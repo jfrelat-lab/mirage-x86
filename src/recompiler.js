@@ -227,6 +227,10 @@ export class Recompiler {
         case 0x6a: P(`cpu.push16(${fs8()}&0xffff);`); break;                          // PUSH Ib (sign-extended)
         case 0x69: { const o = modrm(); const s = rmR(o, sz); const i = sz === 16 ? f16() : (f16() | (f16() << 16)); P(`cpu.imul16x(${s},${i},${sz});`); P(rW(o.reg, sz, 'cpu._mr')); break; }
         case 0x6b: { const o = modrm(); const s = rmR(o, sz); const i = fs8(); P(`cpu.imul16x(${s},${i},${sz});`); P(rW(o.reg, sz, 'cpu._mr')); break; }
+        case 0x6c: emitStr('ins', 8); break;                                            // INSB
+        case 0x6d: emitStr('ins', sz); break;                                           // INSW/D
+        case 0x6e: emitStr('outs', 8); break;                                           // OUTSB
+        case 0x6f: emitStr('outs', sz); break;                                          // OUTSW/D
 
         // ---- Jcc rel8 ----
         case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x76: case 0x77:
@@ -321,9 +325,13 @@ export class Recompiler {
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
         case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT
 
-        // ---- x87 FPU: decode operand, execute as NOP (v1 limitation) ----
-        case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf:
-          modrm(); break;
+        // ---- x87 FPU (D8-DF): dispatch to the coprocessor ----
+        case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf: {
+          const o = modrm();
+          if (o.isReg) P(`cpu.fpuReg(${op},${o.reg},${o.rm});`);
+          else P(`cpu.fpuMem(${op},${o.reg},${memAddr(o)});`);
+          break;
+        }
 
         // ---- LOOP / JCXZ ----
         case 0xe0: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); P(`cpu.eip=((r[1]&0xffff)!==0&&!(cpu.flags&${ZF}))?${(ip + rel) & 0xffff}:${ip};`); P('return;'); ended = true; break; }
@@ -433,6 +441,8 @@ export class Recompiler {
       else if (kind === 'lods') loop(`${rW(0, size, `m.${w}(${SI})`)}${advSI}`);
       else if (kind === 'cmps') loop(`var _x=m.${w}(${SI}),_y=m.${w}(${DI});cpu.setSub(_x,_y,(_x-_y)${M(size)},${size});${adv}`, rep === 0xf3 ? `if(!(cpu.flags&${ZF}))break;` : `if(cpu.flags&${ZF})break;`);
       else if (kind === 'scas') loop(`var _y=m.${w}(${DI});var _x=${rR(0, size)};cpu.setSub(_x,_y,(_x-_y)${M(size)},${size});${advDI}`, rep === 0xf3 ? `if(!(cpu.flags&${ZF}))break;` : `if(cpu.flags&${ZF})break;`);
+      else if (kind === 'ins') loop(`m.${ww}(${DI},cpu.ioRead(r[2]&0xffff,${step}));${advDI}`);
+      else if (kind === 'outs') loop(`cpu.ioWrite(r[2]&0xffff,${step},m.${w}(${SI}));${advSI}`);
     }
 
     function decode0F(sz) {

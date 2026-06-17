@@ -124,25 +124,32 @@ The foundation is deliberately shaped to grow without a rewrite (the register fi
 already 32-bit, operand sizes are parameterised, the device bus is modular).
 
 **Done — Phase A (core correctness):** broad real-mode instruction set incl. BCD,
-bit instructions (BT/BTS/BTR/BTC, BSF/BSR), SHLD/SHRD, XADD, CMPXCHG; single-step
-path; 423k-vector conformance at 100%.
+bit instructions (BT/BTS/BTR/BTC, BSF/BSR), SHLD/SHRD, XADD, CMPXCHG, INS/OUTS;
+single-step path; 423k-vector conformance at 100%; an **x87 FPU subset** (the full
+memory-operand grid over f32/f64/i16/i32 plus common register ops) wired in as a
+modular coprocessor. Real third-party intros run: **HellMood's "Memories"** (the
+256-byte REVISION 2020 intro, [pouet #85227](https://www.pouet.net/prod.php?which=85227))
+loads and animates through its scenes — it needs only `fild`/`fidivr`/`fstp` plus
+`outsb` for its MIDI music. Use `node tools/run-com.js <program>` to probe any .COM.
 
 **Next:**
 - **Hardware input/timing** — 8259 PIC, keyboard IRQ via INT 9 + port 60h, 8253 PIT,
   and a mouse INT 33h driver (the path to a *playable* game).
-- **386 protected mode + DPMI** — most 90s demos and games need it.
-- **x87 FPU** — currently decoded and skipped.
+- **386 protected mode + DPMI** — most larger 90s demos and games need it.
 - **Mode X, planar VGA, palette tricks**, and a WebGL CRT / composite-CGA shader.
-- **Sound Blaster / AdLib (OPL)** audio via WebAudio.
+- **Sound Blaster / AdLib (OPL) + MPU-401 MIDI** audio via WebAudio (today the music
+  ports are accepted but silent).
 - **INT 13h disk + disk-image mounting** (boot real DOS, mount `.img`/`.zip`).
 - **More INT 21h** (EXEC/4Bh, full FCB layer) and **lazy flags + block linking** for
   raw speed, plus a **Web Worker + SharedArrayBuffer** transport to free the main thread.
 
 ## Known limitations
 
-- Real-mode 8086/186/286 instruction set (broad and conformance-checked, but no
-  protected mode/FPU yet). Variable shift counts mask to 5 bits (286+ semantics, not
+- Real-mode 8086/186/286 instruction set (broad and conformance-checked); no protected
+  mode yet, and the **FPU is a pragmatic subset** (float64-backed, no 80-bit precision,
+  no exception/tag machinery). Variable shift counts mask to 5 bits (286+ semantics, not
   the 8088's full-count behaviour); 32-bit `IMUL` overflow flag is approximate.
+- Audio is not synthesised — AdLib/SB/MPU-401 port writes are accepted but silent.
 - One drive (`C:`), in-memory (not yet persisted to IndexedDB).
 
 ## Credits

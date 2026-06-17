@@ -10,6 +10,7 @@
 import { Memory } from './memory.js';
 import { CPU, CS, IF, TF } from './cpu.js';
 import { Recompiler } from './recompiler.js';
+import { installFPU } from './fpu.js';
 
 export const BIOS_SEG = 0xf000;
 
@@ -17,6 +18,7 @@ export class Machine {
   constructor(opts = {}) {
     this.mem = new Memory(opts.memSize || 16 * 1024 * 1024);
     this.cpu = new CPU(this.mem);
+    installFPU(this.cpu);                           // x87 coprocessor
     this.rec = new Recompiler(this.cpu);
 
     this.intHandlers = new Array(256).fill(null); // n -> (cpu, machine) => void
