@@ -25,10 +25,14 @@ mc.onError = (e) => { fault = e; };
 const bytes = new Uint8Array(readFileSync(path));
 dos.load(bytes, '', 'C:\\PROG');
 
-let ran = 0, ticks = 0;
+const wallMs = Number(process.argv[4]) || 6000;     // wall-clock guard
+const t0 = Date.now();
+let ran = 0, ticks = 0, blocked = 0;
 while (ran < budget && !dos.programDone && !fault) {
   ran += mc.runSlice(50000);
-  mc.tickTimer(); ticks++;            // drive INT 1Ch so time/scene counters advance
+  mc.tickTimer(); ticks++;            // drive INT 1Ch + BDA tick so timers advance
+  if (mc.blocked) blocked++;
+  if (Date.now() - t0 > wallMs) break;
 }
 
 const mode = mc.mem.r8(0x449);
@@ -38,7 +42,7 @@ const colours = new Set(); let nonzero = 0;
 for (let i = 0; i < span; i++) { const p = mc.mem.u8[base + i]; if (p) nonzero++; colours.add(p); }
 
 console.log(`program:    ${path} (${bytes.length} bytes)`);
-console.log(`blocks run: ${ran.toLocaleString()}${dos.programDone ? ' (terminated)' : ''}`);
+console.log(`blocks run: ${ran.toLocaleString()} (${ticks} timer ticks)${dos.programDone ? ' (terminated)' : blocked ? ' (waited on input)' : ''}`);
 console.log(`video mode: 0x${mode.toString(16)}`);
 console.log(`framebuffer: ${nonzero}/${span} non-zero, ${colours.size} distinct colours`);
 if (fault) { console.log(`FAULT: ${fault.message}`); process.exit(1); }

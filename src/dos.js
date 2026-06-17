@@ -70,8 +70,11 @@ export function installDOS(machine, vfs) {
     cpu.setSeg(CS, seg); cpu.setSeg(DS, seg); cpu.setSeg(ES, seg); cpu.setSeg(SS, seg);
     cpu.reg.fill(0);
     cpu.eip = 0x100;
+    // Match DOSBox's documented COM-entry register state — sizecoding intros rely on
+    // these exact values (e.g. CX=00FF, DI=FFFE) for their initial loops/effects.
+    cpu.ax = 0; cpu.bx = 0; cpu.cx = 0x00ff; cpu.dx = seg;
+    cpu.si = 0x0100; cpu.di = 0xfffe; cpu.bp = 0x091c;
     cpu.sp = 0xfffe; mem.w16((seg << 4) + 0xfffe, 0); // RET → PSP:0 → INT 20h
-    cpu.dx = seg; cpu.ax = 0;
     dos.allocTop = MEM_TOP;
     cpu.halted = false;
   };
