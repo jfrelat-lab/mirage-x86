@@ -37,12 +37,21 @@ python3 tools/serve.py 8761      # any static server works
 node tools/test.js               # 31 recompiler checks
 node tools/test-dos.js           # DOS hello-world end-to-end
 node tools/test-gfx.js           # mode-13h demos paint the framebuffer
+node tools/test-demos.js         # real nasm-assembled VGA demos render + animate
 node tools/conformance.js        # 423k+ real-8088 vectors (downloads on demand)
 ```
 
-At the prompt: `DIR`, `HELP`, or run a bundled demo — `BARS`, `PLASMA`, `BANNER`,
-`HELLO`. **Ctrl+C** stops a running program. Drag a `.COM`/`.EXE` onto the window
-to mount it on `C:` (and auto-run it).
+At the prompt: `DIR`, `HELP`, or run a demo. Besides the hand-written `BARS`,
+`PLASMA`, `BANNER`, `HELLO`, two **real nasm-assembled VGA demos** ship in `demos/`
+and mount on `C:`: **`XORMUNCH`** (munching-squares XOR field with a palette
+rotated through the DAC ports) and **`PLASMA13`** (a runtime-LUT plasma under a
+rainbow palette). **Ctrl+C** stops a running program. Drag a `.COM`/`.EXE` onto the
+window to mount it on `C:` (and auto-run it).
+
+The demos are real-mode VGA programs (`demos/*.asm`); rebuild with `npm run demos`
+(needs `nasm`). They exercise INT 10h mode-set, direct `A000:0` framebuffer writes,
+the VGA DAC palette ports (`0x3C8`/`0x3C9`), `0x3DA` vsync polling, and INT 16h —
+which is what testing *real* programs forced the engine to implement.
 
 ### URL parameters
 

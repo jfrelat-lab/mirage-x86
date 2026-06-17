@@ -170,6 +170,25 @@ export function installBIOS(machine) {
   machine.hookInterrupt(0x11, (cpu) => { cpu.ax = mem.r16(BDA + 0x10); });
   machine.hookInterrupt(0x12, (cpu) => { cpu.ax = mem.r16(BDA + 0x13); });
 
+  // ---- VGA DAC palette ports (most demos set the palette this way, not INT 10h) ----
+  let dacW = 0, dacR = 0, latch = 0, retrace = 0;
+  machine.onPortWrite(0x3c8, (_p, _s, v) => { dacW = v & 0xff; latch = 0; });   // write index
+  machine.onPortWrite(0x3c7, (_p, _s, v) => { dacR = v & 0xff; latch = 0; });   // read index
+  machine.onPortWrite(0x3c9, (_p, _s, v) => {                                   // write R,G,B (6-bit)
+    bios.dac[dacW * 3 + latch] = v & 0x3f;
+    if (++latch === 3) { latch = 0; dacW = (dacW + 1) & 0xff; }
+  });
+  machine.onPortRead(0x3c9, () => {
+    const v = bios.dac[dacR * 3 + latch];
+    if (++latch === 3) { latch = 0; dacR = (dacR + 1) & 0xff; }
+    return v;
+  });
+  machine.onPortRead(0x3c8, () => dacW);
+  machine.onPortRead(0x3c6, () => 0xff); machine.onPortWrite(0x3c6, () => {});  // pixel mask
+  // Input Status #1: toggle vertical-retrace (bit 3) + display-enable (bit 0) so the
+  // classic vsync wait loops (poll until set, then until clear) terminate.
+  machine.onPortRead(0x3da, () => { retrace ^= 0x09; return retrace; });
+
   machine.bios = bios;
   return bios;
 }
