@@ -1,0 +1,11 @@
+{
+  "name": "mirage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A pure-JavaScript MS-DOS machine with a source-level x86→JS dynamic recompiler.",
+  "scripts": {
+    "test": "node tools/test.js",
+    "serve": "python3 tools/serve.py 8761"
+  }
+}

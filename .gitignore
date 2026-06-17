@@ -1,0 +1,10 @@
+# OS / editor cruft
+.DS_Store
+*.swp
+*~
+
+# logs
+*.log
+
+# node (none today, but keep the repo clean if anything is added later)
+node_modules/

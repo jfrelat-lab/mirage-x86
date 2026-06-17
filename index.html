@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MIRAGE — a pure-JS x86 / MS-DOS machine</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css?v=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101820'/><text x='1.5' y='12' font-family='monospace' font-size='11' fill='%2300d0a0'>M:</text></svg>">
+</head>
+<body class="crt">
+  <header id="bar">
+    <span class="logo">▚ MIRAGE</span>
+    <span class="tag">pure-JavaScript x86 → JS dynamic recompiler · MS-DOS</span>
+    <span class="spacer"></span>
+    <button id="hud-toggle" title="Toggle the JIT / register inspector">DEVTOOLS</button>
+    <button id="crt-toggle" title="Toggle the CRT scanline shader">CRT</button>
+  </header>
+
+  <main id="monitor">
+    <div id="stage">
+      <canvas id="screen" width="640" height="400"></canvas>
+      <div id="crt-overlay"></div>
+    </div>
+    <aside id="hud"></aside>
+  </main>
+
+  <div id="boot">Loading CP437 ROM font…</div>
+  <div id="drop"><div>Drop a .COM / .EXE / file onto the virtual C: drive</div></div>
+
+  <footer id="help">
+    Type <b>HELP</b> · run <b>BARS</b>, <b>PLASMA</b>, <b>BANNER</b>, <b>HELLO</b> · drag &amp; drop files ·
+    URL: <code>?run=PLASMA</code>, <code>?cmd=DIR</code>, <code>?run=https://…/x.com</code>
+  </footer>
+
+  <script type="module" src="src/main.js?v=1"></script>
+</body>
+</html>
