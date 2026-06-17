@@ -6,6 +6,9 @@
   "description": "A pure-JavaScript MS-DOS machine with a source-level x86→JS dynamic recompiler.",
   "scripts": {
     "test": "node tools/test.js",
+    "test:dos": "node tools/test-dos.js",
+    "test:gfx": "node tools/test-gfx.js",
+    "conformance": "node tools/conformance.js",
     "serve": "python3 tools/serve.py 8761"
   }
 }

@@ -67,6 +67,15 @@ export class CPU {
     this.reg[4] = (this.reg[4] & ~0xffff) | ((this.sp + 2) & 0xffff);
     return v;
   }
+  push32(v) {
+    this.reg[4] = (this.reg[4] & ~0xffff) | ((this.sp - 4) & 0xffff);
+    this.mem.w32((this.base[SS] + this.sp) & this.mem.mask, v >>> 0);
+  }
+  pop32() {
+    const v = this.mem.r32((this.base[SS] + this.sp) & this.mem.mask);
+    this.reg[4] = (this.reg[4] & ~0xffff) | ((this.sp + 4) & 0xffff);
+    return v >>> 0;
+  }
 
   // ---- flag computation (called from generated code) -----------------------
   setAdd(a, b, r, bits, withCarry = true) {
@@ -211,8 +220,49 @@ export class CPU {
     if (bits === 16) { a = a << 16 >> 16; b = b << 16 >> 16; const p = a * b; this._mr = p & 0xffff; const c = (p < -32768 || p > 32767); this.setShiftResult(0, 16, c, c, false); }
     else { a |= 0; b |= 0; this._mr = Math.imul(a, b) >>> 0; const p = a * b; const c = (this._mr | 0) !== p; this.setShiftResult(0, 32, c, c, false); }
   }
-  aam(base) { base = base || 10; const al = this.reg[0] & 0xff; this.ah = (al / base) | 0; this.al = al % base; this.setLogic(this.reg[0] & 0xff, 8); }
-  aad(base) { base = base || 10; const al = this.reg[0] & 0xff, ah = (this.reg[0] >> 8) & 0xff; const r = (al + ah * base) & 0xff; this.reg[0] = (this.reg[0] & ~0xffff) | r; this.setLogic(r, 8); }
+  aam(base) { if (base === 0) return this.swInt(0); const al = this.reg[0] & 0xff; this.ah = (al / base) | 0; this.al = al % base; this.setLogic(this.reg[0] & 0xff, 8); }
+  aad(base) { const al = this.reg[0] & 0xff, ah = (this.reg[0] >> 8) & 0xff; const r = (al + ah * base) & 0xff; this.reg[0] = (this.reg[0] & ~0xffff) | r; this.setLogic(r, 8); }
+
+  // ---- BCD adjust (DAA/DAS/AAA/AAS); OF (and AAA/AAS SF/ZF/PF) left undefined
+  _szp(al) { let f = this.flags & ~(ZF | SF | PF); if (al === 0) f |= ZF; if (al & 0x80) f |= SF; if (PARITY[al & 0xff]) f |= PF; this.flags = f; }
+  daa() {
+    const oldAL = this.reg[0] & 0xff, oldCF = this.flags & CF ? 1 : 0; let al = oldAL, cf = 0, af = 0;
+    if ((al & 0x0f) > 9 || (this.flags & AF)) { const s = al + 6; al = s & 0xff; cf = (oldCF || s > 0xff) ? 1 : 0; af = 1; }
+    if (oldAL > ((this.flags & AF) ? 0x9f : 0x99) || oldCF) { al = (al + 0x60) & 0xff; cf = 1; }
+    this.al = al; this._szp(al); this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
+  }
+  das() {
+    const oldAL = this.reg[0] & 0xff, oldCF = this.flags & CF ? 1 : 0; let al = oldAL, cf = 0, af = 0;
+    if ((al & 0x0f) > 9 || (this.flags & AF)) { al = (al - 6) & 0xff; af = 1; }  // low borrow does NOT set CF
+    if (oldAL > ((this.flags & AF) ? 0x9f : 0x99) || oldCF) { al = (al - 0x60) & 0xff; cf = 1; }
+    this.al = al; this._szp(al); this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
+  }
+  aaa() {
+    let al = this.reg[0] & 0xff, ah = (this.reg[0] >> 8) & 0xff, cf = 0, af = 0;
+    if ((al & 0x0f) > 9 || (this.flags & AF)) { al = (al + 6) & 0xff; ah = (ah + 1) & 0xff; af = 1; cf = 1; }
+    al &= 0x0f; this.reg[0] = (this.reg[0] & ~0xffff) | (ah << 8) | al;
+    this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
+  }
+  aas() {
+    let al = this.reg[0] & 0xff, ah = (this.reg[0] >> 8) & 0xff, cf = 0, af = 0;
+    if ((al & 0x0f) > 9 || (this.flags & AF)) { al = (al - 6) & 0xff; ah = (ah - 1) & 0xff; af = 1; cf = 1; }
+    al &= 0x0f; this.reg[0] = (this.reg[0] & ~0xffff) | (ah << 8) | al;
+    this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
+  }
+
+  // ---- double-precision shifts (SHLD/SHRD) --------------------------------
+  shld(dst, src, c, bits) {
+    const m = bits === 32 ? 0xffffffff : (1 << bits) - 1; dst &= m; src &= m; c &= 31; if (!c || c > bits) return dst;
+    const res = ((dst << c) | (src >>> (bits - c))) & m;
+    const cf = (dst >>> (bits - c)) & 1, of = c === 1 ? (((res >>> (bits - 1)) & 1) ^ ((dst >>> (bits - 1)) & 1)) : 0;
+    this.setShiftResult(res, bits, !!cf, !!of); return res;
+  }
+  shrd(dst, src, c, bits) {
+    const m = bits === 32 ? 0xffffffff : (1 << bits) - 1; dst &= m; src &= m; c &= 31; if (!c || c > bits) return dst;
+    const res = ((dst >>> c) | (src << (bits - c))) & m;
+    const cf = (dst >>> (c - 1)) & 1, of = c === 1 ? (((res >>> (bits - 1)) & 1) ^ ((dst >>> (bits - 1)) & 1)) : 0;
+    this.setShiftResult(res, bits, !!cf, !!of); return res;
+  }
 
   // ---- condition evaluation for Jcc/SETcc/CMOVcc (codes 0..15) -------------
   cond(code) {

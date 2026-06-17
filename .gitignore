@@ -8,3 +8,6 @@
 
 # node (none today, but keep the repo clean if anything is added later)
 node_modules/
+
+# downloaded SingleStepTests vectors (fetched on demand by tools/conformance.js)
+tools/sst/

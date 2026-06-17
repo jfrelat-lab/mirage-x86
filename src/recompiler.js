@@ -68,8 +68,20 @@ export class Recompiler {
     return blk;
   }
 
+  /** Execute exactly one instruction, uncached — used by the conformance harness
+   *  and the (future) step debugger. Does not pollute the block cache. */
+  stepOne() {
+    const cpu = this.cpu;
+    const ip0 = cpu.eip & 0xffff;
+    const lin = (cpu.base[CS] + ip0) & this.MM;
+    const blk = this.translate(lin, ip0, 1);
+    blk.fn(cpu);
+    cpu.cycles += blk.count;
+    return blk;
+  }
+
   // -------------------------------------------------------------------------
-  translate(linStart, ip0) {
+  translate(linStart, ip0, maxOps = MAXOPS) {
     const mem = this.mem, MM = this.MM;
     const out = ['var t;'];
     const P = (s) => out.push(s);
@@ -141,7 +153,7 @@ export class Recompiler {
     const endJcc = (cc, target, next) => { P(`cpu.eip=cpu.cond(${cc})?(${target}&0xffff):${next};`); P('return;'); ended = true; };
 
     // ===================== main decode loop =====================
-    while (!ended && count < MAXOPS) {
+    while (!ended && count < maxOps) {
       opsize = 16; segOv = -1; rep = 0;
       // prefixes
       let op = f8();
@@ -184,6 +196,12 @@ export class Recompiler {
         case 0x1e: P(`cpu.push16(cpu.seg[${DS}]);`); break;
         case 0x1f: P(`cpu.setSeg(${DS},cpu.pop16());`); break;
 
+        // ---- BCD adjust ----
+        case 0x27: P('cpu.daa();'); break;
+        case 0x2f: P('cpu.das();'); break;
+        case 0x37: P('cpu.aaa();'); break;
+        case 0x3f: P('cpu.aas();'); break;
+
         // ---- INC/DEC reg16 ----
         case 0x40: case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: {
           const i = op & 7, a = NT(), rr = NT();
@@ -196,9 +214,9 @@ export class Recompiler {
 
         // ---- PUSH/POP reg ----
         case 0x50: case 0x51: case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57:
-          P(`cpu.push16(${rR(op & 7, 16)});`); break;
+          P(sz === 32 ? `cpu.push32(${rR(op & 7, 32)});` : `cpu.push16(${rR(op & 7, 16)});`); break;
         case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f:
-          P(rW(op & 7, 16, 'cpu.pop16()')); break;
+          P(sz === 32 ? rW(op & 7, 32, 'cpu.pop32()') : rW(op & 7, 16, 'cpu.pop16()')); break;
 
         case 0x60: // PUSHA
           P('var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
@@ -340,9 +358,9 @@ export class Recompiler {
         case 0xfc: P(`cpu.flags&=~${DF};`); break;                                      // CLD
         case 0xfd: P(`cpu.flags|=${DF};`); break;                                       // STD
         case 0xfe: { const o = modrm(); const a = NT(), rr = NT(); if (o.reg === 0) P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}+1)&0xff;${rmW(o, 8, rr)}cpu.setAdd(${a},1,${rr},8,false);`); else P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}-1)&0xff;${rmW(o, 8, rr)}cpu.setSub(${a},1,${rr},8,false);`); break; }
-        case 0xff: emitGroup5(); break;
+        case 0xff: emitGroup5(sz); break;
 
-        case 0x0f: { decode0F(); break; }
+        case 0x0f: { decode0F(sz); break; }
 
         default:
           throw new Error('mirage: unimplemented opcode 0x' + op.toString(16).padStart(2, '0') + ' at ' + ((linStart - ip0 + ip - 1) & MM).toString(16));
@@ -375,7 +393,7 @@ export class Recompiler {
       }
     }
 
-    function emitGroup5() {
+    function emitGroup5(sz) {
       const o = modrm();
       switch (o.reg) {
         case 0: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}+1)${M(sz)};${rmW(o, sz, rr)}cpu.setAdd(${a},1,${rr},${sz},false);`); break; }
@@ -417,20 +435,41 @@ export class Recompiler {
       else if (kind === 'scas') loop(`var _y=m.${w}(${DI});var _x=${rR(0, size)};cpu.setSub(_x,_y,(_x-_y)${M(size)},${size});${advDI}`, rep === 0xf3 ? `if(!(cpu.flags&${ZF}))break;` : `if(cpu.flags&${ZF})break;`);
     }
 
-    function decode0F() {
+    function decode0F(sz) {
       const op2 = f8();
       // near Jcc rel16/32
       if (op2 >= 0x80 && op2 <= 0x8f) { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); endJcc(op2 & 0xf, (ip + (rel << 16 >> 16)) & 0xffff, ip); return; }
       // SETcc Eb
       if (op2 >= 0x90 && op2 <= 0x9f) { const o = modrm(); P(rmW(o, 8, `cpu.cond(${op2 & 0xf})?1:0`)); return; }
+      // BTx Ev,Gv (reg bit offset) and group 0F BA Ev,imm8
+      const bt = (o, kind, bitExpr) => {
+        const b = NT(), v = NT();
+        P(`var ${b}=(${bitExpr})&${sz - 1};var ${v}=${rmR(o, sz)};`);
+        P(`cpu.flags=(cpu.flags&~${CF})|((${v}>>>${b})&1);`);
+        if (kind === 'bts') P(rmW(o, sz, `(${v}|(1<<${b}))`));
+        else if (kind === 'btr') P(rmW(o, sz, `(${v}&~(1<<${b}))`));
+        else if (kind === 'btc') P(rmW(o, sz, `(${v}^(1<<${b}))`));
+      };
       switch (op2) {
         case 0x1f: modrm(); return;                                                     // multi-byte NOP
-        case 0xa3: { const o = modrm(); const bit = NT(); P(`var ${bit}=${rR(o.reg, sz)}&${sz - 1};cpu.flags=(cpu.flags&~${CF})|((${rmR(o, sz)}>>>${bit})&1);`); return; } // BT (reg form)
+        case 0xa3: { const o = modrm(); bt(o, 'bt', rR(o.reg, sz)); return; }            // BT
+        case 0xab: { const o = modrm(); bt(o, 'bts', rR(o.reg, sz)); return; }           // BTS
+        case 0xb3: { const o = modrm(); bt(o, 'btr', rR(o.reg, sz)); return; }           // BTR
+        case 0xbb: { const o = modrm(); bt(o, 'btc', rR(o.reg, sz)); return; }           // BTC
+        case 0xba: { const o = modrm(); const imm = f8(); bt(o, ['bt', 'bt', 'bt', 'bt', 'bt', 'bts', 'btr', 'btc'][o.reg], '' + imm); return; }
+        case 0xbc: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}&-${s}))`)}}`); return; } // BSF
+        case 0xbd: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}))`)}}`); return; } // BSR
+        case 0xa4: { const o = modrm(); const c = f8(); P(rmW(o, sz, `cpu.shld(${rmR(o, sz)},${rR(o.reg, sz)},${c & 31},${sz})`)); return; } // SHLD imm
+        case 0xa5: { const o = modrm(); P(rmW(o, sz, `cpu.shld(${rmR(o, sz)},${rR(o.reg, sz)},(r[1]&0xff),${sz})`)); return; }              // SHLD CL
+        case 0xac: { const o = modrm(); const c = f8(); P(rmW(o, sz, `cpu.shrd(${rmR(o, sz)},${rR(o.reg, sz)},${c & 31},${sz})`)); return; } // SHRD imm
+        case 0xad: { const o = modrm(); P(rmW(o, sz, `cpu.shrd(${rmR(o, sz)},${rR(o.reg, sz)},(r[1]&0xff),${sz})`)); return; }              // SHRD CL
         case 0xaf: { const o = modrm(); P(`cpu.imul16x(${rR(o.reg, sz)},${rmR(o, sz)},${sz});`); P(rW(o.reg, sz, 'cpu._mr')); return; } // IMUL Gv,Ev
+        case 0xb0: case 0xb1: { const o = modrm(); const size = op2 === 0xb0 ? 8 : sz; const d = NT(), a = NT(), rr = NT(); P(`var ${d}=${rmR(o, size)},${a}=${rR(0, size)};var ${rr}=(${a}-${d})${M(size)};cpu.setSub(${a},${d},${rr},${size});if(${a}===${d}){${rmW(o, size, rR(o.reg, size))}}else{${rW(0, size, d)}}`); return; } // CMPXCHG
         case 0xb6: { const o = modrm(); P(rW(o.reg, sz, `(${rmR(o, 8)}&0xff)`)); return; } // MOVZX r,Eb
         case 0xb7: { const o = modrm(); P(rW(o.reg, sz, `(${rmR(o, 16)}&0xffff)`)); return; } // MOVZX r,Ew
         case 0xbe: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 8)})<<24>>24)`)); return; } // MOVSX r,Eb
         case 0xbf: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 16)})<<16>>16)`)); return; } // MOVSX r,Ew
+        case 0xc0: case 0xc1: { const o = modrm(); const size = op2 === 0xc0 ? 8 : sz; const d = NT(), s = NT(), rr = NT(); P(`var ${d}=${rmR(o, size)},${s}=${rR(o.reg, size)};var ${rr}=(${d}+${s})${M(size)};${rW(o.reg, size, d)}${rmW(o, size, rr)}cpu.setAdd(${d},${s},${rr},${size});`); return; } // XADD
         default:
           throw new Error('mirage: unimplemented opcode 0x0f 0x' + op2.toString(16).padStart(2, '0'));
       }

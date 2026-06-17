@@ -16,12 +16,15 @@ JavaScript you can read in the debugger.
 
 ## Status
 
-The hard core is built and **verified in Node** (35 assertions across CPU, DOS and
-graphics). In the browser you get a working MS-DOS prompt, the CP437 text screen,
-VGA mode 13h graphics, keyboard input, drag-and-drop file mounting, and URL
-program loading. Running *Dune* (Cryo) or *Second Reality* flawlessly is the north
-star this foundation is built toward — see [Roadmap](#roadmap) for what that needs.
-This is an honest v1 of a very large machine, not a finished emulator.
+The core is built and **verified in Node**: a hand-written suite (31 checks) plus a
+**conformance harness that passes 423,736 real-8088 test vectors at 100%** (the
+TomHarte / SingleStepTests set) across the ALU grid, INC/DEC, TEST, MOV/XCHG,
+group-1, shifts, rotates, NOT/NEG/MUL/IMUL and the BCD instructions. In the browser
+you get a working MS-DOS prompt, the CP437 text screen, VGA mode 13h graphics,
+keyboard input, drag-and-drop file mounting, and URL program loading. Running *Dune*
+(Cryo) or *Second Reality* flawlessly is the north star this foundation is built
+toward — see [Roadmap](#roadmap). This is an honest early build of a very large
+machine, not a finished emulator.
 
 ## Quick start
 
@@ -31,9 +34,10 @@ No build step, no dependencies.
 # from the mirage/ directory
 python3 tools/serve.py 8761      # any static server works
 # open http://localhost:8761
-node tools/test.js               # 20 recompiler checks
+node tools/test.js               # 31 recompiler checks
 node tools/test-dos.js           # DOS hello-world end-to-end
 node tools/test-gfx.js           # mode-13h demos paint the framebuffer
+node tools/conformance.js        # 423k+ real-8088 vectors (downloads on demand)
 ```
 
 At the prompt: `DIR`, `HELP`, or run a bundled demo — `BARS`, `PLASMA`, `BANNER`,
@@ -99,25 +103,37 @@ PLASMA demo executes ~100M block-invocations from only **7 compiled blocks**.
 - **Live JIT inspector.** The DEVTOOLS panel shows registers/flags, block-compile
   counts, and execution rate — a window into the recompiler.
 - **Self-modifying-code aware.** Writes to a translated page invalidate its blocks.
+- **Silicon-validated.** `tools/conformance.js` replays the TomHarte 8088 vectors
+  (10k cases/opcode) through the single-step path and compares registers + RAM
+  strictly and flags masked by the 8088's officially-undefined bits. It caught two
+  genuine 8086 quirks during development: DAA/DAS use an **AF-dependent** high-adjust
+  threshold (`0x99` vs `0x9F`), and a DAS low-nibble borrow does **not** set CF.
 
 ## Roadmap (toward Dune / Second Reality)
 
-The foundation is deliberately shaped to grow here without a rewrite (the register
-file is already 32-bit, sizes are parameterised, the device bus is modular):
+The foundation is deliberately shaped to grow without a rewrite (the register file is
+already 32-bit, operand sizes are parameterised, the device bus is modular).
 
+**Done — Phase A (core correctness):** broad real-mode instruction set incl. BCD,
+bit instructions (BT/BTS/BTR/BTC, BSF/BSR), SHLD/SHRD, XADD, CMPXCHG; single-step
+path; 423k-vector conformance at 100%.
+
+**Next:**
+- **Hardware input/timing** — 8259 PIC, keyboard IRQ via INT 9 + port 60h, 8253 PIT,
+  and a mouse INT 33h driver (the path to a *playable* game).
 - **386 protected mode + DPMI** — most 90s demos and games need it.
-- **x87 FPU** — currently decoded and skipped (a v1 limitation).
+- **x87 FPU** — currently decoded and skipped.
 - **Mode X, planar VGA, palette tricks**, and a WebGL CRT / composite-CGA shader.
 - **Sound Blaster / AdLib (OPL)** audio via WebAudio.
 - **INT 13h disk + disk-image mounting** (boot real DOS, mount `.img`/`.zip`).
 - **More INT 21h** (EXEC/4Bh, full FCB layer) and **lazy flags + block linking** for
   raw speed, plus a **Web Worker + SharedArrayBuffer** transport to free the main thread.
 
-## Known limitations (v1)
+## Known limitations
 
-- Real-mode 8086/186/286 instruction subset (broad, but no protected mode/FPU yet).
-- Shifts mask the count to 5 bits (286+ semantics); BCD `DAA/DAS/AAA/AAS` not yet
-  implemented; 32-bit `IMUL` overflow flag is approximate.
+- Real-mode 8086/186/286 instruction set (broad and conformance-checked, but no
+  protected mode/FPU yet). Variable shift counts mask to 5 bits (286+ semantics, not
+  the 8088's full-count behaviour); 32-bit `IMUL` overflow flag is approximate.
 - One drive (`C:`), in-memory (not yet persisted to IndexedDB).
 
 ## Credits
