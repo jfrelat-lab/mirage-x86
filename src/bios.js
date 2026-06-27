@@ -70,6 +70,7 @@ export function installBIOS(machine) {
   }
   bios.teletype = teletype;
   bios.writeString = (s, attr) => { for (let i = 0; i < s.length; i++) teletype(typeof s === 'string' ? s.charCodeAt(i) : s[i], attr); };
+  bios.resetPalette = () => defaultPalette(bios.dac);
 
   // ---- INT 10h: video ----
   machine.hookInterrupt(0x10, (cpu) => {
@@ -78,6 +79,7 @@ export function installBIOS(machine) {
       case 0x00: {                              // set video mode
         bios.mode = cpu.al & 0x7f;
         mem.w8(BDA + 0x49, bios.mode);
+        defaultPalette(bios.dac);               // a mode set reloads the default DAC
         if (!(cpu.al & 0x80)) {                 // high bit set = keep screen
           if (bios.mode === 0x13) for (let i = 0; i < 320 * 200; i++) mem.w8(0xa0000 + i, 0);
           else clearScreen(0x07);

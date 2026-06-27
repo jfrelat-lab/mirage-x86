@@ -82,10 +82,12 @@ export class Shell {
   }
 
   programReturned() {
-    // if the program left a graphics mode, restore the text screen so the
-    // prompt is visible again (a convenience the real COMMAND.COM lacked).
-    if (this.machine.mem.r8(0x449) !== 0x03) { this.machine.mem.w8(0x449, 0x03); this.bios.clearScreen(0x07); }
-    else this.crlf();
+    // if the program left a graphics mode, restore the text screen so the prompt is
+    // visible again (a convenience the real COMMAND.COM lacked). Also reload the
+    // default DAC palette: a Ctrl+C'd demo may have left the palette rewritten, which
+    // would otherwise tint the text colours (and CLS wouldn't fix it).
+    if (this.machine.mem.r8(0x449) !== 0x03) { this.machine.mem.w8(0x449, 0x03); this.bios.resetPalette(); this.bios.clearScreen(0x07); }
+    else { this.bios.resetPalette(); this.crlf(); }
     if (this.dos.exitCode) this.print(`[program exited with code ${this.dos.exitCode}]\r\n`);
     this.prompt();
   }
