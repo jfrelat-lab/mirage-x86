@@ -463,6 +463,7 @@ export class Recompiler {
       };
       switch (op2) {
         case 0x1f: modrm(); return;                                                     // multi-byte NOP
+        case 0x31: P('cpu.reg[0]=(cpu.cycles>>>0);cpu.reg[2]=(Math.floor(cpu.cycles/4294967296))>>>0;'); return; // RDTSC → EDX:EAX
         case 0xa0: P(`cpu.push16(cpu.seg[${FS}]);`); return;                            // PUSH FS
         case 0xa1: P(`cpu.setSeg(${FS},cpu.pop16());`); return;                         // POP FS
         case 0xa8: P(`cpu.push16(cpu.seg[${GS}]);`); return;                            // PUSH GS
