@@ -83,7 +83,7 @@ export function installFPU(cpu) {
 
   // ---- register / no-operand forms -----------------------------------------
   cpu.fpuReg = (op, reg, rm) => {
-    const b = (reg << 3) | rm;                              // the full second byte (>= 0xC0)
+    const b = 0xc0 | (reg << 3) | rm;                       // the full second byte (mod=3, so >= 0xC0)
     switch (op) {
       case 0xd9:
         if (b < 0xc8) { push(ST(rm)); return; }             // fld st(i)  (reads pre-push ST)
@@ -106,6 +106,7 @@ export function installFPU(cpu) {
           case 0xf4: { const x = ST(0); setST(0, x - Math.trunc(x)); push(Math.trunc(x)); return; } // fxtract-ish
           case 0xf8: setST(0, ST(0) % ST(1)); return;       // fprem
           case 0xfa: setST(0, Math.sqrt(ST(0))); return;    // fsqrt
+          case 0xfb: { const x = ST(0); setST(0, Math.sin(x)); push(Math.cos(x)); return; } // fsincos → ST0=cos, ST1=sin
           case 0xfc: setST(0, toInt(ST(0))); return;        // frndint
           case 0xfd: setST(0, ST(0) * Math.pow(2, Math.trunc(ST(1)))); return; // fscale
           case 0xfe: setST(0, Math.sin(ST(0))); return;     // fsin
@@ -113,10 +114,12 @@ export function installFPU(cpu) {
         }
         return;
       case 0xd8: { const i = rm; const x = ST(0), y = ST(i); setST(0, arith(reg, x, y)); if (reg === 2 || reg === 3) setcc(x, y); if (reg === 3) pop(); return; }
-      case 0xdc: { const i = rm; if (reg === 2 || reg === 3) { setcc(ST(0), ST(i)); if (reg === 3) pop(); return; } setST(i, arith(reg, ST(i), ST(0))); return; }
+      // DC/DE write ST(i): their reg-form sub/div are REVERSED vs D8 (the classic
+      // x87 quirk) — feed arith as (ST(0), ST(i)) so reg4/6 reverse, reg5/7 are plain.
+      case 0xdc: { const i = rm; if (reg === 2 || reg === 3) { setcc(ST(0), ST(i)); if (reg === 3) pop(); return; } setST(i, arith(reg, ST(0), ST(i))); return; }
       case 0xde:                                            // arithmetic + pop (faddp etc.)
         if (b === 0xd9) { setcc(ST(0), ST(1)); pop(); pop(); return; } // fcompp
-        setST(rm, arith(reg, ST(rm), ST(0))); pop(); return;
+        setST(rm, arith(reg, ST(0), ST(rm))); pop(); return;
       case 0xdd:
         if (b < 0xc8) return;                               // ffree st(i)
         if (b < 0xd8) { setST(rm, ST(0)); return; }         // fst st(i)
