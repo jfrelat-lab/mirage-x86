@@ -41,11 +41,15 @@ export class Mirage {
     for (const sample of SAMPLES) this.vfs.addFile('\\' + sample.name, sample.make());
     this.vfs.addFile('\\README.TXT', Uint8Array.from(
       [...'MIRAGE — a pure-JavaScript MS-DOS machine.\r\nTry: BARS, PLASMA, BANNER, HELLO, DIR.\r\n'].map(c => c.charCodeAt(0))));
-    // Real nasm-assembled VGA demos (shipped as .COM); mounted if served.
-    try {
-      const manifest = await (await fetch('demos/manifest.json')).json();
-      for (const f of manifest) this.vfs.addFile('\\' + f, new Uint8Array(await (await fetch('demos/' + f)).arrayBuffer()));
-    } catch { /* offline or not served — skip */ }
+    // Mount .COM bundles listed in each dir's manifest.json (if served): the
+    // committed nasm demos in demos/, plus any local third-party intros in intros/
+    // (gitignored). Each is skipped silently when not present.
+    for (const dir of ['demos', 'intros']) {
+      try {
+        const manifest = await (await fetch(dir + '/manifest.json')).json();
+        for (const f of manifest) this.vfs.addFile('\\' + f, new Uint8Array(await (await fetch(dir + '/' + f)).arrayBuffer()));
+      } catch { /* not served — skip */ }
+    }
     this.shell = new Shell(this.machine);
     this.shell.boot();
     this.keyboard.attach(window);

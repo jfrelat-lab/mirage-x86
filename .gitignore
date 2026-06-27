@@ -11,3 +11,6 @@ node_modules/
 
 # downloaded SingleStepTests vectors (fetched on demand by tools/conformance.js)
 tools/sst/
+
+# third-party demoscene intros downloaded for local testing (not redistributed)
+intros/
