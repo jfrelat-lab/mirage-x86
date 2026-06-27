@@ -116,6 +116,18 @@ function eq(name, got, want) {
 // CMPXCHG CL,DL not equal: AL=5,CL=9 → AL=CL=9
 { const { cpu } = run([0xb0, 0x05, 0xb1, 0x09, 0xb2, 0x42, 0x0f, 0xb0, 0xd1, 0xf4]); eq('cmpxchg ne', cpu.al, 9); }
 
+// self-modifying code: run a subroutine (caches it), patch its MOV BL,0x11 immediate
+// to 0x42, run again — fine-grained SMC must invalidate the block so we see 0x42.
+{ const { cpu } = run(
+    [0xe8, 0x09, 0x00,                // CALL patch (->0x0C)
+     0xc6, 0x06, 0x0d, 0x00, 0x42,    // MOV byte [0x0D], 0x42   (patch the imm)
+     0xe8, 0x01, 0x00,                // CALL patch again
+     0xf4,                            // HLT
+     0xb3, 0x11,                      // patch: MOV BL, 0x11  (imm at 0x0D)
+     0xc3],                           // RET
+    ({ cpu }) => cpu.setSeg(DS, 0x100));  // DS=CS so the write lands on the code
+  eq('SMC re-patch', cpu.bx & 0xff, 0x42); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

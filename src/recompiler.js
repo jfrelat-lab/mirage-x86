@@ -25,16 +25,34 @@ export class Recompiler {
     this.pageBlocks = new Map();   // page -> Set(key)
     this.heat = new Map();         // key -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
-    this.stats = { compiles: 0, exec: 0 };
-    this.mem.onCodeWrite = (page) => this.invalidatePage(page);
+    this.stats = { compiles: 0, exec: 0, invalidations: 0 };
+    this.mem.onCodeWrite = (addr, len) => this.invalidate(addr, len);
   }
 
-  invalidatePage(page) {
-    const set = this.pageBlocks.get(page);
-    if (!set) return;
-    for (const key of set) { this.cache.delete(key); this.heat.delete(key); }
-    set.clear();
-    this.mem.codePage[page] = 0;   // re-marked when the page is translated again
+  /** Self-modifying-code: invalidate only the cached blocks whose byte range the
+   *  write [addr, addr+len) actually overlaps — not the whole 4 KiB page. This is
+   *  what keeps demos that stash variables in their code page (tube, darnit) from
+   *  recompiling every block on every write. */
+  invalidate(addr, len) {
+    const end = addr + len;
+    for (let p = addr >> 12; p <= (end - 1) >> 12; p++) {
+      const set = this.pageBlocks.get(p);
+      if (!set) continue;
+      for (const key of set) {
+        const blk = this.cache.get(key);
+        if (!blk) { set.delete(key); continue; }              // stale key
+        if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, key);
+      }
+      if (set.size === 0) this.mem.codePage[p] = 0;            // page no longer holds code
+    }
+  }
+
+  _evict(blk, key) {
+    this.cache.delete(key); this.heat.delete(key);
+    this.stats.invalidations++;
+    for (let p = blk.linStart >>> 12; p <= (blk.linEnd - 1) >>> 12; p++) {
+      const s = this.pageBlocks.get(p); if (s) s.delete(key);
+    }
   }
 
   reset() { this.cache.clear(); this.pageBlocks.clear(); this.heat.clear(); }
