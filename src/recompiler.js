@@ -323,6 +323,7 @@ export class Recompiler {
 
         case 0xd4: P(`cpu.aam(${f8()});`); break; // AAM
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
+        case 0xd6: P(`r[0]=(r[0]&~0xff)|((cpu.flags&${CF})?0xff:0);`); break; // SALC (undocumented)
         case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT
 
         // ---- x87 FPU (D8-DF): dispatch to the coprocessor ----
@@ -462,6 +463,10 @@ export class Recompiler {
       };
       switch (op2) {
         case 0x1f: modrm(); return;                                                     // multi-byte NOP
+        case 0xa0: P(`cpu.push16(cpu.seg[${FS}]);`); return;                            // PUSH FS
+        case 0xa1: P(`cpu.setSeg(${FS},cpu.pop16());`); return;                         // POP FS
+        case 0xa8: P(`cpu.push16(cpu.seg[${GS}]);`); return;                            // PUSH GS
+        case 0xa9: P(`cpu.setSeg(${GS},cpu.pop16());`); return;                         // POP GS
         case 0xa3: { const o = modrm(); bt(o, 'bt', rR(o.reg, sz)); return; }            // BT
         case 0xab: { const o = modrm(); bt(o, 'bts', rR(o.reg, sz)); return; }           // BTS
         case 0xb3: { const o = modrm(); bt(o, 'btr', rR(o.reg, sz)); return; }           // BTR
