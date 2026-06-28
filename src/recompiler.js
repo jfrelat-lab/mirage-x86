@@ -21,9 +21,12 @@ export class Recompiler {
     this.cpu = cpu;
     this.mem = cpu.mem;
     this.MM = this.mem.mask;
-    this.cache = new Map();        // key -> block
-    this.pageBlocks = new Map();   // page -> Set(key)
-    this.heat = new Map();         // key -> exec count (for the JIT heatmap)
+    // Block lookup: a 2-level page array (blockPages[lin>>>12][lin&0xfff] -> block)
+    // rather than a Map — pure integer indexing on the hot dispatch path, no hashing
+    // (V8's Map always routes through FindOrderedHashMapEntry even for SMI keys).
+    this.blockPages = [];          // page -> Array(4096) of block | undefined
+    this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
+    this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
     this.stats = { compiles: 0, exec: 0, invalidations: 0 };
     this.mem.onCodeWrite = (addr, len) => this.invalidate(addr, len);
@@ -38,49 +41,56 @@ export class Recompiler {
     for (let p = addr >> 12; p <= (end - 1) >> 12; p++) {
       const set = this.pageBlocks.get(p);
       if (!set) continue;
-      for (const key of set) {
-        const blk = this.cache.get(key);
-        if (!blk) { set.delete(key); continue; }              // stale key
-        if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, key);
+      for (const lin of set) {
+        const pg = this.blockPages[lin >>> 12];
+        const blk = pg !== undefined ? pg[lin & 0xfff] : undefined;
+        if (!blk) { set.delete(lin); continue; }              // stale entry
+        if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, lin);
       }
       if (set.size === 0) this.mem.codePage[p] = 0;            // page no longer holds code
     }
   }
 
-  _evict(blk, key) {
-    this.cache.delete(key); this.heat.delete(key);
+  _evict(blk, lin) {
+    const pg = this.blockPages[lin >>> 12]; if (pg !== undefined) pg[lin & 0xfff] = undefined;
+    this.heat.delete(lin);
     this.stats.invalidations++;
     for (let p = blk.linStart >>> 12; p <= (blk.linEnd - 1) >>> 12; p++) {
-      const s = this.pageBlocks.get(p); if (s) s.delete(key);
+      const s = this.pageBlocks.get(p); if (s) s.delete(lin);
     }
   }
 
-  reset() { this.cache.clear(); this.pageBlocks.clear(); this.heat.clear(); }
+  reset() { this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); }
 
   /** Run exactly one basic block from the current CS:IP. Returns its length. */
   step() {
     const cpu = this.cpu;
     const ip0 = cpu.eip & 0xffff;
     const lin = (cpu.base[CS] + ip0) & this.MM;
-    const key = lin + ip0 * 0x1000000;   // distinguish CS:IP aliases of one linear addr
-    let blk = this.cache.get(key);
-    if (!blk) blk = this._compile(key, lin, ip0);
-    if (this.profiling) this.heat.set(key, (this.heat.get(key) || 0) + 1);
+    // O(1) array index, no hashing. blk.ip0 guards the rare case of one linear addr
+    // reached via different CS:IP (the emitted jump targets bake in ip0).
+    const page = this.blockPages[lin >>> 12];
+    let blk = page !== undefined ? page[lin & 0xfff] : undefined;
+    if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
+    if (this.profiling) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
     this.stats.exec++;
     blk.fn(cpu);
     cpu.cycles += blk.count;
     return blk.count;
   }
 
-  _compile(key, lin, ip0) {
+  _compile(lin, ip0) {
     const blk = this.translate(lin, ip0);
-    this.cache.set(key, blk);
+    const pg = lin >>> 12;
+    let page = this.blockPages[pg];
+    if (page === undefined) page = this.blockPages[pg] = new Array(4096);
+    page[lin & 0xfff] = blk;
     const first = blk.linStart >>> 12, last = (blk.linEnd - 1) >>> 12;
     for (let p = first; p <= last; p++) {
       this.mem.markCodePage(p);
       let s = this.pageBlocks.get(p);
       if (!s) { s = new Set(); this.pageBlocks.set(p, s); }
-      s.add(key);
+      s.add(lin);
     }
     this.stats.compiles++;
     return blk;
