@@ -491,6 +491,9 @@ export class Recompiler {
         case 0xb3: { const o = modrm(); bt(o, 'btr', rR(o.reg, sz)); return; }           // BTR
         case 0xbb: { const o = modrm(); bt(o, 'btc', rR(o.reg, sz)); return; }           // BTC
         case 0xba: { const o = modrm(); const imm = f8(); bt(o, ['bt', 'bt', 'bt', 'bt', 'bt', 'bts', 'btr', 'btc'][o.reg], '' + imm); return; }
+        case 0xb2: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${SS},m.r16((${a}+2)&${MM}));`); return; } // LSS
+        case 0xb4: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${FS},m.r16((${a}+2)&${MM}));`); return; } // LFS
+        case 0xb5: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${GS},m.r16((${a}+2)&${MM}));`); return; } // LGS
         case 0xbc: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}&-${s}))`)}}`); return; } // BSF
         case 0xbd: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}))`)}}`); return; } // BSR
         case 0xa4: { const o = modrm(); const c = f8(); P(rmW(o, sz, `cpu.shld(${rmR(o, sz)},${rR(o.reg, sz)},${c & 31},${sz})`)); return; } // SHLD imm
