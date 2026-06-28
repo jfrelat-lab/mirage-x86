@@ -195,17 +195,30 @@ export function installBIOS(machine) {
   return bios;
 }
 
+// The authentic IBM VGA BIOS default 256-colour DAC for mode 13h, captured byte-for-byte
+// from real hardware (via DOSBox-X). Layout: 0-15 EGA, 16-31 greyscale ramp, 32-247 the
+// HSV colour cube (3 intensity x 3 saturation x 24 hues), 248-255 black. 6-bit (0-63).
+// Intros that never program the DAC (e.g. rv256, which only uses indices 16-31) rely on
+// this exact table — a made-up ramp renders them in the wrong colours.
+const VGA_DEFAULT_DAC = (
+  '00000000002a002a00002a2a2a00002a002a2a15002a2a2a15151515153f153f15153f3f3f15153f153f3f3f153f3f3f' +  //   0- 15
+  '0000000505050808080b0b0b0e0e0e1111111414141818181c1c1c2020202424242828282d2d2d3232323838383f3f3f' +  //  16- 31
+  '00003f10003f1f003f2f003f3f003f3f002f3f001f3f00103f00003f10003f1f003f2f003f3f002f3f001f3f00103f00' +  //  32- 47
+  '003f00003f10003f1f003f2f003f3f002f3f001f3f00103f1f1f3f271f3f2f1f3f371f3f3f1f3f3f1f373f1f2f3f1f27' +  //  48- 63
+  '3f1f1f3f271f3f2f1f3f371f3f3f1f373f1f2f3f1f273f1f1f3f1f1f3f271f3f2f1f3f371f3f3f1f373f1f2f3f1f273f' +  //  64- 79
+  '2d2d3f312d3f362d3f3a2d3f3f2d3f3f2d3a3f2d363f2d313f2d2d3f312d3f362d3f3a2d3f3f2d3a3f2d363f2d313f2d' +  //  80- 95
+  '2d3f2d2d3f312d3f362d3f3a2d3f3f2d3a3f2d363f2d313f00001c07001c0e001c15001c1c001c1c00151c000e1c0007' +  //  96-111
+  '1c00001c07001c0e001c15001c1c00151c000e1c00071c00001c00001c07001c0e001c15001c1c00151c000e1c00071c' +  // 112-127
+  '0e0e1c110e1c150e1c180e1c1c0e1c1c0e181c0e151c0e111c0e0e1c110e1c150e1c180e1c1c0e181c0e151c0e111c0e' +  // 128-143
+  '0e1c0e0e1c110e1c150e1c180e1c1c0e181c0e151c0e111c14141c16141c18141c1a141c1c141c1c141a1c14181c1416' +  // 144-159
+  '1c14141c16141c18141c1a141c1c141a1c14181c14161c14141c14141c16141c18141c1a141c1c141a1c14181c14161c' +  // 160-175
+  '0000100400100800100c001010001010000c100008100004100000100400100800100c001010000c1000081000041000' +  // 176-191
+  '00100000100400100800100c001010000c100008100004100808100a08100c08100e081010081010080e10080c10080a' +  // 192-207
+  '100808100a08100c08100e081010080e10080c10080a100808100808100a08100c08100e081010080e10080c10080a10' +  // 208-223
+  '0b0b100c0b100d0b100f0b10100b10100b0f100b0d100b0c100b0b100c0b100d0b100f0b10100b0f100b0d100b0c100b' +  // 224-239
+  '0b100b0b100c0b100d0b100f0b10100b0f100b0d100b0c10000000000000000000000000000000000000000000000000'    // 240-255
+).match(/../g).map((h) => parseInt(h, 16));
+
 function defaultPalette(dac) {
-  // 16 CGA/EGA colours expanded to 6-bit DAC, then a 6-6-4-ish ramp for the rest.
-  const base = [
-    [0, 0, 0], [0, 0, 42], [0, 42, 0], [0, 42, 42], [42, 0, 0], [42, 0, 42], [42, 21, 0], [42, 42, 42],
-    [21, 21, 21], [21, 21, 63], [21, 63, 21], [21, 63, 63], [63, 21, 21], [63, 21, 63], [63, 63, 21], [63, 63, 63],
-  ];
-  for (let i = 0; i < 16; i++) { dac[i * 3] = base[i][0]; dac[i * 3 + 1] = base[i][1]; dac[i * 3 + 2] = base[i][2]; }
-  for (let i = 16; i < 256; i++) {
-    const j = i - 16;
-    dac[i * 3] = ((j >> 5) & 7) * 9;
-    dac[i * 3 + 1] = ((j >> 2) & 7) * 9;
-    dac[i * 3 + 2] = (j & 3) * 21;
-  }
+  dac.set(VGA_DEFAULT_DAC);
 }
