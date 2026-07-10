@@ -43,6 +43,12 @@ export function installFPU(cpu) {
 
   cpu.fpuStatus = () => (cpu.fsw & 0x47ff) | ((cpu.ftop & 7) << 11);
 
+  // Exposed so the recompiler can call them from inlined FPU code (Phase 1.F): the
+  // round-to-integer (banker's rounding) and compare/condition-code helpers. Keeping
+  // them as monomorphic functions lets V8 inline them while the emitted blocks stay small.
+  cpu.f2i = toInt;
+  cpu.fcmp = setcc;
+
   // ---- memory-operand forms (op = D8..DF, reg = modrm.reg field) -----------
   cpu.fpuMem = (op, reg, a) => {
     switch (op) {

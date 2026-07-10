@@ -16,6 +16,10 @@ import { CF, ZF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
 const MAXOPS = 192;               // cap basic-block length
 const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 
+// Kill switch (A/B gate): MIRAGE_NOFPUINLINE=1 falls back to the cpu.fpuMem/fpuReg
+// runtime dispatch instead of the Phase-1.F inline emission. Browser-safe (no `process`).
+const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
+
 export class Recompiler {
   constructor(cpu) {
     this.cpu = cpu;
@@ -113,7 +117,7 @@ export class Recompiler {
     const mem = this.mem, MM = this.MM;
     const out = ['var t;'];
     const P = (s) => out.push(s);
-    let ip = ip0, ended = false, tmp = 0, count = 0;
+    let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false;
     const NT = () => '_' + (tmp++);
 
     // ---- byte fetch (decode-time reads from memory) ----
@@ -179,6 +183,15 @@ export class Recompiler {
     // ---- block terminators ----
     const endJmp = (target) => { P(`cpu.eip=${target}&0xffff;`); P('return;'); ended = true; };
     const endJcc = (cc, target, next) => { P(`cpu.eip=cpu.cond(${cc})?(${target}&0xffff):${next};`); P('return;'); ended = true; };
+
+    // ---- x87 stack-expression helpers (used by emitFPUReg/emitFPUMem below) ----
+    // ST(i) as an lvalue/rvalue string; fpush/FPOP mutate cpu.ftop directly (no mirror).
+    const STe = (i) => i === 0 ? 'st[cpu.ftop]' : `st[(cpu.ftop+${i})&7]`;
+    const setSTe = (i, v) => i === 0 ? `st[cpu.ftop]=${v};` : `st[(cpu.ftop+${i})&7]=${v};`;
+    const fpush = (v) => { const t = NT(); P(`var ${t}=${v};cpu.ftop=(cpu.ftop-1)&7;st[cpu.ftop]=${t};`); };
+    const FPOP = 'cpu.ftop=(cpu.ftop+1)&7;';
+    const arithE = (rg, x, y) => rg === 0 ? `${x}+${y}` : rg === 1 ? `${x}*${y}` : rg === 4 ? `${x}-${y}`
+      : rg === 5 ? `${y}-${x}` : rg === 6 ? `${x}/${y}` : rg === 7 ? `${y}/${x}` : x;   // 2/3 = compare (returns x)
 
     // ===================== main decode loop =====================
     while (!ended && count < maxOps) {
@@ -354,11 +367,17 @@ export class Recompiler {
         case 0xd6: P(`r[0]=(r[0]&~0xff)|((cpu.flags&${CF})?0xff:0);`); break; // SALC (undocumented)
         case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT
 
-        // ---- x87 FPU (D8-DF): dispatch to the coprocessor ----
+        // ---- x87 FPU (D8-DF): emit the specific op inline (Phase 1.F) ----
         case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf: {
           const o = modrm();
-          if (o.isReg) P(`cpu.fpuReg(${op},${o.reg},${o.rm});`);
-          else P(`cpu.fpuMem(${op},${o.reg},${memAddr(o)});`);
+          if (NOFPUINLINE) {                          // A/B fallback: runtime dispatch
+            if (o.isReg) P(`cpu.fpuReg(${op},${o.reg},${o.rm});`);
+            else P(`cpu.fpuMem(${op},${o.reg},${memAddr(o)});`);
+          } else {
+            usesFPU = true;
+            if (o.isReg) emitFPUReg(op, o.reg, o.rm);
+            else emitFPUMem(op, o.reg, o);
+          }
           break;
         }
 
@@ -406,11 +425,119 @@ export class Recompiler {
 
     if (!ended) P(`cpu.eip=${ip};`);
 
-    const body = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base;\n' + out.join('\n');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
     return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body };
 
     // ===================== nested emit helpers =====================
+
+    // ---- x87 inline emission (Phase 1.F) ---------------------------------------
+    // Mirrors src/fpu.js exactly, but with op/reg/rm known at compile time we emit the
+    // one operation's JS directly instead of the giant runtime switch. Uses the block
+    // aliases `st` (cpu.fst) and `dv` (m.dv); cpu.ftop stays on the object (no local
+    // mirror) so it is always correct at every block exit with no flush. Anything not
+    // explicitly recognised routes to the cpu.fpuMem/fpuReg fallback (= today's code),
+    // which is also the safety net for future opcodes. `cpu.fcmp`/`cpu.f2i` are the
+    // shared compare / round-to-int helpers exported from fpu.js. (The string helpers
+    // STe/setSTe/fpush/FPOP/arithE are defined before the decode loop.)
+    function emitFPUMem(op, reg, o) {
+      const a = memAddr(o);
+      const fb = () => P(`cpu.fpuMem(${op},${reg},${a});`);
+      const smc = (len) => `if(m.codePage[${a}>>>12]|m.codePage[((${a}+${len - 1})&${MM})>>>12])m._dirty(${a},${len});`;
+      switch (op) {
+        case 0xd9:                                                   // f32 load/store + control
+          if (reg === 0) return fpush(`dv.getFloat32(${a},true)`);           // FLD m32
+          if (reg === 2) return P(`dv.setFloat32(${a},st[cpu.ftop],true);${smc(4)}`);        // FST m32
+          if (reg === 3) return P(`dv.setFloat32(${a},st[cpu.ftop],true);${smc(4)}${FPOP}`); // FSTP m32
+          if (reg === 7) return P(`m.w16(${a},0x037f);`);                    // FNSTCW (w16 does SMC)
+          return fb();
+        case 0xdd:                                                   // f64 load/store
+          if (reg === 0) return fpush(`dv.getFloat64(${a},true)`);           // FLD m64
+          if (reg === 2) return P(`dv.setFloat64(${a},st[cpu.ftop],true);${smc(8)}`);        // FST m64
+          if (reg === 3) return P(`dv.setFloat64(${a},st[cpu.ftop],true);${smc(8)}${FPOP}`); // FSTP m64
+          if (reg === 7) return P(`m.w16(${a},((cpu.fsw&0x47ff)|((cpu.ftop&7)<<11)));`);      // FNSTSW m16
+          return fb();
+        case 0xdb:                                                   // i32 load/store
+          if (reg === 0) return fpush(`dv.getInt32(${a},true)`);             // FILD m32
+          if (reg === 2) return P(`m.w32(${a},cpu.f2i(st[cpu.ftop])>>>0);`);            // FIST m32
+          if (reg === 3) return P(`m.w32(${a},cpu.f2i(st[cpu.ftop])>>>0);${FPOP}`);     // FISTP m32
+          return fb();
+        case 0xdf:                                                   // i16 load/store
+          if (reg === 0) return fpush(`dv.getInt16(${a},true)`);             // FILD m16
+          if (reg === 2) return P(`m.w16(${a},cpu.f2i(st[cpu.ftop])&0xffff);`);         // FIST m16
+          if (reg === 3) return P(`m.w16(${a},cpu.f2i(st[cpu.ftop])&0xffff);${FPOP}`);  // FISTP m16
+          return fb();
+      }
+      // arithmetic with a memory source: D8=f32, DC=f64, DA=i32, DE=i16
+      const vexpr = op === 0xd8 ? `dv.getFloat32(${a},true)` : op === 0xdc ? `dv.getFloat64(${a},true)`
+        : op === 0xda ? `dv.getInt32(${a},true)` : `dv.getInt16(${a},true)`;
+      const vt = NT(), xt = NT();
+      P(`var ${vt}=${vexpr},${xt}=st[cpu.ftop];`);
+      if (reg === 2) return P(`cpu.fcmp(${xt},${vt});`);                     // FCOM
+      if (reg === 3) return P(`cpu.fcmp(${xt},${vt});${FPOP}`);             // FCOMP
+      return P(setSTe(0, arithE(reg, xt, vt)));                             // FADD/FMUL/FSUB/FSUBR/FDIV/FDIVR
+    }
+
+    function emitFPUReg(op, reg, rm) {
+      const b = 0xc0 | (reg << 3) | rm;
+      const fb = () => P(`cpu.fpuReg(${op},${reg},${rm});`);
+      switch (op) {
+        case 0xd9:
+          if (b < 0xc8) return fpush(STe(rm));                              // FLD ST(i) (pre-push read)
+          if (b < 0xd0) { const t = NT(); P(`var ${t}=st[cpu.ftop];${setSTe(0, STe(rm))}${setSTe(rm, t)}`); return; } // FXCH
+          switch (b) {
+            case 0xe0: return P(setSTe(0, '-st[cpu.ftop]'));                // FCHS
+            case 0xe1: return P(setSTe(0, 'Math.abs(st[cpu.ftop])'));       // FABS
+            case 0xe5: return;                                             // FXAM (cc omitted, as fpu.js)
+            case 0xe8: return fpush('1');                                  // FLD1
+            case 0xe9: return fpush('Math.log2(10)');                      // FLDL2T
+            case 0xea: return fpush('Math.LOG2E');                         // FLDL2E
+            case 0xeb: return fpush('Math.PI');                            // FLDPI
+            case 0xec: return fpush('Math.log10(2)');                      // FLDLG2
+            case 0xed: return fpush('Math.LN2');                           // FLDLN2
+            case 0xee: return fpush('0');                                  // FLDZ
+            case 0xf0: return P(setSTe(0, 'Math.pow(2,st[cpu.ftop])-1'));   // F2XM1
+            case 0xf1: P(setSTe(1, `${STe(1)}*Math.log2(st[cpu.ftop])`)); return P(FPOP); // FYL2X
+            case 0xf2: P(setSTe(0, 'Math.tan(st[cpu.ftop])')); return fpush('1');         // FPTAN
+            case 0xf3: P(setSTe(1, `Math.atan2(${STe(1)},st[cpu.ftop])`)); return P(FPOP); // FPATAN
+            case 0xf4: { const x = NT(); P(`var ${x}=st[cpu.ftop];${setSTe(0, `${x}-Math.trunc(${x})`)}`); return fpush(`Math.trunc(${x})`); } // FXTRACT-ish
+            case 0xf8: return P(setSTe(0, `st[cpu.ftop]%${STe(1)}`));       // FPREM
+            case 0xfa: return P(setSTe(0, 'Math.sqrt(st[cpu.ftop])'));      // FSQRT
+            case 0xfb: { const x = NT(); P(`var ${x}=st[cpu.ftop];${setSTe(0, `Math.sin(${x})`)}`); return fpush(`Math.cos(${x})`); } // FSINCOS
+            case 0xfc: return P(setSTe(0, 'cpu.f2i(st[cpu.ftop])'));        // FRNDINT
+            case 0xfd: return P(setSTe(0, `st[cpu.ftop]*Math.pow(2,Math.trunc(${STe(1)}))`)); // FSCALE
+            case 0xfe: return P(setSTe(0, 'Math.sin(st[cpu.ftop])'));       // FSIN
+            case 0xff: return P(setSTe(0, 'Math.cos(st[cpu.ftop])'));       // FCOS
+          }
+          return fb();
+        case 0xd8: {                                                       // arith with ST(i), result to ST(0)
+          const xt = NT(), yt = NT();
+          P(`var ${xt}=st[cpu.ftop],${yt}=${STe(rm)};`);
+          P(setSTe(0, arithE(reg, xt, yt)));
+          if (reg === 2 || reg === 3) P(`cpu.fcmp(${xt},${yt});`);
+          if (reg === 3) P(FPOP);
+          return;
+        }
+        case 0xdc:                                                         // arith to ST(i) (reversed quirk)
+          if (reg === 2 || reg === 3) { P(`cpu.fcmp(st[cpu.ftop],${STe(rm)});`); if (reg === 3) P(FPOP); return; }
+          return P(setSTe(rm, arithE(reg, 'st[cpu.ftop]', STe(rm))));
+        case 0xde:                                                         // arith to ST(i) + pop (faddp etc.)
+          if (b === 0xd9) { P(`cpu.fcmp(st[cpu.ftop],${STe(1)});`); P(FPOP); return P(FPOP); } // FCOMPP
+          P(setSTe(rm, arithE(reg, 'st[cpu.ftop]', STe(rm)))); return P(FPOP);
+        case 0xdd:
+          if (b < 0xc8) return;                                            // FFREE ST(i)
+          if (b < 0xd8) return P(setSTe(rm, 'st[cpu.ftop]'));              // FST ST(i)
+          if (b < 0xe0) { P(setSTe(rm, 'st[cpu.ftop]')); return P(FPOP); } // FSTP ST(i)
+          P(`cpu.fcmp(st[cpu.ftop],${STe(rm)});`); if (b >= 0xe8) P(FPOP); return; // FUCOM/FUCOMP
+        case 0xdf:
+          if (b === 0xe0) return P(`r[0]=(r[0]&~0xffff)|(((cpu.fsw&0x47ff)|((cpu.ftop&7)<<11))&0xffff);`); // FNSTSW AX
+          return fb();
+        default:                                                           // DA/DB reg forms: rare → fallback
+          return fb();
+      }
+    }
+
     function emitShift(o, size, cnt) {
       const ops = ['rol', 'ror', 'rcl', 'rcr', 'shl', 'shr', 'shl', 'sar'];
       const fn = ops[o.reg];
