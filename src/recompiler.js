@@ -176,8 +176,21 @@ export class Recompiler {
       return { isReg: false, reg, rm, seg, off };
     };
     const memAddr = (o) => { if (o._t === undefined) { o._t = NT(); P(`var ${o._t}=${lin(o.seg, o.off)};`); } return o._t; };
-    const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : (sz === 8 ? `m.r8(${memAddr(o)})` : sz === 16 ? `m.r16(${memAddr(o)})` : `m.r32(${memAddr(o)})`);
-    const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : (sz === 8 ? `m.w8(${memAddr(o)},(${v})&0xff);` : sz === 16 ? `m.w16(${memAddr(o)},(${v})&0xffff);` : `m.w32(${memAddr(o)},(${v})>>>0);`);
+    // Direct typed-array memory access (Phase 1.M): u8[]/dv reads and writes inline instead
+    // of m.r8/w8 calls. Addresses from memAddr are already &MM-masked; composed lanes mask
+    // a+1.. (they escape MM only at the very top of RAM, but that wraps and is reachable).
+    // memRead: little-endian compose. memW keeps the SMC dirty check (shared, never open-coded).
+    const memRead = (a, sz) => sz === 8 ? `u8[${a}]`
+      : sz === 16 ? `(u8[${a}]|(u8[(${a}+1)&${MM}]<<8))`
+        : `((u8[${a}]|(u8[(${a}+1)&${MM}]<<8)|(u8[(${a}+2)&${MM}]<<16)|(u8[(${a}+3)&${MM}]<<24))>>>0)`;
+    const memW = (a, sz, v) => {
+      if (sz === 8) return `u8[${a}]=(${v});if(cp[${a}>>>12]!==0)m._dirty(${a},1);`;
+      const t = NT();
+      if (sz === 16) return `var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;if(cp[${a}>>>12]|cp[((${a}+1)&${MM})>>>12])m._dirty(${a},2);`;
+      return `var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;u8[(${a}+2)&${MM}]=${t}>>>16;u8[(${a}+3)&${MM}]=${t}>>>24;if(cp[${a}>>>12]|cp[((${a}+3)&${MM})>>>12])m._dirty(${a},4);`;
+    };
+    const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o), sz);
+    const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : memW(memAddr(o), sz, v);
 
     // ---- ALU emit (dst read expr, dst write fn|null, src expr, size) ----
     const alu = (op, dRead, dWrite, src, sz) => {
@@ -477,7 +490,7 @@ export class Recompiler {
       }
     }
 
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
     return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body };
