@@ -128,6 +128,23 @@ function eq(name, got, want) {
     ({ cpu }) => cpu.setSeg(DS, 0x100));  // DS=CS so the write lands on the code
   eq('SMC re-patch', cpu.bx & 0xff, 0x42); }
 
+// ---- dead-flag elimination (Phase 1.A2) — flags a producer sets must survive to a
+// later reader even across intervening ops; these catch a wrong def/use annotation that
+// the single-instruction conformance harness is structurally blind to. -----------------
+// ADC reads a prior ADD's CF across a transparent MOV (tests adc use=CF keeps the ADD).
+{ const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0xbb, 0x10, 0x00, 0x83, 0xd3, 0x00, 0xf4]);
+  eq('strip: adc reads prior CF', cpu.bx, 0x11); }
+// INC preserves CF (def is all-but-carry); a later ADC must still see the ADD's CF.
+{ const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0x43, 0x83, 0xd1, 0x00, 0xf4]);
+  eq('strip: inc preserves CF', cpu.cx, 1); eq('strip: inc result', cpu.bx, 1); }
+// DAA reads the prior ADD's AF, with a trailing CMP that would let the ADD strip if AF
+// weren't marked used (0x08+0x08=0x10 AF=1 → DAA yields 0x16, not 0x10).
+{ const { cpu } = run([0xb0, 0x08, 0x04, 0x08, 0x27, 0x3c, 0x99, 0xf4]);
+  eq('strip: daa reads prior AF', cpu.al, 0x16); }
+// PUSHF reads the live flags; a trailing CMP would strip the ADD if PUSHF weren't a reader.
+{ const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0x9c, 0x5b, 0x3d, 0x00, 0x00, 0xf4]);
+  eq('strip: pushf sees CF', !!(cpu.bx & CF), true); eq('strip: pushf sees ZF', !!(cpu.bx & ZF), true); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

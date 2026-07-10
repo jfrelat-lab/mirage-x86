@@ -19,6 +19,13 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 // Kill switch (A/B gate): MIRAGE_NOFPUINLINE=1 falls back to the cpu.fpuMem/fpuReg
 // runtime dispatch instead of the Phase-1.F inline emission. Browser-safe (no `process`).
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
+// MIRAGE_NOSTRIP=1 disables the Phase-1.A2 dead-flag elimination (A/B correctness gate).
+const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSTRIP);
+
+// Abstract flag-liveness bit set (NOT the EFLAGS register layout) for the dead-flag pass:
+// which of the 6 arithmetic flags an instruction defines / uses. Full ALU ops def all 6;
+// INC/DEC def all-but-carry (they preserve CF).
+const lC = 1, lP = 2, lA = 4, lZ = 8, lS = 16, lO = 32, lALL = 63, lNOC = lALL & ~lC;
 
 export class Recompiler {
   constructor(cpu) {
@@ -120,6 +127,16 @@ export class Recompiler {
     let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false;
     const NT = () => '_' + (tmp++);
 
+    // ---- dead-flag pass bookkeeping (Phase 1.A2) ----
+    // One record per decoded instruction: `flagIdx` = out[] index of its strippable
+    // flag-setting call (or -1), `def`/`use` = abstract flag masks. `cur` is the record
+    // for the instruction being decoded. PFLAG emits a strippable flag call and tags it.
+    // Default use=0 (transparent): only flag READERS set `cur.use` (enumerated below);
+    // a forgotten reader is the one unsafe case, so the golden A/B gate covers it.
+    const instrs = [];
+    let cur = { flagIdx: -1, def: 0, use: 0 };
+    const PFLAG = (stmt, def) => { cur.flagIdx = out.length; cur.def |= def; out.push(stmt); };
+
     // ---- byte fetch (decode-time reads from memory) ----
     const f8 = () => { const b = mem.r8((linStart - ip0 + ip) & MM); ip = (ip + 1) & 0xffff; return b; };
     const f16 = () => { const w = mem.r16((linStart - ip0 + ip) & MM); ip = (ip + 2) & 0xffff; return w; };
@@ -167,15 +184,15 @@ export class Recompiler {
       const a = NT(), b = NT(), rr = NT();
       P(`var ${a}=(${dRead})${M(sz)},${b}=(${src})${M(sz)};`);
       switch (op) {
-        case 'add': P(`var ${rr}=(${a}+${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); P(`cpu.setAdd(${a},${b},${rr},${sz});`); break;
-        case 'or': P(`var ${rr}=(${a}|${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); P(`cpu.setLogic(${rr},${sz});`); break;
-        case 'and': P(`var ${rr}=(${a}&${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); P(`cpu.setLogic(${rr},${sz});`); break;
-        case 'xor': P(`var ${rr}=(${a}^${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); P(`cpu.setLogic(${rr},${sz});`); break;
-        case 'sub': P(`var ${rr}=(${a}-${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); P(`cpu.setSub(${a},${b},${rr},${sz});`); break;
-        case 'cmp': P(`var ${rr}=(${a}-${b})${M(sz)};`); P(`cpu.setSub(${a},${b},${rr},${sz});`); break;
-        case 'test': P(`var ${rr}=(${a}&${b})${M(sz)};`); P(`cpu.setLogic(${rr},${sz});`); break;
-        case 'adc': { const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}+${b}+${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); P(`cpu.setAdc(${a},${b},${c},${rr},${sz});`); break; }
-        case 'sbb': { const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}-${b}-${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); P(`cpu.setSbb(${a},${b},${c},${rr},${sz});`); break; }
+        case 'add': P(`var ${rr}=(${a}+${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setAdd(${a},${b},${rr},${sz});`, lALL); break;
+        case 'or': P(`var ${rr}=(${a}|${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
+        case 'and': P(`var ${rr}=(${a}&${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
+        case 'xor': P(`var ${rr}=(${a}^${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
+        case 'sub': P(`var ${rr}=(${a}-${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
+        case 'cmp': P(`var ${rr}=(${a}-${b})${M(sz)};`); PFLAG(`cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
+        case 'test': P(`var ${rr}=(${a}&${b})${M(sz)};`); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
+        case 'adc': { cur.use |= lC; const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}+${b}+${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setAdc(${a},${b},${c},${rr},${sz});`, lALL); break; }
+        case 'sbb': { cur.use |= lC; const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}-${b}-${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setSbb(${a},${b},${c},${rr},${sz});`, lALL); break; }
       }
     };
     const ALUNAMES = ['add', 'or', 'adc', 'sbb', 'and', 'sub', 'xor', 'cmp'];
@@ -230,6 +247,8 @@ export class Recompiler {
       }
       const sz = opsize;
       count++;
+      cur = { flagIdx: -1, def: 0, use: 0 };   // fresh dead-flag record for this instruction
+      instrs.push(cur);
 
       // ----- ALU 0x00..0x3D regular grid -----
       if (op < 0x40 && (op & 7) < 6 && (op >> 3) < 8 && ALUNAMES[op >> 3] !== undefined && (op & 0xc7) !== 0x06 && (op & 0xc7) !== 0x07) {
@@ -254,19 +273,19 @@ export class Recompiler {
         case 0x1f: P(`cpu.setSeg(${DS},cpu.pop16());`); break;
 
         // ---- BCD adjust ----
-        case 0x27: P('cpu.daa();'); break;
-        case 0x2f: P('cpu.das();'); break;
-        case 0x37: P('cpu.aaa();'); break;
-        case 0x3f: P('cpu.aas();'); break;
+        case 0x27: cur.use |= lC | lA; P('cpu.daa();'); break;
+        case 0x2f: cur.use |= lC | lA; P('cpu.das();'); break;
+        case 0x37: cur.use |= lC | lA; P('cpu.aaa();'); break;
+        case 0x3f: cur.use |= lC | lA; P('cpu.aas();'); break;
 
         // ---- INC/DEC reg16 ----
         case 0x40: case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: {
           const i = op & 7, a = NT(), rr = NT();
-          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}+1)${M(sz)};${rW(i, sz, rr)}cpu.setAdd(${a},1,${rr},${sz},false);`); break;
+          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}+1)${M(sz)};${rW(i, sz, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break;
         }
         case 0x48: case 0x49: case 0x4a: case 0x4b: case 0x4c: case 0x4d: case 0x4e: case 0x4f: {
           const i = op & 7, a = NT(), rr = NT();
-          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}-1)${M(sz)};${rW(i, sz, rr)}cpu.setSub(${a},1,${rr},${sz},false);`); break;
+          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}-1)${M(sz)};${rW(i, sz, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break;
         }
 
         // ---- PUSH/POP reg ----
@@ -322,10 +341,10 @@ export class Recompiler {
         case 0x99: P(`r[2]=(r[2]&~0xffff)|((r[0]&0x8000)?0xffff:0);`); break;            // CWD
         case 0x9a: { const o = f16(), s = f16(); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});cpu.setSeg(${CS},${s});`); endJmp('' + o); break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
-        case 0x9c: P('cpu.push16(cpu.flags&0xffff);'); break;                           // PUSHF
+        case 0x9c: cur.use |= lALL; P('cpu.push16(cpu.flags&0xffff);'); break;          // PUSHF (reads all)
         case 0x9d: P('cpu.flags=(cpu.pop16()&0xfd5)|2;'); break;                         // POPF
         case 0x9e: P('cpu.flags=(cpu.flags&~0xff)|(((r[0]>>>8)&0xd5))|2;'); break;       // SAHF
-        case 0x9f: P('r[0]=(r[0]&~0xff00)|((((cpu.flags&0xd5)|2)&0xff)<<8);'); break;    // LAHF
+        case 0x9f: cur.use |= lC | lP | lA | lZ | lS; P('r[0]=(r[0]&~0xff00)|((((cpu.flags&0xd5)|2)&0xff)<<8);'); break; // LAHF (reads CPAZS)
 
         // ---- MOV AL/eAX <-> moffs ----
         case 0xa0: { const d = f16(); P(rW(0, 8, `m.r8(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
@@ -378,9 +397,9 @@ export class Recompiler {
         case 0xce: P(`if(cpu.flags&${OF}){cpu.eip=${ip};cpu.swInt(4);return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
         case 0xcf: P('cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0xfd5)|2;'); P('return;'); ended = true; break; // IRET
 
-        case 0xd4: P(`cpu.aam(${f8()});`); break; // AAM
+        case 0xd4: cur.use |= lALL; P(`cpu.aam(${f8()});`); break; // AAM (may fault mid-block → barrier)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
-        case 0xd6: P(`r[0]=(r[0]&~0xff)|((cpu.flags&${CF})?0xff:0);`); break; // SALC (undocumented)
+        case 0xd6: cur.use |= lC; P(`r[0]=(r[0]&~0xff)|((cpu.flags&${CF})?0xff:0);`); break; // SALC (reads CF)
         case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT
 
         // ---- x87 FPU (D8-DF): emit the specific op inline (Phase 1.F) ----
@@ -420,7 +439,7 @@ export class Recompiler {
         case 0xeb: { const rel = fs8(); endJmp('' + ((ip + rel) & 0xffff)); break; }    // JMP rel8
 
         case 0xf4: P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break; // HLT
-        case 0xf5: P(`cpu.flags^=${CF};`); break;                                       // CMC
+        case 0xf5: cur.use |= lC; P(`cpu.flags^=${CF};`); break;                        // CMC (reads CF)
         case 0xf6: emitGroup3(8); break;
         case 0xf7: emitGroup3(sz); break;
         case 0xf8: P(`cpu.flags&=~${CF};`); break;                                      // CLC
@@ -429,7 +448,7 @@ export class Recompiler {
         case 0xfb: P(`cpu.flags|=${IF};`); break;                                       // STI
         case 0xfc: P(`cpu.flags&=~${DF};`); break;                                      // CLD
         case 0xfd: P(`cpu.flags|=${DF};`); break;                                       // STD
-        case 0xfe: { const o = modrm(); const a = NT(), rr = NT(); if (o.reg === 0) P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}+1)&0xff;${rmW(o, 8, rr)}cpu.setAdd(${a},1,${rr},8,false);`); else P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}-1)&0xff;${rmW(o, 8, rr)}cpu.setSub(${a},1,${rr},8,false);`); break; }
+        case 0xfe: { const o = modrm(); const a = NT(), rr = NT(); if (o.reg === 0) { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}+1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},8,false);`, lNOC); } else { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}-1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},8,false);`, lNOC); } break; }
         case 0xff: emitGroup5(sz); break;
 
         case 0x0f: { decode0F(sz); break; }
@@ -440,6 +459,23 @@ export class Recompiler {
     }
 
     if (!ended) P(`cpu.eip=${ip};`);
+
+    // ---- dead-flag elimination (Phase 1.A2) ----
+    // Backward liveness over the block's instructions: strip a flag-setting call whose
+    // defined flags are ALL dead at that point. Live-out of the block is ALL 6 flags —
+    // the next block (or an external reader between slices) may consume them — so the
+    // last flag writer never strips; only intermediate dead ones do (e.g. address-math
+    // ADDs feeding nothing before the block-final CMP+Jcc). stepOne compiles a single
+    // instruction, so live is always ALL and nothing is ever stripped → the conformance
+    // path is byte-identical by construction.
+    if (!NOSTRIP) {
+      let live = lALL;
+      for (let i = instrs.length - 1; i >= 0; i--) {
+        const n = instrs[i];
+        if (n.flagIdx >= 0 && (n.def & live) === 0) out[n.flagIdx] = '';
+        live = (live & ~n.def) | n.use;
+      }
+    }
 
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
@@ -557,6 +593,7 @@ export class Recompiler {
     function emitShift(o, size, cnt) {
       const ops = ['rol', 'ror', 'rcl', 'rcr', 'shl', 'shr', 'shl', 'sar'];
       const fn = ops[o.reg];
+      if (o.reg === 2 || o.reg === 3) cur.use |= lC;   // RCL/RCR rotate through carry — read CF
       P(rmW(o, size, `cpu.${fn}(${rmR(o, size)},${cnt},${size})`));
     }
 
@@ -565,19 +602,19 @@ export class Recompiler {
       switch (o.reg) {
         case 0: case 1: { const i = size === 8 ? f8() : (size === 16 ? f16() : (f16() | (f16() << 16))); alu('test', rmR(o, size), null, '' + (i >>> 0), size); break; }
         case 2: P(rmW(o, size, `(~${rmR(o, size)})`)); break;                            // NOT
-        case 3: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, size)};var ${rr}=(0-${a})${M(size)};${rmW(o, size, rr)}cpu.setSub(0,${a},${rr},${size});`); break; } // NEG
+        case 3: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, size)};var ${rr}=(0-${a})${M(size)};${rmW(o, size, rr)}`); PFLAG(`cpu.setSub(0,${a},${rr},${size});`, lALL); break; } // NEG
         case 4: P(`cpu.${size === 8 ? 'mul8' : 'mul16'}(${rmR(o, size)});`); break;      // MUL
         case 5: P(`cpu.${size === 8 ? 'imul8' : 'imul16'}(${rmR(o, size)});`); break;    // IMUL
-        case 6: P(`cpu.${size === 8 ? 'div8' : 'div16'}(${rmR(o, size)});`); break;      // DIV
-        case 7: P(`cpu.${size === 8 ? 'idiv8' : 'idiv16'}(${rmR(o, size)});`); break;    // IDIV
+        case 6: cur.use |= lALL; P(`cpu.${size === 8 ? 'div8' : 'div16'}(${rmR(o, size)});`); break;   // DIV (may fault → barrier)
+        case 7: cur.use |= lALL; P(`cpu.${size === 8 ? 'idiv8' : 'idiv16'}(${rmR(o, size)});`); break; // IDIV (may fault → barrier)
       }
     }
 
     function emitGroup5(sz) {
       const o = modrm();
       switch (o.reg) {
-        case 0: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}+1)${M(sz)};${rmW(o, sz, rr)}cpu.setAdd(${a},1,${rr},${sz},false);`); break; }
-        case 1: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}-1)${M(sz)};${rmW(o, sz, rr)}cpu.setSub(${a},1,${rr},${sz},false);`); break; }
+        case 0: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}+1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break; }
+        case 1: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}-1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break; }
         case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, 16)};cpu.push16(${ip});cpu.eip=${tg};`); P('return;'); ended = true; break; } // CALL Ev
         case 3: { const a = memAddr(o); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`); P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, 16)};cpu.eip=${tg};`); P('return;'); ended = true; break; } // JMP Ev
@@ -622,7 +659,7 @@ export class Recompiler {
       // near Jcc rel16/32
       if (op2 >= 0x80 && op2 <= 0x8f) { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); endJcc(op2 & 0xf, (ip + (rel << 16 >> 16)) & 0xffff, ip); return; }
       // SETcc Eb
-      if (op2 >= 0x90 && op2 <= 0x9f) { const o = modrm(); P(rmW(o, 8, `${condExpr(op2 & 0xf)}?1:0`)); return; }
+      if (op2 >= 0x90 && op2 <= 0x9f) { cur.use |= lALL; const o = modrm(); P(rmW(o, 8, `${condExpr(op2 & 0xf)}?1:0`)); return; }
       // BTx Ev,Gv (reg bit offset) and group 0F BA Ev,imm8
       const bt = (o, kind, bitExpr) => {
         const b = NT(), v = NT();
