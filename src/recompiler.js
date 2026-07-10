@@ -11,7 +11,7 @@
 // Every block ends by writing cpu.eip (and, on far transfers, the segments) and
 // returning. The machine loop then fetches the next block.
 
-import { CF, ZF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
+import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
 
 const MAXOPS = 192;               // cap basic-block length
 const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
@@ -180,9 +180,25 @@ export class Recompiler {
     };
     const ALUNAMES = ['add', 'or', 'adc', 'sbb', 'and', 'sub', 'xor', 'cmp'];
 
+    // ---- condition codes as inline bit-tests (replaces the cpu.cond(cc) call) ----
+    // cc 0..15 = O NO B AE Z NZ BE A S NS P NP L GE LE G. `sfNeOf` = (SF!=OF).
+    const sfNeOf = `((cpu.flags>>>7^cpu.flags>>>11)&1)`;
+    const condExpr = (cc) => {
+      switch (cc) {
+        case 0x0: return `(cpu.flags&${OF})`;              case 0x1: return `!(cpu.flags&${OF})`;
+        case 0x2: return `(cpu.flags&${CF})`;              case 0x3: return `!(cpu.flags&${CF})`;
+        case 0x4: return `(cpu.flags&${ZF})`;              case 0x5: return `!(cpu.flags&${ZF})`;
+        case 0x6: return `(cpu.flags&${CF | ZF})`;         case 0x7: return `!(cpu.flags&${CF | ZF})`;
+        case 0x8: return `(cpu.flags&${SF})`;              case 0x9: return `!(cpu.flags&${SF})`;
+        case 0xa: return `(cpu.flags&${PF})`;              case 0xb: return `!(cpu.flags&${PF})`;
+        case 0xc: return sfNeOf;                           case 0xd: return `!${sfNeOf}`;
+        case 0xe: return `((cpu.flags&${ZF})||${sfNeOf})`; case 0xf: return `(!(cpu.flags&${ZF})&&!${sfNeOf})`;
+      }
+    };
+
     // ---- block terminators ----
     const endJmp = (target) => { P(`cpu.eip=${target}&0xffff;`); P('return;'); ended = true; };
-    const endJcc = (cc, target, next) => { P(`cpu.eip=cpu.cond(${cc})?(${target}&0xffff):${next};`); P('return;'); ended = true; };
+    const endJcc = (cc, target, next) => { P(`cpu.eip=${condExpr(cc)}?(${target}&0xffff):${next};`); P('return;'); ended = true; };
 
     // ---- x87 stack-expression helpers (used by emitFPUReg/emitFPUMem below) ----
     // ST(i) as an lvalue/rvalue string; fpush/FPOP mutate cpu.ftop directly (no mirror).
@@ -606,7 +622,7 @@ export class Recompiler {
       // near Jcc rel16/32
       if (op2 >= 0x80 && op2 <= 0x8f) { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); endJcc(op2 & 0xf, (ip + (rel << 16 >> 16)) & 0xffff, ip); return; }
       // SETcc Eb
-      if (op2 >= 0x90 && op2 <= 0x9f) { const o = modrm(); P(rmW(o, 8, `cpu.cond(${op2 & 0xf})?1:0`)); return; }
+      if (op2 >= 0x90 && op2 <= 0x9f) { const o = modrm(); P(rmW(o, 8, `${condExpr(op2 & 0xf)}?1:0`)); return; }
       // BTx Ev,Gv (reg bit offset) and group 0F BA Ev,imm8
       const bt = (o, kind, bitExpr) => {
         const b = NT(), v = NT();
