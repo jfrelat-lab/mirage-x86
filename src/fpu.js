@@ -22,8 +22,11 @@ export function installFPU(cpu) {
 
   const f32l = (a) => dv.getFloat32(a & mask, true);
   const f64l = (a) => dv.getFloat64(a & mask, true);
-  const f32s = (a, v) => dv.setFloat32(a & mask, v, true);
-  const f64s = (a, v) => dv.setFloat64(a & mask, v, true);
+  // Float stores must honour the SMC dirty check like the integer w8/w16/w32 do —
+  // a program that FSTs into a page holding compiled code must invalidate those blocks.
+  const cp = cpu.mem.codePage;
+  const f32s = (a, v) => { a &= mask; dv.setFloat32(a, v, true); if (cp[a >>> 12] || cp[((a + 3) & mask) >>> 12]) cpu.mem._dirty(a, 4); };
+  const f64s = (a, v) => { a &= mask; dv.setFloat64(a, v, true); if (cp[a >>> 12] || cp[((a + 7) & mask) >>> 12]) cpu.mem._dirty(a, 8); };
   const i16 = (a) => dv.getInt16(a & mask, true);
   const i32 = (a) => dv.getInt32(a & mask, true);
 
