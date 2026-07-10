@@ -1,0 +1,97 @@
+{
+  "demos/PLASMA13.COM": {
+    "hash": "e9682c54837c6507e91a8ef1bb50af5990dcb7c7",
+    "mode": 19,
+    "fault": null
+  },
+  "demos/XORMUNCH.COM": {
+    "hash": "36e746c6e8573f03803a683184ed33d96ec1fb81",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/256b.com": {
+    "hash": "fe42ec8145f4360474888b80259f74b3622b2f2a",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/256bytef.com": {
+    "hash": "645977d0e990f3189720349318de9c7854e35541",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/above.com": {
+    "hash": "c4ea636359a183b6dc90e8ee9bf9302483f8fb3a",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/chaosequ.com": {
+    "hash": "173628d3bb4791075152fe8bd75efda9d86ffbf3",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/difze.com": {
+    "hash": "37254de1f6ba14f469592b6d772c91ac97f6cef4",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/intoanew.com": {
+    "hash": "bac8fdec04b7804bab5eac021b40ed5f90ec38a6",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/intro.com": {
+    "hash": "70cacba8383b3c43844db6782a941c15050831b3",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/intro256.com": {
+    "hash": "72c01f48672984b46c89c8f3fd1b8ad08f36ca74",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/kaneda.com": {
+    "hash": "041ccb4bd47e2d8477ef3170c3c330d5d454460e",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/lattice.com": {
+    "hash": "6b907e787db18e6a2c314258c7dcc0bda34b09a1",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/memories.com": {
+    "hash": "2f64deeb0406cb204a1303ab97ed4906c52a91af",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/oktaeder.com": {
+    "hash": "88ab732bf3512b33f6328b736652000ffedfb876",
+    "mode": 3,
+    "fault": "mirage: unimplemented opcode 0x0f 0x01"
+  },
+  "intros/puls.com": {
+    "hash": "660d315007aefedb996f1622004f5d5cdcff0276",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/revitro.com": {
+    "hash": "39c417e0a9cee156b8ac54fe5f8aea416caab4f6",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/rv256.com": {
+    "hash": "55a1f8869af2e26087e90b13fa722901d6287f38",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/tube.com": {
+    "hash": "ce99e50fed8e0bfd871a5da5196a37a8b0786b20",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/upup.com": {
+    "hash": "e633f5ec6c16f2fddb7183e2d302970c4a2e5427",
+    "mode": 19,
+    "fault": null
+  }
+}
