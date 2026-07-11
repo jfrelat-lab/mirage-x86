@@ -645,8 +645,18 @@ export class Recompiler {
         case 0: case 1: { const i = size === 8 ? f8() : (size === 16 ? f16() : (f16() | (f16() << 16))); alu('test', rmR(o, size), null, '' + (i >>> 0), size); break; }
         case 2: P(rmW(o, size, `(~${rmR(o, size)})`)); break;                            // NOT
         case 3: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, size)};var ${rr}=(0-${a})${M(size)};${rmW(o, size, rr)}`); PFLAG(`cpu.setSub(0,${a},${rr},${size});`, lALL); break; } // NEG
-        case 4: P(`cpu.${size === 8 ? 'mul8' : 'mul16'}(${rmR(o, size)});`); break;      // MUL
-        case 5: P(`cpu.${size === 8 ? 'imul8' : 'imul16'}(${rmR(o, size)});`); break;    // IMUL
+        case 4:                                                                         // MUL
+          if (size === 16) { const s = NT(), p = NT(), hi = NT();
+            P(`var ${s}=(${rmR(o, 16)})&0xffff;var ${p}=(r[0]&0xffff)*${s};var ${hi}=(${p}/65536)&0xffff;r[0]=(r[0]&~0xffff)|(${p}&0xffff);r[2]=(r[2]&~0xffff)|${hi};`);
+            PFLAG(`cpu.setShiftResult(0,16,${hi}!==0,${hi}!==0,false);`, lC | lO);
+          } else P(`cpu.mul8(${rmR(o, size)});`);
+          break;
+        case 5:                                                                         // IMUL
+          if (size === 16) { const s = NT(), a = NT(), p = NT();
+            P(`var ${s}=((${rmR(o, 16)})<<16)>>16;var ${a}=((r[0]&0xffff)<<16)>>16;var ${p}=${a}*${s};r[0]=(r[0]&~0xffff)|(${p}&0xffff);r[2]=(r[2]&~0xffff)|((${p}>>16)&0xffff);`);
+            PFLAG(`cpu.setShiftResult(0,16,(${p}<-32768||${p}>32767),(${p}<-32768||${p}>32767),false);`, lC | lO);
+          } else P(`cpu.imul8(${rmR(o, size)});`);
+          break;
         case 6: cur.use |= lALL; P(`cpu.${size === 8 ? 'div8' : 'div16'}(${rmR(o, size)});`); break;   // DIV (may fault → barrier)
         case 7: cur.use |= lALL; P(`cpu.${size === 8 ? 'idiv8' : 'idiv16'}(${rmR(o, size)});`); break; // IDIV (may fault → barrier)
       }
