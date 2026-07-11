@@ -633,10 +633,37 @@ export class Recompiler {
     }
 
     function emitShift(o, size, cnt) {
+      const rot = o.reg;   // 0 rol,1 ror,2 rcl,3 rcr,4/6 shl,5 shr,7 sar
+      if (rot === 2 || rot === 3) cur.use |= lC;   // RCL/RCR rotate through carry — read CF
+      // Inline the logical/arithmetic shifts with a COMPILE-TIME count (C0/C1/D0/D1) for
+      // 8/16-bit — the hot forms. Mirrors cpu.shl/shr/sar exactly; setShiftResult is a
+      // strippable PFLAG (def CF/OF/PF/ZF/SF, AF preserved). CL-count (D2/D3, runtime c==0
+      // branch), rotates, and 32-bit keep the helper call.
+      const isShift = rot === 4 || rot === 5 || rot === 6 || rot === 7;
+      if (isShift && size !== 32 && /^\d+$/.test(cnt)) {
+        const C = Number(cnt) & 0x1f;
+        if (C === 0) return;   // shift by 0: value and flags unchanged (byte-exact no-op)
+        const mask = size === 8 ? 0xff : 0xffff, msb = size - 1;
+        const v = NT(), res = NT(), cf = NT(), of = NT();
+        if (rot === 5) {                                   // SHR
+          P(`var ${v}=(${rmR(o, size)})&${mask};var ${res}=(${v}>>>${C})&${mask};`);
+          P(rmW(o, size, res));
+          P(`var ${cf}=(${v}>>>${C - 1})&1;var ${of}=${C === 1 ? `((${v}>>>${msb})&1)` : '0'};`);
+        } else if (rot === 7) {                            // SAR
+          const sv = NT();
+          P(`var ${v}=(${rmR(o, size)})&${mask};var ${sv}=((${v}&${1 << msb})?(${v}|${~mask}):${v})|0;var ${res}=(${sv}>>${C})&${mask};`);
+          P(rmW(o, size, res));
+          P(`var ${cf}=(${sv}>>${C - 1})&1;var ${of}=0;`);
+        } else {                                           // SHL (rot 4 or 6)
+          P(`var ${v}=(${rmR(o, size)})&${mask};var ${res}=(${v}<<${C})&${mask};`);
+          P(rmW(o, size, res));
+          P(`var ${cf}=${C <= size ? `((${v}>>>${size - C})&1)` : '0'};var ${of}=${C === 1 ? `(((${res}>>>${msb})&1)^${cf})` : '0'};`);
+        }
+        PFLAG(`cpu.setShiftResult(${res},${size},!!${cf},!!${of});`, lC | lP | lZ | lS | lO);
+        return;
+      }
       const ops = ['rol', 'ror', 'rcl', 'rcr', 'shl', 'shr', 'shl', 'sar'];
-      const fn = ops[o.reg];
-      if (o.reg === 2 || o.reg === 3) cur.use |= lC;   // RCL/RCR rotate through carry — read CF
-      P(rmW(o, size, `cpu.${fn}(${rmR(o, size)},${cnt},${size})`));
+      P(rmW(o, size, `cpu.${ops[rot]}(${rmR(o, size)},${cnt},${size})`));
     }
 
     function emitGroup3(size) {
