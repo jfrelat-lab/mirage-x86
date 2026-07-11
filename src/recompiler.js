@@ -16,10 +16,10 @@ import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cp
 const MAXOPS = 192;               // cap basic-block length
 const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 
-// Kill switch (A/B gate): MIRAGE_NOFPUINLINE=1 falls back to the cpu.fpuMem/fpuReg
-// runtime dispatch instead of the Phase-1.F inline emission. Browser-safe (no `process`).
+// Debug kill switch: MIRAGE_NOFPUINLINE=1 falls back to the cpu.fpuMem/fpuReg runtime
+// dispatch instead of emitting each x87 op inline. Browser-safe (no `process`).
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
-// MIRAGE_NOSTRIP=1 disables the Phase-1.A2 dead-flag elimination (A/B correctness gate).
+// MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSTRIP);
 
 // Abstract flag-liveness bit set (NOT the EFLAGS register layout) for the dead-flag pass:
@@ -90,7 +90,7 @@ export class Recompiler {
     return blk.count;
   }
 
-  /** Fused dispatch loop (Phase 1.R): run up to maxBlocks blocks with the try/catch
+  /** Fused dispatch loop: run up to maxBlocks blocks with the try/catch
    *  hoisted out of the per-block path and stats.exec accumulated once — this is the
    *  hot loop (puls was ~20% here). halted/blocked are still checked every iteration:
    *  an INT handler inside blk.fn can set machine.blocked via machine.block(), and it
@@ -156,7 +156,7 @@ export class Recompiler {
     let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false;
     const NT = () => '_' + (tmp++);
 
-    // ---- dead-flag pass bookkeeping (Phase 1.A2) ----
+    // ---- dead-flag pass bookkeeping ----
     // One record per decoded instruction: `flagIdx` = out[] index of its strippable
     // flag-setting call (or -1), `def`/`use` = abstract flag masks. `cur` is the record
     // for the instruction being decoded. PFLAG emits a strippable flag call and tags it.
@@ -205,7 +205,7 @@ export class Recompiler {
       return { isReg: false, reg, rm, seg, off };
     };
     const memAddr = (o) => { if (o._t === undefined) { o._t = NT(); P(`var ${o._t}=${lin(o.seg, o.off)};`); } return o._t; };
-    // Direct typed-array memory access (Phase 1.M): u8[]/dv reads and writes inline instead
+    // Direct typed-array memory access: u8[]/dv reads and writes inline instead
     // of m.r8/w8 calls. Addresses from memAddr are already &MM-masked; composed lanes mask
     // a+1.. (they escape MM only at the very top of RAM, but that wraps and is reachable).
     // memRead: little-endian compose. memW keeps the SMC dirty check (shared, never open-coded).
@@ -444,7 +444,7 @@ export class Recompiler {
         case 0xd6: cur.use |= lC; P(`r[0]=(r[0]&~0xff)|((cpu.flags&${CF})?0xff:0);`); break; // SALC (reads CF)
         case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT
 
-        // ---- x87 FPU (D8-DF): emit the specific op inline (Phase 1.F) ----
+        // ---- x87 FPU (D8-DF): emit the specific op inline ----
         case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf: {
           const o = modrm();
           if (NOFPUINLINE) {                          // A/B fallback: runtime dispatch
@@ -502,7 +502,7 @@ export class Recompiler {
 
     if (!ended) P(`cpu.eip=${ip};`);
 
-    // ---- dead-flag elimination (Phase 1.A2) ----
+    // ---- dead-flag elimination ----
     // Backward liveness over the block's instructions: strip a flag-setting call whose
     // defined flags are ALL dead at that point. Live-out of the block is ALL 6 flags —
     // the next block (or an external reader between slices) may consume them — so the
@@ -526,7 +526,7 @@ export class Recompiler {
 
     // ===================== nested emit helpers =====================
 
-    // ---- x87 inline emission (Phase 1.F) ---------------------------------------
+    // ---- x87 inline emission ---------------------------------------------------
     // Mirrors src/fpu.js exactly, but with op/reg/rm known at compile time we emit the
     // one operation's JS directly instead of the giant runtime switch. Uses the block
     // aliases `st` (cpu.fst) and `dv` (m.dv); cpu.ftop stays on the object (no local
@@ -538,7 +538,7 @@ export class Recompiler {
     function emitFPUMem(op, reg, o) {
       const a = memAddr(o);
       const fb = () => P(`cpu.fpuMem(${op},${reg},${a});`);
-      const smc = (len) => `if(m.codePage[${a}>>>12]|m.codePage[((${a}+${len - 1})&${MM})>>>12])m._dirty(${a},${len});`;
+      const smc = (len) => `if(cp[${a}>>>12]|cp[((${a}+${len - 1})&${MM})>>>12])m._dirty(${a},${len});`;
       switch (op) {
         case 0xd9:                                                   // f32 load/store + control
           if (reg === 0) return fpush(`dv.getFloat32(${a},true)`);           // FLD m32
@@ -676,13 +676,13 @@ export class Recompiler {
           if (size === 16) { const s = NT(), p = NT(), hi = NT();
             P(`var ${s}=(${rmR(o, 16)})&0xffff;var ${p}=(r[0]&0xffff)*${s};var ${hi}=(${p}/65536)&0xffff;r[0]=(r[0]&~0xffff)|(${p}&0xffff);r[2]=(r[2]&~0xffff)|${hi};`);
             PFLAG(`cpu.setShiftResult(0,16,${hi}!==0,${hi}!==0,false);`, lC | lO);
-          } else P(`cpu.mul8(${rmR(o, size)});`);
+          } else P(`cpu.${size === 8 ? 'mul8' : 'mul16'}(${rmR(o, size)});`);   // 8-bit; 32-bit (66h) → mul16 as before
           break;
         case 5:                                                                         // IMUL
           if (size === 16) { const s = NT(), a = NT(), p = NT();
             P(`var ${s}=((${rmR(o, 16)})<<16)>>16;var ${a}=((r[0]&0xffff)<<16)>>16;var ${p}=${a}*${s};r[0]=(r[0]&~0xffff)|(${p}&0xffff);r[2]=(r[2]&~0xffff)|((${p}>>16)&0xffff);`);
             PFLAG(`cpu.setShiftResult(0,16,(${p}<-32768||${p}>32767),(${p}<-32768||${p}>32767),false);`, lC | lO);
-          } else P(`cpu.imul8(${rmR(o, size)});`);
+          } else P(`cpu.${size === 8 ? 'imul8' : 'imul16'}(${rmR(o, size)});`);
           break;
         case 6: cur.use |= lALL; P(`cpu.${size === 8 ? 'div8' : 'div16'}(${rmR(o, size)});`); break;   // DIV (may fault → barrier)
         case 7: cur.use |= lALL; P(`cpu.${size === 8 ? 'idiv8' : 'idiv16'}(${rmR(o, size)});`); break; // IDIV (may fault → barrier)
