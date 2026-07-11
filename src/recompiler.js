@@ -90,6 +90,35 @@ export class Recompiler {
     return blk.count;
   }
 
+  /** Fused dispatch loop (Phase 1.R): run up to maxBlocks blocks with the try/catch
+   *  hoisted out of the per-block path and stats.exec accumulated once — this is the
+   *  hot loop (puls was ~20% here). halted/blocked are still checked every iteration:
+   *  an INT handler inside blk.fn can set machine.blocked via machine.block(), and it
+   *  must be honoured before the next block dispatches (same order as the old loop).
+   *  step() stays for single-block callers (tests, conformance stepOne is separate). */
+  run(machine, maxBlocks) {
+    const cpu = this.cpu, MM = this.MM, pages = this.blockPages, prof = this.profiling;
+    let n = 0;
+    try {
+      while (n < maxBlocks && !cpu.halted && !machine.blocked) {
+        const ip0 = cpu.eip & 0xffff, lin = (cpu.base[CS] + ip0) & MM;
+        const page = pages[lin >>> 12];
+        let blk = page !== undefined ? page[lin & 0xfff] : undefined;
+        if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
+        if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
+        blk.fn(cpu);
+        cpu.cycles += blk.count;
+        n++;
+      }
+    } catch (e) {
+      this.stats.exec += n;
+      if (machine.onError) { machine.onError(e); return n; }
+      throw e;
+    }
+    this.stats.exec += n;
+    return n;
+  }
+
   _compile(lin, ip0) {
     const blk = this.translate(lin, ip0);
     const pg = lin >>> 12;

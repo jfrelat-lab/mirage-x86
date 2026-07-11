@@ -101,15 +101,8 @@ export class Machine {
   // ---- run loop -----------------------------------------------------------
   /** Execute up to `maxBlocks` basic blocks (or until HLT). Returns blocks run. */
   runSlice(maxBlocks = 100000) {
-    const cpu = this.cpu, rec = this.rec;
     this.blocked = false;
-    let n = 0;
-    while (n < maxBlocks) {
-      if (cpu.halted || this.blocked) break;
-      try { rec.step(); } catch (e) { if (this.onError) this.onError(e); else throw e; return n; }
-      n++;
-    }
-    return n;
+    return this.rec.run(this, maxBlocks);
   }
 
   /** A handler calls this to wait on input: rewind past the INT and yield. */
