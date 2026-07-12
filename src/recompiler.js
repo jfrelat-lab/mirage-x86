@@ -127,7 +127,7 @@ export class Recompiler {
       const ip = queue.shift();
       if (byIp.has(ip)) continue;
       const blk = this._blockFor((base + ip) & this.MM, ip);
-      if (!blk || blk.kind !== 0) { byIp.set(ip, null); continue; }   // absent, aliased, or already a region
+      if (!blk || blk.kind !== 0 || blk.canFault) { byIp.set(ip, null); continue; }   // absent/aliased/region/faulting → not a member
       byIp.set(ip, blk); order.push(ip); ins += blk.count;
       const t = blk.term;
       if (t.k === 'jmp') queue.push(t.t);
@@ -301,7 +301,7 @@ export class Recompiler {
     const mem = this.mem, MM = this.MM;
     const out = ['var t;'];
     const P = (s) => out.push(s);
-    let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false;
+    let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false;
     const NT = () => '_' + (tmp++);
 
     // Terminator descriptor. Static, same-CS transfers (JMP rel / Jcc / LOOP / JCXZ) record
@@ -591,7 +591,7 @@ export class Recompiler {
         case 0xce: P(`if(cpu.flags&${OF}){cpu.eip=${ip};cpu.swInt(4);return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
         case 0xcf: P('cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0xfd5)|2;'); P('return;'); ended = true; break; // IRET
 
-        case 0xd4: cur.use |= lALL; P(`cpu.aam(${f8()});`); break; // AAM (may fault mid-block → barrier)
+        case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.aam(${f8()});`); break; // AAM (may swInt mid-block)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
         case 0xd6: cur.use |= lC; P(`r[0]=(r[0]&~0xff)|((cpu.flags&${CF})?0xff:0);`); break; // SALC (reads CF)
         case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT
@@ -679,7 +679,7 @@ export class Recompiler {
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
-    return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, hot: 0, kind: 0 };
+    return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, canFault, hot: 0, kind: 0 };
 
     // ===================== nested emit helpers =====================
 
@@ -841,8 +841,8 @@ export class Recompiler {
             PFLAG(`cpu.setShiftResult(0,16,(${p}<-32768||${p}>32767),(${p}<-32768||${p}>32767),false);`, lC | lO);
           } else P(`cpu.${size === 8 ? 'imul8' : 'imul16'}(${rmR(o, size)});`);
           break;
-        case 6: cur.use |= lALL; P(`cpu.${size === 8 ? 'div8' : 'div16'}(${rmR(o, size)});`); break;   // DIV (may fault → barrier)
-        case 7: cur.use |= lALL; P(`cpu.${size === 8 ? 'idiv8' : 'idiv16'}(${rmR(o, size)});`); break; // IDIV (may fault → barrier)
+        case 6: cur.use |= lALL; canFault = true; P(`cpu.${size === 8 ? 'div8' : 'div16'}(${rmR(o, size)});`); break;   // DIV (may swInt mid-block)
+        case 7: cur.use |= lALL; canFault = true; P(`cpu.${size === 8 ? 'idiv8' : 'idiv16'}(${rmR(o, size)});`); break; // IDIV (may swInt mid-block)
       }
     }
 
