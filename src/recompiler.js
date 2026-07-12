@@ -21,11 +21,37 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSTRIP);
+// MIRAGE_TIER2=1 enables the tier-2 region compiler (default OFF while it is proven out;
+// once golden+conformance+fuzzer are green both ways it becomes the default, flag kept as a
+// kill switch). It fuses a hot block and its statically-reachable successors into one
+// function (a switch-in-loop) so inter-block dispatch disappears on hot loops.
+const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
+const T2_HOT = 64;         // promote a block to a region after this many executions
+const T2_MAXBLK = 24;      // cap region size in blocks
+const T2_MAXINS = 384;     // cap region size in instructions
+const T2_BLACKLIST = 3;    // stop re-forming a root after this many SMC evictions
 
 // Abstract flag-liveness bit set (NOT the EFLAGS register layout) for the dead-flag pass:
 // which of the 6 arithmetic flags an instruction defines / uses. Full ALU ops def all 6;
 // INC/DEC def all-but-carry (they preserve CF).
 const lC = 1, lP = 2, lA = 4, lZ = 8, lS = 16, lO = 32, lALL = 63, lNOC = lALL & ~lC;
+
+// Condition code cc (0..15 = O NO B AE Z NZ BE A S NS P NP L GE LE G) as an inline
+// boolean bit-test on cpu.flags — replaces the cpu.cond(cc) call. Shared by the block
+// emitter (Jcc/SETcc) and the region compiler. sfNeOf = (SF != OF).
+const _sfNeOf = `((cpu.flags>>>7^cpu.flags>>>11)&1)`;
+function condExpr(cc) {
+  switch (cc) {
+    case 0x0: return `(cpu.flags&${OF})`;              case 0x1: return `!(cpu.flags&${OF})`;
+    case 0x2: return `(cpu.flags&${CF})`;              case 0x3: return `!(cpu.flags&${CF})`;
+    case 0x4: return `(cpu.flags&${ZF})`;              case 0x5: return `!(cpu.flags&${ZF})`;
+    case 0x6: return `(cpu.flags&${CF | ZF})`;         case 0x7: return `!(cpu.flags&${CF | ZF})`;
+    case 0x8: return `(cpu.flags&${SF})`;              case 0x9: return `!(cpu.flags&${SF})`;
+    case 0xa: return `(cpu.flags&${PF})`;              case 0xb: return `!(cpu.flags&${PF})`;
+    case 0xc: return _sfNeOf;                          case 0xd: return `!${_sfNeOf}`;
+    case 0xe: return `((cpu.flags&${ZF})||${_sfNeOf})`; case 0xf: return `(!(cpu.flags&${ZF})&&!${_sfNeOf})`;
+  }
+}
 
 export class Recompiler {
   constructor(cpu) {
@@ -47,7 +73,9 @@ export class Recompiler {
     this.pageHi = [];
     this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
-    this.stats = { compiles: 0, exec: 0, invalidations: 0 };
+    this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0 };
+    this.t2evict = new Map();      // region root lin -> SMC-eviction count (for the blacklist)
+    this.t2blacklist = new Set();  // roots that self-modify too much -> stay tier-1
     this.mem.onCodeWrite = (addr, len) => this.invalidate(addr, len);
   }
 
@@ -65,7 +93,8 @@ export class Recompiler {
         const pg = this.blockPages[lin >>> 12];
         const blk = pg !== undefined ? pg[lin & 0xfff] : undefined;
         if (!blk) { set.delete(lin); continue; }              // stale entry
-        if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, lin);
+        if (blk.ranges) { if (blk.ranges.some(([s, e]) => s < end && addr < e)) this._evictRegion(blk, lin); }
+        else if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, lin);
       }
       if (set.size === 0) this.mem.codePage[p] = 0;            // page no longer holds code
     }
@@ -80,7 +109,110 @@ export class Recompiler {
     }
   }
 
-  reset() { this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageLo = []; this.pageHi = []; }
+  reset() { this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageLo = []; this.pageHi = []; this.t2evict.clear(); this.t2blacklist.clear(); }
+
+  // ===================== tier-2 region compiler =====================
+
+  /** A hot block crossed T2_HOT: form a region rooted at it (the block plus its statically-
+   *  reachable successors) and install one fused function in its place. Bails (staying tier-1)
+   *  on a blacklisted root or a region too small to be worth it. */
+  _promote(rootLin, rootIp0) {
+    if (this.t2blacklist.has(rootLin)) return;
+    const base = this.cpu.base[CS];
+    const byIp = new Map();     // ip -> tier-1 block (or null if unusable)
+    const order = [];           // member ips, in discovery order
+    const queue = [rootIp0];
+    let ins = 0;
+    while (queue.length && order.length < T2_MAXBLK && ins < T2_MAXINS) {
+      const ip = queue.shift();
+      if (byIp.has(ip)) continue;
+      const blk = this._blockFor((base + ip) & this.MM, ip);
+      if (!blk || blk.kind !== 0) { byIp.set(ip, null); continue; }   // absent, aliased, or already a region
+      byIp.set(ip, blk); order.push(ip); ins += blk.count;
+      const t = blk.term;
+      if (t.k === 'jmp') queue.push(t.t);
+      else if (t.k === 'jcc' || t.k === 'loop' || t.k === 'jcxz') { queue.push(t.t, t.n); }
+    }
+    if (order.length < 2) return;   // one block fuses nothing — leave it tier-1
+    this._installRegion(this._emitRegion(order, byIp, rootLin, rootIp0), rootLin);
+  }
+
+  /** Cached tier-1 block at (lin, ip0), compiling if absent; null if it's a region or the
+   *  ip0 doesn't match (a CS:IP alias — can't be a region member). */
+  _blockFor(lin, ip0) {
+    const pg = this.blockPages[lin >>> 12];
+    let blk = pg !== undefined ? pg[lin & 0xfff] : undefined;
+    if (blk === undefined) blk = this._compile(lin, ip0);
+    return blk.kind === 0 && blk.ip0 === ip0 ? blk : null;
+  }
+
+  /** Emit the fused region function: a `switch(_e)` over the member ips inside a `for(;;)`.
+   *  An in-region edge is a local `_e=T;break` (re-dispatches the switch); an out-of-region
+   *  edge (or an exit terminator) flushes retired-instruction count into cpu.cycles and
+   *  returns. `_n` accumulates retired instructions; cpu.tbudget bounds a runaway loop. */
+  _emitRegion(order, byIp, rootLin, rootIp0) {
+    const members = new Set(order);
+    let usesFPU = false;
+    const ranges = [];
+    // Budget: check-then-decrement, matching run()'s tier-1 loop (run B blocks for budget B),
+    // so a region and tier-1 stop at exactly the same block boundary — same slice boundary,
+    // same interrupt timing. cpu.cycles is bumped once per block AFTER its body (as tier-1's
+    // run() does), so an in-block RDTSC reads the same count as tier-1. Byte-identical output.
+    const out = [`var _e=${rootIp0};`, 'for(;;){', 'if(cpu.tbudget<=0){cpu.eip=_e;return;}', 'cpu.tbudget--;', 'switch(_e){'];
+    for (const ip of order) {
+      const b = byIp.get(ip);
+      if (b.usesFPU) usesFPU = true;
+      ranges.push([b.linStart, b.linEnd]);
+      out.push(`case ${ip}:{`);
+      if (b.term.k === 'exit') out.push(`cpu.cycles+=${b.count};`, b.bodyOut.join('\n'), 'return;');
+      else out.push(b.bodyOut.join('\n'), `cpu.cycles+=${b.count};`, this._edgeCode(b.term, members));
+      out.push('}');
+    }
+    out.push('default:cpu.eip=_e;return;', '}}');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const body = pre + '\n' + out.join('\n');
+    return { fn: new Function('cpu', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, linStart: rootLin, linEnd: rootLin + 1, ranges, body };
+  }
+
+  /** The region-internal edge for a static terminator: an in-region target is a local jump
+   *  (`_e=T;break`); an out-of-region target flushes cycles and returns to the dispatch loop. */
+  _edgeCode(term, members) {
+    const go = (ip) => members.has(ip) ? `_e=${ip};break;` : `cpu.eip=${ip};return;`;
+    if (term.k === 'jmp') return go(term.t);
+    const cond = term.k === 'jcc' ? condExpr(term.cc)
+      : term.k === 'jcxz' ? '((r[1]&0xffff)===0)'
+        : term.v === 0xe0 ? `((r[1]&0xffff)!==0&&!(cpu.flags&${ZF}))`
+          : term.v === 0xe1 ? `((r[1]&0xffff)!==0&&(cpu.flags&${ZF}))` : '((r[1]&0xffff)!==0)';
+    return `if(${cond}){${go(term.t)}}else{${go(term.n)}}`;
+  }
+
+  _installRegion(region, rootLin) {
+    const pg = rootLin >>> 12;
+    let page = this.blockPages[pg]; if (page === undefined) page = this.blockPages[pg] = new Array(4096);
+    page[rootLin & 0xfff] = region;    // replace the root's tier-1 block; constituents stay tier-1
+    const pages = new Set();
+    for (const [s, e] of region.ranges) for (let p = s >>> 12; p <= (e - 1) >>> 12; p++) pages.add(p);
+    for (const p of pages) {
+      this.mem.markCodePage(p);
+      let set = this.pageBlocks.get(p); if (!set) { set = new Set(); this.pageBlocks.set(p, set); }
+      set.add(rootLin);
+      for (const [s, e] of region.ranges) {
+        if (this.pageLo[p] === undefined || s < this.pageLo[p]) this.pageLo[p] = s;
+        if (this.pageHi[p] === undefined || e > this.pageHi[p]) this.pageHi[p] = e;
+      }
+    }
+    this.stats.t2compiles++;
+  }
+
+  _evictRegion(region, rootLin) {
+    const pg = this.blockPages[rootLin >>> 12]; if (pg !== undefined) pg[rootLin & 0xfff] = undefined;
+    this.stats.invalidations++; this.stats.t2evicts++;
+    const pages = new Set();
+    for (const [s, e] of region.ranges) for (let p = s >>> 12; p <= (e - 1) >>> 12; p++) pages.add(p);
+    for (const p of pages) { const set = this.pageBlocks.get(p); if (set) set.delete(rootLin); }
+    const c = (this.t2evict.get(rootLin) || 0) + 1; this.t2evict.set(rootLin, c);
+    if (c >= T2_BLACKLIST) this.t2blacklist.add(rootLin);   // self-modifying loop → give up, stay tier-1
+  }
 
   /** Run exactly one basic block from the current CS:IP. Returns its length. */
   step() {
@@ -94,6 +226,7 @@ export class Recompiler {
     if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
     if (this.profiling) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
     this.stats.exec++;
+    cpu.tbudget = 1 << 20;   // a region (if one is installed) self-bounds against this
     blk.fn(cpu);
     cpu.cycles += blk.count;
     return blk.count;
@@ -107,9 +240,12 @@ export class Recompiler {
    *  step() stays for single-block callers (tests, conformance stepOne is separate). */
   run(machine, maxBlocks) {
     const cpu = this.cpu, MM = this.MM, pages = this.blockPages, prof = this.profiling;
+    // One shared block-execution budget: a tier-1 block costs 1, and a region decrements it
+    // once per internal iteration (so a fused loop can't outrun the slice or hang the host).
+    cpu.tbudget = maxBlocks;
     let n = 0;
     try {
-      while (n < maxBlocks && !cpu.halted && !machine.blocked) {
+      while (cpu.tbudget > 0 && !cpu.halted && !machine.blocked) {
         const ip0 = cpu.eip & 0xffff, lin = (cpu.base[CS] + ip0) & MM;
         const page = pages[lin >>> 12];
         let blk = page !== undefined ? page[lin & 0xfff] : undefined;
@@ -117,6 +253,7 @@ export class Recompiler {
         if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
         blk.fn(cpu);
         cpu.cycles += blk.count;
+        if (blk.kind === 0) { cpu.tbudget--; if (TIER2 && ++blk.hot === T2_HOT) this._promote(lin, ip0); }
         n++;
       }
     } catch (e) {
@@ -256,22 +393,6 @@ export class Recompiler {
       }
     };
     const ALUNAMES = ['add', 'or', 'adc', 'sbb', 'and', 'sub', 'xor', 'cmp'];
-
-    // ---- condition codes as inline bit-tests (replaces the cpu.cond(cc) call) ----
-    // cc 0..15 = O NO B AE Z NZ BE A S NS P NP L GE LE G. `sfNeOf` = (SF!=OF).
-    const sfNeOf = `((cpu.flags>>>7^cpu.flags>>>11)&1)`;
-    const condExpr = (cc) => {
-      switch (cc) {
-        case 0x0: return `(cpu.flags&${OF})`;              case 0x1: return `!(cpu.flags&${OF})`;
-        case 0x2: return `(cpu.flags&${CF})`;              case 0x3: return `!(cpu.flags&${CF})`;
-        case 0x4: return `(cpu.flags&${ZF})`;              case 0x5: return `!(cpu.flags&${ZF})`;
-        case 0x6: return `(cpu.flags&${CF | ZF})`;         case 0x7: return `!(cpu.flags&${CF | ZF})`;
-        case 0x8: return `(cpu.flags&${SF})`;              case 0x9: return `!(cpu.flags&${SF})`;
-        case 0xa: return `(cpu.flags&${PF})`;              case 0xb: return `!(cpu.flags&${PF})`;
-        case 0xc: return sfNeOf;                           case 0xd: return `!${sfNeOf}`;
-        case 0xe: return `((cpu.flags&${ZF})||${sfNeOf})`; case 0xf: return `(!(cpu.flags&${ZF})&&!${sfNeOf})`;
-      }
-    };
 
     // ---- block terminators ----
     const endJmp = (target) => { term = { k: 'jmp', t: +target }; ended = true; };
@@ -558,7 +679,7 @@ export class Recompiler {
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
-    return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU };
+    return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, hot: 0, kind: 0 };
 
     // ===================== nested emit helpers =====================
 

@@ -27,8 +27,9 @@ const PATHS = {
   plasma13: 'demos/PLASMA13.COM', xormunch: 'demos/XORMUNCH.COM',
   tube: 'intros/tube.com', memories: 'intros/memories.com',
   kaneda: 'intros/kaneda.com', lattice: 'intros/lattice.com',
+  puls: 'intros/puls.com', chaosequ: 'intros/chaosequ.com',
 };
-const DEFAULT = ['tube', 'memories', 'plasma13', 'xormunch', 'kaneda', 'lattice'];
+const DEFAULT = ['tube', 'memories', 'plasma13', 'xormunch', 'kaneda', 'lattice', 'puls'];
 
 const argv = process.argv.slice(2);
 const json = argv.includes('--json');
