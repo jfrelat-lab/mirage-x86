@@ -427,6 +427,7 @@ export class Recompiler {
     // ===================== main decode loop =====================
     while (!ended && count < maxOps) {
       opsize = 16; segOv = -1; rep = 0;
+      const ipStart = ip;                 // instruction start ip — fault return address (#BR etc.)
       // prefixes
       let op = f8();
       for (; ;) {
@@ -496,6 +497,13 @@ export class Recompiler {
           P('var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
         case 0x61: // POPA
           P(`${rW(7, 16, 'cpu.pop16()')}${rW(6, 16, 'cpu.pop16()')}${rW(5, 16, 'cpu.pop16()')}cpu.pop16();${rW(3, 16, 'cpu.pop16()')}${rW(2, 16, 'cpu.pop16()')}${rW(1, 16, 'cpu.pop16()')}${rW(0, 16, 'cpu.pop16()')}`); break;
+        case 0x62: {                                                                   // BOUND Gv,Ma → #BR (INT 5) if index ∉ [lower,upper] (signed)
+          canFault = true; const o = modrm(); const a = memAddr(o);
+          const rd = sz === 16 ? 'r16' : 'r32', sx = sz === 16 ? '<<16>>16' : '|0', d = sz >> 3;
+          const idx = NT(), lo = NT(), hi = NT();
+          P(`var ${idx}=(${rR(o.reg, sz)})${sx};var ${lo}=(m.${rd}(${a}))${sx};var ${hi}=(m.${rd}((${a}+${d})&${MM}))${sx};`);
+          P(`if(${idx}<${lo}||${idx}>${hi}){cpu.eip=${ipStart};cpu.swInt(5);return;}`); break;
+        }
 
         case 0x68: { const i = sz === 16 ? f16() : (f16() | (f16() << 16)); P(`cpu.push16(${i & 0xffff});`); break; } // PUSH Iz (16-bit stack)
         case 0x6a: P(`cpu.push16(${fs8()}&0xffff);`); break;                          // PUSH Ib (sign-extended)
@@ -898,6 +906,8 @@ export class Recompiler {
       const op2 = f8();
       // near Jcc rel16/32
       if (op2 >= 0x80 && op2 <= 0x8f) { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); endJcc(op2 & 0xf, (ip + (rel << 16 >> 16)) & 0xffff, ip); return; }
+      // CMOVcc Gv,Ev (P6+): reg = cond ? Ev : reg
+      if (op2 >= 0x40 && op2 <= 0x4f) { cur.use |= lALL; const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)};if(${condExpr(op2 & 0xf)}){${rW(o.reg, sz, s)}}`); return; }
       // SETcc Eb
       if (op2 >= 0x90 && op2 <= 0x9f) { cur.use |= lALL; const o = modrm(); P(rmW(o, 8, `${condExpr(op2 & 0xf)}?1:0`)); return; }
       // BTx Ev,Gv (reg bit offset) and group 0F BA Ev,imm8
