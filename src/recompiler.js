@@ -167,6 +167,13 @@ export class Recompiler {
     let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false;
     const NT = () => '_' + (tmp++);
 
+    // Terminator descriptor. Static, same-CS transfers (JMP rel / Jcc / LOOP / JCXZ) record
+    // their target(s) here instead of emitting `cpu.eip=T;return` directly, so the region
+    // compiler can follow those edges and rewire in-region ones to a local jump. Everything
+    // else (RET/CALL/far/computed/INT/HLT/fall-through) is `exit`: it emits its own return
+    // and ends any region. `t`/`n` are numeric target ips.
+    let term = { k: 'exit' };
+
     // ---- dead-flag pass bookkeeping ----
     // One record per decoded instruction: `flagIdx` = out[] index of its strippable
     // flag-setting call (or -1), `def`/`use` = abstract flag masks. `cur` is the record
@@ -267,8 +274,21 @@ export class Recompiler {
     };
 
     // ---- block terminators ----
-    const endJmp = (target) => { P(`cpu.eip=${target}&0xffff;`); P('return;'); ended = true; };
-    const endJcc = (cc, target, next) => { P(`cpu.eip=${condExpr(cc)}?(${target}&0xffff):${next};`); P('return;'); ended = true; };
+    const endJmp = (target) => { term = { k: 'jmp', t: +target }; ended = true; };
+    const endJcc = (cc, target, next) => { term = { k: 'jcc', cc, t: +target, n: +next }; ended = true; };
+    // Emit the tier-1 return form of the recorded terminator (byte-identical to the old
+    // inline emission). The region compiler emits its own edge form from the same `term`.
+    const emitTermReturn = () => {
+      if (term.k === 'jmp') P(`cpu.eip=${term.t}&0xffff;`);
+      else if (term.k === 'jcc') P(`cpu.eip=${condExpr(term.cc)}?(${term.t}&0xffff):${term.n};`);
+      else if (term.k === 'jcxz') P(`cpu.eip=((r[1]&0xffff)===0)?${term.t}:${term.n};`);
+      else if (term.k === 'loop') {
+        const c = term.v === 0xe0 ? `(r[1]&0xffff)!==0&&!(cpu.flags&${ZF})`
+          : term.v === 0xe1 ? `(r[1]&0xffff)!==0&&(cpu.flags&${ZF})` : `(r[1]&0xffff)!==0`;
+        P(`cpu.eip=(${c})?${term.t}:${term.n};`);
+      } else return;   // 'exit' — the block emitted its own return
+      P('return;');
+    };
 
     // ---- x87 stack-expression helpers (used by emitFPUReg/emitFPUMem below) ----
     // ST(i) as an lvalue/rvalue string; fpush/FPOP mutate cpu.ftop directly (no mirror).
@@ -392,7 +412,7 @@ export class Recompiler {
         }
         case 0x98: P(`r[0]=(r[0]&~0xffff)|((((r[0]&0xff)<<24>>24))&0xffff);`); break;    // CBW
         case 0x99: P(`r[2]=(r[2]&~0xffff)|((r[0]&0x8000)?0xffff:0);`); break;            // CWD
-        case 0x9a: { const o = f16(), s = f16(); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});cpu.setSeg(${CS},${s});`); endJmp('' + o); break; } // CALLF ptr
+        case 0x9a: { const o = f16(), s = f16(); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
         case 0x9c: cur.use |= lALL; P('cpu.push16(cpu.flags&0xffff);'); break;          // PUSHF (reads all)
         case 0x9d: P('cpu.flags=(cpu.pop16()&0xfd5)|2;'); break;                         // POPF
@@ -470,10 +490,10 @@ export class Recompiler {
         }
 
         // ---- LOOP / JCXZ ----
-        case 0xe0: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); P(`cpu.eip=((r[1]&0xffff)!==0&&!(cpu.flags&${ZF}))?${(ip + rel) & 0xffff}:${ip};`); P('return;'); ended = true; break; }
-        case 0xe1: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); P(`cpu.eip=((r[1]&0xffff)!==0&&(cpu.flags&${ZF}))?${(ip + rel) & 0xffff}:${ip};`); P('return;'); ended = true; break; }
-        case 0xe2: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); P(`cpu.eip=((r[1]&0xffff)!==0)?${(ip + rel) & 0xffff}:${ip};`); P('return;'); ended = true; break; }
-        case 0xe3: { const rel = fs8(); P(`cpu.eip=((r[1]&0xffff)===0)?${(ip + rel) & 0xffff}:${ip};`); P('return;'); ended = true; break; }
+        case 0xe0: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe0, t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
+        case 0xe1: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe1, t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
+        case 0xe2: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe2, t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
+        case 0xe3: { const rel = fs8(); term = { k: 'jcxz', t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
 
         // ---- IN / OUT ----
         case 0xe4: { const p = f8(); P(rW(0, 8, `cpu.ioRead(${p},1)`)); break; }
@@ -486,9 +506,9 @@ export class Recompiler {
         case 0xef: P(`cpu.ioWrite(r[2]&0xffff,${sz / 8},${rR(0, sz)});`); break;
 
         // ---- CALL / JMP ----
-        case 0xe8: { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); const tgt = (ip + (rel << 16 >> 16)) & 0xffff; P(`cpu.push16(${ip});`); endJmp('' + tgt); break; } // CALL rel
+        case 0xe8: { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); const tgt = (ip + (rel << 16 >> 16)) & 0xffff; P(`cpu.push16(${ip});`); P(`cpu.eip=${tgt}&0xffff;`); P('return;'); ended = true; break; } // CALL rel
         case 0xe9: { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); endJmp('' + ((ip + (rel << 16 >> 16)) & 0xffff)); break; } // JMP rel
-        case 0xea: { const o = f16(), s = f16(); P(`cpu.setSeg(${CS},${s});`); endJmp('' + o); break; } // JMPF ptr
+        case 0xea: { const o = f16(), s = f16(); P(`cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // JMPF ptr
         case 0xeb: { const rel = fs8(); endJmp('' + ((ip + rel) & 0xffff)); break; }    // JMP rel8
 
         case 0xf4: P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break; // HLT
@@ -530,10 +550,15 @@ export class Recompiler {
       }
     }
 
+    // `bodyOut` is the block body WITHOUT its terminating branch (kept for the region
+    // compiler, which re-emits the terminator from `term`); tier-1 then appends the
+    // terminator's return form to get the standalone block function.
+    const bodyOut = out.slice();
+    emitTermReturn();
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
-    return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body };
+    return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU };
 
     // ===================== nested emit helpers =====================
 
