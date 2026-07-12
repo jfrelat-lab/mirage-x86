@@ -37,6 +37,14 @@ export class Recompiler {
     // (V8's Map always routes through FindOrderedHashMapEntry even for SMI keys).
     this.blockPages = [];          // page -> Array(4096) of block | undefined
     this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
+    // Per-page block-coverage bounds [pageLo, pageHi) — the min linStart / max linEnd of
+    // any block touching a page. A write outside a page's bound can overlap no block, so
+    // invalidate() skips the whole scan (the hot case for demos that write a data buffer
+    // into a page that also holds code, e.g. tube's pixel buffer). Bounds only grow (an
+    // eviction leaves them a safe over-approximation), so a stale-wide bound just falls
+    // back to the full scan — never a missed invalidation.
+    this.pageLo = [];
+    this.pageHi = [];
     this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
     this.stats = { compiles: 0, exec: 0, invalidations: 0 };
@@ -52,6 +60,7 @@ export class Recompiler {
     for (let p = addr >> 12; p <= (end - 1) >> 12; p++) {
       const set = this.pageBlocks.get(p);
       if (!set) continue;
+      if (end <= this.pageLo[p] || addr >= this.pageHi[p]) continue;   // write outside all blocks on this page
       for (const lin of set) {
         const pg = this.blockPages[lin >>> 12];
         const blk = pg !== undefined ? pg[lin & 0xfff] : undefined;
@@ -71,7 +80,7 @@ export class Recompiler {
     }
   }
 
-  reset() { this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); }
+  reset() { this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageLo = []; this.pageHi = []; }
 
   /** Run exactly one basic block from the current CS:IP. Returns its length. */
   step() {
@@ -131,6 +140,8 @@ export class Recompiler {
       let s = this.pageBlocks.get(p);
       if (!s) { s = new Set(); this.pageBlocks.set(p, s); }
       s.add(lin);
+      if (this.pageLo[p] === undefined || blk.linStart < this.pageLo[p]) this.pageLo[p] = blk.linStart;
+      if (this.pageHi[p] === undefined || blk.linEnd > this.pageHi[p]) this.pageHi[p] = blk.linEnd;
     }
     this.stats.compiles++;
     return blk;
