@@ -21,11 +21,11 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSTRIP);
-// MIRAGE_TIER2=1 enables the tier-2 region compiler (default OFF while it is proven out;
-// once golden+conformance+fuzzer are green both ways it becomes the default, flag kept as a
-// kill switch). It fuses a hot block and its statically-reachable successors into one
-// function (a switch-in-loop) so inter-block dispatch disappears on hot loops.
-const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
+// The tier-2 region compiler is ON by default; MIRAGE_NOTIER2=1 disables it (kill switch /
+// A-B gate). It fuses a hot block and its statically-reachable successors into one function
+// (a switch-in-loop) so inter-block dispatch disappears on hot loops. Proven byte-identical
+// to tier-1: golden + full conformance + the fuzz-region differential fuzzer.
+const TIER2 = typeof process === 'undefined' || !(process.env && process.env.MIRAGE_NOTIER2);
 const T2_HOT = 64;         // promote a block to a region after this many executions
 const T2_MAXBLK = 24;      // cap region size in blocks
 const T2_MAXINS = 384;     // cap region size in instructions
@@ -158,7 +158,10 @@ export class Recompiler {
     // so a region and tier-1 stop at exactly the same block boundary — same slice boundary,
     // same interrupt timing. cpu.cycles is bumped once per block AFTER its body (as tier-1's
     // run() does), so an in-block RDTSC reads the same count as tier-1. Byte-identical output.
-    const out = [`var _e=${rootIp0};`, 'for(;;){', 'if(cpu.tbudget<=0){cpu.eip=_e;return;}', 'cpu.tbudget--;', 'switch(_e){'];
+    // `R.dead` is set by _evictRegion when a write invalidates this region mid-flight (SMC);
+    // the guard stops the stale in-flight execution at the next iteration, bounding staleness
+    // to one block like tier-1 (whose current block.fn also finishes after an eviction).
+    const out = [`var _e=${rootIp0};`, 'for(;;){', 'if(R.dead){cpu.eip=_e;return;}', 'if(cpu.tbudget<=0){cpu.eip=_e;return;}', 'cpu.tbudget--;', 'switch(_e){'];
     for (const ip of order) {
       const b = byIp.get(ip);
       if (b.usesFPU) usesFPU = true;
@@ -171,7 +174,7 @@ export class Recompiler {
     out.push('default:cpu.eip=_e;return;', '}}');
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
-    return { fn: new Function('cpu', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, linStart: rootLin, linEnd: rootLin + 1, ranges, body };
+    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body };
   }
 
   /** The region-internal edge for a static terminator: an in-region target is a local jump
@@ -205,6 +208,7 @@ export class Recompiler {
   }
 
   _evictRegion(region, rootLin) {
+    region.dead = 1;   // stop any in-flight execution of this region at its next iteration
     const pg = this.blockPages[rootLin >>> 12]; if (pg !== undefined) pg[rootLin & 0xfff] = undefined;
     this.stats.invalidations++; this.stats.t2evicts++;
     const pages = new Set();
@@ -227,7 +231,7 @@ export class Recompiler {
     if (this.profiling) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
     this.stats.exec++;
     cpu.tbudget = 1 << 20;   // a region (if one is installed) self-bounds against this
-    blk.fn(cpu);
+    blk.fn(cpu, blk);
     cpu.cycles += blk.count;
     return blk.count;
   }
@@ -251,7 +255,7 @@ export class Recompiler {
         let blk = page !== undefined ? page[lin & 0xfff] : undefined;
         if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
         if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
-        blk.fn(cpu);
+        blk.fn(cpu, blk);
         cpu.cycles += blk.count;
         if (blk.kind === 0) { cpu.tbudget--; if (TIER2 && ++blk.hot === T2_HOT) this._promote(lin, ip0); }
         n++;
