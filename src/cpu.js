@@ -214,6 +214,12 @@ export class CPU {
   div16(s) { s &= 0xffff; if (!s) return this.swInt(0); const n = (this.dx & 0xffff) * 65536 + (this.ax & 0xffff), q = Math.floor(n / s); if (q > 0xffff) return this.swInt(0); this.ax = q; this.dx = n % s; }
   idiv8(s) { s = (s << 24 >> 24); if (!s) return this.swInt(0); const n = (this.ax << 16 >> 16), q = (n / s) | 0; if (q < -128 || q > 127) return this.swInt(0); this.al = q & 0xff; this.ah = (n % s) & 0xff; }
   idiv16(s){ s = (s << 16 >> 16); if (!s) return this.swInt(0); const n = (((this.dx & 0xffff) << 16) | (this.ax & 0xffff)) | 0, q = (n / s) | 0; if (q < -32768 || q > 32767) return this.swInt(0); this.ax = q & 0xffff; this.dx = (n % s) & 0xffff; }
+  // 32-bit MUL/IMUL/DIV/IDIV: EDX:EAX is a 64-bit value, beyond float64's exact range, so
+  // compute with BigInt. reg[0]=EAX, reg[2]=EDX.
+  mul32(s)  { const p = BigInt(this.reg[0] >>> 0) * BigInt(s >>> 0); this.reg[0] = Number(BigInt.asUintN(32, p)); this.reg[2] = Number(BigInt.asUintN(32, p >> 32n)); const c = this.reg[2] !== 0; this.setShiftResult(0, 32, c, c, false); }
+  imul32(s) { const p = BigInt(this.reg[0] | 0) * BigInt(s | 0); this.reg[0] = Number(BigInt.asUintN(32, p)); this.reg[2] = Number(BigInt.asUintN(32, p >> 32n)); const c = p < -2147483648n || p > 2147483647n; this.setShiftResult(0, 32, c, c, false); }
+  div32(s)  { s >>>= 0; if (!s) return this.swInt(0); const n = (BigInt(this.reg[2] >>> 0) << 32n) | BigInt(this.reg[0] >>> 0), bs = BigInt(s), q = n / bs; if (q > 0xffffffffn) return this.swInt(0); this.reg[0] = Number(q); this.reg[2] = Number(n % bs); }
+  idiv32(s) { s |= 0; if (!s) return this.swInt(0); const n = BigInt.asIntN(64, (BigInt(this.reg[2] >>> 0) << 32n) | BigInt(this.reg[0] >>> 0)), bs = BigInt(s), q = n / bs; if (q > 2147483647n || q < -2147483648n) return this.swInt(0); this.reg[0] = Number(BigInt.asUintN(32, q)); this.reg[2] = Number(BigInt.asUintN(32, n % bs)); }
 
   // three-operand / 0F IMUL: signed multiply, result in this._mr, sets CF/OF
   imul16x(a, b, bits) {
