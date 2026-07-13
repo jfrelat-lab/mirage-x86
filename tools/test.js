@@ -8,6 +8,7 @@
 // doubles as a deterministic regression net for the engine.
 
 import { Machine } from '../src/machine.js';
+import { installMouse } from '../src/mouse.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 
 let pass = 0, fail = 0;
@@ -177,6 +178,20 @@ function eq(name, got, want) {
   const { cpu } = run([0xbb, 0x11, 0x00, 0xb8, 0xc8, 0x00, 0x62, 0x06, 0x40, 0x00, 0xbb, 0x77, 0x00, 0xf4],
     ({ mc }) => { mc.mem.w16(0x2040, 10); mc.mem.w16(0x2042, 100); mc.hookInterrupt(5, (c) => { out.push(1); c.halted = true; }); });
   eq('bound out-of-range #BR fired', out.length, 1); eq('bound out-of-range skips trailing MOV', cpu.bx, 0x11); }
+
+// ---- INT 33h mouse driver — the functions Mars polls to steer the camera. ------------
+// AX=0000 reset/detect → AX=FFFF (present), BX=2 (buttons).
+{ const { cpu } = run([0xb8, 0x00, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => installMouse(mc));
+  eq('mouse detect present', cpu.ax, 0xffff); eq('mouse detect buttons', cpu.bx, 2); }
+// AX=000B read motion counters: returns accumulated mickeys (signed) and clears them.
+{ const { cpu } = run([0xb8, 0x0b, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseMoveRel(7, -3); });
+  eq('mouse mickeys dx', cpu.cx, 7); eq('mouse mickeys dy (signed)', cpu.dx, 0xfffd); }
+// AX=0003 get position + buttons: two buttons held → BX bit0|bit1.
+{ const { cpu } = run([0xb8, 0x03, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseButton(0, true); mc.mouseButton(1, true); });
+  eq('mouse buttons L+R', cpu.bx, 3); }
+// AX=0005 button press data: two left presses since reset → BX=2.
+{ const { cpu } = run([0xbb, 0x00, 0x00, 0xb8, 0x05, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseButton(0, true); mc.mouseButton(0, false); mc.mouseButton(0, true); });
+  eq('mouse press count', cpu.bx, 2); }
 
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);

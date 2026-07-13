@@ -9,6 +9,7 @@ import { installDOS } from './dos.js';
 import { VFS } from './vfs.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
+import { installMouse } from './mouse.js';
 import { Shell } from './shell.js';
 import { SAMPLES } from './samples.js';
 
@@ -25,6 +26,7 @@ export class Mirage {
     this.dos = installDOS(this.machine, this.vfs);
     this.video = new Video(this.machine, canvas);
     this.keyboard = new Keyboard(this.machine);
+    installMouse(this.machine);                     // INT 33h; fed by canvas events in boot()
     this.shell = null;
     this.onFrame = opts.onFrame || null;
     this._raf = 0;
@@ -54,9 +56,23 @@ export class Mirage {
     this.shell = new Shell(this.machine);
     this.shell.boot();
     this.keyboard.attach(window);
+    this._attachMouse();
     this._lastTick = performance.now();
     this._loop();
     return this;
+  }
+
+  // Feed browser mouse events into the INT 33h driver: relative motion (movementX/Y)
+  // becomes mickeys — what camera demos like Mars poll each frame via AX=000B. In a
+  // graphics mode a click grabs the pointer so motion keeps flowing past the window
+  // edge (best-effort; a plain move over the canvas works too, and Esc releases it).
+  _attachMouse() {
+    const c = this.canvas, m = this.machine;
+    const mapBtn = (b) => (b === 2 ? 1 : b === 1 ? 2 : 0);   // DOM L/M/R (0/1/2) -> driver bit L/R/M
+    c.addEventListener('mousemove', (e) => { if (e.movementX || e.movementY) m.mouseMoveRel(e.movementX | 0, e.movementY | 0); });
+    c.addEventListener('mousedown', (e) => { m.mouseButton(mapBtn(e.button), true); if (m.mem.r8(0x449) === 0x13 && c.requestPointerLock) { try { c.requestPointerLock(); } catch { } } e.preventDefault(); });
+    window.addEventListener('mouseup', (e) => m.mouseButton(mapBtn(e.button), false));
+    c.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   // ---- public API used by main.js ----
