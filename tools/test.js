@@ -193,6 +193,12 @@ function eq(name, got, want) {
 { const { cpu } = run([0xbb, 0x00, 0x00, 0xb8, 0x05, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseButton(0, true); mc.mouseButton(0, false); mc.mouseButton(0, true); });
   eq('mouse press count', cpu.bx, 2); }
 
+// ---- BSWAP r32 (0F C8+r): reverse a 32-bit register's byte order (486+). --------------
+{ const { cpu } = run([0x66, 0xb8, 0x44, 0x33, 0x22, 0x11, 0x0f, 0xc8, 0xf4]);   // MOV EAX,0x11223344; BSWAP EAX
+  eq('bswap eax', cpu.reg[0] >>> 0, 0x44332211); }
+{ const { cpu } = run([0x66, 0xbb, 0x01, 0x00, 0x00, 0x00, 0x0f, 0xcb, 0xf4]);   // MOV EBX,1; BSWAP EBX (reg-index math)
+  eq('bswap ebx', cpu.reg[3] >>> 0, 0x01000000); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

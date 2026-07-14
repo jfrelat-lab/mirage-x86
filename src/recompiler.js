@@ -910,6 +910,8 @@ export class Recompiler {
       if (op2 >= 0x40 && op2 <= 0x4f) { cur.use |= lALL; const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)};if(${condExpr(op2 & 0xf)}){${rW(o.reg, sz, s)}}`); return; }
       // SETcc Eb
       if (op2 >= 0x90 && op2 <= 0x9f) { cur.use |= lALL; const o = modrm(); P(rmW(o, 8, `${condExpr(op2 & 0xf)}?1:0`)); return; }
+      // BSWAP r32 (0F C8+r): reverse the byte order of a 32-bit register (486+); flags untouched
+      if (op2 >= 0xc8 && op2 <= 0xcf) { const r = op2 - 0xc8, b = NT(); P(`var ${b}=r[${r}]>>>0;r[${r}]=((${b}<<24)|((${b}&0xff00)<<8)|((${b}>>>8)&0xff00)|(${b}>>>24))>>>0;`); return; }
       // BTx Ev,Gv (reg bit offset) and group 0F BA Ev,imm8
       const bt = (o, kind, bitExpr) => {
         const b = NT(), v = NT();
