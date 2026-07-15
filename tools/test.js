@@ -210,6 +210,12 @@ function eq(name, got, want) {
   mc.ioWrite(0x388, 1, 0x04); mc.ioWrite(0x389, 1, 0x80);          // OPL: reset
   eq('opl reset clears', mc.ioRead(0x388, 1), 0x00); }
 
+// ---- EGA/VGA detection: INT 10h AH=12h BL=10h returns EGA info so games find a card. --
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  mc.cpu.ax = 0x1200; mc.cpu.bx = 0x0010;                          // AH=12h, BL=10h "return EGA info"
+  mc.intHandlers[0x10](mc.cpu, mc);
+  eq('ega detect present', mc.cpu.bx, 0x0003); }                   // BH=0 colour, BL=3 (256K) → EGA/VGA present
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

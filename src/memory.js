@@ -19,6 +19,8 @@ export class Memory {
     // pages tells the recompiler to throw the affected blocks away (SMC).
     this.codePage = new Uint8Array(size >> PAGE_BITS);
     this.onCodeWrite = null; // (page) => void, wired up by the recompiler
+    this.planar = false;     // true in EGA/VGA 16-colour modes → A000 writes go through vga.js
+    this.vga = null;         // the VGA planar device (set by installVGA); used on A000 writes
   }
 
   // ---- reads ---------------------------------------------------------------

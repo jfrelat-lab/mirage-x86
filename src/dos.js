@@ -183,7 +183,15 @@ export function installDOS(machine, vfs) {
       case 0x47: { let p = cpu.base[DS] + (cpu.si & 0xffff); const s = vfs.cwd.join('\\'); for (let i = 0; i < s.length; i++) mem.w8(p + i, s.charCodeAt(i)); mem.w8(p + s.length, 0); ok(); break; } // get cwd
       case 0x48: { const par = cpu.bx & 0xffff; if (dos.allocTop + par > MEM_TOP) { err(8); cpu.bx = MEM_TOP - dos.allocTop; break; } cpu.ax = dos.allocTop; dos.allocTop += par; ok(); break; } // alloc
       case 0x49: ok(); break;                                        // free (no-op)
-      case 0x4a: { cpu.bx = Math.min(cpu.bx & 0xffff, MEM_TOP - cpu.seg[ES]); ok(); break; } // resize
+      case 0x4a: {                                                   // resize memory block
+        const seg = cpu.seg[ES], want = cpu.bx & 0xffff, maxPar = MEM_TOP - seg;
+        if (want > maxPar) { err(8); cpu.bx = maxPar; break; }        // not enough memory; report the max
+        // Shrinking the program's own block (the common startup move) frees the memory
+        // above it — without this, a later 0x48 alloc reports 0 free (games print
+        // "0 KBytes available" and quit). Bump-allocator model: last block wins.
+        if (seg + want >= dos.allocTop || seg <= PSP_SEG) dos.allocTop = seg + want;
+        ok(); break;
+      }
       case 0x4c: terminate(cpu.al); break;                           // terminate w/ code
       case 0x4d: cpu.ax = dos.exitCode; break;                       // get return code
       case 0x4e: findFirst(); break;

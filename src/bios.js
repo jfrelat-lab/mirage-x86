@@ -80,8 +80,15 @@ export function installBIOS(machine) {
         bios.mode = cpu.al & 0x7f;
         mem.w8(BDA + 0x49, bios.mode);
         defaultPalette(bios.dac);               // a mode set reloads the default DAC
+        // EGA/VGA 16-colour graphics modes are planar (A000 via the Sequencer/Graphics
+        // Controller); the flag routes A000 writes through the plane logic (see vga.js).
+        const planar = bios.mode === 0x0d || bios.mode === 0x0e || bios.mode === 0x0f ||
+                       bios.mode === 0x10 || bios.mode === 0x11 || bios.mode === 0x12;
+        mem.planar = planar; bios.planar = planar;
+        if (machine.vga) machine.vga.setMode(bios.mode, planar);
         if (!(cpu.al & 0x80)) {                 // high bit set = keep screen
           if (bios.mode === 0x13) for (let i = 0; i < 320 * 200; i++) mem.w8(0xa0000 + i, 0);
+          else if (planar) { if (machine.vga) machine.vga.clear(); }
           else clearScreen(0x07);
         }
         if (bios.onModeChange) bios.onModeChange(bios.mode);
@@ -129,7 +136,10 @@ export function installBIOS(machine) {
           }
         }
         break;
-      case 0x12: break;                          // alternate select
+      case 0x12:                                 // alternate select / EGA info
+        if ((cpu.bx & 0xff) === 0x10) { cpu.bx = 0x0003; cpu.cx = 0x0000; }  // return EGA info: BH=0 colour, BL=3 (256K), CX=switches → EGA/VGA present
+        else cpu.ax = (cpu.ax & 0xff00) | 0x12;                              // ack other subfunctions (scan lines, palette, etc.)
+        break;
       case 0x13: {                               // write string
         const len = cpu.cx & 0xffff, withAttr = cpu.al & 2;
         let p = (cpu.seg[0] << 4) + (cpu.bp & 0xffff); // ES:BP
