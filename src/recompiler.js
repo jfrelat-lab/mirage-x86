@@ -368,14 +368,20 @@ export class Recompiler {
     // of m.r8/w8 calls. Addresses from memAddr are already &MM-masked; composed lanes mask
     // a+1.. (they escape MM only at the very top of RAM, but that wraps and is reachable).
     // memRead: little-endian compose. memW keeps the SMC dirty check (shared, never open-coded).
-    const memRead = (a, sz) => sz === 8 ? `u8[${a}]`
-      : sz === 16 ? `(u8[${a}]|(u8[(${a}+1)&${MM}]<<8))`
-        : `((u8[${a}]|(u8[(${a}+1)&${MM}]<<8)|(u8[(${a}+2)&${MM}]<<16)|(u8[(${a}+3)&${MM}]<<24))>>>0)`;
+    // In EGA/VGA planar modes (m.planar), A000 access must go through the Sequencer/Graphics-
+    // Controller plane logic, so route to m.r8/w8 etc. `m.planar` is false for text/mode-13h/
+    // demos — a single predicted branch keeps the inline u8[] fast path unchanged there.
+    // Route only ACTUAL A000 accesses (>>>16===0xA) through the plane logic — the inline
+    // range check keeps every other access (stack/data/code, all of mode-13h) on the fast
+    // u8[] path even while planar. `m.planar` is false for text/mode-13h/demos → short-circuit.
+    const memRead = (a, sz) => sz === 8 ? `(m.planar&&(${a}>>>16)===10?m.vga.readByte(${a}):u8[${a}])`
+      : sz === 16 ? `(m.planar&&(${a}>>>16)===10?m.r16(${a}):(u8[${a}]|(u8[(${a}+1)&${MM}]<<8)))`
+        : `(m.planar&&(${a}>>>16)===10?m.r32(${a}):((u8[${a}]|(u8[(${a}+1)&${MM}]<<8)|(u8[(${a}+2)&${MM}]<<16)|(u8[(${a}+3)&${MM}]<<24))>>>0))`;
     const memW = (a, sz, v) => {
-      if (sz === 8) return `u8[${a}]=(${v});if(cp[${a}>>>12]!==0)m._dirty(${a},1);`;
+      if (sz === 8) return `if(m.planar&&(${a}>>>16)===10)m.vga.writeByte(${a},(${v}));else{u8[${a}]=(${v});if(cp[${a}>>>12]!==0)m._dirty(${a},1);}`;
       const t = NT();
-      if (sz === 16) return `var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;if(cp[${a}>>>12]|cp[((${a}+1)&${MM})>>>12])m._dirty(${a},2);`;
-      return `var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;u8[(${a}+2)&${MM}]=${t}>>>16;u8[(${a}+3)&${MM}]=${t}>>>24;if(cp[${a}>>>12]|cp[((${a}+3)&${MM})>>>12])m._dirty(${a},4);`;
+      if (sz === 16) return `if(m.planar&&(${a}>>>16)===10)m.w16(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;if(cp[${a}>>>12]|cp[((${a}+1)&${MM})>>>12])m._dirty(${a},2);}`;
+      return `if(m.planar&&(${a}>>>16)===10)m.w32(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;u8[(${a}+2)&${MM}]=${t}>>>16;u8[(${a}+3)&${MM}]=${t}>>>24;if(cp[${a}>>>12]|cp[((${a}+3)&${MM})>>>12])m._dirty(${a},4);}`;
     };
     const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o), sz);
     const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : memW(memAddr(o), sz, v);

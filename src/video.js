@@ -48,8 +48,29 @@ export class Video {
     this._palette();
     const mode = this.mem.r8(0x449);
     if (mode === 0x13) this._renderGfx13();
+    else if (this.mem.planar && this.machine.vga) this._renderPlanar();
     else this._renderText();
     this.ctx.putImageData(this.image, 0, 0);
+  }
+
+  // EGA/VGA 16-colour planar: assemble each pixel's 4-bit index from the four bit-planes,
+  // map it through the attribute palette to a DAC entry, then to RGB.
+  _renderPlanar() {
+    const vga = this.machine.vga, W = vga.width, H = vga.height;
+    this._ensure(W, H);
+    const u32 = this.u32, pal = this.pal, planes = vga.planes, palr = vga.palette;
+    const rowBytes = W >> 3;
+    for (let y = 0; y < H; y++) {
+      for (let xb = 0; xb < rowBytes; xb++) {
+        const off = y * rowBytes + xb;
+        const b0 = planes[off], b1 = planes[0x10000 + off], b2 = planes[0x20000 + off], b3 = planes[0x30000 + off];
+        let o = y * W + xb * 8;
+        for (let m = 0x80; m; m >>= 1) {
+          const idx = ((b0 & m) ? 1 : 0) | ((b1 & m) ? 2 : 0) | ((b2 & m) ? 4 : 0) | ((b3 & m) ? 8 : 0);
+          u32[o++] = pal[palr[idx] & 0x3f];
+        }
+      }
+    }
   }
 
   _renderText() {

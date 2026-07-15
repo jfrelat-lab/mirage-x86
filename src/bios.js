@@ -4,6 +4,7 @@
 // exposed so the JS shell prints through the exact same path as guest code.
 
 import { ZF } from './cpu.js';
+import { installVGA } from './vga.js';
 
 const VRAM = 0xb8000;          // text video memory
 const BDA = 0x400;             // BIOS Data Area
@@ -199,7 +200,7 @@ export function installBIOS(machine) {
   machine.onPortRead(0x3c6, () => 0xff); machine.onPortWrite(0x3c6, () => {});  // pixel mask
   // Input Status #1: toggle vertical-retrace (bit 3) + display-enable (bit 0) so the
   // classic vsync wait loops (poll until set, then until clear) terminate.
-  machine.onPortRead(0x3da, () => { retrace ^= 0x09; return retrace; });
+  machine.onPortRead(0x3da, () => { retrace ^= 0x09; if (machine.vga) machine.vga.atcFlip = 0; return retrace; }); // also resets the ATC index/data flip-flop
 
   // Minimal Sound Blaster DSP detection at base 0x220 (matches BLASTER=A220). We emulate
   // only the reset handshake and the version query so games that probe for a card start up;
@@ -225,6 +226,8 @@ export function installBIOS(machine) {
     machine.onPortWrite(base + 1, (_p, _s, v) => oplData(v & 0xff));      // register data
     machine.onPortRead(base, () => oplStatus);                            // OPL status
   }
+
+  installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
 
   machine.bios = bios;
   return bios;

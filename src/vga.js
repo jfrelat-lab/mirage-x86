@@ -1,0 +1,90 @@
+// vga.js — EGA/VGA 16-colour PLANAR video. In modes 0Dh/0Eh/0Fh/10h/11h/12h the A000
+// window is four bit-planes reached through the Sequencer (map mask) and Graphics
+// Controller (set/reset, ALU function, bit mask, latches, write modes 0-3) — a single
+// CPU byte write fans out to several planes, so it cannot be stored as one flat byte.
+// This device holds the planes and implements the write/read pipeline plus a plane→pixel
+// renderer. Mode 13h stays linear (handled directly in memory/video); text is unchanged.
+
+const PLANE = 0x10000;                              // 64 KiB per plane
+const DIMS = { 0x0d: [320, 200], 0x0e: [640, 200], 0x0f: [640, 350], 0x10: [640, 350], 0x11: [640, 480], 0x12: [640, 480] };
+
+export function installVGA(machine) {
+  const mem = machine.mem;
+  const planes = new Uint8Array(4 * PLANE);
+  const latches = new Uint8Array(4);
+
+  const vga = {
+    planes, latches, mode: 0x03, planar: false, width: 320, height: 200,
+    seqIndex: 0, mapMask: 0x0f,                      // Sequencer: reg 2 = plane write-enable
+    gcIndex: 0, gc: new Uint8Array(9),               // Graphics Controller regs 0..8
+    atcIndex: 0, atcFlip: 0, palette: new Uint8Array(16),  // Attribute Controller palette
+  };
+  for (let i = 0; i < 16; i++) vga.palette[i] = i;   // identity → DAC 0-15 (the EGA colours)
+  vga.gc[8] = 0xff;                                  // bit mask defaults to all bits
+
+  vga.setMode = (mode, planar) => {
+    vga.mode = mode; vga.planar = planar;
+    if (planar) { const d = DIMS[mode] || [320, 200]; vga.width = d[0]; vga.height = d[1]; }
+    vga.mapMask = 0x0f; vga.gc.fill(0); vga.gc[8] = 0xff; vga.seqIndex = 0; vga.gcIndex = 0;
+    vga.atcFlip = 0; for (let i = 0; i < 16; i++) vga.palette[i] = i;
+  };
+  vga.clear = () => planes.fill(0);
+
+  const rotr = (v, c) => c ? (((v >>> c) | (v << (8 - c))) & 0xff) : (v & 0xff);
+  const alu = (fn, v, l) => fn === 1 ? (v & l) : fn === 2 ? (v | l) : fn === 3 ? (v ^ l) : v;
+
+  // The EGA/VGA write pipeline. `off` is the offset within the A000 window (0..0xFFFF).
+  vga.writeByte = (off, val) => {
+    off &= 0xffff;
+    const gc = vga.gc, wm = gc[5] & 3, mask = vga.mapMask, bm = gc[8];
+    const rot = gc[3] & 7, fn = (gc[3] >> 3) & 3, esr = gc[1], sr = gc[0];
+    for (let p = 0; p < 4; p++) {
+      if (!(mask & (1 << p))) continue;
+      const l = latches[p]; let v;
+      if (wm === 0) {                                                 // write mode 0
+        v = (esr & (1 << p)) ? ((sr & (1 << p)) ? 0xff : 0) : rotr(val, rot);
+        v = alu(fn, v, l); v = (v & bm) | (l & ~bm);
+      } else if (wm === 1) {                                          // write mode 1: latch copy
+        v = l;
+      } else if (wm === 2) {                                          // write mode 2: colour from val bits
+        v = (val & (1 << p)) ? 0xff : 0;
+        v = alu(fn, v, l); v = (v & bm) | (l & ~bm);
+      } else {                                                        // write mode 3: val is the bit mask
+        const m2 = rotr(val, rot) & bm;
+        v = (sr & (1 << p)) ? 0xff : 0;
+        v = (v & m2) | (l & ~m2);
+      }
+      planes[p * PLANE + off] = v & 0xff;
+    }
+  };
+
+  // A CPU read loads all four latches (that is what makes read-modify-write blitting work)
+  // and returns the plane chosen by the read-map-select register (read mode 0).
+  vga.readByte = (off) => {
+    off &= 0xffff;
+    latches[0] = planes[off]; latches[1] = planes[PLANE + off];
+    latches[2] = planes[2 * PLANE + off]; latches[3] = planes[3 * PLANE + off];
+    return latches[vga.gc[4] & 3];
+  };
+
+  // ---- register ports (also accept the AL=index/AH=data 16-bit `out dx,ax` form) ----
+  const seqData = (v) => { if (vga.seqIndex === 2) vga.mapMask = v & 0x0f; };
+  machine.onPortWrite(0x3c4, (_p, s, v) => { vga.seqIndex = v & 0x1f; if (s === 2) seqData((v >> 8) & 0xff); });
+  machine.onPortWrite(0x3c5, (_p, _s, v) => seqData(v & 0xff));
+  machine.onPortRead(0x3c5, () => (vga.seqIndex === 2 ? vga.mapMask : 0));
+
+  const gcData = (v) => { vga.gc[vga.gcIndex & 0x0f] = v & 0xff; };
+  machine.onPortWrite(0x3ce, (_p, s, v) => { vga.gcIndex = v & 0x0f; if (s === 2) gcData((v >> 8) & 0xff); });
+  machine.onPortWrite(0x3cf, (_p, _s, v) => gcData(v & 0xff));
+  machine.onPortRead(0x3cf, () => vga.gc[vga.gcIndex & 0x0f]);
+
+  // Attribute Controller: 0x3C0 alternates index then data; the flip-flop is reset to
+  // "index" by a read of Input Status #1 (0x3DA) — bios.js does that reset.
+  machine.onPortWrite(0x3c0, (_p, _s, v) => {
+    if (vga.atcFlip === 0) { vga.atcIndex = v & 0x1f; vga.atcFlip = 1; }
+    else { if (vga.atcIndex < 16) vga.palette[vga.atcIndex] = v & 0x3f; vga.atcFlip = 0; }
+  });
+
+  machine.vga = vga; mem.vga = vga;
+  return vga;
+}

@@ -24,27 +24,31 @@ export class Memory {
   }
 
   // ---- reads ---------------------------------------------------------------
-  r8(a)  { return this.u8[a & this.mask]; }
-  r16(a) { a &= this.mask; return this.u8[a] | (this.u8[(a + 1) & this.mask] << 8); }
-  r32(a) {
-    a &= this.mask;
-    return (this.u8[a] | (this.u8[(a + 1) & this.mask] << 8) |
-           (this.u8[(a + 2) & this.mask] << 16) | (this.u8[(a + 3) & this.mask] << 24)) >>> 0;
-  }
+  // In a planar EGA/VGA mode, A000 reads go through the plane logic (and load the latches);
+  // everything else is a direct typed-array read. `planar` is false for text/mode-13h/demos
+  // so the check is a single predicted branch on the common path.
+  r8(a)  { a &= this.mask; return (this.planar && a >= 0xa0000 && a < 0xb0000) ? this.vga.readByte(a) : this.u8[a]; }
+  r16(a) { a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return this.r8(a) | (this.r8((a + 1) & this.mask) << 8);
+    return this.u8[a] | (this.u8[(a + 1) & this.mask] << 8); }
+  r32(a) { a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return (this.r8(a) | (this.r8((a + 1) & this.mask) << 8) | (this.r8((a + 2) & this.mask) << 16) | (this.r8((a + 3) & this.mask) << 24)) >>> 0;
+    return (this.u8[a] | (this.u8[(a + 1) & this.mask] << 8) | (this.u8[(a + 2) & this.mask] << 16) | (this.u8[(a + 3) & this.mask] << 24)) >>> 0; }
 
   // ---- writes (with SMC tracking) -----------------------------------------
   w8(a, v) {
     a &= this.mask;
+    if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.vga.writeByte(a, v & 0xff); return; }
     this.u8[a] = v;
     if (this.codePage[a >> PAGE_BITS]) this._dirty(a, 1);
   }
   w16(a, v) {
     a &= this.mask;
+    if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.w8(a, v & 0xff); this.w8((a + 1) & this.mask, (v >> 8) & 0xff); return; }
     this.u8[a] = v; this.u8[(a + 1) & this.mask] = v >> 8;
     if (this.codePage[a >> PAGE_BITS] || this.codePage[(a + 1) >> PAGE_BITS]) this._dirty(a, 2);
   }
   w32(a, v) {
     a &= this.mask;
+    if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.w8(a, v & 0xff); this.w8((a + 1) & this.mask, (v >> 8) & 0xff); this.w8((a + 2) & this.mask, (v >> 16) & 0xff); this.w8((a + 3) & this.mask, (v >>> 24) & 0xff); return; }
     this.u8[a] = v; this.u8[(a + 1) & this.mask] = v >> 8;
     this.u8[(a + 2) & this.mask] = v >> 16; this.u8[(a + 3) & this.mask] = v >> 24;
     if (this.codePage[a >> PAGE_BITS] || this.codePage[(a + 3) >> PAGE_BITS]) this._dirty(a, 4);

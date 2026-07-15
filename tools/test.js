@@ -216,6 +216,20 @@ function eq(name, got, want) {
   mc.intHandlers[0x10](mc.cpu, mc);
   eq('ega detect present', mc.cpu.bx, 0x0003); }                   // BH=0 colour, BL=3 (256K) → EGA/VGA present
 
+// ---- EGA planar write pipeline: map-mask selects planes; read-map selects read-back. --
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const vga = mc.vga, mem = mc.mem;
+  mem.planar = true; vga.setMode(0x0d, true);                      // enter planar mode 0Dh
+  mc.ioWrite(0x3c4, 1, 0x02); mc.ioWrite(0x3c5, 1, 0x05);          // Sequencer map-mask = planes 0 and 2
+  mc.ioWrite(0x3ce, 1, 0x05); mc.ioWrite(0x3cf, 1, 0x00);          // Graphics Ctrl write mode 0
+  mem.w8(0xa0000, 0xff);                                           // → planes 0,2 = 0xFF; 1,3 untouched
+  eq('planar plane0 written', vga.planes[0], 0xff);
+  eq('planar plane1 masked out', vga.planes[0x10000], 0x00);
+  eq('planar plane2 written', vga.planes[0x20000], 0xff);
+  mc.ioWrite(0x3ce, 1, 0x04); mc.ioWrite(0x3cf, 1, 0x02);          // read-map select = plane 2
+  eq('planar read-back plane2', mem.r8(0xa0000), 0xff);
+  mc.ioWrite(0x3cf, 1, 0x01);                                      // read-map select = plane 1
+  eq('planar read-back plane1', mem.r8(0xa0000), 0x00); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
