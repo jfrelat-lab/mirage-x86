@@ -9,6 +9,7 @@
 
 import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
+import { installBIOS } from '../src/bios.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 
 let pass = 0, fail = 0;
@@ -198,6 +199,16 @@ function eq(name, got, want) {
   eq('bswap eax', cpu.reg[0] >>> 0, 0x44332211); }
 { const { cpu } = run([0x66, 0xbb, 0x01, 0x00, 0x00, 0x00, 0x0f, 0xcb, 0xf4]);   // MOV EBX,1; BSWAP EBX (reg-index math)
   eq('bswap ebx', cpu.reg[3] >>> 0, 0x01000000); }
+
+// ---- Sound-hardware detection so games start (no audio, just the probe handshakes). ---
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  mc.ioWrite(0x226, 1, 1); mc.ioWrite(0x226, 1, 0);                 // SB DSP reset: 1 then 0
+  eq('sb dsp data-ready', mc.ioRead(0x22e, 1) & 0x80, 0x80);       // status bit7 set
+  eq('sb dsp reset ack', mc.ioRead(0x22a, 1), 0xaa);               // read-data = 0xAA
+  mc.ioWrite(0x388, 1, 0x04); mc.ioWrite(0x389, 1, 0x21);          // OPL: select timer-ctrl, start timer1
+  eq('opl timer expired', mc.ioRead(0x388, 1), 0xc0);              // status shows timer-expired bits
+  mc.ioWrite(0x388, 1, 0x04); mc.ioWrite(0x389, 1, 0x80);          // OPL: reset
+  eq('opl reset clears', mc.ioRead(0x388, 1), 0x00); }
 
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);

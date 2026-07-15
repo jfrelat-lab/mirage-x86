@@ -35,6 +35,9 @@ export function installDOS(machine, vfs) {
     let p = ENV_SEG << 4;
     const put = (s) => { for (let i = 0; i < s.length; i++) mem.w8(p++, s.charCodeAt(i)); mem.w8(p++, 0); };
     put('PATH=C:\\'); put('COMSPEC=C:\\COMMAND.COM'); put('PROMPT=$p$g');
+    // Sound Blaster config — many games (Hocus Pocus, Apogee titles) refuse to start
+    // without BLASTER set, even when they fall back to no sound.
+    put('BLASTER=A220 I7 D1 H5 T6');
     mem.w8(p++, 0);                 // end of env vars
     mem.w16(p, 1); p += 2;          // count of following strings
     for (let i = 0; i < progPath.length; i++) mem.w8(p++, progPath.charCodeAt(i)); mem.w8(p++, 0);

@@ -191,6 +191,31 @@ export function installBIOS(machine) {
   // classic vsync wait loops (poll until set, then until clear) terminate.
   machine.onPortRead(0x3da, () => { retrace ^= 0x09; return retrace; });
 
+  // Minimal Sound Blaster DSP detection at base 0x220 (matches BLASTER=A220). We emulate
+  // only the reset handshake and the version query so games that probe for a card start up;
+  // there is no actual audio — DSP commands are accepted and dropped.
+  let sbReset = 0; const sbOut = [];
+  machine.onPortWrite(0x226, (_p, _s, v) => {                            // DSP reset: 1 then 0 → 0xAA ready
+    if ((v & 1) === 1) sbReset = 1;
+    else if (sbReset) { sbReset = 0; sbOut.length = 0; sbOut.push(0xaa); }
+  });
+  machine.onPortWrite(0x22c, (_p, _s, v) => { if (v === 0xe1) sbOut.push(4, 5); }); // command: get-version → 4.05
+  machine.onPortRead(0x22c, () => 0x00);                                 // write-buffer status: bit7=0 = ready
+  machine.onPortRead(0x22e, () => (sbOut.length ? 0x80 : 0x00));         // read-buffer status: bit7 = data ready
+  machine.onPortRead(0x22a, () => (sbOut.length ? sbOut.shift() : 0xff)); // DSP read-data
+
+  // Minimal AdLib/OPL FM-synth detection. The classic probe resets the two timers, then
+  // starts timer 1 and expects the status port's timer-expired bits (0xC0) to appear.
+  // We fake exactly that handshake (no synthesis): a write of the timer-start bit to
+  // register 4 arms the expired status; a reset clears it. Mirrored at the SB Pro OPL base.
+  let oplReg = 0, oplStatus = 0;
+  const oplData = (v) => { if (oplReg === 0x04) oplStatus = (v & 0x80) ? 0 : (v & 0x01) ? 0xc0 : 0; };
+  for (const base of [0x388, 0x228]) {
+    machine.onPortWrite(base, (_p, _s, v) => { oplReg = v & 0xff; });     // register select
+    machine.onPortWrite(base + 1, (_p, _s, v) => oplData(v & 0xff));      // register data
+    machine.onPortRead(base, () => oplStatus);                            // OPL status
+  }
+
   machine.bios = bios;
   return bios;
 }
