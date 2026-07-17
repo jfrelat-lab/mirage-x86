@@ -118,7 +118,11 @@ export class Recompiler {
    *  on a blacklisted root or a region too small to be worth it. */
   _promote(rootLin, rootIp0) {
     if (this.t2blacklist.has(rootLin)) return;
-    const base = this.cpu.base[CS];
+    // Derive the segment base from the ROOT's own identity, not the live cpu.base[CS]: the
+    // root block may have just done a far transfer (CS changed) before this call, and using
+    // the live base would walk successors in the wrong segment — pulling in blocks that merely
+    // share the same IP offset (a CS:IP alias), whose fused code then derails the guest.
+    const base = (rootLin - rootIp0) & this.MM;
     const byIp = new Map();     // ip -> tier-1 block (or null if unusable)
     const order = [];           // member ips, in discovery order
     const queue = [rootIp0];
