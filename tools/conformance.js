@@ -34,7 +34,10 @@ const DEFAULT = [
   '84', '85', 'a8',                                          // test
   '88', '89', '8a', '8b', '86', '87',                        // mov / xchg
   '80.0', '80.5', '80.7', '81.5', '83.0',                    // group1 (ALU r/m, imm)
-  'd0.0', 'd0.4', 'd0.5', 'd0.7', 'd1.4', 'd1.5', 'd2.4', 'd3.4', // shifts / rotates
+  'd0.0', 'd0.1', 'd0.2', 'd0.3', 'd0.4', 'd0.5', 'd0.7',   // byte by 1: rol ror rcl rcr shl shr sar
+  'd1.0', 'd1.1', 'd1.2', 'd1.3', 'd1.4', 'd1.5', 'd1.7',   // word by 1
+  'd2.0', 'd2.1', 'd2.2', 'd2.3', 'd2.4', 'd2.5', 'd2.7',   // byte by CL (unmasked count)
+  'd3.0', 'd3.1', 'd3.2', 'd3.3', 'd3.4', 'd3.5', 'd3.7',   // word by CL
   'f6.2', 'f6.3', 'f6.4', 'f6.5', 'f7.3', 'f7.4',            // not / neg / mul / imul
   '27', '2f', '37', '3f', 'd4', 'd5',                        // BCD
 ];
@@ -93,8 +96,8 @@ function runOpcode(op, tests) {
   const examples = [];
   for (const t of tests) {
     if (skip(opn, t.bytes)) { skipped++; continue; }
-    // variable shift by CL: the 286+ masks the count to 5 bits, the 8088 doesn't,
-    // so counts >= 32 are a generation difference, not a bug — don't compare them.
+    // variable shift/rotate by CL: the 286+ masks the count to 5 bits, the 8088 doesn't, so
+    // counts >= 32 are a generation difference, not a bug — this is a 286-targeted core.
     if ((opn === 0xd2 || opn === 0xd3) && (t.initial.regs.cx & 0xff) >= 32) { skipped++; continue; }
     REGSET(cpu, t.initial.regs);
     for (const [a, v] of t.initial.ram) u8[a & mask] = v;

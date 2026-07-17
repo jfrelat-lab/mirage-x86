@@ -590,7 +590,7 @@ export class Recompiler {
           P(rW(op & 7, sz, '' + (sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0)))); break;
 
         // ---- group2 shifts ----
-        case 0xc0: { const o = modrm(); const c = f8(); emitShift(o, 8, '' + (c & 0x1f)); break; }
+        case 0xc0: { const o = modrm(); const c = f8(); emitShift(o, 8, '' + (c & 0x1f)); break; }   // 286+: imm8 count masked to 5 bits
         case 0xc1: { const o = modrm(); const c = f8(); emitShift(o, sz, '' + (c & 0x1f)); break; }
         case 0xd0: { const o = modrm(); emitShift(o, 8, '1'); break; }
         case 0xd1: { const o = modrm(); emitShift(o, sz, '1'); break; }
@@ -603,7 +603,14 @@ export class Recompiler {
         case 0xc5: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${DS},m.r16((${a}+2)&${MM}));`); break; } // LDS
         case 0xc6: { const o = modrm(); const i = f8(); P(rmW(o, 8, '' + i)); break; }
         case 0xc7: { const o = modrm(); const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(rmW(o, sz, '' + i)); break; }
-        case 0xc8: { const szv = f16(); f8(); P(`cpu.push16(r[5]);r[5]=(r[5]&~0xffff)|cpu.sp;r[4]=(r[4]&~0xffff)|((cpu.sp-${szv})&0xffff);`); break; } // ENTER (level 0)
+        case 0xc8: {                                                                    // ENTER size,level (make stack frame)
+          const szv = f16(), lvl = f8() & 0x1f; const ft = NT();
+          P(`cpu.push16(r[5]);var ${ft}=cpu.sp;`);                                       // push BP; frameTemp = SP
+          for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]&~0xffff)|((r[5]-2)&0xffff);cpu.push16(m.r16((sb[2]+(r[5]&0xffff))&${MM}));`); // copy nested frame pointers
+          if (lvl > 0) P(`cpu.push16(${ft});`);
+          P(`r[5]=(r[5]&~0xffff)|${ft};r[4]=(r[4]&~0xffff)|((cpu.sp-${szv})&0xffff);`);   // BP = frameTemp; SP -= size
+          break;
+        }
         case 0xc9: P('r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break; // LEAVE
         case 0xca: { const n = f16(); P(`cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`); P('return;'); ended = true; break; } // RETF imm
         case 0xcb: P(`cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`); P('return;'); ended = true; break; // RETF
@@ -820,7 +827,7 @@ export class Recompiler {
       // branch), rotates, and 32-bit keep the helper call.
       const isShift = rot === 4 || rot === 5 || rot === 6 || rot === 7;
       if (isShift && size !== 32 && /^\d+$/.test(cnt)) {
-        const C = Number(cnt) & 0x1f;
+        const C = Number(cnt) & 0x1f;   // 286+: count masked to 5 bits
         if (C === 0) return;   // shift by 0: value and flags unchanged (byte-exact no-op)
         const mask = size === 8 ? 0xff : 0xffff, msb = size - 1;
         const v = NT(), res = NT(), cf = NT(), of = NT();

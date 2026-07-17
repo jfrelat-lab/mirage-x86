@@ -152,6 +152,8 @@ export class CPU {
   }
 
   // ---- shifts & rotates (return result, set CF/OF; shifts also set SZP) ----
+  // 286+ semantics: the shift/rotate count is masked to 5 bits (this is a "186/286-targeted core"
+  // running 286/386-era games & demos, which depend on the mask — see conformance.js).
   shl(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = bits - 1;
     v &= m; c &= 0x1f; if (!c) return v;
@@ -174,20 +176,27 @@ export class CPU {
     const cf = (sv >> (c - 1)) & 1, res = (sv >> c) & m;
     this.setShiftResult(res, bits, !!cf, false); return res;
   }
+  // ROL/ROR: count masked to 5 bits (286+); period = bits. When the masked count is a nonzero
+  // multiple of the period the value is unchanged but CF is STILL written (= LSB for ROL, MSB for
+  // ROR) — a genuine bug in the old `if(!effective) return` path, independent of the count mask.
   rol(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1;
-    v &= m; c &= 0x1f; if (!c) return v; c %= bits; if (!c) return v;
-    const res = ((v << c) | (v >>> (bits - c))) & m, cf = res & 1;
+    v &= m; c &= 0x1f; if (!c) return v;
+    const e = c % bits;
+    const res = e ? (((v << e) | (v >>> (bits - e))) & m) : v, cf = res & 1;
     const of = c === 1 ? (((res >>> (bits - 1)) & 1) ^ cf) : 0;
     this.setShiftResult(res, bits, !!cf, !!of, false); return res;
   }
   ror(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = bits - 1;
-    v &= m; c &= 0x1f; if (!c) return v; c %= bits; if (!c) return v;
-    const res = ((v >>> c) | (v << (bits - c))) & m, cf = (res >>> msb) & 1;
+    v &= m; c &= 0x1f; if (!c) return v;
+    const e = c % bits;
+    const res = e ? (((v >>> e) | (v << (bits - e))) & m) : v, cf = (res >>> msb) & 1;
     const of = c === 1 ? (((res >>> msb) & 1) ^ ((res >>> (msb - 1)) & 1)) : 0;
     this.setShiftResult(res, bits, !!cf, !!of, false); return res;
   }
+  // RCL/RCR: through-carry, period = bits+1; count masked to 5 bits (286+). A full period restores
+  // both value and CF, so an effective count of 0 returns unchanged with no flag write.
   rcl(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1;
     v &= m; c &= 0x1f; c %= (bits + 1); if (!c) return v;
