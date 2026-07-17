@@ -18,6 +18,7 @@ export function installVGA(machine) {
     seqIndex: 0, mapMask: 0x0f,                      // Sequencer: reg 2 = plane write-enable
     gcIndex: 0, gc: new Uint8Array(9),               // Graphics Controller regs 0..8
     atcIndex: 0, atcFlip: 0, palette: new Uint8Array(16),  // Attribute Controller palette
+    crtcIndex: 0, crtc: new Uint8Array(0x19),        // CRTC: r13 offset (logical width), r0C/r0D start address
   };
   for (let i = 0; i < 16; i++) vga.palette[i] = i;   // identity → DAC 0-15 (the EGA colours)
   vga.gc[8] = 0xff;                                  // bit mask defaults to all bits
@@ -84,6 +85,16 @@ export function installVGA(machine) {
     if (vga.atcFlip === 0) { vga.atcIndex = v & 0x1f; vga.atcFlip = 1; }
     else { if (vga.atcIndex < 16) vga.palette[vga.atcIndex] = v & 0x3f; vga.atcFlip = 0; }
   });
+
+  // CRTC (0x3D4 index / 0x3D5 data): the renderer needs r0C/r0D (display start address,
+  // for page-flip / hardware scroll) and r13 (offset = logical scanline width in words).
+  const crtcData = (v) => { vga.crtc[vga.crtcIndex & 0x1f] = v & 0xff; };
+  machine.onPortWrite(0x3d4, (_p, s, v) => { vga.crtcIndex = v & 0x1f; if (s === 2) crtcData((v >> 8) & 0xff); });
+  machine.onPortWrite(0x3d5, (_p, _s, v) => crtcData(v & 0xff));
+  machine.onPortRead(0x3d5, () => vga.crtc[vga.crtcIndex & 0x1f]);
+  // Display geometry for the renderer (fall back to the mode's defaults before the game programs the CRTC).
+  vga.startAddr = () => (vga.crtc[0x0c] << 8) | vga.crtc[0x0d];
+  vga.rowBytes = () => (vga.crtc[0x13] ? vga.crtc[0x13] * 2 : (vga.width >> 3));
 
   machine.vga = vga; mem.vga = vga;
   return vga;

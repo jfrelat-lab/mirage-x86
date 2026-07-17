@@ -59,10 +59,14 @@ export class Video {
     const vga = this.machine.vga, W = vga.width, H = vga.height;
     this._ensure(W, H);
     const u32 = this.u32, pal = this.pal, planes = vga.planes, palr = vga.palette;
-    const rowBytes = W >> 3;
+    // Honour the CRTC display-start (page-flip / hardware scroll) and the offset register
+    // (logical scanline width, often wider than the visible area for smooth scrolling) —
+    // without these a scrolling game like Keen reads the wrong bytes and shears into stripes.
+    const stride = vga.rowBytes(), start = vga.startAddr(), visBytes = W >> 3;
     for (let y = 0; y < H; y++) {
-      for (let xb = 0; xb < rowBytes; xb++) {
-        const off = y * rowBytes + xb;
+      const rowOff = (start + y * stride) & 0xffff;
+      for (let xb = 0; xb < visBytes; xb++) {
+        const off = (rowOff + xb) & 0xffff;
         const b0 = planes[off], b1 = planes[0x10000 + off], b2 = planes[0x20000 + off], b3 = planes[0x30000 + off];
         let o = y * W + xb * 8;
         for (let m = 0x80; m; m >>= 1) {
