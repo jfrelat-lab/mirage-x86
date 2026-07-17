@@ -34,8 +34,13 @@ export class Machine {
     this.cpu.ioWrite = (p, s, v) => this.ioWrite(p, s, v);
 
     // Point every vector at the BIOS stub so unhandled INTs no-op (act as IRET)
-    // rather than jumping through an uninitialised 0000:0000 vector.
-    for (let n = 0; n < 256; n++) this.setVector(n, BIOS_SEG, n);
+    // rather than jumping through an uninitialised 0000:0000 vector. A real IRET (0xCF)
+    // byte is placed at each stub entry so that a guest which hooks an interrupt, saves the
+    // ORIGINAL vector, and later *chains* to it (a far JMP/CALL to f000:n — the ubiquitous
+    // TSR/game pattern, e.g. Keen's INT 8 handler) executes a clean IRET instead of running
+    // off into uninitialised BIOS memory. (The INT-n → JS-handler fast path is unaffected:
+    // swInt dispatches by number and never executes these bytes.)
+    for (let n = 0; n < 256; n++) { this.setVector(n, BIOS_SEG, n); this.mem.u8[(BIOS_SEG << 4) + n] = 0xcf; }
   }
 
   // ---- interrupt vector table --------------------------------------------

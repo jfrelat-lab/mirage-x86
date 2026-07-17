@@ -230,6 +230,13 @@ function eq(name, got, want) {
   mc.ioWrite(0x3cf, 1, 0x01);                                      // read-map select = plane 1
   eq('planar read-back plane1', mem.r8(0xa0000), 0x00); }
 
+// ---- Interrupt chaining: a guest that far-jumps to a saved BIOS vector (f000:n) — the
+// ubiquitous TSR/game pattern — must hit a real IRET stub and return, not run off into
+// uninitialised BIOS memory (this was Commander Keen's INT 8 derail). Simulate an interrupt
+// frame (PUSHF; PUSH CS; PUSH ret) then JMP FAR f000:0008; the IRET must resume at `cont`.
+{ const { cpu } = run([0x9c, 0x0e, 0xb8, 0x0b, 0x00, 0x50, 0xea, 0x08, 0x00, 0x00, 0xf0, 0xbb, 0x78, 0x56, 0xf4]);
+  eq('chain to f000 stub returns via IRET', cpu.bx, 0x5678); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
