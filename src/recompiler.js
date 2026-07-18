@@ -254,6 +254,7 @@ export class Recompiler {
     let n = 0;
     try {
       while (cpu.tbudget > 0 && !cpu.halted && !machine.blocked) {
+        if (machine.hwIrqPending && (cpu.flags & IF)) machine.serviceHwInts();   // deliver a queued IRQ once IF is set
         const ip0 = cpu.eip & 0xffff, lin = (cpu.base[CS] + ip0) & MM;
         const page = pages[lin >>> 12];
         let blk = page !== undefined ? page[lin & 0xfff] : undefined;

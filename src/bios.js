@@ -227,6 +227,28 @@ export function installBIOS(machine) {
     machine.onPortRead(base, () => oplStatus);                            // OPL status
   }
 
+  // ---- 8042 keyboard controller (ports 0x60/0x64) + IRQ1 ------------------
+  // Programs that install their own INT 9h handler — QBasic's IDE, and most games — take input
+  // as hardware scancodes read from port 0x60 on each keyboard IRQ, NOT via the BIOS INT 16h
+  // buffer. Deliver queued keys as make/break scancodes and fire IRQ1 so those handlers see them.
+  const kb = { data: 0, obf: false, scans: [] };   // scans: FIFO of pending make/break scancodes
+  machine.kb = kb;
+  machine.onPortRead(0x60, () => { const d = kb.data; kb.obf = false; return d; });   // read scancode, clear OBF
+  machine.onPortRead(0x64, () => (kb.obf ? 0x1d : 0x1c));     // status byte; bit0 = output-buffer-full
+  machine.onPortWrite(0x60, () => { kb.data = 0xfa; kb.obf = true; });   // keyboard command -> ACK
+  machine.onPortWrite(0x64, () => {});                        // controller command (ignored)
+  machine.onPortWrite(0x20, () => {});                        // master PIC end-of-interrupt
+  machine.onPortWrite(0xa0, () => {});                        // slave PIC end-of-interrupt
+  machine.pushScancodes = (arr) => { for (const s of arr) kb.scans.push(s); };
+  // Deliver the next pending scancode to the guest's INT 9h handler (if one is installed) via
+  // port 0x60 + IRQ1. No guest ISR -> drop them; the BIOS INT 16h / keyQueue path serves those.
+  machine.pumpKeyboard = () => {
+    if (kb.obf || kb.scans.length === 0) return;
+    if (machine.getVector(9).seg === 0xf000) { kb.scans.length = 0; return; }   // no guest INT 9h ISR
+    kb.data = kb.scans.shift(); kb.obf = true;                 // stage the scancode into port 0x60
+    machine.hwIrqPending = true;                               // fire IRQ1 as soon as the guest sets IF
+  };
+
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
 
   machine.bios = bios;

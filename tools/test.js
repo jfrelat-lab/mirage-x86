@@ -237,6 +237,19 @@ function eq(name, got, want) {
 { const { cpu } = run([0x9c, 0x0e, 0xb8, 0x0b, 0x00, 0x50, 0xea, 0x08, 0x00, 0x00, 0xf0, 0xbb, 0x78, 0x56, 0xf4]);
   eq('chain to f000 stub returns via IRET', cpu.bx, 0x5678); }
 
+// ---- 8042 keyboard controller: a queued scancode is delivered to a guest INT 9h handler via
+// port 0x60 + IRQ1, once interrupts are unmasked (the run-loop polls the pending IRQ). This is
+// the path QBasic's IDE and most games use for input, distinct from the BIOS INT 16h buffer.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, mem = mc.mem;
+  mem.blit(0x100 * 16 + 0x50, Uint8Array.from([0xe4, 0x60, 0xa2, 0x80, 0x00, 0xcf])); // INT9: in al,0x60; mov [0x80],al; iret
+  mc.setVector(9, 0x100, 0x50);
+  mem.blit(0x100 * 16, Uint8Array.from([0xfb, 0xeb, 0xfe]));   // sti; jmp $   (spin with IF set)
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x100); cpu.setSeg(SS, 0x100); cpu.sp = 0x1000;
+  cpu.flags &= ~0x200;                                          // start with IF clear — the STI must unmask
+  mc.pushScancodes([0x1e]);                                     // scancode for 'a'
+  for (let i = 0; i < 4; i++) { mc.pumpKeyboard(); mc.runSlice(2000); }
+  eq('8042 IRQ1 delivers scancode to guest INT 9', mem.u8[0x100 * 16 + 0x80], 0x1e); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

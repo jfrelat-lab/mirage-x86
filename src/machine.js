@@ -28,6 +28,7 @@ export class Machine {
     this.onError = null;                           // (err) => void
     this.blocked = false;                          // set by a handler waiting on input
     this.keyQueue = [];                            // {ascii, scan} pushed by the UI
+    this.hwIrqPending = false;                      // a hardware IRQ (keyboard) waits for IF to be set
 
     this.cpu.swInt = (n) => this.swInt(n);
     this.cpu.ioRead = (p, s) => this.ioRead(p, s);
@@ -101,6 +102,16 @@ export class Machine {
     if (v.seg === BIOS_SEG) return false;     // no guest handler; use BIOS buffer instead
     this.realInt(9, v.seg, v.off);
     return true;
+  }
+
+  /** Deliver a pending hardware IRQ once interrupts are unmasked. Called from the run loop at
+   *  block boundaries (guarded by the cheap `hwIrqPending` flag) so a guest that busy-waits for
+   *  the keyboard IRQ with IF briefly set (QBasic's IDE, most games) actually receives it. */
+  serviceHwInts() {
+    if (this.hwIrqPending && (this.cpu.flags & IF)) {
+      this.hwIrqPending = false;
+      this.raiseKeyboardIRQ();
+    }
   }
 
   // ---- run loop -----------------------------------------------------------
