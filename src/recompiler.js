@@ -165,7 +165,8 @@ export class Recompiler {
     // `R.dead` is set by _evictRegion when a write invalidates this region mid-flight (SMC);
     // the guard stops the stale in-flight execution at the next iteration, bounding staleness
     // to one block like tier-1 (whose current block.fn also finishes after an eviction).
-    const out = [`var _e=${rootIp0};`, 'for(;;){', 'if(R.dead){cpu.eip=_e;return;}', 'if(cpu.tbudget<=0){cpu.eip=_e;return;}', 'cpu.tbudget--;', 'switch(_e){'];
+    const out = [`var _e=${rootIp0},dl=cpu.deadline;`, 'for(;;){', 'if(R.dead){cpu.eip=_e;return;}',
+      'if(cpu.tbudget<=0||cpu.cycles>=dl){cpu.eip=_e;return;}', 'cpu.tbudget--;', 'switch(_e){'];
     for (const ip of order) {
       const b = byIp.get(ip);
       if (b.usesFPU) usesFPU = true;
@@ -251,6 +252,10 @@ export class Recompiler {
     // One shared block-execution budget: a tier-1 block costs 1, and a region decrements it
     // once per internal iteration (so a fused loop can't outrun the slice or hang the host).
     cpu.tbudget = maxBlocks;
+    // A tier-2 region runs its loop internally without re-entering this dispatch loop, so it must
+    // bail when a PIT tick comes due (else a timer-delay loop promoted to a region spins forever,
+    // never letting INT 8 advance the counter it waits on). cpu.deadline is that bail threshold.
+    cpu.deadline = machine.timerAuto ? machine.nextTimerCycle : Infinity;
     let n = 0;
     try {
       while (cpu.tbudget > 0 && !cpu.halted && !machine.blocked) {

@@ -116,6 +116,7 @@ export class Machine {
   serviceTimer() {
     if (this.cpu.cycles - this.nextTimerCycle > 8 * this.pitReload) this.nextTimerCycle = this.cpu.cycles;
     this.nextTimerCycle += this.pitReload;
+    this.cpu.deadline = this.nextTimerCycle;   // a running tier-2 region bails here to let the next tick fire
     this.tickTimer();
   }
 

@@ -38,6 +38,8 @@ export class CPU {
     this.ioWrite = () => {};         // (port,size,value) => void
 
     this.cycles = 0;                 // coarse instruction counter (timing/budget)
+    this.deadline = Infinity;        // cpu.cycles at which a tier-2 region must bail so the run
+                                     // loop can deliver a due PIT tick (set per-slice by rec.run)
   }
 
   // ---- register accessors (used by handlers/loaders, not the hot path) -----
