@@ -30,6 +30,21 @@ export class Machine {
     this.keyQueue = [];                            // {ascii, scan} pushed by the UI
     this.hwIrqPending = false;                      // a hardware IRQ (keyboard) waits for IF to be set
 
+    // PIT channel-0 timer, clocked off cpu.cycles (which counts retired instructions ~= the
+    // 1.19 MHz PIT tick for our purposes). The run loop fires INT 8 whenever cpu.cycles crosses
+    // the next reload boundary WITH IF set — so a guest that busy-waits on a timer-updated
+    // counter INSIDE one runSlice (Wolf3D's VBL loop spins on its TimeCount) actually sees the
+    // tick, instead of the old model where the timer only fired between slices.
+    // Reload in cpu.cycles. 65536 = the real PIT channel-0 default, i.e. we treat one retired
+    // instruction as one ~1.19 MHz PIT clock (an emulated ~1.2 MIPS 386). Env override for tuning.
+    this.pitReload = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITRELOAD) || 0x10000;
+    this.nextTimerCycle = this.pitReload;           // cpu.cycles threshold for the next INT 8
+    // Auto-fire the timer off cpu.cycles from the run loop. On (headless): deterministic and
+    // representative — INT 8 fires proportionally to CPU work, so a busy-wait inside one runSlice
+    // still sees ticks. The browser (ui.js) sets this false and paces tickTimer to wall-clock at
+    // 18.2 Hz instead, keeping real-time game speed.
+    this.timerAuto = true;
+
     this.cpu.swInt = (n) => this.swInt(n);
     this.cpu.ioRead = (p, s) => this.ioRead(p, s);
     this.cpu.ioWrite = (p, s, v) => this.ioWrite(p, s, v);
@@ -95,6 +110,15 @@ export class Machine {
     if (v1c.seg !== BIOS_SEG) this.realInt(0x1c, v1c.seg, v1c.off);
   }
 
+  /** Deliver PIT ticks that have come due (cpu.cycles crossed a reload boundary). Called from
+   *  the run loop only when IF is set. A long IF-off gap is coalesced into a single tick so a
+   *  guest that runs with interrupts disabled for a while doesn't get a burst on the next STI. */
+  serviceTimer() {
+    if (this.cpu.cycles - this.nextTimerCycle > 8 * this.pitReload) this.nextTimerCycle = this.cpu.cycles;
+    this.nextTimerCycle += this.pitReload;
+    this.tickTimer();
+  }
+
   /** Raise IRQ1 (keyboard) into a guest-installed INT 9 handler, if any. */
   raiseKeyboardIRQ() {
     if (!(this.cpu.flags & IF)) return false;
@@ -127,6 +151,7 @@ export class Machine {
   reset() {
     this.cpu.reg.fill(0); this.cpu.seg.fill(0); this.cpu.base.fill(0);
     this.cpu.eip = 0; this.cpu.flags = 0x0002 | IF; this.cpu.halted = false;
+    this.nextTimerCycle = this.cpu.cycles + this.pitReload;
     this.rec.reset();
   }
 }

@@ -254,7 +254,10 @@ export class Recompiler {
     let n = 0;
     try {
       while (cpu.tbudget > 0 && !cpu.halted && !machine.blocked) {
-        if (machine.hwIrqPending && (cpu.flags & IF)) machine.serviceHwInts();   // deliver a queued IRQ once IF is set
+        if (cpu.flags & IF) {                                                    // interrupts unmasked: service pending devices
+          if (machine.hwIrqPending) machine.serviceHwInts();                     // queued keyboard IRQ
+          if (machine.timerAuto && cpu.cycles >= machine.nextTimerCycle) machine.serviceTimer(); // PIT tick(s) due mid-slice
+        }
         const ip0 = cpu.eip & 0xffff, lin = (cpu.base[CS] + ip0) & MM;
         const page = pages[lin >>> 12];
         let blk = page !== undefined ? page[lin & 0xfff] : undefined;

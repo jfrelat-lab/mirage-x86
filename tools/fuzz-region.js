@@ -66,6 +66,7 @@ function makeProgram() {
 
 function fresh(bytes, init) {
   const mc = new Machine({ memSize: 1 << 20 });
+  mc.timerAuto = false;   // region(runSlice) vs tier-1(stepOne) equivalence — exclude async PIT ticks
   const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.setSeg(DS, 0x200); cpu.setSeg(ES, 0x200); cpu.setSeg(SS, 0x300);
   cpu.eip = 0; cpu.sp = 0x1000;

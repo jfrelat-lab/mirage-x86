@@ -46,7 +46,7 @@ function fingerprint(relPath) {
   const dos = installDOS(mc, new VFS());
   let fault = null; mc.onError = (e) => { fault = e; };
   dos.load(new Uint8Array(readFileSync(abs)), '', 'C:\\PROG');
-  for (let t = 0; t < TICKS && !fault && !dos.programDone; t++) { mc.runSlice(BUDGET); mc.tickTimer(); }
+  for (let t = 0; t < TICKS && !fault && !dos.programDone; t++) { mc.runSlice(BUDGET); }  // run loop owns the PIT timer now
   const h = createHash('sha1');
   const meta = Buffer.alloc(8);
   meta[0] = mc.mem.r8(0x449);                     // video mode

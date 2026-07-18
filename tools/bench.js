@@ -40,7 +40,8 @@ function bench(name) {
   const rel = PATHS[name];
   if (!rel || !existsSync(join(ROOT, rel))) return null;
   const mc = new Machine({ memSize: 1 << 20 });
-  installBIOS(mc);
+  mc.timerAuto = false;   // measure raw throughput: one explicit tick/frame, not cycles-paced (a
+  installBIOS(mc);        // synthetic "runSlice(2M)=1 frame" would otherwise fire the ISR ~190×/frame)
   const dos = installDOS(mc, new VFS());
   let fault = null; mc.onError = (e) => { fault = e; };
   dos.load(new Uint8Array(readFileSync(join(ROOT, rel))), '', 'C:\\PROG');

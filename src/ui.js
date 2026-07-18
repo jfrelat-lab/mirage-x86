@@ -21,6 +21,7 @@ export class Mirage {
     this.canvas = canvas;
     this.opts = opts;
     this.machine = new Machine({ memSize: opts.memSize || 16 * 1024 * 1024 });
+    this.machine.timerAuto = false;   // browser paces the PIT to wall-clock (18.2 Hz) in _loop() below
     this.bios = installBIOS(this.machine);
     this.vfs = new VFS();
     this.dos = installDOS(this.machine, this.vfs);
