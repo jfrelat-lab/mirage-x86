@@ -559,7 +559,7 @@ export class Recompiler {
         case 0x9a: { const o = f16(), s = f16(); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
         case 0x9c: cur.use |= lALL; P('cpu.push16(cpu.flags&0xffff);'); break;          // PUSHF (reads all)
-        case 0x9d: P('cpu.flags=(cpu.pop16()&0xfd5)|2;'); break;                         // POPF
+        case 0x9d: P('cpu.flags=(cpu.pop16()&0x7fd5)|2;'); break;                        // POPF (386: IOPL/NT bits 12-14 settable in real mode; only bit 15 forced 0)
         case 0x9e: P('cpu.flags=(cpu.flags&~0xff)|(((r[0]>>>8)&0xd5))|2;'); break;       // SAHF
         case 0x9f: cur.use |= lC | lP | lA | lZ | lS; P('r[0]=(r[0]&~0xff00)|((((cpu.flags&0xd5)|2)&0xff)<<8);'); break; // LAHF (reads CPAZS)
 
@@ -619,7 +619,7 @@ export class Recompiler {
         case 0xcc: P(`cpu.eip=${ip};cpu.swInt(3);`); P('return;'); ended = true; break; // INT3
         case 0xcd: { const n = f8(); P(`cpu.eip=${ip};cpu.swInt(${n});`); P('return;'); ended = true; break; } // INT n
         case 0xce: P(`if(cpu.flags&${OF}){cpu.eip=${ip};cpu.swInt(4);return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
-        case 0xcf: P('cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0xfd5)|2;'); P('return;'); ended = true; break; // IRET
+        case 0xcf: P('cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0x7fd5)|2;'); P('return;'); ended = true; break; // IRET (386 real-mode flag mask)
 
         case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.aam(${f8()});`); break; // AAM (may swInt mid-block)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
