@@ -227,6 +227,13 @@ export function installBIOS(machine) {
     machine.onPortRead(base, () => oplStatus);                            // OPL status
   }
 
+  // Game/joystick port 0x201: no joystick attached. Buttons (bits 4-7) read 1 = not pressed;
+  // axis one-shots (bits 0-3) read 0 = timed out. Returning the default 0xFF instead left the
+  // axis bits stuck high, so a game timing how long they stay high (Keen 4's joystick probe)
+  // spun forever. Writes (the axis trigger) are a no-op with no joystick.
+  machine.onPortRead(0x201, () => 0xf0);
+  machine.onPortWrite(0x201, () => {});
+
   // ---- 8042 keyboard controller (ports 0x60/0x64) + IRQ1 ------------------
   // Programs that install their own INT 9h handler — QBasic's IDE, and most games — take input
   // as hardware scancodes read from port 0x60 on each keyboard IRQ, NOT via the BIOS INT 16h
