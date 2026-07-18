@@ -516,8 +516,8 @@ export class Recompiler {
           P(`if(${idx}<${lo}||${idx}>${hi}){cpu.eip=${ipStart};cpu.swInt(5);return;}`); break;
         }
 
-        case 0x68: { const i = sz === 16 ? f16() : (f16() | (f16() << 16)); P(`cpu.push16(${i & 0xffff});`); break; } // PUSH Iz (16-bit stack)
-        case 0x6a: P(`cpu.push16(${fs8()}&0xffff);`); break;                          // PUSH Ib (sign-extended)
+        case 0x68: { const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(sz === 32 ? `cpu.push32(${i});` : `cpu.push16(${i & 0xffff});`); break; } // PUSH Iz
+        case 0x6a: { const v = fs8(); P(sz === 32 ? `cpu.push32(${v >>> 0});` : `cpu.push16(${v & 0xffff});`); break; } // PUSH Ib (sign-extended to opsize)
         case 0x69: { const o = modrm(); const s = rmR(o, sz); const i = sz === 16 ? f16() : (f16() | (f16() << 16)); P(`cpu.imul16x(${s},${i},${sz});`); P(rW(o.reg, sz, 'cpu._mr')); break; }
         case 0x6b: { const o = modrm(); const s = rmR(o, sz); const i = fs8(); P(`cpu.imul16x(${s},${i},${sz});`); P(rW(o.reg, sz, 'cpu._mr')); break; }
         case 0x6c: emitStr('ins', 8); break;                                            // INSB
