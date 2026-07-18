@@ -184,7 +184,7 @@ export function installBIOS(machine) {
   machine.hookInterrupt(0x12, (cpu) => { cpu.ax = mem.r16(BDA + 0x13); });
 
   // ---- VGA DAC palette ports (most demos set the palette this way, not INT 10h) ----
-  let dacW = 0, dacR = 0, latch = 0, retrace = 0;
+  let dacW = 0, dacR = 0, latch = 0;
   machine.onPortWrite(0x3c8, (_p, _s, v) => { dacW = v & 0xff; latch = 0; });   // write index
   machine.onPortWrite(0x3c7, (_p, _s, v) => { dacR = v & 0xff; latch = 0; });   // read index
   machine.onPortWrite(0x3c9, (_p, _s, v) => {                                   // write R,G,B (6-bit)
@@ -198,9 +198,18 @@ export function installBIOS(machine) {
   });
   machine.onPortRead(0x3c8, () => dacW);
   machine.onPortRead(0x3c6, () => 0xff); machine.onPortWrite(0x3c6, () => {});  // pixel mask
-  // Input Status #1: toggle vertical-retrace (bit 3) + display-enable (bit 0) so the
-  // classic vsync wait loops (poll until set, then until clear) terminate.
-  machine.onPortRead(0x3da, () => { retrace ^= 0x09; if (machine.vga) machine.vga.atcFlip = 0; return retrace; }); // also resets the ATC index/data flip-flop
+  // Input Status #1 (0x3DA): a real time-based VGA beam instead of a per-read toggle, so a vsync
+  // loop that measures the retrace (not just waits for an edge) sees a realistic period. The beam
+  // position is cpu.cycles within one ~70 Hz mode-13h frame (period = pitReload / (70/18.2), the
+  // VGA:PIT frequency ratio). bit3 = vertical retrace (short pulse at frame end); bit0 = display
+  // disabled during the surrounding vblank. Reads also reset the ATC index/data flip-flop.
+  const vgaPeriod = Math.max(1, Math.round(machine.pitReload / 3.845));
+  const vblankStart = Math.round(vgaPeriod * 0.88), vretraceStart = Math.round(vgaPeriod * 0.92);
+  machine.onPortRead(0x3da, () => {
+    if (machine.vga) machine.vga.atcFlip = 0;
+    const pos = machine.cpu.cycles % vgaPeriod;
+    return (pos >= vblankStart ? 0x01 : 0) | (pos >= vretraceStart ? 0x08 : 0);
+  });
 
   // Minimal Sound Blaster DSP detection at base 0x220 (matches BLASTER=A220). We emulate
   // only the reset handshake and the version query so games that probe for a card start up;
