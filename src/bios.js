@@ -151,7 +151,7 @@ export function installBIOS(machine) {
         }
         break;
       }
-      case 0x1a: cpu.ax = 0x1a00; cpu.bx = 0x0008; break; // display combination = VGA
+      case 0x1a: cpu.ax = (cpu.ax & 0xff00) | 0x1a; cpu.bx = 0x0008; break; // get DCC: AL=1Ah = supported, BL=08h = VGA colour
       default: break;
     }
   });
