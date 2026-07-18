@@ -9,6 +9,11 @@
     "mode": 19,
     "fault": null
   },
+  "demos/PLANAR.COM": {
+    "hash": "908a72b1a306792614f5fae90e05e9034479e2c4",
+    "mode": 13,
+    "fault": null
+  },
   "intros/256b.com": {
     "hash": "9b1806722b3b95e9301af695877026c6bd3910f1",
     "mode": 19,

@@ -32,7 +32,7 @@ const TICKS = 60, BUDGET = 400000;
 // Fixed workload set: both own demos + every third-party intro. Third-party binaries are
 // gitignored, so `check` silently skips any that are absent on this machine.
 const WORKLOADS = [
-  ['demos/PLASMA13.COM'], ['demos/XORMUNCH.COM'],
+  ['demos/PLASMA13.COM'], ['demos/XORMUNCH.COM'], ['demos/PLANAR.COM'],
   ...['256b', '256bytef', 'above', 'chaosequ', 'difze', 'intoanew', 'intro', 'intro256',
       'kaneda', 'lattice', 'memories', 'oktaeder', 'puls', 'revitro', 'rv256', 'tube', 'upup']
     .map((n) => [`intros/${n}.com`]),
@@ -55,6 +55,11 @@ function fingerprint(relPath) {
   if (fault) h.update(String(fault.message));
   h.update(mc.mem.u8.subarray(0xa0000, 0xa0000 + 64000));  // mode-13h framebuffer
   h.update(Buffer.from(mc.bios.dac.buffer, mc.bios.dac.byteOffset, 768));  // DAC palette
+  if (mc.mem.planar && mc.vga) {                           // EGA/VGA 16-colour modes: A000 is empty,
+    h.update(mc.vga.planes);                               // the picture lives in the four bit-planes,
+    h.update(mc.vga.palette);                              // the attribute palette,
+    h.update(Buffer.from([mc.vga.crtc[0x0c], mc.vga.crtc[0x0d], mc.vga.crtc[0x13]]));  // and the CRTC start/stride
+  }
   return { hash: h.digest('hex'), mode: mc.mem.r8(0x449), fault: fault ? fault.message : null };
 }
 
