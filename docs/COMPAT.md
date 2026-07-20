@@ -38,9 +38,9 @@ difze intoanew intro intro256 kaneda lattice memories oktaeder puls revitro rv25
 
 ## Known engine gaps (the frontier)
 
-1. **CGA graphics (modes 4/5/6)** — no renderer. `video.js` dispatches only mode 13h / EGA
-   planar / text, so a CGA-graphics program shows garbage/text. Add a `_renderCGA` (B800
-   even/odd banks, 4-colour palette). No CGA game is in the collection yet, so it's untested demand.
+1. ~~CGA graphics (modes 4/5/6)~~ — **DONE** (`video.js:_renderCGA`, 0x3D9 colour-select in
+   `bios.js`). Verified: Alley Cat (mode 4) renders its title screen; `demos/CGA.COM` guards it
+   in golden. B800 even/odd banks, 2bpp (4-colour) + mode-6 mono.
 2. **DPMI / protected mode** — none. Blocks Raptor, Jazz, and anything using a DOS extender
    (DOS/16M, DOS4GW). This is the biggest single feature gap for early-90s VGA action games.
 3. **EMS/XMS** — none. Some games probe for it; most degrade gracefully.
