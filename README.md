@@ -68,6 +68,9 @@ which is what testing *real* programs forced the engine to implement.
 The engine is **DOM-free** so it runs identically in Node and the browser, which is
 what makes the headless test harness possible.
 
+> In-depth internals reference lives in **[docs/](docs/)** — start with
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), then RECOMPILER / DEVICES / TESTING / COMPAT.
+
 | Module | Role |
 |--------|------|
 | `src/memory.js` | Flat physical RAM, little-endian accessors, self-modifying-code page tracking |
