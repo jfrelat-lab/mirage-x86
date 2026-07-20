@@ -902,7 +902,7 @@ export class Recompiler {
         case 3: { const a = memAddr(o); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`); P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, 16)};cpu.eip=${tg};`); P('return;'); ended = true; break; } // JMP Ev
         case 5: { const a = memAddr(o); P(`var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`); P('return;'); ended = true; break; } // JMPF
-        case 6: P(`cpu.push16(${rmR(o, 16)});`); break;                                  // PUSH Ev
+        case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }
     }
 
