@@ -112,16 +112,32 @@ Shell.prototype.builtins = {
     this.print('Run a program by typing its name (HELLO, BARS, PLASMA, ...).\r\n');
   },
   DIR(rest) {
-    const path = rest || '.';
-    const entries = this.vfs.list(path);
+    rest = (rest || '').trim();
+    // Split an optional trailing wildcard (DIR *.EXE, DIR \GAMES\*.DAT) from the directory.
+    let dirPath = rest || '.', pattern = null;
+    if (/[*?]/.test(rest)) {
+      const slash = Math.max(rest.lastIndexOf('\\'), rest.lastIndexOf('/'));
+      pattern = rest.slice(slash + 1);
+      dirPath = slash >= 0 ? (rest.slice(0, slash) || '\\') : '.';
+    }
+    const entries = this.vfs.list(dirPath);
     if (!entries) { this.print('File not found\r\n'); return; }
+    // DOS glob → RegExp; `*` and `*.*` match everything (incl. no-extension names).
+    let re = null;
+    if (pattern && pattern !== '*' && pattern !== '*.*') {
+      const src = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+      re = new RegExp('^' + src + '$', 'i');
+    }
     this.print('\r\n Volume in drive C is ' + this.vfs.label + '\r\n');
     this.print(' Directory of ' + this.vfs.cwdString() + '\r\n\r\n');
-    let files = 0, bytes = 0;
+    let files = 0, bytes = 0, shown = 0;
     for (const e of entries) {
+      if (re && !re.test(e.name)) continue;
+      shown++;
       if (e.type === 'dir') this.print(this.name83(e.name) + '   <DIR>         06-17-26\r\n');
       else { files++; bytes += e.data.length; this.print(this.name83(e.name) + ' ' + String(e.data.length).padStart(10) + '  06-17-26\r\n'); }
     }
+    if (pattern && shown === 0) { this.print('File Not Found\r\n'); return; }
     this.print('      ' + files + ' file(s) ' + String(bytes).padStart(12) + ' bytes\r\n');
     this.print('                 ' + (640 * 1024) + ' bytes free\r\n');
   },
