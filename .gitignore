@@ -14,3 +14,6 @@ tools/sst/
 
 # third-party demoscene intros downloaded for local testing (not redistributed)
 intros/
+
+# local (gitignored) DOS games for browser testing — not redistributed
+games/

@@ -63,6 +63,15 @@ which is what testing *real* programs forced the engine to implement.
 ?cmd=DIR                    run any shell command line
 ```
 
+### Testing DOS games
+
+Multi-file games are mounted under `C:\GAMES\`. Put each game in its own folder under a local
+(gitignored) `games/` directory — e.g. `games/ALLEYCAT/CAT.EXE` plus any data files — then run
+`node tools/games-manifest.mjs` to (re)generate `games/manifest.json`. On boot the browser mounts
+every listed file at `C:\GAMES\<game>\`. To play one, `CD GAMES\<game>` then run its executable
+(so the game's relative data-file opens resolve), or jump straight in with `?run=GAMES\<game>\<exe>`.
+Single files still work via drag-and-drop or `?run=https://…`.
+
 ## Architecture
 
 The engine is **DOM-free** so it runs identically in Node and the browser, which is

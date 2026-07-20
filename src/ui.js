@@ -44,11 +44,12 @@ export class Mirage {
     for (const sample of SAMPLES) this.vfs.addFile('\\' + sample.name, sample.make());
     this.vfs.addFile('\\README.TXT', Uint8Array.from(
       [...'MIRAGE — a pure-JavaScript MS-DOS machine.\r\nTry: BARS, PLASMA, BANNER, HELLO, DIR.\r\n'].map(c => c.charCodeAt(0))));
-    // Mount .COM bundles listed in each dir's manifest.json (if served): the
-    // committed nasm demos at the root of C:, plus any local third-party intros
-    // (gitignored) under C:\INTROS so you can `CD INTROS` and run them. Each source
-    // is skipped silently when not served.
-    for (const [dir, prefix] of [['demos', '\\'], ['intros', '\\INTROS\\']]) {
+    // Mount the bundles listed in each dir's manifest.json (if served): the committed nasm
+    // demos at the root of C:, plus any local (gitignored) third-party intros under C:\INTROS
+    // and multi-file games under C:\GAMES\<game>\ so you can `CD INTROS`/`CD GAMES\<game>` and
+    // run them. A games manifest entry keeps its subdir (e.g. "ALLEYCAT/CAT.EXE") so each
+    // game's files land together and its relative data-file opens resolve. Skipped when unserved.
+    for (const [dir, prefix] of [['demos', '\\'], ['intros', '\\INTROS\\'], ['games', '\\GAMES\\']]) {
       try {
         const manifest = await (await fetch(dir + '/manifest.json')).json();
         for (const f of manifest) this.vfs.addFile(prefix + f, new Uint8Array(await (await fetch(dir + '/' + f)).arrayBuffer()));
