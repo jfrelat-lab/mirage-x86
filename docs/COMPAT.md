@@ -4,56 +4,86 @@ A living record of what runs and what's blocked, so a future session starts from
 frontier instead of re-surveying. Update it when you unblock something.
 
 > ⚠️ When probing a game headless, check the **right framebuffer**: mode 13h → `mem.u8[0xa0000]`;
-> **EGA planar (mode 0xD) → `machine.vga.planes`** (linear A000 is empty). Getting this wrong
-> once cost a whole mis-diagnosis ("stuck on planar" that was actually rendering fine).
+> **EGA planar (mode 0xD) → `machine.vga.planes`** (linear A000 is empty); **CGA (4/5/6) → B800
+> interleaved banks**. Getting this wrong once cost a whole mis-diagnosis.
+
+> 🧪 **Headless game runner:** `node tools/run-game.mjs <subdir> <PROG.EXE> [frames] [keysHexCSV]`
+> mounts a whole `games/<subdir>` into the VFS, runs the program, and reports mode(0x449)/planar/
+> cga/faults/framebuffer-occupancy + any B800 text. Feed keys as make/break hex (e.g. `39,b9` =
+> space). This is the fast path for "what mode did it set / why is the screen wrong".
+
+> 🖥️ **Browser rAF is throttled under preview automation** (tab treated as hidden → the run loop
+> stalls). To drive frames from `javascript_tool`: loop `mirage.machine.pumpKeyboard(); mirage.
+> machine.runSlice(20000);` then `mirage.machine.tickTimer(); mirage.video.render();`. Synthetic
+> `KeyboardEvent`s dispatched on `window` DO reach `keyboard.js`; the automation `type` action does not.
 
 ## Demos / intros — the golden set (all render)
 
-20 workloads are covered by the golden gate: `plasma13`, `xormunch`, **`planar`** (the
-hand-written EGA write-mode test), plus the third-party intros `256b 256bytef above chaosequ
-difze intoanew intro intro256 kaneda lattice memories oktaeder puls revitro rv256 tube upup`.
-`memories` (x87 FP) and `tube`/`kaneda` (FP raytracers) exercise the FPU path. `256bytef`,
-`intoanew`, `memories` are **timer-paced** — engine timing changes shift their animation phase
-(a golden re-bless after visual check, not a regression).
+21 workloads are covered by the golden gate: `plasma13`, `xormunch`, `planar` (hand-written EGA
+write-mode test), `cga` (hand-written CGA test), plus third-party intros `256b 256bytef above
+chaosequ difze intoanew intro intro256 kaneda lattice memories oktaeder puls revitro rv256 tube
+upup`. `memories`/`tube`/`kaneda` exercise the FPU path. `256bytef intoanew memories` are
+timer-paced (a phase shift on timing changes is a golden re-bless after visual check, not a
+regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers via INT 33h mouse.
 
-## Games (in `scratchpad/games/`, gitignored)
+## Games (in `games/`, gitignored; mounted at C:\GAMES\ from `games/manifest.json`)
 
 | Game | Mode | Status |
 |---|---|---|
-| Cosmo's Cosmic Adventure | EGA 0Dh | ✅ renders (title screen) — verified |
-| Commander Keen 1 | EGA 0Dh | ✅ renders (gameplay level) — verified |
+| Cosmo's Cosmic Adventure | EGA 0Dh | ✅ renders (gameplay attract) — verified |
+| Commander Keen 1 | EGA 0Dh | ✅ renders (High Scores, pixel-perfect) — verified |
 | Commander Keen 4 | EGA 0Dh | ✅ renders (main menu) — verified |
 | Bio Menace | EGA 0Dh | ✅ renders — verified |
-| Major Stryker | VGA 13h | ✅ renders (Apogee title) — verified, needed the tier-2 PIT fix |
-| Hocus Pocus | VGA 13h | ✅ renders — verified, needed the mid-slice PIT fix |
+| Major Stryker | VGA 13h | ✅ renders (Apogee title) — needed the tier-2 PIT fix |
+| Hocus Pocus | VGA 13h | ✅ renders — needed the mid-slice PIT fix |
 | Jill of the Jungle | VGA 13h | ✅ renders — verified |
-| God of Thunder | VGA 13h | ✅ renders (IMPULSE intro) under tier-2 — needed the INT 10h AH=1Ah fix AND the tier-2 CLI-deadline fix (it hung under tier-2 running a hot loop with interrupts off) |
-| Prince of Persia | EGA 0Dh | ▶ EGA — reached graphics in an earlier survey; not re-verified end-to-end |
-| Monster Bash | EGA | ▶ not verified this session |
-| QBasic | text/13h | ▶ renders its full IDE; keyboard keys don't yet surface to the app (see `qbasic_diagnosis` memory) |
-| **Wolf3D** | VGA 13h | ⚠️ ISR-install derail FIXED (the `FF /6` operand-size bug, commit `0d7c2b3`) — now runs full startup, installs its INT 8/9/0Fh/24h ISRs, and loads all data. Next blocker: exits from its paged memory manager (`PML_GetPageBuffer: Purged main block`) — not rendering yet. See `wolf3d_diagnosis` memory. |
-| Raptor | — | ❌ needs **DPMI/protected mode** (DOS/16M). Passes 386 detection now (after the `popf` fix). |
-| Jazz Jackrabbit | — | ❌ needs **DPMI/protected mode**. |
-| Halloween Harry | text | ❌ `HH1.EXE` is an 11 KB **launcher** (not the engine); exits code 255 after config I/O without setting a graphics mode. Needs the full install or a launcher-specific check. |
+| God of Thunder | VGA 13h | ✅ renders (IMPULSE intro) under tier-2 — ⚠️ the intro logo animates **very slowly** in the browser (see rough edges) |
+| Alley Cat | CGA 4/5 | ✅ title renders; ✅ **now responds to the keyboard** (title advances) after the 2026-07-20 keyboard fix — ⚠️ the post-title screen is buggy (mostly black); needs investigation |
+| Prince of Persia | EGA 0Dh | ⚠️ staged in `games/POP` (cracked THG release, `PRINCE.EXE` is EXEPACK'd). **Headless it unpacks fine** (reaches "Unable to find necessary files" on an empty VFS). **Browser shows "Packed file is corrupt"** — a browser-only EXEPACK failure (likely `memSize`/residual-state), open. |
+| QBasic | text/13h | ▶ renders its full IDE but ~16 s one-time compile warmup (1712 blocks × ~9.7 ms `new Function`); keyboard now reaches it via the INT-9 path |
+| Wolf3D (registered WL6) | VGA 13h | ⚠️ ISR-install derail FIXED (`0d7c2b3`); now exits its paged memory manager (`PML_GetPageBuffer: Purged main block`). Shareware WOLF3DSW staged to test as it fits conventional memory. See [wolf3d_diagnosis] memory. |
+| Raptor / Jazz Jackrabbit | — | ❌ need **DPMI/protected mode** (DOS/16M, DOS4GW). Pass 386 detection. |
+| Halloween Harry | text | ❌ `HH1.EXE` is an 11 KB launcher (exits 255 after config I/O without a graphics mode). |
+
+## Known rough edges (browser UX — reported by the user, not yet fixed)
+
+1. **CATALOG.EXE (Apogee catalog, in COSMO) — arrow-key scrolling is buggy, and ESC (quit) does
+   not reset the current text-mode colours.** Headless the catalog renders perfectly in text mode
+   0x03. The scrolling likely involves the keyboard extended-key handling and/or INT 10h scroll;
+   the colour-on-exit is the "no video-mode/attribute reset when the shell regains control" issue.
+2. **Alley Cat post-title screen** renders mostly black (a garbage strip up top) after the title.
+   Input reaches the game now; the next screen's CGA rendering / game state is the open part.
+3. **God of Thunder IMPULSE logo is very slow** in the browser — a pacing/throughput issue on its
+   mode-13h intro animation (tier-2 + wall-clock PIT), not a correctness bug.
+4. **Prince of Persia "Packed file is corrupt"** in the browser only (EXEPACK; see table).
+5. **Stale video mode across programs:** MIRAGE never resets to text mode when a program exits /
+   the shell relaunches, so a program that doesn't set its own mode inherits the previous game's
+   graphics mode/planar/colours. A "reset to mode 3 before launching a shell command" would fix a
+   class of these (weigh against keeping a demo's final frame visible after it exits).
+
+## Shell features
+
+`DIR` supports wildcard filters (`DIR *.EXE`, `DIR \GAMES\*.DAT`) as of 2026-07-20. Builtins:
+DIR CD CLS TYPE COPY DEL REN MD RD ECHO SET. Programs launched by name or `?run=…`.
 
 ## Known engine gaps (the frontier)
 
-1. ~~CGA graphics (modes 4/5/6)~~ — **DONE** (`video.js:_renderCGA`, 0x3D9 colour-select in
-   `bios.js`). Verified: Alley Cat (mode 4) renders its title screen; `demos/CGA.COM` guards it
-   in golden. B800 even/odd banks, 2bpp (4-colour) + mode-6 mono.
-2. **DPMI / protected mode** — none. Blocks Raptor, Jazz, and anything using a DOS extender
-   (DOS/16M, DOS4GW). This is the biggest single feature gap for early-90s VGA action games.
-3. **EMS/XMS** — none. Some games probe for it; most degrade gracefully.
-4. **Audio** — SB/OPL are detection stubs only (no synthesis). Fine for compatibility, silent.
-5. **Wolf3D's ISR-install path** — a specific upstream control-flow divergence, not a device
-   gap; the co-sim ([TESTING.md](TESTING.md)) is the tool to localize it.
+1. **DPMI / protected mode** — none. The single biggest gap: blocks Raptor, Jazz, Doom-class
+   (DOS4GW), and advanced 64K demos. Real-mode games/≤4K demos do NOT need it.
+2. **EMS/XMS** — none. Some games probe for it; most degrade. (Wolf3D WL6's PML wants memory.)
+3. **Audio** — SB/OPL are detection stubs only (no synthesis). Silent, but detection passes.
+4. **Mode X / unchained VGA** — not implemented. No demo/game we currently have exercises it, but
+   it's a genuine future need (Second Reality, some VGA action games). Would need a hand test.
+5. **Frame-rate throttling** — MIRAGE runs unthrottled (≫ one real frame per tick). This is why
+   HLT-wake-on-timer regressed a demo's timeline, and it interacts with intro/game pacing.
 
-## Fixes this frontier came from (session 2026-07-18/19)
+## Fixes this frontier came from (recent)
 
-- `push dword imm` decrementing SP by 2 not 4 → Wolf3D past its derail (co-sim).
-- `popf`/`iret` 386 flag mask (0x7FD5) → Raptor/Halloween pass 386 detection (co-sim).
-- Cycle-based **PIT timer** delivered mid-slice → Hocus renders; Cosmo/Stryker reach graphics.
-- Tier-2 regions bail on `cpu.deadline` for a due tick → **Stryker** renders (+ tier-1==tier-2).
-- Time-based **0x3DA beam**; joystick 0x201 → 0xF0; INT 10h **AH=1Ah** DCC → God of Thunder renders.
-- Discovered the **EGA planar path already worked** (`vga.js`) — the earlier "stuck on planar"
-  was a probe reading linear A000 instead of `vga.planes`.
+- **Keyboard hardware path (`acaf40f`, 2026-07-20):** the browser fed only the INT 16h buffer;
+  now feeds make/break scancodes to the INT-9/port-0x60 path too → games receive input.
+- **DIR wildcards (`2d461bf`, 2026-07-20).**
+- `push dword imm` / `FF /6 PUSH` operand-size → Wolf3D past its derails (co-sim).
+- Cycle-based **PIT timer** mid-slice + tier-2 `cpu.deadline` safepoint → Hocus/Stryker/GoT render.
+- Time-based **0x3DA beam**; INT 10h **AH=1Ah** DCC → God of Thunder renders.
+- **CGA renderer** (`video.js:_renderCGA`) + 0x3D9 colour-select → Alley Cat title renders.
+- **EGA planar** path (`vga.js`) + CRTC scroll → Keen/Cosmo/PoP-intro/Stryker render.

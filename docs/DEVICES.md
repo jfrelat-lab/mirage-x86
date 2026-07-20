@@ -66,9 +66,17 @@ The write pipeline (`vga.writeByte`) implements the real Graphics Controller:
   0x3DA read. **CRTC** (0x3D4/5): reg 0C/0D display-start (page-flip/scroll), reg 13 offset
   (logical row width) — `_renderPlanar` honours both, so Keen's smooth scroll works.
 
-**No CGA graphics renderer.** Modes 4/5/6 fall through `video.js`'s dispatch to `_renderText`,
-so a CGA-graphics program would not display. Adding a `_renderCGA` (B800 interleaved banks,
-4-colour palette) is the open gap if a CGA game turns up.
+### CGA graphics — modes 4/5/6 (`video.js._renderCGA`)
+Implemented (Alley Cat renders; `demos/CGA.COM` guards it in golden). The B800 framebuffer is
+interleaved: even scanlines at +0x0000, odd at +0x2000, 80 bytes/row. Modes 4/5 = 320×200×4
+(2 bpp) with the palette chosen by the **0x3D9 colour-select register** (`bios.cga.color`:
+bit4 intensity, bit5 palette green/red/brown vs cyan/magenta/white); mode 6 = 640×200 mono.
+`bios.cga = { color, mode }`; ports 0x3D8/0x3D9 in `bios.js`.
+
+> ⚠️ **Render dispatch is flag/mode-mixed** (`video.js:render`): 13h → gfx13; else `mem.planar`
+> → planar; else mode 4/5/6 → CGA; else text. A program that inherits a stale graphics mode
+> from a *previous* program (MIRAGE never resets the mode when the shell regains control) can
+> render its text through the wrong path — see [COMPAT.md](COMPAT.md) "known rough edges".
 
 ### The DAC (`bios.js`)
 Ports 0x3C8 (write index) / 0x3C7 (read index) / 0x3C9 (RGB data, 6-bit). Most demos set the
@@ -97,7 +105,13 @@ override with `MIRAGE_PITRELOAD`) is the period; `nextTimerCycle` the next thres
 - **Keyboard:** an 8042 controller (ports 0x60 data / 0x64 status) delivers queued keys as
   make/break scancodes and raises **IRQ1 → INT 9** (`machine.pushScancodes`/`pumpKeyboard` →
   `hwIrqPending`, serviced at block boundaries when IF set). Games install their own INT 9 and
-  read scancodes from port 0x60 — the BIOS INT 16h buffer path is the fallback.
+  read scancodes from port 0x60 — the BIOS INT 16h buffer (`machine.keyQueue`) is the fallback.
+  - **Browser bridge (`keyboard.js`):** drives BOTH paths. `keydown` → a Set-1 MAKE scancode
+    (keyed by `KeyboardEvent.code`, the physical key) via `pushScancodes`, plus a `(scan,ascii)`
+    pair onto `keyQueue`; `keyup` → the BREAK scancode (`make | 0x80`). Arrows map to bare XT
+    numpad scancodes (0x48/0x4b/0x4d/0x50, no E0). `ui.js`'s run loop calls `pumpKeyboard()` each
+    iteration so staged scancodes reach the guest. Before the 2026-07-20 fix the browser fed only
+    `keyQueue`, so INT-9 games (Alley Cat, God of Thunder, Wolf3D) got no input at all.
 - **Game port 0x201:** reads `0xF0` — "no joystick" (buttons up, axis one-shots timed out).
   Returning the bus default 0xFF left the axis bits stuck high and hung Keen 4's joystick probe.
 

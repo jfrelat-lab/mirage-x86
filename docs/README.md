@@ -13,7 +13,9 @@ Architecture and internals reference. Start with **[ARCHITECTURE.md](ARCHITECTUR
 - **[TESTING.md](TESTING.md)** — the gates (unit, conformance, golden, region/flag fuzzers, bench,
   DOSBox diff), the golden fingerprint mechanism, the CPU co-sim, and what "verify a change" means.
 - **[COMPAT.md](COMPAT.md)** — what runs today and what's blocked (games + demos), the known
-  engine gaps (CGA renderer, DPMI, EMS/XMS, audio), and the fixes that got us here.
+  rough edges, the engine gaps (DPMI, EMS/XMS, audio, Mode X), and the fixes that got us here.
+- **[ROADMAP.md](ROADMAP.md)** — a menu of candidate next tasks grouped by theme (correctness,
+  compatibility features, content, performance, tooling) with effort/value, to choose what's next.
 
 These are written to survive between sessions — keep them in step with the code when you change
 the design (especially the run loop, the region compiler, the device model, or the gates).
