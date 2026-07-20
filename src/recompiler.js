@@ -165,8 +165,14 @@ export class Recompiler {
     // `R.dead` is set by _evictRegion when a write invalidates this region mid-flight (SMC);
     // the guard stops the stale in-flight execution at the next iteration, bounding staleness
     // to one block like tier-1 (whose current block.fn also finishes after an eviction).
+    // Safepoint: bail on the slice budget, or when a PIT tick is due AND interrupts are enabled.
+    // The `&IF` is essential: run() only delivers the timer (and advances the deadline) with IF
+    // set. Bailing on the deadline while IF is clear would return WITHOUT decrementing tbudget and
+    // without run() being able to advance the deadline → an infinite no-progress bail loop (a game
+    // running a hot loop under CLI past a due tick). With IF clear we keep running, bounded by
+    // tbudget; the pending tick is delivered once the guest re-enables interrupts.
     const out = [`var _e=${rootIp0},dl=cpu.deadline;`, 'for(;;){', 'if(R.dead){cpu.eip=_e;return;}',
-      'if(cpu.tbudget<=0||cpu.cycles>=dl){cpu.eip=_e;return;}', 'cpu.tbudget--;', 'switch(_e){'];
+      `if(cpu.tbudget<=0||(cpu.cycles>=dl&&(cpu.flags&${IF}))){cpu.eip=_e;return;}`, 'cpu.tbudget--;', 'switch(_e){'];
     for (const ip of order) {
       const b = byIp.get(ip);
       if (b.usesFPU) usesFPU = true;
@@ -447,9 +453,12 @@ export class Recompiler {
     while (!ended && count < maxOps) {
       opsize = 16; segOv = -1; rep = 0;
       const ipStart = ip;                 // instruction start ip — fault return address (#BR etc.)
-      // prefixes
-      let op = f8();
-      for (; ;) {
+      // prefixes. Bounded: x86 caps an instruction at 15 bytes, so a longer prefix run is not
+      // real code — it is garbage the tier-2 region walker speculatively reached (a Jcc/JMP
+      // successor that lands in data). Without this cap the loop would consume prefix bytes
+      // forever (wrapping the 64K segment), since `count` only advances past the prefixes.
+      let op = f8(), pfx = 0;
+      for (; pfx++ < 15;) {
         if (op === 0x66) { opsize = 32; op = f8(); }
         else if (op === 0x67) { op = f8(); }                       // addr-size (16-bit only in v1)
         else if (op === 0x2e) { segOv = CS; op = f8(); }
