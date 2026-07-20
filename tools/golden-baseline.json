@@ -14,6 +14,11 @@
     "mode": 13,
     "fault": null
   },
+  "demos/CGA.COM": {
+    "hash": "20429b36b0a44cf61a1d666c26ea436ec01f1fcd",
+    "mode": 4,
+    "fault": null
+  },
   "intros/256b.com": {
     "hash": "9b1806722b3b95e9301af695877026c6bd3910f1",
     "mode": 19,

@@ -19,6 +19,7 @@ export function installBIOS(machine) {
     dac: new Uint8Array(768),  // 256 * (r,g,b) 6-bit — VGA palette for mode 13h
     onModeChange: null,        // (mode) => void, wired up by the video layer
     mode: 0x03,
+    cga: { color: 0x30, mode: 0 },  // CGA color-select (0x3D9) / mode-control (0x3D8) registers
   };
 
   // default VGA DAC palette (text + standard 16, then a usable 256 ramp)
@@ -198,6 +199,11 @@ export function installBIOS(machine) {
   });
   machine.onPortRead(0x3c8, () => dacW);
   machine.onPortRead(0x3c6, () => 0xff); machine.onPortWrite(0x3c6, () => {});  // pixel mask
+  // CGA control (modes 4/5/6): 0x3D8 mode-control, 0x3D9 colour-select (bits0-3 background,
+  // bit4 intensity, bit5 palette green-red-brown vs cyan-magenta-white). The renderer reads these.
+  machine.onPortWrite(0x3d8, (_p, _s, v) => { bios.cga.mode = v & 0xff; });
+  machine.onPortWrite(0x3d9, (_p, _s, v) => { bios.cga.color = v & 0xff; });
+  machine.onPortRead(0x3d9, () => bios.cga.color);
   // Input Status #1 (0x3DA): a real time-based VGA beam instead of a per-read toggle, so a vsync
   // loop that measures the retrace (not just waits for an edge) sees a realistic period. The beam
   // position is cpu.cycles within one ~70 Hz mode-13h frame (period = pitReload / (70/18.2), the

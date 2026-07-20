@@ -32,7 +32,7 @@ const TICKS = 60, BUDGET = 400000;
 // Fixed workload set: both own demos + every third-party intro. Third-party binaries are
 // gitignored, so `check` silently skips any that are absent on this machine.
 const WORKLOADS = [
-  ['demos/PLASMA13.COM'], ['demos/XORMUNCH.COM'], ['demos/PLANAR.COM'],
+  ['demos/PLASMA13.COM'], ['demos/XORMUNCH.COM'], ['demos/PLANAR.COM'], ['demos/CGA.COM'],
   ...['256b', '256bytef', 'above', 'chaosequ', 'difze', 'intoanew', 'intro', 'intro256',
       'kaneda', 'lattice', 'memories', 'oktaeder', 'puls', 'revitro', 'rv256', 'tube', 'upup']
     .map((n) => [`intros/${n}.com`]),
@@ -59,6 +59,11 @@ function fingerprint(relPath) {
     h.update(mc.vga.planes);                               // the picture lives in the four bit-planes,
     h.update(mc.vga.palette);                              // the attribute palette,
     h.update(Buffer.from([mc.vga.crtc[0x0c], mc.vga.crtc[0x0d], mc.vga.crtc[0x13]]));  // and the CRTC start/stride
+  }
+  const md = mc.mem.r8(0x449);
+  if (md === 4 || md === 5 || md === 6) {                  // CGA graphics: the picture is in B800,
+    h.update(mc.mem.u8.subarray(0xb8000, 0xb8000 + 16384));  // interleaved even/odd banks,
+    h.update(Buffer.from([mc.bios.cga.color]));            // through the CGA colour-select register
   }
   return { hash: h.digest('hex'), mode: mc.mem.r8(0x449), fault: fault ? fault.message : null };
 }

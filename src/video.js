@@ -49,6 +49,7 @@ export class Video {
     const mode = this.mem.r8(0x449);
     if (mode === 0x13) this._renderGfx13();
     else if (this.mem.planar && this.machine.vga) this._renderPlanar();
+    else if (mode === 4 || mode === 5 || mode === 6) this._renderCGA(mode);
     else this._renderText();
     this.ctx.putImageData(this.image, 0, 0);
   }
@@ -112,5 +113,34 @@ export class Video {
     const mem = this.mem, u32 = this.u32, pal = this.pal;
     const u8 = mem.u8, base = VRAM_GFX;
     for (let i = 0; i < 320 * 200; i++) u32[i] = pal[u8[base + i]];
+  }
+
+  // CGA graphics (modes 4/5 = 320×200×4-colour, 2 bits/pixel; mode 6 = 640×200 mono, 1 bit/pixel).
+  // The B800 framebuffer is interleaved: even scanlines at +0x0000, odd at +0x2000, 80 bytes/row.
+  // Colours come from the 0x3D9 colour-select register mapped onto DAC entries 0-15 (the CGA hues).
+  _renderCGA(mode) {
+    const u8 = this.mem.u8, base = VRAM_TEXT, pal = this.pal;
+    const color = (this.machine.bios.cga || { color: 0x30 }).color;
+    if (mode === 6) {                                   // 640×200 mono
+      this._ensure(640, 200);
+      const u32 = this.u32, fg = pal[(color & 0x0f) || 15], bg = pal[0];
+      for (let y = 0; y < 200; y++) {
+        const row = ((y & 1) ? 0x2000 : 0) + (y >> 1) * 80; let o = y * 640;
+        for (let xb = 0; xb < 80; xb++) { const b = u8[base + row + xb]; for (let bit = 7; bit >= 0; bit--) u32[o++] = (b >> bit) & 1 ? fg : bg; }
+      }
+      return;
+    }
+    this._ensure(320, 200);                             // modes 4/5: 320×200×4
+    const u32 = this.u32;
+    const hi = (color & 0x10) ? 8 : 0;                  // intensity → bright hues
+    const set = (color & 0x20) ? [3, 5, 7] : [2, 4, 6]; // cyan/magenta/white  vs  green/red/brown
+    const lut = [pal[color & 0x0f], pal[set[0] + hi], pal[set[1] + hi], pal[set[2] + hi]];  // idx 0 = background
+    for (let y = 0; y < 200; y++) {
+      const row = ((y & 1) ? 0x2000 : 0) + (y >> 1) * 80; let o = y * 320;
+      for (let xb = 0; xb < 80; xb++) {
+        const b = u8[base + row + xb];
+        u32[o++] = lut[(b >> 6) & 3]; u32[o++] = lut[(b >> 4) & 3]; u32[o++] = lut[(b >> 2) & 3]; u32[o++] = lut[b & 3];
+      }
+    }
   }
 }
