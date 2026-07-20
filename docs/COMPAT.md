@@ -31,7 +31,7 @@ difze intoanew intro intro256 kaneda lattice memories oktaeder puls revitro rv25
 | Prince of Persia | EGA 0Dh | ▶ EGA — reached graphics in an earlier survey; not re-verified end-to-end |
 | Monster Bash | EGA | ▶ not verified this session |
 | QBasic | text/13h | ▶ renders its full IDE; keyboard keys don't yet surface to the app (see `qbasic_diagnosis` memory) |
-| **Wolf3D** | VGA 13h | ❌ reaches mode 13h but doesn't render — **upstream bug**: it enters its VBL loop without ever installing its INT 8 ISR, so `TimeCount` never advances (co-sim from EXE entry needed). See `wolf3d_diagnosis` memory. |
+| **Wolf3D** | VGA 13h | ⚠️ ISR-install derail FIXED (the `FF /6` operand-size bug, commit `0d7c2b3`) — now runs full startup, installs its INT 8/9/0Fh/24h ISRs, and loads all data. Next blocker: exits from its paged memory manager (`PML_GetPageBuffer: Purged main block`) — not rendering yet. See `wolf3d_diagnosis` memory. |
 | Raptor | — | ❌ needs **DPMI/protected mode** (DOS/16M). Passes 386 detection now (after the `popf` fix). |
 | Jazz Jackrabbit | — | ❌ needs **DPMI/protected mode**. |
 | Halloween Harry | text | ❌ `HH1.EXE` is an 11 KB **launcher** (not the engine); exits code 255 after config I/O without setting a graphics mode. Needs the full install or a launcher-specific check. |
