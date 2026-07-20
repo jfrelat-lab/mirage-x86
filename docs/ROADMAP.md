@@ -14,6 +14,7 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 | A3 | **Alley Cat post-title screen** (renders mostly black) | M | First CGA *gameplay* (not just title); exercises CGA mode switches + the new keyboard path end-to-end. |
 | A4 | **God of Thunder IMPULSE logo slowness** | M | Perf/pacing on a real mode-13h intro; feeds the throttling question (B5) and the perf phase (D). |
 | A5 | **Extended-key (E0) scancodes** for arrows/navigation (currently mapped to bare XT codes) | S | Some later games distinguish grey arrows from the numpad; low risk to add behind the physical-code map. |
+| A6 | **Why is the Dune (Cryo) demo (`DUNEDEM`) slow?** — profile the Cryo engine (dispatch-bound? SMC thrash? `.SQZ`/HSQ decompression hot loop? tight vsync/timer poll? AdLib handshake?) | M | The north-star engine runs its intro but sluggishly; `node --prof` via `run-game.mjs` + tier-2/SMC stats. Feeds B5 (throttling) and D (perf). |
 
 ## B · Game compatibility features (the big levers)
 
@@ -34,16 +35,26 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 | C1 | **Add Moktar / Blues Brothers (Titus)** | S | EGA/VGA platformer; exercises the keyboard + planar/13h paths. |
 | C2 | **Add Baby Jo (Loriciel)** | S | Another EGA title to widen coverage. |
 | C3 | **Add Dune (Cryo)** | M | North-star game. Large 1992 VGA title — may need EMS/DPMI/Mode X; even a "how far does it get" run is valuable recon. |
-| C4 | **Add top-rated MS-DOS demos as test candidates** | S | See pouet toplist below — highly-acclaimed complex demos stress the engine in useful ways. |
+| C4 | **Add top-rated MS-DOS demos as test candidates** | S | See the sizecoding survey below. |
+| C5 | **Curate + clean the `intros/` dir** — add the best real-mode sizecoding prods (survey below) as test candidates; REMOVE/flag the ones that don't render; regenerate `intros/manifest.json` | S | Keep `intros/` a curated, working test set. Known-black to drop/flag: void3, juggler, mesha (text/key-wait/HLT), omniscent (back-buffer never blits), heaven (exits). Already present & good: mars, paleozoa, nibble, abstract, cantorus, worm, endless, qblove + the golden set. |
 
-**pouet.net highly-acclaimed MS-DOS candidates** (from `prodlist.php?platform[]=MS-Dos&order=thumbup`
-and `toplist.php` — pouet sorts by **thumbs-up/score** and filters by **platform** + **type/size
-class** 256b/1k/4k/64k/demo, though not by exact byte count):
-- **Second Reality** — Future Crew (demo, Assembly '93) — north star, needs DPMI/Mode X, big.
-- **Heaven Seven** — Exceed (64k) — likely DPMI.
-- **Tube / Puls / Memories** — already in the golden set ✅.
-- **Moralhardcandy** — Blasphemy (demo, 1999).
-Good near-term picks: more 256b/4k productions (mostly real-mode) before the 64k/demo (DPMI) tier.
+### pouet.net sizecoding survey — top MS-DOS by thumbs-up, per size tier (captured 2026-07-20)
+
+Source: `prodlist.php?platform[]=MS-Dos&type[]=<tier>&order=thumbup`. pouet sorts by score and
+filters by platform + size class (not exact bytes). **16b and 2K returned no entries.** Tiny tiers
+(≤4K) are overwhelmingly **real-mode → runnable now**; the 64k/demo tier is the DPMI wall. ✅ = we
+already have it. Verify each still runs before adding (some counts/ordering from the scrape were rough).
+
+| Tier | Top candidates (group, year) |
+|---|---|
+| **32b** | Dírojed (Řrřola '07), matisse (orbitaldecay '10), Projektbeschreibung (Desire '18), FOSFOR (ind '07), fr-016:bytes (Farbrausch '01), persia (orbitaldecay '10), Klappquadrat (T$ '04) |
+| **64b** | Into a New Era (Desire '18) ≈ our `intoanew` ✅, Voron (fsqrt '13), fr-0.1:constant evolution (Farbrausch '03), Tar (fsqrt '13), Essence 64b (Desire '19), Asahikawa (Ribbon '07), Sierpilbrot (Řrřola '07) |
+| **128b** | Wolf128 (Red Sector Inc. '14), Mayan (RSI '14), Spongy (TBC '09), Mixér (Řrřola '07) — sparse tier |
+| **256b** | tube ✅, Puls ✅, memories ✅, Neon Station (Digimind '08), Symetrie (Řrřola '07), Difúze (Řrřola '10) ✅ |
+| **512b** | Mirrors Within (Digimind '07), BinLaden (3Dpoison '02), BootChess (RSI '15), AFLAtoxin ('09), zud ('02), Endless Theory (ALLien Senses '06) ≈ `endless` ✅, worm (Proxium '01) ✅, Cantorus (Titan '07) ✅ |
+| **1K** | paleozoa (fsqrt '12, 107👍) ✅, Chrome Revenge (Abaddon '20), BURST MODE TRANSMISSION (Trilobit '08), moodscroll (xylem '21), QBLOVE (Abaddon '20) ✅, nibble (Flare '03) ✅, Paname (RSI '14) |
+| **4K** | Omniscent (Sanction '97) ⚠️back-buffer, Animate (Schwartz '95), House At The Mountains (BITS '08), Forever Reality (7dUMP '23), Pitman (Tristar '04) ✅text, StarPort BBS (Future Crew '93), Heaven (NoooN '95) ⚠️exits, Void 3 (kolor '99) ⚠️key-wait, Mesha (Rhyme '98) ⚠️HLT |
+| **64k / demo (DPMI tier — later)** | Heaven Seven (Exceed), Second Reality (Future Crew, north star), Moralhardcandy (Blasphemy) |
 
 ## D · Performance (the JIT ceiling — see the perf plan)
 
