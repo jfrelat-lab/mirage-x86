@@ -42,7 +42,8 @@ walk(gameDir);
 vfs.chdir('\\GAMES\\' + sub);
 
 const exeBytes = readFileSync(join(gameDir, prog));
-dos.load(new Uint8Array(exeBytes), '', 'C:\\GAMES\\' + sub + '\\' + prog);
+const tail = process.env.RUNTAIL || '';           // command-line args (e.g. RUNTAIL="ENG VGA ADL")
+dos.load(new Uint8Array(exeBytes), tail, 'C:\\GAMES\\' + sub + '\\' + prog);
 
 const fb = mc.mem.u8;
 const modeAt = () => mc.mem.r8(0x449);
