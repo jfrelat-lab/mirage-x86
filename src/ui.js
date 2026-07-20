@@ -111,6 +111,7 @@ export class Mirage {
       if (this._brk) { this._brk = false; this.dos.programDone = true; this.machine.cpu.halted = true; this.shell.print('^C'); }
       const t0 = performance.now();
       while (performance.now() - t0 < FRAME_BUDGET_MS) {
+        this.machine.pumpKeyboard();                      // stage a queued hw scancode + fire IRQ1
         this.machine.runSlice(20000);
         if (this.machine.blocked) break;                 // waiting on input
         if (this.dos.programDone) { this.shell.state = 'input'; this.shell.programReturned(); break; }
