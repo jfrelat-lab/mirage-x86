@@ -111,7 +111,12 @@ Invariants that make regions safe:
   (this was Stryker's bug). `rec.run` sets `cpu.deadline = timerAuto ? nextTimerCycle : Infinity`
   per slice; `serviceTimer` advances it; the region bails at `cpu.cycles>=dl`, the run loop
   fires INT 8, the region re-enters. `dl` is hoisted to a local (refreshed each entry) so the
-  check is free — bench stays within noise.
+  check is free — bench stays within noise. **The deadline bail is gated on `&& (cpu.flags&IF)`**:
+  run() only delivers the timer (and advances the deadline) with IF set, so bailing while IF is
+  clear would return WITHOUT decrementing tbudget and WITHOUT run() being able to make progress →
+  an infinite no-progress bail loop (a game running a hot loop under CLI past a due tick — this
+  was God of Thunder's tier-2 hang). With IF clear the region keeps running, bounded by tbudget;
+  the pending tick fires when the guest re-enables interrupts.
 - **SMC eviction (`R.dead`/`cpu.tgen`).** A write into a region's page sets `R.dead`; the guard
   stops in-flight execution at the next iteration (staleness bounded to one block, like tier-1).
   3 evictions of a root → blacklist it (`T2_BLACKLIST`), stays tier-1 (auto-modifying intros).

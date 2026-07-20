@@ -27,7 +27,7 @@ difze intoanew intro intro256 kaneda lattice memories oktaeder puls revitro rv25
 | Major Stryker | VGA 13h | ✅ renders (Apogee title) — verified, needed the tier-2 PIT fix |
 | Hocus Pocus | VGA 13h | ✅ renders — verified, needed the mid-slice PIT fix |
 | Jill of the Jungle | VGA 13h | ✅ renders — verified |
-| God of Thunder | VGA 13h | ✅ renders (IMPULSE intro) — verified, needed the INT 10h AH=1Ah fix |
+| God of Thunder | VGA 13h | ✅ renders (IMPULSE intro) under tier-2 — needed the INT 10h AH=1Ah fix AND the tier-2 CLI-deadline fix (it hung under tier-2 running a hot loop with interrupts off) |
 | Prince of Persia | EGA 0Dh | ▶ EGA — reached graphics in an earlier survey; not re-verified end-to-end |
 | Monster Bash | EGA | ▶ not verified this session |
 | QBasic | text/13h | ▶ renders its full IDE; keyboard keys don't yet surface to the app (see `qbasic_diagnosis` memory) |
