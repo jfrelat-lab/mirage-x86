@@ -21,7 +21,7 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 | # | Task | Effort | Why / unblocks |
 |---|---|---|---|
 | B1 | **PoP browser "Packed file is corrupt"** — EXEPACK works headless but not in-browser; diff `memSize`/residual state | S–M | Unblocks Prince of Persia specifically, and any EXEPACK'd program in-browser (very common early-90s). |
-| B2 | **Wolf3D PML memory manager** (`PML_GetPageBuffer: Purged main block`) — test shareware WL1, co-sim vs EMS/XMS expectations | M–L | The last blocker for a landmark title; likely needs B3. |
+| B2 | **Wolf3D PML memory manager** (`PML_GetPageBuffer: Purged main block`) — ⚠️ now **blocked on compile-bound slowness**: Wolf3D runs at ~0.05–0.13 Mblk/s (profiled: `translate`/`new Function`-per-block dominates, ~1716 blocks, QBasic-class warmup — NOT SMC/cache thrash), so PM_Startup can't finish in a practical window to reach/diagnose PML. Needs **D5/tier-0** (faster codegen) first, or a fast-forward past startup. Fixed en route: PIT storm capped (`d94ff27`); noted tier-2 is ~5× slower than tier-1 on Wolf3D. | M–L | The last blocker for a landmark title; gated by D + likely needs B3. |
 | B3 | **EMS/XMS** (INT 67h / HIMEM) | M | Wolf3D and other games probe/need it; degrades gracefully today but blocks some. |
 | B4 | **DPMI / protected mode** (DOS/16M, DOS4GW) | L | *The* single biggest gap — Raptor, Jazz, Doom-class, advanced 64K demos. Foundational for the north star beyond Dune's real-mode parts. |
 | B5 | **Frame-rate throttling** (execute ~one real frame of cycles per tick) | M | Makes timing-sensitive demos/games behave; makes HLT-wake-on-timer safe; would help A4. |
@@ -69,6 +69,7 @@ lattice ×3.9, plasma ×3.5, memories ×1.66.
 | D3 | **Register→locals / x87-stack→locals promotion within regions** | M | Demoted by the profile but still real for tube's x87. |
 | D4 | **Web Worker + SharedArrayBuffer** (Phase 4) | L | Smoothness/unthrottling from rAF + off-main-thread; needs COOP/COEP in serve.py. NOT raw single-thread speed. |
 | D5 | **Internal IR backend** (x86→IR→JS) | L | The foundation D1–D3 ultimately want; big architectural step. |
+| D6 | **Compile-bound startup** (tier-0 bytecode interpreter for cold code, or faster codegen) | L | The per-block `new Function` cost dominates *big-program startup* — **blocks Wolf3D** (~1716 blocks) and **QBasic** (~1712 blocks, ~16 s warmup). Interpret cold blocks, only JIT-compile hot ones. Prereq for B2 (Wolf3D PML). |
 
 ## E · Tooling / infra
 
