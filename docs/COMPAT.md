@@ -48,10 +48,10 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
 
 ## Known rough edges (browser UX — reported by the user, not yet fixed)
 
-1. **CATALOG.EXE (Apogee catalog, in COSMO) — arrow-key scrolling is buggy, and ESC (quit) does
-   not reset the current text-mode colours.** Headless the catalog renders perfectly in text mode
-   0x03. The scrolling likely involves the keyboard extended-key handling and/or INT 10h scroll;
-   the colour-on-exit is the "no video-mode/attribute reset when the shell regains control" issue.
+1. ~~CATALOG.EXE arrow-scroll + ESC colours~~ — **FIXED** (`6553340`): INT 10h AH=06/07 now honours
+   the window rectangle (was scrolling the whole screen, wiping the header/footer) and the correct
+   up/down direction; `shell.programReturned()` resets `bios.attr` to 0x07 so the prompt isn't left
+   in a program's colour (CATALOG paints white-on-blue). Verified in-browser.
 2. **Alley Cat post-title screen** renders mostly black (a garbage strip up top) after the title.
    Input reaches the game now; the next screen's CGA rendering / game state is the open part.
 3. **God of Thunder IMPULSE logo is very slow** in the browser — a pacing/throughput issue on its
