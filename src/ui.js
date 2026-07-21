@@ -103,9 +103,13 @@ export class Mirage {
     this._raf = requestAnimationFrame(() => this._loop());
     const now = performance.now();
 
-    // pace the 18.2 Hz timer interrupt
+    // pace the timer interrupt at the guest's programmed PIT rate (default 18.2 Hz; games such as
+    // Dune reprogram counter 0 to ~200 Hz for smooth animation — machine.pitReload tracks it).
+    // Clamp the browser rate so a game driving the timer at a kHz sound rate can't flood the loop.
+    const tickMs = Math.max(3, TICK_MS * (this.machine.pitReload / 0x10000));
     let ticks = 0;
-    while (now - this._lastTick >= TICK_MS && ticks < 8) { this.machine.tickTimer(); this._lastTick += TICK_MS; ticks++; }
+    while (now - this._lastTick >= tickMs && ticks < 16) { this.machine.tickTimer(); this._lastTick += tickMs; ticks++; }
+    if (now - this._lastTick > 250) this._lastTick = now;   // drop a big backlog (e.g. after the tab was hidden)
 
     if (this.shell.state === 'running') {
       if (this._brk) { this._brk = false; this.dos.programDone = true; this.machine.cpu.halted = true; this.shell.print('^C'); }

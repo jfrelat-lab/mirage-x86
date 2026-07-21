@@ -39,6 +39,33 @@ export class Machine {
     // instruction as one ~1.19 MHz PIT clock (an emulated ~1.2 MIPS 386). Env override for tuning.
     this.pitReload = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITRELOAD) || 0x10000;
     this.nextTimerCycle = this.pitReload;           // cpu.cycles threshold for the next INT 8
+    // pitBase is the default cycles-per-18.2Hz-tick. The 0x3DA VGA beam (70 Hz) scales off THIS,
+    // not the dynamic pitReload — a game reprogramming the system timer (below) must not move the
+    // video refresh, which is an independent clock.
+    this.pitBase = this.pitReload;
+    // PIT counter-0 reprogramming: games set a custom INT 8 rate via ports 0x43 (mode)/0x40 (data)
+    // — e.g. Cryo's Dune sets reload 0x1745 → ~200 Hz for smooth, correctly-paced animation. We
+    // honour counter 0's reload as the new pitReload; counters 1 (refresh)/2 (speaker) don't drive
+    // INT 8 so their programming is accepted but ignored here.
+    this._pitAccess = 3; this._pitHiNext = false; this._pitLo = 0;
+    this.onPortWrite(0x43, (_p, _s, v) => {
+      v &= 0xff;
+      if (((v >> 6) & 3) !== 0) return;              // not counter 0
+      const access = (v >> 4) & 3;
+      if (access === 0) return;                       // counter-latch command (read), no reload change
+      this._pitAccess = access; this._pitHiNext = false;
+    });
+    this.onPortWrite(0x40, (_p, _s, v) => {
+      v &= 0xff;
+      let reload;
+      if (this._pitAccess === 1) reload = v;                    // LSB only
+      else if (this._pitAccess === 2) reload = v << 8;          // MSB only
+      else {                                                    // LSB then MSB
+        if (!this._pitHiNext) { this._pitLo = v; this._pitHiNext = true; return; }
+        reload = (v << 8) | this._pitLo; this._pitHiNext = false;
+      }
+      this.setPitReload(reload === 0 ? 0x10000 : reload);       // 0 == 65536
+    });
     // Auto-fire the timer off cpu.cycles from the run loop. On (headless): deterministic and
     // representative — INT 8 fires proportionally to CPU work, so a busy-wait inside one runSlice
     // still sees ticks. The browser (ui.js) sets this false and paces tickTimer to wall-clock at
@@ -118,6 +145,15 @@ export class Machine {
     this.nextTimerCycle += this.pitReload;
     this.cpu.deadline = this.nextTimerCycle;   // a running tier-2 region bails here to let the next tick fire
     this.tickTimer();
+  }
+
+  /** Set the PIT channel-0 reload (INT 8 period, in cpu.cycles) and reschedule the next tick.
+   *  Called when a guest reprograms the timer via port 0x40/0x43; `ui.js` reads pitReload to pace
+   *  its wall-clock tick rate so the browser delivers INT 8 at the game's chosen frequency. */
+  setPitReload(r) {
+    this.pitReload = r;
+    this.nextTimerCycle = this.cpu.cycles + r;
+    this.cpu.deadline = this.nextTimerCycle;
   }
 
   /** Raise IRQ1 (keyboard) into a guest-installed INT 9 handler, if any. */

@@ -268,7 +268,7 @@ export function installBIOS(machine) {
   // position is cpu.cycles within one ~70 Hz mode-13h frame (period = pitReload / (70/18.2), the
   // VGA:PIT frequency ratio). bit3 = vertical retrace (short pulse at frame end); bit0 = display
   // disabled during the surrounding vblank. Reads also reset the ATC index/data flip-flop.
-  const vgaPeriod = Math.max(1, Math.round(machine.pitReload / 3.845));
+  const vgaPeriod = Math.max(1, Math.round((machine.pitBase || machine.pitReload) / 3.845));
   const vblankStart = Math.round(vgaPeriod * 0.88), vretraceStart = Math.round(vgaPeriod * 0.92);
   machine.onPortRead(0x3da, () => {
     if (machine.vga) machine.vga.atcFlip = 0;
