@@ -12,9 +12,9 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 | A1 | ~~text attr reset on program return~~ **partly DONE** (`6553340`: `programReturned()` resets `bios.attr`=0x07). Still open: reset the *video mode* to text when the shell launches a program (so a program that doesn't set its own mode doesn't inherit the previous game's graphics mode). | S | The remaining half of the "stale mode across programs" class. Weigh vs keeping a demo's final frame visible → reset on *launch*, not exit. |
 | A2 | ✅ **DONE** (`6553340`) — CATALOG uses INT 16h; the bug was the whole-screen INT 10h scroll (now windowed). Arrow input was fine. | — | done |
 | A3 | ✅ **DONE** (`126c901`) — was CGA graphics-mode BIOS text (INT 10h teletype over mode 4). Front-end menus render + navigate. New general feature: CGA graphics-mode character output. | — | done |
-| A4 | **God of Thunder IMPULSE logo slowness** | M | Perf/pacing on a real mode-13h intro; feeds the throttling question (B5) and the perf phase (D). |
+| A4 | ✅ **DONE** (`c0c925c`) — GoT reprograms PIT counter 0 to ~140 Hz for the logo; MIRAGE ignored it (18.2 Hz) → ~7.7× slow. Fixed by honouring PIT reprogramming (same fix as A6). | — | done |
 | A5 | **Extended-key (E0) scancodes** for arrows/navigation (currently mapped to bare XT codes) | S | Some later games distinguish grey arrows from the numpad; low risk to add behind the physical-code map. |
-| A6 | **Why is the Dune (Cryo) demo (`DUNEDEM`) slow?** — profile the Cryo engine (dispatch-bound? SMC thrash? `.SQZ`/HSQ decompression hot loop? tight vsync/timer poll? AdLib handshake?) | M | The north-star engine runs its intro but sluggishly; `node --prof` via `run-game.mjs` + tier-2/SMC stats. Feeds B5 (throttling) and D (perf). |
+| A6 | ✅ **DONE** (`c0c925c`) — not compute-bound: Dune reprograms PIT counter 0 to ~200 Hz and is timer-paced; MIRAGE ignored PIT programming (18.2 Hz) → ~11× slow. Fixed by honouring counter-0 reprogramming (`setPitReload` + `ui.js` pacing; 0x3DA beam decoupled via `pitBase`). | — | done |
 
 ## B · Game compatibility features (the big levers)
 

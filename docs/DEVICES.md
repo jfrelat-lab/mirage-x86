@@ -91,6 +91,13 @@ The 18.2 Hz tick is **clocked off `cpu.cycles`**, treating one retired instructi
 ~1.19 MHz PIT tick. `pitReload` (default 65536 = the real reload → an emulated ~1.2 MIPS 386;
 override with `MIRAGE_PITRELOAD`) is the period; `nextTimerCycle` the next threshold.
 
+- **Counter-0 reprogramming honoured:** games set a faster INT 8 rate via `OUT 43h`/`OUT 40h`
+  (Dune ~200 Hz, God of Thunder ~140 Hz for its logo). `machine`'s 0x43/0x40 handlers decode the
+  access mode and call `setPitReload()`, so timer-paced intros run at the intended speed (ignoring
+  this made them 8–11× too slow). `machine.pitBase` keeps the default so the **0x3DA beam** (70 Hz,
+  an independent clock) does not move when the system timer is reprogrammed. In the browser `ui.js`
+  paces `tickTimer` to `pitReload` (clamped, so a kHz sound-rate timer can't flood the loop).
+
 - **`serviceTimer()`** — fires when `cpu.cycles ≥ nextTimerCycle`: bumps the BDA tick, runs the
   guest INT 8 ISR (or chains INT 1Ch) via `realInt`, advances `nextTimerCycle` and `cpu.deadline`.
   Coalesces a long IF-off gap into a single tick.

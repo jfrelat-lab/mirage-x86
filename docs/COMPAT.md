@@ -39,7 +39,7 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
 | Jill of the Jungle | VGA 13h | ✅ renders — verified |
 | God of Thunder | VGA 13h | ✅ renders (IMPULSE intro) under tier-2 — ⚠️ the intro logo animates **very slowly** in the browser (see rough edges) |
 | Alley Cat | CGA 4/5 | ✅ title + keyboard + **front-end menus** (joystick prompt, skill select, instructions) all render and navigate — needed the keyboard fix AND CGA graphics-mode BIOS text (`126c901`) |
-| **Dune (Cryo)** — north star | VGA 13h | 🌅 **boots + plays its intro logos** (Virgin Games → CRYO, decompressed from the `.SQZ` resources, correct palette) in the **real-mode path** `DUNEDEM ENG VGA ADL`. The **enhanced path** `… HIM 386` faults on **`0F 00`** (group-6, protected mode) — the DPMI gap. Past the logos the timer-paced cinematic stalls (vsync/scripting timing + throttled-rAF drive). Tried via the demo (`games/DUNE`, same engine). |
+| **Dune (Cryo)** — north star | VGA 13h | 🌅 **boots + plays its intro** (Virgin Games → CRYO, from the `.SQZ` resources, correct palette) in the **real-mode path** `DUNEDEM ENG VGA ADL`, now **at correct speed** (the PIT-reprogramming fix `c0c925c` — it drives counter 0 at ~200 Hz). The **enhanced path** `… HIM 386` faults on **`0F 00`** (protected mode / DPMI gap). Tried via the demo (`games/DUNE`, same engine). |
 | Prince of Persia | EGA 0Dh | ⚠️ staged in `games/POP` (cracked THG release, `PRINCE.EXE` is EXEPACK'd). **Headless it unpacks fine** (reaches "Unable to find necessary files" on an empty VFS). **Browser shows "Packed file is corrupt"** — a browser-only EXEPACK failure (likely `memSize`/residual-state), open. |
 | QBasic | text/13h | ▶ renders its full IDE but ~16 s one-time compile warmup (1712 blocks × ~9.7 ms `new Function`); keyboard now reaches it via the INT-9 path |
 | Wolf3D (registered WL6) | VGA 13h | ⚠️ ISR-install derail FIXED (`0d7c2b3`); now exits its paged memory manager (`PML_GetPageBuffer: Purged main block`). Shareware WOLF3DSW staged to test as it fits conventional memory. See [wolf3d_diagnosis] memory. |
@@ -56,8 +56,10 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
    menu / instructions via INT 10h teletype **over CGA graphics mode 4**; the BIOS now renders those
    as 8×8 font glyphs into the bitmap (was writing text char/attr → garbage). The whole front-end
    renders and navigates with the keyboard now. (CGA graphics-mode BIOS text is a general new feature.)
-3. **God of Thunder IMPULSE logo is very slow** in the browser — a pacing/throughput issue on its
-   mode-13h intro animation (tier-2 + wall-clock PIT), not a correctness bug.
+3. ~~God of Thunder IMPULSE logo slow~~ + ~~Dune intro slow~~ — **FIXED** (`c0c925c`): both reprogram
+   PIT counter 0 to a faster rate (Dune ~200 Hz, GoT ~140 Hz for the logo) and are timer-paced, but
+   MIRAGE ignored PIT programming (fixed 18.2 Hz) → their animation ran ~8–11× too slow. MIRAGE now
+   honours counter-0 reprogramming (`machine.setPitReload`; `ui.js` paces to the programmed rate).
 4. **Prince of Persia "Packed file is corrupt"** in the browser only (EXEPACK; see table).
 5. **Stale video mode across programs:** MIRAGE never resets to text mode when a program exits /
    the shell relaunches, so a program that doesn't set its own mode inherits the previous game's
