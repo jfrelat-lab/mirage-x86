@@ -76,3 +76,10 @@ lattice ×3.9, plasma ×3.5, memories ×1.66.
 |---|---|---|---|
 | E1 | Fold `tools/run-game.mjs` conveniences (auto-detect main EXE, screenshot PNG) | S | Faster headless game triage. |
 | E2 | Extend `fuzz-region` to far transfers / multi-segment / call-return | S–M | Closes the class of tier-2 bugs that single-segment loop fuzzing misses. |
+
+## F · Deferred capability gaps (found while testing, #57)
+
+| # | Task | Effort | Why / what it unblocks |
+|---|---|---|---|
+| F1 | **`0F 38` three-byte opcode family + VESA** (INT 10h AH=4Fh, banked/linear framebuffer, hi-res modes) | L | **Chrome Revenge** (1K, Abaddon — arguably the best DOS 1K) faults on `0F 38` and draws in VESA 640×480; both are needed to run it. VESA also unlocks later hi-res demos/games. |
+| F2 | **Boot-sector execution mode** (load a 512-byte sector at `0000:7C00`, set up registers as if BIOS INT 19h booted it, run in that bare environment — not the DOS loader) | M | **BootChess** (512b, RSi) and other bootsector sizecoding prods are NOT DOS programs; MIRAGE only loads `.COM`/`.EXE` via the DOS PSP path. A "boot this image" mode would run them (and is a stepping stone toward disk-image booting). |
