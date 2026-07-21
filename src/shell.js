@@ -82,6 +82,10 @@ export class Shell {
   }
 
   programReturned() {
+    // Restore the DOS-default text attribute (grey on black): a full-screen program (e.g.
+    // Apogee's CATALOG paints on a blue background, attr 0x1F) leaves bios.attr set to its own
+    // colour, so without this the prompt and everything typed after it would inherit that colour.
+    this.bios.attr = 0x07;
     // if the program left a graphics mode, restore the text screen so the prompt is
     // visible again (a convenience the real COMMAND.COM lacked). Also reload the
     // default DAC palette: a Ctrl+C'd demo may have left the palette rewritten, which

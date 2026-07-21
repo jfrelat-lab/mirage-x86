@@ -40,13 +40,29 @@ export function installBIOS(machine) {
   bios.getCursor = () => ({ col: getCol(), row: getRow() });
   bios.setCursor = (row, col) => setCur(col, row);
 
-  function scroll(attr) {
-    for (let i = 0; i < (ROWS - 1) * COLS; i++) {
-      mem.w16(VRAM + i * 2, mem.r16(VRAM + (i + COLS) * 2));
+  // Scroll a text window [top..bottom]×[left..right] by `lines` rows, up (INT 10h AH=06) or
+  // down (AH=07), filling the vacated rows with `attr`. lines=0 (or ≥ window height) clears the
+  // whole window. Honouring the window rectangle matters: menu programs (Apogee's CATALOG) scroll
+  // an inner region and expect the header/footer rows to stay put.
+  function scrollWindow(up, lines, attr, top, left, bottom, right) {
+    top = Math.max(0, top); left = Math.max(0, left);
+    bottom = Math.min(ROWS - 1, bottom); right = Math.min(COLS - 1, right);
+    if (top > bottom || left > right) return;
+    const blank = 0x20 | ((attr & 0xff) << 8);
+    const height = bottom - top + 1;
+    const blankRow = (r) => { for (let c = left; c <= right; c++) mem.w16(VRAM + (r * COLS + c) * 2, blank); };
+    const copyRow = (dst, src) => { for (let c = left; c <= right; c++) mem.w16(VRAM + (dst * COLS + c) * 2, mem.r16(VRAM + (src * COLS + c) * 2)); };
+    if (lines <= 0 || lines >= height) { for (let r = top; r <= bottom; r++) blankRow(r); return; }
+    if (up) {
+      for (let r = top; r <= bottom - lines; r++) copyRow(r, r + lines);
+      for (let r = bottom - lines + 1; r <= bottom; r++) blankRow(r);
+    } else {
+      for (let r = bottom; r >= top + lines; r--) copyRow(r, r - lines);
+      for (let r = top; r < top + lines; r++) blankRow(r);
     }
-    const blank = 0x20 | (attr << 8);
-    for (let i = (ROWS - 1) * COLS; i < ROWS * COLS; i++) mem.w16(VRAM + i * 2, blank);
   }
+  // teletype's line-wrap scroll: the whole screen up one row.
+  function scroll(attr) { scrollWindow(true, 1, attr, 0, 0, ROWS - 1, COLS - 1); }
 
   function clearScreen(attr) {
     const blank = 0x20 | ((attr & 0xff) << 8);
@@ -100,10 +116,11 @@ export function installBIOS(machine) {
       case 0x02: setCur(cpu.dx & 0xff, (cpu.dx >> 8) & 0xff); break; // set cursor pos
       case 0x03: cpu.dx = (getRow() << 8) | getCol(); cpu.cx = 0x0607; break; // get cursor
       case 0x05: mem.w16(BDA + 0x62, cpu.al); break; // set active page
-      case 0x06: case 0x07: {                    // scroll window (simplified: whole screen)
+      case 0x06: case 0x07: {                    // AH=06 scroll up / AH=07 scroll down, in a window
         const lines = cpu.al, bh = (cpu.bx >> 8) & 0xff;
-        if (lines === 0) clearScreen(bh);
-        else for (let i = 0; i < lines; i++) scroll(bh);
+        const top = (cpu.cx >> 8) & 0xff, left = cpu.cx & 0xff;
+        const bottom = (cpu.dx >> 8) & 0xff, right = cpu.dx & 0xff;
+        scrollWindow(ah === 0x06, lines, bh, top, left, bottom, right);
         break;
       }
       case 0x08: cpu.ax = mem.r16(VRAM + (getRow() * COLS + getCol()) * 2); break; // read char/attr
