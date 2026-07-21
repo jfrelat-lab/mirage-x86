@@ -25,6 +25,7 @@ export class Video {
   async loadFont(url) {
     const buf = await (await fetch(url)).arrayBuffer();
     this.font = new Uint8Array(buf);
+    this.machine.font = this.font;   // expose to the BIOS for CGA graphics-mode glyph output
   }
 
   _ensure(w, h) {

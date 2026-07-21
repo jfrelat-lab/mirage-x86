@@ -71,7 +71,40 @@ export function installBIOS(machine) {
   }
   bios.clearScreen = clearScreen;
 
+  // ---- CGA graphics-mode character output (modes 4/5/6) --------------------
+  // In a CGA graphics mode the BIOS draws each character as an 8×8 font glyph straight into the
+  // B800 bitmap, not as a text char/attr cell. Games (Alley Cat's "joystick?" prompt) print over
+  // graphics via INT 10h teletype and rely on this; without it the text bytes render as garbage.
+  // The 8×8 glyph is derived from the 8×16 VGA font (`machine.font`, set by video.js) by taking
+  // every other row. B800 banks interleave: even scanlines +0x0000, odd +0x2000, 80 bytes/row.
+  function glyph8(ch, gy) { const f = machine.font; return f ? f[(ch & 0xff) * 16 + (gy << 1)] : 0; }
+  const gfxRowBase = (y) => VRAM + ((y & 1) ? 0x2000 : 0) + (y >> 1) * 80;
+  function drawGlyphCGA(ch, col, row, color) {
+    const mono = bios.mode === 6;                 // mode 6 = 640×200 1bpp; modes 4/5 = 320×200 2bpp
+    const fg = mono ? 1 : ((color & 3) || 3);     // default to colour 3 so text is visible
+    const x0 = col * 8, y0 = row * 8;
+    for (let gy = 0; gy < 8; gy++) {
+      const y = y0 + gy; if (y >= 200) break;
+      const bits = glyph8(ch, gy), base = gfxRowBase(y);
+      if (mono) { mem.u8[base + (x0 >> 3)] = bits; }
+      else {
+        const bo = base + (x0 >> 2);
+        for (let half = 0; half < 2; half++) {
+          let bval = 0;
+          for (let p = 0; p < 4; p++) if (bits & (0x80 >> (half * 4 + p))) bval |= fg << ((3 - p) * 2);
+          mem.u8[bo + half] = bval;
+        }
+      }
+    }
+  }
+  function scrollGfxCGA() {                         // shift the CGA bitmap up one 8-pixel text row
+    for (let y = 0; y < 200 - 8; y++) { const d = gfxRowBase(y), s = gfxRowBase(y + 8); for (let b = 0; b < 80; b++) mem.u8[d + b] = mem.u8[s + b]; }
+    for (let y = 200 - 8; y < 200; y++) { const d = gfxRowBase(y); for (let b = 0; b < 80; b++) mem.u8[d + b] = 0; }
+  }
+
   function teletype(ch, attr = bios.attr) {
+    const gfx = bios.mode === 4 || bios.mode === 5 || bios.mode === 6;
+    const cols = gfx ? (bios.mode === 6 ? 80 : 40) : COLS;
     let col = getCol(), row = getRow();
     if (ch === 0x0d) col = 0;
     else if (ch === 0x0a) row++;
@@ -79,11 +112,12 @@ export function installBIOS(machine) {
     else if (ch === 0x07) { /* bell */ }
     else if (ch === 0x09) { col = (col + 8) & ~7; }
     else {
-      mem.w16(VRAM + (row * COLS + col) * 2, (ch & 0xff) | (attr << 8));
+      if (gfx) drawGlyphCGA(ch, col, row, attr);
+      else mem.w16(VRAM + (row * COLS + col) * 2, (ch & 0xff) | (attr << 8));
       col++;
     }
-    if (col >= COLS) { col = 0; row++; }
-    if (row >= ROWS) { scroll(attr); row = ROWS - 1; }
+    if (col >= cols) { col = 0; row++; }
+    if (row >= ROWS) { if (gfx) scrollGfxCGA(); else scroll(attr); row = ROWS - 1; }
     setCur(col, row);
   }
   bios.teletype = teletype;
@@ -137,7 +171,15 @@ export function installBIOS(machine) {
         for (let i = 0; i < n; i++) mem.w8(VRAM + (off + i) * 2, c);
         break;
       }
-      case 0x0e: teletype(cpu.al); break;        // teletype
+      case 0x0b: {                               // set CGA palette (BH=1) / background+border (BH=0)
+        const bh = (cpu.bx >> 8) & 0xff, bl = cpu.bx & 0xff;
+        if (bh === 0) bios.cga.color = (bios.cga.color & 0x20) | (bl & 0x1f);       // background/border
+        else bios.cga.color = (bios.cga.color & ~0x20) | ((bl & 1) << 5);          // palette select
+        break;
+      }
+      case 0x0e:                                 // teletype (BL = foreground colour in graphics modes)
+        teletype(cpu.al, (bios.mode >= 4 && bios.mode <= 6) ? (cpu.bx & 0xff) : bios.attr);
+        break;
       case 0x0f: cpu.ax = (COLS << 8) | bios.mode; cpu.bx = (mem.r16(BDA + 0x62) << 8) & 0xff00; break; // get mode
       case 0x10:                                 // palette / DAC
         if (cpu.al === 0x10) {                   // set one DAC register

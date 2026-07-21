@@ -23,6 +23,8 @@ const gameDir = join(ROOT, sub);
 
 const mc = new Machine({ memSize: 1 << 20 });
 installBIOS(mc);
+// give the BIOS the VGA font so CGA graphics-mode text (INT 10h teletype over graphics) renders
+try { mc.font = new Uint8Array(readFileSync(new URL('../assets/vga-rom-8x16.bin', import.meta.url))); } catch {}
 const vfs = new VFS();
 const dos = installDOS(mc, vfs);
 let fault = null; mc.onError = (e) => { fault = e; };
