@@ -11,7 +11,7 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 |---|---|---|---|
 | A1 | ~~text attr reset on program return~~ **partly DONE** (`6553340`: `programReturned()` resets `bios.attr`=0x07). Still open: reset the *video mode* to text when the shell launches a program (so a program that doesn't set its own mode doesn't inherit the previous game's graphics mode). | S | The remaining half of the "stale mode across programs" class. Weigh vs keeping a demo's final frame visible → reset on *launch*, not exit. |
 | A2 | ✅ **DONE** (`6553340`) — CATALOG uses INT 16h; the bug was the whole-screen INT 10h scroll (now windowed). Arrow input was fine. | — | done |
-| A3 | **Alley Cat post-title screen** (renders mostly black) | M | First CGA *gameplay* (not just title); exercises CGA mode switches + the new keyboard path end-to-end. |
+| A3 | ✅ **DONE** (`126c901`) — was CGA graphics-mode BIOS text (INT 10h teletype over mode 4). Front-end menus render + navigate. New general feature: CGA graphics-mode character output. | — | done |
 | A4 | **God of Thunder IMPULSE logo slowness** | M | Perf/pacing on a real mode-13h intro; feeds the throttling question (B5) and the perf phase (D). |
 | A5 | **Extended-key (E0) scancodes** for arrows/navigation (currently mapped to bare XT codes) | S | Some later games distinguish grey arrows from the numpad; low risk to add behind the physical-code map. |
 | A6 | **Why is the Dune (Cryo) demo (`DUNEDEM`) slow?** — profile the Cryo engine (dispatch-bound? SMC thrash? `.SQZ`/HSQ decompression hot loop? tight vsync/timer poll? AdLib handshake?) | M | The north-star engine runs its intro but sluggishly; `node --prof` via `run-game.mjs` + tier-2/SMC stats. Feeds B5 (throttling) and D (perf). |

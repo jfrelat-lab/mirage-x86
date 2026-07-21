@@ -71,7 +71,10 @@ Implemented (Alley Cat renders; `demos/CGA.COM` guards it in golden). The B800 f
 interleaved: even scanlines at +0x0000, odd at +0x2000, 80 bytes/row. Modes 4/5 = 320×200×4
 (2 bpp) with the palette chosen by the **0x3D9 colour-select register** (`bios.cga.color`:
 bit4 intensity, bit5 palette green/red/brown vs cyan/magenta/white); mode 6 = 640×200 mono.
-`bios.cga = { color, mode }`; ports 0x3D8/0x3D9 in `bios.js`.
+`bios.cga = { color, mode }`; ports 0x3D8/0x3D9 in `bios.js`. **INT 10h character output works in
+CGA graphics modes:** teletype/write-char draw each char as an 8×8 font glyph into the B800 bitmap
+(from the 8×16 `machine.font` downsampled), not a text char/attr cell — games print prompts over
+graphics this way (Alley Cat). INT 10h AH=0Bh sets the CGA palette/background.
 
 > ⚠️ **Render dispatch is flag/mode-mixed** (`video.js:render`): 13h → gfx13; else `mem.planar`
 > → planar; else mode 4/5/6 → CGA; else text. A program that inherits a stale graphics mode

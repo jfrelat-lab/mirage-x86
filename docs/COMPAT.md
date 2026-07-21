@@ -38,7 +38,7 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
 | Hocus Pocus | VGA 13h | ✅ renders — needed the mid-slice PIT fix |
 | Jill of the Jungle | VGA 13h | ✅ renders — verified |
 | God of Thunder | VGA 13h | ✅ renders (IMPULSE intro) under tier-2 — ⚠️ the intro logo animates **very slowly** in the browser (see rough edges) |
-| Alley Cat | CGA 4/5 | ✅ title renders; ✅ **now responds to the keyboard** (title advances) after the 2026-07-20 keyboard fix — ⚠️ the post-title screen is buggy (mostly black); needs investigation |
+| Alley Cat | CGA 4/5 | ✅ title + keyboard + **front-end menus** (joystick prompt, skill select, instructions) all render and navigate — needed the keyboard fix AND CGA graphics-mode BIOS text (`126c901`) |
 | **Dune (Cryo)** — north star | VGA 13h | 🌅 **boots + plays its intro logos** (Virgin Games → CRYO, decompressed from the `.SQZ` resources, correct palette) in the **real-mode path** `DUNEDEM ENG VGA ADL`. The **enhanced path** `… HIM 386` faults on **`0F 00`** (group-6, protected mode) — the DPMI gap. Past the logos the timer-paced cinematic stalls (vsync/scripting timing + throttled-rAF drive). Tried via the demo (`games/DUNE`, same engine). |
 | Prince of Persia | EGA 0Dh | ⚠️ staged in `games/POP` (cracked THG release, `PRINCE.EXE` is EXEPACK'd). **Headless it unpacks fine** (reaches "Unable to find necessary files" on an empty VFS). **Browser shows "Packed file is corrupt"** — a browser-only EXEPACK failure (likely `memSize`/residual-state), open. |
 | QBasic | text/13h | ▶ renders its full IDE but ~16 s one-time compile warmup (1712 blocks × ~9.7 ms `new Function`); keyboard now reaches it via the INT-9 path |
@@ -52,8 +52,10 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
    the window rectangle (was scrolling the whole screen, wiping the header/footer) and the correct
    up/down direction; `shell.programReturned()` resets `bios.attr` to 0x07 so the prompt isn't left
    in a program's colour (CATALOG paints white-on-blue). Verified in-browser.
-2. **Alley Cat post-title screen** renders mostly black (a garbage strip up top) after the title.
-   Input reaches the game now; the next screen's CGA rendering / game state is the open part.
+2. ~~Alley Cat post-title screen~~ — **FIXED** (`126c901`): it prints its joystick prompt / skill
+   menu / instructions via INT 10h teletype **over CGA graphics mode 4**; the BIOS now renders those
+   as 8×8 font glyphs into the bitmap (was writing text char/attr → garbage). The whole front-end
+   renders and navigates with the keyboard now. (CGA graphics-mode BIOS text is a general new feature.)
 3. **God of Thunder IMPULSE logo is very slow** in the browser — a pacing/throughput issue on its
    mode-13h intro animation (tier-2 + wall-clock PIT), not a correctness bug.
 4. **Prince of Persia "Packed file is corrupt"** in the browser only (EXEPACK; see table).
