@@ -77,6 +77,13 @@ CGA graphics modes:** teletype/write-char draw each char as an 8×8 font glyph i
 text char/attr cell — games print prompts over graphics this way (Alley Cat). INT 10h AH=0Bh sets
 the CGA palette/background.
 
+**Fonts** — the three IBM VGA ROM fonts `assets/vga-rom-8x{8,14,16}.bin` (256 glyphs, 1 byte/row,
+MSB=left) cover every mode: 8×8 (CGA/200-line graphics + CGA text), 8×14 (EGA text/350-line), 8×16
+(VGA text mode 3 + 480-line graphics). They were **graphically extracted from DOSBox-X** (the
+reference), not copied from source: `tools/fontdump.asm` draws all glyphs in modes 13h/10h/12h and
+dumps the framebuffer, `tools/build-fonts.mjs` reverse-engineers the bitmaps. `video.js` loads all
+three onto `machine.font`/`font8x8`/`font8x14`.
+
 > ⚠️ **Render dispatch is flag/mode-mixed** (`video.js:render`): 13h → gfx13; else `mem.planar`
 > → planar; else mode 4/5/6 → CGA; else text. A program that inherits a stale graphics mode
 > from a *previous* program (MIRAGE never resets the mode when the shell regains control) can
