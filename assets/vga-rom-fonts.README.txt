@@ -1,0 +1,15 @@
+MIRAGE VGA ROM fonts — vga-rom-8x8.bin, vga-rom-8x14.bin, vga-rom-8x16.bin
+
+Each file is 256 glyphs x N rows (N = 8, 14, 16), one byte per row, MSB = leftmost pixel.
+Layout as consumed by src/video.js (text rendering) and src/bios.js (CGA graphics-mode text).
+
+PROVENANCE — graphical extraction, not a source-code copy.
+These are the authentic IBM VGA ROM text fonts, extracted by OBSERVING the reference emulator's
+rendered output: tools/fontdump.asm draws all 256 characters in graphics modes 13h (8x8), 10h
+(8x14) and 12h (8x16) — where the BIOS renders each character from that mode's ROM font — and dumps
+the framebuffer; tools/build-fonts.mjs runs that headless in DOSBox-X and reverse-engineers the
+bitmaps from the rendered pixels. Rebuild: `node tools/build-fonts.mjs` (needs dosbox-x + nasm).
+
+The IBM VGA font bitmaps are widely treated as public domain (freely redistributed for decades;
+they are utilitarian glyph bitmaps). We reproduce them here as font DATA obtained by observation of
+rendered output, independent of any emulator's source code.

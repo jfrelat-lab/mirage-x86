@@ -25,9 +25,11 @@ export class Video {
   async loadFont(url) {
     const buf = await (await fetch(url)).arrayBuffer();
     this.font = new Uint8Array(buf);
-    this.machine.font = this.font;   // expose to the BIOS for CGA graphics-mode glyph output
-    // the real 8×8 CGA font (for graphics-mode text — modes 4/5/6); optional, falls back to 8×16
-    try { this.machine.font8x8 = new Uint8Array(await (await fetch(url.replace('8x16', '8x8'))).arrayBuffer()); } catch { /* keep 8×16 fallback */ }
+    this.machine.font = this.font;   // 8×16 — text mode 3 + VGA-graphics INT 10h text
+    // the 8×8 (CGA / 200-line graphics text) and 8×14 (EGA text) ROM fonts, extracted graphically
+    // from DOSBox (tools/build-fonts.mjs). Optional — drawGlyphCGA falls back to the 8×16 downsample.
+    try { this.machine.font8x8 = new Uint8Array(await (await fetch(url.replace('8x16', '8x8'))).arrayBuffer()); } catch { /* fallback */ }
+    try { this.machine.font8x14 = new Uint8Array(await (await fetch(url.replace('8x16', '8x14'))).arrayBuffer()); } catch { /* optional */ }
   }
 
   _ensure(w, h) {
