@@ -77,7 +77,12 @@ export function installBIOS(machine) {
   // graphics via INT 10h teletype and rely on this; without it the text bytes render as garbage.
   // The 8×8 glyph is derived from the 8×16 VGA font (`machine.font`, set by video.js) by taking
   // every other row. B800 banks interleave: even scanlines +0x0000, odd +0x2000, 80 bytes/row.
-  function glyph8(ch, gy) { const f = machine.font; return f ? f[(ch & 0xff) * 16 + (gy << 1)] : 0; }
+  // Prefer the real 8×8 CGA font (machine.font8x8, one byte per row, MSB=left); fall back to the
+  // 8×16 VGA font downsampled by every other row when only that is loaded.
+  function glyph8(ch, gy) {
+    const f8 = machine.font8x8; if (f8) return f8[(ch & 0xff) * 8 + gy];
+    const f = machine.font; return f ? f[(ch & 0xff) * 16 + (gy << 1)] : 0;
+  }
   const gfxRowBase = (y) => VRAM + ((y & 1) ? 0x2000 : 0) + (y >> 1) * 80;
   function drawGlyphCGA(ch, col, row, color) {
     const mono = bios.mode === 6;                 // mode 6 = 640×200 1bpp; modes 4/5 = 320×200 2bpp

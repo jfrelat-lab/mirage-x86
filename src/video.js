@@ -26,6 +26,8 @@ export class Video {
     const buf = await (await fetch(url)).arrayBuffer();
     this.font = new Uint8Array(buf);
     this.machine.font = this.font;   // expose to the BIOS for CGA graphics-mode glyph output
+    // the real 8×8 CGA font (for graphics-mode text — modes 4/5/6); optional, falls back to 8×16
+    try { this.machine.font8x8 = new Uint8Array(await (await fetch(url.replace('8x16', '8x8'))).arrayBuffer()); } catch { /* keep 8×16 fallback */ }
   }
 
   _ensure(w, h) {
