@@ -71,6 +71,21 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
 `DIR` supports wildcard filters (`DIR *.EXE`, `DIR \GAMES\*.DAT`) as of 2026-07-20. Builtins:
 DIR CD CLS TYPE COPY DEL REN MD RD ECHO SET. Programs launched by name or `?run=…`.
 
+## Tier-2 (region compiler) — browser-OFF
+
+Tier-2 is **off in the browser** (`recompiler.js`: `typeof process !== 'undefined'`) and **on in
+Node** (tests/golden/fuzzers still exercise it; `MIRAGE_NOTIER2=1` disables). Reason: on real
+**games** a fused region can run unbounded work in one `runSlice` and hang the main thread (Cosmo's
+decompression froze the tab), Wolf3D runs ~5× slower under it, and Keen once derailed on a
+far-indirect pattern. Re-enabling needs a region **instruction-budget** (bail on retired-instruction
+count, not just region-iterations) + fixing those game cases. Demos are byte-identical either way.
+
+> ⚠️ **Fast-timer games + the browser loop:** games reprogram PIT counter 0 to 200–1000 Hz. `ui.js`
+> delivers **one INT 8 per runSlice iteration** (interleaved), never several back-to-back — `realInt`
+> only pushes an interrupt frame (the ISR runs in the next runSlice), so firing many at once piled
+> frames on the guest stack → underflow → hang. The rate is also capped (`setPitReload` floors at
+> pitBase/16 ≈ 291 Hz).
+
 ## Known engine gaps (the frontier)
 
 1. **DPMI / protected mode** — none. The single biggest gap: blocks Raptor, Jazz, Doom-class
