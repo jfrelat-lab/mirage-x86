@@ -13,3 +13,14 @@ bitmaps from the rendered pixels. Rebuild: `node tools/build-fonts.mjs` (needs d
 The IBM VGA font bitmaps are widely treated as public domain (freely redistributed for decades;
 they are utilitarian glyph bitmaps). We reproduce them here as font DATA obtained by observation of
 rendered output, independent of any emulator's source code.
+
+------------------------------------------------------------------------------------------------
+vga-default-dac.bin — the default VGA 256-colour DAC (768 bytes: 256 x R,G,B, 6-bit each, 0-63).
+
+Same graphical-extraction principle: tools/palettedump.asm sets mode 13h (the BIOS loads the default
+DAC), reads all 256 entries back through the DAC ports (0x3C7/0x3C9), and dumps them; tools/
+build-palettes.mjs runs it headless in DOSBox-X and also VERIFIES the dump is byte-exact against the
+VGA_DEFAULT_DAC table baked into src/bios.js (which stays the runtime source — it must work at BIOS
+init with no async load). Entries 0-15 are the CGA/EGA 16-colour palette that text/EGA/CGA modes use
+(note entry 6 = #AA5500, the authentic CGA "brown"). Rebuild/verify: node tools/build-palettes.mjs.
+
