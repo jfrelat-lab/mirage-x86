@@ -21,11 +21,15 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSTRIP);
-// The tier-2 region compiler is ON by default; MIRAGE_NOTIER2=1 disables it (kill switch /
-// A-B gate). It fuses a hot block and its statically-reachable successors into one function
-// (a switch-in-loop) so inter-block dispatch disappears on hot loops. Proven byte-identical
-// to tier-1: golden + full conformance + the fuzz-region differential fuzzer.
-const TIER2 = typeof process === 'undefined' || !(process.env && process.env.MIRAGE_NOTIER2);
+// The tier-2 region compiler fuses a hot block and its statically-reachable successors into one
+// function (a switch-in-loop) so inter-block dispatch disappears on hot loops. It's byte-identical
+// to tier-1 (golden + conformance + fuzz-region), but on real GAMES it has unresolved issues — a
+// fused region can run unbounded work per slice (Cosmo's decompression hangs a single runSlice),
+// Wolf3D runs ~5× slower, and Keen once derailed on a far-indirect pattern. So it stays a Node-only
+// opt-in for perf work (ON in Node unless MIRAGE_NOTIER2=1; where the test suite exercises it) and
+// is OFF in the browser (typeof process==='undefined') until a region instruction-budget + the
+// game bugs are fixed. Re-enable browser tier-2 by removing the `typeof process !== 'undefined'`.
+const TIER2 = typeof process !== 'undefined' && !(process.env && process.env.MIRAGE_NOTIER2);
 const T2_HOT = 64;         // promote a block to a region after this many executions
 const T2_MAXBLK = 24;      // cap region size in blocks
 const T2_MAXINS = 384;     // cap region size in instructions

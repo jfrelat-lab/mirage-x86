@@ -103,25 +103,32 @@ export class Mirage {
     this._raf = requestAnimationFrame(() => this._loop());
     const now = performance.now();
 
-    // pace the timer interrupt at the guest's programmed PIT rate (default 18.2 Hz; games such as
-    // Dune reprogram counter 0 to ~200 Hz for smooth animation — machine.pitReload tracks it).
-    // Clamp the browser rate so a game driving the timer at a kHz sound rate can't flood the loop.
+    // The timer interrupt is paced at the guest's programmed PIT rate (default 18.2 Hz; games such
+    // as Dune/Cosmo reprogram counter 0 to 200–1000 Hz — machine.pitReload tracks it, capped).
     const tickMs = Math.max(3, TICK_MS * (this.machine.pitReload / 0x10000));
-    let ticks = 0;
-    while (now - this._lastTick >= tickMs && ticks < 16) { this.machine.tickTimer(); this._lastTick += tickMs; ticks++; }
     if (now - this._lastTick > 250) this._lastTick = now;   // drop a big backlog (e.g. after the tab was hidden)
 
     if (this.shell.state === 'running') {
       if (this._brk) { this._brk = false; this.dos.programDone = true; this.machine.cpu.halted = true; this.shell.print('^C'); }
       const t0 = performance.now();
-      while (performance.now() - t0 < FRAME_BUDGET_MS) {
+      let w = t0;
+      while (w - t0 < FRAME_BUDGET_MS) {
+        // Deliver AT MOST ONE timer tick per iteration, so the runSlice below services its ISR
+        // (runs it to IRET) before the next tick fires. Firing several INT 8 back-to-back would
+        // pile un-serviced interrupt frames on the guest stack (realInt only pushes a frame; the
+        // ISR runs later) — at a fast rate the CPU can't keep up and the stack underflows → hang.
+        if (w - this._lastTick >= tickMs) { this.machine.tickTimer(); this._lastTick += tickMs; }
         this.machine.pumpKeyboard();                      // stage a queued hw scancode + fire IRQ1
         this.machine.runSlice(20000);
         if (this.machine.blocked) break;                 // waiting on input
         if (this.dos.programDone) { this.shell.state = 'input'; this.shell.programReturned(); break; }
         if (this.machine.cpu.halted) break;
+        w = performance.now();
       }
     } else {
+      // at the prompt: keep the BDA clock advancing (bounded — no guest ISR here), then pump the shell
+      let ticks = 0;
+      while (now - this._lastTick >= tickMs && ticks < 4) { this.machine.tickTimer(); this._lastTick += tickMs; ticks++; }
       this.shell.pump();
     }
 
