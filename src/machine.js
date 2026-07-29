@@ -47,11 +47,12 @@ export class Machine {
     // — e.g. Cryo's Dune sets reload 0x1745 → ~200 Hz for smooth, correctly-paced animation. We
     // honour counter 0's reload as the new pitReload; counters 1 (refresh)/2 (speaker) don't drive
     // INT 8 so their programming is accepted but ignored here.
-    this._pitAccess = 3; this._pitHiNext = false; this._pitLo = 0;
+    this._pitAccess = 3; this._pitHiNext = false; this._pitLo = 0; this._pitReadHi = false;
     this.onPortWrite(0x43, (_p, _s, v) => {
       v &= 0xff;
       if (((v >> 6) & 3) !== 0) return;              // not counter 0
       const access = (v >> 4) & 3;
+      this._pitReadHi = false;                        // any counter-0 command re-aligns reads to LSB first
       if (access === 0) return;                       // counter-latch command (read), no reload change
       this._pitAccess = access; this._pitHiNext = false;
     });
@@ -65,6 +66,18 @@ export class Machine {
         reload = (v << 8) | this._pitLo; this._pitHiNext = false;
       }
       this.setPitReload(reload === 0 ? 0x10000 : reload);       // 0 == 65536
+    });
+    // Reading counter 0 (0x40) returns the LIVE countdown value. Games poll it for fine timing /
+    // delays / entropy — Alley Cat's gameplay loop spins on it — so a constant reply freezes them.
+    // The counter counts down from the reload once per PIT period; derive it from cpu.cycles and
+    // return LSB then MSB per the current access mode (BIOS default is LSB-then-MSB).
+    this.onPortRead(0x40, () => {
+      const count = (this.pitReload - (this.cpu.cycles % this.pitReload)) & 0xffff;
+      if (this._pitAccess === 1) return count & 0xff;
+      if (this._pitAccess === 2) return (count >> 8) & 0xff;
+      const b = this._pitReadHi ? (count >> 8) & 0xff : count & 0xff;
+      this._pitReadHi = !this._pitReadHi;
+      return b;
     });
     // Auto-fire the timer off cpu.cycles from the run loop. On (headless): deterministic and
     // representative — INT 8 fires proportionally to CPU work, so a busy-wait inside one runSlice
