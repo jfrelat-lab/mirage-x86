@@ -99,6 +99,9 @@ The 18.2 Hz tick is **clocked off `cpu.cycles`**, treating one retired instructi
 ~1.19 MHz PIT tick. `pitReload` (default 65536 = the real reload → an emulated ~1.2 MIPS 386;
 override with `MIRAGE_PITRELOAD`) is the period; `nextTimerCycle` the next threshold.
 
+- **Counter-0 read (`IN 0x40`)** returns the live countdown value (derived from `cpu.cycles`, LSB-
+  then-MSB per the access mode). Games poll it for fine timing/delays/entropy — Alley Cat's gameplay
+  loop spins on it, so a constant reply froze the game. A counter-0 command re-aligns reads to LSB.
 - **Counter-0 reprogramming honoured:** games set a faster INT 8 rate via `OUT 43h`/`OUT 40h`
   (Dune ~200 Hz, God of Thunder ~140 Hz for its logo). `machine`'s 0x43/0x40 handlers decode the
   access mode and call `setPitReload()`, so timer-paced intros run at the intended speed (ignoring
