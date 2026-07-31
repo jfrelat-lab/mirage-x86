@@ -144,6 +144,9 @@ export class Machine {
     const a = 0x46c;                          // BDA 0040:006C — ticks since midnight
     this.mem.w32(a, (this.mem.r32(a) + 1) >>> 0);
     if (!(this.cpu.flags & IF)) return;
+    this.cpu.halted = false;                  // the timer IRQ wakes a HLT even with the BIOS-default
+                                              // ISR (a `STI;HLT` before the guest installs its own
+                                              // INT 8 — e.g. Moktar's GAME.TDT init — must resume)
     const v8 = this.getVector(8);
     if (v8.seg !== BIOS_SEG) { this.realInt(8, v8.seg, v8.off); return; }
     const v1c = this.getVector(0x1c);

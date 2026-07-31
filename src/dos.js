@@ -114,7 +114,76 @@ export function installDOS(machine, vfs) {
     else dos.loadCOM(bytes, tail, progPath);
   };
 
-  const terminate = (code) => { dos.exitCode = code & 0xff; dos.programDone = true; cpu.halted = true; };
+  // ---- INT 21h AH=4B: load and execute a child program (EXEC) -------------
+  // Loader-stub games (a tiny .COM that shrinks its own block then EXECs the real
+  // binary — e.g. Moktar's MOKTAR.COM -> GAME.TDT) need this. We can't "run the child
+  // to completion and return" synchronously, so instead: save the parent's full CPU
+  // context, load + switch to the child, and let the run loop execute it. When the
+  // child terminates, terminate() below pops the context and resumes the parent right
+  // after its INT 21h — DOS's INT 22h return, modelled without a real IRET.
+  dos.execStack = [];
+
+  function execChild(path, pbLin) {
+    const bytes = vfs.readFile(path) || vfs.readFile('\\' + path);
+    if (!bytes) return 2;                                 // file not found
+    const childPsp = dos.allocTop;                        // first free paragraph (parent shrank via 4Ah)
+    if (childPsp + 0x11 >= MEM_TOP) return 8;             // no room for even a PSP+stack
+    const envSeg = mem.r16(pbLin) || ENV_SEG;             // 0 in the param block = inherit parent's env
+    const tOff = mem.r16(pbLin + 2), tSeg = mem.r16(pbLin + 4), tLin = (tSeg << 4) + tOff;
+    let tail = ''; const tLen = mem.r8(tLin);
+    for (let i = 0; i < tLen; i++) tail += String.fromCharCode(mem.r8(tLin + 1 + i));
+
+    dos.execStack.push({                                  // save the parent to resume on the child's exit
+      reg: Array.from(cpu.reg), seg: Array.from(cpu.seg),
+      eip: cpu.eip, flags: cpu.flags, psp: dos.psp, dta: dos.dta, allocTop: dos.allocTop,
+    });
+    machine.rec.reset();
+    buildPSP(childPsp, tail);
+    mem.w16((childPsp << 4) + 0x16, dos.psp);             // parent PSP link
+    mem.w16((childPsp << 4) + 0x2c, envSeg);              // environment segment
+    dos.psp = childPsp; dos.exitCode = 0;
+
+    if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) {   // MZ-EXE child
+      const rd16 = (o) => bytes[o] | (bytes[o + 1] << 8);
+      const e_cblp = rd16(2), e_cp = rd16(4), e_crlc = rd16(6), e_cparhdr = rd16(8);
+      const e_ss = rd16(0x0e), e_sp = rd16(0x10), e_ip = rd16(0x14), e_cs = rd16(0x16), e_lfarlc = rd16(0x18);
+      let imageBytes = e_cp * 512; if (e_cblp) imageBytes -= (512 - e_cblp);
+      const code = bytes.subarray(e_cparhdr * 16, imageBytes);
+      const loadSeg = childPsp + 0x10;
+      mem.blit(loadSeg << 4, code);
+      for (let i = 0; i < e_crlc; i++) { const a = ((loadSeg + rd16(e_lfarlc + i * 4 + 2)) << 4) + rd16(e_lfarlc + i * 4); mem.w16(a, (mem.r16(a) + loadSeg) & 0xffff); }
+      cpu.reg.fill(0);
+      cpu.setSeg(DS, childPsp); cpu.setSeg(ES, childPsp);
+      cpu.setSeg(SS, (loadSeg + e_ss) & 0xffff); cpu.sp = e_sp;
+      cpu.setSeg(CS, (loadSeg + e_cs) & 0xffff); cpu.eip = e_ip;
+      cpu.ax = 0; cpu.bx = childPsp; cpu.dx = childPsp;
+    } else {                                              // .COM child (GAME.TDT is one: JMP entry, no MZ)
+      mem.blit((childPsp << 4) + 0x100, bytes);
+      cpu.reg.fill(0);
+      cpu.setSeg(CS, childPsp); cpu.setSeg(DS, childPsp); cpu.setSeg(ES, childPsp); cpu.setSeg(SS, childPsp);
+      cpu.eip = 0x100;
+      cpu.ax = 0; cpu.bx = 0; cpu.cx = 0x00ff; cpu.dx = childPsp;
+      cpu.si = 0x0100; cpu.di = 0xfffe; cpu.bp = 0x091c;
+      cpu.sp = 0xfffe; mem.w16((childPsp << 4) + 0xfffe, 0);
+    }
+    cpu.flags = 0x0202;                                   // standard entry flags (IF set)
+    dos.allocTop = MEM_TOP;                               // the child owns the rest of memory
+    cpu.halted = false;
+    return 0;                                             // success — cpu now points at the child
+  }
+
+  const terminate = (code) => {
+    dos.exitCode = code & 0xff;
+    const ctx = dos.execStack.pop();
+    if (ctx) {                                            // a child of an EXEC — resume the parent
+      machine.rec.reset();
+      cpu.reg.set(ctx.reg);
+      for (const s of [ES, CS, SS, DS]) cpu.setSeg(s, ctx.seg[s]);
+      cpu.eip = ctx.eip; cpu.flags = ctx.flags & ~CF;    // EXEC succeeded → CF clear for the parent
+      dos.psp = ctx.psp; dos.dta = ctx.dta; dos.allocTop = ctx.allocTop;
+      cpu.halted = false;
+    } else { dos.programDone = true; cpu.halted = true; }
+  };
 
   // ---- INT 20h / 21h ------------------------------------------------------
   machine.hookInterrupt(0x20, () => terminate(0));
@@ -191,6 +260,13 @@ export function installDOS(machine, vfs) {
         // "0 KBytes available" and quit). Bump-allocator model: last block wins.
         if (seg + want >= dos.allocTop || seg <= PSP_SEG) dos.allocTop = seg + want;
         ok(); break;
+      }
+      case 0x4b: {                                                   // EXEC (load + execute child)
+        if (cpu.al !== 0) { err(1); break; }                         // only AL=00 (load & run) supported
+        const path = asciiz(cpu.base[DS] + (cpu.dx & 0xffff));
+        const rc = execChild(path, cpu.base[ES] + (cpu.bx & 0xffff));
+        if (rc) err(rc);   // failure → CF=1, AX=error (parent context untouched); success switched to the child
+        break;
       }
       case 0x4c: terminate(cpu.al); break;                           // terminate w/ code
       case 0x4d: cpu.ax = dos.exitCode; break;                       // get return code

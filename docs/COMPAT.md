@@ -91,6 +91,19 @@ count, not just region-iterations) + fixing those game cases. Demos are byte-ide
 > frames on the guest stack → underflow → hang. The rate is also capped (`setPitReload` floors at
 > pitBase/16 ≈ 291 Hz).
 
+## EXEC (INT 21h AH=4B) — loader-stub games
+
+`dos.js` implements **AH=4B AL=00 (load + execute child)**: it saves the parent's full CPU
+context, loads the child (COM/MZ) into free memory above the parent (which shrinks its own block
+via AH=4A first), and switches to it; when the child terminates, `terminate()` pops the context
+and resumes the parent right after its INT 21h (DOS's INT 22h return, without a real IRET). This
+unblocks games that ship a tiny launcher `.COM` that EXECs the real binary. Also fixed: `tickTimer`
+now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest installs its own INT 8).
+
+| Game | Status |
+|---|---|
+| **Moktar** (Titus, *Les Aventures de Moktar*, same engine as Prehistorik) | ⚠️ `MOKTAR.COM` (344 B) EXECs `GAME.TDT` — **EXEC works, the child loads + runs** (STI/HLT, stack setup, hundreds of instructions). But `GAME.TDT` is wrapped in **E.Zmiro's "Best Protection Kit"**, which derails into the IVT (executes low memory as code → hits `0F`-less opcode `0x63`/ARPL at linear `0x18C`). Likely walks the DOS **MCB chain** (MIRAGE has a bump allocator, no MCBs) and jumps to an anti-tamper path on mismatch. A cracked/un-protected release, or an MCB chain, would be needed. |
+
 ## Known engine gaps (the frontier)
 
 1. **DPMI / protected mode** — none. The single biggest gap: blocks Raptor, Jazz, Doom-class
