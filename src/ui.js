@@ -14,7 +14,14 @@ import { Shell } from './shell.js';
 import { SAMPLES } from './samples.js';
 
 const TICK_MS = 1000 / 18.2065;     // PC timer period
-const FRAME_BUDGET_MS = 12;         // CPU time per animation frame
+const FRAME_BUDGET_MS = 12;         // real host CPU time per animation frame (safety cap)
+// Emulated CPU speed: how many guest cycles (~retired instructions) run per second of wall-clock.
+// Without this the guest runs unthrottled (hundreds of MIPS), so code whose pace is bound by raw
+// CPU speed rather than the timer or the retrace — e.g. the Commander Keen Vorticons menus/story
+// scroll, which wait on neither — flies by. ~8M ≈ a fast 386: fast enough that timer-paced games
+// (Dune/Cosmo/GoT, gated by their wall-clock INT 8) keep up, slow enough to tame the raw-speed
+// ones. The 0x3DA beam is derived from this (bios.js) so vertical-retrace stays a real 70 Hz.
+const VCPU_HZ = 8_000_000;
 
 export class Mirage {
   constructor(canvas, opts = {}) {
@@ -22,6 +29,7 @@ export class Mirage {
     this.opts = opts;
     this.machine = new Machine({ memSize: opts.memSize || 16 * 1024 * 1024 });
     this.machine.timerAuto = false;   // browser paces the PIT to wall-clock (18.2 Hz) in _loop() below
+    this.machine.vcpuHz = opts.vcpuHz || VCPU_HZ;   // emulated CPU speed; also sets the 70 Hz beam period
     this.bios = installBIOS(this.machine);
     this.vfs = new VFS();
     this.dos = installDOS(this.machine, this.vfs);
@@ -32,6 +40,7 @@ export class Mirage {
     this.onFrame = opts.onFrame || null;
     this._raf = 0;
     this._lastTick = 0;
+    this._lastLoop = 0;
     this._brk = false;
 
     this.machine.onError = (e) => this._onError(e);
@@ -59,7 +68,7 @@ export class Mirage {
     this.shell.boot();
     this.keyboard.attach(window);
     this._attachMouse();
-    this._lastTick = performance.now();
+    this._lastTick = this._lastLoop = performance.now();
     this._loop();
     return this;
   }
@@ -111,6 +120,15 @@ export class Mirage {
     if (this.shell.state === 'running') {
       if (this._brk) { this._brk = false; this.dos.programDone = true; this.machine.cpu.halted = true; this.shell.print('^C'); }
       const t0 = performance.now();
+      // Virtual CPU clock: run at most vcpuHz cycles of guest time per wall-clock second (the
+      // budget for this frame is proportional to the real time elapsed since the last one, clamped
+      // so a hidden/backlogged tab doesn't sprint to catch up). Raw-CPU-speed-bound code is thus
+      // paced to a period-appropriate rate; timer-paced games are unaffected (their animation is
+      // gated by the wall-clock INT 8 below). FRAME_BUDGET_MS still caps real host time as a safety.
+      let dt = now - this._lastLoop; if (dt > 50 || dt < 0) dt = 50;
+      this._lastLoop = now;
+      const cycleBudget = Math.max(1, (this.machine.vcpuHz * dt / 1000) | 0);
+      const cyc0 = this.machine.cpu.cycles;
       let w = t0;
       while (w - t0 < FRAME_BUDGET_MS) {
         // Deliver AT MOST ONE timer tick per iteration, so the runSlice below services its ISR
@@ -119,7 +137,9 @@ export class Mirage {
         // ISR runs later) — at a fast rate the CPU can't keep up and the stack underflows → hang.
         if (w - this._lastTick >= tickMs) { this.machine.tickTimer(); this._lastTick += tickMs; }
         this.machine.pumpKeyboard();                      // stage a queued hw scancode + fire IRQ1
-        this.machine.runSlice(20000);
+        const slice = Math.min(20000, cycleBudget - (this.machine.cpu.cycles - cyc0));
+        if (slice <= 0) break;                            // spent this frame's virtual-cycle budget
+        this.machine.runSlice(slice);
         if (this.machine.blocked) break;                 // waiting on input
         if (this.dos.programDone) { this.shell.state = 'input'; this.shell.programReturned(); break; }
         if (this.machine.cpu.halted) break;

@@ -270,10 +270,16 @@ export function installBIOS(machine) {
   machine.onPortRead(0x3d9, () => bios.cga.color);
   // Input Status #1 (0x3DA): a real time-based VGA beam instead of a per-read toggle, so a vsync
   // loop that measures the retrace (not just waits for an edge) sees a realistic period. The beam
-  // position is cpu.cycles within one ~70 Hz mode-13h frame (period = pitReload / (70/18.2), the
-  // VGA:PIT frequency ratio). bit3 = vertical retrace (short pulse at frame end); bit0 = display
-  // disabled during the surrounding vblank. Reads also reset the ATC index/data flip-flop.
-  const vgaPeriod = Math.max(1, Math.round((machine.pitBase || machine.pitReload) / 3.845));
+  // position is cpu.cycles within one ~70 Hz mode-13h frame. bit3 = vertical retrace (short pulse
+  // at frame end); bit0 = display disabled during the surrounding vblank. Reads also reset the ATC
+  // index/data flip-flop.
+  // Period in cycles: when a virtual CPU clock is set (browser, machine.vcpuHz cycles/second of
+  // wall-clock), one 70 Hz frame is vcpuHz/70 cycles, so a throttled guest sees a real 70 Hz beam.
+  // Headless (no vcpuHz, deterministic timerAuto) keeps the pitBase-derived period so golden
+  // fingerprints are unchanged (period = pitBase / (70/18.2), the VGA:PIT frequency ratio).
+  const vgaPeriod = machine.vcpuHz
+    ? Math.max(1, Math.round(machine.vcpuHz / 70))
+    : Math.max(1, Math.round((machine.pitBase || machine.pitReload) / 3.845));
   const vblankStart = Math.round(vgaPeriod * 0.88), vretraceStart = Math.round(vgaPeriod * 0.92);
   machine.onPortRead(0x3da, () => {
     if (machine.vga) machine.vga.atcFlip = 0;

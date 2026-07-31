@@ -99,8 +99,15 @@ count, not just region-iterations) + fixing those game cases. Demos are byte-ide
 3. **Audio** — SB/OPL are detection stubs only (no synthesis). Silent, but detection passes.
 4. **Mode X / unchained VGA** — not implemented. No demo/game we currently have exercises it, but
    it's a genuine future need (Second Reality, some VGA action games). Would need a hand test.
-5. **Frame-rate throttling** — MIRAGE runs unthrottled (≫ one real frame per tick). This is why
-   HLT-wake-on-timer regressed a demo's timeline, and it interacts with intro/game pacing.
+5. ~~**Frame-rate throttling**~~ — **addressed in the browser** (`ui.js`): a virtual CPU clock
+   (`VCPU_HZ`, ~8 MHz ≈ a fast 386) caps the guest to N cycles/second of wall-clock, so code whose
+   pace is bound by raw CPU speed rather than the timer/retrace (e.g. the Commander Keen Vorticons
+   menus/story scroll, which wait on neither — it reprograms the PIT to 145.6 Hz but does **not**
+   poll 0x3DA) no longer flies by. The 0x3DA beam is derived from `VCPU_HZ` (bios.js) so vertical
+   retrace stays a real 70 Hz. Timer-paced games (Dune/Cosmo/GoT) are unaffected (their animation
+   is gated by the wall-clock INT 8). Headless tools (no `vcpuHz`, deterministic `timerAuto`) keep
+   the pitBase-derived beam, so golden fingerprints are unchanged. `VCPU_HZ` is a single tunable
+   constant — lower it toward ~3–4 MHz to match a slower period machine (e.g. archive.org's DOSBox).
 
 ## Fixes this frontier came from (recent)
 
