@@ -140,11 +140,17 @@ export function installBIOS(machine) {
         bios.mode = cpu.al & 0x7f;
         mem.w8(BDA + 0x49, bios.mode);
         mem.w16(BDA + 0x63, bios.mode === 7 ? 0x03b4 : 0x03d4);  // CRTC base (mono mode 7 vs colour)
-        defaultPalette(bios.dac);               // a mode set reloads the default DAC
         // EGA/VGA 16-colour graphics modes are planar (A000 via the Sequencer/Graphics
         // Controller); the flag routes A000 writes through the plane logic (see vga.js).
         const planar = bios.mode === 0x0d || bios.mode === 0x0e || bios.mode === 0x0f ||
                        bios.mode === 0x10 || bios.mode === 0x11 || bios.mode === 0x12;
+        // A mode set reloads the DAC. In a planar EGA mode the DAC holds the 64 EGA colours and the
+        // 16 attribute-controller palette registers get their EGA defaults; a pixel index then maps
+        // index -> palette-register -> DAC. This reproduces the default 16 exactly, but lets a game
+        // repaint the palette via INT 10h AH=10h AL=00/02 (Prehistorik does — without it the 16
+        // registers stayed identity and its art rendered in garish default colours).
+        if (planar && machine.vga) { egaPaletteDAC(bios.dac); machine.vga.palette.set(EGA_DEFAULT_PAL); }
+        else defaultPalette(bios.dac);
         mem.planar = planar; bios.planar = planar;
         if (machine.vga) machine.vga.setMode(bios.mode, planar);
         if (!(cpu.al & 0x80)) {                 // high bit set = keep screen
@@ -191,7 +197,11 @@ export function installBIOS(machine) {
         break;
       case 0x0f: cpu.ax = (COLS << 8) | bios.mode; cpu.bx = (mem.r16(BDA + 0x62) << 8) & 0xff00; break; // get mode
       case 0x10:                                 // palette / DAC
-        if (cpu.al === 0x10) {                   // set one DAC register
+        if (cpu.al === 0x00) {                   // set one attribute-controller palette register
+          if (machine.vga) machine.vga.palette[cpu.bx & 0x0f] = (cpu.bx >> 8) & 0x3f; // BL=reg, BH=value
+        } else if (cpu.al === 0x02) {            // set all 16 palette registers + overscan (ES:DX -> 17 bytes)
+          if (machine.vga) { let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); for (let i = 0; i < 16; i++) machine.vga.palette[i] = mem.r8(p++) & 0x3f; }
+        } else if (cpu.al === 0x10) {            // set one DAC register
           const reg = cpu.bx & 0xff;
           bios.dac[reg * 3] = (cpu.dx >> 8) & 0x3f;     // DH = red
           bios.dac[reg * 3 + 1] = (cpu.cx >> 8) & 0x3f; // CH = green
@@ -377,4 +387,20 @@ const VGA_DEFAULT_DAC = (
 
 function defaultPalette(dac) {
   dac.set(VGA_DEFAULT_DAC);
+}
+
+// The standard EGA default attribute-controller palette registers (index -> 6-bit EGA colour code).
+// Index 6 -> 0x14 (brown) and 8..15 -> 0x38..0x3f (the high-intensity set) is what makes the plain
+// 16 render correctly once the DAC below holds the 64 EGA colours.
+const EGA_DEFAULT_PAL = Uint8Array.from(
+  [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f]);
+
+// Fill DAC entries 0..63 with the 64 EGA colours. An EGA 6-bit colour code is r g b R G B (secondary
+// then primary bits per channel); each channel = primary*0x2a + secondary*0x15 (6-bit, 0..63).
+function egaPaletteDAC(dac) {
+  for (let v = 0; v < 64; v++) {
+    dac[v * 3]     = ((v >> 2) & 1) * 0x2a + ((v >> 5) & 1) * 0x15; // red
+    dac[v * 3 + 1] = ((v >> 1) & 1) * 0x2a + ((v >> 4) & 1) * 0x15; // green
+    dac[v * 3 + 2] = ((v >> 0) & 1) * 0x2a + ((v >> 3) & 1) * 0x15; // blue
+  }
 }
