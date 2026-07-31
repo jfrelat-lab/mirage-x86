@@ -34,6 +34,11 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
 | Commander Keen 1 | EGA 0Dh | ✅ renders (High Scores, pixel-perfect) — verified |
 | Commander Keen 4 | EGA 0Dh | ✅ renders (main menu) — verified |
 | Bio Menace | EGA 0Dh | ✅ renders — verified |
+| Commander Keen 3 | EGA 0Dh | ✅ renders (Apogee logo intro, pixel-perfect) — Vorticons engine confirmed on a 2nd episode |
+| Duke Nukem 1 | EGA 0Dh | ✅ renders (credits screen: Todd Replogle / George Broussard / id Software) — clean |
+| Prehistorik (Titus) | EGA 0Dh | ⚠️ renders + animates (title logo + caveman intro cutscene) with correct geometry, but **filled areas show heavy colour speckle** — likely Titus's aggressive EGA dithering rendered with an off palette; needs a DOSBox side-by-side to confirm. Reaches EGA via its C/E/V "Graphics Mode" menu: answer **Y** to "Computer Setup not detected", then **E**, then RETURN. |
+| Secret Agent (Apogee) | text→EGA | ⚠️ `SAM1.EXE` loads + runs (CPU active, paints a background) but **stalls before its menu** under scripted input — a config/keyboard-wait quirk shared with its engine sibling Crystal Caves. Normal launch is via `CHOICE.EXE`/`run.bat`. |
+| Lemmings (DOS, THG release) | VGA 13h | ❌ `VGALEMMI.EXE` **derails → unimplemented opcode `0F 0C`** (undefined on 286/386 → MIRAGE ran into data as code after a wrong branch, à la early Wolf3D). Needs co-sim tracing. This release ships **no EGA binary** (CGA/Tandy/VGA only), so it is not an EGA test. |
 | Major Stryker | VGA 13h | ✅ renders (Apogee title) — needed the tier-2 PIT fix |
 | Hocus Pocus | VGA 13h | ✅ renders — needed the mid-slice PIT fix |
 | Jill of the Jungle | VGA 13h | ✅ renders — verified |
