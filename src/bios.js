@@ -282,6 +282,18 @@ export function installBIOS(machine) {
   machine.onPortWrite(0x3d8, (_p, _s, v) => { bios.cga.mode = v & 0xff; });
   machine.onPortWrite(0x3d9, (_p, _s, v) => { bios.cga.color = v & 0xff; });
   machine.onPortRead(0x3d9, () => bios.cga.color);
+  // A20 gate — System Control Port A (0x92), the PS/2 "fast A20": bit 1 opens/closes the 1 MiB
+  // address wrap. (Games that want HMA/extended addressing set it; most rely on the reset default
+  // of A20 disabled, which memory.js already provides.)
+  machine.onPortWrite(0x92, (_p, _s, v) => {
+    const want = !!(v & 2);
+    if (want === machine.mem.a20) return;
+    machine.mem.setA20(want);
+    // The recompiler bakes the address mask as a literal into compiled blocks, so re-bake it and
+    // drop the cache — otherwise inlined accesses keep the old wrap.
+    if (machine.rec) { machine.rec.MM = machine.mem.mask; machine.rec.reset(); }
+  });
+  machine.onPortRead(0x92, () => (machine.mem.a20 ? 0x02 : 0x00));
   // Input Status #1 (0x3DA): a real time-based VGA beam instead of a per-read toggle, so a vsync
   // loop that measures the retrace (not just waits for an edge) sees a realistic period. The beam
   // position is cpu.cycles within one ~70 Hz mode-13h frame. bit3 = vertical retrace (short pulse

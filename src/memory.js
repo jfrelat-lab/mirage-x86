@@ -10,7 +10,13 @@ export class Memory {
   constructor(size = 16 * 1024 * 1024) {
     if ((size & (size - 1)) !== 0) throw new Error('Memory size must be a power of two');
     this.size = size;
-    this.mask = size - 1;
+    // Real-mode addressing wraps at 1 MiB (the 8086's 20-bit bus / the AT's A20 gate disabled at
+    // reset). Default to that wrap regardless of how much RAM is installed, so segment:offset
+    // arithmetic near FFFF:xxxx behaves like real hardware — DOS EXEPACK stubs and lots of startup
+    // code rely on it (a 16 MiB buffer with no wrap makes them print "Packed file is corrupt").
+    // A guest that wants the full range enables A20 (port 0x92) → setA20(true).
+    this.a20 = false;
+    this.mask = Math.min(size - 1, 0xfffff);
     this.buffer = new ArrayBuffer(size);
     this.u8 = new Uint8Array(this.buffer);
     this.dv = new DataView(this.buffer);
@@ -22,6 +28,10 @@ export class Memory {
     this.planar = false;     // true in EGA/VGA 16-colour modes → A000 writes go through vga.js
     this.vga = null;         // the VGA planar device (set by installVGA); used on A000 writes
   }
+
+  /** Open (A20 on) or close the 1 MiB address wrap. On: the full installed RAM is addressable
+   *  (real-mode HMA at FFFF:0010+). Off: segment:offset wraps at 1 MiB like an 8086. */
+  setA20(on) { this.a20 = !!on; this.mask = on ? (this.size - 1) : Math.min(this.size - 1, 0xfffff); }
 
   // ---- reads ---------------------------------------------------------------
   // In a planar EGA/VGA mode, A000 reads go through the plane logic (and load the latches);
