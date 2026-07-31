@@ -75,9 +75,9 @@
     "fault": null
   },
   "intros/oktaeder.com": {
-    "hash": "88ab732bf3512b33f6328b736652000ffedfb876",
+    "hash": "53ac1731e81a545fef8def3a7ae9acc595198952",
     "mode": 3,
-    "fault": "mirage: unimplemented opcode 0x0f 0x01"
+    "fault": "mirage: unimplemented opcode 0x0f 0x01 at 1132"
   },
   "intros/puls.com": {
     "hash": "660d315007aefedb996f1622004f5d5cdcff0276",

@@ -989,7 +989,7 @@ export class Recompiler {
         case 0xbf: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 16)})<<16>>16)`)); return; } // MOVSX r,Ew
         case 0xc0: case 0xc1: { const o = modrm(); const size = op2 === 0xc0 ? 8 : sz; const d = NT(), s = NT(), rr = NT(); P(`var ${d}=${rmR(o, size)},${s}=${rR(o.reg, size)};var ${rr}=(${d}+${s})${M(size)};${rW(o.reg, size, d)}${rmW(o, size, rr)}cpu.setAdd(${d},${s},${rr},${size});`); return; } // XADD
         default:
-          throw new Error('mirage: unimplemented opcode 0x0f 0x' + op2.toString(16).padStart(2, '0'));
+          throw new Error('mirage: unimplemented opcode 0x0f 0x' + op2.toString(16).padStart(2, '0') + ' at ' + ((linStart - ip0 + ip - 2) & MM).toString(16));
       }
     }
   }

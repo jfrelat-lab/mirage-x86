@@ -33,6 +33,9 @@ export function installBIOS(machine) {
   mem.w16(BDA + 0x4a, COLS);     // text columns
   mem.w8(BDA + 0x84, ROWS - 1);  // rows - 1
   mem.w16(BDA + 0x62, 0);        // active page
+  mem.w16(BDA + 0x63, 0x03d4);   // CRTC base I/O port (colour); +6 = 0x3DA status reg. Programs read
+                                 // this to find the vertical-retrace port (Lemmings hung on port 6
+                                 // because it read 0 here, added 6, and polled a dead port).
 
   // ---- cursor (page 0) at BDA 0x50 (col), 0x51 (row) ----
   const getCol = () => mem.r8(BDA + 0x50), getRow = () => mem.r8(BDA + 0x51);
@@ -136,6 +139,7 @@ export function installBIOS(machine) {
       case 0x00: {                              // set video mode
         bios.mode = cpu.al & 0x7f;
         mem.w8(BDA + 0x49, bios.mode);
+        mem.w16(BDA + 0x63, bios.mode === 7 ? 0x03b4 : 0x03d4);  // CRTC base (mono mode 7 vs colour)
         defaultPalette(bios.dac);               // a mode set reloads the default DAC
         // EGA/VGA 16-colour graphics modes are planar (A000 via the Sequencer/Graphics
         // Controller); the flag routes A000 writes through the plane logic (see vga.js).
