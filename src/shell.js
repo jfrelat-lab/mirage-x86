@@ -86,12 +86,16 @@ export class Shell {
     // Apogee's CATALOG paints on a blue background, attr 0x1F) leaves bios.attr set to its own
     // colour, so without this the prompt and everything typed after it would inherit that colour.
     this.bios.attr = 0x07;
-    // if the program left a graphics mode, restore the text screen so the prompt is
-    // visible again (a convenience the real COMMAND.COM lacked). Also reload the
-    // default DAC palette: a Ctrl+C'd demo may have left the palette rewritten, which
-    // would otherwise tint the text colours (and CLS wouldn't fix it).
-    if (this.machine.mem.r8(0x449) !== 0x03) { this.machine.mem.w8(0x449, 0x03); this.bios.resetPalette(); this.bios.clearScreen(0x07); }
-    else { this.bios.resetPalette(); this.crlf(); }
+    // If the program left a non-text mode (or Ctrl+C interrupted it before it reset), restore text
+    // mode 3 via the BIOS (INT 10h AH=00) — this sets bios.mode AND the BDA 0x449 byte AND clears +
+    // resets the DAC + mem.planar. Setting only the BDA byte (as before) left bios.mode stale, so
+    // teletype kept drawing CGA-graphics-mode glyphs and the shell text came out corrupted after
+    // Ctrl+C'ing a graphics program (CGA.COM, Alley Cat).
+    if (this.machine.mem.r8(0x449) !== 0x03 || this.bios.mode !== 0x03) {
+      this.machine.cpu.ax = 0x0003; this.machine.swInt(0x10);
+    } else {
+      this.bios.resetPalette(); this.crlf();
+    }
     if (this.dos.exitCode) this.print(`[program exited with code ${this.dos.exitCode}]\r\n`);
     this.prompt();
   }
