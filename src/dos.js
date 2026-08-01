@@ -318,7 +318,10 @@ export function installDOS(machine, vfs) {
         const seg = cpu.seg[ES], want = cpu.bx & 0xffff, maxPar = MEM_TOP - seg;
         if (want > maxPar) { err(8); cpu.bx = maxPar; break; }        // not enough memory; report the max
         if (dos.allocs.has(seg)) dos.allocs.set(seg, want);           // resizing a dynamic block
-        else if (seg <= PSP_SEG) dos.memFloor = seg + want;           // the program shrinks/grows its own block
+        else if (seg === dos.psp) dos.memFloor = seg + want;          // the *current* program (parent OR an EXEC'd child)
+                                                                      // shrinks/grows its own block — needed so a child
+                                                                      // can free memory for its own sub-EXEC (Pinball
+                                                                      // Fantasies' multi-stage launcher chains EXECs)
         recomputeTop();
         ok(); break;
       }
