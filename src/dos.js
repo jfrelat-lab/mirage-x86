@@ -69,11 +69,35 @@ export function installDOS(machine, vfs) {
     buildEnv(progPath || 'C:\\PROGRAM');
     buildPSP(PSP_SEG, tail);
   }
+  // ---- MCB (Memory Control Block) chain ----------------------------------
+  // Some programs size free memory by walking the DOS MCB chain directly — starting at their own
+  // MCB (PSP-1), following each block's `size` word to the next MCB, until the 'Z' (last) block —
+  // instead of asking via AH=48/4A (Ski or Die's loader does exactly this; Moktar's protection too).
+  // Model the layout as two blocks: the program (owns everything from its PSP up to allocTop) and
+  // one free block above it. Rebuilt whenever allocTop moves so a re-walk sees the current free size.
+  const writeMCB = (seg, sig, owner, size) => {
+    const b = seg << 4;
+    mem.w8(b, sig); mem.w16(b + 1, owner & 0xffff); mem.w16(b + 3, size & 0xffff);
+    for (let i = 5; i < 16; i++) mem.w8(b + i, 0);        // reserved + 8-byte owner name (blank)
+  };
+  const syncMCB = () => {
+    const top = Math.min(dos.allocTop | 0, MEM_TOP);
+    const hasFree = top < MEM_TOP - 1;
+    writeMCB(PSP_SEG - 1, hasFree ? 0x4d : 0x5a, PSP_SEG, top - PSP_SEG);   // program block: 'M', or 'Z' if it owns all of memory
+    if (hasFree) writeMCB(top, 0x5a, 0x0000, MEM_TOP - top - 1);            // free block: 'Z' (last), owner 0
+    mem.w16((DIB_SEG << 4) + DIB_OFF - 2, PSP_SEG - 1);                     // list-of-lists: word before it = first MCB (the program's, at PSP-1)
+  };
+  dos.syncMCB = syncMCB;
+  // INT 21h AH=52 "get list of lists" (SysVars) hands back ES:BX; the word at [ES:BX-2] is the
+  // first MCB segment — the standard way MCB-walkers find the chain head. We host it in unused
+  // low memory just past the BIOS data area.
+  const DIB_SEG = 0x0050, DIB_OFF = 0x0026;
+
   // allocTop = the top of the program block plus every live dynamic allocation. Recomputed after a
   // free/resize so reclaimed memory is actually handed back (a bump allocator that never lowered
   // allocTop made games that alloc-a-temp-then-free-it-then-alloc-the-real-heap — e.g. the SCUMM
   // interpreter — see too little free memory and bail with "Not Enough Free Memory").
-  const recomputeTop = () => { let t = dos.memFloor; for (const [s, p] of dos.allocs) t = Math.max(t, s + p); dos.allocTop = t; };
+  const recomputeTop = () => { let t = dos.memFloor; for (const [s, p] of dos.allocs) t = Math.max(t, s + p); dos.allocTop = t; syncMCB(); };
 
   dos.loadCOM = function (bytes, tail, progPath) {
     prep(tail, progPath);
@@ -87,7 +111,7 @@ export function installDOS(machine, vfs) {
     cpu.ax = 0; cpu.bx = 0; cpu.cx = 0x00ff; cpu.dx = seg;
     cpu.si = 0x0100; cpu.di = 0xfffe; cpu.bp = 0x091c;
     cpu.sp = 0xfffe; mem.w16((seg << 4) + 0xfffe, 0); // RET → PSP:0 → INT 20h
-    dos.allocTop = MEM_TOP;
+    dos.allocTop = MEM_TOP; syncMCB();
     cpu.halted = false;
   };
 
@@ -113,7 +137,7 @@ export function installDOS(machine, vfs) {
     cpu.setSeg(SS, (loadSeg + e_ss) & 0xffff); cpu.sp = e_sp;
     cpu.setSeg(CS, (loadSeg + e_cs) & 0xffff); cpu.eip = e_ip;
     cpu.dx = pspSeg; cpu.ax = 0;
-    dos.allocTop = MEM_TOP;
+    dos.allocTop = MEM_TOP; syncMCB();
     cpu.halted = false;
   };
 
@@ -181,6 +205,27 @@ export function installDOS(machine, vfs) {
     dos.allocTop = MEM_TOP;                               // the child owns the rest of memory
     cpu.halted = false;
     return 0;                                             // success — cpu now points at the child
+  }
+
+  // AH=4B AL=03: load an overlay. Load the EXE image at the segment the caller names in the param
+  // block (word[0]) and fix its relocations by the caller's factor (word[2]) — no PSP, no allocation,
+  // no register change. The caller keeps control and far-calls the overlay's entry itself. Ski or Die's
+  // SKI.EXE is a chain-loader that overlays SKIEGA over itself this way.
+  function loadOverlay(path, pbLin) {
+    const bytes = vfs.readFile(path) || vfs.readFile('\\' + path);
+    if (!bytes) return 2;
+    const loadSeg = mem.r16(pbLin), relocFactor = mem.r16(pbLin + 2);
+    if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) {   // MZ-EXE overlay
+      const rd16 = (o) => bytes[o] | (bytes[o + 1] << 8);
+      const e_cblp = rd16(2), e_cp = rd16(4), e_crlc = rd16(6), e_cparhdr = rd16(8), e_lfarlc = rd16(0x18);
+      let imageBytes = e_cp * 512; if (e_cblp) imageBytes -= (512 - e_cblp);
+      mem.blit(loadSeg << 4, bytes.subarray(e_cparhdr * 16, imageBytes));
+      for (let i = 0; i < e_crlc; i++) { const a = ((loadSeg + rd16(e_lfarlc + i * 4 + 2)) << 4) + rd16(e_lfarlc + i * 4); mem.w16(a, (mem.r16(a) + relocFactor) & 0xffff); }
+    } else {
+      mem.blit(loadSeg << 4, bytes);                                    // raw / .COM overlay
+    }
+    machine.rec.reset();                                                // the loaded region was code — flush stale compiled blocks
+    return 0;
   }
 
   const terminate = (code) => {
@@ -265,9 +310,10 @@ export function installDOS(machine, vfs) {
       case 0x48: {                                                   // allocate a block
         const par = cpu.bx & 0xffff;
         if (dos.allocTop + par > MEM_TOP) { err(8); cpu.bx = MEM_TOP - dos.allocTop; break; }
-        const seg = dos.allocTop; dos.allocs.set(seg, par); dos.allocTop = seg + par; cpu.ax = seg; ok(); break;
+        const seg = dos.allocTop; dos.allocs.set(seg, par); dos.allocTop = seg + par; syncMCB(); cpu.ax = seg; ok(); break;
       }
       case 0x49: { dos.allocs.delete(cpu.seg[ES]); recomputeTop(); ok(); break; } // free (reclaims)
+      case 0x52: { cpu.setSeg(ES, DIB_SEG); cpu.bx = DIB_OFF; break; }             // get list of lists (SysVars); [ES:BX-2] = first MCB
       case 0x4a: {                                                   // resize memory block
         const seg = cpu.seg[ES], want = cpu.bx & 0xffff, maxPar = MEM_TOP - seg;
         if (want > maxPar) { err(8); cpu.bx = maxPar; break; }        // not enough memory; report the max
@@ -276,10 +322,12 @@ export function installDOS(machine, vfs) {
         recomputeTop();
         ok(); break;
       }
-      case 0x4b: {                                                   // EXEC (load + execute child)
-        if (cpu.al !== 0) { err(1); break; }                         // only AL=00 (load & run) supported
+      case 0x4b: {                                                   // EXEC: AL=00 load & run, AL=03 load overlay
         const path = asciiz(cpu.base[DS] + (cpu.dx & 0xffff));
-        const rc = execChild(path, cpu.base[ES] + (cpu.bx & 0xffff));
+        const pb = cpu.base[ES] + (cpu.bx & 0xffff);
+        if (cpu.al === 3) { const rc = loadOverlay(path, pb); if (rc) err(rc); else ok(); break; }
+        if (cpu.al !== 0) { err(1); break; }
+        const rc = execChild(path, pb);
         if (rc) err(rc);   // failure → CF=1, AX=error (parent context untouched); success switched to the child
         break;
       }
