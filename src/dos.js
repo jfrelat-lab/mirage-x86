@@ -66,6 +66,7 @@ export function installDOS(machine, vfs) {
     dos.programDone = false; dos.exitCode = 0;
     dos.allocs = new Map();      // seg → paragraphs for live AH=48 blocks
     dos.memFloor = MEM_TOP;      // bump base above the program's own block (lowered when it shrinks)
+    if (machine.xms) machine.xms.reset();   // a fresh program gets a clean extended-memory pool
     buildEnv(progPath || 'C:\\PROGRAM');
     buildPSP(PSP_SEG, tail);
   }

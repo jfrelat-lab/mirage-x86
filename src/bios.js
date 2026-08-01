@@ -5,6 +5,7 @@
 
 import { ZF } from './cpu.js';
 import { installVGA } from './vga.js';
+import { installXMS } from './xms.js';
 
 const VRAM = 0xb8000;          // text video memory
 const BDA = 0x400;             // BIOS Data Area
@@ -398,6 +399,7 @@ export function installBIOS(machine) {
   };
 
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
+  installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
 
   machine.bios = bios;
   return bios;

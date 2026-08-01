@@ -344,6 +344,15 @@ export class Recompiler {
     // video probe does this: LDS BX,[0:40]; …; RETF into f000:10). The stub byte is 0xCF (IRET),
     // so a bare chain still no-ops; but here we run the JS handler first, then IRET, so an inline
     // BIOS call actually performs its service. Single-instruction "block".
+    if (linStart === 0xf0100 && mem.u8[0xf0100] === 0xcb) {
+      // XMS driver entry (f000:0100, marked with a 0xCB=RETF stub byte). A guest FAR-CALLs it with
+      // AH=function (it got ES:BX from INT 2Fh AX=4310). Run the JS handler, then RETF (pop IP, pop
+      // CS) back to the caller. The byte guard keeps the conformance harness (which overwrites the
+      // address with real opcodes) from being hijacked.
+      const fn = new Function('cpu', `cpu.xmsCall();cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`);
+      return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
+               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
+    }
     if (linStart >= 0xf0000 && linStart < 0xf0100 && mem.u8[linStart] === 0xcf) {
       // Guard on the 0xCF stub byte: a real BIOS entry still holds its IRET stub, whereas the
       // conformance harness overwrites f000:xx with actual test opcodes — those must decode
