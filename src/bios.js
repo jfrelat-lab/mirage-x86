@@ -33,6 +33,13 @@ export function installBIOS(machine) {
   mem.w16(BDA + 0x4a, COLS);     // text columns
   mem.w8(BDA + 0x84, ROWS - 1);  // rows - 1
   mem.w16(BDA + 0x62, 0);        // active page
+  // Video-BIOS ROM signature at C000:0 (0x55 0xAA + size/512). Games detect an EGA/VGA card by
+  // scanning for this option-ROM signature; without it they print "requires an EGA or VGA Adapter".
+  mem.w8(0xc0000, 0x55); mem.w8(0xc0001, 0xaa); mem.w8(0xc0002, 0x40);
+  // EGA/VGA video Data Area — a real EGA/VGA BIOS sets these; games read them to detect the adapter.
+  mem.w8(BDA + 0x87, 0x60);      // video-mode options: 256 KB, EGA/VGA active (bit3=0)
+  mem.w8(BDA + 0x88, 0x09);      // EGA feature-connector / switch settings
+  mem.w8(BDA + 0x89, 0x51);      // VGA flags: VGA active, 400-line default, etc.
   mem.w16(BDA + 0x63, 0x03d4);   // CRTC base I/O port (colour); +6 = 0x3DA status reg. Programs read
                                  // this to find the vertical-retrace port (Lemmings hung on port 6
                                  // because it read 0 here, added 6, and polled a dead port).
@@ -214,6 +221,20 @@ export function installBIOS(machine) {
             bios.dac[(start + i) * 3 + 1] = mem.r8(p++) & 0x3f;
             bios.dac[(start + i) * 3 + 2] = mem.r8(p++) & 0x3f;
           }
+        }
+        break;
+      case 0x11:                                 // character-generator / font routines (EGA/VGA only)
+        if (cpu.al === 0x30) {                   // get font information — games probe this to detect EGA/VGA
+          const bh = (cpu.bx >> 8) & 0xff;       // which font: 2/5=8×14, 6/7=8×16, else 8×8 (0/4 = 2nd half)
+          let src, pts, half = 0;
+          if (bh === 2 || bh === 5) { src = machine.font8x14; pts = 14; }
+          else if (bh === 6 || bh === 7) { src = machine.font; pts = 16; }
+          else { src = machine.font8x8; pts = 8; if (bh === 0 || bh === 4) half = 128 * 8; }
+          const seg = 0xf000, off = 0x4000 + (pts === 14 ? 0x1000 : pts === 16 ? 0x2000 : 0);
+          if (src) for (let i = 0; i < src.length; i++) mem.w8((seg << 4) + off + i, src[i]); // stage the font in the F000 ROM space
+          cpu.setSeg(0, seg); cpu.bp = (off + half) & 0xffff;   // ES:BP → font table
+          cpu.cx = pts;                                         // CX = bytes per character (points)
+          cpu.dx = (cpu.dx & 0xff00) | (ROWS - 1);              // DL = character rows − 1
         }
         break;
       case 0x12:                                 // alternate select / EGA info
