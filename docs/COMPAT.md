@@ -84,7 +84,7 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
 > **FIXED** via Trap-Flag single-step (`2508d98`; it self-decrypts under TF), leaving only a
 > raw-floppy (INT 13h) disk-image blocker — and **Monkey Island** (SCUMM v5) draws only a sliver.
 | QBasic | text/13h | ▶ renders its full IDE but ~16 s one-time compile warmup (1712 blocks × ~9.7 ms `new Function`); keyboard now reaches it via the INT-9 path |
-| Wolf3D (registered WL6) | VGA 13h | ⚠️ ISR-install derail FIXED (`0d7c2b3`); now exits its paged memory manager (`PML_GetPageBuffer: Purged main block`). Shareware WOLF3DSW staged to test as it fits conventional memory. See [wolf3d_diagnosis] memory. |
+| Wolf3D (shareware WL1 + registered WL6) | VGA **Mode-X** | ▶ **PML blocker CLEARED** — the shareware `WOLF3D.EXE` now runs past its paged memory manager (no more `PML_GetPageBuffer: Purged main block`) and **renders its "id Software / Wolfenstein 3-D" PC-13 signon screen** (content correct). What unblocked it: this session's DOS memory fixes — the **MCB chain** (`2d85ee3`) + **AH=4A recognising a child's PSP** (`e11aafa`). Remaining: it draws in **Mode-X (unchained 320×200, 4 planes)**, which MIRAGE renders as linear mode 13h → the image tiles **4× horizontally**. **Same feature gap as Pinball Fantasies.** Compile-bound slow (~50× — needs the tier-0/faster-codegen work). |
 | Raptor / Jazz Jackrabbit | — | ❌ need **DPMI/protected mode** (DOS/16M, DOS4GW). Pass 386 detection. |
 | Halloween Harry | text | ❌ `HH1.EXE` is an 11 KB launcher (exits 255 after config I/O without a graphics mode). |
 
