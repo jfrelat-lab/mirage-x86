@@ -116,8 +116,17 @@ export class Video {
   _renderGfx13() {
     this._ensure(320, 200);
     const mem = this.mem, u32 = this.u32, pal = this.pal;
-    const u8 = mem.u8, base = VRAM_GFX;
-    for (let i = 0; i < 320 * 200; i++) u32[i] = pal[u8[base + i]];
+    const u8 = mem.u8, base = VRAM_GFX, vga = this.machine.vga;
+    // Chained mode 13h stride = CRTC Offset(0x13) × 8 (offset counts planar-address pairs;
+    // ×2 for the pair, ×4 for the 4 chained planes). Standard 13h offset=40 → 320, so every
+    // ordinary intro keeps the plain linear read below. Demos that re-program the offset for a
+    // wider virtual page (Helium: offset=32 → 256-byte lines) or page-flip via the start address
+    // take the general path. start address is in planar dwords → ×4 to reach a linear byte.
+    const off = vga && vga.crtc ? vga.crtc[0x13] : 0;
+    const stride = off ? off * 8 : 320;
+    const start = vga && vga.startAddr ? (vga.startAddr() << 2) : 0;
+    if (stride === 320 && start === 0) { for (let i = 0; i < 320 * 200; i++) u32[i] = pal[u8[base + i]]; return; }
+    for (let y = 0, o = 0; y < 200; y++) { const row = (start + y * stride) & 0xffff; for (let x = 0; x < 320; x++) u32[o++] = pal[u8[base + ((row + x) & 0xffff)]]; }
   }
 
   // Mode-X (unchained 256-colour): pixel (x,y) lives in plane (x&3) at plane-offset
