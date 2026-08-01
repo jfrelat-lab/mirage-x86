@@ -133,7 +133,7 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 
 | Game | Status |
 |---|---|
-| **Moktar** (Titus, *Les Aventures de Moktar*, same engine as Prehistorik) | ⚠️ `MOKTAR.COM` (344 B) EXECs `GAME.TDT` — **EXEC works, the child loads + runs** (STI/HLT, stack setup, hundreds of instructions). But `GAME.TDT` is wrapped in **E.Zmiro's "Best Protection Kit"**, which derails into the IVT (executes low memory as code → hits `0F`-less opcode `0x63`/ARPL at linear `0x18C`). Likely walks the DOS **MCB chain** (MIRAGE has a bump allocator, no MCBs) and jumps to an anti-tamper path on mismatch. A cracked/un-protected release, or an MCB chain, would be needed. |
+| **Moktar** (Titus, *Les Aventures de Moktar*) | VGA 13h | ✅ **renders its title screen** (Lagaf + camel + snake, ©1991 Titus) — commit `a41cd10`. `MOKTAR.COM` EXECs `GAME.TDT`, wrapped in **E.Zmiro's protection**. Two fixes unblocked it: the **MCB chain** (its protection walks the MCBs — landed for Ski or Die), and a **HLT-wake**: `GAME.TDT` does `STI;HLT` between its decryption passes, but headless the cycle-based PIT freezes during HLT (cpu.cycles stops) so the timer never fires → deadlock. `runSlice` now advances to the next timer deadline and delivers the tick when halted with IF set (the PIT ticks through HLT on real hardware). Decryption completes and the game reaches **mode 13h**, loads `MENU.SQZ` etc., draws the title. |
 
 ## Known engine gaps (the frontier)
 

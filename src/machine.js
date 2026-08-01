@@ -215,6 +215,15 @@ export class Machine {
   /** Execute up to `maxBlocks` basic blocks (or until HLT). Returns blocks run. */
   runSlice(maxBlocks = 100000) {
     this.blocked = false;
+    // A halted CPU (STI;HLT, waiting for the next interrupt) freezes cpu.cycles — but the PIT
+    // keeps ticking on real hardware. Headless (timerAuto) drives INT 8 off cpu.cycles, so a HLT
+    // would deadlock: advance to the next timer deadline and deliver the tick to wake it. (The
+    // browser path uses wall-clock tickTimer instead.) Moktar's GAME.TDT does STI;HLT between
+    // its decryption passes; without this it never resumes headless.
+    if (this.cpu.halted && this.timerAuto && (this.cpu.flags & IF)) {
+      if (this.cpu.cycles < this.nextTimerCycle) this.cpu.cycles = this.nextTimerCycle;
+      this.serviceTimer();                       // fires INT 8; tickTimer clears cpu.halted
+    }
     return this.rec.run(this, maxBlocks);
   }
 

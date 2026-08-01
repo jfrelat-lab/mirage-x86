@@ -24,8 +24,8 @@ dos.load(new Uint8Array(readFileSync(prog)), '', 'C:\\PROG');
 // run, advancing the timer, until we've issued TICKS ticks (or it faults/exits)
 const t0 = Date.now();
 for (let t = 0; t < TICKS && !fault && !dos.programDone; t++) {
-  mc.runSlice(400000);
-  mc.tickTimer();
+  mc.runSlice(400000);   // the run loop owns the PIT timer (timerAuto); a manual tickTimer here would
+                         // double-deliver INT 8 vs serviceTimer and desync HLT-paced intros
   if (Date.now() - t0 > 8000) break;
 }
 
