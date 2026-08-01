@@ -119,6 +119,7 @@ export function installDOS(machine, vfs) {
     prep(tail, progPath);
     const rd16 = (o) => bytes[o] | (bytes[o + 1] << 8);
     const e_cblp = rd16(2), e_cp = rd16(4), e_crlc = rd16(6), e_cparhdr = rd16(8);
+    const e_minalloc = rd16(0x0a), e_maxalloc = rd16(0x0c);
     const e_ss = rd16(0x0e), e_sp = rd16(0x10), e_ip = rd16(0x14), e_cs = rd16(0x16);
     const e_lfarlc = rd16(0x18);
     const headerBytes = e_cparhdr * 16;
@@ -137,7 +138,16 @@ export function installDOS(machine, vfs) {
     cpu.setSeg(SS, (loadSeg + e_ss) & 0xffff); cpu.sp = e_sp;
     cpu.setSeg(CS, (loadSeg + e_cs) & 0xffff); cpu.eip = e_ip;
     cpu.dx = pspSeg; cpu.ax = 0;
-    dos.allocTop = MEM_TOP; syncMCB();
+    // Size the program's block from the MZ header: DOS gives it PSP + image + up to e_maxalloc
+    // paragraphs (at least e_minalloc), capped at available memory, and leaves the rest FREE. Most
+    // EXEs set e_maxalloc=0xFFFF (grab everything → allocTop=MEM_TOP, the old behaviour), but some
+    // (Arctic Adventure) request a bounded block and then AH=48-allocate from the free memory above
+    // — which failed when MIRAGE handed them all of RAM.
+    const imgPar = Math.ceil(code.length / 16);
+    const need = 0x10 + imgPar;                               // PSP + image, in paragraphs
+    const want = need + Math.max(e_minalloc, e_maxalloc);     // desired block (maxalloc is usually the ceiling)
+    dos.memFloor = Math.min(pspSeg + Math.max(want, need + e_minalloc), MEM_TOP);
+    dos.allocTop = dos.memFloor; syncMCB();
     cpu.halted = false;
   };
 
