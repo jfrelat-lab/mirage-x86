@@ -47,7 +47,17 @@ regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers v
 | **Dune (Cryo)** — north star | VGA 13h | 🌅 **boots + plays its intro** (Virgin Games → CRYO, from the `.SQZ` resources, correct palette) in the **real-mode path** `DUNEDEM ENG VGA ADL`, now **at correct speed** (the PIT-reprogramming fix `c0c925c` — it drives counter 0 at ~200 Hz). The **enhanced path** `… HIM 386` faults on **`0F 00`** (protected mode / DPMI gap). Tried via the demo (`games/DUNE`, same engine). |
 | Prince of Persia | VGA 13h | ✅ **renders its title screen** (the Persian arch + palace/desert). Was blocked by EXEPACK "Packed file is corrupt" — **FIXED** by the 1 MiB address wrap (A20 default off); the browser's 16 MiB buffer had no wrap, so the EXEPACK stub's segment arithmetic broke. Now identical to real hardware. |
 | Maniac Mansion (Enhanced, SCUMM) | EGA 0Dh | ✅ **renders its title + character-select screen**. Needed two fixes: the 1 MiB address wrap (EXEPACK) and a DOS free-memory-reclaim fix — the SCUMM interpreter allocs a temp block, frees it (AH=49), then allocs its 384 KB heap; MIRAGE's AH=49 was a no-op so the freed block wasn't reclaimed → "Not Enough Free Memory. Program requires 384K". AH=48/49/4A now track live blocks and reclaim on free. First **SCUMM** game to run. |
-| Monkey Island (EGA, SCUMM v5) | EGA 0Dh | ⚠️ reaches EGA + loads `000.lfl`; the earlier `BOUND`→INT 5 spin (garbage bounds) is **gone after the memory fixes** (1 MiB wrap + free-reclaim), so it now runs further and starts drawing (headless), but still does **not** render a full screen (browser stays blank — a browser/headless timing divergence). Progresses, not yet playable. |
+| Monkey Island (EGA, SCUMM v5) | EGA 0Dh | ⚠️ reaches EGA + loads `000.lfl`; the earlier `BOUND`→INT 5 spin (garbage bounds) is **gone after the memory fixes** (1 MiB wrap + free-reclaim), so it now runs further and starts drawing (headless), but still does **not** render a full screen (browser stays blank — see the browser-derail note below). Progresses, not yet playable. |
+| Blues Brothers (Titus, EGA) | EGA 0Dh | ⚠️ **renders headless** (`EGA.EXE`, mode 0Dh, ~86k planar bytes, both tiers). **Derails in the browser** → `0F 00` at linear `0x3C` (INT 0Fh vector). Same browser-only pattern as Monkey/Lemmings/Baby Jo. |
+| Baby Jo: Going Home (Loriciel, EGA) | EGA 0Dh | ⚠️ **renders headless** (`BABY 2`, mode 0Dh, ~53k planar bytes). Same **browser-only derail** (identical `0F 00` at `0x3C`) as Blues Brothers. |
+| Ski or Die (EA) | — | ⚠️ `SKI.EXE` exits early (loader/config — 13 KB stub, not yet diagnosed). |
+
+> ⚠️ **Systematic browser-only derail (open):** Blues Brothers, Baby Jo, Monkey Island, and Lemmings
+> all **render headless but derail in the browser**, jumping into low memory / the IVT (`0F 00` /
+> `0F 0C` at linear ~`0x3C`). Ruled out as the cause (headless still renders when matched): tier-2
+> vs tier-1, `timerAuto`, the 0x3DA beam period, the 1 MiB mask, `installMouse`, and `typeof process`
+> branches. Node cannot reproduce it, so it needs in-browser block tracing of the bad far-jump/RET.
+> Fixing it unblocks 4+ games at once.
 | QBasic | text/13h | ▶ renders its full IDE but ~16 s one-time compile warmup (1712 blocks × ~9.7 ms `new Function`); keyboard now reaches it via the INT-9 path |
 | Wolf3D (registered WL6) | VGA 13h | ⚠️ ISR-install derail FIXED (`0d7c2b3`); now exits its paged memory manager (`PML_GetPageBuffer: Purged main block`). Shareware WOLF3DSW staged to test as it fits conventional memory. See [wolf3d_diagnosis] memory. |
 | Raptor / Jazz Jackrabbit | — | ❌ need **DPMI/protected mode** (DOS/16M, DOS4GW). Pass 386 detection. |
