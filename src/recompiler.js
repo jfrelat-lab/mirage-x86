@@ -339,6 +339,20 @@ export class Recompiler {
   // -------------------------------------------------------------------------
   translate(linStart, ip0, maxOps = MAXOPS) {
     const mem = this.mem, MM = this.MM;
+    // BIOS service entry (f000:00..ff). Reached when a guest calls the ISR *inline* — reads the
+    // vector from the IVT and far-JMP/CALLs f000:n instead of executing `INT n` (Secret Agent's
+    // video probe does this: LDS BX,[0:40]; …; RETF into f000:10). The stub byte is 0xCF (IRET),
+    // so a bare chain still no-ops; but here we run the JS handler first, then IRET, so an inline
+    // BIOS call actually performs its service. Single-instruction "block".
+    if (linStart >= 0xf0000 && linStart < 0xf0100 && mem.u8[linStart] === 0xcf) {
+      // Guard on the 0xCF stub byte: a real BIOS entry still holds its IRET stub, whereas the
+      // conformance harness overwrites f000:xx with actual test opcodes — those must decode
+      // normally, not be hijacked into a callback.
+      const n = linStart - 0xf0000;
+      const fn = new Function('cpu', `cpu.biosCallback(${n});`);
+      return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
+               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
+    }
     const out = ['var t;'];
     const P = (s) => out.push(s);
     let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false;

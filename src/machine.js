@@ -86,6 +86,7 @@ export class Machine {
     this.timerAuto = true;
 
     this.cpu.swInt = (n) => this.swInt(n);
+    this.cpu.biosCallback = (n) => this.biosCallback(n);
     this.cpu.ioRead = (p, s) => this.ioRead(p, s);
     this.cpu.ioWrite = (p, s, v) => this.ioWrite(p, s, v);
 
@@ -105,6 +106,19 @@ export class Machine {
 
   /** Register a JS service routine for INT n and point its vector at our stub. */
   hookInterrupt(n, fn) { this.intHandlers[n] = fn; this.setVector(n, BIOS_SEG, n); }
+
+  /** BIOS service reached by executing its entry (f000:n) — a guest that calls the ISR inline
+   *  rather than via `INT n` (reads the vector, then far-JMP/CALLs it, having pushed an IRET
+   *  frame). Run the JS handler (if any), then IRET back to the frame the guest set up. A vector
+   *  with no JS handler just IRETs — identical to the bare 0xCF stub, so chaining is unaffected. */
+  biosCallback(n) {
+    const cpu = this.cpu, h = this.intHandlers[n];
+    if (h) h(cpu, this);
+    cpu.eip = cpu.pop16();
+    cpu.setSeg(CS, cpu.pop16());
+    cpu.flags = (cpu.pop16() & 0x7fd5) | 2;
+    cpu.halted = false;
+  }
 
   swInt(n) {
     const v = this.getVector(n);

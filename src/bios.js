@@ -252,6 +252,15 @@ export function installBIOS(machine) {
         break;
       }
       case 0x1a: cpu.ax = (cpu.ax & 0xff00) | 0x1a; cpu.bx = 0x0008; break; // get DCC: AL=1Ah = supported, BL=08h = VGA colour
+      case 0x1c: {                               // save/restore video state — VGA-only, so games use it to probe VGA
+        // AL=00 return buffer size (BX = 64-byte blocks for the states requested in CX); AL=01 save, AL=02 restore.
+        // We present as VGA: acknowledge with AL=1Ch. Secret Agent keys "is this VGA?" on CMP AL,1Ch — without it,
+        // it falls through to the BL=32h probe, misdetects MCGA, and refuses to run ("requires an EGA or VGA Adapter").
+        const sub = cpu.al;
+        cpu.ax = (cpu.ax & 0xff00) | 0x1c;       // AL = 1Ch = function supported
+        if (sub === 0x00) cpu.bx = 0x0003;       // report a few 64-byte blocks; save (01) / restore (02) are no-ops
+        break;
+      }
       default: break;
     }
   });
