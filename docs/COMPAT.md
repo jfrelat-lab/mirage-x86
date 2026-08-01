@@ -114,6 +114,10 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 3. **Audio** — SB/OPL are detection stubs only (no synthesis). Silent, but detection passes.
 4. **Mode X / unchained VGA** — not implemented. No demo/game we currently have exercises it, but
    it's a genuine future need (Second Reality, some VGA action games). Would need a hand test.
+6. **No MCB chain** — DOS memory is a bump allocator (now with free-reclaim), not a linked list of
+   Memory Control Blocks. Games that *walk* the MCB chain (common in copy protection — Moktar's
+   E.Zmiro kit) find no valid chain and take an anti-tamper path. A real MCB chain would fix that
+   class.
 5. ~~**Frame-rate throttling**~~ — **addressed in the browser** (`ui.js`): a virtual CPU clock
    (`VCPU_HZ`, ~8 MHz ≈ a fast 386) caps the guest to N cycles/second of wall-clock, so code whose
    pace is bound by raw CPU speed rather than the timer/retrace (e.g. the Commander Keen Vorticons
@@ -126,6 +130,24 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 
 ## Fixes this frontier came from (recent)
 
+- **1 MiB address wrap + A20 gate (`76d0e90`, 2026-08-01):** real-mode addresses now wrap at 1 MiB
+  regardless of installed RAM (was `size-1`, so the browser's 16 MiB had no wrap while headless's
+  1 MiB did). Fixes EXEPACK "Packed file is corrupt" → **Prince of Persia** renders. Port 0x92 opens
+  A20 for HMA. Also aligns browser ↔ headless behaviour.
+- **DOS free-memory reclaim (`38c2c5c`, 2026-08-01):** AH=49 was a no-op; now AH=48/49/4A track live
+  blocks and reclaim on free → the SCUMM interpreter's alloc-temp/free/alloc-heap pattern works.
+  **Maniac Mansion** (first SCUMM game) renders.
+- **EGA palette registers INT 10h AH=10h AL=00/02 (`adc9762`, 2026-08-01):** were unimplemented
+  (only DAC AL=10/12); a planar mode now loads the 64 EGA colours into the DAC with the EGA-default
+  registers, and games can repaint them → **Prehistorik** colours correct (the "rainbow dither" was
+  dropped palette writes).
+- **INT 21h AH=4B EXEC + HLT-wake (`fae7ec1`, 2026-08-01):** load-and-run child programs (parent
+  context saved/restored on the child's exit); `tickTimer` wakes a HLT on the BIOS-default timer.
+  Loader-stub games (Moktar's `MOKTAR.COM` → `GAME.TDT`) now launch the child.
+- **BDA 0040:0063 CRTC base port (`1bacf8d`, 2026-08-01):** was 0; programs read it + add 6 for the
+  0x3DA retrace port → **Lemmings** no longer polls a dead port 6.
+- **Virtual CPU clock (`92e4741`, 2026-08-01):** browser-only throttle (see gap #5) → Keen menus no
+  longer fly by.
 - **Keyboard hardware path (`acaf40f`, 2026-07-20):** the browser fed only the INT 16h buffer;
   now feeds make/break scancodes to the INT-9/port-0x60 path too → games receive input.
 - **DIR wildcards (`2d461bf`, 2026-07-20).**

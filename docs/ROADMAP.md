@@ -20,11 +20,13 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 
 | # | Task | Effort | Why / unblocks |
 |---|---|---|---|
-| B1 | **PoP browser "Packed file is corrupt"** — EXEPACK works headless but not in-browser; diff `memSize`/residual state | S–M | Unblocks Prince of Persia specifically, and any EXEPACK'd program in-browser (very common early-90s). |
+| B1 | ✅ **DONE** (`76d0e90`) — the browser's 16 MiB buffer had no 1 MiB address wrap (headless's 1 MiB did), so EXEPACK stubs' segment arithmetic broke → "Packed file is corrupt". Fixed by wrapping real-mode addresses at 1 MiB regardless of RAM (+ A20 gate on port 0x92). **Prince of Persia renders** its VGA title; unblocks all EXEPACK'd programs in-browser. | — | done |
 | B2 | **Wolf3D PML memory manager** (`PML_GetPageBuffer: Purged main block`) — ⚠️ now **blocked on compile-bound slowness**: Wolf3D runs at ~0.05–0.13 Mblk/s (profiled: `translate`/`new Function`-per-block dominates, ~1716 blocks, QBasic-class warmup — NOT SMC/cache thrash), so PM_Startup can't finish in a practical window to reach/diagnose PML. Needs **D5/tier-0** (faster codegen) first, or a fast-forward past startup. Fixed en route: PIT storm capped (`d94ff27`); noted tier-2 is ~5× slower than tier-1 on Wolf3D. | M–L | The last blocker for a landmark title; gated by D + likely needs B3. |
 | B3 | **EMS/XMS** (INT 67h / HIMEM) | M | Wolf3D and other games probe/need it; degrades gracefully today but blocks some. |
 | B4 | **DPMI / protected mode** (DOS/16M, DOS4GW) | L | *The* single biggest gap — Raptor, Jazz, Doom-class, advanced 64K demos. Foundational for the north star beyond Dune's real-mode parts. |
-| B5 | **Frame-rate throttling** (execute ~one real frame of cycles per tick) | M | Makes timing-sensitive demos/games behave; makes HLT-wake-on-timer safe; would help A4. |
+| B5 | ✅ **DONE (browser)** (`92e4741`) — virtual CPU clock in `ui.js` (`VCPU_HZ` ≈ 8 MHz) caps guest cycles/wall-second; 0x3DA beam derived from it stays 70 Hz. Fixed raw-CPU-speed-bound code (Keen Vorticons menus flying by). Headless keeps its deterministic timing. Tunable constant. | — | done |
+| B8 | **DOS MCB chain** — replace the bump allocator with a real Memory Control Block linked list | M | Copy protections (Moktar's E.Zmiro kit) walk the MCB chain and take an anti-tamper path when it's missing. Unblocks that class of protected games. |
+| B9 | **SCUMM v5 timing divergence (Monkey Island)** — past the earlier BOUND loop after the memory fixes, but still renders nothing (browser blank, headless a sliver); browser/headless diverge | M | Co-sim the interpreter to find where state drifts. Would land the SCUMM v5 line (MI1/MI2/Indy). |
 | B6 | **Mode X / unchained VGA** | M | Second Reality and some VGA action games; needs a hand-authored test (nothing we have exercises it yet). |
 | B7 | **Real audio** (SB/OPL FM synthesis, currently silent stubs) | L | Detection already passes; this is actual sound output. |
 
@@ -32,7 +34,7 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 
 | # | Task | Effort | Why |
 |---|---|---|---|
-| C1 | **Add Moktar / Blues Brothers (Titus)** | S | EGA/VGA platformer; exercises the keyboard + planar/13h paths. |
+| C1 | ⚠️ **Moktar staged + diagnosed** — `MOKTAR.COM` EXECs `GAME.TDT` (EXEC + HLT-wake added, `fae7ec1`); the child runs but its **E.Zmiro copy protection derails** (needs B8 MCB chain or a cracked release). Blues Brothers still to try. | — | mostly done |
 | C2 | **Add Baby Jo (Loriciel)** | S | Another EGA title to widen coverage. |
 | C3 | **Add Dune (Cryo)** | M | North-star game. Large 1992 VGA title — may need EMS/DPMI/Mode X; even a "how far does it get" run is valuable recon. |
 | C4 | **Add top-rated MS-DOS demos as test candidates** | S | See the sizecoding survey below. |
@@ -58,9 +60,10 @@ already have it. Verify each still runs before adding (some counts/ordering from
 
 ## D · Performance (the JIT ceiling — see the perf plan)
 
-Current state: tier-2 region compiler shipped (default ON). Post-fusion profile says the next
-levers are flags and indirect calls, not register access. Cumulative vs baseline: tube ×3.9,
-lattice ×3.9, plasma ×3.5, memories ×1.66.
+Current state: tier-2 region compiler shipped but **browser-OFF, Node-ON** (a fused region can run
+unbounded work in one runSlice and hang the tab; ~5× slower on Wolf3D — see COMPAT). Post-fusion
+profile says the next levers are flags and indirect calls, not register access. Cumulative vs
+baseline: tube ×3.9, lattice ×3.9, plasma ×3.5, memories ×1.66.
 
 | # | Task | Effort | Why |
 |---|---|---|---|
