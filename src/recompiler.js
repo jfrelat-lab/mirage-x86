@@ -274,6 +274,19 @@ export class Recompiler {
           if (machine.timerAuto && cpu.cycles >= machine.nextTimerCycle) machine.serviceTimer(); // PIT tick(s) due mid-slice
         }
         const ip0 = cpu.eip & 0xffff, lin = (cpu.base[CS] + ip0) & MM;
+        // Trap Flag (hardware single-step): when TF is set, run exactly ONE instruction and
+        // then fire INT 1. Uncached — each trapped instruction is freshly decoded, so a
+        // self-modifying tracer (copy-protection decrypting code one step at a time inside
+        // its INT-1 handler, e.g. Lemmings) sees the just-written bytes. swInt(1) clears TF
+        // for the handler; its IRET restores TF and traps the next instruction in turn.
+        if (cpu.flags & TF) {
+          const blk = this.translate(lin, ip0, 1);
+          blk.fn(cpu, blk);
+          cpu.cycles += blk.count;
+          cpu.tbudget--; n++;
+          machine.swInt(1);
+          continue;
+        }
         const page = pages[lin >>> 12];
         let blk = page !== undefined ? page[lin & 0xfff] : undefined;
         if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
