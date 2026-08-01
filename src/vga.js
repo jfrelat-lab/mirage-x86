@@ -14,8 +14,8 @@ export function installVGA(machine) {
   const latches = new Uint8Array(4);
 
   const vga = {
-    planes, latches, mode: 0x03, planar: false, width: 320, height: 200,
-    seqIndex: 0, mapMask: 0x0f,                      // Sequencer: reg 2 = plane write-enable
+    planes, latches, mode: 0x03, planar: false, modeX: false, width: 320, height: 200,
+    seqIndex: 0, mapMask: 0x0f, memMode: 0x0e,       // Sequencer: reg 2 = plane write-enable, reg 4 = memory mode (bit3 = chain-4)
     gcIndex: 0, gc: new Uint8Array(9),               // Graphics Controller regs 0..8
     atcIndex: 0, atcFlip: 0, palette: new Uint8Array(16),  // Attribute Controller palette
     crtcIndex: 0, crtc: new Uint8Array(0x19),        // CRTC: r13 offset (logical width), r0C/r0D start address
@@ -23,11 +23,17 @@ export function installVGA(machine) {
   for (let i = 0; i < 16; i++) vga.palette[i] = i;   // identity → DAC 0-15 (the EGA colours)
   vga.gc[8] = 0xff;                                  // bit mask defaults to all bits
 
+  // Route A000 through the plane pipeline (memory.js checks mem.planar) whenever EITHER an EGA
+  // 16-colour planar mode OR Mode-X (mode 13h with chain-4 off) is active.
+  const syncRouting = () => { mem.planar = vga.planar || vga.modeX; };
+
   vga.setMode = (mode, planar) => {
-    vga.mode = mode; vga.planar = planar;
+    vga.mode = mode; vga.planar = planar; vga.modeX = false; vga.memMode = 0x0e;   // a fresh mode set starts chained
     if (planar) { const d = DIMS[mode] || [320, 200]; vga.width = d[0]; vga.height = d[1]; }
+    else if (mode === 0x13) { vga.width = 320; vga.height = 200; }
     vga.mapMask = 0x0f; vga.gc.fill(0); vga.gc[8] = 0xff; vga.seqIndex = 0; vga.gcIndex = 0;
     vga.atcFlip = 0; for (let i = 0; i < 16; i++) vga.palette[i] = i;
+    syncRouting();
   };
   vga.clear = () => planes.fill(0);
 
@@ -69,10 +75,17 @@ export function installVGA(machine) {
   };
 
   // ---- register ports (also accept the AL=index/AH=data 16-bit `out dx,ax` form) ----
-  const seqData = (v) => { if (vga.seqIndex === 2) vga.mapMask = v & 0x0f; };
+  const seqData = (v) => {
+    if (vga.seqIndex === 2) vga.mapMask = v & 0x0f;
+    else if (vga.seqIndex === 4) {                    // memory mode: bit3 = chain-4. Clearing it in mode 13h = Mode-X (unchained)
+      vga.memMode = v & 0xff;
+      const mx = vga.mode === 0x13 && !(v & 0x08);
+      if (mx !== vga.modeX) { vga.modeX = mx; mem.planar = vga.planar || vga.modeX; }
+    }
+  };
   machine.onPortWrite(0x3c4, (_p, s, v) => { vga.seqIndex = v & 0x1f; if (s === 2) seqData((v >> 8) & 0xff); });
   machine.onPortWrite(0x3c5, (_p, _s, v) => seqData(v & 0xff));
-  machine.onPortRead(0x3c5, () => (vga.seqIndex === 2 ? vga.mapMask : 0));
+  machine.onPortRead(0x3c5, () => (vga.seqIndex === 2 ? vga.mapMask : vga.seqIndex === 4 ? vga.memMode : 0));
 
   const gcData = (v) => { vga.gc[vga.gcIndex & 0x0f] = v & 0xff; };
   machine.onPortWrite(0x3ce, (_p, s, v) => { vga.gcIndex = v & 0x0f; if (s === 2) gcData((v >> 8) & 0xff); });

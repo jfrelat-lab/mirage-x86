@@ -52,7 +52,7 @@ export class Video {
     this.frame++;
     this._palette();
     const mode = this.mem.r8(0x449);
-    if (mode === 0x13) this._renderGfx13();
+    if (mode === 0x13) { if (this.machine.vga && this.machine.vga.modeX) this._renderModeX(); else this._renderGfx13(); }
     else if (this.mem.planar && this.machine.vga) this._renderPlanar();
     else if (mode === 4 || mode === 5 || mode === 6) this._renderCGA(mode);
     else this._renderText();
@@ -118,6 +118,22 @@ export class Video {
     const mem = this.mem, u32 = this.u32, pal = this.pal;
     const u8 = mem.u8, base = VRAM_GFX;
     for (let i = 0; i < 320 * 200; i++) u32[i] = pal[u8[base + i]];
+  }
+
+  // Mode-X (unchained 256-colour): pixel (x,y) lives in plane (x&3) at plane-offset
+  // start + y*stride + (x>>2). Each plane byte is a full 8-bit palette index. Wolf3D
+  // ("Mode Y", 320×200) and Pinball Fantasies draw this way.
+  _renderModeX() {
+    const vga = this.machine.vga, W = 320, H = vga.height || 200;
+    this._ensure(W, H);
+    const u32 = this.u32, pal = this.pal, planes = vga.planes, PLANE = 0x10000;
+    const stride = vga.crtc[0x13] ? vga.crtc[0x13] * 2 : (W >> 2);   // plane-offset addresses per scanline (320px → 80)
+    const start = vga.startAddr();
+    for (let y = 0; y < H; y++) {
+      const rowOff = (start + y * stride) & 0xffff;
+      let o = y * W;
+      for (let x = 0; x < W; x++) u32[o++] = pal[planes[((x & 3) * PLANE) + ((rowOff + (x >> 2)) & 0xffff)]];
+    }
   }
 
   // CGA graphics (modes 4/5 = 320×200×4-colour, 2 bits/pixel; mode 6 = 640×200 mono, 1 bit/pixel).
