@@ -30,6 +30,8 @@ export class CPU {
     this.eip = 0;
     this.flags = 0x0002 | IF;        // reserved bit 1 = 1, interrupts enabled
     this.halted = false;
+    this.cr0 = 0x00000010;           // machine status word: real mode (PE=0), ET=1 (387 present). SMSW reads it,
+                                     // LMSW writes its low 4 bits. We stay real-mode, so PE transitions are ignored.
 
     // Interrupt plumbing. swInt() is filled in by the Machine: it routes a
     // software interrupt either to a JS handler or to a guest-hooked ISR.

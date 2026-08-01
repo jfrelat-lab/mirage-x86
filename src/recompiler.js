@@ -988,6 +988,18 @@ export class Recompiler {
         else if (kind === 'btc') P(rmW(o, sz, `(${v}^(1<<${b}))`));
       };
       switch (op2) {
+        case 0x01: {                                                                    // group 7: SGDT/SIDT/SMSW/LGDT/LIDT/LMSW/INVLPG
+          const o = modrm();
+          if (o.reg === 4) { P(rmW(o, 16, `(cpu.cr0&0xffff)`)); return; }                // SMSW r/m16 → MSW (games test PE bit 0 for real vs protected mode; we're real, PE=0)
+          if (o.reg === 6) { const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.cr0=(cpu.cr0&~0xf)|(${s}&0xf);`); return; } // LMSW low 4 bits (stay real-mode: PE transition ignored)
+          if (o.reg === 0 || o.reg === 1) { const a = memAddr(o); P(`m.w16(${a},0xffff);m.w16((${a}+2)&${MM},0);m.w16((${a}+4)&${MM},0);`); return; } // SGDT/SIDT → dummy limit 0xffff, base 0
+          if (!o.isReg) memAddr(o);                                                      // LGDT/LIDT/INVLPG → consume the memory operand, otherwise no-op
+          return;
+        }
+        case 0x20: { const o = modrm(); P(rW(o.rm, 32, o.reg === 0 ? '(cpu.cr0>>>0)' : '0')); return; } // MOV r32, CRn (CR0 real; CR2/3/4 read 0)
+        case 0x22: { const o = modrm(); if (o.reg === 0) P(`cpu.cr0=${rR(o.rm, 32)}>>>0;`); else P(`${rR(o.rm, 32)};`); return; } // MOV CRn, r32 (store CR0; we stay real-mode so PE is inert)
+        case 0x21: { const o = modrm(); P(rW(o.rm, 32, '0')); return; }                 // MOV r32, DRn → 0 (no debug registers)
+        case 0x23: { const o = modrm(); P(`${rR(o.rm, 32)};`); return; }                // MOV DRn, r32 → no-op
         case 0x1f: modrm(); return;                                                     // multi-byte NOP
         case 0x31: P('cpu.reg[0]=(cpu.cycles>>>0);cpu.reg[2]=(Math.floor(cpu.cycles/4294967296))>>>0;'); return; // RDTSC → EDX:EAX
         case 0xa0: P(`cpu.push16(cpu.seg[${FS}]);`); return;                            // PUSH FS
