@@ -24,9 +24,11 @@ export class VFS {
     if (/^[A-Z]:/.test(p)) { p = p.slice(2); abs = true; }
     if (p.startsWith('\\')) { abs = true; p = p.slice(1); }
     const parts = abs ? [] : this.cwd.slice();
-    for (const seg of p.split('\\')) {
-      if (seg === '' || seg === '.') continue;
+    for (let seg of p.split('\\')) {
+      if (seg === '.') continue;
       if (seg === '..') { parts.pop(); continue; }
+      seg = seg.replace(/\.+$/, '');   // trailing dots are an empty extension: "SKIEGA." ≡ "SKIEGA"
+      if (seg === '') continue;
       parts.push(seg);
     }
     return parts;
