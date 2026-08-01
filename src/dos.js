@@ -17,6 +17,8 @@ export function installDOS(machine, vfs) {
     dta: (PSP_SEG << 4) + 0x80,
     version: [5, 0],
     allocTop: PSP_SEG,
+    allocs: new Map(),        // live AH=48 allocations: seg → paragraphs
+    memFloor: MEM_TOP,        // bump base above the program's own block
     programDone: false,
     exitCode: 0,
     findList: [], findIdx: 0,
@@ -62,9 +64,16 @@ export function installDOS(machine, vfs) {
   function prep(tail, progPath) {
     machine.rec.reset();
     dos.programDone = false; dos.exitCode = 0;
+    dos.allocs = new Map();      // seg → paragraphs for live AH=48 blocks
+    dos.memFloor = MEM_TOP;      // bump base above the program's own block (lowered when it shrinks)
     buildEnv(progPath || 'C:\\PROGRAM');
     buildPSP(PSP_SEG, tail);
   }
+  // allocTop = the top of the program block plus every live dynamic allocation. Recomputed after a
+  // free/resize so reclaimed memory is actually handed back (a bump allocator that never lowered
+  // allocTop made games that alloc-a-temp-then-free-it-then-alloc-the-real-heap — e.g. the SCUMM
+  // interpreter — see too little free memory and bail with "Not Enough Free Memory").
+  const recomputeTop = () => { let t = dos.memFloor; for (const [s, p] of dos.allocs) t = Math.max(t, s + p); dos.allocTop = t; };
 
   dos.loadCOM = function (bytes, tail, progPath) {
     prep(tail, progPath);
@@ -135,8 +144,10 @@ export function installDOS(machine, vfs) {
 
     dos.execStack.push({                                  // save the parent to resume on the child's exit
       reg: Array.from(cpu.reg), seg: Array.from(cpu.seg),
-      eip: cpu.eip, flags: cpu.flags, psp: dos.psp, dta: dos.dta, allocTop: dos.allocTop,
+      eip: cpu.eip, flags: cpu.flags, psp: dos.psp, dta: dos.dta,
+      allocTop: dos.allocTop, allocs: dos.allocs, memFloor: dos.memFloor,
     });
+    dos.allocs = new Map(); dos.memFloor = MEM_TOP;        // the child gets a fresh heap
     machine.rec.reset();
     buildPSP(childPsp, tail);
     mem.w16((childPsp << 4) + 0x16, dos.psp);             // parent PSP link
@@ -181,6 +192,7 @@ export function installDOS(machine, vfs) {
       for (const s of [ES, CS, SS, DS]) cpu.setSeg(s, ctx.seg[s]);
       cpu.eip = ctx.eip; cpu.flags = ctx.flags & ~CF;    // EXEC succeeded → CF clear for the parent
       dos.psp = ctx.psp; dos.dta = ctx.dta; dos.allocTop = ctx.allocTop;
+      dos.allocs = ctx.allocs; dos.memFloor = ctx.memFloor;
       cpu.halted = false;
     } else { dos.programDone = true; cpu.halted = true; }
   };
@@ -250,15 +262,18 @@ export function installDOS(machine, vfs) {
       case 0x43: { ok(); cpu.cx = 0x20; break; }                     // get/set attr (stub)
       case 0x44: { cpu.ax = 0; cpu.dx = (cpu.bx <= 2) ? 0x80 : 0; ok(); break; } // ioctl
       case 0x47: { let p = cpu.base[DS] + (cpu.si & 0xffff); const s = vfs.cwd.join('\\'); for (let i = 0; i < s.length; i++) mem.w8(p + i, s.charCodeAt(i)); mem.w8(p + s.length, 0); ok(); break; } // get cwd
-      case 0x48: { const par = cpu.bx & 0xffff; if (dos.allocTop + par > MEM_TOP) { err(8); cpu.bx = MEM_TOP - dos.allocTop; break; } cpu.ax = dos.allocTop; dos.allocTop += par; ok(); break; } // alloc
-      case 0x49: ok(); break;                                        // free (no-op)
+      case 0x48: {                                                   // allocate a block
+        const par = cpu.bx & 0xffff;
+        if (dos.allocTop + par > MEM_TOP) { err(8); cpu.bx = MEM_TOP - dos.allocTop; break; }
+        const seg = dos.allocTop; dos.allocs.set(seg, par); dos.allocTop = seg + par; cpu.ax = seg; ok(); break;
+      }
+      case 0x49: { dos.allocs.delete(cpu.seg[ES]); recomputeTop(); ok(); break; } // free (reclaims)
       case 0x4a: {                                                   // resize memory block
         const seg = cpu.seg[ES], want = cpu.bx & 0xffff, maxPar = MEM_TOP - seg;
         if (want > maxPar) { err(8); cpu.bx = maxPar; break; }        // not enough memory; report the max
-        // Shrinking the program's own block (the common startup move) frees the memory
-        // above it — without this, a later 0x48 alloc reports 0 free (games print
-        // "0 KBytes available" and quit). Bump-allocator model: last block wins.
-        if (seg + want >= dos.allocTop || seg <= PSP_SEG) dos.allocTop = seg + want;
+        if (dos.allocs.has(seg)) dos.allocs.set(seg, want);           // resizing a dynamic block
+        else if (seg <= PSP_SEG) dos.memFloor = seg + want;           // the program shrinks/grows its own block
+        recomputeTop();
         ok(); break;
       }
       case 0x4b: {                                                   // EXEC (load + execute child)
