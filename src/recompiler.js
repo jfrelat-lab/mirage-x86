@@ -997,6 +997,13 @@ export class Recompiler {
         else if (kind === 'btc') P(rmW(o, sz, `(${v}^(1<<${b}))`));
       };
       switch (op2) {
+        case 0x00: {                                                                    // group 6: SLDT/STR/LLDT/LTR/VERR/VERW — no LDT/TR in real mode, so keep it benign
+          const o = modrm();
+          if (o.reg === 0 || o.reg === 1) { P(rmW(o, 16, '0')); return; }                // SLDT/STR → store null selector (no LDT / task register)
+          if (o.reg === 4 || o.reg === 5) { if (!o.isReg) memAddr(o); P(`cpu.flags|=${ZF};`); return; } // VERR/VERW → report the selector as accessible (ZF=1)
+          if (!o.isReg) memAddr(o);                                                      // LLDT/LTR → consume the operand, otherwise no-op
+          return;
+        }
         case 0x01: {                                                                    // group 7: SGDT/SIDT/SMSW/LGDT/LIDT/LMSW/INVLPG
           const o = modrm();
           if (o.reg === 4) { P(rmW(o, 16, `(cpu.cr0&0xffff)`)); return; }                // SMSW r/m16 → MSW (games test PE bit 0 for real vs protected mode; we're real, PE=0)
