@@ -26,6 +26,20 @@ upup`. `memories`/`tube`/`kaneda` exercise the FPU path. `256bytef intoanew memo
 timer-paced (a phase shift on timing changes is a golden re-bless after visual check, not a
 regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers via INT 33h mouse.
 
+### 4K tier (2026-08-01/04, local-only — `intros/` is gitignored)
+
+Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/view/`→`/get/`).
+`tools/probe-intro.js` reports mode / fault / Mode-X / chained-vs-planar pixels for triage.
+
+| intro | result |
+|---|---|
+| **Helium** (ocsa, ASM'97) | ✅ **renders** — orange balloon + gem. A *finite* intro (plays ~48 ticks, restores mode 3, exits — not a hang). Needed the CRTC-Offset fix: it sets offset=32 (256-byte virtual line) where mode 13h defaults to 40 → `_renderGfx13` hardcoded a 320 stride and tore the picture. |
+| **Heaven** (NoooN, ASM'95) | ⚠️ **runs, then derails** at ~52.5 M cycles. The `0F 00` (group 6) crash is fixed; the remainder is the block-granular-timing limitation — 1 kHz ISR + ~240 k 0x3DA polls/frame. DOSBox-X renders it under **both** `core=normal` *and* `core=dynamic`. See [DEVICES.md](DEVICES.md) and ROADMAP **D7**. |
+| **Mesha** (ASM'98), **Void 3** (MS'99), **Juggler 2001** (MS'01) | ❌ stuck in text mode 0x3 — never switch to graphics. Likely a DOS extender or a sound-card probe; not investigated. |
+
+Most *famous* 4Ks (Elevated, fr-08, cdak) are protected-mode/Windows → out of scope for the
+real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
+
 ## Games (in `games/`, gitignored; mounted at C:\GAMES\ from `games/manifest.json`)
 
 | Game | Mode | Status |

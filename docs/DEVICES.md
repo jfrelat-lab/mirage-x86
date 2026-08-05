@@ -121,6 +121,50 @@ override with `MIRAGE_PITRELOAD`) is the period; `nextTimerCycle` the next thres
   real-time game speed) and in `bench.js`/`fuzz-region.js` (they need the legacy 1-tick-per-frame
   model / no async ticks). When off, `cpu.deadline=Infinity` so regions never bail on the timer.
 
+### Known limitation — block-granular timing (and how DOSBox avoids it)
+
+Two design choices bound how accurate our timing can be, and they matter to a whole class of
+timing-sensitive titles (see the table below):
+
+1. **IRQs are sampled at basic-block boundaries.** `runSlice(N blocks)` runs a fixed block count;
+   `run()` checks `cpu.cycles ≥ nextTimerCycle` only *between* blocks, so a due INT 8 lands up to
+   one block (`MAXOPS` = 192 instructions) late. Errors do not self-correct — the schedule is never
+   re-anchored inside a slice.
+2. **The 0x3DA beam is `cpu.cycles % vgaPeriod`** — the beam phase is *coupled to* `cpu.cycles`, so
+   jitter in when the ISR runs also moves the apparent beam position.
+
+**DOSBox does it differently** (reverse-engineered from dosbox-staging, 2026-08-03):
+
+| | DOSBox | MIRAGE today |
+|---|---|---|
+| Run budget | `CPU_Cycles` **capped to the next PIC event** (`pic.cpp` `PIC_RunQueue`), re-anchored at every event | fixed `runSlice(N blocks)` |
+| IRQ sampling | per block, but the budget *ends* at the event, so it returns there | per block, run continues past the tick |
+| 0x3DA beam | `PIC_FullIndex() - vga.draw.delay.framestart` (`vga_misc.cpp`) — **PIC time re-anchored every frame**, immune to CPU-cycle granularity | `cpu.cycles % vgaPeriod` (coupled to cycle jitter) |
+| Trap Flag | dynrec **falls back to the interpreter** (`CPU_Core_Dynrec_Trap_Run` → `CPU_Core_Normal_Run`) | same idea — `run()`'s TF path uses `translate(…,1)` |
+
+Empirically, **DOSBox-X `core=dynamic` renders Heaven identically to `core=normal`** — so this is
+*not* a recompiler-paradigm limit; a block recompiler can be accurate enough. The gap is our
+fixed-slice + raw-cycle-beam design.
+
+**The correct fix path** (see ROADMAP D7): emit a **deadline safepoint inside tier-1 codegen**
+(blocks decrement/check a budget and return, exactly as tier-2 regions already do via
+`cpu.deadline`), plus a PIC-style event scheduler and a frame-anchored beam clock.
+⚠️ **Do NOT bound blocks by re-translating them** — truncating the straddling block with an uncached
+`translate(lin, ip0, room)` per crossing was catastrophically slow (a vsync-poll loop crossing frame
+boundaries re-JITs constantly; a single `runSlice` never completed). Tried and reverted, 2026-08-04.
+
+### Titles that depend on PIT/PIC timing (mutualise the work here)
+
+| Title | What it does | Status today |
+|---|---|---|
+| **Wolf3D** | reprograms counter 0 to ~700 Hz for its sound service | **capped** at `pitBase>>4` ≈ 291 Hz to avoid an INT-8 storm — a real event scheduler could lift this |
+| **Dune (Cryo)** | ~200 Hz timer-paced animation | works (A6) |
+| **God of Thunder** | ~140 Hz for the logo | works (A4) |
+| **Alley Cat** | polls the counter-0 live countdown (`IN 0x40`) for gameplay/entropy | works |
+| **Heaven** (NoooN 4K) | 1 kHz ISR **+ ~240 k 0x3DA polls/frame** for vsync | **derails** ~52.5 M cycles — the stress case |
+| **Moktar** `GAME.TDT` | `STI;HLT` between decryption passes | works via the HLT-wake path |
+| 0x3DA-polling intros (kaneda, difze, rv256, revitro) | measure the retrace | work, but their golden fingerprints **shift** whenever delivery timing changes → any timing change needs a per-intro dosdiff re-bless |
+
 ## Input
 
 - **Keyboard:** an 8042 controller (ports 0x60 data / 0x64 status) delivers queued keys as
@@ -167,3 +211,8 @@ are derived from `cpu.cycles % vgaPeriod`, where `vgaPeriod = pitReload / 3.845`
 : 18.2 Hz PIT ratio). Reading 0x3DA also resets the Attribute Controller flip-flop. A short
 retrace pulse at frame end + surrounding vblank; demos that *measure* the retrace (not just wait
 for an edge) see a realistic period.
+
+⚠️ Because the phase is `cpu.cycles % vgaPeriod`, it is **coupled to cycle jitter**: anything that
+shifts when the timer ISR runs also shifts the apparent beam. DOSBox instead measures from a
+**per-frame anchor** (`PIC_FullIndex() - framestart`), which is immune to that. See *Known
+limitation — block-granular timing* above and ROADMAP **D7**.
