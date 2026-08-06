@@ -91,7 +91,11 @@ export class Video {
       for (let col = 0; col < COLS; col++) {
         const cell = mem.r16(VRAM_TEXT + (row * COLS + col) * 2);
         const ch = cell & 0xff, attr = cell >> 8;
-        const fg = pal[attr & 0x0f], bg = pal[(attr >> 4) & 0x07];
+        const blinkMode = this.machine.bios ? this.machine.bios.blink : true;
+        const bg = pal[(attr >> 4) & (blinkMode ? 0x07 : 0x0f)];
+        // while blinking and in the "off" phase the glyph is drawn in the background colour
+        const hidden = blinkMode && (attr & 0x80) && !((this.frame >> 4) & 1);
+        const fg = hidden ? bg : pal[attr & 0x0f];
         const gbase = ch * CH;
         for (let y = 0; y < CH; y++) {
           const bits = font[gbase + y];
@@ -101,11 +105,13 @@ export class Video {
       }
     }
     // blinking cursor (underline) at the BIOS cursor position
-    if ((this.frame >> 4) & 1) {
+    const cur = this.machine.bios && this.machine.bios.cursor;
+    if (((this.frame >> 4) & 1) && !(cur && cur.hidden)) {
       const ccol = mem.r8(0x450), crow = mem.r8(0x451);
       if (crow < ROWS && ccol < COLS) {
         const fg = pal[mem.r16(VRAM_TEXT + (crow * COLS + ccol) * 2) >> 8 & 0x0f] || pal[7];
-        for (let y = CH - 3; y < CH; y++) {
+        const y0 = cur ? Math.min(cur.start, CH - 1) : CH - 3, y1 = cur ? Math.min(cur.end, CH - 1) : CH - 1;
+        for (let y = y0; y <= y1; y++) {
           let o = (crow * CH + y) * W + ccol * CW;
           for (let x = 0; x < CW; x++) u32[o++] = fg;
         }

@@ -21,6 +21,8 @@ export function installBIOS(machine) {
     onModeChange: null,        // (mode) => void, wired up by the video layer
     mode: 0x03,
     cga: { color: 0x30, mode: 0 },  // CGA color-select (0x3D9) / mode-control (0x3D8) registers
+    blink: true,                    // attribute bit 7 = blink (default) vs bright background
+    cursor: { start: 14, end: 15, hidden: false },   // scan lines, per INT 10h AH=01 / CRTC 0A-0B
   };
 
   // default VGA DAC palette (text + standard 16, then a usable 256 ramp)
@@ -169,9 +171,17 @@ export function installBIOS(machine) {
         if (bios.onModeChange) bios.onModeChange(bios.mode);
         break;
       }
-      case 0x01: break;                          // set cursor shape (ignored)
+      case 0x01: {                               // set cursor shape; CH bit 5 hides it
+        const ch = (cpu.cx >> 8) & 0xff, cl = cpu.cx & 0xff;
+        bios.cursor.hidden = (ch & 0x20) !== 0 || (ch & 0x1f) > (cl & 0x1f);
+        bios.cursor.start = ch & 0x1f; bios.cursor.end = cl & 0x1f;
+        if (machine.vga) { machine.vga.crtc[0x0a] = ch; machine.vga.crtc[0x0b] = cl; }
+        break;
+      }
       case 0x02: setCur(cpu.dx & 0xff, (cpu.dx >> 8) & 0xff); break; // set cursor pos
-      case 0x03: cpu.dx = (getRow() << 8) | getCol(); cpu.cx = 0x0607; break; // get cursor
+      case 0x03: cpu.dx = (getRow() << 8) | getCol();
+        cpu.cx = (((bios.cursor.hidden ? 0x20 : 0) | (bios.cursor.start & 0x1f)) << 8) | (bios.cursor.end & 0x1f);
+        break; // get cursor position + shape
       case 0x05: mem.w16(BDA + 0x62, cpu.al); break; // set active page
       case 0x06: case 0x07: {                    // AH=06 scroll up / AH=07 scroll down, in a window
         const lines = cpu.al, bh = (cpu.bx >> 8) & 0xff;
@@ -214,6 +224,16 @@ export function installBIOS(machine) {
           bios.dac[reg * 3] = (cpu.dx >> 8) & 0x3f;     // DH = red
           bios.dac[reg * 3 + 1] = (cpu.cx >> 8) & 0x3f; // CH = green
           bios.dac[reg * 3 + 2] = cpu.cx & 0x3f;        // CL = blue
+        } else if (cpu.al === 0x03) {            // toggle blink vs bright-background (BL bit 0)
+          bios.blink = (cpu.bx & 1) !== 0;
+        } else if (cpu.al === 0x17) {            // GET block of DAC registers (mirror of AL=12h)
+          const start = cpu.bx & 0xffff, count = cpu.cx & 0xffff;
+          let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
+          for (let i = 0; i < count; i++) {
+            mem.w8(p++, bios.dac[(start + i) * 3] & 0x3f);
+            mem.w8(p++, bios.dac[(start + i) * 3 + 1] & 0x3f);
+            mem.w8(p++, bios.dac[(start + i) * 3 + 2] & 0x3f);
+          }
         } else if (cpu.al === 0x12) {            // set block of DAC registers
           const start = cpu.bx & 0xffff, count = cpu.cx & 0xffff;
           let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
@@ -260,6 +280,41 @@ export function installBIOS(machine) {
         const sub = cpu.al;
         cpu.ax = (cpu.ax & 0xff00) | 0x1c;       // AL = 1Ch = function supported
         if (sub === 0x00) cpu.bx = 0x0003;       // report a few 64-byte blocks; save (01) / restore (02) are no-ops
+        break;
+      }
+      // AH=0Ch/0Dh write/read pixel. Absent until now and swallowed by `default`, so a program that
+      // plots through the BIOS drew *nothing*, with no error — a whole blank screen and no clue.
+      // Mode 13h is the flat A000 byte array; planar EGA/VGA goes through the plane pipeline (the
+      // Graphics Controller's bit mask selects the pixel); CGA 4/5/6 is the interleaved B800 bitmap.
+      case 0x0c: case 0x0d: {
+        const x = cpu.cx & 0xffff, y = cpu.dx & 0xffff, read = ah === 0x0d;
+        const m = bios.mode;
+        if (m === 0x13) {
+          const a = 0xa0000 + y * 320 + x;
+          if (x >= 320 || y >= 200) break;
+          if (read) cpu.al = mem.r8(a); else mem.w8(a, cpu.al);
+        } else if (m === 4 || m === 5 || m === 6) {
+          const wide = m === 6, bpp = wide ? 1 : 2, perByte = wide ? 8 : 4;
+          if (x >= (wide ? 640 : 320) || y >= 200) break;
+          const off = VRAM + ((y & 1) ? 0x2000 : 0) + (y >> 1) * 80 + ((x / perByte) | 0);
+          const sh = (perByte - 1 - (x % perByte)) * bpp, msk = ((1 << bpp) - 1) << sh;
+          if (read) cpu.al = (mem.r8(off) & msk) >> sh;
+          else mem.w8(off, (mem.r8(off) & ~msk) | ((cpu.al & ((1 << bpp) - 1)) << sh));
+        } else if (machine.vga && mem.planar) {
+          const vga = machine.vga, stride = vga.rowBytes(), off = (y * stride + (x >> 3)) & 0xffff;
+          const bit = 0x80 >> (x & 7);
+          if (read) {                            // assemble the 4 plane bits for this pixel
+            vga.readByte(off);                   // loads the latches
+            let v = 0; for (let p = 0; p < 4; p++) if (vga.planes[p * 0x10000 + off] & bit) v |= 1 << p;
+            cpu.al = v;
+          } else {
+            const savedMask = vga.gc[8], savedMode = vga.gc[5], savedSR = vga.gc[0], savedESR = vga.gc[1];
+            vga.gc[8] = bit; vga.gc[5] = (vga.gc[5] & ~3) | 0; vga.gc[0] = cpu.al & 0x0f; vga.gc[1] = 0x0f;
+            vga.readByte(off);                   // latch, so untouched bits survive the read-modify-write
+            vga.writeByte(off, 0);
+            vga.gc[8] = savedMask; vga.gc[5] = savedMode; vga.gc[0] = savedSR; vga.gc[1] = savedESR;
+          }
+        }
         break;
       }
       default: break;
@@ -338,11 +393,28 @@ export function installBIOS(machine) {
     ? Math.max(1, Math.round(machine.vcpuHz / 70))
     : Math.max(1, Math.round((machine.pitBase || machine.pitReload) / 3.845));
   const vblankStart = Math.round(vgaPeriod * 0.88), vretraceStart = Math.round(vgaPeriod * 0.92);
-  machine.onPortRead(0x3da, () => {
+  const status1 = () => {
     if (machine.vga) machine.vga.atcFlip = 0;
     const pos = machine.cpu.cycles % vgaPeriod;
     return (pos >= vblankStart ? 0x01 : 0) | (pos >= vretraceStart ? 0x08 : 0);
+  };
+  machine.onPortRead(0x3da, status1);
+  // 0x3BA is the same register on the mono/MDA address (BDA 0x463 selects which a program uses).
+  // Unregistered it read back 0xFF via the open-bus default — bit 3 permanently set — so a
+  // "wait for retrace to END" loop never exited. A hang, not a glitch.
+  machine.onPortRead(0x3ba, status1);
+  // Small registers that were unregistered and therefore read 0xFF. A program that saves and
+  // restores VGA state read 0xFF into every one of them and wrote the garbage back.
+  machine.onPortRead(0x3c1, () => {              // Attribute Controller data read
+    const v = machine.vga; if (!v) return 0;
+    return v.atcIndex < 16 ? v.palette[v.atcIndex] : (v.atc ? v.atc[v.atcIndex & 0x1f] : 0);
   });
+  machine.onPortRead(0x3cc, () => machine.miscOutput === undefined ? 0x67 : machine.miscOutput);
+  machine.onPortWrite(0x3c2, (_p, _s, v) => { machine.miscOutput = v & 0xff; });
+  machine.onPortRead(0x3c7, () => 0);            // DAC state: 0 = last access was a write
+  let pelMask = 0xff;                            // 0x3C6 is a real register, not a constant 0xFF:
+  machine.onPortRead(0x3c6, () => pelMask);      // the standard VGA probe writes it and reads back
+  machine.onPortWrite(0x3c6, (_p, _s, v) => { pelMask = v & 0xff; });
 
   // Minimal Sound Blaster DSP detection at base 0x220 (matches BLASTER=A220). We emulate
   // only the reset handshake and the version query so games that probe for a card start up;

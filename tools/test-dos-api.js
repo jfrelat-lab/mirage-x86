@@ -237,6 +237,80 @@ function asciiz(mc, cpu, off, str) {
     (((cpu.reg[1] & 0xffff) << 16) | (cpu.reg[2] & 0xffff)) >>> 0, 0x00012345);
 }
 
+// ---------------------------------------------------------------- video quick wins
+{ // AH=0Ch/0Dh write/read pixel in mode 13h — used to be swallowed by `default`, so a program
+  // plotting through the BIOS drew nothing at all and got no error.
+  const { mc, cpu } = mk();
+  cpu.ah = 0x00; cpu.al = 0x13; mc.intHandlers[0x10](cpu, mc);
+  cpu.ah = 0x0c; cpu.al = 0x2a; cpu.reg[1] = 10; cpu.reg[2] = 5; mc.intHandlers[0x10](cpu, mc);  // CX=x DX=y
+  eq('INT 10h AH=0Ch writes the pixel (mode 13h)', mc.mem.r8(0xa0000 + 5 * 320 + 10), 0x2a);
+  cpu.ah = 0x0d; cpu.al = 0; cpu.reg[1] = 10; cpu.reg[2] = 5; mc.intHandlers[0x10](cpu, mc);
+  eq('INT 10h AH=0Dh reads it back', cpu.reg[0] & 0xff, 0x2a);
+}
+{ // AH=0Ch in a planar EGA mode must go through the plane pipeline
+  const { mc, cpu } = mk();
+  cpu.ah = 0x00; cpu.al = 0x0d; mc.intHandlers[0x10](cpu, mc);
+  cpu.ah = 0x0c; cpu.al = 0x09; cpu.reg[1] = 3; cpu.reg[2] = 1; mc.intHandlers[0x10](cpu, mc);
+  cpu.ah = 0x0d; cpu.al = 0; cpu.reg[1] = 3; cpu.reg[2] = 1; mc.intHandlers[0x10](cpu, mc);
+  eq('INT 10h AH=0Ch/0Dh round-trip a planar pixel', cpu.reg[0] & 0x0f, 0x09);
+}
+{ // AH=01 cursor shape: CH bit 5 hides it, and AH=03 must report what was set (not a constant)
+  const { mc, cpu } = mk();
+  cpu.ah = 0x01; cpu.reg[1] = (0x20 << 8) | 0x00; mc.intHandlers[0x10](cpu, mc);
+  ok('INT 10h AH=01 CH bit5 hides the cursor', mc.bios.cursor.hidden);
+  cpu.ah = 0x01; cpu.reg[1] = (0x06 << 8) | 0x07; mc.intHandlers[0x10](cpu, mc);
+  ok('INT 10h AH=01 un-hides it', !mc.bios.cursor.hidden);
+  cpu.ah = 0x03; cpu.reg[3] = 0; mc.intHandlers[0x10](cpu, mc);
+  eq('INT 10h AH=03 reports the shape that was set', cpu.reg[1] & 0xffff, 0x0607);
+}
+{ // AH=10h AL=03 toggles blink vs bright-background; AL=17h reads a DAC block back
+  const { mc, cpu } = mk();
+  cpu.ah = 0x10; cpu.al = 0x03; cpu.reg[3] = 0; mc.intHandlers[0x10](cpu, mc);
+  ok('INT 10h AH=10h AL=03 can disable blink', mc.bios.blink === false);
+  cpu.ah = 0x10; cpu.al = 0x03; cpu.reg[3] = 1; mc.intHandlers[0x10](cpu, mc);
+  ok('INT 10h AH=10h AL=03 can re-enable blink', mc.bios.blink === true);
+  mc.bios.dac[3] = 11; mc.bios.dac[4] = 22; mc.bios.dac[5] = 33;                 // DAC entry 1
+  cpu.ah = 0x10; cpu.al = 0x17; cpu.reg[3] = 1; cpu.reg[1] = 1; cpu.reg[2] = 0x600; cpu.setSeg(0, 0x100);
+  mc.intHandlers[0x10](cpu, mc);
+  const p = (0x100 << 4) + 0x600;
+  eq('INT 10h AH=10h AL=17h reads the DAC back (r,g,b)',
+    (mc.mem.r8(p) << 16) | (mc.mem.r8(p + 1) << 8) | mc.mem.r8(p + 2), (11 << 16) | (22 << 8) | 33);
+}
+{ // 0x3BA mirrors 0x3DA. Unregistered it read 0xFF — bit 3 always set — so a "wait for retrace to
+  // END" loop never exited: a hang, not a glitch.
+  const { mc } = mk();
+  const a = mc.ioRead(0x3da, 1), b = mc.ioRead(0x3ba, 1);
+  eq('0x3BA mirrors 0x3DA', b & 0x09, a & 0x09);
+  ok('0x3BA is not stuck at 0xFF', b !== 0xff);
+}
+{ // 0x3C6 (pixel mask) is a real register — the standard VGA probe writes and reads it back
+  const { mc } = mk();
+  mc.ioWrite(0x3c6, 1, 0x5a);
+  eq('0x3C6 pixel mask round-trips', mc.ioRead(0x3c6, 1), 0x5a);
+  mc.ioWrite(0x3c6, 1, 0xff);
+}
+{ // read mode 1 (colour compare): after filling a byte with colour 9, comparing against 9 must
+  // return all-ones for those pixels. Read mode 0 would return raw plane data instead.
+  const { mc, cpu } = mk();
+  cpu.ah = 0x00; cpu.al = 0x0d; mc.intHandlers[0x10](cpu, mc);
+  const vga = mc.vga;
+  vga.gc[0] = 0x09; vga.gc[1] = 0x0f; vga.gc[5] = 0; vga.gc[8] = 0xff;   // write mode 0, set/reset = 9
+  vga.writeByte(0, 0);
+  vga.gc[5] = 0x08; vga.gc[2] = 0x09; vga.gc[7] = 0x0f;                  // read mode 1, compare 9, care all
+  eq('read mode 1 reports a full match', vga.readByte(0), 0xff);
+  vga.gc[2] = 0x0a;                                                      // compare against a colour we did not write
+  eq('read mode 1 reports no match', vga.readByte(0), 0x00);
+  vga.gc[5] = 0;                                                         // back to read mode 0
+}
+{ // a mode set must reload the CRTC, or the previous mode's offset/start shears the new one
+  const { mc, cpu } = mk();
+  cpu.ah = 0x00; cpu.al = 0x13; mc.intHandlers[0x10](cpu, mc);
+  mc.vga.crtc[0x13] = 32; mc.vga.crtc[0x0c] = 0x12; mc.vga.crtc[0x0d] = 0x34;   // a Mode-X-ish setup
+  cpu.ah = 0x00; cpu.al = 0x13; mc.intHandlers[0x10](cpu, mc);                  // re-set the mode
+  eq('mode set restores the standard offset', mc.vga.crtc[0x13], 40);
+  eq('mode set clears the display start', mc.vga.startAddr(), 0);
+}
+
 // ---------------------------------------------------------------- XMS
 {
   const { mc, cpu } = mk();

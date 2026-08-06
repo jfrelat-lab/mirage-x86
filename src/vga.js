@@ -31,6 +31,10 @@ export function installVGA(machine) {
     vga.mode = mode; vga.planar = planar; vga.modeX = false; vga.memMode = 0x0e;   // a fresh mode set starts chained
     if (planar) { const d = DIMS[mode] || [320, 200]; vga.width = d[0]; vga.height = d[1]; }
     else if (mode === 0x13) { vga.width = 320; vga.height = 200; }
+    vga.crtc.fill(0);                                  // a mode set reloads the CRTC — otherwise the
+    // Offset = words per scanline. Planar: width/8 bytes per plane, /2 for the word unit. Chained
+    // 13h: the renderer derives stride = offset*8, so the standard value is width/8 (=40 for 320).
+    vga.crtc[0x13] = planar ? ((vga.width >> 3) >> 1) : (vga.width >> 3);
     vga.mapMask = 0x0f; vga.gc.fill(0); vga.gc[8] = 0xff; vga.seqIndex = 0; vga.gcIndex = 0;
     vga.atcFlip = 0; for (let i = 0; i < 16; i++) vga.palette[i] = i;
     syncRouting();
@@ -71,7 +75,14 @@ export function installVGA(machine) {
     off &= 0xffff;
     latches[0] = planes[off]; latches[1] = planes[PLANE + off];
     latches[2] = planes[2 * PLANE + off]; latches[3] = planes[3 * PLANE + off];
-    return latches[vga.gc[4] & 3];
+    if (!(vga.gc[5] & 0x08)) return latches[vga.gc[4] & 3];      // read mode 0: the selected plane
+    const cmp = vga.gc[2] & 0x0f, care = vga.gc[7] & 0x0f;       // read mode 1: colour compare
+    let r = 0;
+    for (let p = 0; p < 4; p++) {
+      if (!(care & (1 << p))) continue;                          // "don't care" planes never disagree
+      r |= (cmp & (1 << p)) ? ~latches[p] : latches[p];          // any disagreeing bit clears the result
+    }
+    return (~r) & 0xff;
   };
 
   // ---- register ports (also accept the AL=index/AH=data 16-bit `out dx,ax` form) ----
