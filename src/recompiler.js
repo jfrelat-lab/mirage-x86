@@ -198,9 +198,10 @@ export class Recompiler {
     const go = (ip) => members.has(ip) ? `_e=${ip};break;` : `cpu.eip=${ip};return;`;
     if (term.k === 'jmp') return go(term.t);
     const cond = term.k === 'jcc' ? condExpr(term.cc)
-      : term.k === 'jcxz' ? '((r[1]&0xffff)===0)'
-        : term.v === 0xe0 ? `((r[1]&0xffff)!==0&&!(cpu.flags&${ZF}))`
-          : term.v === 0xe1 ? `((r[1]&0xffff)!==0&&(cpu.flags&${ZF}))` : '((r[1]&0xffff)!==0)';
+      : term.k === 'jcxz' ? (term.a32 ? '((r[1]>>>0)===0)' : '((r[1]&0xffff)===0)')
+        : term.v === 0xe0 ? `((${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'})!==0&&!(cpu.flags&${ZF}))`
+          : term.v === 0xe1 ? `((${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'})!==0&&(cpu.flags&${ZF}))`
+            : `((${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'})!==0)`;
     return `if(${cond}){${go(term.t)}}else{${go(term.n)}}`;
   }
 
@@ -495,10 +496,11 @@ export class Recompiler {
     const emitTermReturn = () => {
       if (term.k === 'jmp') P(`cpu.eip=${term.t}&0xffff;`);
       else if (term.k === 'jcc') P(`cpu.eip=${condExpr(term.cc)}?(${term.t}&0xffff):${term.n};`);
-      else if (term.k === 'jcxz') P(`cpu.eip=((r[1]&0xffff)===0)?${term.t}:${term.n};`);
+      else if (term.k === 'jcxz') P(`cpu.eip=(${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'}===0)?${term.t}:${term.n};`);
       else if (term.k === 'loop') {
-        const c = term.v === 0xe0 ? `(r[1]&0xffff)!==0&&!(cpu.flags&${ZF})`
-          : term.v === 0xe1 ? `(r[1]&0xffff)!==0&&(cpu.flags&${ZF})` : `(r[1]&0xffff)!==0`;
+        const cx = term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)';                    // ECX under 0x67
+        const c = term.v === 0xe0 ? `${cx}!==0&&!(cpu.flags&${ZF})`
+          : term.v === 0xe1 ? `${cx}!==0&&(cpu.flags&${ZF})` : `${cx}!==0`;
         P(`cpu.eip=(${c})?${term.t}:${term.n};`);
       } else return;   // 'exit' — the block emitted its own return
       P('return;');
@@ -585,10 +587,14 @@ export class Recompiler {
         case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f:
           P(sz === 32 ? rW(op & 7, 32, 'cpu.pop32()') : rW(op & 7, 16, 'cpu.pop16()')); break;
 
-        case 0x60: // PUSHA
-          P('var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
-        case 0x61: // POPA
-          P(`${rW(7, 16, 'cpu.pop16()')}${rW(6, 16, 'cpu.pop16()')}${rW(5, 16, 'cpu.pop16()')}cpu.pop16();${rW(3, 16, 'cpu.pop16()')}${rW(2, 16, 'cpu.pop16()')}${rW(1, 16, 'cpu.pop16()')}${rW(0, 16, 'cpu.pop16()')}`); break;
+        case 0x60: // PUSHA / PUSHAD (66) — pushes the ORIGINAL SP/ESP, not the decremented one
+          P(sz === 32
+            ? 'var _sp=cpu.reg[4]>>>0;cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);'
+            : 'var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
+        case 0x61: // POPA / POPAD (66) — the pushed SP/ESP slot is discarded
+          P(sz === 32
+            ? `${rW(7, 32, 'cpu.pop32()')}${rW(6, 32, 'cpu.pop32()')}${rW(5, 32, 'cpu.pop32()')}cpu.pop32();${rW(3, 32, 'cpu.pop32()')}${rW(2, 32, 'cpu.pop32()')}${rW(1, 32, 'cpu.pop32()')}${rW(0, 32, 'cpu.pop32()')}`
+            : `${rW(7, 16, 'cpu.pop16()')}${rW(6, 16, 'cpu.pop16()')}${rW(5, 16, 'cpu.pop16()')}cpu.pop16();${rW(3, 16, 'cpu.pop16()')}${rW(2, 16, 'cpu.pop16()')}${rW(1, 16, 'cpu.pop16()')}${rW(0, 16, 'cpu.pop16()')}`); break;
         case 0x62: {                                                                   // BOUND Gv,Ma → #BR (INT 5) if index ∉ [lower,upper] (signed)
           canFault = true; const o = modrm(); const a = memAddr(o);
           const rd = sz === 16 ? 'r16' : 'r32', sx = sz === 16 ? '<<16>>16' : '|0', d = sz >> 3;
@@ -635,12 +641,16 @@ export class Recompiler {
         case 0x91: case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: case 0x97: {  // XCHG eAX,reg
           const i = op & 7, tA = NT(); P(`var ${tA}=${rR(0, sz)};${rW(0, sz, rR(i, sz))}${rW(i, sz, tA)}`); break;
         }
-        case 0x98: P(`r[0]=(r[0]&~0xffff)|((((r[0]&0xff)<<24>>24))&0xffff);`); break;    // CBW
-        case 0x99: P(`r[2]=(r[2]&~0xffff)|((r[0]&0x8000)?0xffff:0);`); break;            // CWD
+        // CBW/CWD, or CWDE/CDQ under 0x66. `CDQ; IDIV ECX` is *the* signed 32-bit divide idiom, so
+        // decoding these as their 16-bit forms silently produced garbage quotients.
+        case 0x98: P(sz === 16 ? `r[0]=(r[0]&~0xffff)|((((r[0]&0xff)<<24>>24))&0xffff);`        // CBW  AL→AX
+          : `r[0]=(((r[0]&0xffff)<<16>>16))>>>0;`); break;                                      // CWDE AX→EAX
+        case 0x99: P(sz === 16 ? `r[2]=(r[2]&~0xffff)|((r[0]&0x8000)?0xffff:0);`                // CWD  AX→DX:AX
+          : `r[2]=((r[0]&0x80000000)?0xffffffff:0)>>>0;`); break;                               // CDQ  EAX→EDX:EAX
         case 0x9a: { const o = f16(), s = f16(); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
-        case 0x9c: cur.use |= lALL; P('cpu.push16(cpu.flags&0xffff);'); break;          // PUSHF (reads all)
-        case 0x9d: P('cpu.flags=(cpu.pop16()&0x7fd5)|2;'); break;                        // POPF (386: IOPL/NT bits 12-14 settable in real mode; only bit 15 forced 0)
+        case 0x9c: cur.use |= lALL; P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);' : 'cpu.push16(cpu.flags&0xffff);'); break;   // PUSHF / PUSHFD (66)
+        case 0x9d: P(sz === 32 ? 'cpu.flags=(cpu.pop32()&0x27fd5)|2;' : 'cpu.flags=(cpu.pop16()&0x7fd5)|2;'); break;         // POPF / POPFD (66; RF/VM not modelled)
         case 0x9e: P('cpu.flags=(cpu.flags&~0xff)|(((r[0]>>>8)&0xd5))|2;'); break;       // SAHF
         case 0x9f: cur.use |= lC | lP | lA | lZ | lS; P('r[0]=(r[0]&~0xff00)|((((cpu.flags&0xd5)|2)&0xff)<<8);'); break; // LAHF (reads CPAZS)
 
@@ -703,10 +713,10 @@ export class Recompiler {
         case 0xce: P(`if(cpu.flags&${OF}){cpu.eip=${ip};cpu.swInt(4);return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
         case 0xcf: P('cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0x7fd5)|2;'); P('return;'); ended = true; break; // IRET (386 real-mode flag mask)
 
-        case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.aam(${f8()});`); break; // AAM (may swInt mid-block)
+        case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.eip=${ipStart};if(cpu.aam(${f8()}))return;`); break; // AAM (#DE on base 0 — abort the block)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
         case 0xd6: cur.use |= lC; P(`r[0]=(r[0]&~0xff)|((cpu.flags&${CF})?0xff:0);`); break; // SALC (reads CF)
-        case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT
+        case 0xd7: P(`r[0]=(r[0]&~0xff)|m.r8(${lin(segOv >= 0 ? segOv : DS, addr32 ? '(((r[3]>>>0)+(r[0]&0xff))>>>0)' : '((r[3]+ (r[0]&0xff))&0xffff)')});`); break; // XLAT (EBX under 0x67)
 
         // ---- x87 FPU (D8-DF): emit the specific op inline ----
         case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf: {
@@ -723,10 +733,10 @@ export class Recompiler {
         }
 
         // ---- LOOP / JCXZ ----
-        case 0xe0: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe0, t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
-        case 0xe1: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe1, t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
-        case 0xe2: { const rel = fs8(); P('r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe2, t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
-        case 0xe3: { const rel = fs8(); term = { k: 'jcxz', t: (ip + rel) & 0xffff, n: ip }; ended = true; break; }
+        case 0xe0: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe0, t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe1: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe1, t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe2: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe2, t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe3: { const rel = fs8(); term = { k: 'jcxz', t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
 
         // ---- IN / OUT ----
         case 0xe4: { const p = f8(); P(rW(0, 8, `cpu.ioRead(${p},1)`)); break; }
@@ -746,8 +756,8 @@ export class Recompiler {
 
         case 0xf4: P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break; // HLT
         case 0xf5: cur.use |= lC; P(`cpu.flags^=${CF};`); break;                        // CMC (reads CF)
-        case 0xf6: emitGroup3(8); break;
-        case 0xf7: emitGroup3(sz); break;
+        case 0xf6: emitGroup3(8, ipStart); break;
+        case 0xf7: emitGroup3(sz, ipStart); break;
         case 0xf8: P(`cpu.flags&=~${CF};`); break;                                      // CLC
         case 0xf9: P(`cpu.flags|=${CF};`); break;                                       // STC
         case 0xfa: P(`cpu.flags&=~${IF};`); break;                                      // CLI
@@ -935,7 +945,7 @@ export class Recompiler {
       P(rmW(o, size, `cpu.${ops[rot]}(${rmR(o, size)},${cnt},${size})`));
     }
 
-    function emitGroup3(size) {
+    function emitGroup3(size, ipStart) {
       const o = modrm();
       switch (o.reg) {
         case 0: case 1: { const i = size === 8 ? f8() : (size === 16 ? f16() : (f16() | (f16() << 16))); alu('test', rmR(o, size), null, '' + (i >>> 0), size); break; }
@@ -953,8 +963,12 @@ export class Recompiler {
             PFLAG(`cpu.setShiftResult(0,16,(${p}<-32768||${p}>32767),(${p}<-32768||${p}>32767),false);`, lC | lO);
           } else P(`cpu.${size === 8 ? 'imul8' : 'imul32'}(${rmR(o, size)});`);
           break;
-        case 6: cur.use |= lALL; canFault = true; P(`cpu.${size === 8 ? 'div8' : size === 16 ? 'div16' : 'div32'}(${rmR(o, size)});`); break;   // DIV (may swInt mid-block)
-        case 7: cur.use |= lALL; canFault = true; P(`cpu.${size === 8 ? 'idiv8' : size === 16 ? 'idiv16' : 'idiv32'}(${rmR(o, size)});`); break; // IDIV (may swInt mid-block)
+        // DIV/IDIV can raise #DE. The helper vectors the ISR and returns true; we must set eip to the
+        // FAULTING instruction first (a #DE is a fault, so that is the pushed return address) and then
+        // stop the block — otherwise the rest of it runs and its terminator overwrites cpu.eip, silently
+        // discarding the interrupt on a stack that already holds an IRET frame.
+        case 6: cur.use |= lALL; canFault = true; P(`cpu.eip=${ipStart};if(cpu.${size === 8 ? 'div8' : size === 16 ? 'div16' : 'div32'}(${rmR(o, size)}))return;`); break;   // DIV
+        case 7: cur.use |= lALL; canFault = true; P(`cpu.eip=${ipStart};if(cpu.${size === 8 ? 'idiv8' : size === 16 ? 'idiv16' : 'idiv32'}(${rmR(o, size)}))return;`); break; // IDIV
       }
     }
 
@@ -974,25 +988,29 @@ export class Recompiler {
     function emitStr(kind, size) {
       const step = size / 8;
       const srcSeg = segOv >= 0 ? segOv : DS;
+      // 0x67 switches the string pointers/counter to ESI/EDI/ECX. `67 F3 A4` (REP MOVSB over 32-bit
+      // pointers) is a standard 386 fast-copy; without this it silently used SI/DI/CX.
+      const iR = (i) => addr32 ? `(r[${i}]>>>0)` : `(r[${i}]&0xffff)`;
+      const iAdv = (i) => addr32 ? `r[${i}]=(r[${i}]+_d)>>>0;` : `r[${i}]=(r[${i}]&~0xffff)|((r[${i}]+_d)&0xffff);`;
       const w = size === 8 ? 'r8' : size === 16 ? 'r16' : 'r32';
       const ww = size === 8 ? 'w8' : size === 16 ? 'w16' : 'w32';
       P(`var _d=(cpu.flags&${DF})?-${step}:${step};`);
       const loop = (body, cond) => {
         if (rep) {
-          P('var _c=r[1]&0xffff;');
+          P(`var _c=${iR(1)};`);
           P('while(_c>0){');
           P(body);
           P('_c--;');
           if (cond) P(cond);
           P('}');
-          P('r[1]=(r[1]&~0xffff)|_c;');
+          P(addr32 ? 'r[1]=_c>>>0;' : 'r[1]=(r[1]&~0xffff)|_c;');
         } else { P(body); }
       };
-      const SI = `((sb[${srcSeg}]+(r[6]&0xffff))&${MM})`;
-      const DI = `((sb[${ES}]+(r[7]&0xffff))&${MM})`;
-      const adv = `r[6]=(r[6]&~0xffff)|((r[6]+_d)&0xffff);r[7]=(r[7]&~0xffff)|((r[7]+_d)&0xffff);`;
-      const advDI = `r[7]=(r[7]&~0xffff)|((r[7]+_d)&0xffff);`;
-      const advSI = `r[6]=(r[6]&~0xffff)|((r[6]+_d)&0xffff);`;
+      const SI = `((sb[${srcSeg}]+${iR(6)})&${MM})`;
+      const DI = `((sb[${ES}]+${iR(7)})&${MM})`;
+      const adv = iAdv(6) + iAdv(7);
+      const advDI = iAdv(7);
+      const advSI = iAdv(6);
       if (kind === 'movs') loop(`m.${ww}(${DI},m.${w}(${SI}));${adv}`);
       else if (kind === 'stos') loop(`m.${ww}(${DI},${rR(0, size)});${advDI}`);
       else if (kind === 'lods') loop(`${rW(0, size, `m.${w}(${SI})`)}${advSI}`);

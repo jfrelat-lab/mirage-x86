@@ -223,23 +223,23 @@ export class CPU {
   mul16(s) { s &= 0xffff; const p = (this.reg[0] & 0xffff) * s; this.ax = p & 0xffff; this.dx = (p / 65536) & 0xffff; const c = this.dx !== 0; this.setShiftResult(0, 16, c, c, false); }
   imul8(s) { s = (s << 24 >> 24); const p = ((this.reg[0] & 0xff) << 24 >> 24) * s; this.ax = p & 0xffff; const c = (p < -128 || p > 127); this.setShiftResult(0, 16, c, c, false); }
   imul16(s){ s = (s << 16 >> 16); const p = ((this.reg[0] & 0xffff) << 16 >> 16) * s; this.ax = p & 0xffff; this.dx = (p >> 16) & 0xffff; const c = (p < -32768 || p > 32767); this.setShiftResult(0, 16, c, c, false); }
-  div8(s)  { s &= 0xff;  if (!s) return this.swInt(0); const n = this.ax, q = (n / s) | 0; if (q > 0xff) return this.swInt(0); this.al = q; this.ah = n % s; }
-  div16(s) { s &= 0xffff; if (!s) return this.swInt(0); const n = (this.dx & 0xffff) * 65536 + (this.ax & 0xffff), q = Math.floor(n / s); if (q > 0xffff) return this.swInt(0); this.ax = q; this.dx = n % s; }
-  idiv8(s) { s = (s << 24 >> 24); if (!s) return this.swInt(0); const n = (this.ax << 16 >> 16), q = (n / s) | 0; if (q < -128 || q > 127) return this.swInt(0); this.al = q & 0xff; this.ah = (n % s) & 0xff; }
-  idiv16(s){ s = (s << 16 >> 16); if (!s) return this.swInt(0); const n = (((this.dx & 0xffff) << 16) | (this.ax & 0xffff)) | 0, q = (n / s) | 0; if (q < -32768 || q > 32767) return this.swInt(0); this.ax = q & 0xffff; this.dx = (n % s) & 0xffff; }
+  div8(s)  { s &= 0xff;  if (!s) { this.swInt(0); return true; } const n = this.ax, q = (n / s) | 0; if (q > 0xff) { this.swInt(0); return true; } this.al = q; this.ah = n % s; }
+  div16(s) { s &= 0xffff; if (!s) { this.swInt(0); return true; } const n = (this.dx & 0xffff) * 65536 + (this.ax & 0xffff), q = Math.floor(n / s); if (q > 0xffff) { this.swInt(0); return true; } this.ax = q; this.dx = n % s; }
+  idiv8(s) { s = (s << 24 >> 24); if (!s) { this.swInt(0); return true; } const n = (this.ax << 16 >> 16), q = (n / s) | 0; if (q < -128 || q > 127) { this.swInt(0); return true; } this.al = q & 0xff; this.ah = (n % s) & 0xff; }
+  idiv16(s){ s = (s << 16 >> 16); if (!s) { this.swInt(0); return true; } const n = (((this.dx & 0xffff) << 16) | (this.ax & 0xffff)) | 0, q = (n / s) | 0; if (q < -32768 || q > 32767) { this.swInt(0); return true; } this.ax = q & 0xffff; this.dx = (n % s) & 0xffff; }
   // 32-bit MUL/IMUL/DIV/IDIV: EDX:EAX is a 64-bit value, beyond float64's exact range, so
   // compute with BigInt. reg[0]=EAX, reg[2]=EDX.
   mul32(s)  { const p = BigInt(this.reg[0] >>> 0) * BigInt(s >>> 0); this.reg[0] = Number(BigInt.asUintN(32, p)); this.reg[2] = Number(BigInt.asUintN(32, p >> 32n)); const c = this.reg[2] !== 0; this.setShiftResult(0, 32, c, c, false); }
   imul32(s) { const p = BigInt(this.reg[0] | 0) * BigInt(s | 0); this.reg[0] = Number(BigInt.asUintN(32, p)); this.reg[2] = Number(BigInt.asUintN(32, p >> 32n)); const c = p < -2147483648n || p > 2147483647n; this.setShiftResult(0, 32, c, c, false); }
-  div32(s)  { s >>>= 0; if (!s) return this.swInt(0); const n = (BigInt(this.reg[2] >>> 0) << 32n) | BigInt(this.reg[0] >>> 0), bs = BigInt(s), q = n / bs; if (q > 0xffffffffn) return this.swInt(0); this.reg[0] = Number(q); this.reg[2] = Number(n % bs); }
-  idiv32(s) { s |= 0; if (!s) return this.swInt(0); const n = BigInt.asIntN(64, (BigInt(this.reg[2] >>> 0) << 32n) | BigInt(this.reg[0] >>> 0)), bs = BigInt(s), q = n / bs; if (q > 2147483647n || q < -2147483648n) return this.swInt(0); this.reg[0] = Number(BigInt.asUintN(32, q)); this.reg[2] = Number(BigInt.asUintN(32, n % bs)); }
+  div32(s)  { s >>>= 0; if (!s) { this.swInt(0); return true; } const n = (BigInt(this.reg[2] >>> 0) << 32n) | BigInt(this.reg[0] >>> 0), bs = BigInt(s), q = n / bs; if (q > 0xffffffffn) { this.swInt(0); return true; } this.reg[0] = Number(q); this.reg[2] = Number(n % bs); }
+  idiv32(s) { s |= 0; if (!s) { this.swInt(0); return true; } const n = BigInt.asIntN(64, (BigInt(this.reg[2] >>> 0) << 32n) | BigInt(this.reg[0] >>> 0)), bs = BigInt(s), q = n / bs; if (q > 2147483647n || q < -2147483648n) { this.swInt(0); return true; } this.reg[0] = Number(BigInt.asUintN(32, q)); this.reg[2] = Number(BigInt.asUintN(32, n % bs)); }
 
   // three-operand / 0F IMUL: signed multiply, result in this._mr, sets CF/OF
   imul16x(a, b, bits) {
     if (bits === 16) { a = a << 16 >> 16; b = b << 16 >> 16; const p = a * b; this._mr = p & 0xffff; const c = (p < -32768 || p > 32767); this.setShiftResult(0, 16, c, c, false); }
     else { a |= 0; b |= 0; this._mr = Math.imul(a, b) >>> 0; const p = a * b; const c = (this._mr | 0) !== p; this.setShiftResult(0, 32, c, c, false); }
   }
-  aam(base) { if (base === 0) return this.swInt(0); const al = this.reg[0] & 0xff; this.ah = (al / base) | 0; this.al = al % base; this.setLogic(this.reg[0] & 0xff, 8); }
+  aam(base) { if (base === 0) { this.swInt(0); return true; } const al = this.reg[0] & 0xff; this.ah = (al / base) | 0; this.al = al % base; this.setLogic(this.reg[0] & 0xff, 8); }
   aad(base) { const al = this.reg[0] & 0xff, ah = (this.reg[0] >> 8) & 0xff; const r = (al + ah * base) & 0xff; this.reg[0] = (this.reg[0] & ~0xffff) | r; this.setLogic(r, 8); }
 
   // ---- BCD adjust (DAA/DAS/AAA/AAS); OF (and AAA/AAS SF/ZF/PF) left undefined

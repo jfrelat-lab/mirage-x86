@@ -258,6 +258,11 @@ export function installDOS(machine, vfs) {
 
   machine.hookInterrupt(0x21, (cpu) => {
     const ah = cpu.ah;
+    // Real DOS clears CF on success. Most cases below just `break`, so without this they returned
+    // with whatever CF the caller happened to have — and `stc` before `int 21h` is common enough
+    // that `mov ah,30h / int 21h / jc no_dos` took the error branch. Start clear; the failure
+    // paths (`err()` and the `default`) set it.
+    cpu.flags &= ~CF;
     switch (ah) {
       case 0x00: terminate(0); break;
       case 0x01: { // read char with echo (blocking)

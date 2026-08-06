@@ -284,6 +284,74 @@ function eq(name, got, want) {
     ({ cpu, mc }) => { cpu.reg[5] = 0x40; mc.mem.w16(0x300 * 16 + 0x40, 0x0ff0); mc.mem.w16(0x200 * 16 + 0x40, 0xdead); });
   eq('addr32 [EBP] defaults to SS', cpu.reg[0] & 0xffff, 0x0ff0); }
 
+// ---- 0x66 operand-size on the sign-extend and stack-frame opcodes ---------------------------
+{ // 66 98 = CWDE (AX->EAX), not CBW. AX=0x8001 -> EAX=0xFFFF8001
+  const { cpu } = run([0x66, 0x98, 0xf4], ({ cpu }) => { cpu.reg[0] = 0x00008001; });
+  eq('66 98 = CWDE (not CBW)', cpu.reg[0] >>> 0, 0xffff8001); }
+{ // 66 99 = CDQ (EAX->EDX:EAX), not CWD. EAX negative -> EDX = 0xFFFFFFFF
+  const { cpu } = run([0x66, 0x99, 0xf4], ({ cpu }) => { cpu.reg[0] = 0x80000000; cpu.reg[2] = 0x1234; });
+  eq('66 99 = CDQ (not CWD)', cpu.reg[2] >>> 0, 0xffffffff); }
+{ // plain 98/99 must still be CBW/CWD
+  const { cpu } = run([0x98, 0x99, 0xf4], ({ cpu }) => { cpu.reg[0] = 0x000000ff; });
+  eq('98 still CBW', cpu.reg[0] & 0xffff, 0xffff);
+  eq('99 still CWD', cpu.reg[2] & 0xffff, 0xffff); }
+
+// ---- a #DE must abort the block ------------------------------------------------------------
+// DIV by zero vectors INT 0. If the block kept running, its terminator would overwrite cpu.eip and
+// silently discard the interrupt — on a stack that already holds the IRET frame.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x200); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mc.setVector(0, 0x400, 0x10);                                  // guest #DE handler at 0400:0010
+  //  xor ah,ah ; div bl  (BL=0 -> #DE) ; mov bx,0x1234 ; hlt
+  mc.mem.blit(0x100 * 16, Uint8Array.from([0x30, 0xe4, 0xf6, 0xf3, 0xbb, 0x34, 0x12, 0xf4]));
+  cpu.reg[3] = 0x0000;
+  mc.rec.step();
+  eq('#DE vectors to the guest handler', (cpu.seg[CS] << 16) | (cpu.eip & 0xffff), (0x400 << 16) | 0x10);
+  eq('#DE aborted the block (BX untouched)', cpu.reg[3] & 0xffff, 0x0000);
+  eq('#DE pushed the faulting IP, not the block start', mc.mem.r16(0x300 * 16 + ((cpu.sp) & 0xffff)), 0x0002); }
+
+// ---- 0x67 on the implicit-address instructions (strings, XLAT, LOOP, JCXZ) -------------------
+{ // 67 F3 A4 = REP MOVSB over ESI/EDI/ECX. Put the pointers above 0xFFFF so 16-bit regs can't work.
+  const { cpu, mc } = run([0x67, 0xf3, 0xa4, 0xf4], ({ cpu, mc }) => {
+    cpu.setSeg(DS, 0); cpu.setSeg(ES, 0);
+    cpu.reg[6] = 0x12000; cpu.reg[7] = 0x13000; cpu.reg[1] = 4;      // ESI, EDI, ECX
+    mc.mem.blit(0x12000, Uint8Array.from([1, 2, 3, 4]));
+  });
+  eq('67 REP MOVSB copies via ESI/EDI', mc.mem.r32(0x13000) >>> 0, 0x04030201);
+  eq('67 REP MOVSB drains ECX', cpu.reg[1] >>> 0, 0);
+  eq('67 REP MOVSB advances ESI past 16 bits', cpu.reg[6] >>> 0, 0x12004); }
+{ // 67 D7 = XLAT using EBX
+  const { cpu } = run([0x67, 0xd7, 0xf4], ({ cpu, mc }) => {
+    cpu.setSeg(DS, 0); cpu.reg[3] = 0x12000; cpu.reg[0] = 0x0003; mc.mem.w8(0x12003, 0x7e);
+  });
+  eq('67 XLAT uses EBX', cpu.reg[0] & 0xff, 0x7e); }
+{ // 67 E2 00 = LOOP to the next instruction: exercises the decrement alone. A 16-bit decrement of
+  // ECX=0x00010000 would borrow only within CX (→0x0001FFFF); the 32-bit one gives 0x0000FFFF.
+  const { cpu } = run([0x67, 0xe2, 0x00, 0xf4], ({ cpu }) => { cpu.reg[1] = 0x00010000; });
+  eq('67 LOOP decrements ECX (not CX)', cpu.reg[1] >>> 0, 0x0000ffff); }
+{ // 67 E3 = JECXZ: ECX=0x10000 is non-zero, but CX==0 — a 16-bit test would wrongly jump
+  const { cpu } = run([0x67, 0xe3, 0x02, 0xbb, 0x34, 0x12, 0xf4], ({ cpu }) => { cpu.reg[1] = 0x00010000; });
+  eq('67 JECXZ tests ECX, not CX', cpu.reg[3] & 0xffff, 0x1234); }
+
+// ---- 0x66 on the stack-frame opcodes (PUSHAD/POPAD/PUSHFD/POPFD) ----------------------------
+{ // 66 60 / 66 61 must move 32 bytes, and round-trip EAX's full width
+  const { cpu } = run([0x66, 0x60, 0x66, 0x61, 0xf4], ({ cpu }) => { cpu.reg[0] = 0xdeadbeef; });
+  eq('66 PUSHAD/POPAD round-trips EAX', cpu.reg[0] >>> 0, 0xdeadbeef); }
+{ // PUSHAD pushes 32 bytes: SP must drop by exactly that
+  const { cpu } = run([0x66, 0x60, 0xf4], ({ cpu }) => { cpu.sp = 0x1000; });
+  eq('66 PUSHAD moves SP by 32', (0x1000 - cpu.sp) & 0xffff, 32); }
+{ // 66 9C PUSHFD pushes 4 bytes, not 2
+  const { cpu } = run([0x66, 0x9c, 0xf4], ({ cpu }) => { cpu.sp = 0x1000; });
+  eq('66 PUSHFD moves SP by 4', (0x1000 - cpu.sp) & 0xffff, 4); }
+
+// ---- unhandled INTs are reported, not silently "successful" --------------------------------
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mc.mem.blit(0x100 * 16, Uint8Array.from([0xf8, 0xcd, 0x13, 0xf4]));   // clc ; int 13h ; hlt
+  let steps = 0; while (!cpu.halted && steps++ < 50) mc.rec.step();
+  eq('unhandled INT 13h sets CF (not a silent success)', cpu.flags & 1, 1);
+  eq('unhandled INT 13h is counted', mc.unhandledInts[0x13], 1); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

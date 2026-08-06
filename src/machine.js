@@ -8,7 +8,7 @@
 // which is what lets games install INT 9 / INT 1Ch handlers and have them fire.
 
 import { Memory } from './memory.js';
-import { CPU, CS, IF, TF } from './cpu.js';
+import { CPU, CS, CF, IF, TF } from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
 
@@ -29,6 +29,7 @@ export class Machine {
     this.blocked = false;                          // set by a handler waiting on input
     this.keyQueue = [];                            // {ascii, scan} pushed by the UI
     this.hwIrqPending = false;                      // a hardware IRQ (keyboard) waits for IF to be set
+    this.unhandledInts = new Uint32Array(256);      // per-vector count of INTs we don't implement
 
     // PIT channel-0 timer, clocked off cpu.cycles (which counts retired instructions ~= the
     // 1.19 MHz PIT tick for our purposes). The run loop fires INT 8 whenever cpu.cycles crosses
@@ -125,10 +126,25 @@ export class Machine {
     if (v.seg === BIOS_SEG) {
       const h = this.intHandlers[n];
       if (h) h(this.cpu, this);          // JS handler; eip already points past the INT
-      // else: unhandled BIOS vector -> behave as IRET (no-op)
+      else {
+        // Unhandled BIOS vector. Returning with CF untouched reads to the guest as SUCCESS — so a
+        // program that e.g. asks INT 13h for a sector believes it got one and then parses whatever
+        // was in the buffer. Report failure instead (CF=1 is the DOS/BIOS error convention) and
+        // count it, so "the game misbehaves" becomes one line in `unhandledInts`.
+        this.unhandledInts[n]++;
+        this.cpu.flags |= CF;
+      }
     } else {
       this.realInt(n, v.seg, v.off);     // guest-installed ISR
     }
+  }
+
+  /** Vectors the guest asked for that we don't implement, as "INT xx ×N" — the first thing to look
+   *  at when a program misbehaves for no visible reason. */
+  unhandledIntReport() {
+    const out = [];
+    for (let n = 0; n < 256; n++) if (this.unhandledInts[n]) out.push(`INT ${n.toString(16).padStart(2, '0')}h ×${this.unhandledInts[n]}`);
+    return out.join(', ');
   }
 
   /** Push state and transfer control to a real ISR (used for hooked + hardware ints). */
