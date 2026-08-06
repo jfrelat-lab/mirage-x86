@@ -388,9 +388,10 @@ export class Recompiler {
     const f8 = () => { const b = mem.r8((linStart - ip0 + ip) & MM); ip = (ip + 1) & 0xffff; return b; };
     const f16 = () => { const w = mem.r16((linStart - ip0 + ip) & MM); ip = (ip + 2) & 0xffff; return w; };
     const fs8 = () => { const b = f8(); return b < 128 ? b : b - 256; };
+    const f32 = () => { const lo = f16(), hi = f16(); return (lo | (hi << 16)) >>> 0; };   // disp32 / moffs32 (0x67)
 
     // ---- operand-size / segment-override / rep prefixes ----
-    let opsize, segOv, rep;
+    let opsize, segOv, rep, addr32;
     const M = (sz) => sz === 8 ? '&0xff' : sz === 16 ? '&0xffff' : '>>>0';
 
     // ---- register operand source/sink as JS expressions ----
@@ -402,9 +403,32 @@ export class Recompiler {
 
     // ---- ModR/M ----
     const lin = (seg, off) => `((sb[${seg}]+${off})&${MM})`;
+    // 32-bit effective address (after a 0x67 prefix): the mod/rm grid is the 386 one — rm=100 means a
+    // SIB byte follows, rm=101 with mod=0 means a bare disp32, and every other rm is a 32-bit register.
+    // The default segment is SS when the BASE register is ESP or EBP, DS otherwise. Decoding this is
+    // not optional: a 0x67 instruction is 1-5 bytes longer than its 16-bit lookalike, so skipping the
+    // prefix (as v1 did) desynchronises the whole instruction stream — that is what derailed Heaven.
+    const modrm32 = (mod, rm) => {
+      let seg = DS, disp = 0; const parts = [];
+      if (rm === 4) {                                     // SIB: scale(2) index(3) base(3)
+        const sib = f8(), scale = sib >> 6, index = (sib >> 3) & 7, base = sib & 7;
+        if (index !== 4) parts.push(scale ? `((r[${index}]>>>0)*${1 << scale})` : `(r[${index}]>>>0)`);
+        if (base === 5 && mod === 0) disp = f32() | 0;     // no base register: disp32 follows
+        else { parts.push(`(r[${base}]>>>0)`); if (base === 4 || base === 5) seg = SS; }
+      } else if (rm === 5 && mod === 0) {
+        disp = f32() | 0;                                  // bare disp32
+      } else {
+        parts.push(`(r[${rm}]>>>0)`);
+        if (rm === 5) seg = SS;                            // [EBP]
+      }
+      if (mod === 1) disp += fs8(); else if (mod === 2) disp += f32() | 0;   // SIB is consumed BEFORE the disp
+      if (disp) parts.push(`(${disp | 0})`);
+      return { seg, off: `((${parts.length ? parts.join('+') : '0'})>>>0)` };
+    };
     const modrm = () => {
       const b = f8(), mod = b >> 6, reg = (b >> 3) & 7, rm = b & 7;
       if (mod === 3) return { isReg: true, reg, rm };
+      if (addr32) { const a = modrm32(mod, rm); return { isReg: false, reg, rm, seg: segOv >= 0 ? segOv : a.seg, off: a.off }; }
       let base, seg = DS;
       switch (rm) {
         case 0: base = '((r[3]&0xffff)+(r[6]&0xffff))'; break;
@@ -491,7 +515,7 @@ export class Recompiler {
 
     // ===================== main decode loop =====================
     while (!ended && count < maxOps) {
-      opsize = 16; segOv = -1; rep = 0;
+      opsize = 16; segOv = -1; rep = 0; addr32 = false;
       const ipStart = ip;                 // instruction start ip — fault return address (#BR etc.)
       // prefixes. Bounded: x86 caps an instruction at 15 bytes, so a longer prefix run is not
       // real code — it is garbage the tier-2 region walker speculatively reached (a Jcc/JMP
@@ -500,7 +524,7 @@ export class Recompiler {
       let op = f8(), pfx = 0;
       for (; pfx++ < 15;) {
         if (op === 0x66) { opsize = 32; op = f8(); }
-        else if (op === 0x67) { op = f8(); }                       // addr-size (16-bit only in v1)
+        else if (op === 0x67) { addr32 = true; op = f8(); }        // address-size: 32-bit EAs (ModRM+SIB)
         else if (op === 0x2e) { segOv = CS; op = f8(); }
         else if (op === 0x36) { segOv = SS; op = f8(); }
         else if (op === 0x3e) { segOv = DS; op = f8(); }
@@ -621,10 +645,11 @@ export class Recompiler {
         case 0x9f: cur.use |= lC | lP | lA | lZ | lS; P('r[0]=(r[0]&~0xff00)|((((cpu.flags&0xd5)|2)&0xff)<<8);'); break; // LAHF (reads CPAZS)
 
         // ---- MOV AL/eAX <-> moffs ----
-        case 0xa0: { const d = f16(); P(rW(0, 8, `m.r8(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
-        case 0xa1: { const d = f16(); P(rW(0, sz, sz === 16 ? `m.r16(${lin(segOv >= 0 ? segOv : DS, d)})` : `m.r32(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
-        case 0xa2: { const d = f16(); P(`m.w8(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 8)});`); break; }
-        case 0xa3: { const d = f16(); P(sz === 16 ? `m.w16(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 16)});` : `m.w32(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 32)});`); break; }
+        // moffs is a bare displacement: 2 bytes normally, 4 after a 0x67 prefix (else the stream desyncs).
+        case 0xa0: { const d = addr32 ? f32() : f16(); P(rW(0, 8, `m.r8(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
+        case 0xa1: { const d = addr32 ? f32() : f16(); P(rW(0, sz, sz === 16 ? `m.r16(${lin(segOv >= 0 ? segOv : DS, d)})` : `m.r32(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
+        case 0xa2: { const d = addr32 ? f32() : f16(); P(`m.w8(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 8)});`); break; }
+        case 0xa3: { const d = addr32 ? f32() : f16(); P(sz === 16 ? `m.w16(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 16)});` : `m.w32(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 32)});`); break; }
 
         // ---- string ops ----
         case 0xa4: emitStr('movs', 8); break;

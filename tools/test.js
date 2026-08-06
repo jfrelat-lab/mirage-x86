@@ -250,6 +250,40 @@ function eq(name, got, want) {
   for (let i = 0; i < 4; i++) { mc.pumpKeyboard(); mc.runSlice(2000); }
   eq('8042 IRQ1 delivers scancode to guest INT 9', mem.u8[0x100 * 16 + 0x80], 0x1e); }
 
+// ---- 0x67 address-size prefix: 32-bit effective addresses (ModRM + SIB + disp32) ------------
+// The 8088 conformance vectors cannot reach this (386-only), and a mis-decode is silent: a 0x67
+// instruction is 1-5 bytes longer than its 16-bit lookalike, so getting the LENGTH wrong
+// desynchronises the whole instruction stream. Test both the value AND the resulting stream sync
+// (each case ends with `mov bx,0x1234; hlt` — BX only lands if the earlier lengths were right).
+{ // MOV AX,[EDI+0x10] — mod=01 disp8, 32-bit base
+  const { cpu } = run([0x67, 0x8b, 0x47, 0x10, 0xbb, 0x34, 0x12, 0xf4],
+    ({ cpu, mc }) => { cpu.reg[7] = 0x2000; mc.mem.w16(0x200 * 16 + 0x2010, 0xbeef); });
+  eq('addr32 [EDI+disp8] value', cpu.reg[0] & 0xffff, 0xbeef);
+  eq('addr32 [EDI+disp8] stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
+{ // LEA AX,[EAX+EAX*4] — SIB scale=2 (x4), index=base=EAX; EAX=3 -> 15
+  const { cpu } = run([0x67, 0x8d, 0x04, 0x80, 0xbb, 0x34, 0x12, 0xf4], ({ cpu }) => { cpu.reg[0] = 3; });
+  eq('addr32 SIB LEA [EAX+EAX*4]', cpu.reg[0] & 0xffff, 15);
+  eq('addr32 SIB LEA stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
+{ // MOV AX,[ECX*4+disp32] — SIB with base=101 & mod=0 => no base, disp32 follows the SIB
+  const { cpu } = run([0x67, 0x8b, 0x04, 0x8d, 0x00, 0x20, 0x00, 0x00, 0xbb, 0x34, 0x12, 0xf4],
+    ({ cpu, mc }) => { cpu.reg[1] = 4; mc.mem.w16(0x200 * 16 + 0x2010, 0x5678); });
+  eq('addr32 SIB [ECX*4+disp32]', cpu.reg[0] & 0xffff, 0x5678);
+  eq('addr32 SIB disp32 stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
+{ // MOV AX,[EBX+ESI*2+4] — SIB with a real base, mod=01 disp8
+  const { cpu } = run([0x67, 0x8b, 0x44, 0x73, 0x04, 0xbb, 0x34, 0x12, 0xf4],
+    ({ cpu, mc }) => { cpu.reg[3] = 0x2000; cpu.reg[6] = 8; mc.mem.w16(0x200 * 16 + 0x2014, 0x9abc); });
+  eq('addr32 SIB [EBX+ESI*2+disp8]', cpu.reg[0] & 0xffff, 0x9abc);
+  eq('addr32 SIB base+index stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
+{ // MOV AX,[moffs32] — A1 takes a 4-byte displacement under 0x67, not 2
+  const { cpu } = run([0x67, 0xa1, 0x10, 0x20, 0x00, 0x00, 0xbb, 0x34, 0x12, 0xf4],
+    ({ mc }) => { mc.mem.w16(0x200 * 16 + 0x2010, 0xcafe); });
+  eq('addr32 moffs32 value', cpu.reg[0] & 0xffff, 0xcafe);
+  eq('addr32 moffs32 stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
+{ // [EBP] defaults to SS (like 16-bit [BP]) — SS=0x300 here, DS=0x200
+  const { cpu } = run([0x67, 0x8b, 0x45, 0x00, 0xbb, 0x34, 0x12, 0xf4],
+    ({ cpu, mc }) => { cpu.reg[5] = 0x40; mc.mem.w16(0x300 * 16 + 0x40, 0x0ff0); mc.mem.w16(0x200 * 16 + 0x40, 0xdead); });
+  eq('addr32 [EBP] defaults to SS', cpu.reg[0] & 0xffff, 0x0ff0); }
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
