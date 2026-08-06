@@ -161,7 +161,7 @@ boundaries re-JITs constantly; a single `runSlice` never completed). Tried and r
 | **Dune (Cryo)** | ~200 Hz timer-paced animation | works (A6) |
 | **God of Thunder** | ~140 Hz for the logo | works (A4) |
 | **Alley Cat** | polls the counter-0 live countdown (`IN 0x40`) for gameplay/entropy | works |
-| **Heaven** (NoooN 4K) | 1 kHz ISR **+ ~240 k 0x3DA polls/frame** for vsync | **derails** ~52.5 M cycles — but **NOT a timing-granularity bug**: it derails identically at *every* block size (1, 2, 4, 8, 16, 64, 192), all landing in 52.49–52.70 M. Cause still unknown; do **not** use it to justify D7 (see COMPAT.md) |
+| **Heaven** (NoooN 4K) | 1 kHz ISR **+ ~240 k 0x3DA polls/frame** for vsync | ✅ runs (`7e1e162`). Its old derail was **never a timing bug** — it was the missing `0x67` prefix (ROADMAP F3). Do **not** use Heaven to justify D7 |
 | **Moktar** `GAME.TDT` | `STI;HLT` between decryption passes | works via the HLT-wake path |
 | 0x3DA-polling intros (kaneda, difze, rv256, revitro) | measure the retrace | work, but their golden fingerprints **shift** whenever delivery timing changes → any timing change needs a per-intro dosdiff re-bless |
 

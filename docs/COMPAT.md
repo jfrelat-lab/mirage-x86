@@ -34,17 +34,16 @@ Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/vie
 | intro | result |
 |---|---|
 | **Helium** (ocsa, ASM'97) | ✅ **renders** — orange balloon + gem. A *finite* intro (plays ~48 ticks, restores mode 3, exits — not a hang). Needed the CRTC-Offset fix: it sets offset=32 (256-byte virtual line) where mode 13h defaults to 40 → `_renderGfx13` hardcoded a 320 stride and tore the picture. |
-| **Heaven** (NoooN, ASM'95) | ⚠️ **runs, then derails** at ~52.5 M cycles. **ROOT CAUSE FOUND (2026-08-04): the missing `0x67` address-size prefix** — see below. Not a timing bug (it derails identically at *every* block size 1…192; an earlier "MAXOPS=1 fixes it" claim was a measurement artifact — the detector only tested CS==0/0xffff and missed CS=1, which is the *same* linear 0x187). |
+| **Heaven** (NoooN, ASM'95) | ✅ **runs** — animated vortex/tunnel effect. Was derailing at ~52.5 M cycles; root cause was the missing **`0x67` address-size prefix**, implemented in `7e1e162` (ROADMAP F3, details below). Now past 70 M cycles with CS intact. ⚠️ Not verified frame-exact against DOSBox: `dosdiff` double-delivers INT 8 (it calls `tickTimer()` *and* leaves `timerAuto` on), and animated demos differ by phase anyway — use `render-com.js` for visual checks. |
 | **Mesha** (ASM'98), **Void 3** (MS'99), **Juggler 2001** (MS'01) | ❌ stuck in text mode 0x3 — never switch to graphics. Likely a DOS extender or a sound-card probe; not investigated. |
 
 Most *famous* 4Ks (Elevated, fr-08, cdak) are protected-mode/Windows → out of scope for the
 real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
 
-#### Engine gap found by the Heaven trace: the `0x67` address-size prefix is ignored
+#### Engine gap found by the Heaven trace: the `0x67` address-size prefix (FIXED, `7e1e162`)
 
-`recompiler.js` consumes `0x67` and then decodes the instruction with **16-bit** addressing
-(`else if (op === 0x67) { op = f8(); } // addr-size (16-bit only in v1)`). There is no 32-bit
-ModRM, no **SIB** byte, no disp32. On 386 code that uses 32-bit addressing the byte stream
+v1 consumed `0x67` and then decoded the instruction with **16-bit** addressing — no 32-bit ModRM,
+no **SIB** byte, no disp32. On 386 code that uses 32-bit addressing the byte stream
 **desynchronises**, and everything after it is garbage.
 
 Demonstrated with a planted 9-byte sequence `67 8D 04 80 | C1 E0 02 | 90 | F4`
@@ -57,9 +56,12 @@ makes that block write a bad word into the stack slot at `SS:0xE6B2` (traced: `0
 so the `RET` at `0100:12DE` returns to `0100:5F6D` — a field of zeros — which is executed as
 `ADD [BX+SI],AL` for thousands of bytes until an `FF /5` (`JMP FAR [BX-1]`) lands in the IVT.
 
-**Fix = implement the `0x67` prefix**: 32-bit effective addresses (ModRM mod/rm in 32-bit form,
-SIB scale/index/base, disp32, 32-bit base+index registers). Scoped to the `modrm()` decoder and
-the address-computation path. Likely helps other 386-era demos, not just Heaven.
+**Fixed** by implementing the prefix: 32-bit effective addresses (32-bit ModRM grid, SIB
+scale/index/base, disp32, 32-bit base+index, SS default for ESP/EBP bases, moffs32 for A0-A3),
+in `modrm()` + the address path. `test.js` has 11 targeted cases — each ends with
+`mov bx,0x1234; hlt` so it asserts the decoded **length**, not just the value (the 8088
+conformance vectors are 16-bit-only and cannot reach this class). Should help other 386-era
+demos, not just Heaven.
 
 ## Games (in `games/`, gitignored; mounted at C:\GAMES\ from `games/manifest.json`)
 
