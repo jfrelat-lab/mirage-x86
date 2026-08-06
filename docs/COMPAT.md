@@ -34,11 +34,32 @@ Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/vie
 | intro | result |
 |---|---|
 | **Helium** (ocsa, ASM'97) | ✅ **renders** — orange balloon + gem. A *finite* intro (plays ~48 ticks, restores mode 3, exits — not a hang). Needed the CRTC-Offset fix: it sets offset=32 (256-byte virtual line) where mode 13h defaults to 40 → `_renderGfx13` hardcoded a 320 stride and tore the picture. |
-| **Heaven** (NoooN, ASM'95) | ⚠️ **runs, then derails** at ~52.5 M cycles (control leaves CS=0x100 into garbage: CS=0/1/0xfc5f depending on run). The `0F 00` (group 6) crash is fixed. **Cause unknown.** Ruled out: block granularity (derails identically at *every* block size 1…192 — an earlier "MAXOPS=1 fixes it" claim was a **measurement artifact**: the derail detector only tested CS==0/0xffff and missed CS=1), IRQ-delivery latency, stale `cpu.cycles` at the 0x3DA read, SMC/stale code (fresh-decode derails at the identical cycle), RDTSC (never executed), the PIT rate cap. It self-single-steps under **TF** (25 856 INT 1) in an earlier decryption phase, then derails in TF=0 code. DOSBox-X renders it under **both** `core=normal` and `core=dynamic`. Next lead: this looks Lemmings-class (correct CPU, bad data set up earlier) rather than a timing bug. |
+| **Heaven** (NoooN, ASM'95) | ⚠️ **runs, then derails** at ~52.5 M cycles. **ROOT CAUSE FOUND (2026-08-04): the missing `0x67` address-size prefix** — see below. Not a timing bug (it derails identically at *every* block size 1…192; an earlier "MAXOPS=1 fixes it" claim was a measurement artifact — the detector only tested CS==0/0xffff and missed CS=1, which is the *same* linear 0x187). |
 | **Mesha** (ASM'98), **Void 3** (MS'99), **Juggler 2001** (MS'01) | ❌ stuck in text mode 0x3 — never switch to graphics. Likely a DOS extender or a sound-card probe; not investigated. |
 
 Most *famous* 4Ks (Elevated, fr-08, cdak) are protected-mode/Windows → out of scope for the
 real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
+
+#### Engine gap found by the Heaven trace: the `0x67` address-size prefix is ignored
+
+`recompiler.js` consumes `0x67` and then decodes the instruction with **16-bit** addressing
+(`else if (op === 0x67) { op = f8(); } // addr-size (16-bit only in v1)`). There is no 32-bit
+ModRM, no **SIB** byte, no disp32. On 386 code that uses 32-bit addressing the byte stream
+**desynchronises**, and everything after it is garbage.
+
+Demonstrated with a planted 9-byte sequence `67 8D 04 80 | C1 E0 02 | 90 | F4`
+(`LEA AX,[EAX+EAX*4]; SHL EAX,2; NOP; HLT` — 4 instructions): MIRAGE decoded **8 instructions
+across 20 bytes**, emitting `LEA AX,[SI]` for `8D 04` and then treating the SIB byte `80` as the
+next opcode.
+
+How it kills Heaven: its runtime-generated code at `0100:1206` is `67 8D 04 80 …`. The mis-decode
+makes that block write a bad word into the stack slot at `SS:0xE6B2` (traced: `0080 -> 5F6D`),
+so the `RET` at `0100:12DE` returns to `0100:5F6D` — a field of zeros — which is executed as
+`ADD [BX+SI],AL` for thousands of bytes until an `FF /5` (`JMP FAR [BX-1]`) lands in the IVT.
+
+**Fix = implement the `0x67` prefix**: 32-bit effective addresses (ModRM mod/rm in 32-bit form,
+SIB scale/index/base, disp32, 32-bit base+index registers). Scoped to the `modrm()` decoder and
+the address-computation path. Likely helps other 386-era demos, not just Heaven.
 
 ## Games (in `games/`, gitignored; mounted at C:\GAMES\ from `games/manifest.json`)
 
