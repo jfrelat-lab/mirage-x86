@@ -13,6 +13,7 @@
     "demos": "nasm -f bin demos/xormunch.asm -o demos/XORMUNCH.COM && nasm -f bin demos/plasma13.asm -o demos/PLASMA13.COM",
     "serve": "python3 tools/serve.py 8761",
     "test:dosapi": "node tools/test-dos-api.js",
-    "test:all": "node tools/test.js && node tools/test-dos-api.js && node tools/test-dos.js && node tools/test-gfx.js && node tools/test-demos.js && node tools/golden.js"
+    "test:all": "node tools/test.js && node tools/test-x86-uc.mjs && node tools/test-dos-api.js && node tools/test-dos.js && node tools/test-gfx.js && node tools/test-demos.js && node tools/golden.js",
+    "test:x86": "node tools/test-x86-uc.mjs"
   }
 }

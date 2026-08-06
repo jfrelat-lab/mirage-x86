@@ -1031,13 +1031,29 @@ export class Recompiler {
       // BSWAP r32 (0F C8+r): reverse the byte order of a 32-bit register (486+); flags untouched
       if (op2 >= 0xc8 && op2 <= 0xcf) { const r = op2 - 0xc8, b = NT(); P(`var ${b}=r[${r}]>>>0;r[${r}]=((${b}<<24)|((${b}&0xff00)<<8)|((${b}>>>8)&0xff00)|(${b}>>>24))>>>0;`); return; }
       // BTx Ev,Gv (reg bit offset) and group 0F BA Ev,imm8
+      // BT/BTS/BTR/BTC. For a REGISTER destination the bit offset is masked to the operand width.
+      // For MEMORY it is a **full signed bit-string index**: the byte accessed is base + (ofs>>3)
+      // and the bit is ofs&7, so an offset of 100 reaches the 12th byte and a negative one reaches
+      // backwards. Masking it (as this did) folded every access back into the first word — which is
+      // exactly wrong for the bitmap scans these instructions exist for (allocators, collision masks).
       const bt = (o, kind, bitExpr) => {
         const b = NT(), v = NT();
-        P(`var ${b}=(${bitExpr})&${sz - 1};var ${v}=${rmR(o, sz)};`);
+        if (o.isReg) {
+          P(`var ${b}=(${bitExpr})&${sz - 1};var ${v}=${rmR(o, sz)};`);
+          P(`cpu.flags=(cpu.flags&~${CF})|((${v}>>>${b})&1);`);
+          if (kind === 'bts') P(rmW(o, sz, `(${v}|(1<<${b}))`));
+          else if (kind === 'btr') P(rmW(o, sz, `(${v}&~(1<<${b}))`));
+          else if (kind === 'btc') P(rmW(o, sz, `(${v}^(1<<${b}))`));
+          return;
+        }
+        const base = memAddr(o), ofs = NT(), ad = NT();
+        P(`var ${ofs}=(${bitExpr})${sz === 16 ? '<<16>>16' : '|0'};`);      // signed bit index
+        P(`var ${ad}=(${base}+(${ofs}>>3))&${MM};`);                        // arithmetic shift: floors
+        P(`var ${b}=${ofs}&7;var ${v}=${memRead(ad, 8)};`);
         P(`cpu.flags=(cpu.flags&~${CF})|((${v}>>>${b})&1);`);
-        if (kind === 'bts') P(rmW(o, sz, `(${v}|(1<<${b}))`));
-        else if (kind === 'btr') P(rmW(o, sz, `(${v}&~(1<<${b}))`));
-        else if (kind === 'btc') P(rmW(o, sz, `(${v}^(1<<${b}))`));
+        if (kind === 'bts') P(memW(ad, 8, `(${v}|(1<<${b}))`));
+        else if (kind === 'btr') P(memW(ad, 8, `(${v}&~(1<<${b}))`));
+        else if (kind === 'btc') P(memW(ad, 8, `(${v}^(1<<${b}))`));
       };
       switch (op2) {
         case 0x00: {                                                                    // group 6: SLDT/STR/LLDT/LTR/VERR/VERW — no LDT/TR in real mode, so keep it benign
