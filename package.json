@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A pure-JavaScript MS-DOS machine with a source-level x86→JS dynamic recompiler.",
+  "description": "A pure-JavaScript MS-DOS machine with a source-level x86\u2192JS dynamic recompiler.",
   "scripts": {
     "test": "node tools/test.js",
     "test:dos": "node tools/test-dos.js",
@@ -11,6 +11,8 @@
     "test:demos": "node tools/test-demos.js",
     "conformance": "node tools/conformance.js",
     "demos": "nasm -f bin demos/xormunch.asm -o demos/XORMUNCH.COM && nasm -f bin demos/plasma13.asm -o demos/PLASMA13.COM",
-    "serve": "python3 tools/serve.py 8761"
+    "serve": "python3 tools/serve.py 8761",
+    "test:dosapi": "node tools/test-dos-api.js",
+    "test:all": "node tools/test.js && node tools/test-dos-api.js && node tools/test-dos.js && node tools/test-gfx.js && node tools/test-demos.js && node tools/golden.js"
   }
 }

@@ -41,7 +41,8 @@ sets up segments/stack, and jumps to the entry point. INT 21h services implement
 ```
 
 Files live in an in-memory `VFS` (`vfs.js`); `VFS.dosName()` maps to 8.3. No real disk, no
-network. There is **no EMS/XMS and no DPMI/protected mode** (raptor/jazz need DPMI).
+network. **XMS** is implemented (`xms.js`: INT 2Fh 4300/4310 + the far-call entry, alloc/free/lock/move);
+there is **no EMS and no DPMI/protected mode** (raptor/jazz need DPMI).
 
 ## Video
 

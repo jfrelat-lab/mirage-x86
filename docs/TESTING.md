@@ -8,7 +8,8 @@ optimization kill-switches (see [RECOMPILER.md](RECOMPILER.md)) both on and off.
 
 | Gate | Command | Checks | Bar |
 |---|---|---|---|
-| **Unit** | `node tools/test.js` | 72 hand-written cases: opcodes, flags, ALU/BCD, the EGA planar write pipeline, keyboard 8042/IRQ1, multi-instruction dead-flag cases | 72/72 |
+| **Unit** | `node tools/test.js` | 101 hand-written cases: opcodes, flags, ALU/BCD, the EGA planar write pipeline, keyboard 8042/IRQ1, multi-instruction dead-flag cases, 386 addressing (`0x67` ModRM/SIB), `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD), #DE aborting a block | 101/101 |
+| **DOS/BIOS services** | `node tools/test-dos-api.js` | 62 cases against the INT 21h / 10h / 16h / 1Ah / 2Fh surface: file handles, find-first/next, memory (4Ah→48h→49h), DTA, XMS, and the **CF-on-success convention** — the layer `conformance`/`golden` cannot see | 62/62 |
 | **Conformance** | `node tools/conformance.js` | 527,651 SingleStepTests vectors — per-instruction reg/flag/memory exactness | **100%**, non-negotiable |
 | **Golden** | `node tools/golden.js check` | deterministic output fingerprint of 20 demos (framebuffer + planes + DAC + fault) | 20/20 |
 | **Region fuzzer** | `node tools/fuzz-region.js 20000` | tier-2 region output == tier-1 (`stepOne`) on 20k random programs | `region == tier-1 on all` |

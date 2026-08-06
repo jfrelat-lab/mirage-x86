@@ -185,7 +185,7 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 
 1. **DPMI / protected mode** — none. The single biggest gap: blocks Raptor, Jazz, Doom-class
    (DOS4GW), and advanced 64K demos. Real-mode games/≤4K demos do NOT need it.
-2. **EMS/XMS** — none. Some games probe for it; most degrade. (Wolf3D WL6's PML wants memory.)
+2. **EMS** — none (XMS *is* implemented, see `xms.js`). Some games probe for EMS; most degrade.
 3. **Audio** — SB/OPL are detection stubs only (no synthesis). Silent, but detection passes.
 4. **Mode X / unchained VGA** — not implemented. No demo/game we currently have exercises it, but
    it's a genuine future need (Second Reality, some VGA action games). Would need a hand test.
