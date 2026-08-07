@@ -100,61 +100,80 @@ export function installDOS(machine, vfs) {
   // interpreter — see too little free memory and bail with "Not Enough Free Memory").
   const recomputeTop = () => { let t = dos.memFloor; for (const [s, p] of dos.allocs) t = Math.max(t, s + p); dos.allocTop = t; syncMCB(); };
 
+  // ---- MZ (.EXE) image handling, shared by all three loaders -----------------------------------
+  // loadEXE, the AH=4B EXEC'd child and the AH=4B AL=03 overlay each used to carry their own copy of
+  // this header parsing. They drifted: the e_maxalloc block-sizing fix (98c25f0) was only ever
+  // applied to loadEXE, so an EXEC'd child still got all of memory.
+  const isMZ = (b) => b.length >= 2 && b[0] === 0x4d && b[1] === 0x5a;
+  function parseMZ(bytes) {
+    const rd16 = (o) => bytes[o] | (bytes[o + 1] << 8);
+    const e_cblp = rd16(2), e_cp = rd16(4), e_crlc = rd16(6), e_cparhdr = rd16(8), e_lfarlc = rd16(0x18);
+    let imageBytes = e_cp * 512; if (e_cblp) imageBytes -= (512 - e_cblp);   // last page is partial
+    const relocs = [];
+    for (let i = 0; i < e_crlc; i++) relocs.push({ off: rd16(e_lfarlc + i * 4), seg: rd16(e_lfarlc + i * 4 + 2) });
+    return { code: bytes.subarray(e_cparhdr * 16, imageBytes), relocs,
+             minalloc: rd16(0x0a), maxalloc: rd16(0x0c),
+             ss: rd16(0x0e), sp: rd16(0x10), ip: rd16(0x14), cs: rd16(0x16) };
+  }
+  /** Fix up the relocation table. `addend` is the load segment for a normal load, but the caller's
+   *  own factor for an overlay (AH=4B AL=03), which relocates into a segment it already owns. */
+  function applyRelocs(relocs, loadSeg, addend) {
+    for (const r of relocs) {
+      const a = ((loadSeg + r.seg) << 4) + r.off;
+      mem.w16(a, (mem.r16(a) + addend) & 0xffff);
+    }
+  }
+  /** Entry register state for an MZ image loaded at `loadSeg` with PSP `psp`. */
+  function exeEntry(psp, loadSeg, h) {
+    cpu.reg.fill(0);
+    cpu.setSeg(DS, psp); cpu.setSeg(ES, psp);
+    cpu.setSeg(SS, (loadSeg + h.ss) & 0xffff); cpu.sp = h.sp;
+    cpu.setSeg(CS, (loadSeg + h.cs) & 0xffff); cpu.eip = h.ip;
+    cpu.ax = 0; cpu.dx = psp;
+  }
+  /** Entry register state for a .COM at `seg`. These exact values are DOSBox-documented and
+   *  sizecoding intros depend on them (CX=00FF, DI=FFFE, BP=091C). */
+  function comEntry(seg) {
+    cpu.reg.fill(0);
+    cpu.setSeg(CS, seg); cpu.setSeg(DS, seg); cpu.setSeg(ES, seg); cpu.setSeg(SS, seg);
+    cpu.eip = 0x100;
+    cpu.ax = 0; cpu.bx = 0; cpu.cx = 0x00ff; cpu.dx = seg;
+    cpu.si = 0x0100; cpu.di = 0xfffe; cpu.bp = 0x091c;
+    cpu.sp = 0xfffe; mem.w16((seg << 4) + 0xfffe, 0);   // RET → PSP:0 → INT 20h
+  }
+
   dos.loadCOM = function (bytes, tail, progPath) {
     prep(tail, progPath);
     const seg = PSP_SEG;
     mem.blit((seg << 4) + 0x100, bytes);
-    cpu.setSeg(CS, seg); cpu.setSeg(DS, seg); cpu.setSeg(ES, seg); cpu.setSeg(SS, seg);
-    cpu.reg.fill(0);
-    cpu.eip = 0x100;
-    // Match DOSBox's documented COM-entry register state — sizecoding intros rely on
-    // these exact values (e.g. CX=00FF, DI=FFFE) for their initial loops/effects.
-    cpu.ax = 0; cpu.bx = 0; cpu.cx = 0x00ff; cpu.dx = seg;
-    cpu.si = 0x0100; cpu.di = 0xfffe; cpu.bp = 0x091c;
-    cpu.sp = 0xfffe; mem.w16((seg << 4) + 0xfffe, 0); // RET → PSP:0 → INT 20h
+    comEntry(seg);
     dos.allocTop = MEM_TOP; syncMCB();
     cpu.halted = false;
   };
 
   dos.loadEXE = function (bytes, tail, progPath) {
     prep(tail, progPath);
-    const rd16 = (o) => bytes[o] | (bytes[o + 1] << 8);
-    const e_cblp = rd16(2), e_cp = rd16(4), e_crlc = rd16(6), e_cparhdr = rd16(8);
-    const e_minalloc = rd16(0x0a), e_maxalloc = rd16(0x0c);
-    const e_ss = rd16(0x0e), e_sp = rd16(0x10), e_ip = rd16(0x14), e_cs = rd16(0x16);
-    const e_lfarlc = rd16(0x18);
-    const headerBytes = e_cparhdr * 16;
-    let imageBytes = e_cp * 512; if (e_cblp) imageBytes -= (512 - e_cblp);
-    const code = bytes.subarray(headerBytes, imageBytes);
-
+    const h = parseMZ(bytes);
     const pspSeg = PSP_SEG, loadSeg = pspSeg + 0x10;
-    mem.blit(loadSeg << 4, code);
-    for (let i = 0; i < e_crlc; i++) {                 // apply relocations
-      const off = rd16(e_lfarlc + i * 4), seg = rd16(e_lfarlc + i * 4 + 2);
-      const a = ((loadSeg + seg) << 4) + off;
-      mem.w16(a, (mem.r16(a) + loadSeg) & 0xffff);
-    }
-    cpu.reg.fill(0);
-    cpu.setSeg(DS, pspSeg); cpu.setSeg(ES, pspSeg);
-    cpu.setSeg(SS, (loadSeg + e_ss) & 0xffff); cpu.sp = e_sp;
-    cpu.setSeg(CS, (loadSeg + e_cs) & 0xffff); cpu.eip = e_ip;
-    cpu.dx = pspSeg; cpu.ax = 0;
+    mem.blit(loadSeg << 4, h.code);
+    applyRelocs(h.relocs, loadSeg, loadSeg);
+    exeEntry(pspSeg, loadSeg, h);
     // Size the program's block from the MZ header: DOS gives it PSP + image + up to e_maxalloc
     // paragraphs (at least e_minalloc), capped at available memory, and leaves the rest FREE. Most
     // EXEs set e_maxalloc=0xFFFF (grab everything → allocTop=MEM_TOP, the old behaviour), but some
     // (Arctic Adventure) request a bounded block and then AH=48-allocate from the free memory above
     // — which failed when MIRAGE handed them all of RAM.
-    const imgPar = Math.ceil(code.length / 16);
+    const imgPar = Math.ceil(h.code.length / 16);
     const need = 0x10 + imgPar;                               // PSP + image, in paragraphs
-    const want = need + Math.max(e_minalloc, e_maxalloc);     // desired block (maxalloc is usually the ceiling)
-    dos.memFloor = Math.min(pspSeg + Math.max(want, need + e_minalloc), MEM_TOP);
+    const want = need + Math.max(h.minalloc, h.maxalloc);     // desired block (maxalloc is usually the ceiling)
+    dos.memFloor = Math.min(pspSeg + Math.max(want, need + h.minalloc), MEM_TOP);
     dos.allocTop = dos.memFloor; syncMCB();
     cpu.halted = false;
   };
 
   /** Detect format and load. bytes: Uint8Array, tail: command-line string. */
   dos.load = function (bytes, tail, progPath) {
-    if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) dos.loadEXE(bytes, tail, progPath);
+    if (isMZ(bytes)) dos.loadEXE(bytes, tail, progPath);
     else dos.loadCOM(bytes, tail, progPath);
   };
 
@@ -189,28 +208,15 @@ export function installDOS(machine, vfs) {
     mem.w16((childPsp << 4) + 0x2c, envSeg);              // environment segment
     dos.psp = childPsp; dos.exitCode = 0;
 
-    if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) {   // MZ-EXE child
-      const rd16 = (o) => bytes[o] | (bytes[o + 1] << 8);
-      const e_cblp = rd16(2), e_cp = rd16(4), e_crlc = rd16(6), e_cparhdr = rd16(8);
-      const e_ss = rd16(0x0e), e_sp = rd16(0x10), e_ip = rd16(0x14), e_cs = rd16(0x16), e_lfarlc = rd16(0x18);
-      let imageBytes = e_cp * 512; if (e_cblp) imageBytes -= (512 - e_cblp);
-      const code = bytes.subarray(e_cparhdr * 16, imageBytes);
-      const loadSeg = childPsp + 0x10;
-      mem.blit(loadSeg << 4, code);
-      for (let i = 0; i < e_crlc; i++) { const a = ((loadSeg + rd16(e_lfarlc + i * 4 + 2)) << 4) + rd16(e_lfarlc + i * 4); mem.w16(a, (mem.r16(a) + loadSeg) & 0xffff); }
-      cpu.reg.fill(0);
-      cpu.setSeg(DS, childPsp); cpu.setSeg(ES, childPsp);
-      cpu.setSeg(SS, (loadSeg + e_ss) & 0xffff); cpu.sp = e_sp;
-      cpu.setSeg(CS, (loadSeg + e_cs) & 0xffff); cpu.eip = e_ip;
-      cpu.ax = 0; cpu.bx = childPsp; cpu.dx = childPsp;
+    if (isMZ(bytes)) {                                    // MZ-EXE child
+      const h = parseMZ(bytes), loadSeg = childPsp + 0x10;
+      mem.blit(loadSeg << 4, h.code);
+      applyRelocs(h.relocs, loadSeg, loadSeg);
+      exeEntry(childPsp, loadSeg, h);
+      cpu.bx = childPsp;
     } else {                                              // .COM child (GAME.TDT is one: JMP entry, no MZ)
       mem.blit((childPsp << 4) + 0x100, bytes);
-      cpu.reg.fill(0);
-      cpu.setSeg(CS, childPsp); cpu.setSeg(DS, childPsp); cpu.setSeg(ES, childPsp); cpu.setSeg(SS, childPsp);
-      cpu.eip = 0x100;
-      cpu.ax = 0; cpu.bx = 0; cpu.cx = 0x00ff; cpu.dx = childPsp;
-      cpu.si = 0x0100; cpu.di = 0xfffe; cpu.bp = 0x091c;
-      cpu.sp = 0xfffe; mem.w16((childPsp << 4) + 0xfffe, 0);
+      comEntry(childPsp);
     }
     cpu.flags = 0x0202;                                   // standard entry flags (IF set)
     dos.allocTop = MEM_TOP;                               // the child owns the rest of memory
@@ -226,12 +232,10 @@ export function installDOS(machine, vfs) {
     const bytes = vfs.readFile(path) || vfs.readFile('\\' + path);
     if (!bytes) return 2;
     const loadSeg = mem.r16(pbLin), relocFactor = mem.r16(pbLin + 2);
-    if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) {   // MZ-EXE overlay
-      const rd16 = (o) => bytes[o] | (bytes[o + 1] << 8);
-      const e_cblp = rd16(2), e_cp = rd16(4), e_crlc = rd16(6), e_cparhdr = rd16(8), e_lfarlc = rd16(0x18);
-      let imageBytes = e_cp * 512; if (e_cblp) imageBytes -= (512 - e_cblp);
-      mem.blit(loadSeg << 4, bytes.subarray(e_cparhdr * 16, imageBytes));
-      for (let i = 0; i < e_crlc; i++) { const a = ((loadSeg + rd16(e_lfarlc + i * 4 + 2)) << 4) + rd16(e_lfarlc + i * 4); mem.w16(a, (mem.r16(a) + relocFactor) & 0xffff); }
+    if (isMZ(bytes)) {                                                  // MZ-EXE overlay
+      const h = parseMZ(bytes);
+      mem.blit(loadSeg << 4, h.code);
+      applyRelocs(h.relocs, loadSeg, relocFactor);   // an overlay relocates by the CALLER's factor
     } else {
       mem.blit(loadSeg << 4, bytes);                                    // raw / .COM overlay
     }
