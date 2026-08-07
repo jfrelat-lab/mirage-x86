@@ -110,7 +110,7 @@ les 4 write modes, l'ordre rotate → set/reset → ALU → bitmask, les latches
 | 7 | **INT 10h `AH=0Ch/0Dh`** + **`AH=10h AL=17h`** (lecture DAC) | `bios.js:265,217` | ~25 l. |
 | 8 | **Blink/intensité texte** : cesser de masquer le bit 7 | `video.js:94` | ~5 l. |
 | 9 | **Curseur : masquer + forme** (AH=01, CRTC 0x0A/0x0B) | `bios.js:172`, `video.js:104` | ~10 l. |
-| 10 | **INT 21h `39/3A/3B`** (mkdir/rmdir/chdir) — le VFS a déjà tout | `dos.js` | ~5 l. |
+| 10 | ✅ **INT 21h `39/3A/3B`** (mkdir/rmdir/chdir) + `vfs.rmdir()` (il manquait) ; corrige aussi `RD` du shell | `dos.js`, `vfs.js`, `shell.js` | fait |
 | 11 | **Réinitialiser `vga.crtc` au changement de mode** | `vga.js:30` | ~5 l. |
 | 12 | **Read mode 1** (colour compare) | `vga.js:70` | ~8 l. |
 | 13 | ✅ **XMS : `copyWithin` + bornage (0Bh), rejet du realloc chevauchant (0Fh), check SMC** (`mem.move()`) | `xms.js`, `memory.js` | fait |

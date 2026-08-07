@@ -172,7 +172,9 @@ Shell.prototype.builtins = {
   RENAME(rest) { this.builtins.REN.call(this, rest); },
   MD(rest) { if (!this.vfs.mkdir(rest)) this.print('Cannot create directory\r\n'); },
   MKDIR(rest) { this.builtins.MD.call(this, rest); },
-  RD(rest) { if (!this.vfs.unlink(rest)) this.print('Cannot remove directory\r\n'); },
+  // RD called unlink(), which refuses anything that isn't a file — so it could never actually remove
+  // a directory, only print the failure. There was no rmdir primitive to call until now.
+  RD(rest) { if (!this.vfs.rmdir(rest)) this.print('Cannot remove directory\r\n'); },
   RMDIR(rest) { this.builtins.RD.call(this, rest); },
   SET() { this.print('PATH=C:\\\r\nCOMSPEC=C:\\COMMAND.COM\r\nPROMPT=$p$g\r\n'); },
   PATH() { this.print('PATH=C:\\\r\n'); },

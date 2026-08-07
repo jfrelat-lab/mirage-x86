@@ -332,6 +332,46 @@ function asciiz(mc, cpu, off, str) {
   eq('mode set clears the display start', mc.vga.startAddr(), 0);
 }
 
+// ---------------------------------------------------------------- directories (39/3A/3B/47)
+// These fell through to the "invalid function" arm even though the VFS has always been able to do
+// them — the shell's own MD and CD call straight into it. A program creating its SAVES\ directory on
+// first run, or chdir-ing before an EXEC, was simply told no.
+{
+  const c = mk({ '\\DATA\\F.TXT': 'x' });
+  const at = (off, s) => asciiz(c.mc, c.cpu, off, s);
+
+  eq('39h mkdir succeeds', int21(c, 0x39, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\SAVES'); }).cf, 0);
+  ok('39h actually created the directory', c.vfs.isDir('C:\\SAVES'));
+  const again = int21(c, 0x39, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\SAVES'); });
+  eq('39h on an existing name sets CF', again.cf, CF);
+  eq('39h on an existing name reports "access denied"', again.ax, 5);
+  eq('39h under a missing parent reports "path not found"',
+     int21(c, 0x39, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\NOPE\\SUB'); }).ax, 3);
+
+  eq('3Bh chdir succeeds', int21(c, 0x3b, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\SAVES'); }).cf, 0);
+  const cwd = int21(c, 0x47, (cpu) => { cpu.reg[6] = 0x280; });   // SI = buffer; no drive, no leading \
+  eq('47h clears CF', cwd.cf, 0);
+  eq('3Bh moved the current directory (47h agrees)',
+     String.fromCharCode(...c.mc.mem.readStr((c.cpu.seg[3] << 4) + 0x280, 0)), 'SAVES');
+  eq('3Bh into a missing directory reports "path not found"',
+     int21(c, 0x3b, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\GONE'); }).ax, 3);
+
+  // rmdir refuses the directory you are standing in — DOS error 16, and letting it through would
+  // leave the cwd pointing at a node detached from the tree.
+  eq('3Ah refuses to remove the current directory',
+     int21(c, 0x3a, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\SAVES'); }).ax, 16);
+  int21(c, 0x3b, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\'); });   // back to the root
+  eq('3Ah refuses a non-empty directory',
+     int21(c, 0x3a, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\DATA'); }).ax, 5);
+  eq('3Ah on a missing directory reports "path not found"',
+     int21(c, 0x3a, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\GONE'); }).ax, 3);
+  eq('3Ah on a file, not a directory, fails',
+     int21(c, 0x3a, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\DATA\\F.TXT'); }).ax, 3);
+  eq('3Ah removes an empty directory',
+     int21(c, 0x3a, (cpu) => { cpu.reg[2] = at(0x200, 'C:\\SAVES'); }).cf, 0);
+  ok('3Ah actually removed it', !c.vfs.exists('C:\\SAVES'));
+}
+
 // ---------------------------------------------------------------- XMS
 {
   const { mc, cpu } = mk();

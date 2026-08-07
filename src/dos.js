@@ -311,6 +311,23 @@ export function installDOS(machine, vfs) {
       case 0x33: cpu.dx = 0; break;                                  // ctrl-break state
       case 0x35: { const v = machine.getVector(cpu.al); cpu.setSeg(ES, v.seg); cpu.bx = v.off; break; } // get vector
       case 0x36: { cpu.ax = 4; cpu.bx = 0x4000; cpu.cx = 512; cpu.dx = 0xffff; break; } // free space
+      // Directory operations. The VFS has done this all along — the shell's own MD and CD call
+      // straight into it — but a *program* got "invalid function" from the default arm, so an
+      // installer or a game creating its SAVES\ directory on first run was told no.
+      case 0x39: {                                                   // mkdir: DS:DX = ASCIIZ path
+        const p = asciiz(cpu.base[DS] + (cpu.dx & 0xffff));
+        if (vfs.exists(p)) { err(5); break; }                        // 5: access denied — already there
+        vfs.mkdir(p) ? ok() : err(3); break;                         // 3: path not found (bad parent)
+      }
+      case 0x3a: {                                                   // rmdir: DS:DX = ASCIIZ path
+        const p = asciiz(cpu.base[DS] + (cpu.dx & 0xffff));
+        const kids = vfs.isDir(p) ? vfs.list(p) : null;
+        if (!kids) { err(3); break; }                                // 3: no such directory
+        if (kids.length) { err(5); break; }                          // 5: access denied — not empty
+        vfs.rmdir(p) ? ok() : err(16);                               // 16: that's the current directory
+        break;
+      }
+      case 0x3b: vfs.chdir(asciiz(cpu.base[DS] + (cpu.dx & 0xffff))) ? ok() : err(3); break;   // chdir
       case 0x3c: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: true, truncate: true }); fd < 0 ? err(3) : (cpu.ax = fd, ok()); break; }
       case 0x3d: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: false }); fd < 0 ? err(2) : (cpu.ax = fd, ok()); break; }
       case 0x3e: vfs.close(cpu.bx) ? ok() : err(6); break;            // close

@@ -72,6 +72,17 @@ export class VFS {
     return true;
   }
 
+  /** Remove an empty directory. Refuses the current directory and any ancestor of it — DOS reports
+   *  error 16 for that, and letting it through would leave `cwd` pointing at a detached node. */
+  rmdir(path) {
+    const { parent, name, node } = this.resolve(path);
+    if (!parent || !node || node.type !== 'dir' || node.children.size) return false;
+    const parts = this._split(path);                  // cwd is a component list: the target is an
+    if (parts.every((seg, i) => this.cwd[i] === seg)) return false;   // ancestor iff it prefixes it
+    parent.children.delete(name);
+    return true;
+  }
+
   // ---- raw file access (used by host ingestion + shell) -------------------
   readFile(path) { const n = this.resolve(path).node; return n && n.type === 'file' ? n.data : null; }
 
