@@ -123,6 +123,15 @@ export function installDOS(machine, vfs) {
       mem.w16(a, (mem.r16(a) + addend) & 0xffff);
     }
   }
+  /** Size a program's memory block from its MZ header: DOS gives it PSP + image + up to maxalloc
+   *  paragraphs (at least minalloc), capped at available memory, and leaves the rest FREE. Most EXEs
+   *  set maxalloc=0xFFFF (grab everything), but some — Arctic Adventure — ask for a bounded block and
+   *  then AH=48-allocate from the free memory above, which fails if we hand them all of RAM. */
+  function sizeBlock(pspSeg, h) {
+    const need = 0x10 + Math.ceil(h.code.length / 16);        // PSP + image, in paragraphs
+    const want = need + Math.max(h.minalloc, h.maxalloc);
+    return Math.min(pspSeg + Math.max(want, need + h.minalloc), MEM_TOP);
+  }
   /** Entry register state for an MZ image loaded at `loadSeg` with PSP `psp`. */
   function exeEntry(psp, loadSeg, h) {
     cpu.reg.fill(0);
@@ -158,15 +167,7 @@ export function installDOS(machine, vfs) {
     mem.blit(loadSeg << 4, h.code);
     applyRelocs(h.relocs, loadSeg, loadSeg);
     exeEntry(pspSeg, loadSeg, h);
-    // Size the program's block from the MZ header: DOS gives it PSP + image + up to e_maxalloc
-    // paragraphs (at least e_minalloc), capped at available memory, and leaves the rest FREE. Most
-    // EXEs set e_maxalloc=0xFFFF (grab everything → allocTop=MEM_TOP, the old behaviour), but some
-    // (Arctic Adventure) request a bounded block and then AH=48-allocate from the free memory above
-    // — which failed when MIRAGE handed them all of RAM.
-    const imgPar = Math.ceil(h.code.length / 16);
-    const need = 0x10 + imgPar;                               // PSP + image, in paragraphs
-    const want = need + Math.max(h.minalloc, h.maxalloc);     // desired block (maxalloc is usually the ceiling)
-    dos.memFloor = Math.min(pspSeg + Math.max(want, need + h.minalloc), MEM_TOP);
+    dos.memFloor = sizeBlock(pspSeg, h);
     dos.allocTop = dos.memFloor; syncMCB();
     cpu.halted = false;
   };
@@ -208,18 +209,23 @@ export function installDOS(machine, vfs) {
     mem.w16((childPsp << 4) + 0x2c, envSeg);              // environment segment
     dos.psp = childPsp; dos.exitCode = 0;
 
+    let childTop = MEM_TOP;                               // a .COM child owns the rest of memory
     if (isMZ(bytes)) {                                    // MZ-EXE child
       const h = parseMZ(bytes), loadSeg = childPsp + 0x10;
       mem.blit(loadSeg << 4, h.code);
       applyRelocs(h.relocs, loadSeg, loadSeg);
       exeEntry(childPsp, loadSeg, h);
       cpu.bx = childPsp;
+      childTop = sizeBlock(childPsp, h);            // size the child's block from its own header too
     } else {                                              // .COM child (GAME.TDT is one: JMP entry, no MZ)
       mem.blit((childPsp << 4) + 0x100, bytes);
       comEntry(childPsp);
     }
     cpu.flags = 0x0202;                                   // standard entry flags (IF set)
-    dos.allocTop = MEM_TOP;                               // the child owns the rest of memory
+    // The child's block is sized by its own MZ header, exactly like the parent's — this half of the
+    // e_maxalloc fix (98c25f0) never made it into the EXEC path while the parser was duplicated.
+    // A .COM child still owns everything, which is what DOS does.
+    dos.memFloor = childTop; dos.allocTop = childTop;
     cpu.halted = false;
     return 0;                                             // success — cpu now points at the child
   }

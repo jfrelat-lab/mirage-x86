@@ -168,6 +168,27 @@ function asciiz(mc, cpu, off, str) {
   eq('48h over-large alloc reports "insufficient memory"', r.ax, 8);
 }
 
+{ // an EXEC'd child's block is sized from its OWN header, like the parent's. While the MZ parser
+  // was duplicated this half of the e_maxalloc fix never reached the EXEC path, so a child that
+  // asked for a bounded block was handed all of memory and its own AH=48h then had nowhere to go.
+  const c = mk();
+  int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });   // parent shrinks, as a stub loader does
+  // minimal MZ: 1 page, header 1 para, no relocs, minalloc=0, maxalloc=0x10 (a bounded request)
+  const mz = new Uint8Array(48);
+  const w = (o, v) => { mz[o] = v & 0xff; mz[o + 1] = v >> 8; };
+  mz[0] = 0x4d; mz[1] = 0x5a; w(2, 48 % 512); w(4, 1); w(6, 0); w(8, 1);
+  w(0x0a, 0); w(0x0c, 0x10); w(0x0e, 0); w(0x10, 0x100); w(0x14, 0); w(0x16, 0); w(0x18, 0x1c);
+  mz[16] = 0xcd; mz[17] = 0x20;                       // the image itself: int 20h
+  c.vfs.addFile('\\CHILD.EXE', mz);
+  const nameOff = asciiz(c.mc, c.cpu, 0x200, 'C:\\CHILD.EXE');
+  const pb = 0x280; for (let i = 0; i < 14; i++) c.mc.mem.w8((c.cpu.seg[3] << 4) + pb + i, 0);
+  const r = int21(c, 0x4b, (cpu) => { cpu.al = 0; cpu.reg[2] = nameOff; cpu.setSeg(0, cpu.seg[3]); cpu.reg[3] = pb; });
+  eq('4Bh EXEC succeeds', r.cf, 0);
+  // parent PSP 0x100 + 0x200 shrunk paragraphs = child PSP 0x300; block = PSP(0x10) + 32-byte image(2)
+  // + maxalloc(0x10) = 0x22 paragraphs. Before this, the child was handed everything up to 0xa000.
+  eq('EXEC child block is header-sized, not all of memory', c.dos.allocTop, 0x322);
+}
+
 // ---------------------------------------------------------------- DTA get/set round-trip
 {
   const c = mk();
