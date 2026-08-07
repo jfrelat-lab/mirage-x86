@@ -17,3 +17,6 @@ intros/
 
 # local (gitignored) DOS games for browser testing — not redistributed
 games/
+
+# boot-sector images fetched for local testing (not redistributed)
+boot/

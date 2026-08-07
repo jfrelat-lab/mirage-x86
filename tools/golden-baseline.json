@@ -20,7 +20,7 @@
     "fault": null
   },
   "intros/256b.com": {
-    "hash": "9b1806722b3b95e9301af695877026c6bd3910f1",
+    "hash": "f1a627e7ba05f27ea65074ec172fe1fa16468eab",
     "mode": 19,
     "fault": null
   },
@@ -50,7 +50,7 @@
     "fault": null
   },
   "intros/intro.com": {
-    "hash": "70cacba8383b3c43844db6782a941c15050831b3",
+    "hash": "13c4b776ad9062a48e01fb18a0c81a21e0bb40d7",
     "mode": 19,
     "fault": null
   },
@@ -85,7 +85,7 @@
     "fault": null
   },
   "intros/revitro.com": {
-    "hash": "def761b64fd90c2994923e6aa662e0cd00a3b66d",
+    "hash": "419fabb40304b398c070ea582357351e6a2c3141",
     "mode": 19,
     "fault": null
   },
@@ -101,6 +101,11 @@
   },
   "intros/upup.com": {
     "hash": "812978902c772cbe2a1dcc3e338f4cb8568f7ec6",
+    "mode": 19,
+    "fault": null
+  },
+  "boot/BOOTCHESS.IMG": {
+    "hash": "fa3da5a932b09237af1fa21f10e74f2243e701b5",
     "mode": 19,
     "fault": null
   }

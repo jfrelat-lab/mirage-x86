@@ -11,6 +11,12 @@
 // Math.random/Date), the same code path yields the same hash — so any behavioural drift
 // (a wrongly-stripped flag, an FPU stack skew, a bad inlined store) flips the digest.
 //
+// The harness must be configured like the real player: it now loads the ROM fonts, as video.js does
+// in the browser. Without them, BIOS character output in a graphics mode drew blank glyphs, so three
+// intros (256b, intro, revitro) were pinned rendering a BLACK SCREEN — and scored 98-99% against
+// DOSBox precisely because those reference frames are mostly black. A gate can only see what the
+// harness lets it see.
+//
 // This is the ONLY gate that catches multi-instruction dead-flag bugs: the SST conformance
 // harness is single-instruction and never strips, so it is blind to them. Run it with each
 // optimisation's kill-switch both ON and OFF — both must match the pre-change baseline.
@@ -23,6 +29,7 @@ import { Machine } from '../src/machine.js';
 import { installBIOS } from '../src/bios.js';
 import { installDOS } from '../src/dos.js';
 import { VFS } from '../src/vfs.js';
+import { bootSector } from '../src/boot.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -36,17 +43,31 @@ const WORKLOADS = [
   ...['256b', '256bytef', 'above', 'chaosequ', 'difze', 'intoanew', 'intro', 'intro256',
       'kaneda', 'lattice', 'memories', 'oktaeder', 'puls', 'revitro', 'rv256', 'tube', 'upup']
     .map((n) => [`intros/${n}.com`]),
+  // Boot-sector workloads run through the INT 19h handoff with no DOS installed at all. Pinning one
+  // here is what keeps that second entry point from silently rotting: nothing else exercises it.
+  ['boot/BOOTCHESS.IMG', { boot: true }],
 ];
 
-function fingerprint(relPath) {
+function fingerprint(relPath, opts = {}) {
   const abs = join(ROOT, relPath);
   if (!existsSync(abs)) return null;
   const mc = new Machine({ memSize: 1 << 20 });
   installBIOS(mc);
-  const dos = installDOS(mc, new VFS());
   let fault = null; mc.onError = (e) => { fault = e; };
-  dos.load(new Uint8Array(readFileSync(abs)), '', 'C:\\PROG');
-  for (let t = 0; t < TICKS && !fault && !dos.programDone; t++) { mc.runSlice(BUDGET); }  // run loop owns the PIT timer now
+  // Load the ROM fonts exactly like the browser (video.js) does. Without them a program that prints
+  // through the BIOS in a graphics mode gets blank glyphs, so the gate would be fingerprinting a
+  // screen the real player never sees — 256b.com prints its whole scroller that way.
+  for (const [prop, f] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
+    try { mc[prop] = new Uint8Array(readFileSync(join(ROOT, 'assets', f))); } catch {}
+  }
+  let dos = null;
+  if (opts.boot) {
+    bootSector(mc, new Uint8Array(readFileSync(abs)));
+  } else {
+    dos = installDOS(mc, new VFS());
+    dos.load(new Uint8Array(readFileSync(abs)), '', 'C:\\PROG');
+  }
+  for (let t = 0; t < TICKS && !fault && !(dos && dos.programDone); t++) { mc.runSlice(BUDGET); }  // run loop owns the PIT timer now
   const h = createHash('sha1');
   const meta = Buffer.alloc(8);
   meta[0] = mc.mem.r8(0x449);                     // video mode
@@ -73,8 +94,8 @@ const only = process.argv[3];
 
 if (mode === 'capture') {
   const out = {};
-  for (const [rel] of WORKLOADS) {
-    const fp = fingerprint(rel);
+  for (const [rel, opts] of WORKLOADS) {
+    const fp = fingerprint(rel, opts);
     if (fp) { out[rel] = fp; console.log(`  ${rel}: ${fp.hash.slice(0, 12)} mode=0x${fp.mode.toString(16)}${fp.fault ? ' FAULT:' + fp.fault : ''}`); }
     else console.log(`  ${rel}: (absent — skipped)`);
   }
@@ -84,10 +105,10 @@ if (mode === 'capture') {
   if (!existsSync(BASELINE)) { console.error('no baseline — run: node tools/golden.js capture'); process.exit(2); }
   const base = JSON.parse(readFileSync(BASELINE, 'utf8'));
   let fail = 0, ok = 0, skip = 0;
-  for (const [rel] of WORKLOADS) {
+  for (const [rel, opts] of WORKLOADS) {
     if (only && !rel.includes(only)) continue;
     const want = base[rel];
-    const fp = fingerprint(rel);
+    const fp = fingerprint(rel, opts);
     if (!fp) { if (want) { console.log(`  MISSING ${rel} (in baseline, absent here)`); } skip++; continue; }
     if (!want) { console.log(`  NEW     ${rel}: ${fp.hash.slice(0, 12)} (not in baseline)`); continue; }
     if (fp.hash === want.hash) { ok++; }

@@ -120,9 +120,32 @@ export function installBIOS(machine) {
     for (let y = 200 - 8; y < 200; y++) { const d = gfxRowBase(y); for (let b = 0; b < 80; b++) mem.u8[d + b] = 0; }
   }
 
+  // Mode 13h is 320×200 linear at A000, so an 8×8 cell gives 40×25. BIOS character output used to
+  // treat only CGA 4/5/6 as graphics: in 13h it wrote character+attribute words into the B800 *text*
+  // buffer, which mode 13h does not display — the program printed happily into a screen nobody was
+  // showing, with no error. (Planar EGA/VGA 0Dh–12h still take that wrong path; they need the plane
+  // pipeline, and no program we run prints through the BIOS in those modes yet.)
+  function drawGlyph13(ch, col, row, color) {
+    // No font loaded → we cannot draw anything, and painting the cell background would *erase*
+    // whatever the program had already put there. Leaving the framebuffer alone is the lesser wrong.
+    if (!machine.font8x8 && !machine.font) return;
+    const x0 = col * 8, y0 = row * 8, fg = color & 0xff;
+    for (let gy = 0; gy < 8; gy++) {
+      const y = y0 + gy; if (y >= 200) break;
+      const bits = glyph8(ch, gy), base = 0xa0000 + y * 320 + x0;
+      for (let gx = 0; gx < 8 && x0 + gx < 320; gx++) mem.w8(base + gx, (bits & (0x80 >> gx)) ? fg : 0);
+    }
+  }
+  function scrollGfx13() {
+    const A = 0xa0000;
+    mem.u8.copyWithin(A, A + 8 * 320, A + 200 * 320);
+    mem.u8.fill(0, A + (200 - 8) * 320, A + 200 * 320);
+  }
+
   function teletype(ch, attr = bios.attr) {
-    const gfx = bios.mode === 4 || bios.mode === 5 || bios.mode === 6;
-    const cols = gfx ? (bios.mode === 6 ? 80 : 40) : COLS;
+    const cga = bios.mode === 4 || bios.mode === 5 || bios.mode === 6;
+    const m13 = bios.mode === 0x13, gfx = cga || m13;
+    const cols = m13 ? 40 : cga ? (bios.mode === 6 ? 80 : 40) : COLS;
     let col = getCol(), row = getRow();
     if (ch === 0x0d) col = 0;
     else if (ch === 0x0a) row++;
@@ -130,12 +153,13 @@ export function installBIOS(machine) {
     else if (ch === 0x07) { /* bell */ }
     else if (ch === 0x09) { col = (col + 8) & ~7; }
     else {
-      if (gfx) drawGlyphCGA(ch, col, row, attr);
+      if (m13) drawGlyph13(ch, col, row, attr);
+      else if (cga) drawGlyphCGA(ch, col, row, attr);
       else mem.w16(VRAM + (row * COLS + col) * 2, (ch & 0xff) | (attr << 8));
       col++;
     }
     if (col >= cols) { col = 0; row++; }
-    if (row >= ROWS) { if (gfx) scrollGfxCGA(); else scroll(attr); row = ROWS - 1; }
+    if (row >= ROWS) { if (m13) scrollGfx13(); else if (cga) scrollGfxCGA(); else scroll(attr); row = ROWS - 1; }
     setCur(col, row);
   }
   bios.teletype = teletype;
@@ -191,17 +215,20 @@ export function installBIOS(machine) {
         break;
       }
       case 0x08: cpu.ax = mem.r16(VRAM + (getRow() * COLS + getCol()) * 2); break; // read char/attr
-      case 0x09: {                               // write char+attr (no advance)
-        const c = cpu.al, at = cpu.bx & 0xff, n = cpu.cx & 0xffff;
-        let off = (getRow() * COLS + getCol());
-        for (let i = 0; i < n; i++) mem.w16(VRAM + (off + i) * 2, c | (at << 8));
-        bios.attr = at;
-        break;
-      }
-      case 0x0a: {                               // write char only
-        const c = cpu.al, n = cpu.cx & 0xffff;
-        let off = (getRow() * COLS + getCol());
-        for (let i = 0; i < n; i++) mem.w8(VRAM + (off + i) * 2, c);
+      // In a graphics mode these repeat the glyph across the row instead of writing text words into
+      // a buffer the mode does not display — the same defect the teletype path had.
+      case 0x09: case 0x0a: {                    // write char (+attr for 09), no cursor advance
+        const c = cpu.al, at = cpu.bx & 0xff, n = cpu.cx & 0xffff, row = getRow(), col = getCol();
+        if (bios.mode === 0x13) { for (let i = 0; i < n && col + i < 40; i++) drawGlyph13(c, col + i, row, at); }
+        else if (bios.mode >= 4 && bios.mode <= 6) { for (let i = 0; i < n; i++) drawGlyphCGA(c, col + i, row, at); }
+        else {
+          const off = row * COLS + col;
+          for (let i = 0; i < n; i++) {
+            if (ah === 0x09) mem.w16(VRAM + (off + i) * 2, c | (at << 8));
+            else mem.w8(VRAM + (off + i) * 2, c);
+          }
+        }
+        if (ah === 0x09) bios.attr = at;
         break;
       }
       case 0x0b: {                               // set CGA palette (BH=1) / background+border (BH=0)
@@ -211,7 +238,7 @@ export function installBIOS(machine) {
         break;
       }
       case 0x0e:                                 // teletype (BL = foreground colour in graphics modes)
-        teletype(cpu.al, (bios.mode >= 4 && bios.mode <= 6) ? (cpu.bx & 0xff) : bios.attr);
+        teletype(cpu.al, ((bios.mode >= 4 && bios.mode <= 6) || bios.mode === 0x13) ? (cpu.bx & 0xff) : bios.attr);
         break;
       case 0x0f: cpu.ax = (COLS << 8) | bios.mode; cpu.bx = (mem.r16(BDA + 0x62) << 8) & 0xff00; break; // get mode
       case 0x10:                                 // palette / DAC

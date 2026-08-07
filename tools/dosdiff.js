@@ -44,7 +44,14 @@ function dosboxCapture() {
 
 function mirageCapture() {
   const mc = new Machine({ memSize: 1 << 20 });
-  installBIOS(mc); const dos = installDOS(mc, new VFS());
+  installBIOS(mc);
+  // Same ROM fonts the browser loads: a program that prints through the BIOS in a graphics mode
+  // renders glyphs, and comparing a fontless MIRAGE against a real DOSBox would be comparing a
+  // screen we never show a player.
+  for (const [prop, f] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
+    try { mc[prop] = new Uint8Array(readFileSync(join(HERE, '..', 'assets', f))); } catch {}
+  }
+  const dos = installDOS(mc, new VFS());
   let fault = null; mc.onError = (e) => { fault = e; };
   dos.load(new Uint8Array(readFileSync(prog)), '', 'C:\\PROG');
   for (let t = 0; t < K && !fault && !dos.programDone; t++) { mc.runSlice(1_500_000); mc.tickTimer(); }

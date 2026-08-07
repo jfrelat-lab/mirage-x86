@@ -18,6 +18,7 @@ import { Machine } from '../src/machine.js';
 import { installBIOS } from '../src/bios.js';
 import { installDOS } from '../src/dos.js';
 import { VFS } from '../src/vfs.js';
+import { bootSector, isBootSector } from '../src/boot.js';
 
 const CF = 1;
 let pass = 0, fail = 0; const fails = [];
@@ -330,6 +331,44 @@ function asciiz(mc, cpu, off, str) {
   cpu.ah = 0x00; cpu.al = 0x13; mc.intHandlers[0x10](cpu, mc);                  // re-set the mode
   eq('mode set restores the standard offset', mc.vga.crtc[0x13], 40);
   eq('mode set clears the display start', mc.vga.startAddr(), 0);
+}
+
+// ---------------------------------------------------------------- boot-sector handoff (INT 19h)
+// Not a DOS service at all — that is the point. A boot-sector prod (BootChess and its kind) is what
+// the BIOS loads and jumps to, with no PSP, no INT 21h and no termination convention. This checks the
+// handoff state a real BIOS leaves behind, and that a sector without the 55 AA signature is refused
+// rather than silently run, which would look like a MIRAGE fault instead of a bad image.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const img = new Uint8Array(512);
+  img.set([0xb8, 0x00, 0xb8,                          // mov ax,0b800h
+           0x8e, 0xc0,                                // mov es,ax
+           0x26, 0xc7, 0x06, 0x00, 0x00, 0x41, 0x07,  // mov word [es:0000],0741h  ('A', white)
+           0xf4], 0);                                 // hlt
+  img[510] = 0x55; img[511] = 0xaa;
+
+  ok('a sector with 55 AA is recognised', isBootSector(img));
+  bootSector(mc, img);
+  const cpu = mc.cpu;
+  eq('boot sets CS:IP to 0000:7C00', (cpu.seg[1] << 16) | (cpu.eip & 0xffff), 0x7c00);
+  eq('boot puts the stack just below the sector', cpu.reg[4] & 0xffff, 0x7c00);
+  eq('boot passes the drive in DL', cpu.reg[2] & 0xff, 0x00);
+  eq('boot enables interrupts', cpu.flags & 0x200, 0x200);
+  eq('the sector is at 0000:7C00', mc.mem.u8[0x7c00], 0xb8);
+
+  while (!cpu.halted) mc.rec.step();
+  eq('the booted sector ran and halted', mc.mem.u8[0xb8000], 0x41);
+  eq('...with its attribute', mc.mem.u8[0xb8001], 0x07);
+
+  const bad = new Uint8Array(512);                    // no signature
+  let threw = false;
+  try { bootSector(new Machine({ memSize: 1 << 20 }), bad); } catch { threw = true; }
+  ok('a sector without 55 AA is refused, not silently booted', threw);
+  ok('...unless strict is off', (() => {
+    const m = new Machine({ memSize: 1 << 20 }); installBIOS(m);
+    try { bootSector(m, bad, { strict: false }); return true; } catch { return false; }
+  })());
 }
 
 // ---------------------------------------------------------------- directories (39/3A/3B/47)
