@@ -1,0 +1,54 @@
+// harness.mjs — compose a Machine the way the browser does, in ONE place.
+//
+// Every headless tool used to build its own machine, and each one drifted from `ui.js` in a
+// different direction. That drift is not cosmetic: it decides what the tools can *see*.
+//   • `run-game.mjs` pinned 1 MiB, where extended memory starts exactly at the top of RAM, so every
+//     XMS allocation failed and the XMS path of the games that need it was never exercised at all.
+//   • `golden.js` and `dosdiff.js` never loaded the ROM fonts `video.js` loads, so BIOS character
+//     output in a graphics mode drew blank glyphs — three intros were pinned rendering a BLACK
+//     SCREEN, and scored 98-99% against DOSBox precisely because those frames are mostly black.
+//   • INT 33h was installed only by `ui.js`, so headless runs report "mouse driver not found"
+//     (Mystic Towers does) for a driver the real player has.
+// In all three the defect was in what the harness let us see, not in the code under test. Hence
+// this module: a tool that stands in for the browser calls makeMachine() and inherits the fix.
+//
+// Instruction-level tools (test.js, conformance.js, the fuzzers, the co-simulator) deliberately
+// build bare machines and should NOT use this — they are testing the CPU, not the environment.
+
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { Machine } from '../src/machine.js';
+import { installBIOS } from '../src/bios.js';
+import { installDOS } from '../src/dos.js';
+import { installMouse } from '../src/mouse.js';
+import { VFS } from '../src/vfs.js';
+
+const ASSETS = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets');
+
+/** Load the ROM fonts onto the machine, as video.js does in the browser. Missing files are not an
+ *  error (the engine falls back to blank glyphs) but they are exactly what made the gate blind. */
+export function loadFonts(machine) {
+  for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'],
+                              ['font8x14', 'vga-rom-8x14.bin']]) {
+    try { machine[prop] = new Uint8Array(readFileSync(join(ASSETS, file))); } catch { /* optional */ }
+  }
+  return machine;
+}
+
+/**
+ * @param {{memSize?: number, dos?: boolean, mouse?: boolean, vfs?: VFS}} opts
+ *   memSize defaults to 16 MiB like the browser. Note this does not change real-mode addressing —
+ *   Memory masks to a 1 MiB wrap until A20 is enabled — it only decides how much extended memory
+ *   exists for XMS. `dos: false` composes the bare BIOS machine a boot sector runs on.
+ * @returns {{mc: Machine, bios: object, dos: object|null, vfs: VFS|null}}
+ */
+export function makeMachine(opts = {}) {
+  const mc = new Machine({ memSize: opts.memSize ?? (16 << 20) });
+  const bios = installBIOS(mc);
+  loadFonts(mc);
+  if (opts.mouse !== false) installMouse(mc);          // INT 33h — the browser always has it
+  let dos = null, vfs = null;
+  if (opts.dos !== false) { vfs = opts.vfs || new VFS(); dos = installDOS(mc, vfs); }
+  return { mc, bios, dos, vfs };
+}

@@ -3,15 +3,12 @@
 //   node tools/probe-intro.js <program> [ticks]
 import { readFileSync, writeFileSync } from 'fs';
 import { deflateSync } from 'zlib';
-import { Machine } from '../src/machine.js';
-import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
 import { VFS } from '../src/vfs.js';
+import { makeMachine } from './harness.mjs';
 
 const [prog, ticksArg, outArg] = process.argv.slice(2);
 const TICKS = Number(ticksArg) || 300;
-const mc = new Machine({ memSize: 1 << 20 });
-installBIOS(mc); const dos = installDOS(mc, new VFS());
+const { mc, dos } = makeMachine();          // composed like the browser — see harness.mjs
 let fault = null; mc.onError = (e) => { fault = e; };
 dos.load(new Uint8Array(readFileSync(prog)), '', 'C:\\PROG');
 

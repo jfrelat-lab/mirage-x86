@@ -4,6 +4,29 @@ The safety net. Every non-trivial change runs these; a green run is the bar for 
 are plain Node scripts in `tools/` and drive the DOM-free engine headless. Run each with the
 optimization kill-switches (see [RECOMPILER.md](RECOMPILER.md)) both on and off.
 
+## Surveying the gaps (`tools/survey-gaps.mjs`)
+
+Not a gate — a measurement. It runs every program in `games/` and `intros/` and reports what each
+one **asked for and did not get**: INT vectors with no handler (`machine.unhandledInts`) and INT 21h
+functions that fell through to `default:` (`dos.unhandledFn`). Gaps used to be chosen by reading the
+code and guessing; this ranks them by what the corpus actually calls.
+
+    node tools/survey-gaps.mjs            # whole corpus
+    node tools/survey-gaps.mjs WOLF3DSW   # one game
+    FRAMES=120 node tools/survey-gaps.mjs
+
+Caveat: a title only reaches the calls *after* the point where it currently derails, so anything
+dying early under-reports.
+
+## Harness composition (`tools/harness.mjs`)
+
+Every headless tool composes its Machine through `makeMachine()`, which mirrors `ui.js`: 16 MiB, the
+ROM fonts, the INT 33h mouse, BIOS + DOS. Each of those was, at some point, missing from one tool and
+present in the browser — and every time, the harness's blindness was mistaken for correct behaviour
+(1 MiB made every XMS allocation fail; no fonts pinned three intros rendering a black screen). The
+instruction-level tools (`test.js`, `conformance.js`, the fuzzers, the co-simulator) deliberately
+build bare machines and do not use it.
+
 ## The gates (in the order to run them)
 
 | Gate | Command | Checks | Bar |

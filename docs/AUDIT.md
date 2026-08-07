@@ -60,7 +60,7 @@ Seul `BOUND` manque `cur.use |= lALL` (`recompiler.js:592`).
 | **T1.4** | Gaps INT 21h notables : **`39/3A/3B` (MKDIR/RMDIR/CHDIR)** absents alors que `vfs.mkdir/chdir` **existent** ; `62h` Get PSP ; `45/46` DUP ; `59h` erreur étendue ; **toute l'API FCB** ; pas de périphériques caractère (`CON`/`NUL`/`PRN`) dans le VFS. | `dos.js`, `vfs.js:105` | Un jeu qui crée un dossier `SAVE` abandonne. |
 | **T1.5** | **`AH=44h` IOCTL ignore AL** → `AL=06/07` (statut entrée/sortie) répond toujours « succès, DX=0 » : cause classique de boucle infinie. **`AH=49h`** free réussit toujours (double-free non signalé). **find-first/next** = curseur global unique hors DTA, `CX` (masque d'attributs) ignoré. **PSP:0002** toujours 0xA000 au lieu du vrai sommet de bloc. | `dos.js:319,326,377-401,52` | Élevé. |
 | **T1.6** | **XMS** : `AH=0Fh` realloc **écrase le bloc suivant** ; `AH=0Bh` move sans bornage ; désactivation A20 ment (retourne succès, laisse A20 actif). | `xms.js:85,66,42` | Élevé — WL6/PML passe par là. |
-| **T1.7** | INT 16h `AH=02` renvoie **toujours AL=0** (aucun état Shift/Ctrl/Alt) alors que le chemin 8042 voit les make/break. INT 1Ah : seul `AH=00`. INT 33h non installé en headless (`ui.js` seulement) → headless ≠ navigateur. | `bios.js:270-290`, `mouse.js` | Moyen. Shift-pour-courir ne marche jamais. |
+| **T1.7** | INT 16h `AH=02` renvoie **toujours AL=0** (aucun état Shift/Ctrl/Alt) alors que le chemin 8042 voit les make/break. INT 1Ah : seul `AH=00`. INT 33h ✅ désormais installé par `tools/harness.mjs` dans tous les harnais headless. | `bios.js:270-290`, `mouse.js` | Moyen. Shift-pour-courir ne marche jamais. |
 
 ---
 

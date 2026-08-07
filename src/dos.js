@@ -16,6 +16,13 @@ export function installDOS(machine, vfs) {
     psp: PSP_SEG,
     dta: (PSP_SEG << 4) + 0x80,
     version: [5, 0],
+    unhandledFn: new Uint32Array(256),   // AH -> count of INT 21h calls that fell through to default
+    /** Human-readable list of the INT 21h functions this run asked for and did not get. */
+    unhandledFnReport() {
+      const out = [];
+      for (let n = 0; n < 256; n++) if (this.unhandledFn[n]) out.push(`AH=${n.toString(16).padStart(2, '0')}h x${this.unhandledFn[n]}`);
+      return out;
+    },
     allocTop: PSP_SEG,
     allocs: new Map(),        // live AH=48 allocations: seg → paragraphs
     memFloor: MEM_TOP,        // bump base above the program's own block
@@ -383,7 +390,10 @@ export function installDOS(machine, vfs) {
       case 0x4f: findNext(); break;
       case 0x56: vfs.rename(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), asciiz(cpu.base[ES] + (cpu.di & 0xffff))) ? ok() : err(2); break;
       case 0x57: ok(); cpu.cx = 0; cpu.dx = 0; break;                // get/set file time (stub)
-      default: setCF(true); cpu.ax = 1; break;                       // unsupported function
+      // Unsupported function. Reporting "invalid function" is at least an honest failure, but the
+      // count is what makes the gap visible: `dos.unhandledFnReport()` over the whole games/ tree
+      // says which functions are actually missing instead of us guessing from a reading of the code.
+      default: dos.unhandledFn[ah]++; setCF(true); cpu.ax = 1; break;
     }
   });
 

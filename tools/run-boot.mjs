@@ -9,8 +9,7 @@
 
 import { readFileSync, writeFileSync } from 'fs';
 import { deflateSync } from 'zlib';
-import { Machine } from '../src/machine.js';
-import { installBIOS } from '../src/bios.js';
+import { makeMachine } from './harness.mjs';
 import { bootSector, isBootSector } from '../src/boot.js';
 
 const path = process.argv[2];
@@ -19,12 +18,9 @@ const budget = Number(process.argv[3]) || 2_000_000;
 const keys = process.argv[4] ? process.argv[4].split(',').map(h => parseInt(h, 16)) : [];
 const png = process.env.PNG || null;                 // PNG=out.png to dump the mode-13h screen
 
-const mc = new Machine({ memSize: 1 << 20 });
-installBIOS(mc);
-for (const f of ['vga-rom-8x16.bin', 'vga-rom-8x8.bin', 'vga-rom-8x14.bin']) {
-  const prop = f.includes('8x8') ? 'font8x8' : f.includes('8x14') ? 'font8x14' : 'font';
-  try { mc[prop] = new Uint8Array(readFileSync(new URL('../assets/' + f, import.meta.url))); } catch {}
-}
+// No DOS at all: a boot sector runs on the bare BIOS machine. Everything else — 16 MiB, the ROM
+// fonts, the INT 33h mouse — matches the browser, see harness.mjs.
+const { mc } = makeMachine({ dos: false });
 let fault = null;
 mc.onError = (e) => { fault = e; };
 

@@ -7,10 +7,8 @@
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { Machine } from '../src/machine.js';
-import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
 import { VFS } from '../src/vfs.js';
+import { makeMachine } from './harness.mjs';
 
 const DEMODIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'demos');
 const demos = process.argv.slice(2).length ? process.argv.slice(2) : ['XORMUNCH.COM', 'PLASMA13.COM'];
@@ -20,9 +18,7 @@ for (const name of demos) {
   const path = join(DEMODIR, name);
   if (!existsSync(path)) { console.log(`  ${name}: SKIP (not built)`); continue; }
 
-  const mc = new Machine({ memSize: 1 << 20 });
-  installBIOS(mc);
-  const dos = installDOS(mc, new VFS());
+  const { mc, dos } = makeMachine();        // composed like the browser — see harness.mjs
   dos.loadCOM(new Uint8Array(readFileSync(path)), '', 'C:\\' + name);
 
   const fb = () => mc.mem.u8.slice(0xa0000, 0xa0000 + 64000);

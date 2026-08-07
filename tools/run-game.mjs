@@ -8,10 +8,8 @@
 
 import { readdirSync, statSync, readFileSync } from 'fs';
 import { join, relative } from 'path';
-import { Machine } from '../src/machine.js';
-import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
 import { VFS } from '../src/vfs.js';
+import { makeMachine } from './harness.mjs';
 
 const [sub, prog, framesArg, keysArg] = process.argv.slice(2);
 if (!sub || !prog) { console.error('usage: node tools/run-game.mjs <subdir> <PROG.EXE> [frames] [keysHexCSV]'); process.exit(2); }
@@ -21,18 +19,10 @@ const KEYS = keysArg ? keysArg.split(',').map(h => parseInt(h, 16)) : [];
 const ROOT = new URL('../games/', import.meta.url).pathname;
 const gameDir = join(ROOT, sub);
 
-// 16 MiB, matching the Machine default and the browser. At the 1 MiB this used to pin, extended
-// memory starts exactly at the top of RAM, so every XMS allocation failed with "all extended memory
-// allocated" — the XMS path of the games that need it (Wolf3D, Mystic Towers) was never once
-// exercised headless. Overridable with MEM_MB for a deliberately memory-starved run.
-const mc = new Machine({ memSize: (Number(process.env.MEM_MB) || 16) << 20 });
-installBIOS(mc);
-// give the BIOS the VGA font so CGA graphics-mode text (INT 10h teletype over graphics) renders
-try { mc.font = new Uint8Array(readFileSync(new URL('../assets/vga-rom-8x16.bin', import.meta.url))); } catch {}
-try { mc.font8x8 = new Uint8Array(readFileSync(new URL('../assets/vga-rom-8x8.bin', import.meta.url))); } catch {}
-try { mc.font8x14 = new Uint8Array(readFileSync(new URL('../assets/vga-rom-8x14.bin', import.meta.url))); } catch {}
+// Composed like the browser (16 MiB, ROM fonts, INT 33h mouse) — see harness.mjs for why each of
+// those mattered. MEM_MB forces a deliberately memory-starved run.
 const vfs = new VFS();
-const dos = installDOS(mc, vfs);
+const { mc, dos } = makeMachine({ vfs, memSize: process.env.MEM_MB ? Number(process.env.MEM_MB) << 20 : undefined });
 let fault = null; mc.onError = (e) => { fault = e; };
 
 // mount every file under games/<sub> into \GAMES\<sub>\...

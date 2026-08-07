@@ -15,10 +15,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join, basename } from 'path';
 import { tmpdir } from 'os';
 import { deflateSync } from 'zlib';
-import { Machine } from '../src/machine.js';
-import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
-import { VFS } from '../src/vfs.js';
+import { makeMachine } from './harness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const NASM = '/opt/homebrew/bin/nasm', DOSBOX = '/opt/homebrew/bin/dosbox-x';
@@ -43,15 +40,9 @@ function dosboxCapture() {
 }
 
 function mirageCapture() {
-  const mc = new Machine({ memSize: 1 << 20 });
-  installBIOS(mc);
-  // Same ROM fonts the browser loads: a program that prints through the BIOS in a graphics mode
-  // renders glyphs, and comparing a fontless MIRAGE against a real DOSBox would be comparing a
-  // screen we never show a player.
-  for (const [prop, f] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
-    try { mc[prop] = new Uint8Array(readFileSync(join(HERE, '..', 'assets', f))); } catch {}
-  }
-  const dos = installDOS(mc, new VFS());
+  // Composed like the browser — see harness.mjs. Comparing a fontless MIRAGE against a real DOSBox
+  // was comparing a screen we never show a player.
+  const { mc, dos } = makeMachine();
   let fault = null; mc.onError = (e) => { fault = e; };
   dos.load(new Uint8Array(readFileSync(prog)), '', 'C:\\PROG');
   for (let t = 0; t < K && !fault && !dos.programDone; t++) { mc.runSlice(1_500_000); mc.tickTimer(); }

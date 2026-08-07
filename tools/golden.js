@@ -25,10 +25,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { Machine } from '../src/machine.js';
-import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
-import { VFS } from '../src/vfs.js';
+import { makeMachine } from './harness.mjs';
 import { bootSector } from '../src/boot.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -51,22 +48,11 @@ const WORKLOADS = [
 function fingerprint(relPath, opts = {}) {
   const abs = join(ROOT, relPath);
   if (!existsSync(abs)) return null;
-  const mc = new Machine({ memSize: 1 << 20 });
-  installBIOS(mc);
+  // Composed exactly like the browser (fonts, mouse, 16 MiB) — see harness.mjs for why that matters.
+  const { mc, dos } = makeMachine({ dos: !opts.boot });
   let fault = null; mc.onError = (e) => { fault = e; };
-  // Load the ROM fonts exactly like the browser (video.js) does. Without them a program that prints
-  // through the BIOS in a graphics mode gets blank glyphs, so the gate would be fingerprinting a
-  // screen the real player never sees — 256b.com prints its whole scroller that way.
-  for (const [prop, f] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
-    try { mc[prop] = new Uint8Array(readFileSync(join(ROOT, 'assets', f))); } catch {}
-  }
-  let dos = null;
-  if (opts.boot) {
-    bootSector(mc, new Uint8Array(readFileSync(abs)));
-  } else {
-    dos = installDOS(mc, new VFS());
-    dos.load(new Uint8Array(readFileSync(abs)), '', 'C:\\PROG');
-  }
+  if (opts.boot) bootSector(mc, new Uint8Array(readFileSync(abs)));
+  else dos.load(new Uint8Array(readFileSync(abs)), '', 'C:\\PROG');
   for (let t = 0; t < TICKS && !fault && !(dos && dos.programDone); t++) { mc.runSlice(BUDGET); }  // run loop owns the PIT timer now
   const h = createHash('sha1');
   const meta = Buffer.alloc(8);

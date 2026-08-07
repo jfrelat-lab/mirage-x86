@@ -6,18 +6,14 @@
 
 import { readFileSync, writeFileSync } from 'fs';
 import { deflateSync } from 'zlib';
-import { Machine } from '../src/machine.js';
-import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
 import { VFS } from '../src/vfs.js';
+import { makeMachine } from './harness.mjs';
 
 const [prog, out, ticksArg, scaleArg] = process.argv.slice(2);
 if (!prog || !out) { console.error('usage: node tools/render-com.js <program> <out.png> [ticks] [scale]'); process.exit(2); }
 const TICKS = Number(ticksArg) || 60, S = Number(scaleArg) || 2;
 
-const mc = new Machine({ memSize: 1 << 20 });
-installBIOS(mc);
-const dos = installDOS(mc, new VFS());
+const { mc, dos } = makeMachine();          // composed like the browser — see harness.mjs
 let fault = null; mc.onError = (e) => { fault = e; };
 dos.load(new Uint8Array(readFileSync(prog)), '', 'C:\\PROG');
 
