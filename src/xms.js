@@ -27,9 +27,29 @@ export function installXMS(machine) {
 
   const ok = () => { cpu.ax = 1; };                            // success: AX=1
   const err = (code) => { cpu.ax = 0; cpu.bx = (cpu.bx & ~0xff) | code; };  // fail: AX=0, BL=error
-  const linOf = (handle, off) => {                             // move endpoint → absolute linear byte address
-    if (handle === 0) return (((off >>> 16) & 0xffff) << 4) + (off & 0xffff);  // conventional far ptr seg:off
-    const b = xms.handles.get(handle); return b ? (b.base + (off >>> 0)) >>> 0 : -1;
+
+  // Resolve one endpoint of an AH=0Bh move to an absolute linear address, checking that the whole
+  // [off, off+len) range is inside the block. Without this, an out-of-range move silently scribbled
+  // over a neighbouring handle — or past the end of RAM, where the write vanished with no diagnostic
+  // at all. Returns a negative XMS error code on failure so the caller can report the right one.
+  const CONV_TOP = 0x110000;                                   // seg:off tops out at 0x10FFEF with A20 on
+  const endpoint = (handle, off, len, eHandle, eOffset) => {
+    if (handle === 0) {                                        // conventional memory: far pointer seg:off
+      const lin = (((off >>> 16) & 0xffff) << 4) + (off & 0xffff);
+      return lin + len > CONV_TOP ? -eOffset : lin;
+    }
+    const b = xms.handles.get(handle);
+    if (!b) return -eHandle;
+    const o = off >>> 0;
+    if (o > b.size || o + len > b.size) return -eOffset;
+    return (b.base + o) >>> 0;
+  };
+  /** The lowest live block starting strictly above `base`, or Infinity — i.e. how far a block can
+   *  grow in place before it would run into a neighbour. */
+  const ceilingAbove = (base) => {
+    let c = Infinity;
+    for (const b of xms.handles.values()) if (b.base > base && b.base < c) c = b.base;
+    return c;
   };
   const setA20 = (on) => { machine.mem.setA20(on); if (machine.rec) { machine.rec.MM = machine.mem.mask; machine.rec.reset(); } };
 
@@ -53,26 +73,36 @@ export function installXMS(machine) {
         cpu.dx = h; ok(); break;
       }
       case 0x0a: {                                             // free block: DX = handle
-        if (!xms.handles.has(cpu.dx & 0xffff)) { err(0xa2); break; }
+        const b = xms.handles.get(cpu.dx & 0xffff);
+        if (!b) { err(0xa2); break; }
+        if (b.locked) { err(0xab); break; }                    // ABh: block is locked
         xms.handles.delete(cpu.dx & 0xffff); recomputeTop(); ok(); break;
       }
       case 0x0b: {                                             // move block: DS:SI → ExtMemMoveStruct
         const p = (cpu.base[DS] + (cpu.si & 0xffff)) & 0xfffff;
         const len = mem.r32(p) >>> 0;
+        if (len & 1) { err(0xa7); break; }                     // A7h: length must be even
         const srcH = mem.r16(p + 4), srcOff = mem.r32(p + 6), dstH = mem.r16(p + 10), dstOff = mem.r32(p + 12);
-        const s = linOf(srcH, srcOff), d = linOf(dstH, dstOff);
-        if (s < 0) { err(0xa3); break; }                       // A3h: invalid source handle
-        if (d < 0) { err(0xa5); break; }                       // A5h: invalid destination handle
-        const u8 = mem.u8; for (let i = 0; i < len; i++) u8[(d + i) >>> 0] = u8[(s + i) >>> 0];  // hardware-level copy
+        const s = endpoint(srcH, srcOff, len, 0xa3, 0xa4);     // A3h bad src handle / A4h bad src offset
+        if (s < 0) { err(-s); break; }
+        const d = endpoint(dstH, dstOff, len, 0xa5, 0xa6);     // A5h bad dst handle / A6h bad dst offset
+        if (d < 0) { err(-d); break; }
+        // mem.move is memmove + the SMC dirty check. The old code was an ascending byte loop writing
+        // straight into u8: it corrupted any move whose destination fell inside [src, src+len), and —
+        // worse — bypassed block invalidation on the one bulk path that swaps *code* overlays into
+        // conventional memory, leaving stale compiled blocks live.
+        mem.move(d, s, len);
         ok(); break;
       }
       case 0x0c: {                                             // lock block: DX = handle → DX:BX = 32-bit linear addr
         const b = xms.handles.get(cpu.dx & 0xffff); if (!b) { err(0xa2); break; }
+        if (b.locked >= 0xff) { err(0xac); break; }            // ACh: lock count overflow
         b.locked++; cpu.bx = b.base & 0xffff; cpu.dx = (b.base >>> 16) & 0xffff; cpu.ax = 1; break;
       }
       case 0x0d: {                                             // unlock block
         const b = xms.handles.get(cpu.dx & 0xffff); if (!b) { err(0xa2); break; }
-        if (b.locked > 0) b.locked--; ok(); break;
+        if (b.locked === 0) { err(0xaa); break; }              // AAh: block is not locked
+        b.locked--; ok(); break;
       }
       case 0x0e: {                                             // get handle info: DX=handle → BH=lock, BL=free handles, DX=size KB
         const b = xms.handles.get(cpu.dx & 0xffff); if (!b) { err(0xa2); break; }
@@ -80,9 +110,18 @@ export function installXMS(machine) {
       }
       case 0x0f: {                                             // reallocate: BX = new KB, DX = handle
         const b = xms.handles.get(cpu.dx & 0xffff); if (!b) { err(0xa2); break; }
+        if (b.locked) { err(0xab); break; }                    // ABh: a locked block can't move or resize
         const want = (cpu.bx & 0xffff) * 1024;
-        if (b.base + want > xms.max) { err(0xa0); break; }
-        b.size = want; if (b.base + want > xms.top) xms.top = b.base + want; ok(); break;
+        if (want <= b.size) { b.size = want; recomputeTop(); ok(); break; }   // shrink: always in place
+        // Grow. The old code just widened `size` in place, which silently swallowed whatever block
+        // sat above — two handles then aliased the same bytes. Grow in place only up to the next
+        // live block; otherwise relocate to the top of the pool and copy, as a real driver does.
+        if (b.base + want <= Math.min(ceilingAbove(b.base), xms.max)) {
+          b.size = want; recomputeTop(); ok(); break;
+        }
+        if (xms.top + want > xms.max) { err(0xa0); break; }    // A0h: all extended memory allocated
+        mem.move(xms.top, b.base, b.size);
+        b.base = xms.top; b.size = want; recomputeTop(); ok(); break;
       }
       case 0x01: case 0x02: err(0x91); break;                  // request / release HMA — we don't manage the HMA
       case 0x10: case 0x11: err(0x80); break;                  // UMB — not implemented

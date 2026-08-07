@@ -41,8 +41,11 @@ sets up segments/stack, and jumps to the entry point. INT 21h services implement
 ```
 
 Files live in an in-memory `VFS` (`vfs.js`); `VFS.dosName()` maps to 8.3. No real disk, no
-network. **XMS** is implemented (`xms.js`: INT 2Fh 4300/4310 + the far-call entry, alloc/free/lock/move);
-there is **no EMS and no DPMI/protected mode** (raptor/jazz need DPMI).
+network. **XMS** is implemented (`xms.js`: INT 2Fh 4300/4310 + the far-call entry, alloc/free/lock/move/realloc).
+Move endpoints are bounds-checked against the block (A4h/A6h), lengths must be even (A7h), the copy is
+a memmove that also runs the SMC dirty check — AH=0Bh is the path games swap *code* overlays over — and
+a grow that would run into a neighbouring block relocates instead of aliasing it. There is
+**no EMS and no DPMI/protected mode** (raptor/jazz need DPMI).
 
 ## Video
 

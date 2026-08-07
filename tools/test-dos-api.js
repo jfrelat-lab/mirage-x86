@@ -355,6 +355,115 @@ function asciiz(mc, cpu, off, str) {
   eq('XMS AH=0A on a bad handle reports "invalid handle"', cpu.reg[3] & 0xff, 0xa2);
 }
 
+// ---------------------------------------------------------------- XMS AH=0Bh move block
+// The defect class: a move endpoint used to be resolved without ever checking it against the block's
+// size, so an out-of-range copy scribbled over a neighbouring handle — or past the end of RAM, where
+// it vanished with no diagnostic at all. And the copy itself was an ascending byte loop, which
+// corrupts an overlapping move instead of behaving like memmove.
+{
+  const { mc, cpu } = mk();
+  const alloc = (kb) => { cpu.ah = 0x09; cpu.reg[2] = kb; mc.cpu.xmsCall(); return cpu.reg[2] & 0xffff; };
+  const lin = (h) => { cpu.ah = 0x0c; cpu.reg[2] = h; mc.cpu.xmsCall();
+                       const a = (((cpu.reg[2] & 0xffff) << 16) | (cpu.reg[3] & 0xffff)) >>> 0;
+                       cpu.ah = 0x0d; cpu.reg[2] = h; mc.cpu.xmsCall(); return a; };
+  /** Build an ExtMemMoveStruct at DS:0x400 and invoke AH=0Bh. */
+  const move = (len, srcH, srcOff, dstH, dstOff) => {
+    const p = (cpu.seg[3] << 4) + 0x400;
+    mc.mem.w32(p, len); mc.mem.w16(p + 4, srcH); mc.mem.w32(p + 6, srcOff);
+    mc.mem.w16(p + 10, dstH); mc.mem.w32(p + 12, dstOff);
+    cpu.ah = 0x0b; cpu.reg[6] = 0x400;                          // SI
+    mc.cpu.xmsCall();
+    return { ax: cpu.reg[0] & 0xffff, bl: cpu.reg[3] & 0xff };
+  };
+
+  const a = alloc(4), b = alloc(4);                             // two adjacent 4 KB blocks
+  const aLin = lin(a), bLin = lin(b);
+  for (let i = 0; i < 64; i++) mc.mem.u8[aLin + i] = 0x40 + i;    // recognisable payload in A
+  mc.mem.u8[bLin] = 0x99;                                        // canary at the head of B
+
+  eq('XMS AH=0B moves within bounds', move(64, a, 0, b, 0).ax, 1);
+  eq('XMS AH=0B copied the bytes', mc.mem.u8[bLin + 63], 0x40 + 63);
+
+  const past = move(64, a, 4096 - 32, b, 0);                    // source runs 32 bytes past A's end
+  eq('XMS AH=0B rejects a source range past the block', past.ax, 0);
+  eq('XMS AH=0B reports "invalid source offset"', past.bl, 0xa4);
+  const pastD = move(64, a, 0, b, 4096 - 32);
+  eq('XMS AH=0B rejects a destination range past the block', pastD.ax, 0);
+  eq('XMS AH=0B reports "invalid destination offset"', pastD.bl, 0xa6);
+  eq('XMS AH=0B rejects an odd length', move(3, a, 0, b, 0).bl, 0xa7);
+  eq('XMS AH=0B rejects an unknown source handle', move(2, 0x1234, 0, b, 0).bl, 0xa3);
+  eq('XMS AH=0B rejects an unknown destination handle', move(2, a, 0, 0x1234, 0).bl, 0xa5);
+
+  // Overlap, forward: dst inside [src, src+len). The old ascending byte loop smeared byte 0 across
+  // the range; memmove keeps the original bytes.
+  for (let i = 0; i < 32; i++) mc.mem.u8[aLin + i] = i;
+  eq('XMS AH=0B handles an overlapping move', move(16, a, 0, a, 4).ax, 1);
+  eq('XMS AH=0B overlapping move is a memmove, not a smear', mc.mem.u8[aLin + 8], 4);
+}
+
+// ---------------------------------------------------------------- XMS move vs self-modifying code
+// The audit's worst XMS finding: AH=0Bh wrote straight into the backing array, bypassing block
+// invalidation — on the one bulk path whose whole purpose is swapping *code* overlays into
+// conventional memory. Stale compiled blocks then kept running the code that used to be there.
+// End-to-end: run a routine, XMS-move a different one over it, run again.
+{
+  const { mc, cpu } = mk();
+  const CS = 0x2000, LIN = CS << 4;
+  const run = () => { cpu.setSeg(1, CS); cpu.eip = 0; cpu.halted = false; mc.rec.step(); return cpu.reg[0] & 0xff; };
+  mc.mem.blit(LIN, Uint8Array.from([0xb0, 0x01, 0xf4]));         // mov al,1 ; hlt
+  eq('the original routine runs', run(), 1);
+
+  cpu.ah = 0x09; cpu.reg[2] = 4; mc.cpu.xmsCall();               // alloc 4 KB
+  const h = cpu.reg[2] & 0xffff;
+  cpu.ah = 0x0c; cpu.reg[2] = h; mc.cpu.xmsCall();
+  const base = (((cpu.reg[2] & 0xffff) << 16) | (cpu.reg[3] & 0xffff)) >>> 0;
+  cpu.ah = 0x0d; cpu.reg[2] = h; mc.cpu.xmsCall();
+  mc.mem.u8.set([0xb0, 0x02, 0xf4, 0x00], base);                 // mov al,2 ; hlt   (even length)
+
+  const p = (cpu.seg[3] << 4) + 0x400;                           // ExtMemMoveStruct: 4 bytes, XMS → conventional
+  mc.mem.w32(p, 4); mc.mem.w16(p + 4, h); mc.mem.w32(p + 6, 0);
+  mc.mem.w16(p + 10, 0); mc.mem.w32(p + 12, (CS << 16) | 0);     // handle 0 = far pointer CS:0000
+  cpu.ah = 0x0b; cpu.reg[6] = 0x400; mc.cpu.xmsCall();
+  eq('XMS AH=0B swapped the overlay in', cpu.reg[0] & 0xffff, 1);
+  eq('the swapped-in routine runs, not the cached block', run(), 2);
+}
+
+// ---------------------------------------------------------------- XMS AH=0Fh reallocate / AH=0Ah free
+{
+  const { mc, cpu } = mk();
+  const alloc = (kb) => { cpu.ah = 0x09; cpu.reg[2] = kb; mc.cpu.xmsCall(); return cpu.reg[2] & 0xffff; };
+  const info = (h) => { cpu.ah = 0x0e; cpu.reg[2] = h; mc.cpu.xmsCall(); return cpu.reg[2] & 0xffff; };  // → size KB
+  const lin = (h) => { cpu.ah = 0x0c; cpu.reg[2] = h; mc.cpu.xmsCall();
+                       const a = (((cpu.reg[2] & 0xffff) << 16) | (cpu.reg[3] & 0xffff)) >>> 0;
+                       cpu.ah = 0x0d; cpu.reg[2] = h; mc.cpu.xmsCall(); return a; };
+  const realloc = (h, kb) => { cpu.ah = 0x0f; cpu.reg[2] = h; cpu.reg[3] = kb; mc.cpu.xmsCall();
+                               return { ax: cpu.reg[0] & 0xffff, bl: cpu.reg[3] & 0xff }; };
+
+  const a = alloc(4), b = alloc(4);
+  const bLin = lin(b);
+  for (let i = 0; i < 16; i++) mc.mem.u8[lin(a) + i] = 0x11 + i;
+  mc.mem.u8[bLin] = 0x99;                                        // canary: B must survive A growing
+
+  // Growing A past B used to just widen A's size field, so A and B aliased the same bytes.
+  eq('XMS AH=0F grows a boxed-in block', realloc(a, 32).ax, 1);
+  eq('XMS AH=0F reports the new size', info(a), 32);
+  eq('XMS AH=0F relocated instead of overrunning the neighbour', mc.mem.u8[bLin], 0x99);
+  ok('XMS AH=0F moved the block clear of its neighbour', lin(a) >= bLin + 4096);
+  eq('XMS AH=0F carried the contents to the new home', mc.mem.u8[lin(a) + 15], 0x11 + 15);
+
+  eq('XMS AH=0F shrinks in place', realloc(a, 8).ax, 1);
+  eq('XMS AH=0F reports the shrunk size', info(a), 8);
+
+  cpu.ah = 0x0c; cpu.reg[2] = a; mc.cpu.xmsCall();              // leave A locked
+  eq('XMS AH=0F refuses to resize a locked block', realloc(a, 64).bl, 0xab);
+  cpu.ah = 0x0a; cpu.reg[2] = a; mc.cpu.xmsCall();
+  eq('XMS AH=0A refuses to free a locked block', cpu.reg[3] & 0xff, 0xab);
+  cpu.ah = 0x0d; cpu.reg[2] = a; mc.cpu.xmsCall();              // unlock
+  eq('XMS AH=0D on an unlocked block reports "not locked"', (cpu.ah = 0x0d, cpu.reg[2] = a, mc.cpu.xmsCall(), cpu.reg[3] & 0xff), 0xaa);
+  cpu.ah = 0x0a; cpu.reg[2] = a; mc.cpu.xmsCall();
+  eq('XMS AH=0A frees the now-unlocked block', cpu.reg[0] & 0xffff, 1);
+}
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage DOS/BIOS services: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

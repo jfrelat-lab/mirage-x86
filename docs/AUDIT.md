@@ -113,11 +113,11 @@ les 4 write modes, l'ordre rotate → set/reset → ALU → bitmask, les latches
 | 10 | **INT 21h `39/3A/3B`** (mkdir/rmdir/chdir) — le VFS a déjà tout | `dos.js` | ~5 l. |
 | 11 | **Réinitialiser `vga.crtc` au changement de mode** | `vga.js:30` | ~5 l. |
 | 12 | **Read mode 1** (colour compare) | `vga.js:70` | ~8 l. |
-| 13 | **XMS : `copyWithin` + bornage (0Bh), rejet du realloc chevauchant (0Fh), check SMC** | `xms.js:66,85` | ~15 l. |
+| 13 | ✅ **XMS : `copyWithin` + bornage (0Bh), rejet du realloc chevauchant (0Fh), check SMC** (`mem.move()`) | `xms.js`, `memory.js` | fait |
 | 14 | **Alias/stubs de ports** : 0x3BA (miroir 0x3DA — convertit un **hang** en sortie correcte), 0x3C1, 0x3CC, 0x3C7, 0x3C6 réel | `bios.js`, `vga.js` | ~10 l. |
 | 15 | **Latches DAC lecture/écriture séparés** | `bios.js:297` | 1 l. |
-| 16 | **Déduplication du parseur MZ** (`parseMZ()`) | `dos.js` | −40 l. |
-| 17 | **Bus de ports : tableau plat + `ioRead8/16/32`** | `machine.js:147` | ~20 l. |
+| 16 | ✅ **Déduplication du parseur MZ** (`parseMZ()`) + dimensionnement du bloc de l'enfant EXEC | `dos.js` | fait |
+| 17 | ✅ **Bus de ports : tableau plat** (gain micro réel, débit global inchangé — mesuré) | `machine.js` | fait |
 | 18 | **Corriger les docs** (XMS, table LOC, compte de tests) | `docs/` | — |
 
 ### Gros chantiers (par risque/impact)

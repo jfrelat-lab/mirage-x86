@@ -21,7 +21,11 @@ const KEYS = keysArg ? keysArg.split(',').map(h => parseInt(h, 16)) : [];
 const ROOT = new URL('../games/', import.meta.url).pathname;
 const gameDir = join(ROOT, sub);
 
-const mc = new Machine({ memSize: 1 << 20 });
+// 16 MiB, matching the Machine default and the browser. At the 1 MiB this used to pin, extended
+// memory starts exactly at the top of RAM, so every XMS allocation failed with "all extended memory
+// allocated" — the XMS path of the games that need it (Wolf3D, Mystic Towers) was never once
+// exercised headless. Overridable with MEM_MB for a deliberately memory-starved run.
+const mc = new Machine({ memSize: (Number(process.env.MEM_MB) || 16) << 20 });
 installBIOS(mc);
 // give the BIOS the VGA font so CGA graphics-mode text (INT 10h teletype over graphics) renders
 try { mc.font = new Uint8Array(readFileSync(new URL('../assets/vga-rom-8x16.bin', import.meta.url))); } catch {}

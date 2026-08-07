@@ -79,6 +79,18 @@ export class Memory {
     for (let p = first; p <= last; p++) if (this.codePage[p]) { this._dirty(addr, bytes.length); break; }
   }
 
+  /** Copy `len` bytes within RAM (memmove semantics), marking SMC if the destination lands on code
+   *  pages. XMS AH=0Bh is the one bulk path that routinely swaps *code* overlays into conventional
+   *  memory, so writing straight into `u8` there left stale compiled blocks live — the destination
+   *  has to go through the same dirty check `blit` uses. Addresses are absolute (no A20 mask): XMS
+   *  endpoints are already resolved to physical linear addresses above 1 MiB. */
+  move(dst, src, len) {
+    if (len <= 0) return;
+    this.u8.copyWithin(dst, src, src + len);
+    const first = dst >> PAGE_BITS, last = (dst + len - 1) >> PAGE_BITS;
+    for (let p = first; p <= last; p++) if (this.codePage[p]) { this._dirty(dst, len); break; }
+  }
+
   /** Read a CP437/byte string until a terminator (default '$', DOS-style). */
   readStr(addr, term = 0x24, max = 65535) {
     const out = [];
