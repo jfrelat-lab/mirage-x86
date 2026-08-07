@@ -38,7 +38,7 @@ function runMirage(c) {
   cpu.eip = 0;
   // Execute exactly the bytes of the case (one block; REP loops run to completion inside it).
   let guard = 0;
-  while (!cpu.halted && guard++ < 64) mc.rec.step();
+  while (!cpu.halted && guard++ < 4096) mc.rec.step();   // sequences may loop
   const mems = []; for (let i = 0; i < SCRATCH; i++) mems.push(mem.r8((DS << 4) + i));
   const regs = {}; for (let i = 0; i < 8; i++) regs[GP[i]] = cpu.reg[i] >>> 0;
   return { regs, flags: cpu.flags & FLAGMASK, mem: mems };

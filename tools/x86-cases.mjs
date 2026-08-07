@@ -95,4 +95,63 @@ export const CASES = [
   { n: 'DIV BX', code: [0xf7, 0xf3], regs: { eax: 0x0100, edx: 0x0000, ebx: 0x0007 }, undef: 0x8d5 },
   { n: 'AAM', code: [0xd4, 0x0a], regs: { eax: 0x004b }, undef: 0x811 },
   { n: 'AAD', code: [0xd5, 0x0a], regs: { eax: 0x0409 }, undef: 0x811 },
+
+  // ============================ SEQUENCES ============================
+  // Multi-instruction blocks, which is the only way to exercise the recompiler's **dead-flag
+  // elimination**. Nothing else can: `conformance.js` compiles one instruction at a time so it
+  // never strips (live-out is always ALL), and `golden.js` only notices if a wrong strip happens
+  // to change pixels. The shape that matters is producer → consumer → killer: if liveness is
+  // computed wrongly the producer's flag update is dropped and the consumer silently reads stale
+  // flags. Each case below ends by *consuming* the flags it cares about, so a bad strip shows up
+  // in a register, not just in FLAGS.
+
+  // -- CF must survive from a producer to a later ADC/SBB across filler --
+  { n: 'seq ADD then ADC reads CF', code: [0x01, 0xd8, 0x83, 0xd1, 0x00], regs: { eax: 0xffff, ebx: 2, ecx: 0 } },
+  { n: 'seq ADD, filler, ADC reads CF', code: [0x01, 0xd8, 0x89, 0xfe, 0x83, 0xd1, 0x00], regs: { eax: 0xffff, ebx: 2, ecx: 0, edi: 9 } },
+  { n: 'seq SUB then SBB (multiword)', code: [0x29, 0xd8, 0x19, 0xca], regs: { eax: 1, ebx: 2, edx: 0x10, ecx: 0 } },
+  { n: 'seq ADC chain of three', code: [0xf9, 0x83, 0xd0, 0x00, 0x83, 0xd3, 0x00, 0x83, 0xd1, 0x00], regs: { eax: 0xffff, ebx: 0xffff, ecx: 0 } },
+
+  // -- INC/DEC must PRESERVE CF (def mask excludes it) --
+  { n: 'seq STC, INC, ADC still sees CF', code: [0xf9, 0x40, 0x83, 0xd3, 0x00], regs: { eax: 5, ebx: 0 } },
+  { n: 'seq STC, DEC, ADC still sees CF', code: [0xf9, 0x48, 0x83, 0xd3, 0x00], regs: { eax: 5, ebx: 0 } },
+
+  // -- a shift/rotate with a RUNTIME count of 0 touches nothing --
+  { n: 'seq STC, SHL by CL=0, ADC sees CF', code: [0xf9, 0xb1, 0x00, 0xd3, 0xe0, 0x83, 0xd3, 0x00], regs: { eax: 0x1234, ebx: 0 } },
+  { n: 'seq STC, ROL by CL=0, ADC sees CF', code: [0xf9, 0xb1, 0x00, 0xd3, 0xc0, 0x83, 0xd3, 0x00], regs: { eax: 0x1234, ebx: 0 } },
+
+  // -- REP with CX=0 runs zero iterations and preserves flags --
+  { n: 'seq STC, REP CMPSB CX=0, ADC sees CF', code: [0xf9, 0x31, 0xc9, 0xf3, 0xa6, 0x83, 0xd3, 0x00], regs: { esi: 0x10, edi: 0x20, ebx: 0 } },
+  { n: 'seq STC, REP SCASB CX=0, ADC sees CF', code: [0xf9, 0x31, 0xc9, 0xf3, 0xae, 0x83, 0xd3, 0x00], regs: { edi: 0x20, ebx: 0 } },
+
+  // -- MUL/IMUL: CF/OF defined, SZP/AF officially undefined; check the DEFINED half survives --
+  { n: 'seq MUL then ADC reads CF', code: [0xf7, 0xe3, 0x83, 0xd1, 0x00], regs: { eax: 0x1000, ebx: 0x1000, ecx: 0 }, undef: 0x8d4 },
+  { n: 'seq MUL small then ADC (no carry)', code: [0xf7, 0xe3, 0x83, 0xd1, 0x00], regs: { eax: 2, ebx: 3, ecx: 0 }, undef: 0x8d4 },
+
+  // -- flags consumed by a conditional branch, several instructions later --
+  { n: 'seq CMP, filler, JZ taken', code: [0x39, 0xd8, 0x89, 0xfe, 0x74, 0x03, 0xbb, 0x11, 0x11], regs: { eax: 7, ebx: 7, edi: 3 } },
+  { n: 'seq CMP, filler, JZ not taken', code: [0x39, 0xd8, 0x89, 0xfe, 0x74, 0x03, 0xbb, 0x11, 0x11], regs: { eax: 7, ebx: 8, edi: 3 } },
+  { n: 'seq TEST, JS taken', code: [0x85, 0xc0, 0x78, 0x03, 0xbb, 0x22, 0x22], regs: { eax: 0x8000 } },
+  { n: 'seq CMP, SETcc', code: [0x39, 0xd8, 0x0f, 0x9c, 0xc1], regs: { eax: 1, ebx: 2 } },
+  { n: 'seq CMP, CMOVcc', code: [0x39, 0xd8, 0x0f, 0x4c, 0xca], regs: { eax: 1, ebx: 2, ecx: 0, edx: 0x1234 } },
+
+  // -- LAHF/SAHF and PUSHF/POPF read the whole flag word: nothing may be stripped before them --
+  { n: 'seq ADD then LAHF', code: [0x01, 0xd8, 0x9f], regs: { eax: 0xffff, ebx: 1 } },
+  { n: 'seq ADD, filler, PUSHF/POP AX', code: [0x01, 0xd8, 0x89, 0xfe, 0x9c, 0x58], regs: { eax: 0x7fff, ebx: 1, edi: 4 } },
+  { n: 'seq SAHF then ADC', code: [0xb4, 0xff, 0x9e, 0x83, 0xd3, 0x00], regs: { ebx: 0 } },
+
+  // -- a producer whose flags are killed before use: the strip here must be SAFE --
+  { n: 'seq ADD then XOR kills flags', code: [0x01, 0xd8, 0x31, 0xc9], regs: { eax: 0xffff, ebx: 1 } },
+  { n: 'seq many ALU ops, only last flags live', code: [0x01, 0xd8, 0x29, 0xd8, 0x21, 0xd8, 0x09, 0xd8, 0x31, 0xd8], regs: { eax: 0x1234, ebx: 0x00ff } },
+
+  // -- 32-bit (0x66) arithmetic chains --
+  { n: 'seq 66 ADD/ADC 32-bit', code: [0x66, 0x01, 0xd8, 0x66, 0x83, 0xd1, 0x00], regs: { eax: 0xffffffff, ebx: 2, ecx: 0 } },
+  { n: 'seq 66 SHL then ADC', code: [0x66, 0xd1, 0xe0, 0x83, 0xd3, 0x00], regs: { eax: 0x80000000, ebx: 0 } },
+
+  // -- a bounded loop: the block is re-entered, so flags must be right on every iteration --
+  { n: 'seq LOOP sums 4 times', code: [0x01, 0xd8, 0xe2, 0xfc], regs: { eax: 1, ebx: 1, ecx: 4 } },
+  { n: 'seq DEC/JNZ countdown', code: [0x48, 0x75, 0xfd], regs: { eax: 5 } },
+
+  // -- memory read-modify-write inside a sequence --
+  { n: 'seq ADD [mem], then ADC', code: [0x01, 0x1e, 0x00, 0x00, 0x83, 0xd1, 0x00], regs: { ebx: 0xffff, ecx: 0 } },
+  { n: 'seq INC [mem] preserves CF for ADC', code: [0xf9, 0xff, 0x06, 0x00, 0x00, 0x83, 0xd3, 0x00], regs: { ebx: 0 } },
 ];

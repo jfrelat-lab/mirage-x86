@@ -37,10 +37,14 @@ def run(case):
     uc.reg_write(UC_X86_REG_EFLAGS, 0x2 | case.get('flags', 0))
     uc.reg_write(UC_X86_REG_IP, 0)
 
+    # Bound the run: sequences may loop (LOOP / DEC+JNZ), and an unterminated one must not hang the
+    # capture. 4096 instructions is far above any case here; the MIRAGE side has its own guard.
     try:
-        uc.emu_start(CODE, CODE + len(code), 0, 0)
+        uc.emu_start(CODE, CODE + len(code), 0, 4096)
     except UcError as e:
         return {'error': str(e)}
+    if uc.reg_read(UC_X86_REG_IP) != len(code):
+        return {'error': f'did not reach the end (IP={uc.reg_read(UC_X86_REG_IP):#x})'}
 
     out = {'regs': {name: uc.reg_read(reg) & 0xffffffff for name, reg in GP},
            'flags': uc.reg_read(UC_X86_REG_EFLAGS) & FLAGMASK,
