@@ -14,6 +14,10 @@ import { installFPU } from './fpu.js';
 
 export const BIOS_SEG = 0xf000;
 
+// Result mask by I/O access size in bytes, so the hot path indexes instead of re-deriving the
+// mask with a ternary chain on every IN/OUT. Index 0 and 3 are never used.
+const IO_MASK = [0, 0xff, 0xffff, 0, 0xffffffff];
+
 export class Machine {
   constructor(opts = {}) {
     this.mem = new Memory(opts.memSize || 16 * 1024 * 1024);
@@ -22,8 +26,13 @@ export class Machine {
     this.rec = new Recompiler(this.cpu);
 
     this.intHandlers = new Array(256).fill(null); // n -> (cpu, machine) => void
-    this.portRead = new Map();                     // port -> (port,size) => value
-    this.portWrite = new Map();                    // port -> (port,size,value) => void
+    // The I/O bus is a flat 64K-entry table, not a Map. x86 port space is exactly 16 bits (an
+    // immediate port is a byte, a DX port is masked to 0xffff by the emitter), so the port number
+    // IS the index — no hashing, and a miss is a null slot rather than a Map probe. This is on the
+    // hottest device path there is: a vsync-locked demo polls 0x3DA hundreds of thousands of times
+    // per frame. Two arrays of 65536 pointers cost ~1 MB and are shared by nothing else.
+    this.portRead = new Array(0x10000).fill(null);  // port -> (port,size) => value
+    this.portWrite = new Array(0x10000).fill(null); // port -> (port,size,value) => void
     this.devices = [];
     this.onError = null;                           // (err) => void
     this.blocked = false;                          // set by a handler waiting on input
@@ -88,8 +97,12 @@ export class Machine {
 
     this.cpu.swInt = (n) => this.swInt(n);
     this.cpu.biosCallback = (n) => this.biosCallback(n);
-    this.cpu.ioRead = (p, s) => this.ioRead(p, s);
-    this.cpu.ioWrite = (p, s, v) => this.ioWrite(p, s, v);
+    // Bind the tables directly rather than trampolining through this.ioRead/ioWrite: recompiled code
+    // calls these per IN/OUT, and the extra frame was pure overhead on a 0x3DA poll loop. Capturing
+    // the arrays (not the handlers) keeps late onPortRead/onPortWrite registration working.
+    const pr = this.portRead, pw = this.portWrite;
+    this.cpu.ioRead = (p, s) => { const h = pr[p]; return h ? h(p, s) & IO_MASK[s] : IO_MASK[s]; };
+    this.cpu.ioWrite = (p, s, v) => { const h = pw[p]; if (h) h(p, s, v); };
 
     // Point every vector at the BIOS stub so unhandled INTs no-op (act as IRET)
     // rather than jumping through an uninitialised 0000:0000 vector. A real IRET (0xCF)
@@ -160,10 +173,10 @@ export class Machine {
   }
 
   // ---- modular I/O bus ----------------------------------------------------
-  onPortRead(port, fn) { this.portRead.set(port, fn); }
-  onPortWrite(port, fn) { this.portWrite.set(port, fn); }
-  ioRead(p, s) { const h = this.portRead.get(p); return h ? h(p, s) & (s === 1 ? 0xff : s === 2 ? 0xffff : 0xffffffff) : (s === 1 ? 0xff : s === 2 ? 0xffff : 0xffffffff); }
-  ioWrite(p, s, v) { const h = this.portWrite.get(p); if (h) h(p, s, v); }
+  onPortRead(port, fn) { this.portRead[port & 0xffff] = fn; }
+  onPortWrite(port, fn) { this.portWrite[port & 0xffff] = fn; }
+  ioRead(p, s) { const h = this.portRead[p]; return h ? h(p, s) & IO_MASK[s] : IO_MASK[s]; }
+  ioWrite(p, s, v) { const h = this.portWrite[p]; if (h) h(p, s, v); }
 
   /** A device is any object with an optional attach(machine) and a name. */
   addDevice(dev) { this.devices.push(dev); if (dev.attach) dev.attach(this); return dev; }
