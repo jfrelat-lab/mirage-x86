@@ -443,6 +443,16 @@ function asciiz(mc, cpu, off, str) {
   for (let i = 0; i < 64; i++) { mc.cpu.cycles += 10; seen.add(mc.ioRead(0x61, 1) & 0x10); }
   eq('port 0x61 bit 4 toggles as time passes', seen.size, 2);
 
+  // The OPL is mirrored at the SB16 stereo bases too, because BLASTER advertises T6 (an SB16).
+  // Claiming a card at a base we then ignore is the inconsistency: a game driving the FM at
+  // 0x220/0x222 wrote into nothing and read 0xFF from the status port.
+  for (const base of [0x388, 0x228, 0x220, 0x222]) {
+    mc.ioWrite(base, 1, 0x04); mc.ioWrite(base + 1, 1, 0x80);   // timer control: reset
+    eq(`OPL status reads clear at base 0x${base.toString(16)}`, mc.ioRead(base, 1), 0x00);
+    mc.ioWrite(base, 1, 0x04); mc.ioWrite(base + 1, 1, 0x21);   // start timer 1
+    eq(`OPL timer-expired shows at base 0x${base.toString(16)}`, mc.ioRead(base, 1), 0xc0);
+  }
+
   // PIT channel 2 drives the speaker tone; its counter has to count.
   mc.ioWrite(0x42, 1, 0x00); mc.ioWrite(0x42, 1, 0x10);        // reload 0x1000, LSB then MSB
   const c1 = mc.ioRead(0x42, 1) | (mc.ioRead(0x42, 1) << 8);

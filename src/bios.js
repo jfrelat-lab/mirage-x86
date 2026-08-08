@@ -494,7 +494,13 @@ export function installBIOS(machine) {
   // register 4 arms the expired status; a reset clears it. Mirrored at the SB Pro OPL base.
   let oplReg = 0, oplStatus = 0;
   const oplData = (v) => { if (oplReg === 0x04) oplStatus = (v & 0x80) ? 0 : (v & 0x01) ? 0xc0 : 0; };
-  for (const base of [0x388, 0x228]) {
+  // Bases: 0x388 (Adlib), 0x228 (SB-compatible FM) and — because BLASTER advertises T6, an SB16 —
+  // the OPL3 stereo pair at 0x220/0x221 and 0x222/0x223. Those two were unregistered, so a game
+  // driving the FM there wrote into nothing and read 0xFF from the status port. tools/survey-ports
+  // caught it as HOCUS reading 0x220 and 0x222 about 165000 times each: not a stalled poll, but the
+  // standard "delay by reading the FM status port" between the register write and the data write.
+  // The reads were harmless; the inconsistency was not — we claimed a card at a base we ignored.
+  for (const base of [0x388, 0x228, 0x220, 0x222]) {
     machine.onPortWrite(base, (_p, _s, v) => { oplReg = v & 0xff; });     // register select
     machine.onPortWrite(base + 1, (_p, _s, v) => oplData(v & 0xff));      // register data
     machine.onPortRead(base, () => oplStatus);                            // OPL status
