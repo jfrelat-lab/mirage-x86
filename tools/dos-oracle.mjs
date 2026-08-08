@@ -25,6 +25,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { makeMachine } from './harness.mjs';
 import { bootSector } from '../src/boot.js';
+import { readImage } from './fat12.mjs';
+import { VFS } from '../src/vfs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -46,6 +48,20 @@ const STATELESS = new Set([
   0x37,         // get/set switch character
   0x54,         // get verify flag
 ]);
+
+// The second group: file calls, which are only comparable if we deliberately reproduce the state
+// they depend on. That means three things, all of them in `checkSequential` below — mounting the
+// image's own filesystem so the file being opened exists and holds the same bytes, replaying the
+// records IN ORDER on ONE machine instead of a fresh one per call, and mapping the kernel's handle
+// numbers onto ours (DOS is free to number them differently; what has to match is the behaviour).
+const SEQUENTIAL = new Set([
+  0x3c, 0x3d,   // create, open  — the path is captured, the returned handle is mapped
+  0x3e,         // close
+  0x3f, 0x40,   // read, write   — the bytes are captured and compared, not just the count
+  0x42,         // seek
+]);
+const TAKES_PATH = new Set([0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x41, 0x43, 0x4e, 0x56]);
+const MAX_DATA = 512;    // bytes of a read/write buffer kept per record
 
 const REG = ['ax', 'cx', 'dx', 'bx', 'sp', 'bp', 'si', 'di'];
 const snap = (cpu) => ({
@@ -69,14 +85,27 @@ function capture(imgPath) {
   // An INT 21h serviced by the guest's own kernel goes swInt -> realInt, which pushes FLAGS/CS/IP and
   // jumps. There is no "handler returned" callback to hook, so remember where the frame will unwind
   // to and watch for the CPU to arrive back there with the stack restored.
+  const asciiz = (lin) => {
+    let out = '';
+    for (let i = 0; i < 128; i++) { const c = mc.mem.u8[(lin + i) & 0xfffff]; if (!c) break; out += String.fromCharCode(c); }
+    return out;
+  };
   const origSwInt = cpu.swInt;
   cpu.swInt = (n) => {
     if (n === 0x21) {
-      open.push({
+      const ah = cpu.ah;
+      const rec = {
         inRegs: snap(cpu),
         retIP: cpu.eip & 0xffff, retCS: cpu.seg[1],
         sp: cpu.sp & 0xffff, ss: cpu.seg[2],
-      });
+      };
+      // Registers alone do not describe a file call: the path and the buffer live in memory, and
+      // without them a replay has nothing to open and nothing to compare the bytes against.
+      const dsdx = ((cpu.seg[3] << 4) + (cpu.dx & 0xffff)) & 0xfffff;
+      if (TAKES_PATH.has(ah)) rec.path = asciiz(dsdx);
+      if (ah === 0x40) rec.data = Array.from(mc.mem.u8.subarray(dsdx, dsdx + Math.min(cpu.cx & 0xffff, MAX_DATA)));
+      if (ah === 0x3f) rec.readAt = dsdx;                 // filled in on completion, once AX says how much
+      open.push(rec);
     }
     return origSwInt(n);
   };
@@ -95,7 +124,15 @@ function capture(imgPath) {
       if ((cpu.sp & 0xffff) === top.sp && cpu.seg[2] === top.ss &&
           cpu.seg[1] === top.retCS && (cpu.eip & 0xffff) === top.retIP) {
         open.pop();
-        records.push({ in: top.inRegs, out: snap(cpu) });
+        const out = snap(cpu);
+        const r = { in: top.inRegs, out };
+        if (top.path !== undefined) r.path = top.path;
+        if (top.data !== undefined) r.data = top.data;
+        if (top.readAt !== undefined && !(out.f & CF)) {
+          const n = Math.min(out.r[0] & 0xffff, MAX_DATA);
+          r.data = Array.from(mc.mem.u8.subarray(top.readAt, top.readAt + n));
+        }
+        records.push(r);
       }
     }
     if ((blocks % 50000) === 0) {
@@ -144,6 +181,82 @@ function replay(rec) {
   return { ah, diffs };
 }
 
+/**
+ * Replay the file calls in order on ONE machine, with the image's own filesystem mounted and the
+ * kernel's handle numbers mapped onto ours. This is what "replicating the state deliberately"
+ * means in practice: nothing here loosens the comparison, it supplies the context the call needs.
+ */
+function checkSequential(records, imgPath) {
+  const vfs = new VFS();
+  let mounted = 0;
+  if (existsSync(imgPath)) {
+    const { files } = readImage(new Uint8Array(readFileSync(imgPath)));
+    for (const [path, data] of files) { vfs.addFile(path, data); mounted++; }
+  }
+  const { mc, dos } = makeMachine({ vfs });
+  dos.load(Uint8Array.from([0xcd, 0x20]), '', 'C:\\T.COM');
+  const cpu = mc.cpu;
+  const SCRATCH = 0x3000;                      // where we stage a path or a write buffer
+  const handles = new Map();                   // the kernel's handle number -> ours
+  const fails = new Map();
+  let pass = 0, skipped = 0;
+  const hex = (v) => '0x' + (v >>> 0).toString(16);
+
+  for (const rec of records) {
+    const ah = (rec.in.r[0] >> 8) & 0xff;
+    if (!SEQUENTIAL.has(ah)) continue;
+    for (let i = 0; i < 8; i++) cpu.reg[i] = rec.in.r[i];
+    cpu.setSeg(3, dos.psp); cpu.setSeg(0, dos.psp);        // DS/ES at our PSP; the payload goes below
+    cpu.flags = rec.in.f;
+
+    if (rec.path !== undefined) {                          // stage the path where DS:DX will point
+      const base = (cpu.seg[3] << 4) + SCRATCH;
+      for (let i = 0; i < rec.path.length; i++) mc.mem.w8(base + i, rec.path.charCodeAt(i));
+      mc.mem.w8(base + rec.path.length, 0);
+      cpu.reg[2] = SCRATCH;
+    } else if (ah === 0x3f || ah === 0x40) {
+      cpu.reg[2] = SCRATCH;                                // buffer
+      if (ah === 0x40 && rec.data) {
+        const base = (cpu.seg[3] << 4) + SCRATCH;
+        for (let i = 0; i < rec.data.length; i++) mc.mem.w8(base + i, rec.data[i]);
+      }
+    }
+    // Handles: 0-4 are the standard streams and mean the same on both sides; anything else has to
+    // have been opened during the recording, or we have nothing to translate it to.
+    if (ah === 0x3e || ah === 0x3f || ah === 0x40 || ah === 0x42) {
+      const kh = rec.in.r[3] & 0xffff;
+      if (kh > 4) {
+        if (!handles.has(kh)) { skipped++; continue; }     // opened before the capture started
+        cpu.reg[3] = handles.get(kh);
+      }
+    }
+
+    mc.intHandlers[0x21](cpu, mc);
+    const gotAX = cpu.reg[0] & 0xffff, gotCF = cpu.flags & CF;
+    const wantAX = rec.out.r[0] & 0xffff, wantCF = rec.out.f & CF;
+    const diffs = [];
+
+    if ((ah === 0x3c || ah === 0x3d) && !gotCF && !wantCF) {
+      handles.set(wantAX, gotAX);                          // both opened it; remember the pairing
+    } else if (gotAX !== wantAX) {
+      diffs.push(`AX=${hex(gotAX)} want ${hex(wantAX)}`);
+    }
+    if (gotCF !== wantCF) diffs.push(`CF=${gotCF} want ${wantCF}`);
+    // A read that reports the same count but delivers different bytes is the failure this whole
+    // exercise exists to catch — comparing AX alone would call it a match.
+    if (ah === 0x3f && !gotCF && !wantCF && rec.data) {
+      const base = (cpu.seg[3] << 4) + SCRATCH;
+      for (let i = 0; i < rec.data.length; i++) {
+        if (mc.mem.r8(base + i) !== rec.data[i]) { diffs.push(`byte ${i} = ${hex(mc.mem.r8(base + i))} want ${hex(rec.data[i])}`); break; }
+      }
+    }
+    if (!diffs.length) { pass++; continue; }
+    const key = `AH=${ah.toString(16).padStart(2, '0')}h  ${diffs.join(', ')}` + (rec.path ? `  [${rec.path}]` : '');
+    fails.set(key, (fails.get(key) || 0) + 1);
+  }
+  return { pass, fails, skipped, mounted };
+}
+
 // ---------------------------------------------------------------- main
 const mode = process.argv[2] || 'check';
 
@@ -156,10 +269,11 @@ if (mode === 'capture') {
   console.log(`${blocks.toLocaleString()} blocks, ${records.length} complete INT 21h calls${fault ? ', FAULT ' + fault : ''}`);
   const byAh = new Map();
   for (const r of records) { const ah = (r.in.r[0] >> 8) & 0xff; byAh.set(ah, (byAh.get(ah) || 0) + 1); }
-  const comparable = records.filter((r) => STATELESS.has((r.in.r[0] >> 8) & 0xff));
+  const comparable = records.filter((r) => { const ah = (r.in.r[0] >> 8) & 0xff; return STATELESS.has(ah) || SEQUENTIAL.has(ah); });
   console.log('captured: ' + [...byAh.entries()].sort((a, b) => b[1] - a[1])
     .map(([ah, n]) => `${ah.toString(16).padStart(2, '0')}h x${n}`).join(' '));
-  console.log(`${comparable.length} of them are in the state-light set and will be compared`);
+  const nSeq = comparable.filter((r) => SEQUENTIAL.has((r.in.r[0] >> 8) & 0xff)).length;
+  console.log(`${comparable.length} will be compared (${comparable.length - nSeq} state-light, ${nSeq} sequential file calls)`);
   writeFileSync(RECORDING, JSON.stringify({ image: img.split('/').pop(), records: comparable }));
   console.log(`wrote ${RECORDING}`);
   process.exit(0);
@@ -170,17 +284,29 @@ const { image, records } = JSON.parse(readFileSync(RECORDING, 'utf8'));
 console.log(`replaying ${records.length} calls captured from ${image} into our INT 21h\n`);
 
 const fails = new Map();
-let pass = 0;
+let pass = 0, total = 0;
 for (const rec of records) {
-  const { ah, diffs } = replay(rec);
+  const ah = (rec.in.r[0] >> 8) & 0xff;
+  if (!STATELESS.has(ah)) continue;
+  total++;
+  const { diffs } = replay(rec);
   if (!diffs.length) { pass++; continue; }
-  const key = `AH=${ah.toString(16).padStart(2, '0')}h  ${diffs.join(', ')}`;
-  fails.set(key, (fails.get(key) || 0) + 1);
+  fails.set(`AH=${ah.toString(16).padStart(2, '0')}h  ${diffs.join(', ')}`, (fails.get(`AH=${ah.toString(16).padStart(2, '0')}h  ${diffs.join(', ')}`) || 0) + 1);
 }
-console.log(`mirage vs a real DOS kernel: ${pass} matched, ${records.length - pass} differed`);
+console.log(`state-light calls: ${pass}/${total} matched`);
+
+const seq = checkSequential(records, join(ROOT, 'boot', image));
+const seqTotal = records.filter((r) => SEQUENTIAL.has((r.in.r[0] >> 8) & 0xff)).length;
+console.log(`file calls (sequential, ${seq.mounted} files mounted from the image): ` +
+            `${seq.pass}/${seqTotal - seq.skipped} matched` +
+            (seq.skipped ? `, ${seq.skipped} skipped (handle opened before the recording began)` : ''));
+for (const [k, n] of seq.fails) fails.set(k, (fails.get(k) || 0) + n);
+pass += seq.pass; total += seqTotal - seq.skipped;
+
+console.log(`\nmirage vs a real DOS kernel: ${pass}/${total} matched`);
 if (fails.size) {
   console.log('\nDifferences (distinct shapes, with how often each occurred):');
-  for (const [k, n] of [...fails.entries()].sort((a, b) => b[1] - a[1])) console.log(`  x${String(n).padStart(5)}  ${k}`);
+  for (const [k, n] of [...fails.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)) console.log(`  x${String(n).padStart(5)}  ${k}`);
   process.exit(1);
 }
 console.log('all matched ✓');

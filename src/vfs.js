@@ -112,8 +112,27 @@ export class VFS {
   }
 
   // ---- DOS handle layer ---------------------------------------------------
+  /** The DOS character devices. They live in every directory at once — `C:\\FOO\\CON` is CON — and
+   *  an extension is ignored, which is why `CON.TXT` opens the console rather than creating a file.
+   *  Found by tools/dos-oracle.mjs: FreeDOS's shell opens CON, AUX and PRN during a normal boot and
+   *  we answered "file not found", so five later closes failed too. */
+  static deviceOf(path) {
+    const parts = String(path).toUpperCase().replace(/\//g, '\\').split('\\');
+    let leaf = parts[parts.length - 1] || '';
+    if (/^[A-Z]:$/.test(leaf)) return null;
+    leaf = leaf.split('.')[0];
+    return ['CON', 'NUL', 'PRN', 'AUX', 'CLOCK$',
+            'LPT1', 'LPT2', 'LPT3', 'COM1', 'COM2', 'COM3', 'COM4'].includes(leaf) ? leaf : null;
+  }
+
   /** @param {{create?:boolean, truncate?:boolean}} opts */
   openFile(path, opts = {}) {
+    const device = VFS.deviceOf(path);
+    if (device) {
+      const fd = this.nextFd++;
+      this.handles.set(fd, { device, pos: 0, path });   // no node: reads and writes go to dos.js
+      return fd;
+    }
     const { parent, name, node } = this.resolve(path);
     let n = node;
     if (!n || n.type !== 'file') {
@@ -130,6 +149,7 @@ export class VFS {
 
   read(fd, n) {
     const h = this.handles.get(fd); if (!h) return null;
+    if (h.device) return new Uint8Array(0);            // a device read at end-of-input; dos.js owns CON
     const end = Math.min(h.pos + n, h.node.data.length);
     const out = h.node.data.subarray(h.pos, end);
     h.pos = end; return out;
@@ -137,6 +157,7 @@ export class VFS {
 
   writeBytes(fd, bytes) {
     const h = this.handles.get(fd); if (!h) return 0;
+    if (h.device) return bytes.length;                 // consumed; dos.js echoes CON to the screen
     const need = h.pos + bytes.length;
     if (need > h.node.data.length) {
       const grown = new Uint8Array(need); grown.set(h.node.data); h.node.data = grown;
@@ -146,6 +167,7 @@ export class VFS {
 
   seek(fd, pos, whence) {
     const h = this.handles.get(fd); if (!h) return -1;
+    if (h.device) return 0;                            // a character device has no position
     const len = h.node.data.length;
     h.pos = whence === 1 ? h.pos + pos : whence === 2 ? len + pos : pos;
     if (h.pos < 0) h.pos = 0;

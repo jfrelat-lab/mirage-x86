@@ -31,6 +31,11 @@ An INT 21h serviced by the guest's own kernel goes swInt -> realInt, so there is
 returned" hook; the capture remembers where the frame will unwind to and watches for the CPU to
 arrive back there with the stack restored.
 
+The comparison has two tiers. **State-light calls** are replayed on a fresh machine. **File calls
+are replayed in order on one machine**, with the boot image's own FAT12 filesystem mounted
+(`tools/fat12.mjs`) and the kernel's handle numbers mapped onto ours — the state a file call depends
+on, reproduced on purpose. A read is compared on the bytes it delivered, not just the count.
+
 Two limits, both deliberate. **The comparison runs over a whitelist** of calls whose answer does not
 depend on state we cannot replicate — widening it means replicating state on purpose, one function at
 a time, not loosening the filter. And **FreeDOS is a peer, not an authority**: where it and MS-DOS

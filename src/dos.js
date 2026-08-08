@@ -353,7 +353,10 @@ export function installDOS(machine, vfs) {
       case 0x3b: vfs.chdir(asciiz(cpu.base[DS] + (cpu.dx & 0xffff))) ? ok() : err(3); break;   // chdir
       case 0x3c: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: true, truncate: true }); fd < 0 ? err(3) : (cpu.ax = fd, ok()); break; }
       case 0x3d: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: false }); fd < 0 ? err(2) : (cpu.ax = fd, ok()); break; }
-      case 0x3e: vfs.close(cpu.bx) ? ok() : err(6); break;            // close
+      // Closing a standard stream (0-4) must succeed: we do not model the per-process handle table,
+      // so there is nothing to free, but reporting "invalid handle" is wrong and FreeDOS's shell
+      // does it five times during a boot (tools/dos-oracle.mjs).
+      case 0x3e: (vfs.close(cpu.bx) || (cpu.bx & 0xffff) <= 4) ? ok() : err(6); break;   // close
       case 0x3f: {                                                   // read
         const data = vfs.read(cpu.bx, cpu.cx & 0xffff);
         if (data === null) { err(6); break; }
@@ -363,7 +366,10 @@ export function installDOS(machine, vfs) {
       }
       case 0x40: {                                                   // write
         const n = cpu.cx & 0xffff; let p = cpu.base[DS] + (cpu.dx & 0xffff);
-        if (cpu.bx === 1 || cpu.bx === 2) { for (let i = 0; i < n; i++) out(mem.r8(p + i)); cpu.ax = n; ok(); break; }
+        const dev = vfs.handles.get(cpu.bx & 0xffff);
+        // stdout/stderr, or a handle opened on CON, goes to the screen; the other devices swallow it.
+        if (cpu.bx === 1 || cpu.bx === 2 || (dev && dev.device === 'CON')) { for (let i = 0; i < n; i++) out(mem.r8(p + i)); cpu.ax = n; ok(); break; }
+        if (dev && dev.device) { cpu.ax = n; ok(); break; }
         const buf = new Uint8Array(n); for (let i = 0; i < n; i++) buf[i] = mem.r8(p + i);
         const w = vfs.writeBytes(cpu.bx, buf); if (w === 0 && n) { err(6); break; }
         cpu.ax = w; ok(); break;
