@@ -26,8 +26,15 @@ const GEOMETRY = new Map([
 ]);
 const SECTOR = 512;
 
+// The diskette parameter table: 11 bytes the BIOS keeps, INT 1Eh points at, and INT 13h AH=08
+// hands back in ES:DI. Values are the standard 1.44M set a PC BIOS ships with.
+const DPT_SEG = 0xf000, DPT_OFF = 0xefc7;
+const DPT = [0xaf, 0x02, 0x25, 0x02, 18, 0x1b, 0xff, 0x6c, 0xf6, 0x0f, 0x08];
+
 export function installDisk(machine) {
   const mem = machine.mem, cpu = machine.cpu;
+  for (let i = 0; i < DPT.length; i++) mem.w8((DPT_SEG << 4) + DPT_OFF + i, DPT[i]);
+  machine.setVector(0x1e, DPT_SEG, DPT_OFF);      // INT 1Eh is a data pointer, not code
   const disk = {
     drives: new Map(),       // drive number (0x00 = A:, 0x80 = first hard disk) -> {data, geom}
     lastStatus: 0,           // AH=01 reports the previous operation's status
@@ -96,7 +103,11 @@ export function installDisk(machine) {
         c.cx = ((maxCyl & 0xff) << 8) | (((maxCyl >> 8) & 3) << 6) | (g.spt & 0x3f);
         c.dx = (((g.heads - 1) & 0xff) << 8) | countDrives(drive);
         c.bx = (c.bx & 0xff00) | (g.type || 4);                 // BL = drive type (04 = 1.44M)
-        c.setSeg(ES, 0); c.di = 0;                              // no parameter table
+        // A real BIOS returns ES:DI = the diskette parameter table — the same 11 bytes INT 1Eh
+        // points at — and a guest is entitled to read it. We used to answer 0000:0000, which is a
+        // null pointer dressed as an answer: the caller has no way to know it is not a table.
+        if (drive < 0x80) { c.setSeg(ES, DPT_SEG); c.di = DPT_OFF; }
+        else { c.setSeg(ES, 0); c.di = 0; }                      // fixed disks use a different table
         ok(); return;
       }
       case 0x15: {                                              // get disk type

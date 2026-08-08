@@ -261,12 +261,28 @@ from the end backwards:
 
 So the root cause is upstream in IO.SYS's own initialisation, and step 5 is where to pick it up.
 
-Two hypotheses tested and **refuted**, recorded so they are not re-tried:
+Traced further, the truncation is deliberate: at `70:1BB4`, `c7 05 ff ff` = `mov word [di],0FFFFh`
+writes the terminator into node 0x3B2 itself, whose `next` pointer had been 0x0416 a moment earlier.
+So 0x3B2 is very likely the *last* node of the chain, and the search that fails starts from the wrong
+end — the DOS chain head is the NUL device inside SysVars, not an arbitrary node. Where the search's
+starting DI comes from is the next thing to establish.
+
+**DOSBox-X boots this same image**, and its log shows the identical BIOS-level probe pattern we see —
+"Disk 1 not active", "Disk 2 not active", `INT15 ax=4101` unknown. Our answers on those paths are
+therefore not the differentiator, which is consistent with the refutations below. It also means a
+reference exists: the next step is a **differential trace against DOSBox-X**, not more solo forward
+reasoning, which is where this investigation stopped converging.
+
+Three hypotheses tested and **refuted**, recorded so they are not re-tried:
 
 * *Missing INT 14h/17h.* IO.SYS installs its AUX and PRN drivers unconditionally and called both,
   and neither had a handler — the audit's T1.1 shape exactly (CF set, registers untouched, which a
   caller reading AH as a status byte takes for success). Both are implemented now. No change.
 * *INT 13h answering wrongly for the drives MS-DOS probes.* It calls AH=08 and AH=02 with
-  DL = FC, FD, FE, FF. Our INT 13h fails all four with 80h, which is correct.
+  DL = FC, FD, FE, FF. Our INT 13h fails all four with 80h, which is correct — and DOSBox-X fails
+  them too.
+* *AH=08 returning a null diskette parameter table.* It answered `ES:DI = 0000:0000`, a null pointer
+  dressed as an answer. It now returns a real 11-byte table, with INT 1Eh pointing at the same one.
+  Correct on its own merits; no effect on the derail.
 
 Still unhandled during that boot: INT 15h x2.
