@@ -25,9 +25,20 @@ let fault = null;
 mc.onError = (e) => { fault = e; };
 
 const bytes = new Uint8Array(readFileSync(path));
+// Attach the whole image to the drive we boot from, so a sector that loads more of itself through
+// INT 13h can. A 512-byte prod never asks; a real bootloader always does.
+let geom = null;
+try { geom = mc.disk.attach(0x00, bytes); }
+catch {
+  // Not one of the standard floppy sizes (a hand-built test image usually isn't): lay it out as a
+  // single track, which is enough for anything that reads the first few sectors.
+  const sectors = Math.ceil(bytes.length / 512);
+  geom = mc.disk.attach(0x00, bytes, { cyl: 1, heads: 1, spt: Math.min(63, sectors), type: 1 });
+}
 const info = bootSector(mc, bytes);
 console.log(`=== ${path} (${bytes.length} bytes, signature ${isBootSector(bytes) ? '55 AA ✓' : 'MISSING'}) ===`);
-console.log(`booted at 0000:7C00, DL=0x${info.drive.toString(16).padStart(2, '0')}`);
+console.log(`booted at 0000:7C00, DL=0x${info.drive.toString(16).padStart(2, '0')}` +
+            (geom ? `, drive A: = ${geom.cyl}c/${geom.heads}h/${geom.spt}s` : ''));
 
 const t0 = Date.now();
 let ran = 0, ticks = 0, fed = 0;

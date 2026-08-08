@@ -47,6 +47,13 @@ a memmove that also runs the SMC dirty check — AH=0Bh is the path games swap *
 a grow that would run into a neighbouring block relocates instead of aliasing it. There is
 **no EMS and no DPMI/protected mode** (raptor/jazz need DPMI).
 
+**INT 13h** (`disk.js`) runs over raw sector images attached with `machine.disk.attach(drive, bytes)`;
+standard floppy sizes (160K-2.88M) get their geometry inferred, anything else needs one passed in.
+AH=00/02/03/04/08/15 are implemented; a drive with no image reports 80h "not ready" rather than
+silence, which is the whole point — an unhandled INT 13h let a guest believe it had read a sector and
+parse uninitialised RAM. No drives are attached by default; `tools/run-boot.mjs` attaches the image
+it boots.
+
 ## Video
 
 Two completely separate paths depending on mode:

@@ -17,6 +17,7 @@
 import { Machine } from '../src/machine.js';
 import { installBIOS } from '../src/bios.js';
 import { installDOS } from '../src/dos.js';
+import { readFileSync } from 'fs';
 import { VFS } from '../src/vfs.js';
 import { bootSector, isBootSector } from '../src/boot.js';
 
@@ -211,10 +212,10 @@ function asciiz(mc, cpu, off, str) {
 { // and an interrupt we don't implement at all must not read as success
   const { mc, cpu } = mk();
   cpu.flags &= ~CF;
-  mc.swInt(0x13);                                                 // BIOS disk services — not implemented
+  mc.swInt(0x14);                                                 // BIOS serial port — not implemented
   eq('an unhandled INT sets CF', cpu.flags & CF, CF);
-  eq('an unhandled INT is counted', mc.unhandledInts[0x13], 1);
-  ok('unhandledIntReport names the vector', mc.unhandledIntReport().includes('INT 13h'));
+  eq('an unhandled INT is counted', mc.unhandledInts[0x14], 1);
+  ok('unhandledIntReport names the vector', mc.unhandledIntReport().includes('INT 14h'));
 }
 
 // ---------------------------------------------------------------- BIOS: INT 10h / 16h / 1Ah
@@ -331,6 +332,87 @@ function asciiz(mc, cpu, off, str) {
   cpu.ah = 0x00; cpu.al = 0x13; mc.intHandlers[0x10](cpu, mc);                  // re-set the mode
   eq('mode set restores the standard offset', mc.vga.crtc[0x13], 40);
   eq('mode set clears the display start', mc.vga.startAddr(), 0);
+}
+
+// ---------------------------------------------------------------- INT 13h disk services
+// INT 13h had no handler at all, which is the audit's worst finding made concrete: an unhandled INT
+// returns CF with registers untouched, so a guest that asks for a sector is told nothing went wrong
+// and parses whatever was already in its buffer. The "no media" case below is the important one.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const cpu = mc.cpu;
+  const int13 = (pre) => { pre(cpu); cpu.flags |= CF; mc.intHandlers[0x13](cpu, mc);
+                           return { ah: (cpu.reg[0] >> 8) & 0xff, al: cpu.reg[0] & 0xff, cf: cpu.flags & CF }; };
+
+  // An empty drive must say so. Silence here is what makes a guest walk off into uninitialised RAM.
+  const empty = int13((c) => { c.ah = 0x02; c.al = 1; c.reg[1] = 0x0001; c.reg[2] = 0x0000; });
+  eq('13h read from an empty drive sets CF', empty.cf, CF);
+  eq('13h read from an empty drive reports "not ready"', empty.ah, 0x80);
+
+  // A 360K image: 40 cylinders, 2 heads, 9 sectors/track.
+  const img = new Uint8Array(368640);
+  for (let i = 0; i < 512; i++) img[i] = 0x11;                    // C0 H0 S1
+  for (let i = 0; i < 512; i++) img[512 + i] = 0x22;              // C0 H0 S2
+  const lba = (1 * 2 + 1) * 9 + (3 - 1);                          // C1 H1 S3
+  for (let i = 0; i < 512; i++) img[lba * 512 + i] = 0x33;
+  const g = mc.disk.attach(0x00, img);
+  eq('a 360K image gets the right geometry', `${g.cyl}/${g.heads}/${g.spt}`, '40/2/9');
+
+  cpu.setSeg(0, 0x2000); cpu.reg[3] = 0x100;                      // ES:BX = 2000:0100
+  const r1 = int13((c) => { c.ah = 0x02; c.al = 2; c.reg[1] = 0x0001; c.reg[2] = 0x0000; });
+  eq('13h reads two sectors', r1.cf, 0);
+  eq('13h reports the count in AL', r1.al, 2);
+  eq('13h delivered sector 1', mc.mem.r8(0x20100), 0x11);
+  eq('13h delivered sector 2', mc.mem.r8(0x20100 + 512), 0x22);
+
+  // CHS decoding: CH = cylinder, CL bits 0-5 = sector, DH = head. Getting this wrong reads the
+  // wrong part of the disk and reports success, which is the silent-wrongness shape again.
+  const r2 = int13((c) => { c.ah = 0x02; c.al = 1; c.reg[1] = 0x0103; c.reg[2] = 0x0100; });  // C1 S3 H1
+  eq('13h reads a sector addressed by full CHS', r2.cf, 0);
+  eq('...from the right place on the disk', mc.mem.r8(0x20100), 0x33);
+
+  const bad = int13((c) => { c.ah = 0x02; c.al = 1; c.reg[1] = 0x0001 | (0x28 << 8); c.reg[2] = 0x0000; }); // cyl 40
+  eq('13h past the last cylinder fails', bad.cf, CF);
+  eq('13h past the last cylinder reports "sector not found"', bad.ah, 0x04);
+  eq('...and reports 0 sectors transferred', bad.al, 0);
+  eq('13h AH=01 reports the previous status', int13((c) => { c.ah = 0x01; }).ah, 0x04);
+
+  const p = int13((c) => { c.ah = 0x08; c.reg[2] = 0x0000; });
+  eq('13h AH=08 succeeds', p.cf, 0);
+  eq('13h AH=08 reports sectors per track', cpu.reg[1] & 0x3f, 9);
+  eq('13h AH=08 reports the last cylinder', (cpu.reg[1] >> 8) & 0xff, 39);
+  eq('13h AH=08 reports the last head', (cpu.reg[2] >> 8) & 0xff, 1);
+
+  // Write back into the image: it IS the medium, not a copy of it. (AH=08 above returned ES:DI=0,
+  // as a real BIOS does, so the buffer segment has to be set again.)
+  cpu.setSeg(0, 0x2000); cpu.reg[3] = 0x100;
+  mc.mem.w8(0x20100, 0xAB);
+  eq('13h AH=03 writes', int13((c) => { c.ah = 0x03; c.al = 1; c.reg[1] = 0x0001; c.reg[2] = 0x0000; }).cf, 0);
+  eq('...into the image', img[0], 0xAB);
+
+  const unk = int13((c) => { c.ah = 0x4f; });
+  eq('13h reports an unimplemented subfunction', unk.ah, 0x01);
+  ok('...and still counts it for the survey', mc.unhandledInts[0x13] > 0);
+}
+
+// ---------------------------------------------------------------- two-sector boot, end to end
+// The rung above the boot handoff: a sector that loads more of itself. demos/bootload.asm reads
+// sector 2 through INT 13h and jumps into it; "STAGE2 OK" can only appear if the read worked.
+{
+  const imgPath = new URL('../demos/BOOTLOAD.IMG', import.meta.url);
+  let img = null;
+  try { img = new Uint8Array(readFileSync(imgPath)); } catch { /* not assembled — skip */ }
+  if (img) {
+    const mc = new Machine({ memSize: 1 << 20 });
+    installBIOS(mc);
+    mc.disk.attach(0x00, img, { cyl: 1, heads: 1, spt: 2, type: 1 });
+    bootSector(mc, img);
+    for (let i = 0; i < 200 && !mc.cpu.halted; i++) mc.runSlice(2000);
+    let text = '';
+    for (let i = 0; i < 9; i++) text += String.fromCharCode(mc.mem.u8[0xb8000 + i * 2]);
+    eq('a two-sector boot image loads its second sector via INT 13h', text, 'STAGE2 OK');
+  }
 }
 
 // ---------------------------------------------------------------- gaps the corpus actually asked for
