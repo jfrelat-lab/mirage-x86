@@ -18,6 +18,27 @@ code and guessing; this ranks them by what the corpus actually calls.
 Caveat: a title only reaches the calls *after* the point where it currently derails, so anything
 dying early under-reports.
 
+## The DOS oracle (`tools/dos-oracle.mjs`)
+
+`test-dos-api.js` states its expectations by hand, and three of its early cases were wrong because I
+derived them by hand. The fix that worked for the CPU was to stop deriving and start observing. Since
+a real kernel boots on our BIOS (roadmap F2d), the same move is available for the DOS layer:
+
+    node tools/dos-oracle.mjs capture   # boot FreeDOS, record every INT 21h in -> out
+    node tools/dos-oracle.mjs check     # replay the recording into our INT 21h and diff
+
+An INT 21h serviced by the guest's own kernel goes swInt -> realInt, so there is no "handler
+returned" hook; the capture remembers where the frame will unwind to and watches for the CPU to
+arrive back there with the stack restored.
+
+Two limits, both deliberate. **The comparison runs over a whitelist** of calls whose answer does not
+depend on state we cannot replicate — widening it means replicating state on purpose, one function at
+a time, not loosening the filter. And **FreeDOS is a peer, not an authority**: where it and MS-DOS
+differ neither is automatically right. What this catches is our answers being differently *shaped*
+from a real kernel's, which is a more tractable question than "which DOS is correct".
+
+The recording is committed, so `check` runs without a boot image.
+
 ## Surveying the I/O bus (`tools/survey-ports.mjs`)
 
 The port-bus counterpart of `survey-gaps.mjs`. Runs the same corpus (`tools/corpus.mjs`) with

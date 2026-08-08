@@ -29,6 +29,8 @@ export function installDOS(machine, vfs) {
     programDone: false,
     exitCode: 0,
     findList: [], findIdx: 0,
+    switchChar: 0x2f,         // AH=37h: '/' — what DOS reports as the command-line option prefix
+    date: null, time: null,   // AH=2Bh/2Dh: a guest-set date/time, if any
     allocStrategy: 0,         // AH=58h: 0 = first fit. Remembered, not honoured — see the handler.
     umbLink: 0,               // AH=58h AL=02/03: UMBs are not in the allocation chain
     onPrint: null,            // optional tap for headless capture
@@ -290,7 +292,9 @@ export function installDOS(machine, vfs) {
     // Real DOS clears CF on success. Most cases below just `break`, so without this they returned
     // with whatever CF the caller happened to have — and `stc` before `int 21h` is common enough
     // that `mov ah,30h / int 21h / jc no_dos` took the error branch. Start clear; the failure
-    // paths (`err()` and the `default`) set it.
+    // paths (`err()` and the `default`) set it. A handler that must PRESERVE the caller's CF instead
+    // — AH=37h is one, confirmed over 1406 captured kernel calls — restores it from here.
+    const entryCF = cpu.flags & CF;
     cpu.flags &= ~CF;
     switch (ah) {
       case 0x00: terminate(0); break;
@@ -400,6 +404,33 @@ export function installDOS(machine, vfs) {
       case 0x52: { cpu.setSeg(ES, DIB_SEG); cpu.bx = DIB_OFF; break; }             // get list of lists (SysVars); [ES:BX-2] = first MCB
       // The three below were picked from tools/survey-gaps.mjs, not from reading the code: they are
       // what the corpus actually calls and did not get.
+      // Found by tools/dos-oracle.mjs, not by the corpus survey: no game we have calls these, but a
+      // real DOS environment leans on them — FreeDOS's own shell asks for the switch character 1406
+      // times during a single boot. Note the convention these three share: AH is left alone and AL
+      // carries the status, so writing the whole of AX would be wrong.
+      case 0x37:                                                     // get/set switch character
+        if (cpu.al === 0x00) { cpu.al = 0; cpu.dx = (cpu.dx & 0xff00) | dos.switchChar; }
+        else if (cpu.al === 0x01) { dos.switchChar = cpu.dx & 0xff; cpu.al = 0; }
+        else if (cpu.al === 0x02) { cpu.al = 0; cpu.dx = (cpu.dx & 0xff00) | 0; }   // device-availability char (obsolete)
+        else if (cpu.al === 0x03) { cpu.al = 0; }
+        else cpu.al = 0xff;
+        // The kernel leaves CF exactly as the caller had it — 1406 captured calls, CF preserved in
+        // every one (tools/dos-oracle.mjs) — so undo the dispatch head's clear rather than ok().
+        cpu.flags |= entryCF;
+        break;
+      case 0x2b: {                                                   // set date: CX=year DH=month DL=day
+        const y = cpu.cx & 0xffff, mo = (cpu.dx >> 8) & 0xff, d = cpu.dx & 0xff;
+        const days = [31, (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        if (y < 1980 || y > 2099 || mo < 1 || mo > 12 || d < 1 || d > days[mo - 1]) { cpu.al = 0xff; ok(); break; }
+        dos.date = { y, mo, d };
+        cpu.al = 0; ok(); break;
+      }
+      case 0x2d: {                                                   // set time: CH:CL=h:m DH:DL=s:hundredths
+        const h = (cpu.cx >> 8) & 0xff, mi = cpu.cx & 0xff, sec = (cpu.dx >> 8) & 0xff, hs = cpu.dx & 0xff;
+        if (h > 23 || mi > 59 || sec > 59 || hs > 99) { cpu.al = 0xff; ok(); break; }
+        dos.time = { h, mi, sec, hs };
+        cpu.al = 0; ok(); break;
+      }
       case 0x62: cpu.bx = dos.psp; ok(); break;                      // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
       case 0x29: {                                                   // parse filename into an FCB — Ski or Die
         // DS:SI = text, ES:DI = FCB. Fill drive (0 = default, else 1-based), then the 8.3 name
