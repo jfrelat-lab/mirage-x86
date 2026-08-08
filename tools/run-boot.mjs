@@ -1,7 +1,8 @@
 // run-boot.mjs — boot a sector image headless and report what it drew.
 //
 //   node tools/run-boot.mjs <image> [blockBudget] [keysHexCSV]
-//   e.g. node tools/run-boot.mjs intros/BOOTCHESS.IMG 2000000 20,a0
+//   e.g. node tools/run-boot.mjs boot/BOOTCHESS.IMG 2000000 20,a0
+//        node tools/run-boot.mjs boot/FREEDOS14.IMG 9000000 4e,0d      (answer N + Enter)
 //
 // The counterpart of run-com.js for the boot path: no DOS is installed, so there is no PSP, no
 // INT 21h and no termination convention — a boot sector runs until it halts or we stop it. That
@@ -41,13 +42,16 @@ console.log(`booted at 0000:7C00, DL=0x${info.drive.toString(16).padStart(2, '0'
             (geom ? `, drive A: = ${geom.cyl}c/${geom.heads}h/${geom.spt}s` : ''));
 
 const t0 = Date.now();
-let ran = 0, ticks = 0, fed = 0;
+let ran = 0, ticks = 0, fed = 0, sinceKey = 0;
 while (ran < budget && !mc.cpu.halted && !fault && Date.now() - t0 < 8000) {
   ran += mc.runSlice(50000);
   mc.tickTimer(); ticks++;
-  // Feed a keystroke whenever the sector is sitting in a BIOS key wait — a chess program does
-  // nothing at all until someone types a move.
-  if (mc.blocked && fed < keys.length) { mc.keyQueue.push({ ascii: keys[fed], scan: keys[fed] }); fed++; }
+  // Feed the keys on a schedule rather than only when `mc.blocked`. Blocking is the BIOS INT 16h
+  // AH=00 path; a real DOS kernel POLLS with AH=01 instead and never blocks, so the old condition
+  // never fired for it — the harness could type at BootChess but not at FreeDOS.
+  if (fed < keys.length && ticks > 2000 && ++sinceKey > 400) {
+    mc.keyQueue.push({ ascii: keys[fed], scan: keys[fed] }); fed++; sinceKey = 0;
+  }
 }
 
 const mode = mc.mem.r8(0x449);
@@ -81,6 +85,9 @@ if (png && (mode === 0x13)) {
   writeFileSync(png, encodePNG(W, H, rgb));
   console.log(`wrote ${png} (${W}x${H})`);
 }
+// What the image asked for and did not get — the reason to run an unknown boot image at all.
+const gaps = mc.unhandledIntReport();
+console.log(`unimplemented INT vectors: ${gaps || 'none'}`);
 if (fault) { console.log(`FAULT: ${fault.message}`); process.exit(1); }
 console.log('no fault ✓');
 

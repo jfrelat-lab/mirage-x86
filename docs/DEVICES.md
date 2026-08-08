@@ -47,6 +47,11 @@ a memmove that also runs the SMC dirty check — AH=0Bh is the path games swap *
 a grow that would run into a neighbouring block relocates instead of aliasing it. There is
 **no EMS and no DPMI/protected mode** (raptor/jazz need DPMI).
 
+A **real DOS kernel boots on this BIOS**: FreeDOS 1.4 reaches its `A:\>` prompt through
+`tools/run-boot.mjs`, with no unimplemented INT vector and no unhandled port along the way. That is
+the practical statement of how complete the hardware layer is — more useful than any list of
+services, because a kernel exercises the ones that matter and complains about the rest.
+
 **Interrupt controller** (`pic.js`): a real 8259A pair — IRR, ISR, IMR, fixed priority, non-specific
 and specific EOI, the ICW1-4 initialisation sequence (so a guest can move the vector base) and the
 IRQ2 cascade. Masking and in-service state are honoured: a masked IRQ is not delivered, and a tick
