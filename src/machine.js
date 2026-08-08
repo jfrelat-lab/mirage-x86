@@ -144,6 +144,16 @@ export class Machine {
         // program that e.g. asks INT 13h for a sector believes it got one and then parses whatever
         // was in the buffer. Report failure instead (CF=1 is the DOS/BIOS error convention) and
         // count it, so "the game misbehaves" becomes one line in `unhandledInts`.
+        // INT 03h (breakpoint) and INT 01h (single step) are the exception: on real hardware their
+        // default vectors are a bare IRET, which restores the flags rather than modifying them. A
+        // debugger-detection routine — LOOM's bundled !RAWCOPY.EXE fires INT 3 over 1500 times —
+        // reads a clobbered CF as a debugger being present. Count them, change nothing.
+        // INT 03h (breakpoint) and INT 01h (single step) are not gaps: their real default vectors ARE
+        // a bare IRET, which restores the flags rather than modifying them. Doing nothing is the
+        // correct implementation, so they are neither counted nor failed — a debugger-detection
+        // routine (LOOM's bundled !RAWCOPY.EXE fires INT 3 over 1500 times) reads a clobbered CF as
+        // a debugger being present.
+        if (n === 0x03 || n === 0x01) return;
         this.unhandledInts[n]++;
         this.cpu.flags |= CF;
       }

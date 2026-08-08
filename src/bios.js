@@ -393,6 +393,16 @@ export function installBIOS(machine) {
     cpu.flags |= CF; cpu.ah = 0x86;            // AH=86h + CF = "function not supported"
   });
 
+  // ---- INT 2Ah: network / critical section ----
+  // AH=00 is "is a network installed?" — AL=0 means no. Programs call it before deciding whether to
+  // use file sharing; with no handler it returned CF, which some read as "installed but erroring".
+  machine.hookInterrupt(0x2a, (cpu) => {
+    if (cpu.ah === 0x00) { cpu.ax = 0; cpu.flags &= ~CF; return; }
+    if (cpu.ah === 0x80 || cpu.ah === 0x81 || cpu.ah === 0x82) { cpu.flags &= ~CF; return; }  // begin/end critical section: no-ops
+    machine.unhandledInts[0x2a]++;
+    cpu.flags |= CF;
+  });
+
   // ---- INT 11h / INT 12h ----
   machine.hookInterrupt(0x11, (cpu) => { cpu.ax = mem.r16(BDA + 0x10); });
   machine.hookInterrupt(0x12, (cpu) => { cpu.ax = mem.r16(BDA + 0x13); });

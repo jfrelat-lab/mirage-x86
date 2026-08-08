@@ -96,6 +96,11 @@ export function installDOS(machine, vfs) {
     writeMCB(PSP_SEG - 1, hasFree ? 0x4d : 0x5a, PSP_SEG, top - PSP_SEG);   // program block: 'M', or 'Z' if it owns all of memory
     if (hasFree) writeMCB(top, 0x5a, 0x0000, MEM_TOP - top - 1);            // free block: 'Z' (last), owner 0
     mem.w16((DIB_SEG << 4) + DIB_OFF - 2, PSP_SEG - 1);                     // list-of-lists: word before it = first MCB (the program's, at PSP-1)
+    // PSP:0002 is "first paragraph past this program's block", and it was hard-wired to 0xA000 —
+    // i.e. every program was told it owned all of conventional memory no matter how it had been
+    // sized or how much it had already shrunk. A program that sizes its heap from this word (rather
+    // than asking AH=48h) computed it from a number that was never true after an AH=4Ah.
+    mem.w16((dos.psp << 4) + 0x02, top);
   };
   dos.syncMCB = syncMCB;
   // INT 21h AH=52 "get list of lists" (SysVars) hands back ES:BX; the word at [ES:BX-2] is the
@@ -362,18 +367,92 @@ export function installDOS(machine, vfs) {
       case 0x41: vfs.unlink(asciiz(cpu.base[DS] + (cpu.dx & 0xffff))) ? ok() : err(2); break; // delete
       case 0x42: { const pos = vfs.seek(cpu.bx, ((cpu.cx << 16) | cpu.dx) | 0, cpu.al); if (pos < 0) { err(6); break; } cpu.dx = (pos >>> 16) & 0xffff; cpu.ax = pos & 0xffff; ok(); break; } // lseek
       case 0x43: { ok(); cpu.cx = 0x20; break; }                     // get/set attr (stub)
-      case 0x44: { cpu.ax = 0; cpu.dx = (cpu.bx <= 2) ? 0x80 : 0; ok(); break; } // ioctl
+      case 0x44:                                                     // IOCTL — AL selects the subfunction
+        // AL was ignored, so AL=06/07 (input/output status) always answered "ready". A program that
+        // polls a handle until it reports ready spins forever on the answer it wanted; one that
+        // polls until NOT ready never leaves. Answer per handle instead: the three standard streams
+        // are character devices and always ready, a file is always ready to read and write.
+        switch (cpu.al) {
+          case 0x00: cpu.dx = (cpu.bx <= 2) ? 0x80 : 0; cpu.ax = cpu.dx; ok(); break;   // get device info
+          case 0x01: ok(); break;                                                        // set device info
+          case 0x06: case 0x07:                                                          // input / output status
+            cpu.al = (cpu.bx <= 4 || vfs.handles.has(cpu.bx & 0xffff)) ? 0xff : 0x00;    // FF = ready, 00 = not
+            if (cpu.bx > 4 && !vfs.handles.has(cpu.bx & 0xffff)) { err(6); break; }       // invalid handle
+            ok(); break;
+          case 0x08: cpu.ax = 1; ok(); break;                                            // removable? 1 = fixed
+          default: err(1); break;
+        }
+        break;
       case 0x47: { let p = cpu.base[DS] + (cpu.si & 0xffff); const s = vfs.cwd.join('\\'); for (let i = 0; i < s.length; i++) mem.w8(p + i, s.charCodeAt(i)); mem.w8(p + s.length, 0); ok(); break; } // get cwd
       case 0x48: {                                                   // allocate a block
         const par = cpu.bx & 0xffff;
         if (dos.allocTop + par > MEM_TOP) { err(8); cpu.bx = MEM_TOP - dos.allocTop; break; }
         const seg = dos.allocTop; dos.allocs.set(seg, par); dos.allocTop = seg + par; syncMCB(); cpu.ax = seg; ok(); break;
       }
-      case 0x49: { dos.allocs.delete(cpu.seg[ES]); recomputeTop(); ok(); break; } // free (reclaims)
+      case 0x49: {                                                   // free a block (reclaims)
+        // Freeing a segment we never handed out used to report success, so a double free — or a
+        // free of a bogus pointer — looked fine and quietly left the allocator's idea of memory
+        // wrong. Real DOS returns error 9, "invalid memory block address".
+        const seg = cpu.seg[ES];
+        if (!dos.allocs.has(seg)) { err(9); break; }
+        dos.allocs.delete(seg); recomputeTop(); ok(); break;
+      }
       case 0x52: { cpu.setSeg(ES, DIB_SEG); cpu.bx = DIB_OFF; break; }             // get list of lists (SysVars); [ES:BX-2] = first MCB
       // The three below were picked from tools/survey-gaps.mjs, not from reading the code: they are
       // what the corpus actually calls and did not get.
       case 0x62: cpu.bx = dos.psp; ok(); break;                      // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
+      case 0x29: {                                                   // parse filename into an FCB — Ski or Die
+        // DS:SI = text, ES:DI = FCB. Fill drive (0 = default, else 1-based), then the 8.3 name
+        // blank-padded and uppercased. AL returns 1 if the name held a wildcard, else 0; SI is left
+        // past the last character consumed, which is what a caller parsing a command tail relies on.
+        let p = cpu.base[DS] + (cpu.si & 0xffff);
+        const start = p;
+        const skipLead = cpu.al & 1;
+        if (skipLead) while (mem.r8(p) === 0x20 || mem.r8(p) === 0x09) p++;
+        const isSep = (ch) => ch === 0 || ' \t.:;,=+<>|/"[]'.includes(String.fromCharCode(ch));
+        const fcb = cpu.base[ES] + (cpu.di & 0xffff);
+        let drive = 0;
+        if (mem.r8(p + 1) === 0x3a) {                                // "X:" drive prefix
+          drive = (String.fromCharCode(mem.r8(p)).toUpperCase().charCodeAt(0) - 64) & 0xff;
+          p += 2;
+        }
+        mem.w8(fcb, drive);
+        let wild = 0;
+        const field = (len, off) => {
+          for (let i = 0; i < len; i++) mem.w8(fcb + off + i, 0x20);
+          for (let i = 0; i < len; ) {
+            const ch = mem.r8(p);
+            if (isSep(ch)) break;
+            p++;
+            if (ch === 0x3f) { wild = 1; mem.w8(fcb + off + i, 0x3f); i++; }
+            else if (ch === 0x2a) { wild = 1; for (; i < len; i++) mem.w8(fcb + off + i, 0x3f); }
+            else { mem.w8(fcb + off + i, String.fromCharCode(ch).toUpperCase().charCodeAt(0)); i++; }
+          }
+          while (!isSep(mem.r8(p))) p++;                             // drop anything past the field
+        };
+        field(8, 1);
+        if (mem.r8(p) === 0x2e) { p++; field(3, 9); } else for (let i = 0; i < 3; i++) mem.w8(fcb + 9 + i, 0x20);
+        for (let i = 0; i < 25; i++) mem.w8(fcb + 12 + i, 0);        // current block/size/date fields
+        cpu.al = wild;
+        cpu.si = (cpu.si & 0xffff) + (p - start);
+        break;                                                       // AH=29h does not use CF
+      }
+      case 0x38: {                                                   // get country info — OMF
+        // AL=00 asks for the current country. We are a US machine: MM/DD/YY, '$', decimal '.', and
+        // 12-hour time off. The caller reads the 34-byte block at DS:DX; BX returns the country code.
+        if ((cpu.dx & 0xffff) === 0xffff) { err(2); break; }         // set-country form: no such country
+        let p = cpu.base[DS] + (cpu.dx & 0xffff);
+        for (let i = 0; i < 34; i++) mem.w8(p + i, 0);
+        mem.w16(p, 0);                                               // date format 0 = MM/DD/YY
+        mem.w8(p + 2, 0x24);                                         // currency symbol "$"
+        mem.w8(p + 7, 0x2c);                                         // thousands separator ","
+        mem.w8(p + 9, 0x2e);                                         // decimal separator "."
+        mem.w8(p + 11, 0x2d);                                        // date separator "-"
+        mem.w8(p + 13, 0x3a);                                        // time separator ":"
+        mem.w8(p + 17, 2);                                           // currency: 2 decimal places
+        cpu.bx = 1;                                                  // country code 1 = USA
+        ok(); break;
+      }
       case 0x58:                                                     // get/set memory allocation strategy
         // MathRescue/WordRescue set it before allocating. Our allocator is a bump allocator, so
         // there is no first/best/last fit to honour — we remember the value and hand it back, which

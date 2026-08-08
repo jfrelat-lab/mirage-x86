@@ -334,6 +334,93 @@ function asciiz(mc, cpu, off, str) {
   eq('mode set clears the display start', mc.vga.startAddr(), 0);
 }
 
+// ---------------------------------------------------------------- second survey batch
+// AH=29h (Ski or Die), AH=38h (OMF), INT 03h (1578 calls from LOOM's bundled !RAWCOPY.EXE), plus
+// three audit items in the same area: IOCTL ignoring AL, free accepting any segment, PSP:0002.
+{
+  const c = mk();
+  // INT 03h is a breakpoint: its real vector is a bare IRET, which RESTORES the flags. Setting CF
+  // makes a debugger-detection routine conclude a debugger is attached.
+  c.cpu.flags &= ~CF;
+  c.mc.swInt(0x03);
+  eq('INT 03h leaves the flags alone', c.cpu.flags & CF, 0);
+  // Not a gap either: a bare IRET IS the correct default vector, so it must not show up in the
+  // survey as something the corpus asked for and did not get.
+  eq('INT 03h is not reported as unimplemented', c.mc.unhandledInts[0x03], 0);
+  c.cpu.flags &= ~CF;
+  c.mc.swInt(0x14);                                             // a genuinely unsupported vector
+  eq('an unsupported vector still reports failure', c.cpu.flags & CF, CF);
+  // INT 2Ah AH=00: "is a network installed?" — AL=0 means no. Returning CF read as "installed, and
+  // erroring", which is a different and worse answer.
+  c.cpu.ah = 0x00; c.cpu.flags |= CF;
+  c.mc.intHandlers[0x2a](c.cpu, c.mc);
+  eq('INT 2Ah AH=00 clears CF', c.cpu.flags & CF, 0);
+  eq('INT 2Ah AH=00 reports no network', c.cpu.reg[0] & 0xffff, 0);
+}
+{ // AH=29h — parse a filename into an FCB
+  const c = mk();
+  const at = (off, s) => asciiz(c.mc, c.cpu, off, s);
+  const fcbOff = 0x300;
+  const parse = (text, al = 0) => {
+    at(0x200, text);
+    c.cpu.reg[6] = 0x200; c.cpu.setSeg(0, c.cpu.seg[3]); c.cpu.reg[7] = fcbOff;
+    return int21(c, 0x29, (cpu) => { cpu.al = al; });
+  };
+  const fcbStr = (off, len) => {
+    let s = '';
+    for (let i = 0; i < len; i++) s += String.fromCharCode(c.mc.mem.r8((c.cpu.seg[0] << 4) + fcbOff + off + i));
+    return s;
+  };
+  parse('GAME.TDT');
+  eq('29h fills the 8-character name, blank padded', fcbStr(1, 8), 'GAME    ');
+  eq('29h fills the extension', fcbStr(9, 3), 'TDT');
+  eq('29h reports no wildcard', c.cpu.reg[0] & 0xff, 0);
+  eq('29h leaves the drive as "default"', c.mc.mem.r8((c.cpu.seg[0] << 4) + fcbOff), 0);
+
+  parse('B:SAVE*.D?T');
+  eq('29h takes the drive letter', c.mc.mem.r8((c.cpu.seg[0] << 4) + fcbOff), 2);
+  eq('29h expands * to ? across the field', fcbStr(1, 8), 'SAVE????');
+  eq('29h keeps a literal ?', fcbStr(9, 3), 'D?T');
+  eq('29h reports the wildcard in AL', c.cpu.reg[0] & 0xff, 1);
+  eq('29h uppercases', (parse('lower.txt'), fcbStr(1, 8)), 'LOWER   ');
+}
+{ // AH=38h — country info
+  const c = mk();
+  const r = int21(c, 0x38, (cpu) => { cpu.al = 0; cpu.reg[2] = 0x300; });
+  eq('38h clears CF', r.cf, 0);
+  eq('38h reports the country code in BX', c.cpu.reg[3] & 0xffff, 1);
+  const p = (c.cpu.seg[3] << 4) + 0x300;
+  eq('38h: date format is MM/DD/YY', c.mc.mem.r16(p), 0);
+  eq('38h: currency symbol', String.fromCharCode(c.mc.mem.r8(p + 2)), '$');
+  eq('38h: decimal separator', String.fromCharCode(c.mc.mem.r8(p + 9)), '.');
+  eq('38h with DX=FFFF (set country) fails', int21(c, 0x38, (cpu) => { cpu.al = 0; cpu.reg[2] = 0xffff; }).cf, CF);
+}
+{ // AH=44h IOCTL used to ignore AL, so AL=06/07 always answered "ready"
+  const c = mk({ '\\F.TXT': 'x' });
+  const off = asciiz(c.mc, c.cpu, 0x200, 'C:\\F.TXT');
+  const fd = int21(c, 0x3d, (cpu) => { cpu.al = 0; cpu.reg[2] = off; }).ax;
+  eq('44h AL=00 reports a character device for stdin', int21(c, 0x44, (cpu) => { cpu.al = 0; cpu.reg[3] = 0; }).ax & 0x80, 0x80);
+  eq('44h AL=06 says an open file is ready to read', int21(c, 0x44, (cpu) => { cpu.al = 6; cpu.reg[3] = fd; }).ax & 0xff, 0xff);
+  eq('44h AL=06 on a bogus handle fails', int21(c, 0x44, (cpu) => { cpu.al = 6; cpu.reg[3] = 0x99; }).cf, CF);
+  eq('44h with an unknown subfunction fails', int21(c, 0x44, (cpu) => { cpu.al = 0x7f; cpu.reg[3] = 0; }).cf, CF);
+}
+{ // PSP:0002 ("first paragraph past this block") was hard-wired to 0xA000 for every program
+  const c = mk();
+  eq('PSP:0002 starts at the top of memory for a .COM that owns everything',
+     c.mc.mem.r16((c.dos.psp << 4) + 2), 0xa000);
+  int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });   // shrink to 0x200 paras
+  eq('PSP:0002 follows the block after a shrink', c.mc.mem.r16((c.dos.psp << 4) + 2), 0x100 + 0x200);
+}
+{ // AH=49h accepted any segment, so a double free looked fine and left the allocator wrong
+  const c = mk();
+  int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });
+  const seg = int21(c, 0x48, (cpu) => { cpu.reg[3] = 0x10; }).ax;
+  eq('49h frees a block we handed out', int21(c, 0x49, (cpu) => { cpu.setSeg(0, seg); }).cf, 0);
+  const twice = int21(c, 0x49, (cpu) => { cpu.setSeg(0, seg); });
+  eq('49h refuses a double free', twice.cf, CF);
+  eq('49h reports "invalid memory block address"', twice.ax, 9);
+}
+
 // ---------------------------------------------------------------- INT 13h disk services
 // INT 13h had no handler at all, which is the audit's worst finding made concrete: an unhandled INT
 // returns CF with registers untouched, so a guest that asks for a sector is told nothing went wrong
