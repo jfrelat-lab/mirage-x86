@@ -3,7 +3,7 @@
 // 0040:0000 and the 80x25 text screen at B800:0000. The text routines are
 // exposed so the JS shell prints through the exact same path as guest code.
 
-import { ZF } from './cpu.js';
+import { ZF, CF } from './cpu.js';
 import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
 
@@ -369,6 +369,27 @@ export function installBIOS(machine) {
       const t = mem.r32(BDA + 0x6c);
       cpu.cx = (t >>> 16) & 0xffff; cpu.dx = t & 0xffff; cpu.al = 0;
     }
+  });
+
+  // ---- INT 15h: system services ----
+  // Only AH=86h, because that is the only subfunction the corpus actually asks for — 16384 calls
+  // from `revitro` alone (tools/survey-gaps.mjs). Until now INT 15h had no handler at all, so the
+  // wait returned instantly: a demo that paces itself with it ran as fast as the host could go,
+  // which is a very plausible reason revitro's animation sits at a different phase from DOSBox's.
+  // Everything else still increments machine.unhandledInts[0x15] so the survey keeps seeing it.
+  machine.hookInterrupt(0x15, (cpu) => {
+    if (cpu.ah === 0x86) {                     // wait CX:DX microseconds
+      const us = (((cpu.cx & 0xffff) * 65536) + (cpu.dx & 0xffff));
+      // cpu.cycles IS the PIT clock: pitBase cycles per 18.2 Hz tick, i.e. 1.193182 MHz at the
+      // default reload. We cannot block a JS handler, so time passes by advancing the virtual
+      // clock — the run loop then delivers whatever PIT ticks came due, which is what the guest
+      // was waiting for anyway.
+      cpu.cycles += us * (machine.pitBase * 1.193182 / 65536);
+      cpu.flags &= ~CF;                        // CF clear = the wait completed
+      return;
+    }
+    machine.unhandledInts[0x15]++;
+    cpu.flags |= CF; cpu.ah = 0x86;            // AH=86h + CF = "function not supported"
   });
 
   // ---- INT 11h / INT 12h ----

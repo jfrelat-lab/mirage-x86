@@ -29,6 +29,8 @@ export function installDOS(machine, vfs) {
     programDone: false,
     exitCode: 0,
     findList: [], findIdx: 0,
+    allocStrategy: 0,         // AH=58h: 0 = first fit. Remembered, not honoured — see the handler.
+    umbLink: 0,               // AH=58h AL=02/03: UMBs are not in the allocation chain
     onPrint: null,            // optional tap for headless capture
   };
 
@@ -100,6 +102,11 @@ export function installDOS(machine, vfs) {
   // first MCB segment — the standard way MCB-walkers find the chain head. We host it in unused
   // low memory just past the BIOS data area.
   const DIB_SEG = 0x0050, DIB_OFF = 0x0026;
+  // InDOS flag (AH=34h) and, one byte below it as DOS lays them out, the critical-error flag. Kept
+  // in the same scratch paragraph as the list-of-lists, clear of the MCB-head word at DIB_OFF-2.
+  const INDOS_OFF = 0x0021, CRITERR_OFF = 0x0020;
+  mem.w8((DIB_SEG << 4) + INDOS_OFF, 0);
+  mem.w8((DIB_SEG << 4) + CRITERR_OFF, 0);
 
   // allocTop = the top of the program block plus every live dynamic allocation. Recomputed after a
   // free/resize so reclaimed memory is actually handed back (a bump allocator that never lowered
@@ -364,6 +371,25 @@ export function installDOS(machine, vfs) {
       }
       case 0x49: { dos.allocs.delete(cpu.seg[ES]); recomputeTop(); ok(); break; } // free (reclaims)
       case 0x52: { cpu.setSeg(ES, DIB_SEG); cpu.bx = DIB_OFF; break; }             // get list of lists (SysVars); [ES:BX-2] = first MCB
+      // The three below were picked from tools/survey-gaps.mjs, not from reading the code: they are
+      // what the corpus actually calls and did not get.
+      case 0x62: cpu.bx = dos.psp; ok(); break;                      // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
+      case 0x58:                                                     // get/set memory allocation strategy
+        // MathRescue/WordRescue set it before allocating. Our allocator is a bump allocator, so
+        // there is no first/best/last fit to honour — we remember the value and hand it back, which
+        // is what the caller checks. Reporting failure here would be worse: the program concludes
+        // it is on a DOS too old to ask.
+        if (cpu.al === 0x00) { cpu.ax = dos.allocStrategy; ok(); }
+        else if (cpu.al === 0x01) { dos.allocStrategy = cpu.bx & 0xffff; ok(); }
+        else if (cpu.al === 0x02) { cpu.ax = dos.umbLink; ok(); }     // UMB link state (we have no UMBs)
+        else if (cpu.al === 0x03) { dos.umbLink = cpu.bx & 1; ok(); }
+        else err(1);
+        break;
+      case 0x34:                                                     // get InDOS flag address -> ES:BX
+        // Keen1 reads it. A TSR uses the flag to know whether DOS is re-entrant right now; since our
+        // INT 21h handlers are atomic JS, it is always 0 — but the pointer has to be real, because
+        // the caller dereferences it.
+        cpu.setSeg(ES, DIB_SEG); cpu.bx = INDOS_OFF; ok(); break;
       case 0x4a: {                                                   // resize memory block
         const seg = cpu.seg[ES], want = cpu.bx & 0xffff, maxPar = MEM_TOP - seg;
         if (want > maxPar) { err(8); cpu.bx = maxPar; break; }        // not enough memory; report the max

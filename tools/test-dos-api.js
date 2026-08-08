@@ -333,6 +333,47 @@ function asciiz(mc, cpu, off, str) {
   eq('mode set clears the display start', mc.vga.startAddr(), 0);
 }
 
+// ---------------------------------------------------------------- gaps the corpus actually asked for
+// Chosen from tools/survey-gaps.mjs rather than from a reading of the code: these are the INT 21h
+// functions programs in games/ called and did not get.
+{
+  const c = mk();
+  const psp = int21(c, 0x62);                                   // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
+  eq('62h clears CF', psp.cf, 0);
+  eq('62h returns the current PSP in BX', c.cpu.reg[3] & 0xffff, c.dos.psp);
+
+  eq('58h AL=00 reports the strategy', int21(c, 0x58, (cpu) => { cpu.al = 0; }).ax, 0);
+  eq('58h AL=01 sets it', int21(c, 0x58, (cpu) => { cpu.al = 1; cpu.reg[3] = 2; }).cf, 0);
+  eq('58h AL=00 reads back what was set', int21(c, 0x58, (cpu) => { cpu.al = 0; }).ax, 2);
+  eq('58h AL=02 reports the UMB link state', int21(c, 0x58, (cpu) => { cpu.al = 2; }).cf, 0);
+  eq('58h with a bogus subfunction fails', int21(c, 0x58, (cpu) => { cpu.al = 9; }).cf, CF);
+
+  const indos = int21(c, 0x34);                                 // InDOS flag — Keen1
+  eq('34h clears CF', indos.cf, 0);
+  const p = (c.cpu.seg[0] << 4) + (c.cpu.reg[3] & 0xffff);
+  ok('34h returns a pointer into low memory', p > 0 && p < 0x600);
+  eq('34h: the flag is clear outside a DOS call', c.mc.mem.r8(p), 0);
+}
+
+// ---------------------------------------------------------------- INT 15h AH=86h (wait)
+// 16384 calls from revitro alone. With no handler at all the wait returned instantly, so a demo
+// pacing itself on it ran as fast as the host could go.
+{
+  const c = mk();
+  const before = c.mc.cpu.cycles;
+  c.cpu.ah = 0x86; c.cpu.reg[1] = 0; c.cpu.reg[2] = 1000;        // CX:DX = 1000 us
+  c.cpu.flags |= CF;
+  c.mc.intHandlers[0x15](c.cpu, c.mc);
+  eq('INT 15h AH=86h clears CF when the wait completes', c.cpu.flags & CF, 0);
+  const spent = c.mc.cpu.cycles - before;
+  // cpu.cycles is the PIT clock: 1.193182 MHz, so 1000 us is ~1193 cycles.
+  ok(`INT 15h AH=86h advanced the virtual clock (${Math.round(spent)} cycles)`, spent > 1100 && spent < 1300);
+  c.cpu.ah = 0x4f; c.mc.intHandlers[0x15](c.cpu, c.mc);          // an unsupported subfunction
+  eq('INT 15h reports unsupported subfunctions', c.cpu.flags & CF, CF);
+  eq('...with AH=86h', (c.cpu.reg[0] >> 8) & 0xff, 0x86);
+  ok('...and still counts them for the survey', c.mc.unhandledInts[0x15] > 0);
+}
+
 // ---------------------------------------------------------------- boot-sector handoff (INT 19h)
 // Not a DOS service at all — that is the point. A boot-sector prod (BootChess and its kind) is what
 // the BIOS loads and jumps to, with no PSP, no INT 21h and no termination convention. This checks the
