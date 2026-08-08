@@ -39,6 +39,7 @@ export class Machine {
     this.keyQueue = [];                            // {ascii, scan} pushed by the UI
     this.hwIrqPending = false;                      // a hardware IRQ (keyboard) waits for IF to be set
     this.unhandledInts = new Uint32Array(256);      // per-vector count of INTs we don't implement
+    this._inBiosCallback = -1;                     // vector currently running via the inline far-call path
 
     // PIT channel-0 timer, clocked off cpu.cycles (which counts retired instructions ~= the
     // 1.19 MHz PIT tick for our purposes). The run loop fires INT 8 whenever cpu.cycles crosses
@@ -127,7 +128,17 @@ export class Machine {
    *  with no JS handler just IRETs — identical to the bare 0xCF stub, so chaining is unaffected. */
   biosCallback(n) {
     const cpu = this.cpu, h = this.intHandlers[n];
-    if (h) h(cpu, this);
+    const prev = this._inBiosCallback;
+    this._inBiosCallback = n;                    // tells block() which path it is on
+    try { if (h) h(cpu, this); } finally { this._inBiosCallback = prev; }
+    if (this.blocked) {
+      // The handler is waiting on input. Consuming the IRET frame here is what broke this path:
+      // it overwrote the rewind block() had just done, so the guest never re-asked, `blocked`
+      // stayed set and AX was never loaded. Leave the caller's frame alone and re-enter this same
+      // entry when the slice resumes, so the service is retried instead of silently completing.
+      cpu.setSeg(CS, BIOS_SEG); cpu.eip = n;
+      return;
+    }
     cpu.eip = cpu.pop16();
     cpu.setSeg(CS, cpu.pop16());
     cpu.flags = (cpu.pop16() & 0x7fd5) | 2;
@@ -266,8 +277,14 @@ export class Machine {
     return this.rec.run(this, maxBlocks);
   }
 
-  /** A handler calls this to wait on input: rewind past the INT and yield. */
-  block(instrLen = 2) { this.blocked = true; this.cpu.eip = (this.cpu.eip - instrLen) & 0xffff; }
+  /** A handler calls this to wait on input: yield, and arrange for the service to be re-entered.
+   *  On the `INT n` path the handler runs with eip already past the CD nn, so rewind to re-execute
+   *  it. On the inline far-call path there is nothing to rewind — the guest pushed an IRET frame and
+   *  jumped to f000:n — and biosCallback handles the re-entry itself. */
+  block(instrLen = 2) {
+    this.blocked = true;
+    if (this._inBiosCallback < 0) this.cpu.eip = (this.cpu.eip - instrLen) & 0xffff;
+  }
 
   reset() {
     this.cpu.reg.fill(0); this.cpu.seg.fill(0); this.cpu.base.fill(0);

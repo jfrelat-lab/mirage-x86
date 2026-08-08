@@ -421,6 +421,47 @@ function asciiz(mc, cpu, off, str) {
   eq('49h reports "invalid memory block address"', twice.ax, 9);
 }
 
+// ---------------------------------------------------------------- blocking on the far-call path
+// Audit T1.3, "élevé, silencieux". A guest can reach a BIOS service two ways: `INT n`, or by reading
+// the vector, pushing an IRET frame and far-JMP/CALLing f000:n — the ubiquitous TSR/game pattern.
+// On the second path, biosCallback popped the frame unconditionally right after the handler ran,
+// which overwrote the rewind block() had just done: the guest never re-asked, `blocked` stayed set,
+// and AX was never loaded with the key.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const cpu = mc.cpu;
+  const SS = 0x3000, RET_CS = 0x1234, RET_IP = 0x5678;
+  cpu.setSeg(2, SS); cpu.sp = 0x100;
+  cpu.push16(0x0202); cpu.push16(RET_CS); cpu.push16(RET_IP);   // the IRET frame the guest pushes
+  const spAfterPush = cpu.sp & 0xffff;
+
+  cpu.ah = 0x00;                                                 // INT 16h AH=00: wait for a key
+  mc.keyQueue.length = 0;
+  mc.biosCallback(0x16);
+  ok('a blocking service on the far-call path sets blocked', mc.blocked);
+  eq('...leaves the caller\'s IRET frame on the stack', cpu.sp & 0xffff, spAfterPush);
+  eq('...and re-enters the BIOS entry, not the caller', (cpu.seg[1] << 16) | (cpu.eip & 0xffff), (0xf000 << 16) | 0x16);
+
+  mc.blocked = false;
+  mc.keyQueue.push({ ascii: 0x41, scan: 0x1e });                 // 'A'
+  mc.biosCallback(0x16);
+  ok('once the key arrives the service completes', !mc.blocked);
+  eq('...loading AL with the character', cpu.reg[0] & 0xff, 0x41);
+  eq('...and AH with the scan code', (cpu.reg[0] >> 8) & 0xff, 0x1e);
+  eq('...consuming the IRET frame exactly once', cpu.sp & 0xffff, (spAfterPush + 6) & 0xffff);
+  eq('...and returning to the caller', (cpu.seg[1] << 16) | (cpu.eip & 0xffff), (RET_CS << 16) | RET_IP);
+}
+{ // the INT path must keep rewinding, which is how it re-asks
+  const c = mk();
+  c.mc.keyQueue.length = 0;
+  c.cpu.eip = 0x200;
+  c.cpu.ah = 0x01;                                               // INT 21h AH=01: read with echo
+  c.mc.intHandlers[0x21](c.cpu, c.mc);
+  ok('a blocking INT 21h service sets blocked', c.mc.blocked);
+  eq('...and rewinds past the INT so it is re-executed', c.cpu.eip & 0xffff, 0x1fe);
+}
+
 // ---------------------------------------------------------------- INT 13h disk services
 // INT 13h had no handler at all, which is the audit's worst finding made concrete: an unhandled INT
 // returns CF with registers untouched, so a guest that asks for a sector is told nothing went wrong
