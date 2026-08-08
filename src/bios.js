@@ -7,6 +7,7 @@ import { ZF, CF } from './cpu.js';
 import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
 import { installDisk } from './disk.js';
+import { installPIC } from './pic.js';
 
 const VRAM = 0xb8000;          // text video memory
 const BDA = 0x400;             // BIOS Data Area
@@ -393,6 +394,19 @@ export function installBIOS(machine) {
     cpu.flags |= CF; cpu.ah = 0x86;            // AH=86h + CF = "function not supported"
   });
 
+  // ---- INT 08h: the BIOS timer handler ----
+  // A game that hooks INT 8 very often does its work and then chains to the ORIGINAL vector,
+  // expecting the BIOS handler to finish the job — which on real hardware ends with
+  // `mov al,20h; out 20h,al`. Our f000:08 was a bare IRET, so with a real PIC in place ISR bit 0
+  // stayed set after the first tick and the timer never fired again: COSMO, HOCUS, MI2 and
+  // GODTHUND all went black. The BDA tick is bumped by machine.tickTimer before delivery, so all
+  // that is left here is the end-of-interrupt.
+  machine.hookInterrupt(0x08, () => { if (machine.pic) machine.pic.eoi(0); });
+
+  // ---- INT 09h: the BIOS keyboard handler ----
+  // Same shape: an ISR that chains to the original INT 9 expects the BIOS to acknowledge IRQ1.
+  machine.hookInterrupt(0x09, () => { if (machine.pic) machine.pic.eoi(1); });
+
   // ---- INT 2Ah: network / critical section ----
   // AH=00 is "is a network installed?" — AL=0 means no. Programs call it before deciding whether to
   // use file sharing; with no handler it returned CF, which some read as "installed but erroring".
@@ -523,20 +537,6 @@ export function installBIOS(machine) {
   machine.onPortRead(0x64, () => (kb.obf ? 0x1d : 0x1c));     // status byte; bit0 = output-buffer-full
   machine.onPortWrite(0x60, () => { kb.data = 0xfa; kb.obf = true; });   // keyboard command -> ACK
   machine.onPortWrite(0x64, () => {});                        // controller command (ignored)
-  machine.onPortWrite(0x20, () => {});                        // master PIC end-of-interrupt
-  machine.onPortWrite(0xa0, () => {});                        // slave PIC end-of-interrupt
-
-  // ---- 8259 interrupt mask registers (0x21 / 0xA1) ------------------------
-  // Not a PIC — priority, IRR/ISR and a real EOI are still ahead (roadmap F2c). But the mask
-  // register has to READ BACK what was written, and it did not: an unregistered read returns
-  // all-ones, so the ubiquitous "save the IMR, mask my IRQ, restore it later" sequence read 0xFF
-  // and restored 0xFF — every interrupt masked, including the timer. tools/survey-ports.mjs counts
-  // 23 reads and 23 writes of 0x21 across GODTHUND, HOCUS, LOOM, MATHRESC, MI2 and MOKTAR.
-  const pic = machine.pic = { imr1: 0x00, imr2: 0x00 };
-  machine.onPortWrite(0x21, (_p, _s, v) => { pic.imr1 = v & 0xff; });
-  machine.onPortRead(0x21, () => pic.imr1);
-  machine.onPortWrite(0xa1, (_p, _s, v) => { pic.imr2 = v & 0xff; });
-  machine.onPortRead(0xa1, () => pic.imr2);
 
   // ---- 8255 PPI port B (0x61) + PIT channel 2 (0x42) ----------------------
   // 0x61 was unhandled and is the most-touched port in the corpus after the video status register:
@@ -585,6 +585,7 @@ export function installBIOS(machine) {
 
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
+  installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
   installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
 
   machine.bios = bios;

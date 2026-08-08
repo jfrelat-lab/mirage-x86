@@ -47,6 +47,12 @@ a memmove that also runs the SMC dirty check — AH=0Bh is the path games swap *
 a grow that would run into a neighbouring block relocates instead of aliasing it. There is
 **no EMS and no DPMI/protected mode** (raptor/jazz need DPMI).
 
+**Interrupt controller** (`pic.js`): a real 8259A pair — IRR, ISR, IMR, fixed priority, non-specific
+and specific EOI, the ICW1-4 initialisation sequence (so a guest can move the vector base) and the
+IRQ2 cascade. Masking and in-service state are honoured: a masked IRQ is not delivered, and a tick
+cannot arrive while the previous ISR is still open. Rotating priority, special mask mode and the poll
+command are not implemented. *When* an interrupt is delivered has not changed — that is D7.
+
 **INT 13h** (`disk.js`) runs over raw sector images attached with `machine.disk.attach(drive, bytes)`;
 standard floppy sizes (160K-2.88M) get their geometry inferred, anything else needs one passed in.
 AH=00/02/03/04/08/15 are implemented; a drive with no image reports 80h "not ready" rather than

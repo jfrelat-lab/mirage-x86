@@ -208,13 +208,27 @@ export class Machine {
     const a = 0x46c;                          // BDA 0040:006C — ticks since midnight
     this.mem.w32(a, (this.mem.r32(a) + 1) >>> 0);
     if (!(this.cpu.flags & IF)) return;
+    // Raise IRQ0 on the PIC and let it decide. This is where masking and in-service state start
+    // mattering: a guest that has masked IRQ0 in the IMR no longer receives the tick (it used to,
+    // regardless), and a tick cannot be delivered while the previous INT 8 is still in service.
+    // The delivery *point* is unchanged — still right here — so this is a semantic change, not a
+    // timing one. Moving delivery to run-loop safepoints is D7.
+    const pic = this.pic;
+    if (pic) {
+      pic.raise(0);
+      if (pic.pending() !== 0) return;        // masked, or an ISR of equal/higher priority is open
+      pic.acknowledge();                      // clears IRR bit 0, sets ISR bit 0
+    }
     this.cpu.halted = false;                  // the timer IRQ wakes a HLT even with the BIOS-default
                                               // ISR (a `STI;HLT` before the guest installs its own
                                               // INT 8 — e.g. Moktar's GAME.TDT init — must resume)
     const v8 = this.getVector(8);
     if (v8.seg !== BIOS_SEG) { this.realInt(8, v8.seg, v8.off); return; }
+    // No guest ISR: we are the BIOS timer handler. A real one ends with `mov al,20h; out 20h,al`,
+    // and so must we — otherwise ISR bit 0 stays set and the timer never ticks again.
     const v1c = this.getVector(0x1c);
     if (v1c.seg !== BIOS_SEG) this.realInt(0x1c, v1c.seg, v1c.off);
+    if (pic) pic.eoi(0);
   }
 
   /** Deliver PIT ticks that have come due (cpu.cycles crossed a reload boundary). Called from
@@ -245,8 +259,19 @@ export class Machine {
   /** Raise IRQ1 (keyboard) into a guest-installed INT 9 handler, if any. */
   raiseKeyboardIRQ() {
     if (!(this.cpu.flags & IF)) return false;
+    const pic = this.pic;
+    if (pic) {
+      pic.raise(1);
+      if (pic.pending() !== 1) return false;  // masked, or a higher-priority ISR is still open
+    }
     const v = this.getVector(9);
-    if (v.seg === BIOS_SEG) return false;     // no guest handler; use BIOS buffer instead
+    if (v.seg === BIOS_SEG) {
+      // No guest handler; the BIOS buffer path handles the scancode itself, so acknowledge and end
+      // the interrupt here rather than leaving IRQ1 asserted forever.
+      if (pic) { pic.acknowledge(); pic.eoi(1); }
+      return false;
+    }
+    if (pic) pic.acknowledge();
     this.realInt(9, v.seg, v.off);
     return true;
   }

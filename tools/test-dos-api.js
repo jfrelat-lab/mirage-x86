@@ -421,6 +421,83 @@ function asciiz(mc, cpu, off, str) {
   eq('49h reports "invalid memory block address"', twice.ax, 9);
 }
 
+// ---------------------------------------------------------------- the 8259 PIC
+// Before this there was `onPortWrite(0x20, () => {})`: no IRR, no ISR, a no-op EOI, and interrupts
+// delivered straight from the device. A guest that masked an IRQ still received it, and an ISR
+// that had not finished could not hold off the next one.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const pic = mc.pic;
+
+  pic.raise(0);
+  eq('a raised IRQ shows in the request register', mc.ioRead(0x20, 1) & 1, 1);
+  eq('...and is what the CPU would take', pic.pending(), 0);
+  eq('acknowledging returns the vector', pic.acknowledge(), 0x08);
+  mc.ioWrite(0x20, 1, 0x0b);                                    // OCW3: read ISR instead of IRR
+  eq('...and moves the bit to the in-service register', mc.ioRead(0x20, 1) & 1, 1);
+
+  // In-service state is the point: a second IRQ0 cannot be taken until the first ends.
+  pic.raise(0);
+  eq('an in-service IRQ blocks the next one at the same level', pic.pending(), -1);
+  mc.ioWrite(0x20, 1, 0x20);                                    // non-specific EOI
+  eq('EOI clears the in-service bit', mc.ioRead(0x20, 1) & 1, 0);
+  eq('...and the queued request is taken', pic.pending(), 0);
+  pic.acknowledge(); mc.ioWrite(0x20, 1, 0x20);
+
+  // Priority: IRQ0 outranks IRQ1, and an open IRQ0 blocks IRQ1 too.
+  pic.raise(1); pic.raise(0);
+  eq('the higher-priority line wins', pic.pending(), 0);
+  pic.acknowledge();
+  eq('an open higher-priority ISR blocks the lower one', pic.pending(), -1);
+  mc.ioWrite(0x20, 1, 0x20);
+  eq('...which is taken once the first ends', pic.pending(), 1);
+  eq('IRQ1 maps to INT 09h', pic.acknowledge(), 0x09);
+  mc.ioWrite(0x20, 1, 0x61);                                    // specific EOI for level 1
+  eq('a specific EOI clears its own level', mc.ioRead(0x20, 1) & 2, 0);
+
+  // The mask.
+  mc.ioWrite(0x21, 1, 0x01);
+  pic.raise(0);
+  eq('a masked line is not delivered', pic.pending(), -1);
+  ok('...but is still requested', (mc.ioWrite(0x20, 1, 0x0a), mc.ioRead(0x20, 1) & 1) === 1);
+  mc.ioWrite(0x21, 1, 0x00);
+  eq('unmasking releases it', pic.pending(), 0);
+  pic.acknowledge(); mc.ioWrite(0x20, 1, 0x20);
+
+  // ICW sequence: a guest that re-initialises the pair can move the vector base.
+  mc.ioWrite(0x20, 1, 0x11);                                    // ICW1: cascade, expect ICW4
+  mc.ioWrite(0x21, 1, 0x50);                                    // ICW2: vectors at 0x50
+  mc.ioWrite(0x21, 1, 0x04);                                    // ICW3
+  mc.ioWrite(0x21, 1, 0x01);                                    // ICW4: 8086 mode
+  pic.raise(0);
+  eq('after re-initialisation IRQ0 uses the new vector base', pic.acknowledge(), 0x50);
+  mc.ioWrite(0x20, 1, 0x20);
+  eq('ICW1 clears the mask', mc.ioRead(0x21, 1), 0x00);
+
+  // The cascade: a slave line raises the master's IRQ2 and vectors from the slave's base.
+  pic.reset();
+  pic.raise(12);                                                // IRQ12 = slave line 4
+  eq('a slave request appears on the master cascade line', (mc.ioWrite(0x20, 1, 0x0a), mc.ioRead(0x20, 1)) & 4, 4);
+  eq('...and vectors from the slave base', pic.acknowledge(), 0x74);
+}
+{ // end to end: masking IRQ0 stops the timer reaching a guest ISR
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  mc.setVector(8, 0x2000, 0x100);                               // pretend a guest hooked INT 8
+  mc.cpu.setSeg(2, 0x4000); mc.cpu.sp = 0x200; mc.cpu.flags |= 0x200;
+  const sp0 = mc.cpu.sp & 0xffff;
+  mc.tickTimer();
+  ok('an unmasked timer tick enters the guest ISR', (mc.cpu.sp & 0xffff) === ((sp0 - 6) & 0xffff));
+  mc.pic.eoi(0);
+  mc.ioWrite(0x21, 1, 0x01);                                    // mask IRQ0
+  const sp1 = mc.cpu.sp & 0xffff;
+  mc.tickTimer();
+  eq('a masked timer tick does not', mc.cpu.sp & 0xffff, sp1);
+  eq('...though the BDA tick still advances, as the counter is not the interrupt',
+     mc.mem.r32(0x46c) > 0, true);
+}
+
 // ---------------------------------------------------------------- ports the corpus hammers
 // From tools/survey-ports.mjs. 0x61 had no handler at all and takes 37205 reads / 102563 writes
 // across nearly every game; 0x21 takes 23 reads and 23 writes.
