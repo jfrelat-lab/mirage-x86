@@ -13,7 +13,19 @@ for(let i=0;i<n;i++){
   if(m.FAULT||u.FAULT){ reason='one faulted: M='+(m.FAULT||'')+' U='+(u.FAULT||''); firstDiv=i; break; }
   if(m.cs!==u.cs||m.ip!==u.ip){ reason='CS:IP differ'; firstDiv=i; break; }
   let rd=''; for(const r of gp) if(m[r]!==u[r]) rd+=' '+r+'(M='+h(m[r])+' U='+h(u[r])+')';
-  if((m.fl&FLM)!==(u.fl&FLM)) rd+=' FLAGS(M='+h(m.fl&FLM)+' U='+h(u.fl&FLM)+')';
+  // MUL/IMUL/DIV/IDIV leave SF/ZF/AF/PF architecturally UNDEFINED. MIRAGE matches real 8088 silicon
+  // there (conformance is 100% on those vectors); Unicorn models a later CPU and differs. Comparing
+  // them would report an artifact as a bug — the same trap as BCD in tools/x86-cases.mjs. Only CF
+  // and OF are defined, so only those are compared after one of these.
+  const prev = M[i-1];
+  let mask = FLM;
+  if (prev) {
+    const l = ((prev.cs<<4)+prev.ip)&0xfffff;
+    let k = 0; while (k < 6 && [0x26,0x2e,0x36,0x3e,0x64,0x65,0x66,0x67,0xf0,0xf2,0xf3].includes(RAM[(l+k)&0xfffff])) k++;
+    const op = RAM[(l+k)&0xfffff], modrm = RAM[(l+k+1)&0xfffff];
+    if (((op===0xf6||op===0xf7) && ((modrm>>3)&7)>=4) || (op===0x0f && RAM[(l+k+1)&0xfffff]===0xaf)) mask = 0x0801; // CF|OF
+  }
+  if((m.fl&mask)!==(u.fl&mask)) rd+=' FLAGS(M='+h(m.fl&mask)+' U='+h(u.fl&mask)+')';
   if(rd){ reason='regs differ:'+rd; firstDiv=i; break; }
 }
 console.log('MIRAGE steps',M.length,' Unicorn steps',U.length,' compared',n);
