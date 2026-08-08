@@ -519,6 +519,54 @@ export function installBIOS(machine) {
   machine.onPortWrite(0x64, () => {});                        // controller command (ignored)
   machine.onPortWrite(0x20, () => {});                        // master PIC end-of-interrupt
   machine.onPortWrite(0xa0, () => {});                        // slave PIC end-of-interrupt
+
+  // ---- 8259 interrupt mask registers (0x21 / 0xA1) ------------------------
+  // Not a PIC — priority, IRR/ISR and a real EOI are still ahead (roadmap F2c). But the mask
+  // register has to READ BACK what was written, and it did not: an unregistered read returns
+  // all-ones, so the ubiquitous "save the IMR, mask my IRQ, restore it later" sequence read 0xFF
+  // and restored 0xFF — every interrupt masked, including the timer. tools/survey-ports.mjs counts
+  // 23 reads and 23 writes of 0x21 across GODTHUND, HOCUS, LOOM, MATHRESC, MI2 and MOKTAR.
+  const pic = machine.pic = { imr1: 0x00, imr2: 0x00 };
+  machine.onPortWrite(0x21, (_p, _s, v) => { pic.imr1 = v & 0xff; });
+  machine.onPortRead(0x21, () => pic.imr1);
+  machine.onPortWrite(0xa1, (_p, _s, v) => { pic.imr2 = v & 0xff; });
+  machine.onPortRead(0xa1, () => pic.imr2);
+
+  // ---- 8255 PPI port B (0x61) + PIT channel 2 (0x42) ----------------------
+  // 0x61 was unhandled and is the most-touched port in the corpus after the video status register:
+  // 37205 reads and 102563 writes, from nearly every game. Two things live there.
+  //   bit 4 — the RAM-refresh toggle. It flips continuously on real hardware, and a program that
+  //           times a short delay by counting flips (a very common trick before the PIT is safe to
+  //           reprogram) spins forever against the stuck 1 an unhandled read returns.
+  //   bits 0-1 — the speaker gate. Read back, so a program that ORs a bit in and writes it back
+  //           does not accidentally clear the other.
+  //   bit 5 — timer-2 output, i.e. the speaker's square wave.
+  // Channel 2 of the PIT (0x42) is the tone generator behind it. We honour its reload so the square
+  // wave has the right period; nothing here makes sound, it makes the *timing* readable.
+  const ppi = machine.ppi = { portB: 0x00, ch2Reload: 0x10000, _lo: 0, _hiNext: false };
+  machine.onPortWrite(0x61, (_p, _s, v) => { ppi.portB = v & 0xff; });
+  machine.onPortRead(0x61, () => {
+    const cyc = machine.cpu.cycles;
+    // The refresh bit toggles every ~15.085 us = 18 PIT clocks, and cpu.cycles IS the PIT clock.
+    const refresh = ((cyc / 18) | 0) & 1;
+    // Timer 2 output: a square wave at the programmed reload, high for the first half of a period.
+    const half = ppi.ch2Reload >> 1;
+    const out = half > 0 && (cyc % ppi.ch2Reload) < half ? 1 : 0;
+    return (ppi.portB & 0x0f) | (refresh << 4) | (out << 5);
+  });
+  machine.onPortWrite(0x42, (_p, _s, v) => {                  // channel 2 reload, LSB then MSB
+    v &= 0xff;
+    if (!ppi._hiNext) { ppi._lo = v; ppi._hiNext = true; return; }
+    ppi._hiNext = false;
+    const r = (v << 8) | ppi._lo;
+    ppi.ch2Reload = r === 0 ? 0x10000 : r;
+  });
+  machine.onPortRead(0x42, () => {                            // live countdown, same shape as ch0
+    const count = (ppi.ch2Reload - (machine.cpu.cycles % ppi.ch2Reload)) & 0xffff;
+    const b = ppi._hiNext ? (count >> 8) & 0xff : count & 0xff;
+    ppi._hiNext = !ppi._hiNext;
+    return b;
+  });
   machine.pushScancodes = (arr) => { for (const s of arr) kb.scans.push(s); };
   // Deliver the next pending scancode to the guest's INT 9h handler (if one is installed) via
   // port 0x60 + IRQ1. No guest ISR -> drop them; the BIOS INT 16h / keyQueue path serves those.

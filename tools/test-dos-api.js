@@ -421,6 +421,36 @@ function asciiz(mc, cpu, off, str) {
   eq('49h reports "invalid memory block address"', twice.ax, 9);
 }
 
+// ---------------------------------------------------------------- ports the corpus hammers
+// From tools/survey-ports.mjs. 0x61 had no handler at all and takes 37205 reads / 102563 writes
+// across nearly every game; 0x21 takes 23 reads and 23 writes.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+
+  // An unregistered read returns all-ones, so "save the IMR, mask my IRQ, restore it" read 0xFF and
+  // restored 0xFF — every interrupt masked, including the timer.
+  mc.ioWrite(0x21, 1, 0xfe);
+  eq('the PIC mask register reads back what was written', mc.ioRead(0x21, 1), 0xfe);
+  mc.ioWrite(0xa1, 1, 0x0f);
+  eq('...on the slave too', mc.ioRead(0xa1, 1), 0x0f);
+
+  // Port 0x61: the low bits read back, and bit 4 (the RAM-refresh toggle) must actually toggle —
+  // a delay loop that counts flips spins forever against a stuck value.
+  mc.ioWrite(0x61, 1, 0x03);
+  eq('port 0x61 reads back the speaker gate bits', mc.ioRead(0x61, 1) & 0x03, 0x03);
+  const seen = new Set();
+  for (let i = 0; i < 64; i++) { mc.cpu.cycles += 10; seen.add(mc.ioRead(0x61, 1) & 0x10); }
+  eq('port 0x61 bit 4 toggles as time passes', seen.size, 2);
+
+  // PIT channel 2 drives the speaker tone; its counter has to count.
+  mc.ioWrite(0x42, 1, 0x00); mc.ioWrite(0x42, 1, 0x10);        // reload 0x1000, LSB then MSB
+  const c1 = mc.ioRead(0x42, 1) | (mc.ioRead(0x42, 1) << 8);
+  mc.cpu.cycles += 0x400;
+  const c2 = mc.ioRead(0x42, 1) | (mc.ioRead(0x42, 1) << 8);
+  ok(`PIT channel 2 counts down (${c1} then ${c2})`, c1 !== c2);
+}
+
 // ---------------------------------------------------------------- blocking on the far-call path
 // Audit T1.3, "élevé, silencieux". A guest can reach a BIOS service two ways: `INT n`, or by reading
 // the vector, pushing an IRET frame and far-JMP/CALLing f000:n — the ubiquitous TSR/game pattern.

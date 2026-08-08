@@ -14,27 +14,14 @@
 // come after the point where it currently derails, so a title that dies early under-reports. The
 // ranking is "what the corpus asks for", not "what the corpus would ask for if everything worked".
 
-import { readdirSync, statSync, readFileSync, existsSync } from 'fs';
-import { join, relative, extname } from 'path';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { VFS } from '../src/vfs.js';
 import { makeMachine } from './harness.mjs';
+import { targets, walk } from './corpus.mjs';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(HERE, '..');
 const FRAMES = Number(process.env.FRAMES) || 80;
 const filter = process.argv[2];
-
-/** Every file under `dir`, as paths relative to it. */
-function walk(dir, base = dir, out = []) {
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, base, out);
-    else out.push(relative(base, p));
-  }
-  return out;
-}
 
 /** Run one program with its own directory mounted, and report what it asked for. */
 function probe(gameDir, mountPrefix, prog) {
@@ -62,30 +49,11 @@ function probe(gameDir, mountPrefix, prog) {
   };
 }
 
-const targets = [];
-const gamesRoot = join(ROOT, 'games');
-if (existsSync(gamesRoot)) {
-  for (const sub of readdirSync(gamesRoot)) {
-    const d = join(gamesRoot, sub);
-    if (!statSync(d).isDirectory()) continue;
-    if (filter && !sub.toUpperCase().includes(filter.toUpperCase())) continue;
-    // One entry point per game: the biggest .EXE/.COM at the top level is nearly always it.
-    const progs = readdirSync(d).filter((f) => ['.EXE', '.COM'].includes(extname(f).toUpperCase()))
-      .map((f) => ({ f, size: statSync(join(d, f)).size }))
-      .sort((a, b) => b.size - a.size);
-    if (progs.length) targets.push({ label: `games/${sub}/${progs[0].f}`, dir: d, mount: `\\GAMES\\${sub}\\`, prog: progs[0].f });
-  }
-}
-const introsRoot = join(ROOT, 'intros');
-if (existsSync(introsRoot) && !filter) {
-  for (const f of readdirSync(introsRoot).filter((f) => extname(f).toLowerCase() === '.com')) {
-    targets.push({ label: `intros/${f}`, dir: introsRoot, mount: '\\INTROS\\', prog: f });
-  }
-}
+const list = targets(filter);
 
 const intTotals = new Map(), fnTotals = new Map(), fnWho = new Map();
-console.log(`surveying ${targets.length} programs, ${FRAMES} frames each\n`);
-for (const t of targets) {
+console.log(`surveying ${list.length} programs, ${FRAMES} frames each\n`);
+for (const t of list) {
   const r = probe(t.dir, t.mount, t.prog);
   if (r.error) { console.log(`  ${t.label.padEnd(34)} ${r.error}`); continue; }
   const bits = [];
