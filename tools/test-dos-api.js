@@ -212,10 +212,10 @@ function asciiz(mc, cpu, off, str) {
 { // and an interrupt we don't implement at all must not read as success
   const { mc, cpu } = mk();
   cpu.flags &= ~CF;
-  mc.swInt(0x14);                                                 // BIOS serial port — not implemented
+  mc.swInt(0x18);                                                 // ROM BASIC — not implemented
   eq('an unhandled INT sets CF', cpu.flags & CF, CF);
-  eq('an unhandled INT is counted', mc.unhandledInts[0x14], 1);
-  ok('unhandledIntReport names the vector', mc.unhandledIntReport().includes('INT 14h'));
+  eq('an unhandled INT is counted', mc.unhandledInts[0x18], 1);
+  ok('unhandledIntReport names the vector', mc.unhandledIntReport().includes('INT 18h'));
 }
 
 // ---------------------------------------------------------------- BIOS: INT 10h / 16h / 1Ah
@@ -348,7 +348,7 @@ function asciiz(mc, cpu, off, str) {
   // survey as something the corpus asked for and did not get.
   eq('INT 03h is not reported as unimplemented', c.mc.unhandledInts[0x03], 0);
   c.cpu.flags &= ~CF;
-  c.mc.swInt(0x14);                                             // a genuinely unsupported vector
+  c.mc.swInt(0x18);                                             // a genuinely unsupported vector (ROM BASIC)
   eq('an unsupported vector still reports failure', c.cpu.flags & CF, CF);
   // INT 2Ah AH=00: "is a network installed?" — AL=0 means no. Returning CF read as "installed, and
   // erroring", which is a different and worse answer.

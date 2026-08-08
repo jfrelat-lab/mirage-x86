@@ -407,6 +407,22 @@ export function installBIOS(machine) {
   // Same shape: an ISR that chains to the original INT 9 expects the BIOS to acknowledge IRQ1.
   machine.hookInterrupt(0x09, () => { if (machine.pic) machine.pic.eoi(1); });
 
+  // ---- INT 17h (printer) / INT 14h (serial) ----
+  // No ports are fitted — the equipment word at BDA 0x410 says so — but MS-DOS's IO.SYS installs its
+  // PRN and AUX drivers unconditionally and initialises them at boot, so it calls these regardless.
+  // With no handler they returned CF and untouched registers, i.e. "success" to a caller that reads
+  // AH as a status byte. That is the audit's T1.1 shape once more.
+  machine.hookInterrupt(0x17, (cpu) => {
+    // AH=00 print / 01 init / 02 status. Bit 0 = timeout: nothing answered, which is the truth.
+    cpu.ah = 0x01;
+    cpu.flags &= ~CF;
+  });
+  machine.hookInterrupt(0x14, (cpu) => {
+    // AH=00 init / 01 send / 02 receive / 03 status. AH bit 7 = timeout, AL = modem status.
+    cpu.ax = 0x8000;
+    cpu.flags &= ~CF;
+  });
+
   // ---- INT 2Ah: network / critical section ----
   // AH=00 is "is a network installed?" — AL=0 means no. Programs call it before deciding whether to
   // use file sharing; with no handler it returned CF, which some read as "installed but erroring".

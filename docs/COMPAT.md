@@ -231,3 +231,27 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 - Time-based **0x3DA beam**; INT 10h **AH=1Ah** DCC → God of Thunder renders.
 - **CGA renderer** (`video.js:_renderCGA`) + 0x3D9 colour-select → Alley Cat title renders.
 - **EGA planar** path (`vga.js`) + CRTC scroll → Keen/Cosmo/PoP-intro/Stryker render.
+
+## Booting a real DOS kernel
+
+**FreeDOS 1.4 boots** to its `A:\>` prompt, verified interactively (`tools/run-boot.mjs
+boot/FREEDOS14.IMG 9000000 4e,0d`), with no unimplemented INT vector and no unhandled port along
+the way. Its INT 21h behaviour is the DOS oracle's reference (`tools/dos-oracle.mjs`).
+
+**MS-DOS 6.22 does not**, and where it stops is precisely located. The boot sector loads IO.SYS,
+which prints "Starting MS-DOS..." and then derails:
+
+    0070:07C9   2E FF 1E 0E 00      call far [cs:000E]     -> 0009:F00B
+
+Linear 0x9*16+0xF00B is not code. Control lands inside the interrupt vector table, where the low
+word of vector 29h (`62 07`) decodes as `BOUND` and raises INT 5 — forever, ~9M times per run.
+The pointer at CS:000E is zero in the on-disk IO.SYS, so IO.SYS fills it in during its own init and
+the value it computed is wrong. The root cause is therefore something we answer incorrectly earlier
+in that init, not the call itself.
+
+Ruled out: INT 14h/17h. IO.SYS installs its AUX and PRN drivers unconditionally and called both,
+and both were unhandled — a promising shape (the audit's T1.1: CF set, registers untouched, which
+a caller reading AH as a status byte takes for success). They are implemented now and the derail is
+unchanged. Worth recording as a hypothesis that failed rather than leaving it to be re-tried.
+
+Still unhandled during that boot: INT 15h x2.
