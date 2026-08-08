@@ -18,6 +18,21 @@ code and guessing; this ranks them by what the corpus actually calls.
 Caveat: a title only reaches the calls *after* the point where it currently derails, so anything
 dying early under-reports.
 
+## The VGA oracle (`tools/vga-rom.mjs`)
+
+Asking "is our INT 10h mode set correct?" has no oracle — we wrote both the question and the answer.
+Loading a **real VGA BIOS ROM** turns it around: the ROM is placed at C000:0 and entered by a far
+call to C000:0003 exactly as a POST does, it programs the card and points INT 10h at itself, and from
+then on a mode set runs real 16-bit code against our device model. Any difference is then in our
+*hardware*, not in our approximation of a BIOS.
+
+    node tools/vga-rom.mjs boot/vgabios-stdvga.bin
+    MODE=0x12 node tools/vga-rom.mjs boot/vgabios-stdvga.bin
+    MODE=0x0d DUMP=1 node tools/vga-rom.mjs boot/...        # print one mode's register table
+
+SeaVGABIOS narrates itself on port 0x402 (the QEMU/Bochs debug console) and the tool prints that too.
+The ROM ships prebuilt with QEMU as `pc-bios/vgabios-stdvga.bin` (LGPL); `boot/` is gitignored.
+
 ## The DOS oracle (`tools/dos-oracle.mjs`)
 
 `test-dos-api.js` states its expectations by hand, and three of its early cases were wrong because I

@@ -52,6 +52,10 @@ A **real DOS kernel boots on this BIOS**: FreeDOS 1.4 reaches its `A:\>` prompt 
 the practical statement of how complete the hardware layer is — more useful than any list of
 services, because a kernel exercises the ones that matter and complains about the rest.
 
+A **real VGA BIOS ROM runs on this device model**: SeaVGABIOS initialises without a fault, takes over
+INT 10h, and its mode sets for 03h/0Dh/0Eh/10h/12h/13h leave register state identical to ours — the
+CRTC and Graphics Controller tables in `vga.js` were captured from it rather than derived.
+
 **Interrupt controller** (`pic.js`): a real 8259A pair — IRR, ISR, IMR, fixed priority, non-specific
 and specific EOI, the ICW1-4 initialisation sequence (so a guest can move the vector base) and the
 IRQ2 cascade. Masking and in-service state are honoured: a masked IRQ is not delivered, and a tick
