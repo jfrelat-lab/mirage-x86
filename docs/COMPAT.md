@@ -238,20 +238,35 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 boot/FREEDOS14.IMG 9000000 4e,0d`), with no unimplemented INT vector and no unhandled port along
 the way. Its INT 21h behaviour is the DOS oracle's reference (`tools/dos-oracle.mjs`).
 
-**MS-DOS 6.22 does not**, and where it stops is precisely located. The boot sector loads IO.SYS,
-which prints "Starting MS-DOS..." and then derails:
+**MS-DOS 6.22 does not**, and the failure is fully traced — though not yet root-caused. The chain,
+from the end backwards:
 
-    0070:07C9   2E FF 1E 0E 00      call far [cs:000E]     -> 0009:F00B
+1. `0070:07C9  2E FF 1E 0E 00   call far [cs:000E]` jumps to `0009:F00B`. That is not code: it is
+   inside the interrupt vector table, where the low word of vector 29h (`62 07`) decodes as `BOUND`
+   and raises INT 5 — about 9M times per run, which is what the unhandled-INT counter reported.
+2. The pointer at `CS:000E` is zero in the on-disk IO.SYS, so it is written at runtime. The writer is
+   `02CC:067D`, a run of `mov es:[di+8],dh` / `[di+0Ch],bh` / `[di+0Eh],cx` / `[di+10h],ah` /
+   `[di+11h],al` — building a device-driver header through `ES:DI`.
+3. It runs with **DI = 0xFFFF**. Every effective address wraps, so instead of filling a header
+   somewhere else the five writes land at 0x707-0x710 — inside IO.SYS's own first 16 bytes, right on
+   top of the far pointer at CS:000E. `CX=0x0B40` supplies its low word and `AX=0xF009` the rest,
+   which is exactly the `0009:F00B` we jump to.
+4. DI = 0xFFFF is the **terminator of a device-driver chain**. `02CC:04DB` walks it —
+   `cmp es:[di+5],al` / `je found` / `les di,es:[di]` / `cmp di,0FFFFh` / `jne` — and falls out the
+   bottom into `stc; ret`. The STC and the CF do propagate correctly (verified by single-stepping);
+   the caller simply carries on and dereferences DI anyway, at `02CC:0606 test es:[di+23h],5`.
+5. The search is for a node whose attribute high byte is 0. **The chain has exactly one node**, at
+   70:03B2, attributes 0x4041 (a block device). At this point in a real boot IO.SYS has installed its
+   resident drivers; one node means most of that installation did not happen or did not link.
 
-Linear 0x9*16+0xF00B is not code. Control lands inside the interrupt vector table, where the low
-word of vector 29h (`62 07`) decodes as `BOUND` and raises INT 5 — forever, ~9M times per run.
-The pointer at CS:000E is zero in the on-disk IO.SYS, so IO.SYS fills it in during its own init and
-the value it computed is wrong. The root cause is therefore something we answer incorrectly earlier
-in that init, not the call itself.
+So the root cause is upstream in IO.SYS's own initialisation, and step 5 is where to pick it up.
 
-Ruled out: INT 14h/17h. IO.SYS installs its AUX and PRN drivers unconditionally and called both,
-and both were unhandled — a promising shape (the audit's T1.1: CF set, registers untouched, which
-a caller reading AH as a status byte takes for success). They are implemented now and the derail is
-unchanged. Worth recording as a hypothesis that failed rather than leaving it to be re-tried.
+Two hypotheses tested and **refuted**, recorded so they are not re-tried:
+
+* *Missing INT 14h/17h.* IO.SYS installs its AUX and PRN drivers unconditionally and called both,
+  and neither had a handler — the audit's T1.1 shape exactly (CF set, registers untouched, which a
+  caller reading AH as a status byte takes for success). Both are implemented now. No change.
+* *INT 13h answering wrongly for the drives MS-DOS probes.* It calls AH=08 and AH=02 with
+  DL = FC, FD, FE, FF. Our INT 13h fails all four with 80h, which is correct.
 
 Still unhandled during that boot: INT 15h x2.
