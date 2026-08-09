@@ -7,6 +7,7 @@
 //   ?args=...            command tail passed to the program
 //   ?load=URL[,URL2]     fetch + mount binaries without running
 //   ?cmd=DIR             run an arbitrary shell command line
+//   ?mhz=8               cap the guest at N million cycles/s (default: uncapped — see ui.js VCPU_HZ)
 
 import { Mirage } from './ui.js';
 import { VFS } from './vfs.js';
@@ -16,7 +17,11 @@ const hud = document.getElementById('hud');
 const boot = document.getElementById('boot');
 const drop = document.getElementById('drop');
 
-const app = new Mirage(canvas, { onFrame: throttle(updateHud, 100) });
+const mhz = parseFloat(new URLSearchParams(location.search).get('mhz'));
+const app = new Mirage(canvas, {
+  onFrame: throttle(updateHud, 100),
+  ...(mhz > 0 ? { vcpuHz: mhz * 1e6 } : {}),
+});
 
 app.boot().then(async () => {
   boot.remove();

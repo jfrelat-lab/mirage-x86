@@ -153,14 +153,20 @@ demos, not just Heaven.
 `DIR` supports wildcard filters (`DIR *.EXE`, `DIR \GAMES\*.DAT`) as of 2026-07-20. Builtins:
 DIR CD CLS TYPE COPY DEL REN MD RD ECHO SET. Programs launched by name or `?run=…`.
 
-## Tier-2 (region compiler) — browser-OFF
+## Tier-2 (region compiler) — OFF everywhere, opt-in
 
-Tier-2 is **off in the browser** (`recompiler.js`: `typeof process !== 'undefined'`) and **on in
-Node** (tests/golden/fuzzers still exercise it; `MIRAGE_NOTIER2=1` disables). Reason: on real
+Tier-2 is **off everywhere**; `MIRAGE_TIER2=1` opts in (Node only) for work on it. Reason: on real
 **games** a fused region can run unbounded work in one `runSlice` and hang the main thread (Cosmo's
 decompression froze the tab), Wolf3D runs ~5× slower under it, and Keen once derailed on a
 far-indirect pattern. Re-enabling needs a region **instruction-budget** (bail on retired-instruction
 count, not just region-iterations) + fixing those game cases. Demos are byte-identical either way.
+
+It used to be ON by default in Node and off in the browser, and that asymmetry cost more than it
+looked. Every headless perf figure — `tools/bench.js`, the roadmap's targets — was measuring a
+configuration that never shipped. And "unbounded work per slice" is not a corner case: `bench.js`
+appeared to hang for **25 minutes** because `intros/memories.com` takes >300 s under tier-2 for work
+tier-1 does in **8.5 ms**, a >30,000× cliff. Same bench, tier-1: 25 seconds, and now comparable to
+what the browser actually runs.
 
 > ⚠️ **Fast-timer games + the browser loop:** games reprogram PIT counter 0 to 200–1000 Hz. `ui.js`
 > delivers **one INT 8 per runSlice iteration** (interleaved), never several back-to-back — `realInt`
@@ -193,15 +199,25 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
    Memory Control Blocks. Games that *walk* the MCB chain (common in copy protection — Moktar's
    E.Zmiro kit) find no valid chain and take an anti-tamper path. A real MCB chain would fix that
    class.
-5. ~~**Frame-rate throttling**~~ — **addressed in the browser** (`ui.js`): a virtual CPU clock
-   (`VCPU_HZ`, ~8 MHz ≈ a fast 386) caps the guest to N cycles/second of wall-clock, so code whose
-   pace is bound by raw CPU speed rather than the timer/retrace (e.g. the Commander Keen Vorticons
-   menus/story scroll, which wait on neither — it reprograms the PIT to 145.6 Hz but does **not**
-   poll 0x3DA) no longer flies by. The 0x3DA beam is derived from `VCPU_HZ` (bios.js) so vertical
-   retrace stays a real 70 Hz. Timer-paced games (Dune/Cosmo/GoT) are unaffected (their animation
-   is gated by the wall-clock INT 8). Headless tools (no `vcpuHz`, deterministic `timerAuto`) keep
-   the pitBase-derived beam, so golden fingerprints are unchanged. `VCPU_HZ` is a single tunable
-   constant — lower it toward ~3–4 MHz to match a slower period machine (e.g. archive.org's DOSBox).
+5. **Frame-rate throttling** — the virtual CPU clock (`ui.js` `VCPU_HZ`) caps the guest to N
+   cycles/second of wall-clock. It exists for code paced by neither the timer nor the retrace — the
+   Commander Keen Vorticons menus and story scroll, which reprogram the PIT to 145.6 Hz but do
+   **not** poll 0x3DA — which otherwise flies past.
+
+   **It now defaults to `null` (uncapped).** The default used to be 8 MHz, and since the engine
+   sustains ~180–220 M cycles/s in a browser, that was a **~25× slowdown applied to the whole
+   machine** to fix a handful of titles: `tube` and `memories`, whose pace is exactly raw CPU speed,
+   crawled for it. DOSBox runs those same titles at full speed, so the throttle is a per-title
+   preference, not a correctness requirement. It stays reachable — `?mhz=8` or
+   `new Mirage(canvas, { vcpuHz })` — for the titles that want it.
+
+   The 0x3DA beam no longer derives from `VCPU_HZ`: with no cap, cycles are not proportional to wall
+   time, so `bios.js` anchors the beam to `machine.wallClockMs` (real 70 Hz however fast the engine
+   runs). Timer-paced games (Dune/Cosmo/GoT) were always unaffected — their animation is gated by
+   the wall-clock INT 8. Headless tools set no wall clock and keep the pitBase-derived beam, so
+   golden fingerprints are unchanged.
+
+   ⚠️ Still to verify: how Keen Vorticons actually behaves uncapped, side by side with DOSBox.
 
 ## Fixes this frontier came from (recent)
 

@@ -15,13 +15,18 @@ import { SAMPLES } from './samples.js';
 
 const TICK_MS = 1000 / 18.2065;     // PC timer period
 const FRAME_BUDGET_MS = 12;         // real host CPU time per animation frame (safety cap)
-// Emulated CPU speed: how many guest cycles (~retired instructions) run per second of wall-clock.
-// Without this the guest runs unthrottled (hundreds of MIPS), so code whose pace is bound by raw
-// CPU speed rather than the timer or the retrace — e.g. the Commander Keen Vorticons menus/story
-// scroll, which wait on neither — flies by. ~8M ≈ a fast 386: fast enough that timer-paced games
-// (Dune/Cosmo/GoT, gated by their wall-clock INT 8) keep up, slow enough to tame the raw-speed
-// ones. The 0x3DA beam is derived from this (bios.js) so vertical-retrace stays a real 70 Hz.
-const VCPU_HZ = 8_000_000;
+// Emulated CPU speed: guest cycles (~retired instructions) per second of wall-clock, or null to run
+// as fast as the host manages. NULL IS THE DEFAULT — the engine sustains ~220 M cycles/s, and the
+// 8 MHz cap this used to impose was a ~27x slowdown applied to everything, which is what made
+// raw-speed-bound intros (tube, memories) crawl.
+//
+// The cap existed to stop code paced by neither the timer nor the retrace — the Commander Keen
+// Vorticons menus and story scroll — from flying past. That is a real effect, but it is a per-title
+// concern and does not justify throttling the whole machine: DOSBox runs those same titles at full
+// speed. So the knob stays, reachable per run (?mhz=8 or new Mirage(c, {vcpuHz})), and the default
+// no longer pays for it. The 0x3DA retrace is anchored to wall-clock in bios.js, so vsync-paced code
+// still sees a true 70 Hz with no cap in place.
+const VCPU_HZ = null;
 
 export class Mirage {
   constructor(canvas, opts = {}) {
@@ -29,7 +34,8 @@ export class Mirage {
     this.opts = opts;
     this.machine = new Machine({ memSize: opts.memSize || 16 * 1024 * 1024 });
     this.machine.timerAuto = false;   // browser paces the PIT to wall-clock (18.2 Hz) in _loop() below
-    this.machine.vcpuHz = opts.vcpuHz || VCPU_HZ;   // emulated CPU speed; also sets the 70 Hz beam period
+    this.machine.vcpuHz = opts.vcpuHz ?? VCPU_HZ;   // emulated CPU speed cap; null = unthrottled
+    this.machine.wallClockMs = () => performance.now();   // anchors the 0x3DA beam to real 70 Hz
     this.bios = installBIOS(this.machine);
     this.vfs = new VFS();
     this.dos = installDOS(this.machine, this.vfs);
@@ -58,13 +64,19 @@ export class Mirage {
     // and multi-file games under C:\GAMES\<game>\ so you can `CD INTROS`/`CD GAMES\<game>` and
     // run them. A games manifest entry keeps its subdir (e.g. "ALLEYCAT/CAT.EXE") so each
     // game's files land together and its relative data-file opens resolve. Skipped when unserved.
-    for (const [dir, prefix] of [['demos', '\\'], ['intros', '\\INTROS\\'], ['games', '\\GAMES\\']]) {
+    for (const [dir, prefix] of [['demos', '\\'], ['intros', '\\INTROS\\']]) {
       try {
         const manifest = await (await fetch(dir + '/manifest.json')).json();
         for (const f of manifest) this.vfs.addFile(prefix + f, new Uint8Array(await (await fetch(dir + '/' + f)).arrayBuffer()));
       } catch { /* not served — skip */ }
     }
+    await this._indexGames();
     this.shell = new Shell(this.machine);
+    // Mount a title the first time a command mentions it (or while standing in its directory).
+    this.shell.beforeCommand = (line) => {
+      const title = this._gameFor(line);
+      return title ? this.ensureGame(title) : null;
+    };
     this.shell.boot();
     this.keyboard.attach(window);
     this._attachMouse();
@@ -87,11 +99,62 @@ export class Mirage {
   }
 
   // ---- public API used by main.js ----
+  // ---- games: indexed at boot, fetched on demand ----------------------------
+  // demos/ and intros/ are a few hundred KB and are mounted eagerly. games/ is not: 2081 files and
+  // 147 MB at the time of writing, growing with every title staged, and it was all downloaded
+  // SEQUENTIALLY before the boot indicator came down. Only the manifest is read now — enough to
+  // create C:\GAMES\<TITLE> so DIR lists what is available — and a title's files arrive the first
+  // time a command touches it. Nothing else changes: by the time a command runs, its files are in.
+
+  async _indexGames() {
+    this._games = new Map();                      // TITLE -> { files, loaded, pending }
+    let manifest;
+    try { manifest = await (await fetch('games/manifest.json')).json(); }
+    catch { return; }                             // not served — skip, as before
+    for (const f of manifest) {
+      const title = String(f).split('/')[0].toUpperCase();
+      if (!title || title === String(f).toUpperCase()) continue;   // loose file, not a game dir
+      if (!this._games.has(title)) this._games.set(title, { files: [], loaded: false, pending: null });
+      this._games.get(title).files.push(f);
+    }
+    this._mkdirp('\\GAMES');
+    for (const title of this._games.keys()) this._mkdirp('\\GAMES\\' + title);
+  }
+
+  _mkdirp(path) {
+    let cur = '';
+    for (const seg of path.split('\\').filter(Boolean)) {
+      cur += '\\' + seg;
+      if (!this.vfs.exists(cur)) this.vfs.mkdir(cur);
+    }
+  }
+
+  /** Fetch one title's files into the VFS, once. Null when there is nothing to wait for. */
+  ensureGame(title) {
+    const g = this._games && this._games.get(String(title).toUpperCase());
+    if (!g || g.loaded) return null;
+    if (!g.pending) {
+      g.pending = Promise.all(g.files.map(async (f) => {
+        try {
+          const bytes = new Uint8Array(await (await fetch('games/' + f)).arrayBuffer());
+          this.vfs.addFile('\\GAMES\\' + f.replace(/\//g, '\\'), bytes);
+        } catch { /* one missing file is the title's problem, not the shell's */ }
+      })).then(() => { g.loaded = true; });
+    }
+    return g.pending;
+  }
+
+  /** The title a command line refers to, directly or via the current directory. */
+  _gameFor(line) {
+    const m = (this.vfs.cwdString() + ' ' + line).toUpperCase().replace(/\//g, '\\').match(/GAMES\\([^\\ ]+)/);
+    return m ? m[1] : null;
+  }
+
   mountFile(name, bytes) { this.vfs.addFile('\\' + VFS.dosName(name), bytes); }
   runCommand(line) {                                  // inject a command as if typed
     if (this.shell.state !== 'input') return;
     this.shell.print(line + '\r\n');
-    this.shell.submit(line);
+    this.shell.dispatch(line);        // may mount a game's files first (?run=GAMES\X\Y.EXE)
   }
   setProfiling(on) { this.machine.rec.profiling = on; }
   stats() {
@@ -127,7 +190,9 @@ export class Mirage {
       // gated by the wall-clock INT 8 below). FRAME_BUDGET_MS still caps real host time as a safety.
       let dt = now - this._lastLoop; if (dt > 50 || dt < 0) dt = 50;
       this._lastLoop = now;
-      const cycleBudget = Math.max(1, (this.machine.vcpuHz * dt / 1000) | 0);
+      const cap = this.machine.vcpuHz;          // null (the default) = no virtual-clock throttle:
+      const cycleBudget = cap                   // the frame is then bounded by FRAME_BUDGET_MS alone
+        ? Math.max(1, (cap * dt / 1000) | 0) : Infinity;
       const cyc0 = this.machine.cpu.cycles;
       let w = t0;
       while (w - t0 < FRAME_BUDGET_MS) {
@@ -139,6 +204,7 @@ export class Mirage {
         this.machine.pumpKeyboard();                      // stage a queued hw scancode + fire IRQ1
         const slice = Math.min(20000, cycleBudget - (this.machine.cpu.cycles - cyc0));
         if (slice <= 0) break;                            // spent this frame's virtual-cycle budget
+        // (unthrottled: cycleBudget is Infinity, so the loop runs until FRAME_BUDGET_MS is up)
         this.machine.runSlice(slice);
         if (this.machine.blocked) break;                 // waiting on input
         if (this.dos.programDone) { this.shell.state = 'input'; this.shell.programReturned(); break; }

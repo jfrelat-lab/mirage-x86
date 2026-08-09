@@ -26,11 +26,15 @@ const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.
 // to tier-1 (golden + conformance + fuzz-region), but on real GAMES it has unresolved issues — a
 // fused region can run unbounded work per slice (Cosmo's decompression hangs a single runSlice),
 // Wolf3D runs ~5× slower, and Keen once derailed on a far-indirect pattern. So it stays a Node-only
-// Wolf3D runs ~5× slower, and Keen once derailed on a far-indirect pattern. So it stays a Node-only
-// opt-in for perf work (ON in Node unless MIRAGE_NOTIER2=1; where the test suite exercises it) and
-// is OFF in the browser (typeof process==='undefined') until a region instruction-budget + the
-// game bugs are fixed. Re-enable browser tier-2 by removing the `typeof process !== 'undefined'`.
-const TIER2 = typeof process !== 'undefined' && !(process.env && process.env.MIRAGE_NOTIER2);
+// Wolf3D runs ~5× slower, and Keen once derailed on a far-indirect pattern.
+//
+// It is therefore OFF everywhere, opt-in via MIRAGE_TIER2=1 for perf work on it. It used to be ON
+// by default in Node and off in the browser, which had a consequence worth spelling out: every
+// headless perf number — tools/bench.js, the roadmap's targets — measured a configuration nobody
+// ever ran. And the "unbounded work per slice" defect is not a corner case: intros/memories.com
+// takes >300s for work tier-1 does in 8.5ms, a >30,000× cliff that made bench.js look hung.
+// Turn it back on by default once regions carry an instruction budget and the game bugs are fixed.
+const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
 const T2_HOT = 64;         // promote a block to a region after this many executions
 const T2_MAXBLK = 24;      // cap region size in blocks
 const T2_MAXINS = 384;     // cap region size in instructions

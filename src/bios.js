@@ -474,16 +474,26 @@ export function installBIOS(machine) {
   // position is cpu.cycles within one ~70 Hz mode-13h frame. bit3 = vertical retrace (short pulse
   // at frame end); bit0 = display disabled during the surrounding vblank. Reads also reset the ATC
   // index/data flip-flop.
-  // Period in cycles: when a virtual CPU clock is set (browser, machine.vcpuHz cycles/second of
-  // wall-clock), one 70 Hz frame is vcpuHz/70 cycles, so a throttled guest sees a real 70 Hz beam.
-  // Headless (no vcpuHz, deterministic timerAuto) keeps the pitBase-derived period so golden
-  // fingerprints are unchanged (period = pitBase / (70/18.2), the VGA:PIT frequency ratio).
+  // Where the period comes from, in order of preference:
+  //
+  //   1. machine.wallClockMs (the browser) — the beam is derived from REAL time, so the retrace is
+  //      a true 70 Hz however fast the engine runs. This is what makes running the CPU unthrottled
+  //      safe: cycles are no longer proportional to wall time, so a cycle-derived beam would make
+  //      vsync-paced code run at whatever rate the host happens to manage (~27x too fast here).
+  //   2. machine.vcpuHz — a virtual CPU clock, if one is set: one 70 Hz frame is vcpuHz/70 cycles.
+  //   3. neither (headless, deterministic timerAuto) — the pitBase-derived period, so golden
+  //      fingerprints are unchanged (period = pitBase / (70/18.2), the VGA:PIT frequency ratio).
   const vgaPeriod = machine.vcpuHz
     ? Math.max(1, Math.round(machine.vcpuHz / 70))
     : Math.max(1, Math.round((machine.pitBase || machine.pitReload) / 3.845));
   const vblankStart = Math.round(vgaPeriod * 0.88), vretraceStart = Math.round(vgaPeriod * 0.92);
+  const FRAME_MS = 1000 / 70;
   const status1 = () => {
     if (machine.vga) machine.vga.atcFlip = 0;
+    if (machine.wallClockMs) {
+      const t = machine.wallClockMs() / FRAME_MS, f = t - Math.floor(t);
+      return (f >= 0.88 ? 0x01 : 0) | (f >= 0.92 ? 0x08 : 0);
+    }
     const pos = machine.cpu.cycles % vgaPeriod;
     return (pos >= vblankStart ? 0x01 : 0) | (pos >= vretraceStart ? 0x08 : 0);
   };

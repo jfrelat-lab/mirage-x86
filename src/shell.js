@@ -10,9 +10,10 @@ export class Shell {
     this.bios = machine.bios;
     this.dos = machine.dos;
     this.vfs = machine.dos.vfs;
-    this.state = 'input';          // 'input' | 'running'
+    this.state = 'input';          // 'input' | 'running' | 'loading'
     this.line = '';
     this.history = [];
+    this.beforeCommand = null;     // host hook: (line) => Promise|null, awaited before the command
   }
 
   print(s) { this.bios.writeString(s); }
@@ -34,10 +35,23 @@ export class Shell {
     while (q.length) {
       const k = q.shift();
       const a = k.ascii;
-      if (a === 0x0d) { this.crlf(); const l = this.line; this.line = ''; this.submit(l); return; }
+      if (a === 0x0d) { this.crlf(); const l = this.line; this.line = ''; this.dispatch(l); return; }
       else if (a === 0x08) { if (this.line.length) { this.line = this.line.slice(0, -1); this.bios.teletype(0x08); this.bios.teletype(0x20); this.bios.teletype(0x08); } }
       else if (a >= 0x20 && a < 0x100) { this.line += String.fromCharCode(a); this.bios.teletype(a); }
     }
+  }
+
+  /** Enter a command, letting the host do async work first — the browser mounts a game's files on
+   *  demand rather than downloading every title before the first prompt. While that runs the shell
+   *  sits in 'loading', where pump() ignores keys and the UI's run loop leaves the CPU alone, so
+   *  nothing can observe a half-mounted directory. With no hook this is just submit(). */
+  dispatch(line) {
+    const pre = this.beforeCommand && this.beforeCommand(line);
+    if (!pre || typeof pre.then !== 'function') { this.submit(line); return; }
+    this.state = 'loading';
+    pre.then(
+      () => { this.state = 'input'; this.submit(line); },
+      (e) => { this.state = 'input'; this.print('Error: ' + (e.message || e) + '\r\n'); this.prompt(); });
   }
 
   submit(line) {
