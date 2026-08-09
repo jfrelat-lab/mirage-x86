@@ -14,18 +14,31 @@ import { Shell } from './shell.js';
 import { SAMPLES } from './samples.js';
 
 const TICK_MS = 1000 / 18.2065;     // PC timer period
-const FRAME_BUDGET_MS = 12;         // real host CPU time per animation frame (safety cap)
+// Real host CPU time the run loop may spend per animation frame. This used to be a flat 12 ms,
+// which was tuned when the loop ALSO had a virtual-cycle budget that normally made it exit long
+// before that — measured on tube, it used 2.4 ms of each 16.7 ms frame, leaving ~14 ms for the
+// canvas draw and the browser's own compositing.
+//
+// Uncapped, the loop spends its whole allowance every frame (12.8 ms measured), leaving under 4 ms.
+// Miss the vsync deadline and rAF halves to 30 Hz, so the intro is DISPLAYED half as often even
+// though the guest is doing 10x the work — which is exactly how "it doesn't look as fast as before"
+// gets produced by making something faster. So the budget adapts: back off when frames are actually
+// being dropped, creep back up when they are not.
+const FRAME_BUDGET_MAX = 12, FRAME_BUDGET_MIN = 4;
+const FRAME_DROP_MS = 20;           // a frame gap this long means we missed a display refresh
 // Emulated CPU speed: guest cycles (~retired instructions) per second of wall-clock, or null to run
 // as fast as the host manages. NULL IS THE DEFAULT — the engine sustains ~220 M cycles/s, and the
 // 8 MHz cap this used to impose was a ~27x slowdown applied to everything, which is what made
 // raw-speed-bound intros (tube, memories) crawl.
 //
 // The cap existed to stop code paced by neither the timer nor the retrace — the Commander Keen
-// Vorticons menus and story scroll — from flying past. That is a real effect, but it is a per-title
-// concern and does not justify throttling the whole machine: DOSBox runs those same titles at full
-// speed. So the knob stays, reachable per run (?mhz=8 or new Mirage(c, {vcpuHz})), and the default
-// no longer pays for it. The 0x3DA retrace is anchored to wall-clock in bios.js, so vsync-paced code
-// still sees a true 70 Hz with no cap in place.
+// Vorticons menus and story scroll — from flying past. Note that DOSBox does NOT run these titles
+// flat out: its default cycles=auto means 3000 cycles/ms in real mode (max only in protected mode),
+// so Keen is playable on archive.org precisely BECAUSE it is throttled to ~3 M instr/s, and this
+// default is ~24x that. See docs/COMPAT.md for the measured table (demos/cpuspeed.asm) — period
+// games will want ?mhz=3, and the knob stays reachable for them (or new Mirage(c, {vcpuHz})).
+// The 0x3DA retrace is anchored to wall-clock in bios.js, so vsync-paced code still sees a true
+// 70 Hz with no cap in place.
 const VCPU_HZ = null;
 
 export class Mirage {
@@ -47,6 +60,7 @@ export class Mirage {
     this._raf = 0;
     this._lastTick = 0;
     this._lastLoop = 0;
+    this._frameBudget = FRAME_BUDGET_MAX;   // adapts to what the browser can actually display
     this._brk = false;
 
     this.machine.onError = (e) => this._onError(e);
@@ -187,15 +201,21 @@ export class Mirage {
       // budget for this frame is proportional to the real time elapsed since the last one, clamped
       // so a hidden/backlogged tab doesn't sprint to catch up). Raw-CPU-speed-bound code is thus
       // paced to a period-appropriate rate; timer-paced games are unaffected (their animation is
-      // gated by the wall-clock INT 8 below). FRAME_BUDGET_MS still caps real host time as a safety.
-      let dt = now - this._lastLoop; if (dt > 50 || dt < 0) dt = 50;
+      // gated by the wall-clock INT 8 below). The host-time budget still caps real CPU time.
+      const gap = now - this._lastLoop;         // how long since the last displayed frame
+      let dt = gap; if (dt > 50 || dt < 0) dt = 50;
       this._lastLoop = now;
+      // Yield host time back to the compositor when we are visibly costing it frames, and take it
+      // back when we are not. Without this the loop starves rendering and the guest is displayed at
+      // half rate — see FRAME_BUDGET_MAX.
+      if (gap > FRAME_DROP_MS && gap < 200) this._frameBudget = Math.max(FRAME_BUDGET_MIN, this._frameBudget - 1);
+      else if (gap > 0) this._frameBudget = Math.min(FRAME_BUDGET_MAX, this._frameBudget + 0.25);
       const cap = this.machine.vcpuHz;          // null (the default) = no virtual-clock throttle:
       const cycleBudget = cap                   // the frame is then bounded by FRAME_BUDGET_MS alone
         ? Math.max(1, (cap * dt / 1000) | 0) : Infinity;
       const cyc0 = this.machine.cpu.cycles;
       let w = t0;
-      while (w - t0 < FRAME_BUDGET_MS) {
+      while (w - t0 < this._frameBudget) {
         // Deliver AT MOST ONE timer tick per iteration, so the runSlice below services its ISR
         // (runs it to IRET) before the next tick fires. Firing several INT 8 back-to-back would
         // pile un-serviced interrupt frames on the guest stack (realInt only pushes a frame; the
@@ -204,7 +224,7 @@ export class Mirage {
         this.machine.pumpKeyboard();                      // stage a queued hw scancode + fire IRQ1
         const slice = Math.min(20000, cycleBudget - (this.machine.cpu.cycles - cyc0));
         if (slice <= 0) break;                            // spent this frame's virtual-cycle budget
-        // (unthrottled: cycleBudget is Infinity, so the loop runs until FRAME_BUDGET_MS is up)
+        // (unthrottled: cycleBudget is Infinity, so the loop runs until the host budget is up)
         this.machine.runSlice(slice);
         if (this.machine.blocked) break;                 // waiting on input
         if (this.dos.programDone) { this.shell.state = 'input'; this.shell.programReturned(); break; }
