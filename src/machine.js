@@ -26,6 +26,7 @@ export class Machine {
     // Which x86 generation this machine is. Read by the recompiler at TRANSLATION time, so every
     // difference becomes a constant in the emitted code — see src/cpu-profile.js.
     this.cpu.profile = resolveProfile(opts.cpu);
+    this.cpu.shiftMask = this.cpu.profile.shiftCountMask;   // read by the shift/rotate helpers
     installFPU(this.cpu);                           // x87 coprocessor
     this.rec = new Recompiler(this.cpu);
 

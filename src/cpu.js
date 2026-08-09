@@ -36,6 +36,8 @@ export class CPU {
     // Interrupt plumbing. swInt() is filled in by the Machine: it routes a
     // software interrupt either to a JS handler or to a guest-hooked ISR.
     this.swInt = (n) => { throw new Error('Unhandled INT ' + n.toString(16)); };
+    // Overwritten by Machine from the CPU profile; 0x1f (286+) is the default so a bare CPU works.
+    this.shiftMask = 0x1f;
     this.ioRead = () => 0xff;        // (port,size) => value
     this.ioWrite = () => {};         // (port,size,value) => void
 
@@ -156,11 +158,16 @@ export class CPU {
   }
 
   // ---- shifts & rotates (return result, set CF/OF; shifts also set SZP) ----
-  // 286+ semantics: the shift/rotate count is masked to 5 bits (this is a "186/286-targeted core"
-  // running 286/386-era games & demos, which depend on the mask — see conformance.js).
+  // The count mask comes from the CPU profile (src/cpu-profile.js): a 286+ masks it to 5 bits, an
+  // 8086/88 uses CL in full. That is why the shifts below handle counts >= the operand width
+  // explicitly instead of leaning on JS's `<<`, which silently masks to 5 bits and would turn a
+  // shift of 32 into a shift of 0.
   shl(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = bits - 1;
-    v &= m; c &= 0x1f; if (!c) return v;
+    v &= m; c &= this.shiftMask; if (!c) return v;
+    // Everything is shifted out: the result is 0, and CF is the last bit to leave (the LSB when the
+    // count equals the width, nothing at all beyond it).
+    if (c >= bits) { const cf = c === bits ? (v & 1) : 0; this.setShiftResult(0, bits, !!cf, false); return 0; }
     const cf = c <= bits ? (v >>> (bits - c)) & 1 : 0;
     const res = (v << c) & m;
     const of = c === 1 ? (((res >>> msb) & 1) ^ cf) : 0;
@@ -168,14 +175,17 @@ export class CPU {
   }
   shr(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = bits - 1;
-    v &= m; c &= 0x1f; if (!c) return v;
+    v &= m; c &= this.shiftMask; if (!c) return v;
+    if (c >= bits) { const cf = c === bits ? ((v >>> msb) & 1) : 0; this.setShiftResult(0, bits, !!cf, false); return 0; }
     const cf = (v >>> (c - 1)) & 1, res = (v >>> c) & m;
     const of = c === 1 ? (v >>> msb) & 1 : 0;
     this.setShiftResult(res, bits, !!cf, !!of); return res;
   }
   sar(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = 1 << (bits - 1);
-    v &= m; c &= 0x1f; if (!c) return v;
+    v &= m; c &= this.shiftMask; if (!c) return v;
+    // An arithmetic shift saturates to the sign: every bit becomes the sign bit, which is also CF.
+    if (c >= bits) { const neg = (v & msb) !== 0, res = neg ? m : 0; this.setShiftResult(res, bits, neg, false); return res; }
     const sv = ((v & msb) ? (v | ~m) : v) | 0;
     const cf = (sv >> (c - 1)) & 1, res = (sv >> c) & m;
     this.setShiftResult(res, bits, !!cf, false); return res;
@@ -185,7 +195,7 @@ export class CPU {
   // ROR) — a genuine bug in the old `if(!effective) return` path, independent of the count mask.
   rol(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1;
-    v &= m; c &= 0x1f; if (!c) return v;
+    v &= m; c &= this.shiftMask; if (!c) return v;
     const e = c % bits;
     const res = e ? (((v << e) | (v >>> (bits - e))) & m) : v, cf = res & 1;
     const of = c === 1 ? (((res >>> (bits - 1)) & 1) ^ cf) : 0;
@@ -193,7 +203,7 @@ export class CPU {
   }
   ror(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = bits - 1;
-    v &= m; c &= 0x1f; if (!c) return v;
+    v &= m; c &= this.shiftMask; if (!c) return v;
     const e = c % bits;
     const res = e ? (((v >>> e) | (v << (bits - e))) & m) : v, cf = (res >>> msb) & 1;
     const of = c === 1 ? (((res >>> msb) & 1) ^ ((res >>> (msb - 1)) & 1)) : 0;
@@ -203,7 +213,7 @@ export class CPU {
   // both value and CF, so an effective count of 0 returns unchanged with no flag write.
   rcl(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1;
-    v &= m; c &= 0x1f; c %= (bits + 1); if (!c) return v;
+    v &= m; c &= this.shiftMask; c %= (bits + 1); if (!c) return v;
     let cf = (this.flags & CF) ? 1 : 0;
     for (let i = 0; i < c; i++) { const nb = (v >>> (bits - 1)) & 1; v = ((v << 1) | cf) & m; cf = nb; }
     const of = (((v >>> (bits - 1)) & 1) ^ cf);
@@ -211,7 +221,7 @@ export class CPU {
   }
   rcr(v, c, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = 1 << (bits - 1);
-    v &= m; c &= 0x1f; c %= (bits + 1); if (!c) return v;
+    v &= m; c &= this.shiftMask; c %= (bits + 1); if (!c) return v;
     let cf = (this.flags & CF) ? 1 : 0;
     const of = ((v >>> (bits - 1)) & 1) ^ cf;
     for (let i = 0; i < c; i++) { const nb = v & 1; v = (v >>> 1) | (cf ? msb : 0); cf = nb; }

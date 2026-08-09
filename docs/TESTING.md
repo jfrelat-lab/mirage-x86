@@ -82,13 +82,17 @@ Why it exists: MIRAGE was a hybrid nobody shipped — 8088 on some 16-bit corner
 of those differences are exactly how a DOS program **detects** the CPU, so a program could reach a
 conclusion no real machine supports and pick a code path on it.
 
-    MIRAGE_CPU=8088 node tools/conformance.js d2.4 d3.4
+The profile is also what makes the conformance gate honest. Those vectors are captured from **8088
+silicon**, so `tools/conformance.js` now selects the `8088` profile by default. It used to run under
+the shipping default and skip the 28,113 cases where the generations genuinely differ — which meant
+the gate quietly excluded the cases most likely to expose a bug. `MIRAGE_CPU=386 node
+tools/conformance.js` still runs it under the shipping profile, with those skips, to check that
+profile has not drifted.
 
-runs the vectors under a chosen profile. Under the default those cases are skipped as a generation
-difference (100% of 3972); under `8088` all 8000 are compared and **81.19%** pass — the shift *mask*
-is plumbed but the 8088 shift arithmetic for counts >= the operand size is not implemented yet. That
-number is the size of the remaining work, and it is the point of the exercise: the seam is measured
-rather than argued about.
+Completing the 8088 profile was the work that bought this. The shift *mask* was plumbed but the
+arithmetic for counts >= the operand size was not implemented — JS's own `<<`/`>>` mask to 5 bits, so
+a shift of 32 silently became a no-op. `MIRAGE_CPU=8088 node tools/conformance.js d2.4 d3.4` went
+**81.19% → 100%** (8000/8000), and the full run from 527,651 compared cases to **555,764**.
 
 Still to come: `PUSHA`/`BOUND`/`ENTER` raising #UD below a 186, `0x66`/`0x67`/SIB below a 386, and
 the undefined-flag values after MUL/DIV/BCD. The last needs the hardware-generated 286/386 suites
@@ -166,7 +170,7 @@ build bare machines and do not use it.
 | **Unit** | `node tools/test.js` | 101 hand-written cases: opcodes, flags, ALU/BCD, the EGA planar write pipeline, keyboard 8042/IRQ1, multi-instruction dead-flag cases, 386 addressing (`0x67` ModRM/SIB), `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD), #DE aborting a block | 101/101 |
 | **386 semantics vs Unicorn** | `node tools/test-x86-uc.mjs` (`--capture` to refresh) | 2086 cases — 86 hand-written plus **2000 generated** (`tools/x86-gen.mjs`) (single instructions + multi-instruction **sequences**) whose expected values are **observed from Unicorn** (QEMU's TCG core), not hand-derived: `0x67` ModRM/SIB forms, `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD, 32-bit ALU), BT/BTS/BTR/BTC bit-string offsets on memory, string ops/XLAT/LOOP under `0x67`, shift/rotate flag corners, and sequences that exercise the **dead-flag elimination** pass (producer → consumer → killer, INC/DEC preserving CF, shifts with a runtime count of 0, REP with CX=0, LAHF/PUSHF reading the whole word, bounded loops). The captured reference is committed, so the gate needs neither Python nor Unicorn. ⚠️ **BCD (27/2f/37/3f) is deliberately excluded** — Unicorn models the later-CPU algorithm; the 8088 differs and `conformance` covers it with real silicon (40000/40000). | 2086/2086 |
 | **DOS/BIOS services** | `node tools/test-dos-api.js` | 243 cases against the INT 21h / 10h / 16h / 1Ah / 2Fh surface: file handles, find-first/next, memory (4Ah then 48h/49h), EXEC child block sizing, directories (39h/3Ah/3Bh/47h), the boot-sector INT 19h handoff, INT 13h over sector images (CHS decoding, geometry, error codes, and a two-sector boot image that loads its own second sector), DTA, the **CF-on-success convention**, and the XMS driver (move bounds/overlap/even length, realloc relocation, lock/free refusal, plus an end-to-end check that an AH=0Bh overlay swap invalidates the cached compiled block) - the layer `conformance`/`golden` cannot see | 243/243 |
-| **Conformance** | `node tools/conformance.js` | 527,651 SingleStepTests vectors — per-instruction reg/flag/memory exactness | **100%**, non-negotiable |
+| **Conformance** | `node tools/conformance.js` | 555,764 SingleStepTests vectors (8088 silicon, run under the `8088` profile — no skips) — per-instruction reg/flag/memory exactness | **100%**, non-negotiable |
 | **Golden** | `node tools/golden.js check` | deterministic output fingerprint of 20 demos (framebuffer + planes + DAC + fault) | 20/20 |
 | **Region fuzzer** | `node tools/fuzz-region.js 20000` | tier-2 region output == tier-1 (`stepOne`) on 20k random programs | `region == tier-1 on all` |
 | **Flag fuzzer** | `node tools/fuzz-flags.js` | randomized flag-producing sequences vs a reference | clean |

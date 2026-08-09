@@ -7,11 +7,8 @@
 //
 //   node tools/conformance.js                 # curated default set
 //   node tools/conformance.js 00 01 27 2f     # specific opcodes (hex)
-//   MIRAGE_CPU=8088 node tools/conformance.js d2.4 d3.4    # under the 8088 profile
-//
-// CPU=8088 is what makes the shift-by-CL cases below testable at all: under the default (386)
-// profile the count is masked to 5 bits, so counts >= 32 are a generation difference rather than a
-// bug and are skipped. Selecting the 8088 profile removes both the masking and the skip.
+//   MIRAGE_CPU=386 node tools/conformance.js  # the shipping profile instead (skips 28113 cases
+//                                             # where the generations genuinely differ)
 //
 // Vector files are fetched on demand into tools/sst/ (gitignored).
 
@@ -93,7 +90,12 @@ const REGGET = {
   cs: c => c.seg[1], ds: c => c.seg[3], es: c => c.seg[0], ss: c => c.seg[2], ip: c => c.eip & 0xffff,
 };
 
-const PROFILE = process.env.MIRAGE_CPU || null;
+// These vectors are captured from 8088 SILICON, so the engine is configured as an 8088 to compare
+// against them. It used to run under the shipping default (386) and skip the 28113 cases where the
+// generations genuinely differ — which meant the gate quietly excluded the very cases most likely to
+// expose a bug. With the profile set there is nothing to excuse: 555764 cases, no skips.
+// MIRAGE_CPU=386 still works, for checking that the shipping profile has not drifted.
+const PROFILE = process.env.MIRAGE_CPU || '8088';
 
 function runOpcode(op, tests) {
   const mc = new Machine({ memSize: 1 << 20, cpu: PROFILE });   // 1 MB → 8088 wrap at 1 MB

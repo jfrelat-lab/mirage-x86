@@ -1,9 +1,8 @@
 // cpu-profile.js — which x86 generation MIRAGE claims to be.
 //
 // Until now it was a hybrid nobody ever shipped: 8088 semantics on some 16-bit corners, 286
-// behaviour on others (shift counts masked to 5 bits, PUSH SP pushing the original value — see
-// tools/conformance.js, which skips the cases where they differ and calls the core "286-targeted"),
-// and 386 decoding for 0x66/0x67/SIB. That seam is not academic: several of these differences are
+// behaviour on others (shift counts masked to 5 bits, PUSH SP pushing the original value), and 386
+// decoding for 0x66/0x67/SIB. That seam is not academic: several of these differences are
 // exactly how a DOS program DETECTS the CPU, so a program can reach a conclusion about the machine
 // that no real machine would support, and then pick a code path on it.
 //
@@ -23,11 +22,11 @@ export const PROFILES = {
   // 1990-94 DOS software, and the engine already behaves like a 286 in the places that differ.
   '8088': {
     name: '8088',
-    // The count is used in full: `shl ax,255` really shifts 255 times. NOTE: the mask is plumbed,
-    // but the arithmetic for counts >= the operand size is NOT implemented — the shift helpers in
-    // cpu.js assume a masked count (and JS's own `<<` masks to 5 bits regardless). Measured cost:
-    // `MIRAGE_CPU=8088 node tools/conformance.js d2.4 d3.4` gives 81.19%, versus 100% under the
-    // default profile with 4028 cases skipped as a generation difference. That gap IS the work.
+    // The count is used in full: `shl ax,255` really shifts 255 times, and everything is shifted
+    // out. Implemented, not just plumbed — the helpers in cpu.js handle counts >= the operand size
+    // explicitly, because JS's own `<<`/`>>` mask to 5 bits and would render a shift of 32 a no-op.
+    // The recompiler's inline shift fast path is guarded to compile-time counts below the operand
+    // size, so the large ones route to those helpers rather than to a bare JS shift.
     shiftCountMask: 0xff,
     pushSPOriginal: false,     // PUSH SP pushes SP *after* the decrement
     pushfSetsReserved: true,   // bits 12-15 always read back as 1

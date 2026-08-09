@@ -26,6 +26,7 @@ const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.
 // to tier-1 (golden + conformance + fuzz-region), but on real GAMES it has unresolved issues — a
 // fused region can run unbounded work per slice (Cosmo's decompression hangs a single runSlice),
 // Wolf3D runs ~5× slower, and Keen once derailed on a far-indirect pattern. So it stays a Node-only
+// Wolf3D runs ~5× slower, and Keen once derailed on a far-indirect pattern. So it stays a Node-only
 // opt-in for perf work (ON in Node unless MIRAGE_NOTIER2=1; where the test suite exercises it) and
 // is OFF in the browser (typeof process==='undefined') until a region instruction-budget + the
 // game bugs are fixed. Re-enable browser tier-2 by removing the `typeof process !== 'undefined'`.
@@ -970,8 +971,12 @@ export class Recompiler {
       // strippable PFLAG (def CF/OF/PF/ZF/SF, AF preserved). CL-count (D2/D3, runtime c==0
       // branch), rotates, and 32-bit keep the helper call.
       const isShift = rot === 4 || rot === 5 || rot === 6 || rot === 7;
-      if (isShift && size !== 32 && /^\d+$/.test(cnt)) {
-        const C = Number(cnt) & SHIFT_MASK;   // 286+ masks to 5 bits; an 8088 shifts the full count
+      // The inline fast path assumes the count is smaller than the operand — under the 8088 profile
+      // it need not be, and JS's own shift operators mask to 5 bits, so a count of 32 would become 0.
+      // Counts at or above the width go to the helper, which handles them explicitly.
+      const litC = /^\d+$/.test(cnt) ? (Number(cnt) & SHIFT_MASK) : -1;
+      if (isShift && size !== 32 && litC >= 0 && litC < size) {
+        const C = litC;
         if (C === 0) return;   // shift by 0: value and flags unchanged (byte-exact no-op)
         const mask = size === 8 ? 0xff : 0xffff, msb = size - 1;
         const v = NT(), res = NT(), cf = NT(), of = NT();
