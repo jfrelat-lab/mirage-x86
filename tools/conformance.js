@@ -7,6 +7,11 @@
 //
 //   node tools/conformance.js                 # curated default set
 //   node tools/conformance.js 00 01 27 2f     # specific opcodes (hex)
+//   MIRAGE_CPU=8088 node tools/conformance.js d2.4 d3.4    # under the 8088 profile
+//
+// CPU=8088 is what makes the shift-by-CL cases below testable at all: under the default (386)
+// profile the count is masked to 5 bits, so counts >= 32 are a generation difference rather than a
+// bug and are skipped. Selecting the 8088 profile removes both the masking and the skip.
 //
 // Vector files are fetched on demand into tools/sst/ (gitignored).
 
@@ -88,17 +93,20 @@ const REGGET = {
   cs: c => c.seg[1], ds: c => c.seg[3], es: c => c.seg[0], ss: c => c.seg[2], ip: c => c.eip & 0xffff,
 };
 
+const PROFILE = process.env.MIRAGE_CPU || null;
+
 function runOpcode(op, tests) {
-  const mc = new Machine({ memSize: 1 << 20 });   // 1 MB → 8088 wrap at 1 MB
+  const mc = new Machine({ memSize: 1 << 20, cpu: PROFILE });   // 1 MB → 8088 wrap at 1 MB
   const cpu = mc.cpu, u8 = mc.mem.u8, mask = mc.mem.mask;
   let pass = 0, hard = 0, flag = 0, skipped = 0;
   const opn = parseInt(op, 16);
   const examples = [];
   for (const t of tests) {
     if (skip(opn, t.bytes)) { skipped++; continue; }
-    // variable shift/rotate by CL: the 286+ masks the count to 5 bits, the 8088 doesn't, so
-    // counts >= 32 are a generation difference, not a bug — this is a 286-targeted core.
-    if ((opn === 0xd2 || opn === 0xd3) && (t.initial.regs.cx & 0xff) >= 32) { skipped++; continue; }
+    // variable shift/rotate by CL: the 286+ masks the count to 5 bits, the 8088 does not. Under the
+    // 8088 profile there is nothing to excuse and the case is compared like any other.
+    if (mc.cpu.profile.shiftCountMask !== 0xff &&
+        (opn === 0xd2 || opn === 0xd3) && (t.initial.regs.cx & 0xff) >= 32) { skipped++; continue; }
     REGSET(cpu, t.initial.regs);
     for (const [a, v] of t.initial.ram) u8[a & mask] = v;
     cpu.halted = false;

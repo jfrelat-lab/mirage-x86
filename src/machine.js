@@ -11,6 +11,7 @@ import { Memory } from './memory.js';
 import { CPU, CS, CF, IF, TF } from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
+import { resolveProfile } from './cpu-profile.js';
 
 export const BIOS_SEG = 0xf000;
 
@@ -22,6 +23,9 @@ export class Machine {
   constructor(opts = {}) {
     this.mem = new Memory(opts.memSize || 16 * 1024 * 1024);
     this.cpu = new CPU(this.mem);
+    // Which x86 generation this machine is. Read by the recompiler at TRANSLATION time, so every
+    // difference becomes a constant in the emitted code — see src/cpu-profile.js.
+    this.cpu.profile = resolveProfile(opts.cpu);
     installFPU(this.cpu);                           // x87 coprocessor
     this.rec = new Recompiler(this.cpu);
 

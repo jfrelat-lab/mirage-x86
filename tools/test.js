@@ -352,6 +352,42 @@ function eq(name, got, want) {
   eq('unhandled INT 13h sets CF (not a silent success)', cpu.flags & 1, 1);
   eq('unhandled INT 13h is counted', mc.unhandledInts[0x13], 1); }
 
+// ---- CPU profiles: the generation differences a DOS program uses to DETECT the chip -----------
+// Until src/cpu-profile.js existed, MIRAGE was a hybrid nobody shipped — 8088 on some corners, 286
+// on others, 386 decoding throughout — so a detection routine could conclude something impossible.
+// Each of these is a DEFINED difference, not an undefined-flag corner.
+{
+  /** Run `code` at 0100:0000 under `cpu` profile until HLT, return the machine. */
+  const run = (cpuProfile, code) => {
+    const mc = new Machine({ memSize: 1 << 20, cpu: cpuProfile });
+    const c = mc.cpu;
+    c.setSeg(CS, 0x100); c.eip = 0; c.setSeg(SS, 0x300); c.sp = 0x1000;
+    mc.mem.blit(0x100 * 16, Uint8Array.from(code));
+    let n = 0; while (!c.halted && n++ < 200) mc.rec.step();
+    return mc;
+  };
+
+  // NOTE on shifts: `shiftCountMask` is plumbed through the profile, but the 8088 shift ARITHMETIC
+  // for counts >= the operand size is not implemented — the helpers assume a masked count, and JS's
+  // own `<<` masks to 5 bits anyway. `MIRAGE_CPU=8088 node tools/conformance.js d2.4 d3.4` measures
+  // exactly what that costs: 81.19%, against 100% (with 4028 cases skipped) under the default. That
+  // number is the size of the remaining work, so there is no assertion here pretending otherwise.
+
+  // PUSH SP: an 8086/88 pushes SP AFTER the decrement, a 286+ the value it had on entry.
+  const pushsp = [0x54, 0x58, 0xf4];                      // push sp ; pop ax ; hlt
+  eq('386: PUSH SP pushes the entry value', run('386', pushsp).cpu.reg[0] & 0xffff, 0x1000);
+  eq('8088: PUSH SP pushes the decremented value', run('8088', pushsp).cpu.reg[0] & 0xffff, 0x0ffe);
+
+  // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
+  const pushf = [0x9c, 0x58, 0xf4];                       // pushf ; pop ax ; hlt
+  eq('386: PUSHF clears the reserved bits', run('386', pushf).cpu.reg[0] & 0xf000, 0x0000);
+  eq('8088: PUSHF sets the reserved bits', run('8088', pushf).cpu.reg[0] & 0xf000, 0xf000);
+
+  let threw = false;
+  try { new Machine({ memSize: 1 << 20, cpu: 'z80' }); } catch { threw = true; }
+  eq('an unknown profile is refused rather than silently ignored', threw, true);
+}
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

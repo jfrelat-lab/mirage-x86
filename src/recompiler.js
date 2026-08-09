@@ -340,6 +340,9 @@ export class Recompiler {
   // -------------------------------------------------------------------------
   translate(linStart, ip0, maxOps = MAXOPS) {
     const mem = this.mem, MM = this.MM;
+    // The CPU generation, read once per block. Every use below is a compile-time constant folded
+    // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
+    const PROF = this.cpu.profile, SHIFT_MASK = PROF.shiftCountMask;
     // BIOS service entry (f000:00..ff). Reached when a guest calls the ISR *inline* — reads the
     // vector from the IVT and far-JMP/CALLs f000:n instead of executing `INT n` (Secret Agent's
     // video probe does this: LDS BX,[0:40]; …; RETF into f000:10). The stub byte is 0xCF (IRET),
@@ -583,6 +586,9 @@ export class Recompiler {
 
         // ---- PUSH/POP reg ----
         case 0x50: case 0x51: case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57:
+          // PUSH SP is the classic CPU-detection probe: an 8086/88 pushes SP *after* the decrement,
+          // a 286+ pushes the value it had on entry. Every other register is unaffected.
+          if ((op & 7) === 4 && sz === 16 && !PROF.pushSPOriginal) { P('cpu.push16((cpu.reg[4]-2)&0xffff);'); break; }
           P(sz === 32 ? `cpu.push32(${rR(op & 7, 32)});` : `cpu.push16(${rR(op & 7, 16)});`); break;
         case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f:
           P(sz === 32 ? rW(op & 7, 32, 'cpu.pop32()') : rW(op & 7, 16, 'cpu.pop16()')); break;
@@ -649,7 +655,9 @@ export class Recompiler {
           : `r[2]=((r[0]&0x80000000)?0xffffffff:0)>>>0;`); break;                               // CDQ  EAX→EDX:EAX
         case 0x9a: { const o = f16(), s = f16(); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
-        case 0x9c: cur.use |= lALL; P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);' : 'cpu.push16(cpu.flags&0xffff);'); break;   // PUSHF / PUSHFD (66)
+        // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
+        case 0x9c: cur.use |= lALL; P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);'
+          : `cpu.push16((cpu.flags${PROF.pushfSetsReserved ? '|0xf000' : ''})&0xffff);`); break;
         case 0x9d: P(sz === 32 ? 'cpu.flags=(cpu.pop32()&0x27fd5)|2;' : 'cpu.flags=(cpu.pop16()&0x7fd5)|2;'); break;         // POPF / POPFD (66; RF/VM not modelled)
         case 0x9e: P('cpu.flags=(cpu.flags&~0xff)|(((r[0]>>>8)&0xd5))|2;'); break;       // SAHF
         case 0x9f: cur.use |= lC | lP | lA | lZ | lS; P('r[0]=(r[0]&~0xff00)|((((cpu.flags&0xd5)|2)&0xff)<<8);'); break; // LAHF (reads CPAZS)
@@ -683,8 +691,8 @@ export class Recompiler {
           P(rW(op & 7, sz, '' + (sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0)))); break;
 
         // ---- group2 shifts ----
-        case 0xc0: { const o = modrm(); const c = f8(); emitShift(o, 8, '' + (c & 0x1f)); break; }   // 286+: imm8 count masked to 5 bits
-        case 0xc1: { const o = modrm(); const c = f8(); emitShift(o, sz, '' + (c & 0x1f)); break; }
+        case 0xc0: { const o = modrm(); const c = f8(); emitShift(o, 8, '' + (c & SHIFT_MASK)); break; }   // the 286+ masks the count to 5 bits; an 8088 uses it in full
+        case 0xc1: { const o = modrm(); const c = f8(); emitShift(o, sz, '' + (c & SHIFT_MASK)); break; }
         case 0xd0: { const o = modrm(); emitShift(o, 8, '1'); break; }
         case 0xd1: { const o = modrm(); emitShift(o, sz, '1'); break; }
         case 0xd2: { const o = modrm(); emitShift(o, 8, '(r[1]&0xff)'); break; }
@@ -920,7 +928,7 @@ export class Recompiler {
       // branch), rotates, and 32-bit keep the helper call.
       const isShift = rot === 4 || rot === 5 || rot === 6 || rot === 7;
       if (isShift && size !== 32 && /^\d+$/.test(cnt)) {
-        const C = Number(cnt) & 0x1f;   // 286+: count masked to 5 bits
+        const C = Number(cnt) & SHIFT_MASK;   // 286+ masks to 5 bits; an 8088 shifts the full count
         if (C === 0) return;   // shift by 0: value and flags unchanged (byte-exact no-op)
         const mask = size === 8 ? 0xff : 0xffff, msb = size - 1;
         const v = NT(), res = NT(), cf = NT(), of = NT();

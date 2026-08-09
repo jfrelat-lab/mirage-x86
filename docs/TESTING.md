@@ -18,6 +18,31 @@ code and guessing; this ranks them by what the corpus actually calls.
 Caveat: a title only reaches the calls *after* the point where it currently derails, so anything
 dying early under-reports.
 
+## CPU profiles (`src/cpu-profile.js`)
+
+`new Machine({ cpu: '8088' | '286' | '386' })` selects which x86 generation the engine claims to be;
+the default is `386`. Nearly every difference resolves at translation time, so a profile is a
+constant in the emitted JS and costs nothing at run time.
+
+Why it exists: MIRAGE was a hybrid nobody shipped — 8088 on some 16-bit corners, 286 on others
+(shift counts masked to 5 bits, `PUSH SP` pushing the entry value), 386 decoding throughout. Several
+of those differences are exactly how a DOS program **detects** the CPU, so a program could reach a
+conclusion no real machine supports and pick a code path on it.
+
+    MIRAGE_CPU=8088 node tools/conformance.js d2.4 d3.4
+
+runs the vectors under a chosen profile. Under the default those cases are skipped as a generation
+difference (100% of 3972); under `8088` all 8000 are compared and **81.19%** pass — the shift *mask*
+is plumbed but the 8088 shift arithmetic for counts >= the operand size is not implemented yet. That
+number is the size of the remaining work, and it is the point of the exercise: the seam is measured
+rather than argued about.
+
+Still to come: `PUSHA`/`BOUND`/`ENTER` raising #UD below a 186, `0x66`/`0x67`/SIB below a 386, and
+the undefined-flag values after MUL/DIV/BCD. The last needs the hardware-generated 286/386 suites
+([SingleStepTests/80286](https://github.com/SingleStepTests/80286),
+[/80386](https://github.com/SingleStepTests/80386) — real silicon, same author as our 8088 vectors),
+which ship in a binary **MOO** container rather than JSON, so a decoder is a prerequisite.
+
 ## The VGA oracle (`tools/vga-rom.mjs`)
 
 Asking "is our INT 10h mode set correct?" has no oracle — we wrote both the question and the answer.
