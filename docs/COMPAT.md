@@ -218,8 +218,17 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
    | MIRAGE capped at 3 MHz | 551 |
    | MIRAGE capped at 8 MHz (the old default) | 1333 |
    | DOSBox `cycles=20000` | 3015 |
-   | MIRAGE **uncapped** (today's default) | 10622 |
-   | DOSBox `cycles=max` | 13935 |
+   | MIRAGE **uncapped**, through the animation-frame loop (what you see) | 10622 |
+   | DOSBox `core=normal cycles=max` — the **interpreter** | 14367 |
+   | MIRAGE **uncapped**, engine flat out (no compositor share) | 14155 |
+   | DOSBox `core=dynamic cycles=max` — its **recompiler** | 39936 |
+
+   So MIRAGE is at **parity with DOSBox's interpreter (~99%)** and at **~35% of its dynamic core**.
+   An earlier revision said "76% of DOSBox `cycles=max`", which compared against `core=normal`
+   while calling it DOSBox, and handicapped MIRAGE with the loop's 12-of-16.7 ms share — two errors
+   that partly cancelled. Caveat: this is one tight ALU loop on one Apple Silicon host, where
+   `core=dynamic_x86` falls back (14373) so DOSBox is using its generic recompiler; it says nothing
+   about memory, FPU or VGA-bound work.
 
    The correction that matters: DOSBox does **not** run these titles at full speed. `cycles=auto`
    means "3000 cycles/ms for real-mode programs, `max` only once a program enters protected mode" —
