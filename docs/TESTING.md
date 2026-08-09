@@ -18,6 +18,30 @@ code and guessing; this ranks them by what the corpus actually calls.
 Caveat: a title only reaches the calls *after* the point where it currently derails, so anything
 dying early under-reports.
 
+## test386.asm (`tools/run-test386.mjs`)
+
+A third kind of CPU oracle, and the only one that is a *program*: [test386.asm](https://github.com/barotto/test386.asm)
+is a self-checking tester whose author read the manuals and encoded the expected behaviour as
+executable assertions; PCem and 86Box use it on themselves. It runs as a BIOS replacement — the 64 KB
+image IS the F000 segment, entered at the reset vector — and reports a rising sequence of codes to
+the POST port (0x190 by default). The last code before it stops is the diagnostic.
+
+    node tools/run-test386.mjs boot/test386.bin
+
+It earned its place in the first ten minutes by finding two real defects the per-instruction
+harnesses structurally could not:
+
+* **`MOV CS,r/m` did not raise #UD.** The instruction does not exist; we executed it. Nothing
+  legitimate does this, but a CPU-detection routine probing an instruction's existence via #UD gets
+  the wrong answer.
+* **We assumed the F000 segment was ours.** `swInt` claimed any vector pointing into F000, so a
+  guest that replaces the ROM — which is exactly what test386 is — had its own exception handler
+  swallowed, and spun on the faulting instruction forever. The vector is now only claimed when our
+  own 0xCF stub is still the byte at the target.
+
+Build it with NASM (`git clone https://github.com/barotto/test386.asm && make`); `boot/` is
+gitignored. It reaches POST 5 today, up from POST 3 before those two fixes.
+
 ### Generated cases (`tools/x86-gen.mjs`)
 
 The 86 hand-written cases test what I thought of; the `0x67` bug that derailed Heaven for a week
@@ -130,7 +154,7 @@ build bare machines and do not use it.
 |---|---|---|---|
 | **Unit** | `node tools/test.js` | 101 hand-written cases: opcodes, flags, ALU/BCD, the EGA planar write pipeline, keyboard 8042/IRQ1, multi-instruction dead-flag cases, 386 addressing (`0x67` ModRM/SIB), `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD), #DE aborting a block | 101/101 |
 | **386 semantics vs Unicorn** | `node tools/test-x86-uc.mjs` (`--capture` to refresh) | 2086 cases — 86 hand-written plus **2000 generated** (`tools/x86-gen.mjs`) (single instructions + multi-instruction **sequences**) whose expected values are **observed from Unicorn** (QEMU's TCG core), not hand-derived: `0x67` ModRM/SIB forms, `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD, 32-bit ALU), BT/BTS/BTR/BTC bit-string offsets on memory, string ops/XLAT/LOOP under `0x67`, shift/rotate flag corners, and sequences that exercise the **dead-flag elimination** pass (producer → consumer → killer, INC/DEC preserving CF, shifts with a runtime count of 0, REP with CX=0, LAHF/PUSHF reading the whole word, bounded loops). The captured reference is committed, so the gate needs neither Python nor Unicorn. ⚠️ **BCD (27/2f/37/3f) is deliberately excluded** — Unicorn models the later-CPU algorithm; the 8088 differs and `conformance` covers it with real silicon (40000/40000). | 2086/2086 |
-| **DOS/BIOS services** | `node tools/test-dos-api.js` | 241 cases against the INT 21h / 10h / 16h / 1Ah / 2Fh surface: file handles, find-first/next, memory (4Ah then 48h/49h), EXEC child block sizing, directories (39h/3Ah/3Bh/47h), the boot-sector INT 19h handoff, INT 13h over sector images (CHS decoding, geometry, error codes, and a two-sector boot image that loads its own second sector), DTA, the **CF-on-success convention**, and the XMS driver (move bounds/overlap/even length, realloc relocation, lock/free refusal, plus an end-to-end check that an AH=0Bh overlay swap invalidates the cached compiled block) - the layer `conformance`/`golden` cannot see | 241/241 |
+| **DOS/BIOS services** | `node tools/test-dos-api.js` | 243 cases against the INT 21h / 10h / 16h / 1Ah / 2Fh surface: file handles, find-first/next, memory (4Ah then 48h/49h), EXEC child block sizing, directories (39h/3Ah/3Bh/47h), the boot-sector INT 19h handoff, INT 13h over sector images (CHS decoding, geometry, error codes, and a two-sector boot image that loads its own second sector), DTA, the **CF-on-success convention**, and the XMS driver (move bounds/overlap/even length, realloc relocation, lock/free refusal, plus an end-to-end check that an AH=0Bh overlay swap invalidates the cached compiled block) - the layer `conformance`/`golden` cannot see | 243/243 |
 | **Conformance** | `node tools/conformance.js` | 527,651 SingleStepTests vectors — per-instruction reg/flag/memory exactness | **100%**, non-negotiable |
 | **Golden** | `node tools/golden.js check` | deterministic output fingerprint of 20 demos (framebuffer + planes + DAC + fault) | 20/20 |
 | **Region fuzzer** | `node tools/fuzz-region.js 20000` | tier-2 region output == tier-1 (`stepOne`) on 20k random programs | `region == tier-1 on all` |

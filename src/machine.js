@@ -154,7 +154,13 @@ export class Machine {
     if (v.seg === BIOS_SEG) {
       const h = this.intHandlers[n];
       if (h) h(this.cpu, this);          // JS handler; eip already points past the INT
-      else {
+      else if (this.mem.u8[((BIOS_SEG << 4) + v.off) & this.mem.mask] !== 0xcf) {
+        // The vector points into F000 but the byte there is NOT our IRET stub, so the guest has
+        // replaced the ROM and owns this vector — test386.asm does exactly that, being a BIOS
+        // replacement whose exception handlers live in F000. Assuming we own the segment made us
+        // swallow its #UD handler and spin on the faulting instruction forever.
+        this.realInt(n, v.seg, v.off);
+      } else {
         // Unhandled BIOS vector. Returning with CF untouched reads to the guest as SUCCESS — so a
         // program that e.g. asks INT 13h for a sector believes it got one and then parses whatever
         // was in the buffer. Report failure instead (CF=1 is the DOS/BIOS error convention) and

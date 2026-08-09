@@ -640,7 +640,17 @@ export class Recompiler {
         case 0x8b: { const o = modrm(); P(rW(o.reg, sz, rmR(o, sz))); break; }
         case 0x8c: { const o = modrm(); P(rmW(o, 16, `cpu.seg[${o.reg}]`)); break; }   // MOV Ew,Sw
         case 0x8d: { const o = modrm(); P(rW(o.reg, sz, '(' + o.off + ')')); break; }   // LEA
-        case 0x8e: { const o = modrm(); P(`cpu.setSeg(${o.reg},${rmR(o, 16)});`); break; } // MOV Sw,Ew
+        case 0x8e: {                                                                    // MOV Sw,Ew
+          const o = modrm();
+          // reg=001 selects CS, and `MOV CS,r/m` does not exist — a real CPU raises #UD. We used to
+          // execute it, which test386.asm catches: its POST-3 fault test expects INT 6 and got a
+          // normal retirement. Nothing legitimate does this, but a CPU-detection routine probing an
+          // instruction's existence via #UD gets the wrong answer, and the exception has to end the
+          // block for the same reason DIV's #DE does — otherwise the terminator overwrites cpu.eip
+          // and silently discards the interrupt on a stack that already holds an IRET frame.
+          if (o.reg === 1) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; }
+          P(`cpu.setSeg(${o.reg},${rmR(o, 16)});`); break;
+        }
         case 0x8f: { const o = modrm(); P(rmW(o, 16, 'cpu.pop16()')); break; }          // POP Ev
 
         case 0x90: break;                                                               // NOP

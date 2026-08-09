@@ -209,6 +209,20 @@ function asciiz(mc, cpu, off, str) {
   eq('an unimplemented INT 21h function sets CF', r.cf, CF);
   eq('an unimplemented INT 21h function reports "invalid function"', r.ax, 1);
 }
+{ // the F000 segment is ours only while OUR stub is still there
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const cpu = mc.cpu;
+  // A guest that replaces the ROM owns its vectors. test386.asm does exactly that — it IS the BIOS —
+  // and we were swallowing its #UD handler and spinning on the faulting instruction forever.
+  mc.mem.blit(0xf0000 + 0x40, Uint8Array.from([0xb8, 0x99, 0x99, 0xcf]));   // mov ax,9999h ; iret
+  mc.setVector(0x40, 0xf000, 0x40);
+  cpu.setSeg(2, 0x3000); cpu.sp = 0x100; cpu.reg[0] = 0;
+  mc.swInt(0x40);
+  eq('a guest handler inside F000 is entered, not swallowed', (cpu.seg[1] << 16) | (cpu.eip & 0xffff), (0xf000 << 16) | 0x40);
+  eq('...and our own IRET stub still takes the unhandled path', (mc.mem.u8[0xf0000 + 0x41] !== 0xcf), true);
+}
+
 { // and an interrupt we don't implement at all must not read as success
   const { mc, cpu } = mk();
   cpu.flags &= ~CF;
