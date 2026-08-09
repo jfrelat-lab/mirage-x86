@@ -343,6 +343,12 @@ export class Recompiler {
     // The CPU generation, read once per block. Every use below is a compile-time constant folded
     // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
     const PROF = this.cpu.profile, SHIFT_MASK = PROF.shiftCountMask;
+    // Shared by LDS/LES/LSS/LFS/LGS: an offset at the effective address, then a 16-bit selector.
+    // Its position depends on the operand size — +2 for a word offset, +4 for a dword.
+    const loadPtr = (o, segIdx, size) => {
+      const a = memAddr(o);
+      return `${rW(o.reg, size, size === 16 ? `m.r16(${a})` : `m.r32(${a})>>>0`)}cpu.setSeg(${segIdx},m.r16((${a}+${size === 16 ? 2 : 4})&${MM}));`;
+    };
     // BIOS service entry (f000:00..ff). Reached when a guest calls the ISR *inline* — reads the
     // vector from the IVT and far-JMP/CALLs f000:n instead of executing `INT n` (Secret Agent's
     // video probe does this: LDS BX,[0:40]; …; RETF into f000:10). The stub byte is 0xCF (IRET),
@@ -717,8 +723,11 @@ export class Recompiler {
         // SP adjustment stays a 16-bit count either way.
         case 0xc2: { const n = f16(); P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`); P('return;'); ended = true; break; } // RET imm
         case 0xc3: P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};`); P('return;'); ended = true; break;        // RET
-        case 0xc4: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${ES},m.r16((${a}+2)&${MM}));`); break; } // LES
-        case 0xc5: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${DS},m.r16((${a}+2)&${MM}));`); break; } // LDS
+        // LDS/LES/LSS/LFS/LGS all load an offset followed by a 16-bit selector. Under 0x66 the offset
+        // is a DWORD, so the selector sits at +4, not +2 — reading it at +2 loaded half the offset as
+        // the segment. test386's POST-6 `o32 lss ebx,[es:di]` caught it; last of the T0.3 family.
+        case 0xc4: { const o = modrm(); P(loadPtr(o, ES, sz)); break; } // LES
+        case 0xc5: { const o = modrm(); P(loadPtr(o, DS, sz)); break; } // LDS
         case 0xc6: { const o = modrm(); const i = f8(); P(rmW(o, 8, '' + i)); break; }
         case 0xc7: { const o = modrm(); const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(rmW(o, sz, '' + i)); break; }
         case 0xc8: {                                                                    // ENTER size,level (make stack frame)
@@ -1134,9 +1143,9 @@ export class Recompiler {
         case 0xb3: { const o = modrm(); bt(o, 'btr', rR(o.reg, sz)); return; }           // BTR
         case 0xbb: { const o = modrm(); bt(o, 'btc', rR(o.reg, sz)); return; }           // BTC
         case 0xba: { const o = modrm(); const imm = f8(); bt(o, ['bt', 'bt', 'bt', 'bt', 'bt', 'bts', 'btr', 'btc'][o.reg], '' + imm); return; }
-        case 0xb2: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${SS},m.r16((${a}+2)&${MM}));`); return; } // LSS
-        case 0xb4: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${FS},m.r16((${a}+2)&${MM}));`); return; } // LFS
-        case 0xb5: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${GS},m.r16((${a}+2)&${MM}));`); return; } // LGS
+        case 0xb2: { const o = modrm(); P(loadPtr(o, SS, sz)); return; } // LSS
+        case 0xb4: { const o = modrm(); P(loadPtr(o, FS, sz)); return; } // LFS
+        case 0xb5: { const o = modrm(); P(loadPtr(o, GS, sz)); return; } // LGS
         case 0xbc: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}&-${s}))`)}}`); return; } // BSF
         case 0xbd: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}))`)}}`); return; } // BSR
         case 0xa4: { const o = modrm(); const c = f8(); P(rmW(o, sz, `cpu.shld(${rmR(o, sz)},${rR(o.reg, sz)},${c & 31},${sz})`)); return; } // SHLD imm

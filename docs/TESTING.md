@@ -40,13 +40,18 @@ harnesses structurally could not:
   rest of the frame, and the far-pointer *immediate* was read as 2+2 bytes instead of 4+2 — which
   DESYNCHRONISES the instruction stream, the same failure shape as the 0x67 bug that derailed Heaven
   for a week. Four POST stages' worth of tests were sitting behind it.
+* **`LDS`/`LES`/`LSS`/`LFS`/`LGS` read the selector at the wrong offset under 0x66.** The offset
+  is a dword there, so the selector sits at +4; we read +2 regardless and loaded half the offset as
+  the segment. Same family as the control transfers, and the last of the audit's T0.3 list.
 * **We assumed the F000 segment was ours.** `swInt` claimed any vector pointing into F000, so a
   guest that replaces the ROM — which is exactly what test386 is — had its own exception handler
   swallowed, and spun on the faulting instruction forever. The vector is now only claimed when our
   own 0xCF stub is still the byte at the target.
 
 Build it with NASM (`git clone https://github.com/barotto/test386.asm && make`); `boot/` is
-gitignored. It reaches POST 6 today, up from POST 3 when it was first run.
+gitignored. **Its entire real-mode section now passes** (POST 0-6), up from POST 3 when it was first run. What
+follows POST 6 is protected mode, which MIRAGE does not implement — so test386 has nothing further
+to tell us until roadmap B4 lands. That makes it a finished ladder rather than a failing gate.
 
 ### Generated cases (`tools/x86-gen.mjs`)
 
