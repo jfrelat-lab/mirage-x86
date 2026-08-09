@@ -663,7 +663,12 @@ export class Recompiler {
           : `r[0]=(((r[0]&0xffff)<<16>>16))>>>0;`); break;                                      // CWDE AX→EAX
         case 0x99: P(sz === 16 ? `r[2]=(r[2]&~0xffff)|((r[0]&0x8000)?0xffff:0);`                // CWD  AX→DX:AX
           : `r[2]=((r[0]&0x80000000)?0xffffffff:0)>>>0;`); break;                               // CDQ  EAX→EDX:EAX
-        case 0x9a: { const o = f16(), s = f16(); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // CALLF ptr
+        // The far pointer immediate is 4+2 bytes under 0x66, not 2+2 — reading only two would
+        // DESYNCHRONISE the instruction stream, which is the same failure shape as the 0x67 bug that
+        // derailed Heaven. test386's POST-5 far-call test is what surfaced it.
+        case 0x9a: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16();
+          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});` : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});`);
+          P(`cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
         // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
         case 0x9c: cur.use |= lALL; P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);'
@@ -708,8 +713,10 @@ export class Recompiler {
         case 0xd2: { const o = modrm(); emitShift(o, 8, '(r[1]&0xff)'); break; }
         case 0xd3: { const o = modrm(); emitShift(o, sz, '(r[1]&0xff)'); break; }
 
-        case 0xc2: { const n = f16(); P(`cpu.eip=cpu.pop16();r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`); P('return;'); ended = true; break; } // RET imm
-        case 0xc3: P('cpu.eip=cpu.pop16();'); P('return;'); ended = true; break;        // RET
+        // RET pops what CALL pushed: 4 bytes under a 0x66 prefix, 2 without. The immediate form's
+        // SP adjustment stays a 16-bit count either way.
+        case 0xc2: { const n = f16(); P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`); P('return;'); ended = true; break; } // RET imm
+        case 0xc3: P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};`); P('return;'); ended = true; break;        // RET
         case 0xc4: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${ES},m.r16((${a}+2)&${MM}));`); break; } // LES
         case 0xc5: { const o = modrm(); const a = memAddr(o); P(`${rW(o.reg, 16, `m.r16(${a})`)}cpu.setSeg(${DS},m.r16((${a}+2)&${MM}));`); break; } // LDS
         case 0xc6: { const o = modrm(); const i = f8(); P(rmW(o, 8, '' + i)); break; }
@@ -723,8 +730,15 @@ export class Recompiler {
           break;
         }
         case 0xc9: P('r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break; // LEAVE
-        case 0xca: { const n = f16(); P(`cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`); P('return;'); ended = true; break; } // RETF imm
-        case 0xcb: P(`cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`); P('return;'); ended = true; break; // RETF
+        // RETF pops what CALLF pushed — two dwords under 0x66, two words without. The selector is
+        // popped as a dword too and its upper half discarded.
+        case 0xca: { const n = f16(); P(sz === 16
+          ? `cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`
+          : `cpu.eip=cpu.pop32()&0xffff;cpu.setSeg(${CS},cpu.pop32()&0xffff);r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`);
+          P('return;'); ended = true; break; } // RETF imm
+        case 0xcb: P(sz === 16 ? `cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`
+                               : `cpu.eip=cpu.pop32()&0xffff;cpu.setSeg(${CS},cpu.pop32()&0xffff);`);
+          P('return;'); ended = true; break; // RETF
 
         case 0xcc: P(`cpu.eip=${ip};cpu.swInt(3);`); P('return;'); ended = true; break; // INT3
         case 0xcd: { const n = f8(); P(`cpu.eip=${ip};cpu.swInt(${n});`); P('return;'); ended = true; break; } // INT n
@@ -767,9 +781,19 @@ export class Recompiler {
         case 0xef: P(`cpu.ioWrite(r[2]&0xffff,${sz / 8},${rR(0, sz)});`); break;
 
         // ---- CALL / JMP ----
-        case 0xe8: { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); const tgt = (ip + (rel << 16 >> 16)) & 0xffff; P(`cpu.push16(${ip});`); P(`cpu.eip=${tgt}&0xffff;`); P('return;'); ended = true; break; } // CALL rel
-        case 0xe9: { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); endJmp('' + ((ip + (rel << 16 >> 16)) & 0xffff)); break; } // JMP rel
-        case 0xea: { const o = f16(), s = f16(); P(`cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // JMPF ptr
+        // CALL/JMP rel under a 0x66 prefix take a 32-bit displacement AND, for CALL, push a 32-bit
+        // return address — SP moves by 4, not 2. We read the 32-bit displacement but then
+        // sign-extended it as if it were 16-bit and pushed 16 bits, so the stack was off by two for
+        // the rest of the frame. Found by test386.asm's POST-5 `o32 call dword` check. The target
+        // still masks to 16 bits: real mode's segment limit is 0xFFFF regardless of operand size.
+        case 0xe8: {
+          const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16));
+          const tgt = (ip + rel) & 0xffff;
+          P(sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`);
+          P(`cpu.eip=${tgt}&0xffff;`); P('return;'); ended = true; break;
+        }
+        case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ((ip + rel) & 0xffff)); break; } // JMP rel
+        case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // JMPF ptr
         case 0xeb: { const rel = fs8(); endJmp('' + ((ip + rel) & 0xffff)); break; }    // JMP rel8
 
         case 0xf4: P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break; // HLT
@@ -995,9 +1019,15 @@ export class Recompiler {
       switch (o.reg) {
         case 0: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}+1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break; }
         case 1: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}-1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break; }
-        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, 16)};cpu.push16(${ip});cpu.eip=${tg};`); P('return;'); ended = true; break; } // CALL Ev
-        case 3: { const a = memAddr(o); P(`cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`); P('return;'); ended = true; break; } // CALLF
-        case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, 16)};cpu.eip=${tg};`); P('return;'); ended = true; break; } // JMP Ev
+        // Same 0x66 rule as CALL rel: the pushed return address is a dword and the target operand is
+        // read at the prefixed size. `o32 call ebx` is test386's POST-5 %%rm32 case.
+        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`}cpu.eip=${tg}&0xffff;`); P('return;'); ended = true; break; } // CALL Ev
+        // CALLF under 0x66 pushes CS and a 32-bit return offset, and reads a 48-bit far pointer.
+        case 3: { const a = memAddr(o);
+          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`
+                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o&0xffff;`);
+          P('return;'); ended = true; break; } // CALLF
+        case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${tg}&0xffff;`); P('return;'); ended = true; break; } // JMP Ev
         case 5: { const a = memAddr(o); P(`var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`); P('return;'); ended = true; break; } // JMPF
         case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }

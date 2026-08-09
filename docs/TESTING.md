@@ -34,13 +34,19 @@ harnesses structurally could not:
 * **`MOV CS,r/m` did not raise #UD.** The instruction does not exist; we executed it. Nothing
   legitimate does this, but a CPU-detection routine probing an instruction's existence via #UD gets
   the wrong answer.
+* **The whole 0x66 control-transfer family transferred 16 bits.** `CALL`/`JMP rel`, the indirect
+  `FF /2`/`/3`/`/4` forms, `CALLF`/`JMPF ptr` and `RETF` all ignored the operand-size prefix: the
+  return address was pushed as a word instead of a dword, so the stack was two bytes out for the
+  rest of the frame, and the far-pointer *immediate* was read as 2+2 bytes instead of 4+2 — which
+  DESYNCHRONISES the instruction stream, the same failure shape as the 0x67 bug that derailed Heaven
+  for a week. Four POST stages' worth of tests were sitting behind it.
 * **We assumed the F000 segment was ours.** `swInt` claimed any vector pointing into F000, so a
   guest that replaces the ROM — which is exactly what test386 is — had its own exception handler
   swallowed, and spun on the faulting instruction forever. The vector is now only claimed when our
   own 0xCF stub is still the byte at the target.
 
 Build it with NASM (`git clone https://github.com/barotto/test386.asm && make`); `boot/` is
-gitignored. It reaches POST 5 today, up from POST 3 before those two fixes.
+gitignored. It reaches POST 6 today, up from POST 3 when it was first run.
 
 ### Generated cases (`tools/x86-gen.mjs`)
 
