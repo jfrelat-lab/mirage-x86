@@ -18,6 +18,24 @@ code and guessing; this ranks them by what the corpus actually calls.
 Caveat: a title only reaches the calls *after* the point where it currently derails, so anything
 dying early under-reports.
 
+### Generated cases (`tools/x86-gen.mjs`)
+
+The 86 hand-written cases test what I thought of; the `0x67` bug that derailed Heaven for a week
+lived in a corner nobody thought to write a case for. The generator does not think — it walks the
+ModRM/SIB/prefix grid mechanically for a table of opcode templates and asks the oracle. Seeded
+xorshift, no `Math.random`, so a seed always yields the same cases and the committed expectations
+stay meaningful; change the seed or the tables and you must re-capture.
+
+Every generated case has to be safe to run: registers that take part in an effective address are
+clamped so the access lands inside the 256-byte scratch area, and counts for `SHLD`/`SHRD` are held
+below the operand size because the result above it is architecturally **undefined**. That last rule
+is not cosmetic — the first run without it reported 16 "failures" that were only Unicorn's choice in
+undefined territory, the same trap as BCD and as the MUL flags in the co-simulator.
+
+`GEN_SEED=… GEN_COUNT=… node tools/test-x86-uc.mjs --capture` re-rolls the set. Two further seeds at
+2000 cases were tried and also passed clean, which is what makes "the grid is covered" a measurement
+rather than a hope.
+
 ## CPU profiles (`src/cpu-profile.js`)
 
 `new Machine({ cpu: '8088' | '286' | '386' })` selects which x86 generation the engine claims to be;
@@ -111,7 +129,7 @@ build bare machines and do not use it.
 | Gate | Command | Checks | Bar |
 |---|---|---|---|
 | **Unit** | `node tools/test.js` | 101 hand-written cases: opcodes, flags, ALU/BCD, the EGA planar write pipeline, keyboard 8042/IRQ1, multi-instruction dead-flag cases, 386 addressing (`0x67` ModRM/SIB), `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD), #DE aborting a block | 101/101 |
-| **386 semantics vs Unicorn** | `node tools/test-x86-uc.mjs` (`--capture` to refresh) | 86 cases (single instructions + multi-instruction **sequences**) whose expected values are **observed from Unicorn** (QEMU's TCG core), not hand-derived: `0x67` ModRM/SIB forms, `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD, 32-bit ALU), BT/BTS/BTR/BTC bit-string offsets on memory, string ops/XLAT/LOOP under `0x67`, shift/rotate flag corners, and sequences that exercise the **dead-flag elimination** pass (producer → consumer → killer, INC/DEC preserving CF, shifts with a runtime count of 0, REP with CX=0, LAHF/PUSHF reading the whole word, bounded loops). The captured reference is committed, so the gate needs neither Python nor Unicorn. ⚠️ **BCD (27/2f/37/3f) is deliberately excluded** — Unicorn models the later-CPU algorithm; the 8088 differs and `conformance` covers it with real silicon (40000/40000). | 86/86 |
+| **386 semantics vs Unicorn** | `node tools/test-x86-uc.mjs` (`--capture` to refresh) | 2086 cases — 86 hand-written plus **2000 generated** (`tools/x86-gen.mjs`) (single instructions + multi-instruction **sequences**) whose expected values are **observed from Unicorn** (QEMU's TCG core), not hand-derived: `0x67` ModRM/SIB forms, `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD, 32-bit ALU), BT/BTS/BTR/BTC bit-string offsets on memory, string ops/XLAT/LOOP under `0x67`, shift/rotate flag corners, and sequences that exercise the **dead-flag elimination** pass (producer → consumer → killer, INC/DEC preserving CF, shifts with a runtime count of 0, REP with CX=0, LAHF/PUSHF reading the whole word, bounded loops). The captured reference is committed, so the gate needs neither Python nor Unicorn. ⚠️ **BCD (27/2f/37/3f) is deliberately excluded** — Unicorn models the later-CPU algorithm; the 8088 differs and `conformance` covers it with real silicon (40000/40000). | 2086/2086 |
 | **DOS/BIOS services** | `node tools/test-dos-api.js` | 241 cases against the INT 21h / 10h / 16h / 1Ah / 2Fh surface: file handles, find-first/next, memory (4Ah then 48h/49h), EXEC child block sizing, directories (39h/3Ah/3Bh/47h), the boot-sector INT 19h handoff, INT 13h over sector images (CHS decoding, geometry, error codes, and a two-sector boot image that loads its own second sector), DTA, the **CF-on-success convention**, and the XMS driver (move bounds/overlap/even length, realloc relocation, lock/free refusal, plus an end-to-end check that an AH=0Bh overlay swap invalidates the cached compiled block) - the layer `conformance`/`golden` cannot see | 241/241 |
 | **Conformance** | `node tools/conformance.js` | 527,651 SingleStepTests vectors — per-instruction reg/flag/memory exactness | **100%**, non-negotiable |
 | **Golden** | `node tools/golden.js check` | deterministic output fingerprint of 20 demos (framebuffer + planes + DAC + fault) | 20/20 |

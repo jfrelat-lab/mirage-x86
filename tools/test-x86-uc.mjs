@@ -16,7 +16,13 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Machine } from '../src/machine.js';
-import { CASES, SCRATCH_PATTERN } from './x86-cases.mjs';
+import { CASES as HAND, SCRATCH_PATTERN } from './x86-cases.mjs';
+import { generateCases } from './x86-gen.mjs';
+
+// The hand-written cases encode intent (each one is a regression lock with a comment); the generated
+// ones enumerate the ModRM/SIB/prefix grid mechanically, because the 0x67 bug lived in a corner
+// nobody thought to write a case for. Both go through the same oracle.
+const CASES = [...HAND, ...generateCases()];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXPECTED = join(HERE, 'x86-uc-expected.json');
