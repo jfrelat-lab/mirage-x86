@@ -204,12 +204,30 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
    Commander Keen Vorticons menus and story scroll, which reprogram the PIT to 145.6 Hz but do
    **not** poll 0x3DA — which otherwise flies past.
 
-   **It now defaults to `null` (uncapped).** The default used to be 8 MHz, and since the engine
-   sustains ~180–220 M cycles/s in a browser, that was a **~25× slowdown applied to the whole
-   machine** to fix a handful of titles: `tube` and `memories`, whose pace is exactly raw CPU speed,
-   crawled for it. DOSBox runs those same titles at full speed, so the throttle is a per-title
-   preference, not a correctness requirement. It stays reachable — `?mhz=8` or
-   `new Mirage(canvas, { vcpuHz })` — for the titles that want it.
+   **It now defaults to `null` (uncapped)**, which is almost certainly too fast for period games —
+   see the measurements below before changing it again.
+
+   `demos/cpuspeed.asm` measures work completed per second of wall-clock, so MIRAGE and DOSBox can
+   be compared in one unit instead of trusting that a MIRAGE "cycle" means what a DOSBox `cycles=`
+   means (it roughly does: 3 MHz here ≈ `cycles=3000` there, within 20%):
+
+   | configuration | work units in 3.02 s |
+   |---|---|
+   | DOSBox `cycles=auto` — **the default, and what archive.org serves** | 449 |
+   | DOSBox `cycles=3000` | 449 |
+   | MIRAGE capped at 3 MHz | 551 |
+   | MIRAGE capped at 8 MHz (the old default) | 1333 |
+   | DOSBox `cycles=20000` | 3015 |
+   | MIRAGE **uncapped** (today's default) | 10622 |
+   | DOSBox `cycles=max` | 13935 |
+
+   The correction that matters: DOSBox does **not** run these titles at full speed. `cycles=auto`
+   means "3000 cycles/ms for real-mode programs, `max` only once a program enters protected mode" —
+   so Keen Vorticons is playable on archive.org *because* it is throttled to ~3 M instructions/s.
+   The old 8 MHz default was already 3× faster than that, and uncapped is ~24×. An earlier revision
+   of this file claimed the opposite and used it to justify uncapping; it was wrong.
+
+   The knob stays reachable — `?mhz=8`, or `new Mirage(canvas, { vcpuHz })`.
 
    The 0x3DA beam no longer derives from `VCPU_HZ`: with no cap, cycles are not proportional to wall
    time, so `bios.js` anchors the beam to `machine.wallClockMs` (real 70 Hz however fast the engine
