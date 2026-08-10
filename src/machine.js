@@ -12,6 +12,7 @@ import { CPU, CS, CF, IF, TF } from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
 import { resolveProfile } from './cpu-profile.js';
+import { resolveMemStrategy } from './mem-strategy.js';
 
 export const BIOS_SEG = 0xf000;
 
@@ -25,6 +26,8 @@ export class Machine {
     this.cpu = new CPU(this.mem);
     // Which x86 generation this machine is. Read by the recompiler at TRANSLATION time, so every
     // difference becomes a constant in the emitted code — see src/cpu-profile.js.
+    // The VGA keeps its linear shadow up to date only when emitted reads rely on it.
+    this.mem.shadowReads = resolveMemStrategy().read === 'shadow';
     this.cpu.profile = resolveProfile(opts.cpu);
     this.cpu.shiftMask = this.cpu.profile.shiftCountMask;   // read by the shift/rotate helpers
     installFPU(this.cpu);                           // x87 coprocessor

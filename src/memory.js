@@ -27,6 +27,8 @@ export class Memory {
     this.onCodeWrite = null; // (page) => void, wired up by the recompiler
     this.planar = false;     // true in EGA/VGA 16-colour modes → A000 writes go through vga.js
     this.vga = null;         // the VGA planar device (set by installVGA); used on A000 writes
+    this.shadowReads = false;   // MIRAGE_MEM_READ=shadow: the A000 window mirrors what a planar read
+                                // returns, so emitted code can read it with no test at all
 
     // Page tables for the `paged` memory-dispatch strategy (src/mem-strategy.js). One entry per
     // 4 KiB page holding a BIASED offset — base - (page<<12) — so emitted code adds the whole
@@ -68,6 +70,8 @@ export class Memory {
     if (this.planar === !!on) return;
     this.planar = !!on;
     for (let p = 0xa0; p < 0xb0; p++) { this.rdOfs[p] = this.planar ? -1 : 0; this.wrOfs[p] = this.planar || this.codePage[p] ? -1 : 0; }
+    // Entering a planar mode makes the window's contents meaningful again — refill the shadow.
+    if (this.shadowReads && this.planar && this.vga) this.vga.rebuildShadow();
   }
 
   // ---- reads ---------------------------------------------------------------

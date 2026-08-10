@@ -11,7 +11,7 @@
 // neither says anything about JavaScript's cost model. Hence: implement the candidates, flag them,
 // and measure in the engine.
 //
-//   MIRAGE_MEM_READ=inline|paged     (default inline)
+//   MIRAGE_MEM_READ=inline|paged|shadow   (default inline)
 //   MIRAGE_MEM_WRITE=inline|paged    (default inline)
 //
 // Read and write are selected INDEPENDENTLY, because the measurements say they are different
@@ -21,7 +21,7 @@
 // must pass for each combination, not just the default.
 
 /** Strategy names, exported so tools can sweep the matrix. */
-export const READ_STRATEGIES = ['inline', 'paged'];
+export const READ_STRATEGIES = ['inline', 'paged', 'shadow'];
 export const WRITE_STRATEGIES = ['inline', 'paged'];
 
 const envOr = (name, dflt) =>
@@ -71,6 +71,15 @@ const READ = {
   paged: (MM) => (a, sz) => sz === 8 ? `((_po=rdo[${a}>>>12])>=0?u8[_po+${a}]:m.r8(${a}))`
     : sz === 16 ? `(((${a}&4095)<4095&&(_po=rdo[${a}>>>12])>=0)?(u8[_po+${a}]|(u8[_po+${a}+1]<<8)):m.r16(${a}))`
       : `(((${a}&4095)<4093&&(_po=rdo[${a}>>>12])>=0)?((u8[_po+${a}]|(u8[_po+${a}+1]<<8)|(u8[_po+${a}+2]<<16)|(u8[_po+${a}+3]<<24))>>>0):m.r32(${a}))`,
+
+  // No test at all. Correct only because vga.js mirrors the planar window into u8[] (see its
+  // "linear read shadow" section) — the whole cost moves off the access path and onto planar
+  // writes, which already go through a handler. 5 characters instead of 57, and the only shape
+  // that won decisively in tools/memdispatch.mjs (25-43%). Its known hole is latch loading, dealt
+  // with in vga.js; no emulator does this, so the gates are the only evidence.
+  shadow: (MM) => (a, sz) => sz === 8 ? `u8[${a}]`
+    : sz === 16 ? `(u8[${a}]|(u8[(${a}+1)&${MM}]<<8))`
+      : `((u8[${a}]|(u8[(${a}+1)&${MM}]<<8)|(u8[(${a}+2)&${MM}]<<16)|(u8[(${a}+3)&${MM}]<<24))>>>0)`,
 };
 
 // ---- write ----------------------------------------------------------------------------------

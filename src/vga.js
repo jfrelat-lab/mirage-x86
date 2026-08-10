@@ -72,6 +72,13 @@ export function installVGA(machine) {
   // The EGA/VGA write pipeline. `off` is the offset within the A000 window (0..0xFFFF).
   vga.writeByte = (off, val) => {
     off &= 0xffff;
+    // Under MIRAGE_MEM_READ=shadow nothing loads the latches any more (reads bypass this file
+    // entirely), so load them from the write address — exact for read-then-write-same-address,
+    // which is the EGA blitting idiom. See the shadow notes below.
+    if (mem.shadowReads) {
+      latches[0] = planes[off]; latches[1] = planes[PLANE + off];
+      latches[2] = planes[2 * PLANE + off]; latches[3] = planes[3 * PLANE + off];
+    }
     const gc = vga.gc, wm = gc[5] & 3, mask = vga.mapMask, bm = gc[8];
     const rot = gc[3] & 7, fn = (gc[3] >> 3) & 3, esr = gc[1], sr = gc[0];
     for (let p = 0; p < 4; p++) {
@@ -92,6 +99,43 @@ export function installVGA(machine) {
       }
       planes[p * PLANE + off] = v & 0xff;
     }
+    if (mem.shadowReads) vga.syncShadow(off);
+  };
+
+  // What a CPU read of `off` returns, WITHOUT the latch side effect. Split out of readByte so the
+  // shadow below can be computed without disturbing latch state.
+  const readValue = (off) => {
+    if (!(vga.gc[5] & 0x08)) return planes[(vga.gc[4] & 3) * PLANE + off];  // read mode 0: selected plane
+    const cmp = vga.gc[2] & 0x0f, care = vga.gc[7] & 0x0f;                  // read mode 1: colour compare
+    let r = 0;
+    for (let p = 0; p < 4; p++) {
+      if (!(care & (1 << p))) continue;                          // "don't care" planes never disagree
+      r |= (cmp & (1 << p)) ? ~planes[p * PLANE + off] : planes[p * PLANE + off];
+    }
+    return (~r) & 0xff;
+  };
+
+  // ---- linear read shadow (MIRAGE_MEM_READ=shadow) --------------------------------------------
+  // The measured prize is emitting `u8[a]` with no test at all — 2.5-4x in synthetic tests, and 5
+  // characters of source instead of 57. That only works if the flat array already holds what a
+  // planar read would return, so vga.js maintains exactly that in the A000 window.
+  //
+  // Maintenance is incremental — one byte after each planar write — with a full rebuild only when
+  // the read plane (GC 4) or read mode (GC 5) changes. Measurement says that is 0-1 times per run:
+  // tools/vga-plane-switches.mjs found ZERO writes to GC index 4 across Keen 1, Cosmo, Duke Nukem 1
+  // and Wolf3D. EGA games write video memory and essentially never read it back.
+  //
+  // ⚠️ The semantic hole, stated plainly rather than discovered later: a real read also LOADS THE
+  // FOUR LATCHES, and an unconditional array read cannot. Latches are only ever consumed by writes,
+  // so they are loaded at WRITE time from the address being written instead. That is exact for the
+  // dominant EGA idiom (`mov al,[es:di]` then `mov [es:di],bl` — same address) and WRONG for
+  // read-A-then-write-B. No emulator does this, so no prior art de-risks it; golden and the EGA
+  // titles are the only evidence, which is why it is a flag and not the default.
+  const VGA_WINDOW = 0xa0000;
+  vga.syncShadow = (off) => { mem.u8[VGA_WINDOW + off] = readValue(off); };
+  vga.rebuildShadow = () => {
+    if (!mem.shadowReads || !mem.planar) return;
+    for (let off = 0; off < 0x10000; off++) mem.u8[VGA_WINDOW + off] = readValue(off);
   };
 
   // A CPU read loads all four latches (that is what makes read-modify-write blitting work)
@@ -100,14 +144,7 @@ export function installVGA(machine) {
     off &= 0xffff;
     latches[0] = planes[off]; latches[1] = planes[PLANE + off];
     latches[2] = planes[2 * PLANE + off]; latches[3] = planes[3 * PLANE + off];
-    if (!(vga.gc[5] & 0x08)) return latches[vga.gc[4] & 3];      // read mode 0: the selected plane
-    const cmp = vga.gc[2] & 0x0f, care = vga.gc[7] & 0x0f;       // read mode 1: colour compare
-    let r = 0;
-    for (let p = 0; p < 4; p++) {
-      if (!(care & (1 << p))) continue;                          // "don't care" planes never disagree
-      r |= (cmp & (1 << p)) ? ~latches[p] : latches[p];          // any disagreeing bit clears the result
-    }
-    return (~r) & 0xff;
+    return readValue(off);
   };
 
   // ---- register ports (also accept the AL=index/AH=data 16-bit `out dx,ax` form) ----
@@ -123,7 +160,13 @@ export function installVGA(machine) {
   machine.onPortWrite(0x3c5, (_p, _s, v) => seqData(v & 0xff));
   machine.onPortRead(0x3c5, () => (vga.seqIndex === 2 ? vga.mapMask : vga.seqIndex === 4 ? vga.memMode : 0));
 
-  const gcData = (v) => { vga.gc[vga.gcIndex & 0x0f] = v & 0xff; };
+  const gcData = (v) => {
+    const i = vga.gcIndex & 0x0f, old = vga.gc[i];
+    vga.gc[i] = v & 0xff;
+    // GC 4 (read map select) and GC 5 (read mode) change what every byte of the window reads back:
+    // the only event that forces a full shadow rebuild. Measured at 0-1 times per run.
+    if ((i === 4 || i === 5 || i === 2 || i === 7) && vga.gc[i] !== old) vga.rebuildShadow();
+  };
   machine.onPortWrite(0x3ce, (_p, s, v) => { vga.gcIndex = v & 0x0f; if (s === 2) gcData((v >> 8) & 0xff); });
   machine.onPortWrite(0x3cf, (_p, _s, v) => gcData(v & 0xff));
   machine.onPortRead(0x3cf, () => vga.gc[vga.gcIndex & 0x0f]);
