@@ -27,11 +27,48 @@ export class Memory {
     this.onCodeWrite = null; // (page) => void, wired up by the recompiler
     this.planar = false;     // true in EGA/VGA 16-colour modes → A000 writes go through vga.js
     this.vga = null;         // the VGA planar device (set by installVGA); used on A000 writes
+
+    // Page tables for the `paged` memory-dispatch strategy (src/mem-strategy.js). One entry per
+    // 4 KiB page holding a BIASED offset — base - (page<<12) — so emitted code adds the whole
+    // address and needs no offset mask (the shape v86's TLB and DOSBox's paging.h both use). A
+    // negative entry means "not plain RAM: take the helper".
+    //
+    // Kept correct at all times rather than lazily, which is cheap because only three rare things
+    // dirty them: entering/leaving a planar mode, the A20 line, and a page gaining translated code.
+    // The WRITE table folds in what is currently a second probe — a page holding code is simply not
+    // plain — so the SMC check leaves the fast path instead of sitting beside the device test.
+    this.rdOfs = new Int32Array(size >> PAGE_BITS);
+    this.wrOfs = new Int32Array(size >> PAGE_BITS);
+    this.rebuildPageTables();
+  }
+
+  /** Recompute both page tables from planar / A20 / code-page state. Rare — see the field comment. */
+  rebuildPageTables() {
+    const n = this.rdOfs.length, pagesInRange = (this.mask + 1) >>> PAGE_BITS;
+    for (let p = 0; p < n; p++) {
+      // Identity mapping, so a plain page's biased offset is 0. Pages past the current address mask
+      // (A20 closed) are not plain: the helper applies the wrap.
+      const device = this.planar && p >= 0xa0 && p < 0xb0;
+      const plain = !device && p < pagesInRange;
+      this.rdOfs[p] = plain ? 0 : -1;
+      this.wrOfs[p] = plain && !this.codePage[p] ? 0 : -1;
+    }
   }
 
   /** Open (A20 on) or close the 1 MiB address wrap. On: the full installed RAM is addressable
    *  (real-mode HMA at FFFF:0010+). Off: segment:offset wraps at 1 MiB like an 8086. */
-  setA20(on) { this.a20 = !!on; this.mask = on ? (this.size - 1) : Math.min(this.size - 1, 0xfffff); }
+  setA20(on) {
+    this.a20 = !!on;
+    this.mask = on ? (this.size - 1) : Math.min(this.size - 1, 0xfffff);
+    this.rebuildPageTables();
+  }
+
+  /** Entering or leaving a planar EGA/VGA mode moves A000-AFFF between plain RAM and the device. */
+  setPlanar(on) {
+    if (this.planar === !!on) return;
+    this.planar = !!on;
+    for (let p = 0xa0; p < 0xb0; p++) { this.rdOfs[p] = this.planar ? -1 : 0; this.wrOfs[p] = this.planar || this.codePage[p] ? -1 : 0; }
+  }
 
   // ---- reads ---------------------------------------------------------------
   // In a planar EGA/VGA mode, A000 reads go through the plane logic (and load the latches);
@@ -68,7 +105,10 @@ export class Memory {
   // blocks it actually overlaps (not the whole page).
   _dirty(addr, len) { if (this.onCodeWrite) this.onCodeWrite(addr, len); }
 
-  markCodePage(page) { this.codePage[page] = 1; }
+  // A page gaining or losing translated code moves it in and out of the write fast path. wrOfs
+  // mirrors rdOfs when the page is clean, so a device page stays a device page either way.
+  markCodePage(page) { this.codePage[page] = 1; this.wrOfs[page] = -1; }
+  clearCodePage(page) { this.codePage[page] = 0; this.wrOfs[page] = this.rdOfs[page]; }
 
   // ---- bulk helpers --------------------------------------------------------
   /** Copy bytes in, marking SMC if they land on code pages. */

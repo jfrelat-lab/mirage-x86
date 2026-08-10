@@ -20,6 +20,13 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 // dispatch instead of emitting each x87 op inline. Browser-safe (no `process`).
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
+import { resolveMemStrategy, memEmitters, memPrologue } from './mem-strategy.js';
+
+// Which memory-dispatch emission to use; see mem-strategy.js. Default reproduces the previous
+// emission character-for-character, so selecting it is provably a no-op.
+const MEM = resolveMemStrategy();
+const MEM_PRE = memPrologue(MEM);
+
 const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSTRIP);
 // The tier-2 region compiler fuses a hot block and its statically-reachable successors into one
 // function (a switch-in-loop) so inter-block dispatch disappears on hot loops. It's byte-identical
@@ -105,7 +112,7 @@ export class Recompiler {
         if (blk.ranges) { if (blk.ranges.some(([s, e]) => s < end && addr < e)) this._evictRegion(blk, lin); }
         else if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, lin);
       }
-      if (set.size === 0) this.mem.codePage[p] = 0;            // page no longer holds code
+      if (set.size === 0) this.mem.clearCodePage(p);            // page no longer holds code
     }
   }
 
@@ -192,7 +199,7 @@ export class Recompiler {
       out.push('}');
     }
     out.push('default:cpu.eip=_e;return;', '}}');
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + MEM_PRE + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body };
   }
@@ -472,15 +479,7 @@ export class Recompiler {
     // Route only ACTUAL A000 accesses (>>>16===0xA) through the plane logic — the inline
     // range check keeps every other access (stack/data/code, all of mode-13h) on the fast
     // u8[] path even while planar. `m.planar` is false for text/mode-13h/demos → short-circuit.
-    const memRead = (a, sz) => sz === 8 ? `(m.planar&&(${a}>>>16)===10?m.vga.readByte(${a}):u8[${a}])`
-      : sz === 16 ? `(m.planar&&(${a}>>>16)===10?m.r16(${a}):(u8[${a}]|(u8[(${a}+1)&${MM}]<<8)))`
-        : `(m.planar&&(${a}>>>16)===10?m.r32(${a}):((u8[${a}]|(u8[(${a}+1)&${MM}]<<8)|(u8[(${a}+2)&${MM}]<<16)|(u8[(${a}+3)&${MM}]<<24))>>>0))`;
-    const memW = (a, sz, v) => {
-      if (sz === 8) return `if(m.planar&&(${a}>>>16)===10)m.vga.writeByte(${a},(${v}));else{u8[${a}]=(${v});if(cp[${a}>>>12]!==0)m._dirty(${a},1);}`;
-      const t = NT();
-      if (sz === 16) return `if(m.planar&&(${a}>>>16)===10)m.w16(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;if(cp[${a}>>>12]|cp[((${a}+1)&${MM})>>>12])m._dirty(${a},2);}`;
-      return `if(m.planar&&(${a}>>>16)===10)m.w32(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;u8[(${a}+2)&${MM}]=${t}>>>16;u8[(${a}+3)&${MM}]=${t}>>>24;if(cp[${a}>>>12]|cp[((${a}+3)&${MM})>>>12])m._dirty(${a},4);}`;
-    };
+    const { memRead, memW } = memEmitters(MEM, MM, NT);
     const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o), sz);
     const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : memW(memAddr(o), sz, v);
 
@@ -854,7 +853,7 @@ export class Recompiler {
     // terminator's return form to get the standalone block function.
     const bodyOut = out.slice();
     emitTermReturn();
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + MEM_PRE + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
     return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, canFault, hot: 0, kind: 0 };

@@ -187,7 +187,7 @@ export function installBIOS(machine) {
         // registers stayed identity and its art rendered in garish default colours).
         if (planar && machine.vga) { egaPaletteDAC(bios.dac); machine.vga.palette.set(EGA_DEFAULT_PAL); }
         else defaultPalette(bios.dac);
-        mem.planar = planar; bios.planar = planar;
+        mem.setPlanar(planar); bios.planar = planar;
         if (machine.vga) machine.vga.setMode(bios.mode, planar);
         if (!(cpu.al & 0x80)) {                 // high bit set = keep screen
           if (bios.mode === 0x13) for (let i = 0; i < 320 * 200; i++) mem.w8(0xa0000 + i, 0);

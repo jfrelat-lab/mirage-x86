@@ -25,7 +25,7 @@ export function installVGA(machine) {
 
   // Route A000 through the plane pipeline (memory.js checks mem.planar) whenever EITHER an EGA
   // 16-colour planar mode OR Mode-X (mode 13h with chain-4 off) is active.
-  const syncRouting = () => { mem.planar = vga.planar || vga.modeX; };
+  const syncRouting = () => { mem.setPlanar(vga.planar || vga.modeX); };
 
   // The register state a real VGA BIOS leaves behind after a mode set, captured by running an actual
   // SeaVGABIOS ROM inside MIRAGE (tools/vga-rom.mjs) — observed, not derived, in the same spirit as
@@ -116,7 +116,7 @@ export function installVGA(machine) {
     else if (vga.seqIndex === 4) {                    // memory mode: bit3 = chain-4. Clearing it in mode 13h = Mode-X (unchained)
       vga.memMode = v & 0xff;
       const mx = vga.mode === 0x13 && !(v & 0x08);
-      if (mx !== vga.modeX) { vga.modeX = mx; mem.planar = vga.planar || vga.modeX; }
+      if (mx !== vga.modeX) { vga.modeX = mx; mem.setPlanar(vga.planar || vga.modeX); }
     }
   };
   machine.onPortWrite(0x3c4, (_p, s, v) => { vga.seqIndex = v & 0x1f; if (s === 2) seqData((v >> 8) & 0xff); });
