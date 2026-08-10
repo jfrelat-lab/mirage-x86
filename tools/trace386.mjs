@@ -37,16 +37,24 @@ for (let i = 0; i + SIG.length <= rom.length; i++) {
 const romBase = 0x100000 - rom.length;
 
 const posts = [];
-mc.onPortWrite(POST_PORT, (_p, _s, v) => { posts.push(v & 0xff); ring[ri++ & MASK] = -1 - (v & 0xff); });
+mc.onPortWrite(POST_PORT, (_p, _s, v) => { posts.push(v & 0xff); const k = ri++ & MASK; ringPost[k] = v & 0xff;
+  if (SPIN_AFTER >= 0 && (v & 0xff) === SPIN_AFTER) armed = true; });
 mc.onPortRead(POST_PORT, () => 0xff);
 mc.onPortWrite(0x92, (_p, _s, v) => { mc.mem.setA20(!!(v & 2)); mc.rec.MM = mc.mem.mask; mc.rec.reset(); });
 mc.onPortRead(0x92, () => (mc.mem.a20 ? 0x02 : 0x00));
 
-// Ring buffer of block entries. Negative entries are POST-code markers, so the trace shows which
-// section each block belongs to without a second pass.
+// Ring buffer of block entries, with POST markers in a PARALLEL array rather than encoded as
+// negative values — CS >= 0x8000 makes (cs<<16)|ip negative, so the first version reported real
+// addresses as POST codes. Two arrays cannot be ambiguous.
 const MASK = 8191;
-const ring = new Int32Array(MASK + 1).fill(0);
+const ringCs = new Int32Array(MASK + 1), ringIp = new Int32Array(MASK + 1);
+const ringPost = new Int32Array(MASK + 1).fill(-1);
 let ri = 0;
+// A repeated block is NORMAL — every loop does it — so the detector must be armed for the section
+// under investigation only, or it fires on the first delay loop (it did: POST 01, f000:039b).
+const SPIN_LIMIT = Number(process.env.SPIN || 5000);
+const SPIN_AFTER = process.env.SPIN_AFTER === undefined ? -1 : Number(process.env.SPIN_AFTER);
+let spinCs = -1, spinIp = -1, spinN = 0, armed = SPIN_AFTER < 0;
 const rec = mc.rec;
 const origTranslate = rec.translate.bind(rec);
 rec.translate = (...a) => {
@@ -54,7 +62,15 @@ rec.translate = (...a) => {
   if (b && !b._traced) {
     b._traced = 1;
     const f = b.fn;
-    b.fn = (c, blk) => { ring[ri++ & MASK] = ((c.seg[1] & 0xffff) * 0x10000 + (c.eip & 0xffff)) | 0; return f(c, blk); };
+    b.fn = (c, blk) => {
+      const k = ri++ & MASK; ringPost[k] = -1; ringCs[k] = c.seg[1] & 0xffff; ringIp[k] = c.eip >>> 0;
+      // A tight spin fills the whole ring with one address and erases the lead-up, which is the only
+      // part worth seeing. Stop the machine once the same block repeats, so the buffer still holds
+      // how we got there.
+      if (armed && ringCs[k] === spinCs && ringIp[k] === spinIp) { if (++spinN > SPIN_LIMIT) c.halted = true; }
+      else { spinCs = ringCs[k]; spinIp = ringIp[k]; spinN = 0; }
+      return f(c, blk);
+    };
   }
   return b;
 };
@@ -76,12 +92,15 @@ console.log(`error: routine at ROM offset ${errIp < 0 ? '<signature not found>' 
   `(linear 0x${h((romBase + errIp) >>> 0, 6)})`);
 console.log(`\nlast ${SHOW} block entries before the stop (oldest first):`);
 const start = Math.max(0, ri - SHOW);
+let prev = null, runLen = 0;
 for (let i = start; i < ri; i++) {
-  const v = ring[i & MASK];
-  if (v < 0) { console.log(`    ---- POST ${h(-1 - v, 2)} ----`); continue; }
-  const cs = (v >>> 16) & 0xffff, ip = v & 0xffff;
-  const lin = (cpu.base[1] === (cs << 4) ? (cs << 4) + ip : null);   // only meaningful in real mode
-  const isErr = errIp >= 0 && ip === errIp;
-  console.log(`    ${h(cs)}:${h(ip)}${isErr ? '   <<<< error: — the block BEFORE this is the failing assertion' : ''}` +
-    (lin !== null ? `   lin=0x${h(lin, 6)}` : ''));
+  const k = i & MASK;
+  if (ringPost[k] >= 0) { console.log(`    ---- POST ${h(ringPost[k], 2)} ----`); prev = null; continue; }
+  const key = ringCs[k] + ':' + ringIp[k];
+  if (key === prev) { runLen++; continue; }
+  if (runLen) { console.log(`      (x${runLen + 1})`); runLen = 0; }
+  prev = key;
+  const isErr = errIp >= 0 && ringIp[k] === errIp;
+  console.log(`    ${h(ringCs[k])}:${h(ringIp[k], 8)}${isErr ? '   <<<< error:' : ''}`);
 }
+if (runLen) console.log(`      (x${runLen + 1})`);
