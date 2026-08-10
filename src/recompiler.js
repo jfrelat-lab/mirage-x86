@@ -700,9 +700,11 @@ export class Recompiler {
         // The far pointer immediate is 4+2 bytes under 0x66, not 2+2 — reading only two would
         // DESYNCHRONISE the instruction stream, which is the same failure shape as the 0x67 bug that
         // derailed Heaven. test386's POST-5 far-call test is what surfaced it.
+        // CALLF/JMPF must not assume the descriptor is a code segment: in protected mode it may be
+        // a CALL GATE, whose fields are selector:offset rather than base/limit. cpu.farCall/farJmp
+        // make that decision; real mode takes the same path and behaves as before.
         case 0x9a: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16();
-          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});` : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});`);
-          P(`cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // CALLF ptr
+          P(`cpu.eip=${ip};cpu.farCall(${s},${o >>> 0},${sz === 32 ? 1 : 0});`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
         // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
         case 0x9c: cur.use |= lALL; P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);'
@@ -769,13 +771,8 @@ export class Recompiler {
         case 0xc9: P('r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break; // LEAVE
         // RETF pops what CALLF pushed — two dwords under 0x66, two words without. The selector is
         // popped as a dword too and its upper half discarded.
-        case 0xca: { const n = f16(); P(sz === 16
-          ? `cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());cpu.spAdd(${n});`
-          : `cpu.eip=cpu.pop32()&0xffff;cpu.setSeg(${CS},cpu.pop32()&0xffff);cpu.spAdd(${n});`);
-          P('return;'); ended = true; break; } // RETF imm
-        case 0xcb: P(sz === 16 ? `cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`
-                               : `cpu.eip=cpu.pop32()&0xffff;cpu.setSeg(${CS},cpu.pop32()&0xffff);`);
-          P('return;'); ended = true; break; // RETF
+        case 0xca: { const n = f16(); P(`cpu.farRet(${sz === 32 ? 1 : 0},${n});`); P('return;'); ended = true; break; } // RETF imm
+        case 0xcb: P(`cpu.farRet(${sz === 32 ? 1 : 0},0);`); P('return;'); ended = true; break; // RETF
 
         case 0xcc: P(`cpu.eip=${ip};cpu.swInt(3);`); P('return;'); ended = true; break; // INT3
         case 0xcd: { const n = f8(); P(`cpu.eip=${ip};cpu.swInt(${n});`); P('return;'); ended = true; break; } // INT n
@@ -833,7 +830,7 @@ export class Recompiler {
           P(`cpu.eip=${tgt}&0xffff;`); P('return;'); ended = true; break;
         }
         case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ((ip + rel) & 0xffff)); break; } // JMP rel
-        case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.setSeg(${CS},${s});`); P(`cpu.eip=${o}&0xffff;`); P('return;'); ended = true; break; } // JMPF ptr
+        case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.farJmp(${s},${o >>> 0});`); P('return;'); ended = true; break; } // JMPF ptr
         case 0xeb: { const rel = fs8(); endJmp('' + ((ip + rel) & 0xffff)); break; }    // JMP rel8
 
         case 0xf4: P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break; // HLT
@@ -1151,10 +1148,11 @@ export class Recompiler {
         case 0x00: {                                                                    // group 6: SLDT/STR/LLDT/LTR/VERR/VERW
           const o = modrm();
           if (o.reg === 0) { P(rmW(o, 16, 'cpu.ldtr.sel')); return; }                    // SLDT
-          if (o.reg === 1) { P(rmW(o, 16, '0')); return; }                                // STR → no task register yet
+          if (o.reg === 1) { P(rmW(o, 16, 'cpu.tr.sel')); return; }                       // STR
           if (o.reg === 2) { P(`cpu.loadLDT(${rmR(o, 16)});`); return; }                  // LLDT
           if (o.reg === 4 || o.reg === 5) { if (!o.isReg) memAddr(o); P(`cpu.flags|=${ZF};`); return; } // VERR/VERW → report the selector as accessible (ZF=1)
-          if (!o.isReg) memAddr(o);                                                      // LTR → consume the operand, otherwise no-op
+          if (o.reg === 3) { P(`cpu.loadTR(${rmR(o, 16)});`); return; }                  // LTR
+          if (!o.isReg) memAddr(o);
           return;
         }
         case 0x01: {                                                                    // group 7: SGDT/SIDT/SMSW/LGDT/LIDT/LMSW/INVLPG

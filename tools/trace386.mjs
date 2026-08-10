@@ -67,7 +67,10 @@ rec.translate = (...a) => {
       // A tight spin fills the whole ring with one address and erases the lead-up, which is the only
       // part worth seeing. Stop the machine once the same block repeats, so the buffer still holds
       // how we got there.
-      if (armed && ringCs[k] === spinCs && ringIp[k] === spinIp) { if (++spinN > SPIN_LIMIT) c.halted = true; }
+      // Stopping the moment `error:` is ENTERED keeps the ring holding the assertions that led
+      // there; letting it run fills the buffer with the routine's own hlt/jmp loop instead.
+      if (errIp >= 0 && ringIp[k] >= errIp && ringIp[k] < errIp + 16) c.halted = true;   // a block may start a few bytes into the routine
+      else if (armed && ringCs[k] === spinCs && ringIp[k] === spinIp) { if (++spinN > SPIN_LIMIT) c.halted = true; }
       else { spinCs = ringCs[k]; spinIp = ringIp[k]; spinN = 0; }
       return f(c, blk);
     };

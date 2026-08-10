@@ -45,6 +45,7 @@ export class CPU {
     this.gdtr = { base: 0, limit: 0 };
     this.idtr = { base: 0, limit: 0x3ff };          // the real-mode IVT, expressed as an IDTR
     this.ldtr = { sel: 0, base: 0, limit: 0 };
+    this.tr = { sel: 0, base: 0, limit: 0 };        // task register — the TSS holds the inner-ring stacks
     this.cr3 = 0;                    // page-directory physical base (bits 31:12)
     this.cr2 = 0;                    // faulting linear address, set on #PF
     this.cr0 = 0x00000010;           // machine status word: PE=0 (real mode), ET=1 (387 present).
@@ -119,6 +120,112 @@ export class CPU {
     // size for CS, 32-bit stack pointer for SS.
     if (i === CS) this.csD = (gran & 0x40) ? 1 : 0;
     else if (i === SS) this.ssB = (gran & 0x40) ? 1 : 0;
+  }
+
+  /** Raw descriptor fields for a selector, or null for the null selector. */
+  readDesc(sel) {
+    sel &= 0xffff;
+    if ((sel & 0xfffc) === 0) return null;
+    const tbl = (sel & 4) ? this.ldtr : this.gdtr;
+    const a = (tbl.base + (sel & 0xfff8)) >>> 0, m = this.mem;
+    const access = m.r8(a + 5);
+    return {
+      w0: m.r16(a), w1: m.r16(a + 2), b4: m.r8(a + 4), access, b6: m.r8(a + 6), b7: m.r8(a + 7),
+      sys: (access & 0x10) === 0, type: access & 0x0f, dpl: (access >> 5) & 3, present: (access & 0x80) !== 0,
+    };
+  }
+
+  /** LTR — the TSS descriptor lives in the GDT, like the LDT's. */
+  loadTR(sel) {
+    sel &= 0xffff; this.tr.sel = sel;
+    const d = this.readDesc(sel);
+    if (!d) { this.tr.base = 0; this.tr.limit = 0; return; }
+    let limit = (d.w0 | ((d.b6 & 0x0f) << 16)) >>> 0;
+    if (d.b6 & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;
+    this.tr.base = (d.w1 | (d.b4 << 16) | (d.b7 << 24)) >>> 0;
+    this.tr.limit = limit;
+  }
+
+  /** The stack the TSS reserves for privilege level `pl` (32-bit TSS: ESP0 at +4, SS0 at +8, …). */
+  tssStack(pl) {
+    const m = this.mem, b = this.tr.base >>> 0;
+    return { esp: m.r32(b + 4 + pl * 8) >>> 0, ss: m.r16(b + 8 + pl * 8) & 0xffff };
+  }
+
+  pushW(v, is32) { if (is32) this.push32(v); else this.push16(v); }
+
+  /**
+   * Far CALL. In protected mode the destination descriptor decides everything, and it must be
+   * examined BEFORE being used as a segment: S=0 marks a SYSTEM descriptor, and type 4 / 0xC are
+   * 286 / 386 CALL GATES, whose "base/limit" fields are really selector:offset. Treating a gate as
+   * a code segment is what made test386 POST 20 jump to linear 0xd0 and execute the real-mode IVT.
+   *
+   * A gate to a lower DPL also switches stacks: the inner stack comes from the TSS, the caller's
+   * SS:ESP are pushed on it, and the gate's parameter count says how many words to copy across.
+   */
+  farCall(sel, off, is32) {
+    const plain = () => {
+      this.pushW(this.seg[CS], is32); this.pushW(this.eip >>> 0, is32);
+      this.setSeg(CS, sel); this.eip = off >>> 0;
+    };
+    if (!(this.cr0 & 1)) return plain();
+    const d = this.readDesc(sel);
+    if (!d || !d.sys) return plain();                       // an ordinary code segment
+    if (d.type !== 0x04 && d.type !== 0x0c) return plain();  // not a call gate (task gate etc.): later
+    const g32 = d.type === 0x0c;
+    const gSel = d.w1 & 0xffff;
+    const gOff = g32 ? ((d.w0 | ((d.b6 | (d.b7 << 8)) << 16)) >>> 0) : d.w0;
+    const params = d.b4 & 0x1f;
+    const target = this.readDesc(gSel);
+    const cpl = this.seg[CS] & 3;
+    const tdpl = target ? target.dpl : cpl;
+    if (tdpl < cpl) {                                        // inward: switch to the TSS's stack
+      const oldSS = this.seg[SS], oldESP = this.reg[4] >>> 0;
+      const inner = this.tssStack(tdpl);
+      const args = [];
+      for (let i = 0; i < params; i++) {
+        const a = (this.base[SS] + ((oldESP + i * (g32 ? 4 : 2)) >>> 0)) >>> 0;
+        args.push(g32 ? this.mem.r32(a) : this.mem.r16(a));
+      }
+      this.setSeg(SS, inner.ss); this.reg[4] = inner.esp;
+      this.pushW(oldSS, g32); this.pushW(oldESP, g32);
+      for (let i = params - 1; i >= 0; i--) this.pushW(args[i], g32);
+    }
+    this.pushW(this.seg[CS], g32); this.pushW(this.eip >>> 0, g32);
+    this.setSeg(CS, (gSel & 0xfffc) | tdpl);                 // CS's RPL becomes the new CPL
+    this.eip = gOff >>> 0;
+  }
+
+  /** Far JMP. A gate is followed the same way, but nothing is pushed and no stack switch happens. */
+  farJmp(sel, off) {
+    if (this.cr0 & 1) {
+      const d = this.readDesc(sel);
+      if (d && d.sys && (d.type === 0x04 || d.type === 0x0c)) {
+        const g32 = d.type === 0x0c;
+        this.setSeg(CS, d.w1 & 0xffff);
+        this.eip = (g32 ? ((d.w0 | ((d.b6 | (d.b7 << 8)) << 16)) >>> 0) : d.w0) >>> 0;
+        return;
+      }
+    }
+    this.setSeg(CS, sel); this.eip = off >>> 0;
+  }
+
+  /** Far RET. Like IRET, an outward return also restores the caller's SS:ESP. */
+  farRet(is32, popBytes) {
+    const pop = is32 ? () => this.pop32() : () => this.pop16();
+    const cpl = (this.cr0 & 1) ? (this.seg[CS] & 3) : 0;
+    const eip = is32 ? (pop() >>> 0) : pop();
+    const cs = pop() & 0xffff;
+    if (popBytes) this.spAdd(popBytes);
+    if ((this.cr0 & 1) && (cs & 3) > cpl) {
+      const esp = is32 ? (pop() >>> 0) : pop();
+      const ss = pop() & 0xffff;
+      this.setSeg(CS, cs); this.eip = eip;
+      this.setSeg(SS, ss); this.reg[4] = esp;
+      if (popBytes) this.spAdd(popBytes);
+    } else {
+      this.setSeg(CS, cs); this.eip = eip;
+    }
   }
 
   /**
