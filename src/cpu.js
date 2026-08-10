@@ -34,6 +34,10 @@ export class CPU {
     // Always 0 in real mode. It selects the DEFAULT that 0x66/0x67 invert, so translated code is
     // only valid for one value of it — the block cache is keyed by it (recompiler.js).
     this.csD = 0;
+    // Stack-segment B bit: 0 = the stack pointer is SP (16-bit, wraps in 64 KiB), 1 = ESP (32-bit).
+    // Independent of the operand size, which decides how MUCH is pushed, not WHERE. Always 0 in
+    // real mode. test386 POST 9 exists to catch exactly this confusion.
+    this.ssB = 0;
     this.limit = new Uint32Array(6).fill(0xffff);   // cached segment limits (0xFFFF in real mode)
     this.segAccess = new Uint8Array(6);             // cached access byte (P/DPL/S/type) — checks come later
     // Descriptor table registers. Real mode never consults them; LGDT/LIDT load them and protected
@@ -86,7 +90,7 @@ export class CPU {
     if (!(this.cr0 & 1)) {                        // real mode: the selector is the base, shifted
       this.base[i] = sel << 4;
       this.limit[i] = 0xffff;
-      if (i === CS) this.csD = 0;
+      if (i === CS) this.csD = 0; else if (i === SS) this.ssB = 0;
       return;
     }
     this.loadDescriptor(i, sel);
@@ -96,7 +100,7 @@ export class CPU {
   loadDescriptor(i, sel) {
     if ((sel & 0xfffc) === 0) {                   // null selector: legal to load, faults on use
       this.base[i] = 0; this.limit[i] = 0;
-      if (i === CS) this.csD = 0;
+      if (i === CS) this.csD = 0; else if (i === SS) this.ssB = 0;
       return;
     }
     const tbl = (sel & 4) ? this.ldtr : this.gdtr;          // TI bit picks GDT or LDT
@@ -109,7 +113,10 @@ export class CPU {
     this.base[i] = (b0 | (b1 << 16) | (b2 << 24)) >>> 0;
     this.limit[i] = limit;
     this.segAccess[i] = access;
-    if (i === CS) this.csD = (gran & 0x40) ? 1 : 0;         // D/B bit: a 32-bit code segment
+    // The same bit is called D on a code segment and B on a stack segment: 32-bit default operand
+    // size for CS, 32-bit stack pointer for SS.
+    if (i === CS) this.csD = (gran & 0x40) ? 1 : 0;
+    else if (i === SS) this.ssB = (gran & 0x40) ? 1 : 0;
   }
 
   /**
@@ -126,22 +133,30 @@ export class CPU {
   csip() { return (this.base[CS] + (this.eip & 0xffff)) & this.mem.mask; }
 
   // ---- real-mode stack -----------------------------------------------------
+  /** The stack pointer in use: SP or ESP, per the SS descriptor's B bit. */
+  get stackPtr() { return this.ssB ? (this.reg[4] >>> 0) : (this.reg[4] & 0xffff); }
+  /** Adjust it by n, wrapping in 16 bits and preserving the high half when B=0. */
+  spAdd(n) {
+    if (this.ssB) this.reg[4] = (this.reg[4] + n) >>> 0;
+    else this.reg[4] = (this.reg[4] & ~0xffff) | ((this.reg[4] + n) & 0xffff);
+  }
+
   push16(v) {
-    this.reg[4] = (this.reg[4] & ~0xffff) | ((this.sp - 2) & 0xffff);
-    this.mem.w16((this.base[SS] + this.sp) & this.mem.mask, v & 0xffff);
+    this.spAdd(-2);
+    this.mem.w16((this.base[SS] + this.stackPtr) & this.mem.mask, v & 0xffff);
   }
   pop16() {
-    const v = this.mem.r16((this.base[SS] + this.sp) & this.mem.mask);
-    this.reg[4] = (this.reg[4] & ~0xffff) | ((this.sp + 2) & 0xffff);
+    const v = this.mem.r16((this.base[SS] + this.stackPtr) & this.mem.mask);
+    this.spAdd(2);
     return v;
   }
   push32(v) {
-    this.reg[4] = (this.reg[4] & ~0xffff) | ((this.sp - 4) & 0xffff);
-    this.mem.w32((this.base[SS] + this.sp) & this.mem.mask, v >>> 0);
+    this.spAdd(-4);
+    this.mem.w32((this.base[SS] + this.stackPtr) & this.mem.mask, v >>> 0);
   }
   pop32() {
-    const v = this.mem.r32((this.base[SS] + this.sp) & this.mem.mask);
-    this.reg[4] = (this.reg[4] & ~0xffff) | ((this.sp + 4) & 0xffff);
+    const v = this.mem.r32((this.base[SS] + this.stackPtr) & this.mem.mask);
+    this.spAdd(4);
     return v >>> 0;
   }
 

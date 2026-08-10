@@ -609,8 +609,8 @@ export class Recompiler {
 
         case 0x60: // PUSHA / PUSHAD (66) — pushes the ORIGINAL SP/ESP, not the decremented one
           P(sz === 32
-            ? 'var _sp=cpu.reg[4]>>>0;cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);'
-            : 'var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
+            ? 'var _sp=cpu.stackPtr;cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);'
+            : 'var _sp=cpu.stackPtr;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
         case 0x61: // POPA / POPAD (66) — the pushed SP/ESP slot is discarded
           P(sz === 32
             ? `${rW(7, 32, 'cpu.pop32()')}${rW(6, 32, 'cpu.pop32()')}${rW(5, 32, 'cpu.pop32()')}cpu.pop32();${rW(3, 32, 'cpu.pop32()')}${rW(2, 32, 'cpu.pop32()')}${rW(1, 32, 'cpu.pop32()')}${rW(0, 32, 'cpu.pop32()')}`
@@ -729,7 +729,7 @@ export class Recompiler {
 
         // RET pops what CALL pushed: 4 bytes under a 0x66 prefix, 2 without. The immediate form's
         // SP adjustment stays a 16-bit count either way.
-        case 0xc2: { const n = f16(); P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`); P('return;'); ended = true; break; } // RET imm
+        case 0xc2: { const n = f16(); P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};cpu.spAdd(${n});`); P('return;'); ended = true; break; } // RET imm
         case 0xc3: P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};`); P('return;'); ended = true; break;        // RET
         // LDS/LES/LSS/LFS/LGS all load an offset followed by a 16-bit selector. Under 0x66 the offset
         // is a DWORD, so the selector sits at +4, not +2 — reading it at +2 loaded half the offset as
@@ -740,18 +740,18 @@ export class Recompiler {
         case 0xc7: { const o = modrm(); const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(rmW(o, sz, '' + i)); break; }
         case 0xc8: {                                                                    // ENTER size,level (make stack frame)
           const szv = f16(), lvl = f8() & 0x1f; const ft = NT();
-          P(`cpu.push16(r[5]);var ${ft}=cpu.sp;`);                                       // push BP; frameTemp = SP
+          P(`cpu.push16(r[5]);var ${ft}=cpu.stackPtr;`);                                       // push BP; frameTemp = SP
           for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]&~0xffff)|((r[5]-2)&0xffff);cpu.push16(m.r16((sb[2]+(r[5]&0xffff))&${MM}));`); // copy nested frame pointers
           if (lvl > 0) P(`cpu.push16(${ft});`);
-          P(`r[5]=(r[5]&~0xffff)|${ft};r[4]=(r[4]&~0xffff)|((cpu.sp-${szv})&0xffff);`);   // BP = frameTemp; SP -= size
+          P(`r[5]=(r[5]&~0xffff)|${ft};cpu.spAdd(-${szv});`);   // BP = frameTemp; SP -= size
           break;
         }
         case 0xc9: P('r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break; // LEAVE
         // RETF pops what CALLF pushed — two dwords under 0x66, two words without. The selector is
         // popped as a dword too and its upper half discarded.
         case 0xca: { const n = f16(); P(sz === 16
-          ? `cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`
-          : `cpu.eip=cpu.pop32()&0xffff;cpu.setSeg(${CS},cpu.pop32()&0xffff);r[4]=(r[4]&~0xffff)|((cpu.sp+${n})&0xffff);`);
+          ? `cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());cpu.spAdd(${n});`
+          : `cpu.eip=cpu.pop32()&0xffff;cpu.setSeg(${CS},cpu.pop32()&0xffff);cpu.spAdd(${n});`);
           P('return;'); ended = true; break; } // RETF imm
         case 0xcb: P(sz === 16 ? `cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`
                                : `cpu.eip=cpu.pop32()&0xffff;cpu.setSeg(${CS},cpu.pop32()&0xffff);`);
