@@ -24,8 +24,7 @@ import { resolveMemStrategy, memEmitters, memPrologue } from './mem-strategy.js'
 
 // Which memory-dispatch emission to use; see mem-strategy.js. Default reproduces the previous
 // emission character-for-character, so selecting it is provably a no-op.
-const MEM = resolveMemStrategy();
-const MEM_PRE = memPrologue(MEM);
+const MEM_DEFAULT = resolveMemStrategy();
 
 const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSTRIP);
 // The tier-2 region compiler fuses a hot block and its statically-reachable successors into one
@@ -74,6 +73,7 @@ export class Recompiler {
     this.cpu = cpu;
     this.mem = cpu.mem;
     this.MM = this.mem.mask;
+    this.memStrategy = MEM_DEFAULT;   // switched to `paged` when the guest enables paging
     // Block lookup: a 2-level page array (blockPages[lin>>>12][lin&0xfff] -> block)
     // rather than a Map — pure integer indexing on the hot dispatch path, no hashing
     // (V8's Map always routes through FindOrderedHashMapEntry even for SMI keys).
@@ -202,7 +202,7 @@ export class Recompiler {
       out.push('}');
     }
     out.push('default:cpu.eip=_e;return;', '}}');
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + MEM_PRE + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body };
   }
@@ -483,7 +483,7 @@ export class Recompiler {
     // Route only ACTUAL A000 accesses (>>>16===0xA) through the plane logic — the inline
     // range check keeps every other access (stack/data/code, all of mode-13h) on the fast
     // u8[] path even while planar. `m.planar` is false for text/mode-13h/demos → short-circuit.
-    const { memRead, memW } = memEmitters(MEM, MM, NT);
+    const { memRead, memW } = memEmitters(this.memStrategy, MM, NT);
     const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o), sz);
     const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : memW(memAddr(o), sz, v);
 
@@ -880,7 +880,7 @@ export class Recompiler {
     // terminator's return form to get the standalone block function.
     const bodyOut = out.slice();
     emitTermReturn();
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + MEM_PRE + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
     return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, canFault, hot: 0, kind: 0 };
@@ -1178,13 +1178,16 @@ export class Recompiler {
           if (!o.isReg) memAddr(o);                                                      // INVLPG → no-op (no paging yet)
           return;
         }
-        case 0x20: { const o = modrm(); P(rW(o.rm, 32, o.reg === 0 ? '(cpu.cr0>>>0)' : '0')); return; } // MOV r32, CRn (CR0 real; CR2/3/4 read 0)
+        case 0x20: { const o = modrm(); const src = o.reg === 0 ? '(cpu.cr0>>>0)' : o.reg === 2 ? '(cpu.cr2>>>0)' : o.reg === 3 ? '(cpu.cr3>>>0)' : '0';
+          P(rW(o.rm, 32, src)); return; }                                               // MOV r32, CRn
         // MOV CRn, r32. CR0 bit 0 (PE) now really switches how selectors resolve, so this ends the
         // block: the very next instruction is normally the far jump that reloads CS, and the code
         // after it must be translated under the new CS.D.
         case 0x22: {
           const o = modrm();
           if (o.reg === 0) { P(`cpu.setCR0(${rR(o.rm, 32)});cpu.eip=${ip};`); P('return;'); ended = true; }
+          else if (o.reg === 3) { P(`cpu.setCR3(${rR(o.rm, 32)});cpu.eip=${ip};`); P('return;'); ended = true; }
+          else if (o.reg === 2) P(`cpu.cr2=${rR(o.rm, 32)}>>>0;`);
           else P(`${rR(o.rm, 32)};`);
           return;
         }

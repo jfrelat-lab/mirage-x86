@@ -32,6 +32,18 @@ export class Machine {
     this.cpu.shiftMask = this.cpu.profile.shiftCountMask;   // read by the shift/rotate helpers
     installFPU(this.cpu);                           // x87 coprocessor
     this.rec = new Recompiler(this.cpu);
+    // Paging plumbing. Memory needs the CPU to walk CR3, and any change to the mapping invalidates
+    // both the software TLB and every translated block (their emitted addresses assumed the old
+    // one). Enabling paging also forces the `paged` memory strategy: it is the only emission that
+    // consults the table, so `inline` code would silently bypass translation. That is the trigger
+    // the memory-dispatch benchmarks named — a page table earns its keep once there is address
+    // TRANSLATION to do, and there now is.
+    this.mem.cpu = this.cpu;
+    this.cpu.onPagingChange = () => {
+      if (this.cpu.pagingOn) this.rec.memStrategy = { read: 'paged', write: 'paged' };
+      this.mem.rebuildPageTables();
+      this.rec.reset();
+    };
 
     this.intHandlers = new Array(256).fill(null); // n -> (cpu, machine) => void
     // The I/O bus is a flat 64K-entry table, not a Map. x86 port space is exactly 16 bits (an

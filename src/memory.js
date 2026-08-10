@@ -44,17 +44,56 @@ export class Memory {
     this.rebuildPageTables();
   }
 
-  /** Recompute both page tables from planar / A20 / code-page state. Rare — see the field comment. */
+  /**
+   * Recompute both page tables. Without guest paging this is the identity mapping, so a plain page's
+   * biased offset is 0. With CR0.PG set it becomes a genuine SOFTWARE TLB: each entry holds
+   * physical - linear for that page, so emitted code adds the whole linear address and lands on the
+   * right physical byte with no walk. That is the case the biased-offset design was built for and
+   * measured as premature — it stops being premature the moment there is translation to do.
+   *
+   * Refilling the whole table costs one walk per 4 KiB page of installed RAM (4096 for 16 MiB),
+   * which is cheap enough to do outright on a CR3 reload or a paging transition rather than
+   * maintaining per-entry validity.
+   */
   rebuildPageTables() {
     const n = this.rdOfs.length, pagesInRange = (this.mask + 1) >>> PAGE_BITS;
+    const cpu = this.cpu, paging = cpu && cpu.pagingOn;
     for (let p = 0; p < n; p++) {
-      // Identity mapping, so a plain page's biased offset is 0. Pages past the current address mask
-      // (A20 closed) are not plain: the helper applies the wrap.
       const device = this.planar && p >= 0xa0 && p < 0xb0;
-      const plain = !device && p < pagesInRange;
-      this.rdOfs[p] = plain ? 0 : -1;
-      this.wrOfs[p] = plain && !this.codePage[p] ? 0 : -1;
+      if (device || p >= pagesInRange) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; continue; }
+      if (!paging) {
+        this.rdOfs[p] = 0;
+        this.wrOfs[p] = this.codePage[p] ? -1 : 0;
+        continue;
+      }
+      const phys = this.walk(p << PAGE_BITS);
+      if (phys < 0) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; continue; }   // not present → the helper faults
+      const bias = (phys - (p << PAGE_BITS)) | 0;
+      this.rdOfs[p] = bias;
+      // A code page must keep trapping writes, and so must a read-only one (the R/W bit lives in
+      // the walk; `walk` reports it via walkRW).
+      this.wrOfs[p] = (this.codePage[p] || !this.walkRW) ? -1 : bias;
     }
+  }
+
+  /** Translate a linear page to a physical address, or -1 if not present. Sets walkRW as a side
+   *  channel for the writability of the last successful walk. */
+  walk(lin) {
+    const cpu = this.cpu;
+    const dir = (cpu.cr3 & 0xfffff000) >>> 0;
+    const pde = this.r32phys(dir + ((lin >>> 22) * 4));
+    if (!(pde & 1)) { this.walkRW = false; return -1; }
+    const pt = (pde & 0xfffff000) >>> 0;
+    const pte = this.r32phys(pt + (((lin >>> 12) & 0x3ff) * 4));
+    if (!(pte & 1)) { this.walkRW = false; return -1; }
+    this.walkRW = !!(pde & 2) && !!(pte & 2);          // both levels must allow writing
+    return (pte & 0xfffff000) >>> 0;
+  }
+
+  /** A physical dword read that never itself translates — used by the walk. */
+  r32phys(a) {
+    a &= this.size - 1;
+    return (this.u8[a] | (this.u8[a + 1] << 8) | (this.u8[a + 2] << 16) | (this.u8[a + 3] << 24)) >>> 0;
   }
 
   /** Open (A20 on) or close the 1 MiB address wrap. On: the full installed RAM is addressable
@@ -74,11 +113,30 @@ export class Memory {
     if (this.shadowReads && this.planar && this.vga) this.vga.rebuildShadow();
   }
 
+  /**
+   * Linear -> physical for the helper path. The emitted fast path never comes here (its page-table
+   * entry already carries the bias); this is for pages the table marks as not-plain: device windows,
+   * and under paging the not-present ones.
+   *
+   * NOT YET a #PF: a non-present page is counted and reads as zero. Raising the fault from inside a
+   * memory accessor needs the same block-ending treatment as #DE and #UD, which is its own step —
+   * and a silent zero surfaces as a later POST failing rather than as a wrong answer nobody sees.
+   */
+  xlat(a) {
+    if (!(this.cpu && this.cpu.pagingOn)) return a & this.mask;
+    const phys = this.walk(a);
+    if (phys < 0) { this.pfCount = (this.pfCount || 0) + 1; this.lastPF = a >>> 0; return -1; }
+    return (phys | (a & 0xfff)) & (this.size - 1);
+  }
+
   // ---- reads ---------------------------------------------------------------
   // In a planar EGA/VGA mode, A000 reads go through the plane logic (and load the latches);
   // everything else is a direct typed-array read. `planar` is false for text/mode-13h/demos
   // so the check is a single predicted branch on the common path.
-  r8(a)  { a &= this.mask; return (this.planar && a >= 0xa0000 && a < 0xb0000) ? this.vga.readByte(a) : this.u8[a]; }
+  r8(a)  {
+    if (this.cpu && this.cpu.pagingOn) { const t = this.xlat(a); return t < 0 ? 0 : this.u8[t]; }
+    a &= this.mask; return (this.planar && a >= 0xa0000 && a < 0xb0000) ? this.vga.readByte(a) : this.u8[a];
+  }
   r16(a) { a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return this.r8(a) | (this.r8((a + 1) & this.mask) << 8);
     return this.u8[a] | (this.u8[(a + 1) & this.mask] << 8); }
   r32(a) { a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return (this.r8(a) | (this.r8((a + 1) & this.mask) << 8) | (this.r8((a + 2) & this.mask) << 16) | (this.r8((a + 3) & this.mask) << 24)) >>> 0;
@@ -86,6 +144,7 @@ export class Memory {
 
   // ---- writes (with SMC tracking) -----------------------------------------
   w8(a, v) {
+    if (this.cpu && this.cpu.pagingOn) { const t = this.xlat(a); if (t >= 0) { this.u8[t] = v; if (this.codePage[t >> PAGE_BITS]) this._dirty(t, 1); } return; }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.vga.writeByte(a, v & 0xff); return; }
     this.u8[a] = v;

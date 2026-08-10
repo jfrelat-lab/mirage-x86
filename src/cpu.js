@@ -45,6 +45,8 @@ export class CPU {
     this.gdtr = { base: 0, limit: 0 };
     this.idtr = { base: 0, limit: 0x3ff };          // the real-mode IVT, expressed as an IDTR
     this.ldtr = { sel: 0, base: 0, limit: 0 };
+    this.cr3 = 0;                    // page-directory physical base (bits 31:12)
+    this.cr2 = 0;                    // faulting linear address, set on #PF
     this.cr0 = 0x00000010;           // machine status word: PE=0 (real mode), ET=1 (387 present).
                                      // SMSW reads it; LMSW and MOV CR0 write it, and bit 0 (PE) now
                                      // really switches how setSeg resolves a selector.
@@ -179,7 +181,17 @@ export class CPU {
    * hold real-mode paragraph values that are not valid selectors. Re-resolving them here would read
    * whatever the GDT happens to contain at those indices. It is also what makes "unreal mode" work.
    */
-  setCR0(v) { this.cr0 = v >>> 0; }
+  setCR0(v) {
+    const wasPg = (this.cr0 >>> 31) & 1;
+    this.cr0 = v >>> 0;
+    if (((this.cr0 >>> 31) & 1) !== wasPg) this.onPagingChange && this.onPagingChange();
+  }
+
+  /** CR3 reload: the whole software TLB is stale. */
+  setCR3(v) { this.cr3 = v >>> 0; this.onPagingChange && this.onPagingChange(); }
+
+  /** Paging enabled? Only meaningful with PE set — PG without PE is illegal. */
+  get pagingOn() { return ((this.cr0 >>> 31) & 1) !== 0 && (this.cr0 & 1) !== 0; }
 
   /** Linear address of CS:IP — where the recompiler fetches the next block. */
   csip() { return (this.base[CS] + (this.eip & 0xffff)) & this.mem.mask; }
