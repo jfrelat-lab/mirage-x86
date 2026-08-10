@@ -120,6 +120,38 @@ export class CPU {
   }
 
   /**
+   * IRET. In real mode it pops EIP/CS/EFLAGS and nothing else. In protected mode, returning to a
+   * LESS privileged ring pops two more items — the caller's ESP and SS — because entering the inner
+   * ring had switched stacks. test386's switchToRing3 is exactly this: it builds a five-element
+   * frame (EIP, CS, EFLAGS, ESP, SS) and IRETs into ring 3. Getting the frame length wrong is how a
+   * bogus CS ends up loaded, which is what made it spin at 9bf0:0004.
+   *
+   * The width comes from the operand size, so iretd pops dwords.
+   */
+  iret(is32) {
+    const pop = is32 ? () => this.pop32() : () => this.pop16();
+    if (!(this.cr0 & 1)) {                       // real mode — unchanged
+      this.eip = is32 ? (pop() >>> 0) : pop();
+      this.setSeg(CS, pop() & 0xffff);
+      this.flags = (pop() & 0x7fd5) | 2;
+      return;
+    }
+    const cpl = this.seg[CS] & 3;
+    const eip = is32 ? (pop() >>> 0) : pop();
+    const cs = pop() & 0xffff;
+    const fl = pop();
+    if ((cs & 3) > cpl) {                        // outward transition: the frame carries the stack
+      const esp = is32 ? (pop() >>> 0) : pop();
+      const ss = pop() & 0xffff;
+      this.setSeg(CS, cs); this.eip = eip;
+      this.setSeg(SS, ss); this.reg[4] = esp;    // SS first: it decides whether ESP is 16 or 32 bits
+    } else {
+      this.setSeg(CS, cs); this.eip = eip;
+    }
+    this.flags = (fl & 0x7fd5) | 2;
+  }
+
+  /**
    * LLDT: the operand selects a GDT descriptor OF TYPE LDT, whose base and limit become the LDTR.
    * Until this existed, every LDT selector resolved against ldtr.base = 0 and read whatever sat at
    * linear address 0 — which is how test386's 32-bit stack section (its segments live in the LDT)

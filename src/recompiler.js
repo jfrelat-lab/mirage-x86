@@ -783,10 +783,7 @@ export class Recompiler {
         // IRET pops the frame at the OPERAND size: iretd (32-bit) pops EIP/CS/EFLAGS as dwords.
         // The frame was pushed at the gate's width, and a 32-bit gate is entered from 32-bit code,
         // so the two agree without needing to know which gate delivered us.
-        case 0xcf:
-          P(sz === 16 ? 'cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0x7fd5)|2;'
-                      : 'cpu.eip=cpu.pop32()>>>0;cpu.setSeg(' + CS + ',cpu.pop32()&0xffff);cpu.flags=(cpu.pop32()&0x7fd5)|2;');
-          P('return;'); ended = true; break;
+        case 0xcf: P(`cpu.iret(${sz === 32 ? 1 : 0});`); P('return;'); ended = true; break;
 
         case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.eip=${ipStart};if(cpu.aam(${f8()}))return;`); break; // AAM (#DE on base 0 — abort the block)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
