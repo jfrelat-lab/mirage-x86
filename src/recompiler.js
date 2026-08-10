@@ -77,7 +77,9 @@ export class Recompiler {
     // Block lookup: a 2-level page array (blockPages[lin>>>12][lin&0xfff] -> block)
     // rather than a Map — pure integer indexing on the hot dispatch path, no hashing
     // (V8's Map always routes through FindOrderedHashMapEntry even for SMI keys).
-    this.blockPages = [];          // page -> Array(4096) of block | undefined
+    // Indexed by (lin & 0xfff) | (csD << 12): the same bytes decode differently under a 16-bit and a
+    // 32-bit code segment, so a block is only valid for the CS.D it was translated with.
+    this.blockPages = [];          // page -> Array(8192) of block | undefined
     this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
     // Per-page block-coverage bounds [pageLo, pageHi) — the min linStart / max linEnd of
     // any block touching a page. A write outside a page's bound can overlap no block, so
@@ -107,7 +109,7 @@ export class Recompiler {
       if (end <= this.pageLo[p] || addr >= this.pageHi[p]) continue;   // write outside all blocks on this page
       for (const lin of set) {
         const pg = this.blockPages[lin >>> 12];
-        const blk = pg !== undefined ? pg[lin & 0xfff] : undefined;
+        const blk = pg !== undefined ? (pg[lin & 0xfff] || pg[(lin & 0xfff) | 0x1000]) : undefined;
         if (!blk) { set.delete(lin); continue; }              // stale entry
         if (blk.ranges) { if (blk.ranges.some(([s, e]) => s < end && addr < e)) this._evictRegion(blk, lin); }
         else if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, lin);
@@ -117,7 +119,8 @@ export class Recompiler {
   }
 
   _evict(blk, lin) {
-    const pg = this.blockPages[lin >>> 12]; if (pg !== undefined) pg[lin & 0xfff] = undefined;
+    const pg = this.blockPages[lin >>> 12];
+    if (pg !== undefined) { pg[lin & 0xfff] = undefined; pg[(lin & 0xfff) | 0x1000] = undefined; }   // both CS.D variants
     this.heat.delete(lin);
     this.stats.invalidations++;
     for (let p = blk.linStart >>> 12; p <= (blk.linEnd - 1) >>> 12; p++) {
@@ -161,7 +164,7 @@ export class Recompiler {
    *  ip0 doesn't match (a CS:IP alias — can't be a region member). */
   _blockFor(lin, ip0) {
     const pg = this.blockPages[lin >>> 12];
-    let blk = pg !== undefined ? pg[lin & 0xfff] : undefined;
+    let blk = pg !== undefined ? pg[(lin & 0xfff) | (this.cpu.csD << 12)] : undefined;
     if (blk === undefined) blk = this._compile(lin, ip0);
     return blk.kind === 0 && blk.ip0 === ip0 ? blk : null;
   }
@@ -219,8 +222,8 @@ export class Recompiler {
 
   _installRegion(region, rootLin) {
     const pg = rootLin >>> 12;
-    let page = this.blockPages[pg]; if (page === undefined) page = this.blockPages[pg] = new Array(4096);
-    page[rootLin & 0xfff] = region;    // replace the root's tier-1 block; constituents stay tier-1
+    let page = this.blockPages[pg]; if (page === undefined) page = this.blockPages[pg] = new Array(8192);
+    page[(rootLin & 0xfff) | (this.cpu.csD << 12)] = region;    // replace the root's tier-1 block; constituents stay tier-1
     const pages = new Set();
     for (const [s, e] of region.ranges) for (let p = s >>> 12; p <= (e - 1) >>> 12; p++) pages.add(p);
     for (const p of pages) {
@@ -237,7 +240,8 @@ export class Recompiler {
 
   _evictRegion(region, rootLin) {
     region.dead = 1;   // stop any in-flight execution of this region at its next iteration
-    const pg = this.blockPages[rootLin >>> 12]; if (pg !== undefined) pg[rootLin & 0xfff] = undefined;
+    const pg = this.blockPages[rootLin >>> 12];
+    if (pg !== undefined) { pg[rootLin & 0xfff] = undefined; pg[(rootLin & 0xfff) | 0x1000] = undefined; }
     this.stats.invalidations++; this.stats.t2evicts++;
     const pages = new Set();
     for (const [s, e] of region.ranges) for (let p = s >>> 12; p <= (e - 1) >>> 12; p++) pages.add(p);
@@ -254,7 +258,7 @@ export class Recompiler {
     // O(1) array index, no hashing. blk.ip0 guards the rare case of one linear addr
     // reached via different CS:IP (the emitted jump targets bake in ip0).
     const page = this.blockPages[lin >>> 12];
-    let blk = page !== undefined ? page[lin & 0xfff] : undefined;
+    let blk = page !== undefined ? page[(lin & 0xfff) | (this.cpu.csD << 12)] : undefined;
     if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
     if (this.profiling) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
     this.stats.exec++;
@@ -301,7 +305,7 @@ export class Recompiler {
           continue;
         }
         const page = pages[lin >>> 12];
-        let blk = page !== undefined ? page[lin & 0xfff] : undefined;
+        let blk = page !== undefined ? page[(lin & 0xfff) | (cpu.csD << 12)] : undefined;
         if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
         if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
         blk.fn(cpu, blk);
@@ -322,8 +326,8 @@ export class Recompiler {
     const blk = this.translate(lin, ip0);
     const pg = lin >>> 12;
     let page = this.blockPages[pg];
-    if (page === undefined) page = this.blockPages[pg] = new Array(4096);
-    page[lin & 0xfff] = blk;
+    if (page === undefined) page = this.blockPages[pg] = new Array(8192);
+    page[(lin & 0xfff) | (this.cpu.csD << 12)] = blk;
     const first = blk.linStart >>> 12, last = (blk.linEnd - 1) >>> 12;
     for (let p = first; p <= last; p++) {
       this.mem.markCodePage(p);
@@ -350,7 +354,7 @@ export class Recompiler {
   }
 
   // -------------------------------------------------------------------------
-  translate(linStart, ip0, maxOps = MAXOPS) {
+  translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD) {
     const mem = this.mem, MM = this.MM;
     // The CPU generation, read once per block. Every use below is a compile-time constant folded
     // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
@@ -530,7 +534,7 @@ export class Recompiler {
 
     // ===================== main decode loop =====================
     while (!ended && count < maxOps) {
-      opsize = 16; segOv = -1; rep = 0; addr32 = false;
+      opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
       const ipStart = ip;                 // instruction start ip — fault return address (#BR etc.)
       // prefixes. Bounded: x86 caps an instruction at 15 bytes, so a longer prefix run is not
       // real code — it is garbage the tier-2 region walker speculatively reached (a Jcc/JMP
@@ -538,8 +542,8 @@ export class Recompiler {
       // forever (wrapping the 64K segment), since `count` only advances past the prefixes.
       let op = f8(), pfx = 0;
       for (; pfx++ < 15;) {
-        if (op === 0x66) { opsize = 32; op = f8(); }
-        else if (op === 0x67) { addr32 = true; op = f8(); }        // address-size: 32-bit EAs (ModRM+SIB)
+        if (op === 0x66) { opsize = d ? 16 : 32; op = f8(); }        // operand-size: INVERTS the default
+        else if (op === 0x67) { addr32 = !d; op = f8(); }           // address-size: inverts likewise
         else if (op === 0x2e) { segOv = CS; op = f8(); }
         else if (op === 0x36) { segOv = SS; op = f8(); }
         else if (op === 0x3e) { segOv = DS; op = f8(); }
