@@ -833,14 +833,23 @@ export class Recompiler {
         case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.farJmp(${s},${o >>> 0});`); P('return;'); ended = true; break; } // JMPF ptr
         case 0xeb: { const rel = fs8(); endJmp('' + ((ip + rel) & 0xffff)); break; }    // JMP rel8
 
-        case 0xf4: P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break; // HLT
+        case 0xf4:                                                                      // HLT
+          canFault = true;
+          P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break;
         case 0xf5: cur.use |= lC; P(`cpu.flags^=${CF};`); break;                        // CMC (reads CF)
         case 0xf6: emitGroup3(8, ipStart); break;
         case 0xf7: emitGroup3(sz, ipStart); break;
         case 0xf8: P(`cpu.flags&=~${CF};`); break;                                      // CLC
         case 0xf9: P(`cpu.flags|=${CF};`); break;                                       // STC
-        case 0xfa: P(`cpu.flags&=~${IF};`); break;                                      // CLI
-        case 0xfb: P(`cpu.flags|=${IF};`); break;                                       // STI
+        case 0xfa:                                                                      // CLI
+          canFault = true;
+          P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          P(`cpu.flags&=~${IF};`); break;
+        case 0xfb:                                                                      // STI
+          canFault = true;
+          P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          P(`cpu.flags|=${IF};`); break;
         case 0xfc: P(`cpu.flags&=~${DF};`); break;                                      // CLD
         case 0xfd: P(`cpu.flags|=${DF};`); break;                                       // STD
         case 0xfe: { const o = modrm(); const a = NT(), rr = NT(); if (o.reg === 0) { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}+1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},8,false);`, lNOC); } else { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}-1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},8,false);`, lNOC); } break; }
@@ -1144,6 +1153,9 @@ export class Recompiler {
         else if (kind === 'btr') P(memW(ad, 8, `(${v}&~(1<<${b}))`));
         else if (kind === 'btc') P(memW(ad, 8, `(${v}^(1<<${b}))`));
       };
+// A privileged instruction outside ring 0 raises #GP(0). Emitted rather than assumed, because the
+// same opcode is legal at CPL 0 and the check has to be made at run time. test386 arms an expected
+// EX_GP (13) and falls into `jmp error` if the fault never arrives, which is how POST 20 fails.
       switch (op2) {
         case 0x00: {                                                                    // group 6: SLDT/STR/LLDT/LTR/VERR/VERW
           const o = modrm();

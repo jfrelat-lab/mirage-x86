@@ -39,6 +39,8 @@ export class Machine {
     // the memory-dispatch benchmarks named — a page table earns its keep once there is address
     // TRANSLATION to do, and there now is.
     this.mem.cpu = this.cpu;
+    // Faults that carry an error code (protected mode only) — #GP is the first we raise.
+    this.cpu.raise = (n, err) => { if (this.cpu.cr0 & 1) this.protInt(n, err); else this.swInt(n); };
     this.cpu.onPagingChange = () => {
       if (this.cpu.pagingOn) this.rec.memStrategy = { read: 'paged', write: 'paged' };
       this.mem.rebuildPageTables();
