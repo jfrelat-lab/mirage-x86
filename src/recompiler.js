@@ -609,8 +609,10 @@ export class Recompiler {
 
         case 0x60: // PUSHA / PUSHAD (66) — pushes the ORIGINAL SP/ESP, not the decremented one
           P(sz === 32
-            ? 'var _sp=cpu.stackPtr;cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);'
-            : 'var _sp=cpu.stackPtr;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
+            // The pushed eSP is the ORIGINAL one, at the OPERAND width — SS.B chooses where the
+            // pushes go, never what the value is. test386 POST 9 asserts exactly this.
+            ? 'var _sp=cpu.reg[4]>>>0;cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);'
+            : 'var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
         case 0x61: // POPA / POPAD (66) — the pushed SP/ESP slot is discarded
           P(sz === 32
             ? `${rW(7, 32, 'cpu.pop32()')}${rW(6, 32, 'cpu.pop32()')}${rW(5, 32, 'cpu.pop32()')}cpu.pop32();${rW(3, 32, 'cpu.pop32()')}${rW(2, 32, 'cpu.pop32()')}${rW(1, 32, 'cpu.pop32()')}${rW(0, 32, 'cpu.pop32()')}`
