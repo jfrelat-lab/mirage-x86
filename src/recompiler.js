@@ -661,6 +661,18 @@ export class Recompiler {
         case 0x8b: { const o = modrm(); P(rW(o.reg, sz, rmR(o, sz))); break; }
         case 0x8c: { const o = modrm(); P(rmW(o, 16, `cpu.seg[${o.reg}]`)); break; }   // MOV Ew,Sw
         case 0x8d: { const o = modrm(); P(rW(o.reg, sz, '(' + o.off + ')')); break; }   // LEA
+        // ARPL r/m16, r16 — adjust the destination's RPL up to the source's, setting ZF when it had
+        // to. Protected mode only: a 386 in real mode raises #UD on 0x63, and a CPU-detection
+        // routine probing for it must get that answer, so the mode test is emitted rather than
+        // assumed. (This is also the opcode games/TURBOPAS/TURBO.EXE faults on.)
+        case 0x63: {
+          const o = modrm(), d = NT(), sr = NT();
+          canFault = true;
+          P(`if(!(cpu.cr0&1)){cpu.eip=${ipStart};cpu.swInt(6);return;}`);
+          P(`var ${d}=${rmR(o, 16)},${sr}=${rR(o.reg, 16)};`);
+          P(`if((${d}&3)<(${sr}&3)){cpu.flags|=${ZF};${rmW(o, 16, `((${d}&~3)|(${sr}&3))`)}}else cpu.flags&=~${ZF};`);
+          break;
+        }
         case 0x8e: {                                                                    // MOV Sw,Ew
           const o = modrm();
           // reg=001 selects CS, and `MOV CS,r/m` does not exist — a real CPU raises #UD. We used to
@@ -768,7 +780,13 @@ export class Recompiler {
         case 0xcc: P(`cpu.eip=${ip};cpu.swInt(3);`); P('return;'); ended = true; break; // INT3
         case 0xcd: { const n = f8(); P(`cpu.eip=${ip};cpu.swInt(${n});`); P('return;'); ended = true; break; } // INT n
         case 0xce: P(`if(cpu.flags&${OF}){cpu.eip=${ip};cpu.swInt(4);return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
-        case 0xcf: P('cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0x7fd5)|2;'); P('return;'); ended = true; break; // IRET (386 real-mode flag mask)
+        // IRET pops the frame at the OPERAND size: iretd (32-bit) pops EIP/CS/EFLAGS as dwords.
+        // The frame was pushed at the gate's width, and a 32-bit gate is entered from 32-bit code,
+        // so the two agree without needing to know which gate delivered us.
+        case 0xcf:
+          P(sz === 16 ? 'cpu.eip=cpu.pop16();cpu.setSeg(' + CS + ',cpu.pop16());cpu.flags=(cpu.pop16()&0x7fd5)|2;'
+                      : 'cpu.eip=cpu.pop32()>>>0;cpu.setSeg(' + CS + ',cpu.pop32()&0xffff);cpu.flags=(cpu.pop32()&0x7fd5)|2;');
+          P('return;'); ended = true; break;
 
         case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.eip=${ipStart};if(cpu.aam(${f8()}))return;`); break; // AAM (#DE on base 0 — abort the block)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD

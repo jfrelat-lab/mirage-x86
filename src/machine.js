@@ -153,7 +153,37 @@ export class Machine {
     cpu.halted = false;
   }
 
+  /**
+   * Protected-mode interrupt/exception dispatch: through an IDT GATE, not the real-mode IVT.
+   * Gate types 0x06/0x07 are the 286 (16-bit) interrupt/trap gates, 0x0E/0x0F their 386 (32-bit)
+   * counterparts; the odd ones are TRAP gates and leave IF alone, the even ones are INTERRUPT gates
+   * and clear it. The frame is pushed at the GATE's width, not the current code segment's.
+   *
+   * Same-privilege only for now: a gate whose selector has a lower DPL needs a stack switch through
+   * the TSS, which is the next step. Nothing here checks privilege, so a fault that should be #GP
+   * still gets delivered — wrong, but it surfaces as a later POST rather than as silence.
+   */
+  protInt(n, err) {
+    const cpu = this.cpu, m = this.mem;
+    const a = (cpu.idtr.base + n * 8) >>> 0;
+    const offLo = m.r16(a), sel = m.r16(a + 2), access = m.r8(a + 5), offHi = m.r16(a + 6);
+    const type = access & 0x1f, is32 = (type & 0x08) !== 0;
+    const off = is32 ? ((offLo | (offHi << 16)) >>> 0) : offLo;
+    if (is32) { cpu.push32(cpu.flags); cpu.push32(cpu.seg[CS]); cpu.push32(cpu.eip >>> 0); }
+    else { cpu.push16(cpu.flags & 0xffff); cpu.push16(cpu.seg[CS]); cpu.push16(cpu.eip & 0xffff); }
+    if (err !== undefined) { if (is32) cpu.push32(err); else cpu.push16(err); }
+    if ((type & 1) === 0) cpu.flags &= ~IF;      // interrupt gate masks; trap gate does not
+    cpu.flags &= ~TF;
+    cpu.setSeg(CS, sel);
+    cpu.eip = off;
+    cpu.halted = false;
+  }
+
   swInt(n) {
+    // In protected mode every vector goes through the IDT — including the ones a BIOS would own in
+    // real mode. test386 replaces the BIOS wholesale, so routing its exceptions to our JS handlers
+    // would swallow them.
+    if (this.cpu.cr0 & 1) return this.protInt(n);
     const v = this.getVector(n);
     if (v.seg === BIOS_SEG) {
       const h = this.intHandlers[n];
