@@ -155,6 +155,26 @@ export class CPU {
   pushW(v, is32) { if (is32) this.push32(v); else this.push16(v); }
 
   /**
+   * After an OUTWARD transfer (a far return or IRET to a less privileged ring), any of DS/ES/FS/GS
+   * still holding a segment more privileged than the new CPL is loaded with the NULL selector — the
+   * inner ring's data must not stay reachable from the outer one. Conforming code segments are
+   * exempt, being readable from anywhere.
+   *
+   * test386 checks it directly: after returning from a ring-0 call gate it asserts
+   * `mov ax,ds / cmp ax,0`. Leaving DS intact is a privilege leak, not just a stale register.
+   */
+  nullInvalidDataSegs(cpl) {
+    for (const i of [ES, DS, FS, GS]) {
+      const sel = this.seg[i];
+      if ((sel & 0xfffc) === 0) continue;                    // already null
+      const d = this.readDesc(sel);
+      if (!d) continue;
+      const conformingCode = !d.sys && (d.type & 0x0c) === 0x0c;
+      if (!conformingCode && d.dpl < cpl) { this.seg[i] = 0; this.base[i] = 0; this.limit[i] = 0; }
+    }
+  }
+
+  /**
    * Far CALL. In protected mode the destination descriptor decides everything, and it must be
    * examined BEFORE being used as a segment: S=0 marks a SYSTEM descriptor, and type 4 / 0xC are
    * 286 / 386 CALL GATES, whose "base/limit" fields are really selector:offset. Treating a gate as
@@ -223,6 +243,7 @@ export class CPU {
       this.setSeg(CS, cs); this.eip = eip;
       this.setSeg(SS, ss); this.reg[4] = esp;
       if (popBytes) this.spAdd(popBytes);
+      this.nullInvalidDataSegs(cs & 3);
     } else {
       this.setSeg(CS, cs); this.eip = eip;
     }
@@ -254,6 +275,7 @@ export class CPU {
       const ss = pop() & 0xffff;
       this.setSeg(CS, cs); this.eip = eip;
       this.setSeg(SS, ss); this.reg[4] = esp;    // SS first: it decides whether ESP is 16 or 32 bits
+      this.nullInvalidDataSegs(cs & 3);
     } else {
       this.setSeg(CS, cs); this.eip = eip;
     }
