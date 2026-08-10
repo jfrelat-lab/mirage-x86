@@ -1134,14 +1134,35 @@ export class Recompiler {
         }
         case 0x01: {                                                                    // group 7: SGDT/SIDT/SMSW/LGDT/LIDT/LMSW/INVLPG
           const o = modrm();
-          if (o.reg === 4) { P(rmW(o, 16, `(cpu.cr0&0xffff)`)); return; }                // SMSW r/m16 → MSW (games test PE bit 0 for real vs protected mode; we're real, PE=0)
-          if (o.reg === 6) { const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.cr0=(cpu.cr0&~0xf)|(${s}&0xf);`); return; } // LMSW low 4 bits (stay real-mode: PE transition ignored)
-          if (o.reg === 0 || o.reg === 1) { const a = memAddr(o); P(`m.w16(${a},0xffff);m.w16((${a}+2)&${MM},0);m.w16((${a}+4)&${MM},0);`); return; } // SGDT/SIDT → dummy limit 0xffff, base 0
-          if (!o.isReg) memAddr(o);                                                      // LGDT/LIDT/INVLPG → consume the memory operand, otherwise no-op
+          if (o.reg === 4) { P(rmW(o, 16, `(cpu.cr0&0xffff)`)); return; }                // SMSW r/m16 → MSW
+          if (o.reg === 6) { const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.setCR0((cpu.cr0&~0xf)|(${s}&0xf));`); return; } // LMSW: low 4 bits, PE included
+          // SGDT/SIDT store a 6-byte pseudo-descriptor: 16-bit limit then 32-bit base.
+          if (o.reg === 0 || o.reg === 1) {
+            const a = memAddr(o), t = o.reg === 0 ? 'gdtr' : 'idtr';
+            P(`m.w16(${a},cpu.${t}.limit&0xffff);m.w32((${a}+2)&${MM},cpu.${t}.base>>>0);`);
+            return;
+          }
+          // LGDT/LIDT load it. Without a 0x66 prefix the base is truncated to 24 bits on a 386 —
+          // that is architectural, not an approximation, and code that loads a table above 16 MiB
+          // from a 16-bit segment relies on knowing it.
+          if (o.reg === 2 || o.reg === 3) {
+            const a = memAddr(o), t = o.reg === 2 ? 'gdtr' : 'idtr';
+            P(`cpu.${t}.limit=m.r16(${a});cpu.${t}.base=(m.r32((${a}+2)&${MM})&${sz === 32 ? '0xffffffff' : '0xffffff'})>>>0;`);
+            return;
+          }
+          if (!o.isReg) memAddr(o);                                                      // INVLPG → no-op (no paging yet)
           return;
         }
         case 0x20: { const o = modrm(); P(rW(o.rm, 32, o.reg === 0 ? '(cpu.cr0>>>0)' : '0')); return; } // MOV r32, CRn (CR0 real; CR2/3/4 read 0)
-        case 0x22: { const o = modrm(); if (o.reg === 0) P(`cpu.cr0=${rR(o.rm, 32)}>>>0;`); else P(`${rR(o.rm, 32)};`); return; } // MOV CRn, r32 (store CR0; we stay real-mode so PE is inert)
+        // MOV CRn, r32. CR0 bit 0 (PE) now really switches how selectors resolve, so this ends the
+        // block: the very next instruction is normally the far jump that reloads CS, and the code
+        // after it must be translated under the new CS.D.
+        case 0x22: {
+          const o = modrm();
+          if (o.reg === 0) { P(`cpu.setCR0(${rR(o.rm, 32)});cpu.eip=${ip};`); P('return;'); ended = true; }
+          else P(`${rR(o.rm, 32)};`);
+          return;
+        }
         case 0x21: { const o = modrm(); P(rW(o.rm, 32, '0')); return; }                 // MOV r32, DRn → 0 (no debug registers)
         case 0x23: { const o = modrm(); P(`${rR(o.rm, 32)};`); return; }                // MOV DRn, r32 → no-op
         case 0x1f: modrm(); return;                                                     // multi-byte NOP

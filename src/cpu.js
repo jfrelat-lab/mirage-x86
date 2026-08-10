@@ -34,8 +34,16 @@ export class CPU {
     // Always 0 in real mode. It selects the DEFAULT that 0x66/0x67 invert, so translated code is
     // only valid for one value of it — the block cache is keyed by it (recompiler.js).
     this.csD = 0;
-    this.cr0 = 0x00000010;           // machine status word: real mode (PE=0), ET=1 (387 present). SMSW reads it,
-                                     // LMSW writes its low 4 bits. We stay real-mode, so PE transitions are ignored.
+    this.limit = new Uint32Array(6).fill(0xffff);   // cached segment limits (0xFFFF in real mode)
+    this.segAccess = new Uint8Array(6);             // cached access byte (P/DPL/S/type) — checks come later
+    // Descriptor table registers. Real mode never consults them; LGDT/LIDT load them and protected
+    // mode resolves every selector through them.
+    this.gdtr = { base: 0, limit: 0 };
+    this.idtr = { base: 0, limit: 0x3ff };          // the real-mode IVT, expressed as an IDTR
+    this.ldtr = { sel: 0, base: 0, limit: 0 };
+    this.cr0 = 0x00000010;           // machine status word: PE=0 (real mode), ET=1 (387 present).
+                                     // SMSW reads it; LMSW and MOV CR0 write it, and bit 0 (PE) now
+                                     // really switches how setSeg resolves a selector.
 
     // Interrupt plumbing. swInt() is filled in by the Machine: it routes a
     // software interrupt either to a JS handler or to a guest-hooked ISR.
@@ -62,7 +70,57 @@ export class CPU {
   get al() { return this.reg[0] & 0xff; }    set al(v) { this.reg[0] = (this.reg[0] & ~0xff) | (v & 0xff); }
   get ah() { return (this.reg[0] >> 8) & 0xff; } set ah(v) { this.reg[0] = (this.reg[0] & ~0xff00) | ((v & 0xff) << 8); }
 
-  setSeg(i, sel) { this.seg[i] = sel & 0xffff; this.base[i] = (sel & 0xffff) << 4; }
+  // ---- segment loading -----------------------------------------------------
+  // In real mode a selector IS the base, shifted. In protected mode it is an INDEX into a descriptor
+  // table, and base/limit/size come from the 8-byte descriptor found there. Every address the
+  // recompiler emits is already `base[seg] + offset` and never `sel << 4`, so making this one method
+  // descriptor-aware is what carries the entire emitted corpus into protected mode unchanged.
+  //
+  // Deliberately NOT here yet, each being its own step gated by test386's POST sequence: privilege
+  // and type checks with #GP, call gates, task switching. A selector that would fault on real
+  // hardware is loaded here instead of raising — wrong, but wrong in a way that surfaces as a later
+  // POST failing rather than as silence.
+  setSeg(i, sel) {
+    sel &= 0xffff;
+    this.seg[i] = sel;
+    if (!(this.cr0 & 1)) {                        // real mode: the selector is the base, shifted
+      this.base[i] = sel << 4;
+      this.limit[i] = 0xffff;
+      if (i === CS) this.csD = 0;
+      return;
+    }
+    this.loadDescriptor(i, sel);
+  }
+
+  /** Cache base/limit (and, for CS, the D bit) from the descriptor `sel` selects. */
+  loadDescriptor(i, sel) {
+    if ((sel & 0xfffc) === 0) {                   // null selector: legal to load, faults on use
+      this.base[i] = 0; this.limit[i] = 0;
+      if (i === CS) this.csD = 0;
+      return;
+    }
+    const tbl = (sel & 4) ? this.ldtr : this.gdtr;          // TI bit picks GDT or LDT
+    const a = (tbl.base + (sel & 0xfff8)) >>> 0;            // the index is already scaled by 8
+    const m = this.mem;
+    const lo = m.r16(a), b0 = m.r16(a + 2);
+    const b1 = m.r8(a + 4), access = m.r8(a + 5), gran = m.r8(a + 6), b2 = m.r8(a + 7);
+    let limit = (lo | ((gran & 0x0f) << 16)) >>> 0;
+    if (gran & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;   // G: the limit counts 4 KiB pages
+    this.base[i] = (b0 | (b1 << 16) | (b2 << 24)) >>> 0;
+    this.limit[i] = limit;
+    this.segAccess[i] = access;
+    if (i === CS) this.csD = (gran & 0x40) ? 1 : 0;         // D/B bit: a 32-bit code segment
+  }
+
+  /**
+   * Write CR0. Switching PE does NOT re-resolve the segment registers: on real hardware the cached
+   * descriptors survive the switch untouched and are only replaced when a segment register is
+   * explicitly reloaded. That is not a detail — it is what the standard entry sequence depends on
+   * (`mov cr0,eax` with PE set, THEN a far jump to load CS), because at that instant DS/ES/SS still
+   * hold real-mode paragraph values that are not valid selectors. Re-resolving them here would read
+   * whatever the GDT happens to contain at those indices. It is also what makes "unreal mode" work.
+   */
+  setCR0(v) { this.cr0 = v >>> 0; }
 
   /** Linear address of CS:IP — where the recompiler fetches the next block. */
   csip() { return (this.base[CS] + (this.eip & 0xffff)) & this.mem.mask; }
