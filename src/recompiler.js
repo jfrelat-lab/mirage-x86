@@ -574,13 +574,18 @@ export class Recompiler {
 
       switch (op) {
         // ---- segment push/pop ----
-        case 0x06: P(`cpu.push16(cpu.seg[${ES}]);`); break;
-        case 0x07: P(`cpu.setSeg(${ES},cpu.pop16());`); break;
-        case 0x0e: P(`cpu.push16(cpu.seg[${CS}]);`); break;
-        case 0x16: P(`cpu.push16(cpu.seg[${SS}]);`); break;
-        case 0x17: P(`cpu.setSeg(${SS},cpu.pop16());`); break;
-        case 0x1e: P(`cpu.push16(cpu.seg[${DS}]);`); break;
-        case 0x1f: P(`cpu.setSeg(${DS},cpu.pop16());`); break;
+        case 0x06: P(sz === 16 ? `cpu.push16(cpu.seg[${ES}]);` : `cpu.push32(cpu.seg[${ES}]);`); break;
+        case 0x07: P(sz === 16 ? `cpu.setSeg(${ES},cpu.pop16());` : `cpu.setSeg(${ES},cpu.pop32()&0xffff);`); break;
+        // PUSH/POP of a segment register moves ONE STACK SLOT of the current operand size: 4 bytes
+        // under a 32-bit operand size (0x66 in real mode, or a 32-bit code segment), 2 otherwise.
+        // Only the low 16 bits are the selector; the rest is zero on push and discarded on pop.
+        // test386 POST 9 asserts both the stored word AND the resulting ESP, which is what caught
+        // this: emitting push16 unconditionally moved the stack by 2 where it owed 4.
+        case 0x0e: P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);` : `cpu.push32(cpu.seg[${CS}]);`); break;
+        case 0x16: P(sz === 16 ? `cpu.push16(cpu.seg[${SS}]);` : `cpu.push32(cpu.seg[${SS}]);`); break;
+        case 0x17: P(sz === 16 ? `cpu.setSeg(${SS},cpu.pop16());` : `cpu.setSeg(${SS},cpu.pop32()&0xffff);`); break;
+        case 0x1e: P(sz === 16 ? `cpu.push16(cpu.seg[${DS}]);` : `cpu.push32(cpu.seg[${DS}]);`); break;
+        case 0x1f: P(sz === 16 ? `cpu.setSeg(${DS},cpu.pop16());` : `cpu.setSeg(${DS},cpu.pop32()&0xffff);`); break;
 
         // ---- BCD adjust ----
         case 0x27: cur.use |= lC | lA; P('cpu.daa();'); break;
@@ -667,7 +672,8 @@ export class Recompiler {
           if (o.reg === 1) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; }
           P(`cpu.setSeg(${o.reg},${rmR(o, 16)});`); break;
         }
-        case 0x8f: { const o = modrm(); P(rmW(o, 16, 'cpu.pop16()')); break; }          // POP Ev
+        // POP Ev moves one stack slot of the current operand size, like PUSH/POP sreg above.
+        case 0x8f: { const o = modrm(); P(rmW(o, sz, sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()')); break; }  // POP Ev
 
         case 0x90: break;                                                               // NOP
         case 0x91: case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: case 0x97: {  // XCHG eAX,reg
@@ -1127,11 +1133,13 @@ export class Recompiler {
         else if (kind === 'btc') P(memW(ad, 8, `(${v}^(1<<${b}))`));
       };
       switch (op2) {
-        case 0x00: {                                                                    // group 6: SLDT/STR/LLDT/LTR/VERR/VERW — no LDT/TR in real mode, so keep it benign
+        case 0x00: {                                                                    // group 6: SLDT/STR/LLDT/LTR/VERR/VERW
           const o = modrm();
-          if (o.reg === 0 || o.reg === 1) { P(rmW(o, 16, '0')); return; }                // SLDT/STR → store null selector (no LDT / task register)
+          if (o.reg === 0) { P(rmW(o, 16, 'cpu.ldtr.sel')); return; }                    // SLDT
+          if (o.reg === 1) { P(rmW(o, 16, '0')); return; }                                // STR → no task register yet
+          if (o.reg === 2) { P(`cpu.loadLDT(${rmR(o, 16)});`); return; }                  // LLDT
           if (o.reg === 4 || o.reg === 5) { if (!o.isReg) memAddr(o); P(`cpu.flags|=${ZF};`); return; } // VERR/VERW → report the selector as accessible (ZF=1)
-          if (!o.isReg) memAddr(o);                                                      // LLDT/LTR → consume the operand, otherwise no-op
+          if (!o.isReg) memAddr(o);                                                      // LTR → consume the operand, otherwise no-op
           return;
         }
         case 0x01: {                                                                    // group 7: SGDT/SIDT/SMSW/LGDT/LIDT/LMSW/INVLPG
@@ -1169,10 +1177,10 @@ export class Recompiler {
         case 0x23: { const o = modrm(); P(`${rR(o.rm, 32)};`); return; }                // MOV DRn, r32 → no-op
         case 0x1f: modrm(); return;                                                     // multi-byte NOP
         case 0x31: P('cpu.reg[0]=(cpu.cycles>>>0);cpu.reg[2]=(Math.floor(cpu.cycles/4294967296))>>>0;'); return; // RDTSC → EDX:EAX
-        case 0xa0: P(`cpu.push16(cpu.seg[${FS}]);`); return;                            // PUSH FS
-        case 0xa1: P(`cpu.setSeg(${FS},cpu.pop16());`); return;                         // POP FS
-        case 0xa8: P(`cpu.push16(cpu.seg[${GS}]);`); return;                            // PUSH GS
-        case 0xa9: P(`cpu.setSeg(${GS},cpu.pop16());`); return;                         // POP GS
+        case 0xa0: P(sz === 16 ? `cpu.push16(cpu.seg[${FS}]);` : `cpu.push32(cpu.seg[${FS}]);`); return;   // PUSH FS
+        case 0xa1: P(sz === 16 ? `cpu.setSeg(${FS},cpu.pop16());` : `cpu.setSeg(${FS},cpu.pop32()&0xffff);`); return;  // POP FS
+        case 0xa8: P(sz === 16 ? `cpu.push16(cpu.seg[${GS}]);` : `cpu.push32(cpu.seg[${GS}]);`); return;   // PUSH GS
+        case 0xa9: P(sz === 16 ? `cpu.setSeg(${GS},cpu.pop16());` : `cpu.setSeg(${GS},cpu.pop32()&0xffff);`); return;  // POP GS
         case 0xa3: { const o = modrm(); bt(o, 'bt', rR(o.reg, sz)); return; }            // BT
         case 0xab: { const o = modrm(); bt(o, 'bts', rR(o.reg, sz)); return; }           // BTS
         case 0xb3: { const o = modrm(); bt(o, 'btr', rR(o.reg, sz)); return; }           // BTR

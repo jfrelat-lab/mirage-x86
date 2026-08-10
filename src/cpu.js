@@ -120,6 +120,26 @@ export class CPU {
   }
 
   /**
+   * LLDT: the operand selects a GDT descriptor OF TYPE LDT, whose base and limit become the LDTR.
+   * Until this existed, every LDT selector resolved against ldtr.base = 0 and read whatever sat at
+   * linear address 0 — which is how test386's 32-bit stack section (its segments live in the LDT)
+   * silently got a garbage descriptor rather than a fault.
+   */
+  loadLDT(sel) {
+    sel &= 0xffff;
+    this.ldtr.sel = sel;
+    if ((sel & 0xfffc) === 0) { this.ldtr.base = 0; this.ldtr.limit = 0; return; }
+    const a = (this.gdtr.base + (sel & 0xfff8)) >>> 0;      // an LDT selector always indexes the GDT
+    const m = this.mem;
+    const lo = m.r16(a), b0 = m.r16(a + 2);
+    const b1 = m.r8(a + 4), gran = m.r8(a + 6), b2 = m.r8(a + 7);
+    let limit = (lo | ((gran & 0x0f) << 16)) >>> 0;
+    if (gran & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;
+    this.ldtr.base = (b0 | (b1 << 16) | (b2 << 24)) >>> 0;
+    this.ldtr.limit = limit;
+  }
+
+  /**
    * Write CR0. Switching PE does NOT re-resolve the segment registers: on real hardware the cached
    * descriptors survive the switch untouched and are only replaced when a segment register is
    * explicitly reloaded. That is not a detail — it is what the standard entry sequence depends on
