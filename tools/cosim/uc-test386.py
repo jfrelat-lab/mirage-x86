@@ -92,6 +92,7 @@ def _ring0_stack():
     ss0 = int.from_bytes(mem[tb + 8:tb + 10], 'little')
     return ss0, esp0, (_desc_base(ss0) + esp0) & 0xffffffff
 
+stale = []                          # segment indices Unicorn could not restore
 trampoline = None
 K_CS, K_SS = 0xd0, 0x118            # test386's ring-0 code/stack selectors
 cpl0 = snap['seg'][1] & 3
@@ -120,8 +121,21 @@ if cpl0 != 0:
     print(f'  entree en anneau {cpl0} via IRET a {K_CS:#06x}:{iret_off:#x} '
           f'(pile TSS {K_SS:#06x}:{esp0:#x}, lineaire {stack_lin:#x})')
 else:
+    # A segment register can legitimately hold a selector that no longer resolves: the descriptor
+    # CACHE keeps whatever was loaded last, so after a real-to-protected switch FS/GS still carry
+    # real-mode values (selector 0x2000, base 0x20000 = 0x2000<<4) that index far past the GDT limit.
+    # MIRAGE reproduces that faithfully; Unicorn cannot, because writing a selector makes it walk the
+    # GDT. Report what could not be restored instead of dying — and treat any divergence involving
+    # those registers as a harness artefact.
     for i, r in enumerate(SEGR):
-        uc.reg_write(r, snap['seg'][i] & 0xffff)
+        try:
+            uc.reg_write(r, snap['seg'][i] & 0xffff)
+        except UcError:
+            stale.append(i)
+    if stale:
+        print('  caches de segment non restaurables (selecteurs herites du mode reel): '
+              + ', '.join(f"{['ES', 'CS', 'SS', 'DS', 'FS', 'GS'][i]}=0x{snap['seg'][i]:04x}"
+                          for i in stale))
 
 # Ports: replay exactly what MIRAGE returned, in order. Anything unrecorded reads 0xFF, as the
 # open bus does on both sides.
@@ -280,5 +294,5 @@ for (n, cs, eip, cr2, at) in seen_intr[:6]:
           '  -> resync depuis MIRAGE')
 if len(seen_intr) > 6:
     print(f'  ... et {len(seen_intr) - 6} autres exceptions')
-json.dump({'trace': trace, 'err': err}, open(OUT, 'w'))
+json.dump({'trace': trace, 'err': err, 'stale': stale}, open(OUT, 'w'))
 print(f'unicorn: {len(trace)} steps -> {OUT}' + (f'   stopped: {err}' if err else ''))

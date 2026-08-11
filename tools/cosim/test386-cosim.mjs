@@ -95,6 +95,24 @@ if (SKIP > 0) {
 
 // Phase 2: single-step, recording one entry per instruction. translate(...,1) is the same
 // one-instruction path the Trap Flag uses, so nothing is fused and each step is comparable.
+// STEPS=0 counts instructions to the halt without recording anything. A window is only worth
+// tracing if it is small enough to hold: every entry carries a 128-byte stack window, so a
+// hundred-thousand-instruction window is tens of megabytes of JSON before it is ever compared.
+if (STEPS === 0) {
+  let n = 0;
+  const t1 = Date.now();
+  while (!cpu.halted && !fault && Date.now() - t1 < 120_000) {
+    const lin = (cpu.base[1] + (cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff))) >>> 0;
+    const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
+    const blk = mc.rec.translate(lin, ip0, 1);
+    blk.fn(cpu, blk); cpu.cycles += blk.count; n++;
+  }
+  console.log(`comptage seul: ${n.toLocaleString('fr')} instructions jusqu'a ` +
+    `${cpu.halted ? 'halted' : fault ? 'fault' : 'timeout'} en ` +
+    `0x${cpu.seg[1].toString(16)}:0x${cpu.eip.toString(16)}`);
+  process.exit(0);
+}
+
 const trace = [];
 for (let i = 0; i < STEPS && !cpu.halted && !fault; i++) {
   const lin = (cpu.base[1] + (cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff))) >>> 0;

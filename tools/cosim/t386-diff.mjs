@@ -19,7 +19,12 @@ import { readFileSync } from 'fs';
 const A = process.argv[2] || '/tmp/t386-mirage.json';
 const B = process.argv[3] || '/tmp/t386-uc.json';
 const M = JSON.parse(readFileSync(A, 'utf8')).trace;
-const U = JSON.parse(readFileSync(B, 'utf8')).trace;
+const UJ = JSON.parse(readFileSync(B, 'utf8'));
+const U = UJ.trace;
+// Segment registers Unicorn could not restore (a descriptor cache left over from real mode indexes
+// past the GDT limit, so writing the selector is refused). Comparing them would report the harness,
+// not the engine — but say so, rather than dropping them silently.
+const STALE = new Set(UJ.stale || []);
 
 const h = (n, w = 8) => (n >>> 0).toString(16).padStart(w, '0');
 const RN = ['EAX', 'ECX', 'EDX', 'EBX', 'ESP', 'EBP', 'ESI', 'EDI'];
@@ -28,6 +33,7 @@ const FLAGS = 0x8d5;                        // CF PF AF ZF SF OF
 
 const N = Math.min(M.length, U.length);
 console.log(`MIRAGE ${M.length} pas, Unicorn ${U.length} pas -> ${N} comparés`);
+if (STALE.size) console.log(`  (non comparés: ${[...STALE].map((k) => SN[k]).join(', ')} — cache non restaurable)`);
 
 const at = (t, i) => `${h(t[i].cs, 4)}:${h(t[i].eip)}`;
 
@@ -41,7 +47,7 @@ for (let i = 0; i < N; i++) {
     if ((m.r[k] >>> 0) !== (u.r[k] >>> 0)) d.push(`${RN[k]}  M=${h(m.r[k])} U=${h(u.r[k])}`);
   }
   for (let k = 0; k < 6; k++) {
-    if (k !== 1 && m.s[k] !== u.s[k]) d.push(`${SN[k]}   M=${h(m.s[k], 4)} U=${h(u.s[k], 4)}`);
+    if (k !== 1 && !STALE.has(k) && m.s[k] !== u.s[k]) d.push(`${SN[k]}   M=${h(m.s[k], 4)} U=${h(u.s[k], 4)}`);
   }
   if ((m.f & FLAGS) !== (u.f & FLAGS)) d.push(`FLAGS M=${h(m.f & FLAGS, 3)} U=${h(u.f & FLAGS, 3)}`);
   if (!d.length) continue;

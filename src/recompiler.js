@@ -609,8 +609,18 @@ export class Recompiler {
           // a 286+ pushes the value it had on entry. Every other register is unaffected.
           if ((op & 7) === 4 && sz === 16 && !PROF.pushSPOriginal) { P('cpu.push16((cpu.reg[4]-2)&0xffff);'); break; }
           P(sz === 32 ? `cpu.push32(${rR(op & 7, 32)});` : `cpu.push16(${rR(op & 7, 16)});`); break;
-        case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f:
-          P(sz === 32 ? rW(op & 7, 32, 'cpu.pop32()') : rW(op & 7, 16, 'cpu.pop16()')); break;
+        case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f: {
+          // Pop into a temp FIRST. A 16-bit write is emitted as `r[n]=(r[n]&~0xffff)|(expr&0xffff)`,
+          // and JavaScript evaluates the left operand before calling expr — so `o16 pop sp` merged
+          // the popped word into the ESP value from BEFORE the pop's own increment. With ESP at
+          // 0x0001fffe the upper half stayed 0x0001 where the architecture gives 0x0002. Only SP is
+          // affected (no other register aliases the stack pointer), and the low half is right either
+          // way, so `cmp sp,imm` right after it still passes — the wrong ESP surfaces much later.
+          // Sequencing also gives POP the defined behaviour of reading ESP after the increment.
+          const t0 = NT();
+          P(`var ${t0}=${sz === 32 ? 'cpu.pop32()' : 'cpu.pop16()'};`);
+          P(rW(op & 7, sz, t0)); break;
+        }
 
         case 0x60: // PUSHA / PUSHAD (66) — pushes the ORIGINAL SP/ESP, not the decremented one
           P(sz === 32
@@ -685,7 +695,10 @@ export class Recompiler {
           P(`cpu.setSeg(${o.reg},${rmR(o, 16)});`); break;
         }
         // POP Ev moves one stack slot of the current operand size, like PUSH/POP sreg above.
-        case 0x8f: { const o = modrm(); P(rmW(o, sz, sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()')); break; }  // POP Ev
+        // POP Ev — same sequencing as POP r16 above, for the same two reasons: the destination may be
+        // SP, and when the destination is memory based on ESP the effective address is defined to be
+        // computed AFTER the pop's increment.
+        case 0x8f: { const o = modrm(); const t0 = NT(); P(`var ${t0}=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()'};`); P(rmW(o, sz, t0)); break; }
 
         case 0x90: break;                                                               // NOP
         case 0x91: case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: case 0x97: {  // XCHG eAX,reg
