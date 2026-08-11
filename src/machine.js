@@ -119,6 +119,7 @@ export class Machine {
     this.timerAuto = true;
 
     this.cpu.swInt = (n) => this.swInt(n);
+    this.cpu.softInt = (n, nextIp, faultIp) => this.softInt(n, nextIp, faultIp);
     this.cpu.biosCallback = (n) => this.biosCallback(n);
     // Bind the tables directly rather than trampolining through this.ioRead/ioWrite: recompiled code
     // calls these per IN/OUT, and the extra frame was pure overhead on a 0x3DA poll loop. Capturing
@@ -208,6 +209,29 @@ export class Machine {
     cpu.setSeg(1, (sel & 0xfffc) | newCpl);          // CS's RPL carries the new CPL
     cpu.eip = off;
     cpu.halted = false;
+  }
+
+  /**
+   * INT n / INT3 / INTO — a SOFTWARE interrupt, which unlike a fault is privilege-checked against
+   * the gate: `INT n` at CPL > gate.DPL raises #GP with the IDT-style error code (n<<3)|2, so a
+   * ring-3 program cannot call a kernel-only vector. Without this check every gate was reachable
+   * from ring 3, and test386's kernel-only handler was entered from CPL 3 instead of faulting — it
+   * then failed its own stack-frame assertion, which is how POST 20 died.
+   *
+   * The distinction matters: BOUND and #UD also route through swInt, and those are FAULTS, so they
+   * must not be DPL-checked. Only the three software-interrupt opcodes call this.
+   *
+   * faultIp is the address of the INT instruction and nextIp the one after it. #GP here is a fault,
+   * so the saved EIP must point AT the instruction, not past it — test386 checks that return address.
+   */
+  softInt(n, nextIp, faultIp) {
+    const cpu = this.cpu;
+    if (cpu.cr0 & 1) {
+      const dpl = (this.mem.r8((cpu.idtr.base + n * 8 + 5) >>> 0) >> 5) & 3;
+      if (dpl < (cpu.seg[1] & 3)) { cpu.eip = faultIp; return this.protInt(13, (n << 3) | 2); }
+    }
+    cpu.eip = nextIp;
+    return this.swInt(n);
   }
 
   swInt(n) {

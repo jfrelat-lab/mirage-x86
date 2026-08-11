@@ -787,9 +787,13 @@ export class Recompiler {
         case 0xca: { const n = f16(); P(`cpu.farRet(${sz === 32 ? 1 : 0},${n});`); P('return;'); ended = true; break; } // RETF imm
         case 0xcb: P(`cpu.farRet(${sz === 32 ? 1 : 0},0);`); P('return;'); ended = true; break; // RETF
 
-        case 0xcc: P(`cpu.eip=${ip};cpu.swInt(3);`); P('return;'); ended = true; break; // INT3
-        case 0xcd: { const n = f8(); P(`cpu.eip=${ip};cpu.swInt(${n});`); P('return;'); ended = true; break; } // INT n
-        case 0xce: P(`if(cpu.flags&${OF}){cpu.eip=${ip};cpu.swInt(4);return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
+        // INT3 / INT n / INTO are SOFTWARE interrupts: privilege-checked against the gate's DPL,
+        // unlike the faults that also route through swInt. softInt takes both the next IP and the
+        // instruction's own address, because #GP on the DPL check is a fault and must save the
+        // latter.
+        case 0xcc: P(`cpu.softInt(3,${ip},${ipStart});`); P('return;'); ended = true; break; // INT3
+        case 0xcd: { const n = f8(); P(`cpu.softInt(${n},${ip},${ipStart});`); P('return;'); ended = true; break; } // INT n
+        case 0xce: P(`if(cpu.flags&${OF}){cpu.softInt(4,${ip},${ipStart});return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
         // IRET pops the frame at the OPERAND size: iretd (32-bit) pops EIP/CS/EFLAGS as dwords.
         // The frame was pushed at the gate's width, and a 32-bit gate is entered from 32-bit code,
         // so the two agree without needing to know which gate delivered us.
