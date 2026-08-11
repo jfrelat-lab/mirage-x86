@@ -226,6 +226,19 @@ export class CPU {
         this.eip = (g32 ? ((d.w0 | ((d.b6 | (d.b7 << 8)) << 16)) >>> 0) : d.w0) >>> 0;
         return;
       }
+      // A far JMP to a code segment cannot CHANGE privilege, only stay at it. So a NON-CONFORMING
+      // target demands CPL == DPL exactly (plus RPL <= CPL); a conforming one demands only
+      // DPL <= CPL. Without this, ring 3 could jump straight into ring-0 code and keep running —
+      // which is what test386's `jmp far 0xd3:0` did (a DPL-0 segment entered from CPL 3) instead of
+      // raising #GP. The error code is the selector with its RPL bits cleared.
+      if (d && !d.sys) {
+        const cpl = this.seg[CS] & 3;
+        const conforming = (d.type & 0x0c) === 0x0c;
+        if (conforming ? d.dpl > cpl : ((sel & 3) > cpl || d.dpl !== cpl)) {
+          this.raise(13, sel & 0xfffc);
+          return;
+        }
+      }
     }
     this.setSeg(CS, sel); this.eip = off >>> 0;
   }

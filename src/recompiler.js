@@ -850,7 +850,10 @@ export class Recompiler {
           P(`cpu.eip=${tgt}&0xffff;`); P('return;'); ended = true; break;
         }
         case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ((ip + rel) & 0xffff)); break; } // JMP rel
-        case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.farJmp(${s},${o >>> 0});`); P('return;'); ended = true; break; } // JMPF ptr
+        // EIP is set to the instruction's OWN address first: farJmp can now raise #GP on the
+        // target's privilege, and that is a fault, so the saved EIP must point AT the JMP. On
+        // success farJmp overwrites EIP anyway, so this costs nothing.
+        case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.eip=${ipStart};cpu.farJmp(${s},${o >>> 0});`); P('return;'); ended = true; break; } // JMPF ptr
         case 0xeb: { const rel = fs8(); endJmp('' + ((ip + rel) & 0xffff)); break; }    // JMP rel8
 
         case 0xf4:                                                                      // HLT
