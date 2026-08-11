@@ -183,14 +183,29 @@ export class CPU {
    * A gate to a lower DPL also switches stacks: the inner stack comes from the TSS, the caller's
    * SS:ESP are pushed on it, and the gate's parameter count says how many words to copy across.
    */
-  farCall(sel, off, is32) {
+  farCall(sel, off, is32, faultIp) {
     const plain = () => {
       this.pushW(this.seg[CS], is32); this.pushW(this.eip >>> 0, is32);
       this.setSeg(CS, sel); this.eip = off >>> 0;
     };
     if (!(this.cr0 & 1)) return plain();
     const d = this.readDesc(sel);
-    if (!d || !d.sys) return plain();                       // an ordinary code segment
+    // An ordinary code segment — same privilege rule as farJmp, and for the same reason: a far CALL
+    // straight to a code segment does not change rings (only a CALL GATE does that, below). So a
+    // non-conforming target demands CPL == DPL exactly plus RPL <= CPL, a conforming one only
+    // DPL <= CPL. test386 runs the identical check for CALL and for JMP — its macro parameterises
+    // the instruction — so `call far 0xd3:0` from CPL 3 must raise #GP just as the JMP does.
+    if (d && !d.sys) {
+      const cpl = this.seg[CS] & 3;
+      const conforming = (d.type & 0x0c) === 0x0c;
+      if (conforming ? d.dpl > cpl : ((sel & 3) > cpl || d.dpl !== cpl)) {
+        // EIP currently holds the RETURN address, which is what a successful call pushes. #GP is a
+        // fault, so the saved EIP must instead point AT the CALL — hence faultIp from the emitter.
+        if (faultIp !== undefined) this.eip = faultIp >>> 0;
+        return this.raise(13, sel & 0xfffc);
+      }
+    }
+    if (!d || !d.sys) return plain();
     if (d.type !== 0x04 && d.type !== 0x0c) return plain();  // not a call gate (task gate etc.): later
     const g32 = d.type === 0x0c;
     const gSel = d.w1 & 0xffff;
@@ -244,11 +259,27 @@ export class CPU {
   }
 
   /** Far RET. Like IRET, an outward return also restores the caller's SS:ESP. */
-  farRet(is32, popBytes) {
+  farRet(is32, popBytes, faultIp) {
     const pop = is32 ? () => this.pop32() : () => this.pop16();
     const cpl = (this.cr0 & 1) ? (this.seg[CS] & 3) : 0;
+    const esp0 = this.reg[4];                       // to restore if the return is not permitted
     const eip = is32 ? (pop() >>> 0) : pop();
     const cs = pop() & 0xffff;
+    // A far RET may only return OUTWARD or stay put — never inward. So the target's RPL must be
+    // >= CPL, and (for a non-conforming segment) its DPL must equal that RPL. test386 checks this by
+    // making a ring-3 program push `error` and RETF to a DPL-0 selector: if the return wrongly
+    // succeeds you land in the error routine, which is exactly where MIRAGE was landing. The stack
+    // is rewound because a fault leaves it untouched.
+    if (this.cr0 & 1) {
+      const rpl = cs & 3;
+      const d = this.readDesc(cs);
+      const conforming = d && !d.sys && (d.type & 0x0c) === 0x0c;
+      if (rpl < cpl || (d && !d.sys && (conforming ? d.dpl > rpl : d.dpl !== rpl))) {
+        this.reg[4] = esp0;
+        if (faultIp !== undefined) this.eip = faultIp >>> 0;
+        return this.raise(13, cs & 0xfffc);
+      }
+    }
     if (popBytes) this.spAdd(popBytes);
     if ((this.cr0 & 1) && (cs & 3) > cpl) {
       const esp = is32 ? (pop() >>> 0) : pop();

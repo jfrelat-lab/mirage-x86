@@ -717,7 +717,7 @@ export class Recompiler {
         // a CALL GATE, whose fields are selector:offset rather than base/limit. cpu.farCall/farJmp
         // make that decision; real mode takes the same path and behaves as before.
         case 0x9a: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16();
-          P(`cpu.eip=${ip};cpu.farCall(${s},${o >>> 0},${sz === 32 ? 1 : 0});`); P('return;'); ended = true; break; } // CALLF ptr
+          P(`cpu.eip=${ip};cpu.farCall(${s},${o >>> 0},${sz === 32 ? 1 : 0},${ipStart});`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
         // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
         case 0x9c: cur.use |= lALL; P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);'
@@ -784,8 +784,10 @@ export class Recompiler {
         case 0xc9: P('r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break; // LEAVE
         // RETF pops what CALLF pushed — two dwords under 0x66, two words without. The selector is
         // popped as a dword too and its upper half discarded.
-        case 0xca: { const n = f16(); P(`cpu.farRet(${sz === 32 ? 1 : 0},${n});`); P('return;'); ended = true; break; } // RETF imm
-        case 0xcb: P(`cpu.farRet(${sz === 32 ? 1 : 0},0);`); P('return;'); ended = true; break; // RETF
+        // farRet can now raise #GP on the target's privilege; that is a fault, so it needs the
+        // instruction's own address for the saved EIP.
+        case 0xca: { const n = f16(); P(`cpu.farRet(${sz === 32 ? 1 : 0},${n},${ipStart});`); P('return;'); ended = true; break; } // RETF imm
+        case 0xcb: P(`cpu.farRet(${sz === 32 ? 1 : 0},0,${ipStart});`); P('return;'); ended = true; break; // RETF
 
         // INT3 / INT n / INTO are SOFTWARE interrupts: privilege-checked against the gate's DPL,
         // unlike the faults that also route through swInt. softInt takes both the next IP and the
