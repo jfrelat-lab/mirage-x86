@@ -75,6 +75,24 @@ Object.assign(cpu.ldtr, snap.ldtr); Object.assign(cpu.tr, snap.tr);
 mc.mem.setA20(snap.a20); mc.mem.rebuildPageTables(); mc.rec.reset();
 cpu.halted = false; fault = null;
 
+// Optional: advance SKIP instructions and re-snapshot there. Resynchronising Unicorn at each fault
+// cannot reset QEMU's cached CPL, so once the replay passes a privilege boundary it is unusable;
+// starting from a LATER clean snapshot avoids resync entirely. Pick a SKIP that lands at CPL 0 —
+// Unicorn's reg_write(CS) rejects a ring-3 selector, since only a far transfer may load CS.
+const SKIP = Number(process.env.SKIP || 0);
+if (SKIP > 0) {
+  for (let i = 0; i < SKIP && !cpu.halted && !fault; i++) {
+    const lin = (cpu.base[1] + (cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff))) >>> 0;
+    const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
+    const blk = mc.rec.translate(lin, ip0, 1);
+    blk.fn(cpu, blk); cpu.cycles += blk.count;
+  }
+  snapNow();                                    // re-capture memory AND registers at the new point
+  cpu.halted = false;
+  console.log(`  avance de ${SKIP} instructions -> CS=0x${snap.seg[1].toString(16)} ` +
+    `EIP=0x${snap.eip.toString(16)} CPL=${snap.seg[1] & 3}`);
+}
+
 // Phase 2: single-step, recording one entry per instruction. translate(...,1) is the same
 // one-instruction path the Trap Flag uses, so nothing is fused and each step is comparable.
 const trace = [];
