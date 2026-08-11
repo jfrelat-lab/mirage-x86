@@ -21,6 +21,34 @@ const SHOW = Number(process.argv[3] || 32);
 const POST_PORT = Number(process.env.POST_PORT || 0x190);
 const rom = new Uint8Array(readFileSync(path));
 
+// Address -> source line, from NASM's listing (`make` in barotto/test386.asm emits test386.lst).
+// This replaces hand-decoding bytes, which is where every misreading in this investigation came
+// from: an address is now resolved to the exact line that produced it, plus the nearest label above
+// it, so a trace reads as source instead of as hex.
+//   LST=/path/to/test386.lst node tools/trace386.mjs boot/test386.bin
+const lstPath = process.env.LST;
+const srcAt = new Map(), labelAt = [];
+if (lstPath) {
+  for (const line of readFileSync(lstPath, 'utf8').split('\n')) {
+    // NASM listing: "  line ADDRESS bytes  <depth> source". The source column is everything after
+    // the optional <depth> marker; a label may sit at its start, alone or before an instruction.
+    const m = /^\s*\d+\s+([0-9A-F]{8})\s+\S*\s*(?:<\d+>)?\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const addr = parseInt(m[1], 16), text = m[2].replace(/\s+$/, '').replace(/^\s+/, '');
+    if (!text) continue;
+    if (!srcAt.has(addr)) srcAt.set(addr, text);
+    const lab = /^([A-Za-z_.][A-Za-z_0-9.$]*)\s*:/.exec(text);
+    if (lab) labelAt.push([addr, lab[1]]);
+  }
+  labelAt.sort((a, b) => a[0] - b[0]);
+  console.log(`listing: ${srcAt.size} addresses, ${labelAt.length} labels from ${lstPath}`);
+}
+const nearestLabel = (a) => {
+  let lo = 0, hi = labelAt.length - 1, best = null;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (labelAt[mid][0] <= a) { best = labelAt[mid]; lo = mid + 1; } else hi = mid - 1; }
+  return best ? `${best[1]}+0x${(a - best[0]).toString(16)}` : '';
+};
+
 const mc = new Machine({ memSize: 16 << 20 });
 const cpu = mc.cpu;
 let fault = null; mc.onError = (e) => { fault = e; };
@@ -104,6 +132,8 @@ for (let i = start; i < ri; i++) {
   if (runLen) { console.log(`      (x${runLen + 1})`); runLen = 0; }
   prev = key;
   const isErr = errIp >= 0 && ringIp[k] === errIp;
-  console.log(`    ${h(ringCs[k])}:${h(ringIp[k], 8)}${isErr ? '   <<<< error:' : ''}`);
+  const src = srcAt.get(ringIp[k]);
+  console.log(`    ${h(ringCs[k])}:${h(ringIp[k], 8)}${isErr ? ' <<<< error:' : '         '}` +
+    (src ? `  ${src}` : '') + (lstPath ? `   [${nearestLabel(ringIp[k])}]` : ''));
 }
 if (runLen) console.log(`      (x${runLen + 1})`);
