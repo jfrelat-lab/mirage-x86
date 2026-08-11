@@ -808,14 +808,17 @@ export class Recompiler {
         case 0xe3: { const rel = fs8(); term = { k: 'jcxz', t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
 
         // ---- IN / OUT ----
-        case 0xe4: { const p = f8(); P(rW(0, 8, `cpu.ioRead(${p},1)`)); break; }
-        case 0xe5: { const p = f8(); P(rW(0, sz, `cpu.ioRead(${p},${sz / 8})`)); break; }
-        case 0xe6: { const p = f8(); P(`cpu.ioWrite(${p},1,${rR(0, 8)});`); break; }
-        case 0xe7: { const p = f8(); P(`cpu.ioWrite(${p},${sz / 8},${rR(0, sz)});`); break; }
-        case 0xec: P(rW(0, 8, 'cpu.ioRead(r[2]&0xffff,1)')); break;
-        case 0xed: P(rW(0, sz, `cpu.ioRead(r[2]&0xffff,${sz / 8})`)); break;
-        case 0xee: P(`cpu.ioWrite(r[2]&0xffff,1,${rR(0, 8)});`); break;
-        case 0xef: P(`cpu.ioWrite(r[2]&0xffff,${sz / 8},${rR(0, sz)});`); break;
+        // IN/OUT are IOPL-sensitive: at CPL > IOPL they raise #GP(0) unless the TSS's I/O permission
+        // bitmap allows the port. The bitmap is not modelled yet, so this is the strict reading —
+        // which is what test386 asks for here (it clears IOPL, then expects `in al,0x64` to fault).
+        case 0xe4: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, 8, `cpu.ioRead(${p},1)`)); break; }
+        case 0xe5: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, sz, `cpu.ioRead(${p},${sz / 8})`)); break; }
+        case 0xe6: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(${p},1,${rR(0, 8)});`); break; }
+        case 0xe7: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(${p},${sz / 8},${rR(0, sz)});`); break; }
+        case 0xec: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, 8, 'cpu.ioRead(r[2]&0xffff,1)')); break;
+        case 0xed: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, sz, `cpu.ioRead(r[2]&0xffff,${sz / 8})`)); break;
+        case 0xee: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(r[2]&0xffff,1,${rR(0, 8)});`); break;
+        case 0xef: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(r[2]&0xffff,${sz / 8},${rR(0, sz)});`); break;
 
         // ---- CALL / JMP ----
         // CALL/JMP rel under a 0x66 prefix take a 32-bit displacement AND, for CALL, push a 32-bit

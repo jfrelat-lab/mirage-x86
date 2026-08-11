@@ -183,12 +183,29 @@ export class Machine {
     const offLo = m.r16(a), sel = m.r16(a + 2), access = m.r8(a + 5), offHi = m.r16(a + 6);
     const type = access & 0x1f, is32 = (type & 0x08) !== 0;
     const off = is32 ? ((offLo | (offHi << 16)) >>> 0) : offLo;
-    if (is32) { cpu.push32(cpu.flags); cpu.push32(cpu.seg[CS]); cpu.push32(cpu.eip >>> 0); }
-    else { cpu.push16(cpu.flags & 0xffff); cpu.push16(cpu.seg[CS]); cpu.push16(cpu.eip & 0xffff); }
-    if (err !== undefined) { if (is32) cpu.push32(err); else cpu.push16(err); }
-    if ((type & 1) === 0) cpu.flags &= ~IF;      // interrupt gate masks; trap gate does not
+
+    // The new CPL is the TARGET code segment's DPL, not the gate's and not zero. Loading the gate's
+    // selector verbatim silently promoted every handler to ring 0 — test386 installs a DPL-3
+    // handler for #GP, checks which ring it is running in, and asks for a different saved CS in
+    // each case, which is how that showed up.
+    const target = cpu.readDesc(sel);
+    const cpl = cpu.seg[1] & 3;
+    const conforming = target && !target.sys && (target.type & 0x0c) === 0x0c;
+    const newCpl = (target && !conforming) ? target.dpl : cpl;
+
+    if (newCpl < cpl) {                              // inward: the inner stack comes from the TSS
+      const oldSS = cpu.seg[2], oldESP = cpu.reg[4] >>> 0;
+      const inner = cpu.tssStack(newCpl);
+      cpu.setSeg(2, inner.ss); cpu.reg[4] = inner.esp;
+      cpu.pushW(oldSS, is32); cpu.pushW(oldESP, is32);
+    }
+    cpu.pushW(cpu.flags, is32);
+    cpu.pushW(cpu.seg[1], is32);
+    cpu.pushW(cpu.eip >>> 0, is32);
+    if (err !== undefined) cpu.pushW(err, is32);
+    if ((type & 1) === 0) cpu.flags &= ~IF;          // interrupt gate masks; trap gate does not
     cpu.flags &= ~TF;
-    cpu.setSeg(CS, sel);
+    cpu.setSeg(1, (sel & 0xfffc) | newCpl);          // CS's RPL carries the new CPL
     cpu.eip = off;
     cpu.halted = false;
   }
