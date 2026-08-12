@@ -410,9 +410,17 @@ export class Recompiler {
     let cur = { flagIdx: -1, def: 0, use: 0 };
     const PFLAG = (stmt, def) => { cur.flagIdx = out.length; cur.def |= def; out.push(stmt); };
 
+    // EIP is a full 32-bit offset in a 32-bit code segment; only a 16-bit segment wraps at 0xFFFF.
+    // Masking it to 16 bits unconditionally — which every fetch and every relative target used to do
+    // — silently truncates the moment EIP exceeds 0xFFFF. test386's FLAT section runs at linear
+    // 0xe00f4f6d, so the first instruction was fetched correctly and every one after it was decoded
+    // from the wrong address. `d` is the CS D bit, and the block cache is already keyed by it, so a
+    // block compiled under one width is never reused under the other.
+    const ipAdd = d ? (a, b) => (a + b) >>> 0 : (a, b) => (a + b) & 0xffff;
+
     // ---- byte fetch (decode-time reads from memory) ----
-    const f8 = () => { const b = mem.r8((linStart - ip0 + ip) & MM); ip = (ip + 1) & 0xffff; return b; };
-    const f16 = () => { const w = mem.r16((linStart - ip0 + ip) & MM); ip = (ip + 2) & 0xffff; return w; };
+    const f8 = () => { const b = mem.r8((linStart - ip0 + ip) & MM); ip = ipAdd(ip, 1); return b; };
+    const f16 = () => { const w = mem.r16((linStart - ip0 + ip) & MM); ip = ipAdd(ip, 2); return w; };
     const fs8 = () => { const b = f8(); return b < 128 ? b : b - 256; };
     const f32 = () => { const lo = f16(), hi = f16(); return (lo | (hi << 16)) >>> 0; };   // disp32 / moffs32 (0x67)
 
@@ -511,8 +519,11 @@ export class Recompiler {
     // Emit the tier-1 return form of the recorded terminator (byte-identical to the old
     // inline emission). The region compiler emits its own edge form from the same `term`.
     const emitTermReturn = () => {
-      if (term.k === 'jmp') P(`cpu.eip=${term.t}&0xffff;`);
-      else if (term.k === 'jcc') P(`cpu.eip=${condExpr(term.cc)}?(${term.t}&0xffff):${term.n};`);
+      // term.t is already reduced to the code segment's width at decode time (see ipAdd), so the
+      // old runtime `&0xffff` was redundant in 16-bit code and destructive in 32-bit code — it threw
+      // away the top half of every branch target above 0xFFFF.
+      if (term.k === 'jmp') P(`cpu.eip=${term.t};`);
+      else if (term.k === 'jcc') P(`cpu.eip=${condExpr(term.cc)}?${term.t}:${term.n};`);
       else if (term.k === 'jcxz') P(`cpu.eip=(${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'}===0)?${term.t}:${term.n};`);
       else if (term.k === 'loop') {
         const cx = term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)';                    // ECX under 0x67
@@ -652,7 +663,7 @@ export class Recompiler {
         // ---- Jcc rel8 ----
         case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x76: case 0x77:
         case 0x78: case 0x79: case 0x7a: case 0x7b: case 0x7c: case 0x7d: case 0x7e: case 0x7f: {
-          const rel = fs8(); endJcc(op & 0xf, (ip + rel) & 0xffff, ip); break;
+          const rel = fs8(); endJcc(op & 0xf, ipAdd(ip, rel), ip); break;
         }
 
         // ---- group1: ALU Eb/Ev, imm ----
@@ -764,8 +775,8 @@ export class Recompiler {
 
         // RET pops what CALL pushed: 4 bytes under a 0x66 prefix, 2 without. The immediate form's
         // SP adjustment stays a 16-bit count either way.
-        case 0xc2: { const n = f16(); P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};cpu.spAdd(${n});`); P('return;'); ended = true; break; } // RET imm
-        case 0xc3: P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()&0xffff'};`); P('return;'); ended = true; break;        // RET
+        case 0xc2: { const n = f16(); P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};cpu.spAdd(${n});`); P('return;'); ended = true; break; } // RET imm
+        case 0xc3: P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};`); P('return;'); ended = true; break;        // RET
         // LDS/LES/LSS/LFS/LGS all load an offset followed by a 16-bit selector. Under 0x66 the offset
         // is a DWORD, so the selector sits at +4, not +2 — reading it at +2 loaded half the offset as
         // the segment. test386's POST-6 `o32 lss ebx,[es:di]` caught it; last of the T0.3 family.
@@ -821,10 +832,10 @@ export class Recompiler {
         }
 
         // ---- LOOP / JCXZ ----
-        case 0xe0: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe0, t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
-        case 0xe1: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe1, t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
-        case 0xe2: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe2, t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
-        case 0xe3: { const rel = fs8(); term = { k: 'jcxz', t: (ip + rel) & 0xffff, n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe0: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe0, t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe1: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe1, t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe2: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe2, t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe3: { const rel = fs8(); term = { k: 'jcxz', t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
 
         // ---- IN / OUT ----
         // IN/OUT are IOPL-sensitive: at CPL > IOPL they raise #GP(0) unless the TSS's I/O permission
@@ -847,16 +858,16 @@ export class Recompiler {
         // still masks to 16 bits: real mode's segment limit is 0xFFFF regardless of operand size.
         case 0xe8: {
           const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16));
-          const tgt = (ip + rel) & 0xffff;
+          const tgt = ipAdd(ip, rel);
           P(sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`);
-          P(`cpu.eip=${tgt}&0xffff;`); P('return;'); ended = true; break;
+          P(`cpu.eip=${tgt};`); P('return;'); ended = true; break;
         }
-        case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ((ip + rel) & 0xffff)); break; } // JMP rel
+        case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ipAdd(ip, rel)); break; } // JMP rel
         // EIP is set to the instruction's OWN address first: farJmp can now raise #GP on the
         // target's privilege, and that is a fault, so the saved EIP must point AT the JMP. On
         // success farJmp overwrites EIP anyway, so this costs nothing.
         case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.eip=${ipStart};cpu.farJmp(${s},${o >>> 0});`); P('return;'); ended = true; break; } // JMPF ptr
-        case 0xeb: { const rel = fs8(); endJmp('' + ((ip + rel) & 0xffff)); break; }    // JMP rel8
+        case 0xeb: { const rel = fs8(); endJmp('' + ipAdd(ip, rel)); break; }    // JMP rel8
 
         case 0xf4:                                                                      // HLT
           canFault = true;
@@ -1096,13 +1107,13 @@ export class Recompiler {
         case 1: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}-1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break; }
         // Same 0x66 rule as CALL rel: the pushed return address is a dword and the target operand is
         // read at the prefixed size. `o32 call ebx` is test386's POST-5 %%rm32 case.
-        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`}cpu.eip=${tg}&0xffff;`); P('return;'); ended = true; break; } // CALL Ev
+        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
         // CALLF under 0x66 pushes CS and a 32-bit return offset, and reads a 48-bit far pointer.
         case 3: { const a = memAddr(o);
           P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`
-                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o&0xffff;`);
+                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // CALLF
-        case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${tg}&0xffff;`); P('return;'); ended = true; break; } // JMP Ev
+        case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // JMP Ev
         case 5: { const a = memAddr(o); P(`var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`); P('return;'); ended = true; break; } // JMPF
         case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }
@@ -1146,7 +1157,7 @@ export class Recompiler {
     function decode0F(sz) {
       const op2 = f8();
       // near Jcc rel16/32
-      if (op2 >= 0x80 && op2 <= 0x8f) { const rel = sz === 16 ? f16() : (f16() | (f16() << 16)); endJcc(op2 & 0xf, (ip + (rel << 16 >> 16)) & 0xffff, ip); return; }
+      if (op2 >= 0x80 && op2 <= 0x8f) { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJcc(op2 & 0xf, ipAdd(ip, rel), ip); return; }
       // CMOVcc Gv,Ev (P6+): reg = cond ? Ev : reg
       if (op2 >= 0x40 && op2 <= 0x4f) { cur.use |= lALL; const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)};if(${condExpr(op2 & 0xf)}){${rW(o.reg, sz, s)}}`); return; }
       // SETcc Eb
