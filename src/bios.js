@@ -6,6 +6,7 @@
 import { ZF, CF } from './cpu.js';
 import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
+import { installDPMI } from './dpmi.js';
 import { installDisk } from './disk.js';
 import { installPIC } from './pic.js';
 
@@ -613,6 +614,8 @@ export function installBIOS(machine) {
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
   installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
+  installDPMI(machine);  // DPMI host (INT 2Fh AX=1687h + f000:0200 mode-switch entry). AFTER XMS:
+                         // it chains that INT 2Fh hook and caps the XMS pool below its own tables.
 
   machine.bios = bios;
   return bios;

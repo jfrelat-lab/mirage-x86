@@ -1,0 +1,136 @@
+// dpmi.js — a DPMI 0.9 host: the mode-switch entry point plus the INT 31h services a client needs.
+//
+// Why a host at all. A DOS extender asks INT 2Fh AX=1687h whether one is present. Answer "no" and
+// it takes its HARDEST path — switching to protected mode itself through VCPI or raw hardware, with
+// INT 15h extended-memory services and its own descriptor tables. Answer "yes" and it takes the
+// documented client path: far-call our entry point to be put into protected mode, then ask for
+// everything else through INT 31h. That path is specified, testable, and far smaller.
+//
+// Discovery and entry follow the same shape as xms.js: a marker byte at a fixed f000 address that
+// the recompiler intercepts, so a FAR CALL to it runs JS instead of bytes.
+//
+// The host's own tables live at the TOP of RAM, and the XMS pool is capped below them so the two
+// allocators cannot collide.
+
+import { CS, DS, ES, SS } from './cpu.js';
+
+export const DPMI_ENTRY_SEG = 0xf000, DPMI_ENTRY_OFF = 0x0200;   // far-callable mode-switch entry
+
+const GDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
+const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for GDT + IDT
+
+// Selector layout. Index 0 must be the null descriptor; the rest are handed to the client.
+const SEL_CODE32 = 0x08, SEL_DATA32 = 0x10;      // flat 4 GiB, the pair every 32-bit client wants
+const SEL_CLIENT = 0x18;                          // first selector describing a client segment
+const SEL_MAX = GDT_ENTRIES * 8;
+
+export function installDPMI(machine) {
+  const mem = machine.mem, cpu = machine.cpu;
+
+  const HOST_BASE = mem.size - HOST_SIZE;
+  const GDT_BASE = HOST_BASE, GDT_LIMIT = GDT_ENTRIES * 8 - 1;
+
+  // Keep XMS out of the host's reserved block. Without this the two bump allocators overlap and the
+  // symptom is a descriptor table quietly overwritten by a game's extended-memory allocation.
+  if (machine.xms) machine.xms.max = Math.min(machine.xms.max, HOST_BASE);
+
+  const dpmi = {
+    active: false,                 // has a client switched to protected mode?
+    is32: false,
+    nextSel: SEL_CLIENT,           // bump allocator over the GDT
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; },
+  };
+
+  /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
+  const setDesc = (sel, base, limit, access, gran) => {
+    const a = (GDT_BASE + (sel & 0xfff8)) >>> 0;
+    let g = gran & 0xf0;
+    if (limit > 0xfffff) { limit = limit >>> 12; g |= 0x80; }     // G=1: the limit counts 4 KiB pages
+    mem.w16(a, limit & 0xffff);
+    mem.w16(a + 2, base & 0xffff);
+    mem.w8(a + 4, (base >>> 16) & 0xff);
+    mem.w8(a + 5, access & 0xff);
+    mem.w8(a + 6, g | ((limit >>> 16) & 0x0f));
+    mem.w8(a + 7, (base >>> 24) & 0xff);
+  };
+
+  /** A descriptor for one of the client's real-mode segments: same bytes, seen through a selector. */
+  const allocClientSel = (seg, code) => {
+    if (dpmi.nextSel >= SEL_MAX) return 0;
+    const sel = dpmi.nextSel; dpmi.nextSel += 8;
+    // Ring 0, deliberately. A real host runs its client at ring 3, but MIRAGE has no reason to
+    // enforce that boundary yet and DOS/4GW executes CLI/STI and port I/O constantly: at CPL 3 with
+    // IOPL 0 the very first one raises #GP(0), which is exactly where Doom died (1b:6e9d). Tightening
+    // this later means changing the DPL here and the RPL below, and supplying a TSS — nothing else.
+    setDesc(sel, (seg & 0xffff) << 4, 0xffff, code ? 0x9a : 0x92, 0x40);
+    return sel;
+  };
+
+  /** Build the tables once, on the first mode switch. */
+  const buildTables = () => {
+    for (let i = 0; i < GDT_ENTRIES * 8; i++) mem.w8(GDT_BASE + i, 0);
+    setDesc(SEL_CODE32, 0, 0xffffffff, 0x9a, 0xc0);      // flat code, 32-bit
+    setDesc(SEL_DATA32, 0, 0xffffffff, 0x92, 0xc0);      // flat data, 32-bit
+    // Deliberately NO IDT. Software interrupts are reflected to the JS services in Machine.softInt,
+    // so the only thing an IDT would serve here is EXCEPTIONS — and an exception inside a DPMI
+    // client is a defect we want to SEE. An earlier version installed 256 gates pointing at a
+    // reflector stub that was described in a comment and never written: every fault then jumped to
+    // linear 0x21x, executed the interrupt vector table as code, and Doom "exited cleanly" with no
+    // message. Silent garbage is the worst possible outcome; protInt now names the vector instead.
+    cpu.gdtr.base = GDT_BASE; cpu.gdtr.limit = GDT_LIMIT;
+  };
+
+  /**
+   * The mode-switch entry, reached by a FAR CALL from real mode.
+   *
+   * On entry AX bit 0 says whether the client is 32-bit, and ES points at the host data block it
+   * allocated for us (we need none). On exit the client must be IN protected mode, with CS/DS/ES/SS
+   * describing the very same memory its real-mode segments did, and execution continuing at the
+   * instruction after the call. So the return address is popped in real mode and re-entered through
+   * a selector — the one transition a RETF cannot express by itself.
+   */
+  const modeSwitch = () => {
+    const is32 = (cpu.reg[0] & 1) !== 0;
+    buildTables();
+
+    const retOff = cpu.pop16(), retSeg = cpu.pop16();     // still a real-mode stack at this point
+    const oldDS = cpu.seg[DS], oldES = cpu.seg[ES], oldSS = cpu.seg[SS];
+    const csSel = allocClientSel(retSeg, true);
+    const dsSel = allocClientSel(oldDS, false);
+    // The spec is specific here: ES comes back describing the client's PSP, not whatever it held
+    // before. DOS/4GW reads its command line and environment through it immediately after the
+    // switch, so handing back the old ES gives it garbage at the very first thing it does.
+    const psp = machine.dos ? machine.dos.psp : oldES;
+    const esSel = allocClientSel(psp, false);
+    const ssSel = oldSS === oldDS ? dsSel : allocClientSel(oldSS, false);
+
+    cpu.setCR0((cpu.cr0 | 1) >>> 0);                     // PE — from here selectors are indices
+    machine.rec.reset();                                  // every cached block assumed real mode
+    cpu.setSeg(DS, dsSel); cpu.setSeg(ES, esSel); cpu.setSeg(SS, ssSel);
+    cpu.setSeg(CS, csSel); cpu.eip = retOff;
+    cpu.flags &= ~1;                                      // CF=0: the switch succeeded
+    dpmi.active = true; dpmi.is32 = is32;
+  };
+
+  cpu.dpmiSwitch = modeSwitch;
+  machine.dpmi = dpmi;
+  mem.u8[(DPMI_ENTRY_SEG << 4) + DPMI_ENTRY_OFF] = 0xcb;  // marker byte (RETF) the recompiler guards on
+
+  // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
+  // owns the vector (XMS answers 43xx there) rather than replacing it.
+  const prev = machine.intHandlers[0x2f];
+  machine.hookInterrupt(0x2f, (c, m) => {
+    if (c.ax === 0x1687) {
+      c.ax = 0;                                  // 0 = host present
+      c.reg[3] = (c.reg[3] & ~0xffff) | 1;       // BX bit 0: 32-bit programs supported
+      c.reg[1] = (c.reg[1] & ~0xff) | 3;         // CL = processor type (3 = 386)
+      c.reg[2] = (c.reg[2] & ~0xffff) | 0x005a;  // DX = DPMI version 0.90
+      c.reg[6] = c.reg[6] & ~0xffff;             // SI = paragraphs of host data needed: none
+      c.setSeg(ES, DPMI_ENTRY_SEG); c.reg[7] = (c.reg[7] & ~0xffff) | DPMI_ENTRY_OFF;
+      return;
+    }
+    if (prev) prev(c, m);
+  });
+
+  return dpmi;
+}

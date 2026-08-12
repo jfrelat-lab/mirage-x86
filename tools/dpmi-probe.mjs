@@ -42,27 +42,45 @@ const mux = new Map();
 const MUX_NAMES = { 0x1686: 'DPMI: am I in protected mode?', 0x1687: 'DPMI: host present + entry point',
   0x4300: 'XMS installed?', 0x4310: 'XMS entry point', 0x1680: 'release timeslice' };
 const seenOrder = [];
-mc.hookInterrupt(0x2f, (c) => {
+// CHAIN, do not replace: hookInterrupt overwrites the slot, so an observer registered here silently
+// disabled the XMS and DPMI answers and the client saw a machine with neither. Observe, then defer.
+const prev2f = mc.intHandlers[0x2f];
+mc.hookInterrupt(0x2f, (c, m) => {
   const ax = c.ax;
   if (!mux.has(ax)) { mux.set(ax, 0); seenOrder.push(ax); }
   mux.set(ax, mux.get(ax) + 1);
+  if (prev2f) prev2f(c, m);
 });
 
 // INT 31h is the DPMI service entry. Record AX in call order — the ORDER is the useful part, since
 // a client's first few calls tell you which model it is using.
 const dpmiCalls = new Map(); const dpmiOrder = [];
-mc.hookInterrupt(0x31, (c) => {
+const prev31 = mc.intHandlers[0x31];
+mc.hookInterrupt(0x31, (c, m) => {
   const ax = c.ax;
   if (!dpmiCalls.has(ax)) { dpmiCalls.set(ax, 0); dpmiOrder.push(ax); }
   dpmiCalls.set(ax, dpmiCalls.get(ax) + 1);
+  if (prev31) prev31(c, m);
 });
 
 // The launcher chain is the first thing to verify: a DOS/4GW title is a small real-mode stub that
 // EXECs the extender, which then loads the LE image. If EXEC never happens, nothing downstream can.
-const execs = [];
+const execs = [], out = [];
 const origInt21 = mc.intHandlers[0x21];
 mc.intHandlers[0x21] = (c, m) => {
-  if ((c.ax >> 8) === 0x4b) {
+  const ah = c.ax >> 8;
+  // Capture what the program PRINTS. A DOS-extended title reports its own failures through AH=09h
+  // (a $-terminated string) or AH=40h (write to a handle), and neither touches video memory.
+  if (ah === 0x09) {
+    let t = '', a = (c.seg[3] << 4) + (c.reg[2] & 0xffff);
+    for (let i = 0; i < 400; i++) { const b = mc.mem.u8[(a + i) & 0xfffff]; if (b === 0x24) break; t += String.fromCharCode(b); }
+    out.push(t);
+  } else if (ah === 0x40) {
+    let t = '', a = (c.seg[3] << 4) + (c.reg[2] & 0xffff), n = Math.min(c.reg[1] & 0xffff, 400);
+    for (let i = 0; i < n; i++) t += String.fromCharCode(mc.mem.u8[(a + i) & 0xfffff]);
+    out.push(t);
+  }
+  if (ah === 0x4b) {
     let name = '', a = (c.seg[3] << 4) + (c.reg[2] & 0xffff);   // DS:DX = ASCIIZ path
     for (let i = 0; i < 80; i++) { const b = mc.mem.u8[(a + i) & 0xfffff]; if (!b) break; name += String.fromCharCode(b); }
     // Read the bytes from the LIVE machine, not from the file: static offsets need the load segment
@@ -137,6 +155,25 @@ if (!dpmiOrder.length) console.log('  (aucun — le client n a pas pris le chemi
 for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
 
 const ints = mc.unhandledIntReport();
+// What did it SAY? A program that exits on purpose has almost always printed why. Reading the text
+// buffer is quicker than inferring the reason from where it stopped.
+{
+  const lines = [];
+  for (let row = 0; row < 25; row++) {
+    let t = '';
+    for (let col = 0; col < 80; col++) {
+      const ch = mc.mem.u8[(0xb8000 + (row * 80 + col) * 2) & 0xfffff];
+      t += ch >= 32 && ch < 127 ? String.fromCharCode(ch) : ' ';
+    }
+    if (t.trim()) lines.push('  | ' + t.replace(/\s+$/, ''));
+  }
+  console.log('\nsorties DOS (INT 21h AH=09h/40h):');
+console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(/[\r]/g, '')).join('\n') : '  (aucune)');
+
+console.log('\necran texte:');
+  console.log(lines.length ? lines.join('\n') : '  (vide)');
+}
+
 console.log('\nEXEC (INT 21h AH=4Bh) tentes: ' + (execs.length ? execs.join(' | ') : '(aucun)'));
 console.log('\nvecteurs INT non implementes: ' + (ints || '(aucun)'));
 // The final loop's opcodes, read live. "It spins at X" is not a diagnosis; what it is WAITING ON is.

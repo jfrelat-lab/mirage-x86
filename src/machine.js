@@ -193,6 +193,17 @@ export class Machine {
    */
   protInt(n, err, faultIp) {
     const cpu = this.cpu, m = this.mem;
+    // A DPMI client has no IDT of ours to fall through to (see dpmi.js): every software interrupt is
+    // reflected in softInt, so reaching here means a genuine EXCEPTION. Name it rather than
+    // dispatching through an empty table, which is how a fault turns into "the program exited
+    // cleanly" with nothing to go on.
+    if (this.dpmi && this.dpmi.active) {
+      const NAMES = { 0: '#DE', 1: '#DB', 3: '#BP', 4: '#OF', 5: '#BR', 6: '#UD', 7: '#NM', 8: '#DF',
+        10: '#TS', 11: '#NP', 12: '#SS', 13: '#GP', 14: '#PF' };
+      throw new Error(`mirage: ${NAMES[n] || 'exception ' + n} in DPMI client at ` +
+        `${cpu.seg[1].toString(16)}:${(cpu.eip >>> 0).toString(16)}` +
+        (err !== undefined ? ` err=0x${(err >>> 0).toString(16)}` : ''));
+    }
     const a = (cpu.idtr.base + n * 8) >>> 0;
     const offLo = m.r16(a), sel = m.r16(a + 2), access = m.r8(a + 5), offHi = m.r16(a + 6);
     const type = access & 0x1f, is32 = (type & 0x08) !== 0;
@@ -251,6 +262,16 @@ export class Machine {
   softInt(n, nextIp, faultIp) {
     const cpu = this.cpu;
     if (cpu.cr0 & 1) {
+      // A DPMI host REFLECTS a software interrupt issued in protected mode to the real-mode handler.
+      // Ours are JS services, so reflection is simply calling them — no IDT gate, no frame, no mode
+      // change. Without this the client's first INT went through an IDT whose gates pointed at a
+      // stub that was described in a comment and never written, and Doom ended up executing zeros
+      // at 000b:09b3.
+      if (this.dpmi && this.dpmi.active && this.intHandlers[n]) {
+        cpu.eip = nextIp;
+        this.intHandlers[n](cpu, this);
+        return;
+      }
       const dpl = (this.mem.r8((cpu.idtr.base + n * 8 + 5) >>> 0) >> 5) & 3;
       if (dpl < (cpu.seg[1] & 3)) { cpu.eip = faultIp; return this.protInt(13, (n << 3) | 2); }
     }
