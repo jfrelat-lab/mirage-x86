@@ -1203,6 +1203,18 @@ export class Recompiler {
           if (!o.isReg) memAddr(o);
           return;
         }
+        // CLTS — clear CR0.TS (bit 3). A DOS extender issues it after a task switch so the next x87
+        // instruction does not raise #NM. We do not model TS at all, so clearing it is exact.
+        case 0x06: P('cpu.cr0&=~8;'); return;
+        // LAR / LSL Gv,Ew — query a selector without loading it. ZF reports accessibility and the
+        // destination is left untouched when it is not, so the helper returns -1 for "no" and the
+        // emitted code tests that once.
+        case 0x02: case 0x03: {
+          const o = modrm(); const t = NT();
+          P(`var ${t}=${op2 === 0x02 ? `cpu.larRights(${rmR(o, 16)},${sz === 32 ? 1 : 0})` : `cpu.lslLimit(${rmR(o, 16)})`};`);
+          P(`if(${t}<0){cpu.flags&=~${ZF};}else{cpu.flags|=${ZF};${rW(o.reg, sz, t)}}`);
+          return;
+        }
         case 0x01: {                                                                    // group 7: SGDT/SIDT/SMSW/LGDT/LIDT/LMSW/INVLPG
           const o = modrm();
           if (o.reg === 4) { P(rmW(o, 16, `(cpu.cr0&0xffff)`)); return; }                // SMSW r/m16 → MSW

@@ -119,7 +119,9 @@ for (; frames < FRAMES && !fault && !dos.programDone; frames++) {
   mc.runSlice(200000);
   mc.tickTimer();
   if (Date.now() - t0 > WALL) break;
-  if (seenOrder.includes(0x1687)) { frames++; break; }   // handshake seen — that is the whole question
+  // Stop at the handshake only when nobody asked for a longer run: for reconnaissance that IS the
+  // answer, but once you are chasing what happens AFTER it, stopping there hides everything.
+  if (!process.env.FRAMES && seenOrder.includes(0x1687)) { frames++; break; }
 }
 
 console.log(`=== ${dir}/${prog} — ${frames} frames, ${(cpu.cycles / 1e6).toFixed(1)} Mcycles ===`);
@@ -145,6 +147,16 @@ console.log('\nvecteurs INT non implementes: ' + (ints || '(aucun)'));
   console.log(`\noctets autour de ${h(cpu.seg[1])}:${h(at, 4)} :`);
   console.log(`  ${h(from, 4)}: ${dump(from, 16)}`);
   console.log(`  ${h(at, 4)}: ${dump(at, 16)}   <- ici`);
+}
+
+// The loop reads DS=0, so show low memory and the string-op state. Two candidate explanations for a
+// scan that never matches: the data is not what the client expects, or SI is not moving the way STD
+// says it should.
+{
+  const dump = (a, n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(a + i) & 0xfffff], 2)).join(' ');
+  console.log(`\nmemoire basse (DS=0), la zone balayee :`);
+  for (let a = 0x2c0; a < 0x300; a += 16) console.log(`  ${h(a, 4)}: ${dump(a, 16)}`);
+  console.log(`  SI=${h(cpu.reg[6] & 0xffff, 4)}  BX=${h(cpu.reg[3] & 0xffff, 4)}  DF=${(cpu.flags >> 10) & 1}  DS=${h(cpu.seg[3], 4)}`);
 }
 
 console.log('\nderniers blocs executes (les plus anciens d abord):');

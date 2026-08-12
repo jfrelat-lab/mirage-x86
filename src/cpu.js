@@ -135,6 +135,56 @@ export class CPU {
     };
   }
 
+  /**
+   * LAR / LSL — read a descriptor's access rights or limit WITHOUT loading it, so a program can ask
+   * "may I use this selector, and how big is it?" before committing. Both set ZF on success and
+   * leave the destination untouched on failure, which is how the caller tells them apart; these
+   * return -1 for "not accessible" so the emitted code has one thing to test.
+   *
+   * Accessibility: a non-null selector, inside its table, present, and — for everything except a
+   * CONFORMING code segment — DPL >= max(CPL, RPL). Conforming code is readable from anywhere.
+   * Some system types are not valid LAR/LSL operands at all; the table below is the 386 set.
+   */
+  _descVisible(sel) {
+    sel &= 0xffff;
+    if ((sel & 0xfffc) === 0) return null;                     // null selector is never accessible
+    const tbl = (sel & 4) ? this.ldtr : this.gdtr;
+    if ((sel & 0xfff8) + 7 > tbl.limit) return null;           // beyond the table
+    const d = this.readDesc(sel);
+    if (!d || !d.present) return null;
+    if (d.sys) {
+      // Valid system/gate types for LAR/LSL on a 386: LDT, TSS (avail/busy, 16 and 32 bit), and the
+      // three gate kinds. Everything else (0, 8, 0xA, 0xD) is reserved and reads as inaccessible.
+      const ok = [1, 2, 3, 4, 5, 9, 0xb, 0xc].includes(d.type);
+      if (!ok) return null;
+    }
+    const conforming = !d.sys && (d.type & 0x0c) === 0x0c;
+    if (!conforming) {
+      const cpl = this.seg[CS] & 3, rpl = sel & 3;
+      if (d.dpl < cpl || d.dpl < rpl) return null;
+    }
+    return d;
+  }
+
+  /** Access-rights dword for LAR: the descriptor's second dword with the base/limit bits masked
+   *  out. A 16-bit operand keeps only the low half of that. -1 when inaccessible. */
+  larRights(sel, is32) {
+    const d = this._descVisible(sel);
+    if (!d) return -1;
+    const e2 = ((d.access << 8) | (d.b6 << 16) | (d.b7 << 24)) >>> 0;
+    return (is32 ? (e2 & 0x00ffff00) : (e2 & 0x0000ff00)) >>> 0;
+  }
+
+  /** Segment limit for LSL, granularity applied. -1 when inaccessible. A gate has no limit. */
+  lslLimit(sel) {
+    const d = this._descVisible(sel);
+    if (!d) return -1;
+    if (d.sys && (d.type === 4 || d.type === 5 || d.type === 0xc)) return -1;   // gates carry no limit
+    let lim = (d.w0 | ((d.b6 & 0x0f) << 16)) >>> 0;
+    if (d.b6 & 0x80) lim = (((lim << 12) >>> 0) | 0xfff) >>> 0;                 // G: the limit counts 4 KiB pages
+    return lim >>> 0;
+  }
+
   /** LTR — the TSS descriptor lives in the GDT, like the LDT's. */
   loadTR(sel) {
     sel &= 0xffff; this.tr.sel = sel;
