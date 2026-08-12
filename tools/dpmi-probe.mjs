@@ -62,9 +62,42 @@ mc.intHandlers[0x21] = (c, m) => {
   if ((c.ax >> 8) === 0x4b) {
     let name = '', a = (c.seg[3] << 4) + (c.reg[2] & 0xffff);   // DS:DX = ASCIIZ path
     for (let i = 0; i < 80; i++) { const b = mc.mem.u8[(a + i) & 0xfffff]; if (!b) break; name += String.fromCharCode(b); }
-    execs.push(`AL=${c.ax & 0xff} "${name}"`);
+    // Read the bytes from the LIVE machine, not from the file: static offsets need the load segment
+    // and the relocation layout, and getting either wrong sends the whole reading astray.
+    const cl = (c.seg[1] << 4) >>> 0;
+    const dump = (from, n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(cl + from + i) & 0xfffff], 2)).join(' ');
+    execs.push(`  octets CS:${h((c.eip - 8) & 0xffff)} = ${dump((c.eip - 8) & 0xffff, 16)}`);
+    execs.push(`  parent: PSP=${h(dos.psp)} allocTop=${h(dos.allocTop)} memFloor=${h(dos.memFloor)}  ` +
+      `-> l enfant sera charge a ${h(dos.allocTop)}`);
+    execs.push(`  le parent lit DS=020e : ${Array.from({length:8},(_,i)=>h(mc.mem.u8[(0x020e<<4)+i],2)).join(' ')}`);
+    execs.push(`AL=${c.ax & 0xff} "${name}"  appele depuis ${h(c.seg[1])}:${h(c.eip, 8)} SS:SP=${h(c.seg[2])}:${h(c.reg[4] & 0xffff)}`);
   }
   return origInt21(c, m);
+};
+
+// Ring buffer of block entries. "It ends up at 0000:0187" says nothing about HOW it got there, and
+// that is the whole question — the same technique that located every test386 assertion.
+const MASK = 2047;
+const rCs = new Int32Array(MASK + 1), rIp = new Int32Array(MASK + 1), rN = new Int32Array(MASK + 1);
+let ri = 0;
+
+const rec = mc.rec, origTranslate = rec.translate.bind(rec);
+rec.translate = (...a) => {
+  const b = origTranslate(...a);
+  if (b && !b._t) {
+    b._t = 1; const f = b.fn;
+    b.fn = (c, blk) => {
+      // Dedupe CONSECUTIVE repeats at insertion instead of stopping on them. A spin detector has to
+      // be armed or it fires on the first legitimate delay loop; deduping needs no tuning at all —
+      // any loop, however long, costs one slot, so the lead-up always survives in the ring.
+      const cs = c.seg[1] & 0xffff, ip = c.eip >>> 0;
+      const last = (ri - 1) & MASK;
+      if (ri && rCs[last] === cs && rIp[last] === ip) rN[last]++;
+      else { const k = ri++ & MASK; rCs[k] = cs; rIp[k] = ip; rN[k] = 1; }
+      return f(c, blk);
+    };
+  }
+  return b;
 };
 
 try { dos.load(new Uint8Array(readFileSync(join(dir, prog))), '', 'C:' + mount + prog); }
@@ -93,4 +126,13 @@ for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
 const ints = mc.unhandledIntReport();
 console.log('\nEXEC (INT 21h AH=4Bh) tentes: ' + (execs.length ? execs.join(' | ') : '(aucun)'));
 console.log('\nvecteurs INT non implementes: ' + (ints || '(aucun)'));
+console.log('\nderniers blocs executes (les plus anciens d abord):');
+{
+  const start = Math.max(0, ri - 26);
+  for (let i = start; i < ri; i++) {
+    const k = i & MASK;
+    console.log(`    ${h(rCs[k])}:${h(rIp[k], 4)}${rN[k] > 1 ? `   (x${rN[k]})` : ''}`);
+  }
+}
+
 console.log('fonctions INT 21h non implementees: ' + (dos.unhandledFnReport().join(' ') || '(aucune)'));
