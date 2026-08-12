@@ -15,6 +15,10 @@ import { resolveProfile } from './cpu-profile.js';
 import { resolveMemStrategy } from './mem-strategy.js';
 
 export const BIOS_SEG = 0xf000;
+// Where every UNSERVICED interrupt vector points. 0xFF53 is the address a real IBM BIOS uses for its
+// dummy IRET, so the table looks like a real one: a handful of distinct installed handlers and a
+// large block of identical entries.
+const DUMMY_INT_OFF = 0xff53;
 
 // Result mask by I/O access size in bytes, so the hot path indexes instead of re-deriving the
 // mask with a ternary chain on every IN/OUT. Index 0 and 3 are never used.
@@ -135,7 +139,16 @@ export class Machine {
     // TSR/game pattern, e.g. Keen's INT 8 handler) executes a clean IRET instead of running
     // off into uninitialised BIOS memory. (The INT-n → JS-handler fast path is unaffected:
     // swInt dispatches by number and never executes these bytes.)
-    for (let n = 0; n < 256; n++) { this.setVector(n, BIOS_SEG, n); this.mem.u8[(BIOS_SEG << 4) + n] = 0xcf; }
+    //
+    // Unserviced vectors all point at ONE shared dummy, the way a real BIOS does (F000:FF53 is the
+    // IBM dummy IRET). Giving every vector its own offset made the table look like 256 distinct
+    // installed handlers, which no real machine ever shows: DOS/4GW scans low memory backwards
+    // looking for two adjacent identical vectors — the standard way to find free vector space — and
+    // in a table where every entry differs it never finds any. Doom span 12.4M times in that scan.
+    // hookInterrupt re-points a vector to its own F000:00nn stub when a JS service claims it, so the
+    // per-vector identity the inline BIOS-call path depends on survives for exactly those.
+    for (let n = 0; n < 256; n++) { this.setVector(n, BIOS_SEG, DUMMY_INT_OFF); this.mem.u8[(BIOS_SEG << 4) + n] = 0xcf; }
+    this.mem.u8[(BIOS_SEG << 4) + DUMMY_INT_OFF] = 0xcf;
   }
 
   // ---- interrupt vector table --------------------------------------------
