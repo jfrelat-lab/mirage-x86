@@ -19,7 +19,10 @@ import { walk } from './corpus.mjs';
 
 const dir = process.argv[2] || 'games/OMF';
 const prog = process.argv[3] || 'OMF.EXE';
-const FRAMES = Number(process.env.FRAMES) || 300;
+// Short by default. The DPMI handshake is the FIRST thing a client does, so a long run only buys
+// wall-clock: the signal is there within a few frames or it is not there at all.
+const FRAMES = Number(process.env.FRAMES) || 40;
+const WALL = Number(process.env.WALL) || 4000;
 const h = (n, w = 4) => (n >>> 0).toString(16).padStart(w, '0');
 
 const vfs = new VFS();
@@ -80,6 +83,7 @@ mc.intHandlers[0x21] = (c, m) => {
 const MASK = 2047;
 const rCs = new Int32Array(MASK + 1), rIp = new Int32Array(MASK + 1), rN = new Int32Array(MASK + 1);
 let ri = 0;
+const rSeen = new Map();
 
 const rec = mc.rec, origTranslate = rec.translate.bind(rec);
 rec.translate = (...a) => {
@@ -90,10 +94,16 @@ rec.translate = (...a) => {
       // Dedupe CONSECUTIVE repeats at insertion instead of stopping on them. A spin detector has to
       // be armed or it fires on the first legitimate delay loop; deduping needs no tuning at all —
       // any loop, however long, costs one slot, so the lead-up always survives in the ring.
+      // Consecutive-dedupe alone is not enough: a two-block loop (A,B,A,B…) alternates, so nothing
+      // is consecutive and the ring still fills with it. Cap how many times any single address may
+      // be RECORDED — a loop of any shape then costs a bounded number of slots and the lead-up
+      // survives, with no threshold to tune.
       const cs = c.seg[1] & 0xffff, ip = c.eip >>> 0;
-      const last = (ri - 1) & MASK;
-      if (ri && rCs[last] === cs && rIp[last] === ip) rN[last]++;
-      else { const k = ri++ & MASK; rCs[k] = cs; rIp[k] = ip; rN[k] = 1; }
+      const key = (cs << 20) ^ ip;
+      const seen = (rSeen.get(key) || 0) + 1;
+      rSeen.set(key, seen);
+      if (seen <= 3) { const k = ri++ & MASK; rCs[k] = cs; rIp[k] = ip; rN[k] = 1; }
+      else { const last = (ri - 1) & MASK; if (rCs[last] === cs && rIp[last] === ip) rN[last]++; }
       return f(c, blk);
     };
   }
@@ -108,7 +118,8 @@ let frames = 0;
 for (; frames < FRAMES && !fault && !dos.programDone; frames++) {
   mc.runSlice(200000);
   mc.tickTimer();
-  if (Date.now() - t0 > 20000) break;
+  if (Date.now() - t0 > WALL) break;
+  if (seenOrder.includes(0x1687)) { frames++; break; }   // handshake seen — that is the whole question
 }
 
 console.log(`=== ${dir}/${prog} — ${frames} frames, ${(cpu.cycles / 1e6).toFixed(1)} Mcycles ===`);
@@ -126,6 +137,16 @@ for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
 const ints = mc.unhandledIntReport();
 console.log('\nEXEC (INT 21h AH=4Bh) tentes: ' + (execs.length ? execs.join(' | ') : '(aucun)'));
 console.log('\nvecteurs INT non implementes: ' + (ints || '(aucun)'));
+// The final loop's opcodes, read live. "It spins at X" is not a diagnosis; what it is WAITING ON is.
+{
+  const cl = (cpu.seg[1] << 4) >>> 0, at = (cpu.eip >>> 0) & 0xffff;
+  const from = Math.max(0, at - 16);
+  const dump = (a, n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(cl + a + i) & 0xfffff], 2)).join(' ');
+  console.log(`\noctets autour de ${h(cpu.seg[1])}:${h(at, 4)} :`);
+  console.log(`  ${h(from, 4)}: ${dump(from, 16)}`);
+  console.log(`  ${h(at, 4)}: ${dump(at, 16)}   <- ici`);
+}
+
 console.log('\nderniers blocs executes (les plus anciens d abord):');
 {
   const start = Math.max(0, ri - 26);
