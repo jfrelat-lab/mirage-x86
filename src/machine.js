@@ -178,7 +178,7 @@ export class Machine {
    * the TSS, which is the next step. Nothing here checks privilege, so a fault that should be #GP
    * still gets delivered — wrong, but it surfaces as a later POST rather than as silence.
    */
-  protInt(n, err) {
+  protInt(n, err, faultIp) {
     const cpu = this.cpu, m = this.mem;
     const a = (cpu.idtr.base + n * 8) >>> 0;
     const offLo = m.r16(a), sel = m.r16(a + 2), access = m.r8(a + 5), offHi = m.r16(a + 6);
@@ -194,6 +194,17 @@ export class Machine {
     const conforming = target && !target.sys && (target.type & 0x0c) === 0x0c;
     const newCpl = (target && !conforming) ? target.dpl : cpl;
 
+    // An interrupt may only go INWARD or stay put. A gate whose target code segment is LESS
+    // privileged than the current CPL is illegal — #GP with that segment's selector. MIRAGE instead
+    // dropped to the lower ring while staying on the inner stack, so test386's `int 0x22` at CPL 0
+    // (its handler lives in a DPL-3 segment) entered ring 3 on the ring-0 stack, and the handler's
+    // `esp == ESP_R3_PROT - 0x14` assertion failed. Conforming targets follow the same DPL <= CPL
+    // rule. src/test386.asm:899 states it: protModeFaultTest EX_GP, CU_SEG_PROT32, int 0x22.
+    if (target && !target.sys && target.dpl > cpl) {
+      // On this fault the saved EIP must point AT the INT, not past it; softInt supplies that.
+      if (faultIp !== undefined) cpu.eip = faultIp >>> 0;
+      return this.protInt(13, sel & 0xfffc);
+    }
     if (newCpl < cpl) {                              // inward: the inner stack comes from the TSS
       const oldSS = cpu.seg[2], oldESP = cpu.reg[4] >>> 0;
       const inner = cpu.tssStack(newCpl);
@@ -231,6 +242,7 @@ export class Machine {
       if (dpl < (cpu.seg[1] & 3)) { cpu.eip = faultIp; return this.protInt(13, (n << 3) | 2); }
     }
     cpu.eip = nextIp;
+    if (cpu.cr0 & 1) return this.protInt(n, undefined, faultIp);
     return this.swInt(n);
   }
 
