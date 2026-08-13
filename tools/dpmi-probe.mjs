@@ -102,6 +102,7 @@ const MASK = 2047;
 const rCs = new Int32Array(MASK + 1), rIp = new Int32Array(MASK + 1), rN = new Int32Array(MASK + 1);
 let ri = 0;
 const rSeen = new Map();
+const pmTrace = [];
 
 const rec = mc.rec, origTranslate = rec.translate.bind(rec);
 rec.translate = (...a) => {
@@ -117,6 +118,10 @@ rec.translate = (...a) => {
       // be RECORDED — a loop of any shape then costs a bounded number of slots and the lead-up
       // survives, with no threshold to tune.
       const cs = c.seg[1] & 0xffff, ip = c.eip >>> 0;
+      // The first blocks AFTER the mode switch are the ones that say whether the client resumed at
+      // the address and selector we handed it. The tail of the ring only ever shows where it ended
+      // up, which is a different question.
+      if (mc.dpmi && mc.dpmi.active && pmTrace.length < 25) pmTrace.push(h(cs) + ':' + h(ip, 4));
       const key = (cs << 20) ^ ip;
       const seen = (rSeen.get(key) || 0) + 1;
       rSeen.set(key, seen);
@@ -195,6 +200,9 @@ console.log('\nvecteurs INT non implementes: ' + (ints || '(aucun)'));
   for (let a = 0x2c0; a < 0x300; a += 16) console.log(`  ${h(a, 4)}: ${dump(a, 16)}`);
   console.log(`  SI=${h(cpu.reg[6] & 0xffff, 4)}  BX=${h(cpu.reg[3] & 0xffff, 4)}  DF=${(cpu.flags >> 10) & 1}  DS=${h(cpu.seg[3], 4)}`);
 }
+
+console.log('\npremiers blocs APRES la bascule en mode protege:');
+console.log(pmTrace.length ? '  ' + pmTrace.join(' -> ') : '  (aucun)');
 
 console.log('\nderniers blocs executes (les plus anciens d abord):');
 {

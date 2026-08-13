@@ -16,19 +16,24 @@ import { CS, DS, ES, SS } from './cpu.js';
 
 export const DPMI_ENTRY_SEG = 0xf000, DPMI_ENTRY_OFF = 0x0200;   // far-callable mode-switch entry
 
-const GDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
-const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for GDT + IDT
+const LDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
+const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for the tables
 
-// Selector layout. Index 0 must be the null descriptor; the rest are handed to the client.
-const SEL_CODE32 = 0x08, SEL_DATA32 = 0x10;      // flat 4 GiB, the pair every 32-bit client wants
-const SEL_CLIENT = 0x18;                          // first selector describing a client segment
-const SEL_MAX = GDT_ENTRIES * 8;
+// Client descriptors live in the LDT, not the GDT. Every real host does this — CWSDPMI, DOS/4GW's
+// own, Windows — and a client is entitled to assume it: DOS/4GW derived a selector with the TI bit
+// set (0x0004 = LDT entry 0) from what we handed back, found an LDTR we had never loaded, and ran
+// off through low memory in 0x180-byte strides. INT 31h AX=0000 (allocate descriptors) is specified
+// to return LDT selectors too, so this is also the shape the services need.
+const TI = 4;                                     // selector bit 2: 1 = LDT
+const SEL_CODE32 = 0x08 | TI, SEL_DATA32 = 0x10 | TI;   // flat 4 GiB, the pair a 32-bit client wants
+const SEL_CLIENT = 0x18;                          // first client segment (index, TI added on return)
+const SEL_MAX = LDT_ENTRIES * 8;
 
 export function installDPMI(machine) {
   const mem = machine.mem, cpu = machine.cpu;
 
   const HOST_BASE = mem.size - HOST_SIZE;
-  const GDT_BASE = HOST_BASE, GDT_LIMIT = GDT_ENTRIES * 8 - 1;
+  const LDT_BASE = HOST_BASE, LDT_LIMIT = LDT_ENTRIES * 8 - 1;
 
   // Keep XMS out of the host's reserved block. Without this the two bump allocators overlap and the
   // symptom is a descriptor table quietly overwritten by a game's extended-memory allocation.
@@ -43,7 +48,7 @@ export function installDPMI(machine) {
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
   const setDesc = (sel, base, limit, access, gran) => {
-    const a = (GDT_BASE + (sel & 0xfff8)) >>> 0;
+    const a = (LDT_BASE + (sel & 0xfff8)) >>> 0;
     let g = gran & 0xf0;
     if (limit > 0xfffff) { limit = limit >>> 12; g |= 0x80; }     // G=1: the limit counts 4 KiB pages
     mem.w16(a, limit & 0xffff);
@@ -62,13 +67,17 @@ export function installDPMI(machine) {
     // enforce that boundary yet and DOS/4GW executes CLI/STI and port I/O constantly: at CPL 3 with
     // IOPL 0 the very first one raises #GP(0), which is exactly where Doom died (1b:6e9d). Tightening
     // this later means changing the DPL here and the RPL below, and supplying a TSS — nothing else.
-    setDesc(sel, (seg & 0xffff) << 4, 0xffff, code ? 0x9a : 0x92, 0x40);
-    return sel;
+    // D/B = 0: these describe the client's REAL-MODE segments, which hold 16-bit code and a 16-bit
+    // stack. Marking them 32-bit made the recompiler decode 16-bit instructions at the wrong width,
+    // and DOS/4GW's third instruction after the switch loaded raw opcode bytes into EIP
+    // (001c:6e9d -> 001c:e89713d). A client that wants 32-bit selectors allocates them itself.
+    setDesc(sel, (seg & 0xffff) << 4, 0xffff, code ? 0x9a : 0x92, 0x00);
+    return sel | TI;
   };
 
   /** Build the tables once, on the first mode switch. */
   const buildTables = () => {
-    for (let i = 0; i < GDT_ENTRIES * 8; i++) mem.w8(GDT_BASE + i, 0);
+    for (let i = 0; i < LDT_ENTRIES * 8; i++) mem.w8(LDT_BASE + i, 0);
     setDesc(SEL_CODE32, 0, 0xffffffff, 0x9a, 0xc0);      // flat code, 32-bit
     setDesc(SEL_DATA32, 0, 0xffffffff, 0x92, 0xc0);      // flat data, 32-bit
     // Deliberately NO IDT. Software interrupts are reflected to the JS services in Machine.softInt,
@@ -77,7 +86,9 @@ export function installDPMI(machine) {
     // reflector stub that was described in a comment and never written: every fault then jumped to
     // linear 0x21x, executed the interrupt vector table as code, and Doom "exited cleanly" with no
     // message. Silent garbage is the worst possible outcome; protInt now names the vector instead.
-    cpu.gdtr.base = GDT_BASE; cpu.gdtr.limit = GDT_LIMIT;
+    // Load LDTR directly rather than through LLDT: that would need a GDT entry describing the LDT,
+    // and nothing here reads one. The GDT stays empty — a client never sees a GDT selector from us.
+    cpu.ldtr.sel = 0; cpu.ldtr.base = LDT_BASE; cpu.ldtr.limit = LDT_LIMIT;
   };
 
   /**
