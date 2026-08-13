@@ -73,9 +73,13 @@ mc.hookInterrupt(0x31, (c, m) => {
   const from = `${h(c.seg[1])}:${h(c.eip >>> 0, 8)}`;
   if (prev31) prev31(c, m);
   if (dpmiLog.length < 40) {
+    // 0300 and 0302 do NOT finish here — they switch to real mode and complete later at the
+    // sentinel. What the registers hold on the way out is the real-mode state we just installed, not
+    // a result, and printing it as "sortie" made perfectly normal values look like garbage.
+    const deferred = ax === 0x0300 || ax === 0x0302;
     dpmiLog.push(`  AX=${h(ax)} appele depuis ${from}\n` +
       `     entree : ${fmtRegs(before)}\n` +
-      `     sortie : ${fmtRegs(snapRegs(c))}`);
+      `     ${deferred ? 'etat reel installe (le service finit a la sentinelle)' : 'sortie'} : ${fmtRegs(snapRegs(c))}`);
   }
 });
 
@@ -119,6 +123,7 @@ const rCs = new Int32Array(MASK + 1), rIp = new Int32Array(MASK + 1), rN = new I
 let ri = 0;
 const rSeen = new Map();
 const pmTrace = [];
+let recent = [], beforeNull = [];
 
 const rec = mc.rec, origTranslate = rec.translate.bind(rec);
 rec.translate = (...a) => {
@@ -138,6 +143,11 @@ rec.translate = (...a) => {
       // the address and selector we handed it. The tail of the ring only ever shows where it ended
       // up, which is a different question.
       if (mc.dpmi && mc.dpmi.active && pmTrace.length < 25) pmTrace.push(h(cs) + ':' + h(ip, 4));
+      // A rolling window, snapshotted the first time CS goes null. The blocks AFTER a derail are the
+      // wreckage; the ones just BEFORE it name the instruction responsible.
+      recent.push(h(cs) + ':' + h(ip, 4));
+      if (recent.length > 24) recent.shift();
+      if (!beforeNull.length && mc.dpmi && mc.dpmi.active && cs === 0) beforeNull = recent.slice();
       const key = (cs << 20) ^ ip;
       const seen = (rSeen.get(key) || 0) + 1;
       rSeen.set(key, seen);
@@ -225,7 +235,12 @@ if (dpmiLog.length) {
 }
 
 if (badSel.length) {
-  console.log('\nselecteurs hors limite charges en mode protege:');
+  if (beforeNull.length) {
+  console.log('\nderniers blocs AVANT que CS ne devienne nul:');
+  console.log('  ' + beforeNull.join(' -> '));
+}
+
+console.log('\nselecteurs hors limite charges en mode protege:');
   for (const l of badSel) console.log('  ' + l);
 }
 
