@@ -72,6 +72,15 @@ mc.hookInterrupt(0x31, (c, m) => {
   const before = snapRegs(c);
   const from = `${h(c.seg[1])}:${h(c.eip >>> 0, 8)}`;
   if (prev31) prev31(c, m);
+  // The instructions that FOLLOW a 0204 are where the returned CX:EDX is stored. Reading them from
+  // the live machine is the only way to see it — the register log shows the pair arriving, never
+  // what the client does with it.
+  if (ax === 0x0204 && (c.reg[3] & 0xff) === 0x21) {
+    const lin = (c.base[1] + (c.eip >>> 0)) >>> 0;
+    const dump = (n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(lin + i) & 0xffffff], 2)).join(' ');
+    dpmiLog.push(`  >> apres 0204 (BL=21), octets en ${h(c.seg[1])}:${h(c.eip >>> 0, 4)} ` +
+      `(lineaire ${h(lin, 6)}): ${dump(24)}`);
+  }
   if (dpmiLog.length < 40) {
     // 0300 and 0302 do NOT finish here — they switch to real mode and complete later at the
     // sentinel. What the registers hold on the way out is the real-mode state we just installed, not
@@ -182,7 +191,7 @@ cpu.setSeg = (i, sel) => {
 // biosCallback consumes an IRET frame of its own. While a 0302 call is in flight, the frame it pops
 // is the one 0302 pushed — so log what it sees on entry and where it lands, which is the whole
 // question. Wrapped here rather than in the engine: it is a diagnostic, not behaviour.
-const bcLog = [];
+const bcLog = []; let bcCount = 0;
 const origBios = mc.biosCallback.bind(mc);
 mc.biosCallback = (n) => {
   const inFlight = mc.dpmi && mc.dpmi.rmCalls.length > 0;
@@ -193,7 +202,8 @@ mc.biosCallback = (n) => {
     `ss:sp=${h(cpu.seg[2])}:${h(cpu.reg[4] & 0xffff)} pile=[${w(0)} ${w(1)} ${w(2)} ${w(3)}] ` +
     `bloque=${mc.blocked}`;
   const r = origBios(n);
-  bcLog.push(`${before}\n     sortie ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
+  bcCount++;
+  if (bcLog.length < 6) bcLog.push(`${before}\n     sortie ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
     `ss:sp=${h(cpu.seg[2])}:${h(cpu.reg[4] & 0xffff)} bloque=${mc.blocked} ` +
     `rmCalls=${mc.dpmi.rmCalls.length}`);
   return r;
@@ -230,12 +240,22 @@ if (!dpmiOrder.length) console.log('  (aucun — le client n a pas pris le chemi
 for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
 if (dpmiLog.length) {
   if (bcLog.length) {
-  console.log('\nbiosCallback pendant un appel 0302:');
+  console.log(`\nbiosCallback pendant un appel 0302 (${bcCount} entrees au total):`);
   for (const l of bcLog.slice(0, 6)) console.log('  ' + l);
 }
 
 if (badSel.length) {
-  if (beforeNull.length) {
+  // The chain site itself: the far transfer that arrives at selector zero.
+if (beforeNull.length && mc.dpmi) {
+  const csBase = 0x32c0;                       // base the client set for 0044 via 0007
+  const at = 0x1260;
+  const dump = (a, n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(csBase + a + i) & 0xffffff], 2)).join(' ');
+  console.log(`\nsite du chainage, 0044:${h(at, 4)} (lineaire ${h(csBase + at, 6)}):`);
+  console.log('  ' + dump(at, 16));
+  console.log('  ' + dump(at + 16, 16));
+}
+
+if (beforeNull.length) {
   console.log('\nderniers blocs AVANT que CS ne devienne nul:');
   console.log('  ' + beforeNull.join(' -> '));
 }
