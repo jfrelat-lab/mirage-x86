@@ -12,11 +12,15 @@
 // The host's own tables live at the TOP of RAM, and the XMS pool is capped below them so the two
 // allocators cannot collide.
 
-import { CS, DS, ES, SS } from './cpu.js';
+import { CS, DS, ES, SS, FS, GS, TF } from './cpu.js';
+
+const TF_MASK = TF;   // a real-mode call must not inherit the client's single-step flag
 
 export const DPMI_ENTRY_SEG = 0xf000, DPMI_ENTRY_OFF = 0x0200;   // far-callable mode-switch entry
 const STATE_STUB_OFF = 0x0210;                                   // the do-nothing state save/restore
 const RAW_R2P_OFF = 0x0220, RAW_P2R_OFF = 0x0230;                // raw mode-switch routines (0306)
+const RM_RET_OFF = 0x0240;                                       // where a 0302 real-mode call returns
+const RM_STACK_TOP = 0x0500;                                     // host-provided real-mode stack (256 B below)
 
 const LDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
 const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for the tables
@@ -53,7 +57,9 @@ export function installDPMI(machine) {
     // Processor EXCEPTION handlers (0202/0203), a separate table from the interrupt vectors above:
     // vector 0Dh as an exception is #GP, not INT 0Dh.
     excVec: new Array(32).fill(null),
-    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); },
+    rmCalls: [],                   // 0302 calls in flight (nested calls are legal)
+    log: null,                     // set by a probe to record real-mode call targets
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; },
   };
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
@@ -263,6 +269,13 @@ export function installDPMI(machine) {
       case 0x0304:
         return ok();
 
+      // 0302 — Call Real Mode Procedure with IRET Frame. Completes in realCallReturn, not here, so
+      // there is no ok(): CF is set on the way back out.
+      //   in: CX = words to copy from the protected-mode stack, ES:(E)DI = real mode call structure
+      case 0x0302:
+        realCall(bufAddr(), c.reg[1] & 0xffff);
+        return;
+
       // 0202 / 0203 — Get / Set Processor Exception Handler Vector. Same read-then-install dance as
       // 0204/0205, and the same reason it cannot be refused: the client stores whatever CX:EDX held
       // and transfers through it later (refusing 0202 left CS=0xffff). A separate table from the
@@ -333,13 +346,96 @@ export function installDPMI(machine) {
   const rawSwitch = (toProtected) => {
     const ax = cpu.reg[0] & 0xffff, cx = cpu.reg[1] & 0xffff, dx = cpu.reg[2] & 0xffff;
     const bx = cpu.reg[3] & 0xffff, si = cpu.reg[6] & 0xffff, di = cpu.reg[7] & 0xffff;
+    // No cache flush: blocks are keyed by (linear address, CS.D), so 16-bit and 32-bit code at the
+    // same address are already distinct entries, and emitted code reads segment bases at run time.
+    // Flushing on every switch made a client that bounces between modes re-translate constantly.
     cpu.setCR0(toProtected ? ((cpu.cr0 | 1) >>> 0) : ((cpu.cr0 & ~1) >>> 0));
-    machine.rec.reset();                 // cached blocks were translated for the other mode
     cpu.setSeg(DS, ax); cpu.setSeg(ES, cx); cpu.setSeg(SS, dx);
     cpu.reg[4] = (cpu.reg[4] & ~0xffff) | bx;   // SP only: the convention passes 16 bits
     cpu.setSeg(CS, si); cpu.eip = di;
   };
   cpu.dpmiRawSwitch = rawSwitch;
+
+  // ---- 0302: call a real-mode procedure from protected mode ------------------
+  //
+  // This one cannot finish inside its own handler: it has to RUN GUEST CODE and come back. So it is
+  // split in two. The service sets the machine up in real mode, entered as if by an interrupt, with
+  // the return address pointing at a SENTINEL of ours; when the procedure's IRET reaches that
+  // sentinel, the second half copies the resulting registers out and restores protected mode.
+  //
+  // The client passes a 50-byte "real mode call structure" holding the registers to enter with, and
+  // reads the same structure afterwards to see what came back.
+
+  const RMCS = { EDI: 0x00, ESI: 0x04, EBP: 0x08, EBX: 0x10, EDX: 0x14, ECX: 0x18, EAX: 0x1c,
+                 FLAGS: 0x20, ES: 0x22, DS: 0x24, FS: 0x26, GS: 0x28,
+                 IP: 0x2a, CS: 0x2c, SP: 0x2e, SS: 0x30 };
+
+  const realCall = (rmcs, words) => {
+    const r32 = (o) => mem.r32((rmcs + o) >>> 0) >>> 0, r16 = (o) => mem.r16((rmcs + o) >>> 0);
+
+    // Everything needed to come back. base/limit/csD/ssB are saved and restored verbatim rather than
+    // re-resolved from the selectors: the descriptors are still there, and re-reading them would
+    // only add a way to get it wrong.
+    dpmi.rmCalls.push({
+      rmcs, reg: Array.from(cpu.reg), seg: Array.from(cpu.seg), base: Array.from(cpu.base),
+      limit: Array.from(cpu.limit), eip: cpu.eip >>> 0, flags: cpu.flags, cr0: cpu.cr0,
+      csD: cpu.csD, ssB: cpu.ssB,
+    });
+
+    // Read the parameter words off the PROTECTED-mode stack before switching: they are addressed
+    // through the protected-mode SS, which is about to stop meaning what it means now.
+    const args = [];
+    for (let i = 0; i < words; i++) {
+      args.push(mem.r16((cpu.base[SS] + ((cpu.reg[4] >>> 0) + i * 2)) >>> 0));
+    }
+
+    cpu.setCR0((cpu.cr0 & ~1) >>> 0);            // real mode: a selector is a segment again
+
+    cpu.reg[7] = r32(RMCS.EDI); cpu.reg[6] = r32(RMCS.ESI); cpu.reg[5] = r32(RMCS.EBP);
+    cpu.reg[3] = r32(RMCS.EBX); cpu.reg[2] = r32(RMCS.EDX); cpu.reg[1] = r32(RMCS.ECX);
+    cpu.reg[0] = r32(RMCS.EAX);
+    cpu.flags = (r16(RMCS.FLAGS) | 2) & ~TF_MASK;
+    cpu.setSeg(ES, r16(RMCS.ES)); cpu.setSeg(DS, r16(RMCS.DS));
+    cpu.setSeg(FS, r16(RMCS.FS)); cpu.setSeg(GS, r16(RMCS.GS));
+
+    // SS:SP of zero means "host, provide a stack" — a client that has no real-mode stack of its own
+    // says so this way, and it is the common case.
+    const ss = r16(RMCS.SS), sp = r16(RMCS.SP);
+    if ((ss | sp) === 0) { cpu.setSeg(SS, DPMI_ENTRY_SEG); cpu.reg[4] = RM_STACK_TOP; }
+    else { cpu.setSeg(SS, ss); cpu.reg[4] = (cpu.reg[4] & ~0xffff) | sp; }
+
+    // The procedure's own parameters go on first, so they sit ABOVE the frame it returns through.
+    for (let i = args.length - 1; i >= 0; i--) cpu.push16(args[i]);
+    cpu.push16(cpu.flags & 0xffff);              // the IRET frame: FLAGS, CS, IP
+    cpu.push16(DPMI_ENTRY_SEG);
+    cpu.push16(RM_RET_OFF);
+
+    cpu.setSeg(CS, r16(RMCS.CS)); cpu.eip = r16(RMCS.IP);
+    if (dpmi.log) dpmi.log.push(`0302 -> reel ${r16(RMCS.CS).toString(16)}:${r16(RMCS.IP).toString(16)} ` +
+      `ax=${(r32(RMCS.EAX) & 0xffff).toString(16)} ss:sp=${cpu.seg[SS].toString(16)}:${(cpu.reg[4] & 0xffff).toString(16)} mots=${words}`);
+  };
+
+  /** The sentinel the procedure's IRET lands on: harvest registers, go back to protected mode. */
+  const realCallReturn = () => {
+    const st = dpmi.rmCalls.pop();
+    if (!st) return;                             // not ours — nothing to unwind
+    const w32 = (o, v) => mem.w32((st.rmcs + o) >>> 0, v >>> 0);
+    const w16 = (o, v) => mem.w16((st.rmcs + o) >>> 0, v & 0xffff);
+
+    // Harvest BEFORE restoring, or the client reads back its own inputs and every DOS call it makes
+    // through this path silently returns nothing.
+    w32(RMCS.EDI, cpu.reg[7]); w32(RMCS.ESI, cpu.reg[6]); w32(RMCS.EBP, cpu.reg[5]);
+    w32(RMCS.EBX, cpu.reg[3]); w32(RMCS.EDX, cpu.reg[2]); w32(RMCS.ECX, cpu.reg[1]);
+    w32(RMCS.EAX, cpu.reg[0]);
+    w16(RMCS.FLAGS, cpu.flags); w16(RMCS.ES, cpu.seg[ES]); w16(RMCS.DS, cpu.seg[DS]);
+    w16(RMCS.FS, cpu.seg[FS]); w16(RMCS.GS, cpu.seg[GS]);
+
+    cpu.setCR0(st.cr0);
+    cpu.reg.set(st.reg); cpu.seg.set(st.seg); cpu.base.set(st.base); cpu.limit.set(st.limit);
+    cpu.csD = st.csD; cpu.ssB = st.ssB;
+    cpu.eip = st.eip; cpu.flags = st.flags & ~1;         // CF=0: the call succeeded
+  };
+  cpu.dpmiRealCallReturn = realCallReturn;
 
   cpu.dpmiSwitch = modeSwitch;
   machine.dpmi = dpmi;
@@ -350,6 +446,7 @@ export function installDPMI(machine) {
   mem.u8[(DPMI_ENTRY_SEG << 4) + STATE_STUB_OFF] = 0xcb;
   mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_R2P_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(1)
   mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_P2R_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(0)
+  mem.u8[(DPMI_ENTRY_SEG << 4) + RM_RET_OFF] = 0xcb;      // guarded: cpu.dpmiRealCallReturn()
 
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
   // owns the vector (XMS answers 43xx there) rather than replacing it.

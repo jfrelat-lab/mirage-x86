@@ -148,13 +148,19 @@ rec.translate = (...a) => {
   return b;
 };
 
+if (mc.dpmi) mc.dpmi.log = [];
+
 try { dos.load(new Uint8Array(readFileSync(join(dir, prog))), '', 'C:' + mount + prog); }
 catch (e) { console.error('chargement impossible: ' + e.message); process.exit(1); }
 
 const t0 = Date.now();
 let frames = 0;
+const CYCLE_CAP = Number(process.env.CYCLES) || 2e8;
 for (; frames < FRAMES && !fault && !dos.programDone; frames++) {
-  mc.runSlice(200000);
+  mc.runSlice(2000);
+  // A wall-clock test BETWEEN slices cannot stop a slice, so a big slice made the probe run for
+  // minutes. Smaller slices plus a cycle ceiling bound it whatever the guest does.
+  if (cpu.cycles > CYCLE_CAP) break;
   mc.tickTimer();
   if (Date.now() - t0 > WALL) break;
   // Stop at the handshake only when nobody asked for a longer run: for reconnaissance that IS the
@@ -174,7 +180,12 @@ console.log('\nINT 31h (services DPMI) demandes, dans l ordre:');
 if (!dpmiOrder.length) console.log('  (aucun — le client n a pas pris le chemin DPMI)');
 for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
 if (dpmiLog.length) {
-  console.log('\nINT 31h — registres d entree et de sortie, dans l ordre:');
+  if (mc.dpmi && mc.dpmi.log && mc.dpmi.log.length) {
+  console.log('\nappels reels via 0302:');
+  for (const l of mc.dpmi.log.slice(0, 12)) console.log('  ' + l);
+}
+
+console.log('\nINT 31h — registres d entree et de sortie, dans l ordre:');
   for (const l of dpmiLog) console.log(l);
 }
 
