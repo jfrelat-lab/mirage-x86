@@ -168,6 +168,19 @@ rec.translate = (...a) => {
   return b;
 };
 
+// INT 10h AH=4Fh is VBE/VESA. Under DOSBox-X this demo reaches video mode 0xC5, a VESA mode, while
+// MIRAGE stays in text mode — so what it asks INT 10h for matters as much as what it asks INT 31h.
+const vbe = new Map();
+const prev10 = mc.intHandlers[0x10];
+mc.hookInterrupt(0x10, (c, m) => {
+  const ax = c.ax;
+  if ((ax >> 8) === 0x4f || (ax >> 8) === 0x00) {
+    const k = h(ax);
+    vbe.set(k, (vbe.get(k) || 0) + 1);
+  }
+  if (prev10) prev10(c, m);
+});
+
 if (mc.dpmi) mc.dpmi.log = [];
 
 // Every selector load in protected mode that names an entry PAST the table limit. setSeg accepts
@@ -296,6 +309,7 @@ console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(
   const lin = mode === 0x13 || mode >= 0x0d ? 0xa0000 : 0xb8000;
   let nz = 0, distinct = new Set();
   for (let i = 0; i < 64000; i++) { const b = mc.mem.u8[lin + i]; if (b) nz++; if (distinct.size < 40) distinct.add(b); }
+  console.log(`\nINT 10h (modes / VBE): ${[...vbe].map(([k, v]) => k + 'x' + v).join(' ') || '(aucun)'}`);
   console.log(`\nvideo: mode=0x${mode.toString(16)} surface=${lin.toString(16)} ` +
     `octets non nuls=${nz}/64000 valeurs distinctes=${distinct.size}`);
 }

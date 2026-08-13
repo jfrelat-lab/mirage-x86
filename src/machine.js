@@ -165,6 +165,7 @@ export class Machine {
   biosCallback(n) {
     const cpu = this.cpu, h = this.intHandlers[n];
     const prev = this._inBiosCallback;
+    const depth0 = this.dpmi ? this.dpmi.rmCalls.length : 0;   // grew? the handler transferred control
     this._inBiosCallback = n;                    // tells block() which path it is on
     try { if (h) h(cpu, this); } finally { this._inBiosCallback = prev; }
     if (this.blocked) {
@@ -175,6 +176,14 @@ export class Machine {
       cpu.setSeg(CS, BIOS_SEG); cpu.eip = n;
       return;
     }
+    // A service may TRANSFER control rather than return — DPMI's 0300/0302 switch to real mode and
+    // set CS:IP on the routine to run, finishing later at their sentinel. Consuming the frame here
+    // would overwrite exactly that. The symptom was precise: the client chained into our INT 31h
+    // stub, 0300 set CS:IP to the real-mode ISR, and this epilogue immediately replaced it with the
+    // sentinel address, so the ISR never ran, AX came back unchanged and the client retried 341,385
+    // times. The handler having pushed a real-mode call is the signal that it owns CS:IP now.
+    if (this.dpmi && this.dpmi.rmCalls.length > depth0) return;
+
     // Pop the frame at the width it was PUSHED at. In real mode that is 16-bit, as it always was.
     // But a DPMI client reaches these stubs by CHAINING to the old vector after its own handler ran,
     // and the frame waiting there is the one softInt pushed for a 32-bit client — three dwords, not
