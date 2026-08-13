@@ -599,7 +599,8 @@ export function installDPMI(machine) {
     if (dpmi.log) {
       const lin = ((r16(RMCS.CS) << 4) + r16(RMCS.IP)) >>> 0;
       const bytes = [0, 1, 2, 3].map((i) => mem.r8((lin + i) >>> 0).toString(16).padStart(2, '0')).join(' ');
-      dpmi.log.push(`0302 -> reel ${r16(RMCS.CS).toString(16)}:${r16(RMCS.IP).toString(16)} ` +
+      dpmi.log.push(`0302 rmcs=${rmcs.toString(16)} es:di=${cpu.seg[ES].toString(16)}:${(cpu.reg[7] & 0xffff).toString(16)} ` +
+        `-> reel ${r16(RMCS.CS).toString(16)}:${r16(RMCS.IP).toString(16)} ` +
         `ax=${(r32(RMCS.EAX) & 0xffff).toString(16)} ss:sp=${cpu.seg[SS].toString(16)}:${(cpu.reg[4] & 0xffff).toString(16)} ` +
         `mots=${words}  lineaire=${lin.toString(16)} octets=[${bytes}] PE=${cpu.cr0 & 1}`);
     }
