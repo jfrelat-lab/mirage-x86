@@ -45,7 +45,7 @@ export function loadFonts(machine) {
  */
 export function makeMachine(opts = {}) {
   const mc = new Machine({ memSize: opts.memSize ?? (16 << 20) });
-  const bios = installBIOS(mc);
+  const bios = installBIOS(mc, { xms: opts.xms });
   loadFonts(mc);
   if (opts.mouse !== false) installMouse(mc);          // INT 33h — the browser always has it
   let dos = null, vfs = null;

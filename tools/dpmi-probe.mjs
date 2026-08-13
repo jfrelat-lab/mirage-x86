@@ -32,7 +32,8 @@ for (const rel of walk(dir)) {
 }
 vfs.chdir(mount.replace(/\\$/, ''));
 
-const { mc, dos } = makeMachine({ vfs });
+// NOXMS=1 boots without an XMS driver, for a title that refuses to run alongside one.
+const { mc, dos } = makeMachine({ vfs, xms: process.env.NOXMS ? false : undefined });
 const cpu = mc.cpu;
 let fault = null; mc.onError = (e) => { fault = e; };
 
