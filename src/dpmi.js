@@ -21,6 +21,7 @@ const STATE_STUB_OFF = 0x0210;                                   // the do-nothi
 const RAW_R2P_OFF = 0x0220, RAW_P2R_OFF = 0x0230;                // raw mode-switch routines (0306)
 const RM_RET_OFF = 0x0240;                                       // where a 0302 real-mode call returns
 const RM_STACK_TOP = 0x0500;                                     // host-provided real-mode stack (256 B below)
+const CB_BASE_OFF = 0x0600, CB_MAX = 16;                         // real-mode callback entries (0303)
 
 const LDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
 const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for the tables
@@ -46,6 +47,11 @@ export function installDPMI(machine) {
   // symptom is a descriptor table quietly overwritten by a game's extended-memory allocation.
   if (machine.xms) machine.xms.max = Math.min(machine.xms.max, HOST_BASE);
 
+  // The DPMI heap grows DOWN from the host tables while XMS grows UP from 1 MiB, and the XMS ceiling
+  // is lowered to whatever the heap has reached. One pool with two ends beats two pools with a
+  // guessed split: a client that wants 8 MiB gets it if XMS has not taken it.
+  const heapFloor = () => (machine.xms ? machine.xms.top : 0x100000);
+
   const dpmi = {
     active: false,                 // has a client switched to protected mode?
     is32: false,
@@ -58,8 +64,11 @@ export function installDPMI(machine) {
     // vector 0Dh as an exception is #GP, not INT 0Dh.
     excVec: new Array(32).fill(null),
     rmCalls: [],                   // 0302 calls in flight (nested calls are legal)
+    callbacks: [],                 // 0303: real-mode addresses that re-enter protected-mode code
+    memTop: 0,                     // DPMI heap: grows DOWN from the host tables (set below)
+    blocks: new Map(),             // handle -> { base, size }
     log: null,                     // set by a probe to record real-mode call targets
-    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; },
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
   };
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
@@ -284,6 +293,139 @@ export function installDPMI(machine) {
         realCall(bufAddr(), c.reg[1] & 0xffff);
         return;
 
+      // 0001 — Free LDT Descriptor. The bump allocator never reuses a slot, so freeing is just
+      // marking the descriptor not-present: a selector the client later loads by mistake then faults
+      // instead of silently addressing whatever was there.
+      case 0x0001: {
+        const off = descOffset(c.reg[3] & 0xffff);
+        if (off < 0) return fail(ERR_INVALID_SELECTOR);
+        mem.w8((LDT_BASE + off + 5) >>> 0, 0);      // P=0
+        return ok();
+      }
+
+      // 000A — Create Alias Descriptor: a DATA descriptor over the same memory as an existing one.
+      // This is how a client writes to its own code segment — the point of an alias is that the two
+      // descriptors must keep describing the same bytes, so base and limit are copied, not recomputed.
+      //   in: BX = selector;  out: AX = alias
+      case 0x000a: {
+        const off = descOffset(c.reg[3] & 0xffff);
+        if (off < 0) return fail(ERR_INVALID_SELECTOR);
+        if (dpmi.nextSel >= SEL_MAX) return fail(0x8011);
+        const src = (LDT_BASE + off) >>> 0, sel = dpmi.nextSel; dpmi.nextSel += 8;
+        const dst = (LDT_BASE + sel) >>> 0;
+        for (let i = 0; i < 8; i++) mem.w8((dst + i) >>> 0, mem.r8((src + i) >>> 0));
+        mem.w8(dst + 5, (mem.r8(src + 5) & ~0x08) | 0x02);   // code -> data, writable
+        c.ax = sel | TI;
+        return ok();
+      }
+
+      // 0600-0603 — Lock / unlock a linear region, and 0702/0703 — page-management hints. MIRAGE has
+      // no demand paging and never swaps, so every page is permanently resident: locking is already
+      // true and the hints have nothing to act on. Reporting success is accurate here, not a stub.
+      case 0x0600: case 0x0601: case 0x0602: case 0x0603:
+      case 0x0702: case 0x0703:
+        return ok();
+
+      // 0006 — Get Segment Base Address. The client reads back where a descriptor points, typically
+      // right after setting it, to convert between its own pointers and linear addresses.
+      //   in: BX = selector;  out: CX:DX = base
+      case 0x0006: {
+        const off = descOffset(c.reg[3] & 0xffff);
+        if (off < 0) return fail(ERR_INVALID_SELECTOR);
+        const a = (LDT_BASE + off) >>> 0;
+        const base = (mem.r16(a + 2) | (mem.r8(a + 4) << 16) | (mem.r8(a + 7) << 24)) >>> 0;
+        c.reg[1] = (c.reg[1] & ~0xffff) | ((base >>> 16) & 0xffff);   // CX
+        c.reg[2] = (c.reg[2] & ~0xffff) | (base & 0xffff);            // DX
+        return ok();
+      }
+
+      // 0501 — Allocate Memory Block. This is the one that matters: it is how a DOS-extended program
+      // gets its heap, and Doom asked twenty-one times before this existed.
+      //   in: BX:CX = size;  out: BX:CX = linear address, SI:DI = handle
+      case 0x0501: {
+        const size = ((((c.reg[3] & 0xffff) << 16) | (c.reg[1] & 0xffff)) >>> 0) || 1;
+        const base = (dpmi.memTop - ((size + 0xfff) & ~0xfff)) >>> 0;   // page-aligned, growing down
+        if (base < heapFloor()) return fail(0x8013);                    // physical memory unavailable
+        dpmi.memTop = base;
+        if (machine.xms) machine.xms.max = Math.min(machine.xms.max, base);
+        dpmi.blocks.set(base, { base, size });
+        c.reg[3] = (c.reg[3] & ~0xffff) | ((base >>> 16) & 0xffff);     // BX:CX = linear address
+        c.reg[1] = (c.reg[1] & ~0xffff) | (base & 0xffff);
+        c.reg[6] = (c.reg[6] & ~0xffff) | ((base >>> 16) & 0xffff);     // SI:DI = handle (the address)
+        c.reg[7] = (c.reg[7] & ~0xffff) | (base & 0xffff);
+        return ok();
+      }
+
+      // 0502 — Free Memory Block. We do not reclaim: the heap is a bump allocator, and a client that
+      // frees on the way out gains nothing from us doing better. Reporting success keeps its teardown
+      // clean, which is the only thing that matters here.
+      case 0x0502:
+        return ok();
+
+      // 0500 — Get Free Memory Information. A 0x30-byte block; a client reads the first field (the
+      // largest available block) and usually ignores the rest, but the page counts must be
+      // self-consistent or a careful one will conclude there is no memory.
+      case 0x0500: {
+        const a = bufAddr();
+        const free = Math.max(0, dpmi.memTop - heapFloor()) >>> 0;
+        const pages = free >>> 12;
+        for (let i = 0; i < 0x30; i += 4) mem.w32((a + i) >>> 0, 0xffffffff);   // "unknown" per spec
+        mem.w32(a + 0x00, free);        // largest available block, bytes
+        mem.w32(a + 0x04, pages);       // max unlocked page allocation
+        mem.w32(a + 0x08, pages);       // max locked page allocation
+        mem.w32(a + 0x0c, (mem.size >>> 12));   // linear address space, pages
+        mem.w32(a + 0x10, pages);       // total unlocked pages
+        mem.w32(a + 0x14, pages);       // free pages
+        mem.w32(a + 0x18, (mem.size >>> 12));   // total physical pages
+        mem.w32(a + 0x1c, pages);       // free linear address space, pages
+        mem.w32(a + 0x20, 0);           // no paging file
+        return ok();
+      }
+
+      // 0200 / 0201 — Get / Set REAL mode interrupt vector. Straight through to the IVT: in real mode
+      // that table is the truth, and a client hooking a real-mode vector expects exactly that.
+      //   in: BL = vector;  out/in: CX:DX = segment:offset
+      case 0x0200: {
+        const v = machine.getVector(c.reg[3] & 0xff);
+        c.reg[1] = (c.reg[1] & ~0xffff) | v.seg;
+        c.reg[2] = (c.reg[2] & ~0xffff) | v.off;
+        return ok();
+      }
+      case 0x0201:
+        machine.setVector(c.reg[3] & 0xff, c.reg[1] & 0xffff, c.reg[2] & 0xffff);
+        return ok();
+
+      // 0009 — Set Descriptor Access Rights. CL is the access byte (P/DPL/S/type), CH the extended
+      // byte whose HIGH nibble carries G and D/B. The low nibble of that byte is the top of the
+      // limit and must be preserved, which is the whole reason this is not a plain store.
+      //   in: BX = selector, CX = rights
+      case 0x0009: {
+        const off = descOffset(c.reg[3] & 0xffff);
+        if (off < 0) return fail(ERR_INVALID_SELECTOR);
+        const a = (LDT_BASE + off) >>> 0;
+        mem.w8(a + 5, c.reg[1] & 0xff);
+        mem.w8(a + 6, ((c.reg[1] >> 8) & 0xf0) | (mem.r8(a + 6) & 0x0f));
+        return ok();
+      }
+
+      // 0303 — Allocate Real Mode Callback Address. Hands back a real-mode far address that, called
+      // from real mode, re-enters the client's protected-mode procedure. The mirror of 0302.
+      //   in: DS:(E)SI = protected-mode procedure, ES:(E)DI = call structure to use
+      //   out: CX:DX = real-mode address
+      case 0x0303: {
+        if (dpmi.callbacks.length >= CB_MAX) return fail(0x8015);     // callbacks exhausted
+        const idx = dpmi.callbacks.length;
+        const off32 = (r) => (dpmi.is32 ? (r >>> 0) : (r & 0xffff));
+        dpmi.callbacks.push({
+          sel: c.seg[DS], off: off32(c.reg[6]),
+          rmcsSel: c.seg[ES], rmcsOff: off32(c.reg[7]),
+          rmcs: (c.base[ES] + off32(c.reg[7])) >>> 0,
+        });
+        c.reg[1] = (c.reg[1] & ~0xffff) | DPMI_ENTRY_SEG;             // CX
+        c.reg[2] = (c.reg[2] & ~0xffff) | (CB_BASE_OFF + idx);        // DX
+        return ok();
+      }
+
       // 0202 / 0203 — Get / Set Processor Exception Handler Vector. Same read-then-install dance as
       // 0204/0205, and the same reason it cannot be refused: the client stores whatever CX:EDX held
       // and transfers through it later (refusing 0202 left CS=0xffff). A separate table from the
@@ -363,6 +505,41 @@ export function installDPMI(machine) {
     cpu.setSeg(CS, si); cpu.eip = di;
   };
   cpu.dpmiRawSwitch = rawSwitch;
+
+  /**
+   * A real-mode callback firing (0303). Real-mode code far-calls an address we handed out; we fill
+   * the client's call structure with the real-mode register state and enter its protected-mode
+   * procedure.
+   *
+   * LIMITATION, stated rather than hidden: the protected-mode context to return into is taken from
+   * the innermost 0302 call in flight. That covers what this exists for — a real-mode service
+   * calling back while the client waits inside 0302 — but a callback fired from real-mode code the
+   * client did not call has no context to use, and is refused by leaving the machine alone. Doing
+   * better needs the client's locked protected-mode stack, which is 0600/0601 territory.
+   */
+  const callbackFired = (idx) => {
+    const cb = dpmi.callbacks[idx];
+    const ctx = dpmi.rmCalls[dpmi.rmCalls.length - 1];
+    if (!cb || !ctx) return;                     // nothing sensible to do; leave the machine as it is
+
+    // The real-mode state the callback was invoked with, for the client to inspect and edit.
+    const w32 = (o, v) => mem.w32((cb.rmcs + o) >>> 0, v >>> 0);
+    const w16 = (o, v) => mem.w16((cb.rmcs + o) >>> 0, v & 0xffff);
+    w32(RMCS.EDI, cpu.reg[7]); w32(RMCS.ESI, cpu.reg[6]); w32(RMCS.EBP, cpu.reg[5]);
+    w32(RMCS.EBX, cpu.reg[3]); w32(RMCS.EDX, cpu.reg[2]); w32(RMCS.ECX, cpu.reg[1]);
+    w32(RMCS.EAX, cpu.reg[0]);
+    w16(RMCS.FLAGS, cpu.flags); w16(RMCS.ES, cpu.seg[ES]); w16(RMCS.DS, cpu.seg[DS]);
+    w16(RMCS.FS, cpu.seg[FS]); w16(RMCS.GS, cpu.seg[GS]);
+    w16(RMCS.SS, cpu.seg[SS]); w16(RMCS.SP, cpu.reg[4]);
+
+    cpu.setCR0(ctx.cr0);                          // back to protected mode, on the client's context
+    cpu.seg.set(ctx.seg); cpu.base.set(ctx.base); cpu.limit.set(ctx.limit);
+    cpu.csD = ctx.csD; cpu.ssB = ctx.ssB;
+    cpu.reg[4] = ctx.reg[4];                      // the client's protected-mode stack
+    cpu.setSeg(ES, cb.rmcsSel); cpu.reg[7] = cb.rmcsOff >>> 0;   // ES:(E)DI = the call structure
+    cpu.setSeg(CS, cb.sel); cpu.eip = cb.off >>> 0;
+  };
+  cpu.dpmiCallback = callbackFired;
 
   // ---- 0302: call a real-mode procedure from protected mode ------------------
   //
@@ -450,6 +627,7 @@ export function installDPMI(machine) {
   };
   cpu.dpmiRealCallReturn = realCallReturn;
 
+  dpmi.memTop = HOST_BASE;
   cpu.dpmiSwitch = modeSwitch;
   machine.dpmi = dpmi;
   mem.u8[(DPMI_ENTRY_SEG << 4) + DPMI_ENTRY_OFF] = 0xcb;  // marker byte (RETF) the recompiler guards on
@@ -460,6 +638,7 @@ export function installDPMI(machine) {
   mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_R2P_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(1)
   mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_P2R_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(0)
   mem.u8[(DPMI_ENTRY_SEG << 4) + RM_RET_OFF] = 0xcb;      // guarded: cpu.dpmiRealCallReturn()
+  for (let i = 0; i < CB_MAX; i++) mem.u8[(DPMI_ENTRY_SEG << 4) + CB_BASE_OFF + i] = 0xcb;
 
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
   // owns the vector (XMS answers 43xx there) rather than replacing it.

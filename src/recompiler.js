@@ -373,6 +373,14 @@ export class Recompiler {
     // The DPMI host's far-callable entries. The guard is on the LINEAR address, so one stub serves
     // both modes: f000:0220 in real mode and <host code selector>:0220 in protected mode resolve to
     // the same place, which is exactly what a raw mode-switch routine has to be.
+    if (linStart >= 0xf0600 && linStart < 0xf0610 && mem.u8[linStart] === 0xcb) {
+      // A real-mode callback the client allocated with 0303. One guarded byte per callback, so the
+      // address itself says which one fired.
+      const idx = linStart - 0xf0600;
+      const fn = new Function('cpu', `cpu.dpmiCallback(${idx});`);
+      return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
+               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
+    }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
       // Where a 0302 real-mode procedure's IRET lands. Not a callable entry: the host put this
       // address in the frame it pushed, so reaching it MEANS the call is over.
