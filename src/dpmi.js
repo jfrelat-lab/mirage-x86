@@ -286,6 +286,14 @@ export function installDPMI(machine) {
       case 0x0304:
         return ok();
 
+      // 0300 — Simulate Real Mode Interrupt. The service a DPMI client uses most: run a real-mode
+      // ISR with the registers in the call structure and hand the results back. Identical to 0302
+      // except that the target comes from the real-mode vector rather than the structure.
+      //   in: BL = interrupt, CX = words to copy, ES:(E)DI = real mode call structure
+      case 0x0300:
+        realCall(bufAddr(), c.reg[1] & 0xffff, c.reg[3] & 0xff);
+        return;
+
       // 0302 — Call Real Mode Procedure with IRET Frame. Completes in realCallReturn, not here, so
       // there is no ok(): CF is set on the way back out.
       //   in: CX = words to copy from the protected-mode stack, ES:(E)DI = real mode call structure
@@ -336,6 +344,22 @@ export function installDPMI(machine) {
         const base = (mem.r16(a + 2) | (mem.r8(a + 4) << 16) | (mem.r8(a + 7) << 24)) >>> 0;
         c.reg[1] = (c.reg[1] & ~0xffff) | ((base >>> 16) & 0xffff);   // CX
         c.reg[2] = (c.reg[2] & ~0xffff) | (base & 0xffff);            // DX
+        return ok();
+      }
+
+      // 0007 — Set Segment Base Address. The write half of 0006, and the pair a client uses to point
+      // a descriptor it allocated at a block it just obtained. Both Jazz Jackrabbit and Turbo Pascal
+      // ask for it four times before anything else works — they share Borland's runtime, which is
+      // why their service lists are identical.
+      //   in: BX = selector, CX:DX = base
+      case 0x0007: {
+        const off = descOffset(c.reg[3] & 0xffff);
+        if (off < 0) return fail(ERR_INVALID_SELECTOR);
+        const a = (LDT_BASE + off) >>> 0;
+        const base = ((((c.reg[1] & 0xffff) << 16) | (c.reg[2] & 0xffff)) >>> 0);
+        mem.w16(a + 2, base & 0xffff);
+        mem.w8(a + 4, (base >>> 16) & 0xff);
+        mem.w8(a + 7, (base >>> 24) & 0xff);
         return ok();
       }
 
@@ -555,7 +579,7 @@ export function installDPMI(machine) {
                  FLAGS: 0x20, ES: 0x22, DS: 0x24, FS: 0x26, GS: 0x28,
                  IP: 0x2a, CS: 0x2c, SP: 0x2e, SS: 0x30 };
 
-  const realCall = (rmcs, words) => {
+  const realCall = (rmcs, words, vec) => {
     const r32 = (o) => mem.r32((rmcs + o) >>> 0) >>> 0, r16 = (o) => mem.r16((rmcs + o) >>> 0);
 
     // Everything needed to come back. base/limit/csD/ssB are saved and restored verbatim rather than
@@ -595,12 +619,15 @@ export function installDPMI(machine) {
     cpu.push16(DPMI_ENTRY_SEG);
     cpu.push16(RM_RET_OFF);
 
-    cpu.setSeg(CS, r16(RMCS.CS)); cpu.eip = r16(RMCS.IP);
+    // 0300 enters through the real-mode INTERRUPT VECTOR instead of the structure's CS:IP; the rest
+    // of the sequence is identical, which is why it shares this path rather than copying it.
+    const tgt = vec === undefined ? { seg: r16(RMCS.CS), off: r16(RMCS.IP) } : machine.getVector(vec);
+    cpu.setSeg(CS, tgt.seg); cpu.eip = tgt.off;
     if (dpmi.log) {
-      const lin = ((r16(RMCS.CS) << 4) + r16(RMCS.IP)) >>> 0;
+      const lin = ((tgt.seg << 4) + tgt.off) >>> 0;
       const bytes = [0, 1, 2, 3].map((i) => mem.r8((lin + i) >>> 0).toString(16).padStart(2, '0')).join(' ');
-      dpmi.log.push(`0302 rmcs=${rmcs.toString(16)} es:di=${cpu.seg[ES].toString(16)}:${(cpu.reg[7] & 0xffff).toString(16)} ` +
-        `-> reel ${r16(RMCS.CS).toString(16)}:${r16(RMCS.IP).toString(16)} ` +
+      dpmi.log.push(`${vec === undefined ? '0302' : '0300 int ' + vec.toString(16)} rmcs=${rmcs.toString(16)} es:di=${cpu.seg[ES].toString(16)}:${(cpu.reg[7] & 0xffff).toString(16)} ` +
+        `-> reel ${tgt.seg.toString(16)}:${tgt.off.toString(16)} ` +
         `ax=${(r32(RMCS.EAX) & 0xffff).toString(16)} ss:sp=${cpu.seg[SS].toString(16)}:${(cpu.reg[4] & 0xffff).toString(16)} ` +
         `mots=${words}  lineaire=${lin.toString(16)} octets=[${bytes}] PE=${cpu.cr0 & 1}`);
     }
