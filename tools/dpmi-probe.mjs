@@ -94,10 +94,14 @@ mc.hookInterrupt(0x31, (c, m) => {
 
 // The launcher chain is the first thing to verify: a DOS/4GW title is a small real-mode stub that
 // EXECs the extender, which then loads the LE image. If EXEC never happens, nothing downstream can.
-const execs = [], out = [];
+const execs = [], out = [], seq21 = [];
 const origInt21 = mc.intHandlers[0x21];
 mc.intHandlers[0x21] = (c, m) => {
   const ah = c.ax >> 8;
+  // The FULL INT 21h sequence, in order, for comparison against DOSBox-X's own log. Its
+  // "Executing interrupt 21, ah=XX, al=XX" lines are the only external reference we have for this
+  // layer, and the first place the two sequences differ localises the defect.
+  seq21.push(`${h(ah, 2)}:${h(c.ax & 0xff, 2)}`);
   // Capture what the program PRINTS. A DOS-extended title reports its own failures through AH=09h
   // (a $-terminated string) or AH=40h (write to a handle), and neither touches video memory.
   if (ah === 0x09) {
@@ -309,7 +313,12 @@ console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(
   const lin = mode === 0x13 || mode >= 0x0d ? 0xa0000 : 0xb8000;
   let nz = 0, distinct = new Set();
   for (let i = 0; i < 64000; i++) { const b = mc.mem.u8[lin + i]; if (b) nz++; if (distinct.size < 40) distinct.add(b); }
-  console.log(`\nINT 10h (modes / VBE): ${[...vbe].map(([k, v]) => k + 'x' + v).join(' ') || '(aucun)'}`);
+  if (process.env.SEQ21) {
+  console.log('\nsequence INT 21h (ah:al), dans l ordre:');
+  console.log(seq21.join(' '));
+}
+
+console.log(`\nINT 10h (modes / VBE): ${[...vbe].map(([k, v]) => k + 'x' + v).join(' ') || '(aucun)'}`);
   console.log(`\nvideo: mode=0x${mode.toString(16)} surface=${lin.toString(16)} ` +
     `octets non nuls=${nz}/64000 valeurs distinctes=${distinct.size}`);
 }
