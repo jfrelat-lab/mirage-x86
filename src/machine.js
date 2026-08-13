@@ -175,9 +175,20 @@ export class Machine {
       cpu.setSeg(CS, BIOS_SEG); cpu.eip = n;
       return;
     }
-    cpu.eip = cpu.pop16();
-    cpu.setSeg(CS, cpu.pop16());
-    cpu.flags = (cpu.pop16() & 0x7fd5) | 2;
+    // Pop the frame at the width it was PUSHED at. In real mode that is 16-bit, as it always was.
+    // But a DPMI client reaches these stubs by CHAINING to the old vector after its own handler ran,
+    // and the frame waiting there is the one softInt pushed for a 32-bit client — three dwords, not
+    // three words. Popping 16 bits from it returned to selector 0 with a shredded EIP.
+    const is32 = (cpu.cr0 & 1) && this.dpmi && this.dpmi.active && this.dpmi.is32;
+    if (is32) {
+      cpu.eip = cpu.pop32() >>> 0;
+      cpu.setSeg(CS, cpu.pop32() & 0xffff);
+      cpu.flags = (cpu.pop32() & 0x27fd5) | 2;
+    } else {
+      cpu.eip = cpu.pop16();
+      cpu.setSeg(CS, cpu.pop16());
+      cpu.flags = (cpu.pop16() & 0x7fd5) | 2;
+    }
     cpu.halted = false;
   }
 

@@ -1146,7 +1146,16 @@ export class Recompiler {
                       : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // JMP Ev
-        case 5: { const a = memAddr(o); P(`var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`); P('return;'); ended = true; break; } // JMPF
+        // JMPF Ev — the far pointer's LAYOUT follows the operand size, exactly as CALLF above already
+        // did: 16-bit takes a word offset with the selector at +2, 32-bit a dword offset with the
+        // selector at +4. Reading the 16-bit layout unconditionally fetched the selector from the
+        // middle of a 32-bit offset, which is zero for any offset below 64 KiB — so an `o32 jmp far
+        // [mem]` silently jumped to selector 0. Moralhardcandy chains its INT 21h handler that way
+        // and landed at 0000:0021 with the offset intact, which is what made it visible.
+        case 5: { const a = memAddr(o);
+          P(sz === 16 ? `var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`
+                      : `var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o>>>0;`);
+          P('return;'); ended = true; break; } // JMPF
         case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }
     }
