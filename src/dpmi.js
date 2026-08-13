@@ -121,6 +121,14 @@ export function installDPMI(machine) {
    */
   const modeSwitch = () => {
     const is32 = (cpu.reg[0] & 1) !== 0;
+    // A20 FIRST. Protected mode requires it, and until it is on every address is masked to 1 MiB —
+    // so our tables at 0xFF0000 aliased onto 0xF0000 and wrote descriptors straight over the BIOS
+    // stubs. They still worked (reads aliased the same way), but f000:0021 stopped being the INT 21h
+    // stub, so a client calling that vector through 0302 ran whatever the descriptor bytes decoded
+    // to. Nothing pointed at the cause: the tables were self-consistent and the damage was elsewhere.
+    machine.mem.setA20(true);
+    machine.rec.MM = machine.mem.mask;
+    machine.rec.reset();
     buildTables();
 
     const retOff = cpu.pop16(), retSeg = cpu.pop16();     // still a real-mode stack at this point
@@ -411,8 +419,13 @@ export function installDPMI(machine) {
     cpu.push16(RM_RET_OFF);
 
     cpu.setSeg(CS, r16(RMCS.CS)); cpu.eip = r16(RMCS.IP);
-    if (dpmi.log) dpmi.log.push(`0302 -> reel ${r16(RMCS.CS).toString(16)}:${r16(RMCS.IP).toString(16)} ` +
-      `ax=${(r32(RMCS.EAX) & 0xffff).toString(16)} ss:sp=${cpu.seg[SS].toString(16)}:${(cpu.reg[4] & 0xffff).toString(16)} mots=${words}`);
+    if (dpmi.log) {
+      const lin = ((r16(RMCS.CS) << 4) + r16(RMCS.IP)) >>> 0;
+      const bytes = [0, 1, 2, 3].map((i) => mem.r8((lin + i) >>> 0).toString(16).padStart(2, '0')).join(' ');
+      dpmi.log.push(`0302 -> reel ${r16(RMCS.CS).toString(16)}:${r16(RMCS.IP).toString(16)} ` +
+        `ax=${(r32(RMCS.EAX) & 0xffff).toString(16)} ss:sp=${cpu.seg[SS].toString(16)}:${(cpu.reg[4] & 0xffff).toString(16)} ` +
+        `mots=${words}  lineaire=${lin.toString(16)} octets=[${bytes}] PE=${cpu.cr0 & 1}`);
+    }
   };
 
   /** The sentinel the procedure's IRET lands on: harvest registers, go back to protected mode. */

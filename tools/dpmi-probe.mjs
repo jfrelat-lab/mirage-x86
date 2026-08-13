@@ -150,6 +150,26 @@ rec.translate = (...a) => {
 
 if (mc.dpmi) mc.dpmi.log = [];
 
+// biosCallback consumes an IRET frame of its own. While a 0302 call is in flight, the frame it pops
+// is the one 0302 pushed — so log what it sees on entry and where it lands, which is the whole
+// question. Wrapped here rather than in the engine: it is a diagnostic, not behaviour.
+const bcLog = [];
+const origBios = mc.biosCallback.bind(mc);
+mc.biosCallback = (n) => {
+  const inFlight = mc.dpmi && mc.dpmi.rmCalls.length > 0;
+  if (!inFlight) return origBios(n);
+  const sp = (cpu.seg[2] << 4) + (cpu.reg[4] & 0xffff);
+  const w = (i) => h(mc.mem.r16((sp + i * 2) & 0xfffff));
+  const before = `INT ${h(n, 2)} entree ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
+    `ss:sp=${h(cpu.seg[2])}:${h(cpu.reg[4] & 0xffff)} pile=[${w(0)} ${w(1)} ${w(2)} ${w(3)}] ` +
+    `bloque=${mc.blocked}`;
+  const r = origBios(n);
+  bcLog.push(`${before}\n     sortie ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
+    `ss:sp=${h(cpu.seg[2])}:${h(cpu.reg[4] & 0xffff)} bloque=${mc.blocked} ` +
+    `rmCalls=${mc.dpmi.rmCalls.length}`);
+  return r;
+};
+
 try { dos.load(new Uint8Array(readFileSync(join(dir, prog))), '', 'C:' + mount + prog); }
 catch (e) { console.error('chargement impossible: ' + e.message); process.exit(1); }
 
@@ -180,7 +200,12 @@ console.log('\nINT 31h (services DPMI) demandes, dans l ordre:');
 if (!dpmiOrder.length) console.log('  (aucun — le client n a pas pris le chemin DPMI)');
 for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
 if (dpmiLog.length) {
-  if (mc.dpmi && mc.dpmi.log && mc.dpmi.log.length) {
+  if (bcLog.length) {
+  console.log('\nbiosCallback pendant un appel 0302:');
+  for (const l of bcLog.slice(0, 6)) console.log('  ' + l);
+}
+
+if (mc.dpmi && mc.dpmi.log && mc.dpmi.log.length) {
   console.log('\nappels reels via 0302:');
   for (const l of mc.dpmi.log.slice(0, 12)) console.log('  ' + l);
 }
