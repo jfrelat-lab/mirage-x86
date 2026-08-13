@@ -56,11 +56,26 @@ mc.hookInterrupt(0x2f, (c, m) => {
 // a client's first few calls tell you which model it is using.
 const dpmiCalls = new Map(); const dpmiOrder = [];
 const prev31 = mc.intHandlers[0x31];
+// Log each call's INPUT registers and what the host answered. A tally of AX values says WHICH
+// services are wanted; only the arguments say whether our reply was understood — and a wrong reply
+// that the client stores without checking CF is indistinguishable from a right one until much later.
+const dpmiLog = [];
+const REGN = ['ax', 'cx', 'dx', 'bx', 'sp', 'bp', 'si', 'di'];
+const snapRegs = (c) => ({ r: Array.from(c.reg), es: c.seg[0], ds: c.seg[3], f: c.flags });
+const fmtRegs = (s) => REGN.map((n, i) => n + '=' + h(s.r[i] & 0xffff)).join(' ') +
+  `  es=${h(s.es)} ds=${h(s.ds)} CF=${s.f & 1}`;
 mc.hookInterrupt(0x31, (c, m) => {
   const ax = c.ax;
   if (!dpmiCalls.has(ax)) { dpmiCalls.set(ax, 0); dpmiOrder.push(ax); }
   dpmiCalls.set(ax, dpmiCalls.get(ax) + 1);
+  const before = snapRegs(c);
+  const from = `${h(c.seg[1])}:${h(c.eip >>> 0, 8)}`;
   if (prev31) prev31(c, m);
+  if (dpmiLog.length < 40) {
+    dpmiLog.push(`  AX=${h(ax)} appele depuis ${from}\n` +
+      `     entree : ${fmtRegs(before)}\n` +
+      `     sortie : ${fmtRegs(snapRegs(c))}`);
+  }
 });
 
 // The launcher chain is the first thing to verify: a DOS/4GW title is a small real-mode stub that
@@ -158,6 +173,10 @@ for (const ax of seenOrder) console.log(`  AX=${h(ax)}  x${mux.get(ax)}   ${MUX_
 console.log('\nINT 31h (services DPMI) demandes, dans l ordre:');
 if (!dpmiOrder.length) console.log('  (aucun — le client n a pas pris le chemin DPMI)');
 for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
+if (dpmiLog.length) {
+  console.log('\nINT 31h — registres d entree et de sortie, dans l ordre:');
+  for (const l of dpmiLog) console.log(l);
+}
 
 const ints = mc.unhandledIntReport();
 // What did it SAY? A program that exits on purpose has almost always printed why. Reading the text
