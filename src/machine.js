@@ -198,6 +198,17 @@ export class Machine {
     // dispatching through an empty table, which is how a fault turns into "the program exited
     // cleanly" with nothing to go on.
     if (this.dpmi && this.dpmi.active) {
+      // An exception handler the client installed with 0203 gets the fault, with the frame the DPMI
+      // spec describes. Only an UNCLAIMED exception is a defect on our side worth naming.
+      const ev = n < 32 ? this.dpmi.excVec[n] : null;
+      if (ev) {
+        const is32 = this.dpmi.is32;
+        cpu.pushW(cpu.flags, is32); cpu.pushW(cpu.seg[1], is32); cpu.pushW(cpu.eip >>> 0, is32);
+        if (err !== undefined) cpu.pushW(err, is32);
+        cpu.flags &= ~(IF | TF);
+        cpu.setSeg(1, ev.sel); cpu.eip = ev.off >>> 0;
+        return;
+      }
       const NAMES = { 0: '#DE', 1: '#DB', 3: '#BP', 4: '#OF', 5: '#BR', 6: '#UD', 7: '#NM', 8: '#DF',
         10: '#TS', 11: '#NP', 12: '#SS', 13: '#GP', 14: '#PF' };
       throw new Error(`mirage: ${NAMES[n] || 'exception ' + n} in DPMI client at ` +
@@ -267,9 +278,30 @@ export class Machine {
       // change. Without this the client's first INT went through an IDT whose gates pointed at a
       // stub that was described in a comment and never written, and Doom ended up executing zeros
       // at 000b:09b3.
-      if (this.dpmi && this.dpmi.active && this.intHandlers[n]) {
+      if (this.dpmi && this.dpmi.active) {
+        // A handler the client installed with INT 31h AX=0205 wins: push a protected-mode interrupt
+        // frame and enter it, so its own IRET returns here. Reflecting to the JS service instead
+        // would silently ignore the hook the client just asked us to honour.
+        const v = this.dpmi.pmVec[n];
+        if (v) {
+          cpu.eip = nextIp;
+          const is32 = this.dpmi.is32;
+          cpu.pushW(cpu.flags, is32); cpu.pushW(cpu.seg[1], is32); cpu.pushW(cpu.eip >>> 0, is32);
+          cpu.flags &= ~(IF | TF);
+          cpu.setSeg(1, v.sel); cpu.eip = v.off >>> 0;
+          return;
+        }
+        if (this.intHandlers[n]) {
+          cpu.eip = nextIp;
+          this.intHandlers[n](cpu, this);
+          return;
+        }
+        // Nobody claims this vector. In real mode it would reach the BIOS dummy IRET, so the
+        // equivalent here is simply to return — the emitted code has already advanced EIP. Falling
+        // through to protInt instead read an IDT we deliberately do not have, and reported INT 41h
+        // as "exception 65".
         cpu.eip = nextIp;
-        this.intHandlers[n](cpu, this);
+        this.unhandledInts[n]++;
         return;
       }
       const dpl = (this.mem.r8((cpu.idtr.base + n * 8 + 5) >>> 0) >> 5) & 3;

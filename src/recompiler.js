@@ -370,6 +370,15 @@ export class Recompiler {
     // video probe does this: LDS BX,[0:40]; …; RETF into f000:10). The stub byte is 0xCF (IRET),
     // so a bare chain still no-ops; but here we run the JS handler first, then IRET, so an inline
     // BIOS call actually performs its service. Single-instruction "block".
+    // The DPMI host's far-callable entries. The guard is on the LINEAR address, so one stub serves
+    // both modes: f000:0220 in real mode and <host code selector>:0220 in protected mode resolve to
+    // the same place, which is exactly what a raw mode-switch routine has to be.
+    if ((linStart === 0xf0220 || linStart === 0xf0230) && mem.u8[linStart] === 0xcb) {
+      const to = linStart === 0xf0220 ? 1 : 0;
+      const fn = new Function('cpu', `cpu.dpmiRawSwitch(${to});`);
+      return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
+               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
+    }
     if (linStart === 0xf0200 && mem.u8[0xf0200] === 0xcb) {
       // DPMI mode-switch entry (f000:0200). The client FAR-CALLs it to be put into protected mode;
       // dpmiSwitch consumes the return address itself, because coming back means re-entering

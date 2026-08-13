@@ -16,6 +16,7 @@ import { CS, DS, ES, SS } from './cpu.js';
 
 export const DPMI_ENTRY_SEG = 0xf000, DPMI_ENTRY_OFF = 0x0200;   // far-callable mode-switch entry
 const STATE_STUB_OFF = 0x0210;                                   // the do-nothing state save/restore
+const RAW_R2P_OFF = 0x0220, RAW_P2R_OFF = 0x0230;                // raw mode-switch routines (0306)
 
 const LDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
 const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for the tables
@@ -46,7 +47,13 @@ export function installDPMI(machine) {
     is32: false,
     nextSel: SEL_CLIENT,           // bump allocator over the LDT
     unimplemented: new Map(),      // INT 31h AX values a client asked for and we refused
-    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); },
+    // Protected-mode interrupt vectors the client installed with 0205. A null entry means "still
+    // ours", and softInt reflects those to the JS service as before.
+    pmVec: new Array(256).fill(null),
+    // Processor EXCEPTION handlers (0202/0203), a separate table from the interrupt vectors above:
+    // vector 0Dh as an exception is #GP, not INT 0Dh.
+    excVec: new Array(32).fill(null),
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); },
   };
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
@@ -140,7 +147,7 @@ export function installDPMI(machine) {
   const ok = () => { cpu.flags &= ~1; };
   const fail = (code) => { cpu.flags |= 1; cpu.ax = code; };
 
-  const ERR_UNSUPPORTED = 0x8001, ERR_INVALID_SELECTOR = 0x8022;
+  const ERR_UNSUPPORTED = 0x8001, ERR_INVALID_SELECTOR = 0x8022, ERR_INVALID_VALUE = 0x8021;
 
   /** Byte offset of a selector's descriptor in the LDT, or -1 if it is not one of ours. */
   const descOffset = (sel) => {
@@ -192,6 +199,112 @@ export function installDPMI(machine) {
         return ok();
       }
 
+      // 0306 — Get Raw Mode Switch Addresses. Refusing this is worse than useless: the client does
+      // not check CF, so it stored 0305's leftover BX:CX/SI:DI as the switch routines and later
+      // transferred through them (#GP at 24:893e with selector 0x210). Blanking the registers on
+      // refusal would only move the crash to 0000:0000.
+      //   BX:CX = real -> protected routine, SI:DI = protected -> real routine
+      case 0x0306: {
+        c.reg[3] = (c.reg[3] & ~0xffff) | DPMI_ENTRY_SEG;            // BX
+        c.reg[1] = (c.reg[1] & ~0xffff) | RAW_R2P_OFF;               // CX
+        c.reg[6] = (c.reg[6] & ~0xffff) | (SEL_HOST_CODE | TI);      // SI
+        c.reg[7] = (c.reg[7] & ~0xffff) | RAW_P2R_OFF;               // DI
+        return ok();
+      }
+
+      // 0000 — Allocate LDT Descriptors. CX consecutive entries, zeroed and marked not-present; the
+      // client fills them in with 000C. This is the call that makes a client self-sufficient, and it
+      // is why the descriptors had to live in the LDT in the first place.
+      //   in: CX = count;  out: AX = base selector
+      case 0x0000: {
+        const count = c.reg[1] & 0xffff;
+        if (count === 0) return fail(ERR_INVALID_VALUE);
+        if (dpmi.nextSel + count * 8 > SEL_MAX) return fail(0x8011);   // descriptor unavailable
+        const base = dpmi.nextSel;
+        for (let i = 0; i < count; i++) {
+          const off = base + i * 8;
+          for (let b = 0; b < 8; b++) mem.w8((LDT_BASE + off + b) >>> 0, 0);
+        }
+        dpmi.nextSel += count * 8;
+        c.ax = base | TI;
+        return ok();
+      }
+
+      // 0003 — Get Selector Increment Value: how far apart consecutive selectors are. Always 8 on a
+      // 386; the client uses it to walk a block returned by 0000.
+      case 0x0003:
+        c.reg[0] = (c.reg[0] & ~0xffff) | 8;      // AX
+        return ok();
+
+      // 0008 — Set Segment Limit. The client grows a descriptor it allocated with 0000, typically to
+      // cover a memory block it just obtained. Above 1 MiB the limit must be expressed in 4 KiB
+      // pages with G=1, and the low 12 bits must then be all ones — a limit that is not page-aligned
+      // is an error, not something to round.
+      //   in: BX = selector, CX:DX = 32-bit limit
+      case 0x0008: {
+        const off = descOffset(c.reg[3] & 0xffff);
+        if (off < 0) return fail(ERR_INVALID_SELECTOR);
+        let limit = (((c.reg[1] & 0xffff) << 16) | (c.reg[2] & 0xffff)) >>> 0;
+        const a = (LDT_BASE + off) >>> 0;
+        let gran = mem.r8(a + 6) & 0xf0;
+        if (limit > 0xfffff) {
+          if ((limit & 0xfff) !== 0xfff) return fail(ERR_INVALID_VALUE);
+          limit = limit >>> 12; gran |= 0x80;
+        } else {
+          gran &= ~0x80;
+        }
+        mem.w16(a, limit & 0xffff);
+        mem.w8(a + 6, gran | ((limit >>> 16) & 0x0f));
+        return ok();
+      }
+
+      // 0304 — Free Real Mode Callback Address. We hand out no callbacks yet (0303), so there is
+      // nothing to release; reporting success keeps the client's teardown path clean.
+      case 0x0304:
+        return ok();
+
+      // 0202 / 0203 — Get / Set Processor Exception Handler Vector. Same read-then-install dance as
+      // 0204/0205, and the same reason it cannot be refused: the client stores whatever CX:EDX held
+      // and transfers through it later (refusing 0202 left CS=0xffff). A separate table from the
+      // interrupt vectors — exception 0Dh is #GP, which is not INT 0Dh.
+      //   in: BL = exception 00-1Fh;  out/in: CX:EDX = selector:offset
+      case 0x0202: {
+        const n = c.reg[3] & 0xff;
+        if (n > 0x1f) return fail(ERR_INVALID_VALUE);
+        const v = dpmi.excVec[n] || { sel: SEL_HOST_CODE | TI, off: STATE_STUB_OFF };
+        c.reg[1] = (c.reg[1] & ~0xffff) | (v.sel & 0xffff);
+        c.reg[2] = v.off >>> 0;
+        return ok();
+      }
+      case 0x0203: {
+        const n = c.reg[3] & 0xff;
+        if (n > 0x1f) return fail(ERR_INVALID_VALUE);
+        dpmi.excVec[n] = { sel: c.reg[1] & 0xffff, off: c.reg[2] >>> 0 };
+        return ok();
+      }
+
+      // 0204 / 0205 — Get / Set Protected Mode Interrupt Vector. This is how a client installs its
+      // own handlers: it reads the current vector, keeps it to chain to, and writes its own.
+      //
+      // A vector we still own is reported as <host code>:n — the per-vector BIOS stub at f000:00nn
+      // that already exists for real mode. Executing it runs the JS service and IRETs, and the
+      // recompiler's guard is on the LINEAR address, so it works identically through a selector.
+      // That means a client which chains to the old vector reaches the real service, instead of the
+      // 0000:0000 it would get if we reported an empty vector.
+      //   in:  BL = vector;  out: CX:EDX = selector:offset
+      case 0x0204: {
+        const n = c.reg[3] & 0xff;
+        const v = dpmi.pmVec[n] || { sel: SEL_HOST_CODE | TI, off: n };
+        c.reg[1] = (c.reg[1] & ~0xffff) | (v.sel & 0xffff);          // CX
+        c.reg[2] = v.off >>> 0;                                       // EDX
+        return ok();
+      }
+      case 0x0205: {
+        const n = c.reg[3] & 0xff;
+        dpmi.pmVec[n] = { sel: c.reg[1] & 0xffff, off: c.reg[2] >>> 0 };
+        return ok();
+      }
+
       // 0A00 — Get Vendor-Specific API Entry Point. Extenders probe for host extensions (DOS/4GW
       // asks for "RATIONAL DOS/4G"). We have none, and saying so is the correct answer — a host is
       // not required to provide any.
@@ -204,6 +317,30 @@ export function installDPMI(machine) {
     }
   });
 
+  /**
+   * Raw mode switch (the routines 0306 hands out). The client sets up the state it wants on the
+   * OTHER side and far-calls one of these; they do not return, they transfer:
+   *
+   *   AX = new DS   CX = new ES   DX = new SS   BX = new SP   SI:DI = new CS:IP
+   *
+   * Values are selectors when switching TO protected mode and real-mode segments when switching to
+   * real mode, which is exactly the difference cpu.setSeg already makes from CR0.PE — so the switch
+   * is: set PE, then load the segments, and every address the recompiler emits follows.
+   *
+   * The caller's return address is left on the old stack on purpose: the client supplies a new
+   * SS:SP, so the old stack is not ours to tidy.
+   */
+  const rawSwitch = (toProtected) => {
+    const ax = cpu.reg[0] & 0xffff, cx = cpu.reg[1] & 0xffff, dx = cpu.reg[2] & 0xffff;
+    const bx = cpu.reg[3] & 0xffff, si = cpu.reg[6] & 0xffff, di = cpu.reg[7] & 0xffff;
+    cpu.setCR0(toProtected ? ((cpu.cr0 | 1) >>> 0) : ((cpu.cr0 & ~1) >>> 0));
+    machine.rec.reset();                 // cached blocks were translated for the other mode
+    cpu.setSeg(DS, ax); cpu.setSeg(ES, cx); cpu.setSeg(SS, dx);
+    cpu.reg[4] = (cpu.reg[4] & ~0xffff) | bx;   // SP only: the convention passes 16 bits
+    cpu.setSeg(CS, si); cpu.eip = di;
+  };
+  cpu.dpmiRawSwitch = rawSwitch;
+
   cpu.dpmiSwitch = modeSwitch;
   machine.dpmi = dpmi;
   mem.u8[(DPMI_ENTRY_SEG << 4) + DPMI_ENTRY_OFF] = 0xcb;  // marker byte (RETF) the recompiler guards on
@@ -211,6 +348,8 @@ export function installDPMI(machine) {
   // routine has nothing to do and a bare RETF is the whole of it — which is also why 0305 reports a
   // buffer size of zero. It is a normal RETF byte, not a guarded entry: it really does just return.
   mem.u8[(DPMI_ENTRY_SEG << 4) + STATE_STUB_OFF] = 0xcb;
+  mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_R2P_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(1)
+  mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_P2R_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(0)
 
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
   // owns the vector (XMS answers 43xx there) rather than replacing it.
