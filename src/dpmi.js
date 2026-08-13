@@ -620,6 +620,12 @@ export function installDPMI(machine) {
     w16(RMCS.FLAGS, cpu.flags); w16(RMCS.ES, cpu.seg[ES]); w16(RMCS.DS, cpu.seg[DS]);
     w16(RMCS.FS, cpu.seg[FS]); w16(RMCS.GS, cpu.seg[GS]);
 
+    if (dpmi.log) {
+      const r16r = (o) => mem.r16((st.rmcs + o) >>> 0);
+      dpmi.log.push(`   <- retour ax=${r16r(RMCS.EAX).toString(16)} bx=${r16r(RMCS.EBX).toString(16)} ` +
+        `cx=${r16r(RMCS.ECX).toString(16)} dx=${r16r(RMCS.EDX).toString(16)} ` +
+        `flags=${r16r(RMCS.FLAGS).toString(16)} CF=${r16r(RMCS.FLAGS) & 1}`);
+    }
     cpu.setCR0(st.cr0);
     cpu.reg.set(st.reg); cpu.seg.set(st.seg); cpu.base.set(st.base); cpu.limit.set(st.limit);
     cpu.csD = st.csD; cpu.ssB = st.ssB;
