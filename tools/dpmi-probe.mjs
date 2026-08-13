@@ -254,6 +254,17 @@ const ints = mc.unhandledIntReport();
   console.log('\nsorties DOS (INT 21h AH=09h/40h):');
 console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(/[\r]/g, '')).join('\n') : '  (aucune)');
 
+// Executing without faulting is not the same as RENDERING. The BIOS mode byte says which surface to
+// look at, and counting non-zero bytes distinguishes "cleared the screen" from "drew something".
+{
+  const mode = mc.mem.u8[0x449];
+  const lin = mode === 0x13 || mode >= 0x0d ? 0xa0000 : 0xb8000;
+  let nz = 0, distinct = new Set();
+  for (let i = 0; i < 64000; i++) { const b = mc.mem.u8[lin + i]; if (b) nz++; if (distinct.size < 40) distinct.add(b); }
+  console.log(`\nvideo: mode=0x${mode.toString(16)} surface=${lin.toString(16)} ` +
+    `octets non nuls=${nz}/64000 valeurs distinctes=${distinct.size}`);
+}
+
 console.log('\necran texte:');
   console.log(lines.length ? lines.join('\n') : '  (vide)');
 }
