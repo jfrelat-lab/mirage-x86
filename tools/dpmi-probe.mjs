@@ -150,6 +150,24 @@ rec.translate = (...a) => {
 
 if (mc.dpmi) mc.dpmi.log = [];
 
+// Every selector load in protected mode that names an entry PAST the table limit. setSeg accepts
+// those silently, so the only way to see one is to look. The address that performs the load is the
+// answer to "where did 0x1519 come from" — a register delta cannot say.
+const badSel = [];
+const SEGN = ['ES', 'CS', 'SS', 'DS', 'FS', 'GS'];
+const origSetSeg = cpu.setSeg.bind(cpu);
+cpu.setSeg = (i, sel) => {
+  sel &= 0xffff;
+  if ((cpu.cr0 & 1) && (sel & 0xfffc)) {
+    const tbl = (sel & 4) ? cpu.ldtr : cpu.gdtr;
+    if ((sel & 0xfff8) + 7 > tbl.limit && badSel.length < 12) {
+      badSel.push(`${SEGN[i]}=${h(sel)} (${sel & 4 ? 'LDT' : 'GDT'} limite=${h(tbl.limit)}) ` +
+        `charge depuis ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 8)}`);
+    }
+  }
+  return origSetSeg(i, sel);
+};
+
 // biosCallback consumes an IRET frame of its own. While a 0302 call is in flight, the frame it pops
 // is the one 0302 pushed — so log what it sees on entry and where it lands, which is the whole
 // question. Wrapped here rather than in the engine: it is a diagnostic, not behaviour.
@@ -203,6 +221,11 @@ if (dpmiLog.length) {
   if (bcLog.length) {
   console.log('\nbiosCallback pendant un appel 0302:');
   for (const l of bcLog.slice(0, 6)) console.log('  ' + l);
+}
+
+if (badSel.length) {
+  console.log('\nselecteurs hors limite charges en mode protege:');
+  for (const l of badSel) console.log('  ' + l);
 }
 
 if (mc.dpmi && mc.dpmi.log && mc.dpmi.log.length) {
