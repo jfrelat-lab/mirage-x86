@@ -94,7 +94,7 @@ mc.hookInterrupt(0x31, (c, m) => {
 
 // The launcher chain is the first thing to verify: a DOS/4GW title is a small real-mode stub that
 // EXECs the extender, which then loads the LE image. If EXEC never happens, nothing downstream can.
-const execs = [], out = [], seq21 = [];
+const execs = [], out = [], seq21 = [], log21 = [];
 const origInt21 = mc.intHandlers[0x21];
 mc.intHandlers[0x21] = (c, m) => {
   const ah = c.ax >> 8;
@@ -126,7 +126,20 @@ mc.intHandlers[0x21] = (c, m) => {
     execs.push(`  le parent lit DS=020e : ${Array.from({length:8},(_,i)=>h(mc.mem.u8[(0x020e<<4)+i],2)).join(' ')}`);
     execs.push(`AL=${c.ax & 0xff} "${name}"  appele depuis ${h(c.seg[1])}:${h(c.eip, 8)} SS:SP=${h(c.seg[2])}:${h(c.reg[4] & 0xffff)}`);
   }
-  return origInt21(c, m);
+  // The oracle gives the SEQUENCE; only our own returns say what each call answered. The divergence
+  // is caused by one of the first calls replying differently, so record them in full.
+  // AH=3Dh opens by NAME, and the name is the whole point when a program is probing for a driver.
+  if (ah === 0x3d && log21.length < 20) {
+    let t = '', a = (c.seg[3] << 4) + (c.reg[2] & 0xffff);
+    for (let i = 0; i < 32; i++) { const b = mc.mem.u8[(a + i) & 0xfffff]; if (!b) break; t += String.fromCharCode(b); }
+    log21.push(`  3d  ouvre "${t}"`);
+  }
+  const before21 = snapRegs(c);
+  const r21 = origInt21(c, m);
+  if (log21.length < 20) {
+    log21.push(`  ${h(ah, 2)}  entree ${fmtRegs(before21)}\n      sortie ${fmtRegs(snapRegs(c))}`);
+  }
+  return r21;
 };
 
 // Ring buffer of block entries. "It ends up at 0000:0187" says nothing about HOW it got there, and
@@ -314,6 +327,10 @@ console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(
   let nz = 0, distinct = new Set();
   for (let i = 0; i < 64000; i++) { const b = mc.mem.u8[lin + i]; if (b) nz++; if (distinct.size < 40) distinct.add(b); }
   if (process.env.SEQ21) {
+  console.log('\nINT 21h — les premiers appels, entree et sortie:');
+  for (const l of log21) console.log(l);
+}
+if (process.env.SEQ21) {
   console.log('\nsequence INT 21h (ah:al), dans l ordre:');
   console.log(seq21.join(' '));
 }

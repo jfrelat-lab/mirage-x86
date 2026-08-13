@@ -383,7 +383,11 @@ export function installDOS(machine, vfs) {
         // polls until NOT ready never leaves. Answer per handle instead: the three standard streams
         // are character devices and always ready, a file is always ready to read and write.
         switch (cpu.al) {
-          case 0x00: cpu.dx = (cpu.bx <= 2) ? 0x80 : 0; cpu.ax = cpu.dx; ok(); break;   // get device info
+          // DOS opens FIVE standard handles, not three: 0-2 are the console streams, 3 is AUX and
+          // 4 is PRN, and all five are character devices. Reporting 3 and 4 as block devices told a
+          // runtime that its printer and serial handles were disk files. Found by comparing our
+          // INT 21h returns against DOSBox-X's call log for Doom.
+          case 0x00: cpu.dx = (cpu.bx <= 4) ? 0x80 : 0; cpu.ax = cpu.dx; ok(); break;   // get device info
           case 0x01: ok(); break;                                                        // set device info
           case 0x06: case 0x07:                                                          // input / output status
             cpu.al = (cpu.bx <= 4 || vfs.handles.has(cpu.bx & 0xffff)) ? 0xff : 0x00;    // FF = ready, 00 = not
