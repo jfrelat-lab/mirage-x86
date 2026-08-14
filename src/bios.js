@@ -7,6 +7,7 @@ import { ZF, CF } from './cpu.js';
 import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
 import { installDPMI } from './dpmi.js';
+import { installEMS } from './ems.js';
 import { installDisk } from './disk.js';
 import { installPIC } from './pic.js';
 
@@ -15,6 +16,7 @@ const BDA = 0x400;             // BIOS Data Area
 const COLS = 80, ROWS = 25;
 
 /**
+ * @param opts.ems  false to boot without expanded memory, as not loading EMM386.
  * @param opts.xms  false to boot WITHOUT an XMS driver. Not a debugging switch: some titles refuse
  *   to start when one is present — Zone 66's extender wants raw extended memory and says so
  *   ("This program can not run with an XMS driver!!!"), which on real hardware meant not loading
@@ -620,6 +622,7 @@ export function installBIOS(machine, opts = {}) {
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
   if (opts.xms !== false) installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
+  if (opts.ems !== false) installEMS(machine);   // EMS — after XMS: shares its pool via xms.top
   installDPMI(machine);  // DPMI host (INT 2Fh AX=1687h + f000:0200 mode-switch entry). AFTER XMS:
                          // it chains that INT 2Fh hook and caps the XMS pool below its own tables.
 

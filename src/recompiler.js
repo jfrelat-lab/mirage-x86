@@ -371,19 +371,16 @@ export class Recompiler {
     // so a bare chain still no-ops; but here we run the JS handler first, then IRET, so an inline
     // BIOS call actually performs its service. Single-instruction "block".
     // The DPMI host's far-callable entries. The guard is on the LINEAR address, so one stub serves
-    // both modes: f000:0220 in real mode and <host code selector>:0220 in protected mode resolve to
-    // the same place, which is exactly what a raw mode-switch routine has to be.
+    // both modes — which is what a raw mode-switch routine has to be.
     if (linStart >= 0xf0600 && linStart < 0xf0610 && mem.u8[linStart] === 0xcb) {
-      // A real-mode callback the client allocated with 0303. One guarded byte per callback, so the
-      // address itself says which one fired.
+      // A 0303 callback: one guarded byte each, so the address says which one fired.
       const idx = linStart - 0xf0600;
       const fn = new Function('cpu', `cpu.dpmiCallback(${idx});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
                body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
     }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
-      // Where a 0302 real-mode procedure's IRET lands. Not a callable entry: the host put this
-      // address in the frame it pushed, so reaching it MEANS the call is over.
+      // Where a 0302 procedure's IRET lands: reaching it means the call is over.
       const fn = new Function('cpu', 'cpu.dpmiRealCallReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
                body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
@@ -395,9 +392,8 @@ export class Recompiler {
                body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
     }
     if (linStart === 0xf0200 && mem.u8[0xf0200] === 0xcb) {
-      // DPMI mode-switch entry (f000:0200). The client FAR-CALLs it to be put into protected mode;
-      // dpmiSwitch consumes the return address itself, because coming back means re-entering
-      // through a SELECTOR — the one transition a RETF cannot express.
+      // DPMI mode-switch entry. dpmiSwitch consumes the return address itself: coming back means
+      // re-entering through a selector, which a RETF cannot express.
       const fn = new Function('cpu', 'cpu.dpmiSwitch();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
                body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
@@ -442,12 +438,8 @@ export class Recompiler {
     let cur = { flagIdx: -1, def: 0, use: 0 };
     const PFLAG = (stmt, def) => { cur.flagIdx = out.length; cur.def |= def; out.push(stmt); };
 
-    // EIP is a full 32-bit offset in a 32-bit code segment; only a 16-bit segment wraps at 0xFFFF.
-    // Masking it to 16 bits unconditionally — which every fetch and every relative target used to do
-    // — silently truncates the moment EIP exceeds 0xFFFF. test386's FLAT section runs at linear
-    // 0xe00f4f6d, so the first instruction was fetched correctly and every one after it was decoded
-    // from the wrong address. `d` is the CS D bit, and the block cache is already keyed by it, so a
-    // block compiled under one width is never reused under the other.
+    // EIP is a full 32-bit offset in a 32-bit code segment; only a 16-bit one wraps at 0xFFFF. `d` is
+    // the CS D bit, which the block cache is already keyed by.
     const ipAdd = d ? (a, b) => (a + b) >>> 0 : (a, b) => (a + b) & 0xffff;
 
     // ---- byte fetch (decode-time reads from memory) ----
@@ -653,13 +645,9 @@ export class Recompiler {
           if ((op & 7) === 4 && sz === 16 && !PROF.pushSPOriginal) { P('cpu.push16((cpu.reg[4]-2)&0xffff);'); break; }
           P(sz === 32 ? `cpu.push32(${rR(op & 7, 32)});` : `cpu.push16(${rR(op & 7, 16)});`); break;
         case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f: {
-          // Pop into a temp FIRST. A 16-bit write is emitted as `r[n]=(r[n]&~0xffff)|(expr&0xffff)`,
-          // and JavaScript evaluates the left operand before calling expr — so `o16 pop sp` merged
-          // the popped word into the ESP value from BEFORE the pop's own increment. With ESP at
-          // 0x0001fffe the upper half stayed 0x0001 where the architecture gives 0x0002. Only SP is
-          // affected (no other register aliases the stack pointer), and the low half is right either
-          // way, so `cmp sp,imm` right after it still passes — the wrong ESP surfaces much later.
-          // Sequencing also gives POP the defined behaviour of reading ESP after the increment.
+          // Pop into a temp FIRST: a 16-bit write emits `r[n]=(r[n]&~0xffff)|(expr&0xffff)` and JS
+          // evaluates the left operand before expr, so `o16 pop sp` would merge into the pre-pop ESP.
+          // Sequencing also gives POP its defined behaviour of reading ESP after the increment.
           const t0 = NT();
           P(`var ${t0}=${sz === 32 ? 'cpu.pop32()' : 'cpu.pop16()'};`);
           P(rW(op & 7, sz, t0)); break;
@@ -738,9 +726,8 @@ export class Recompiler {
           P(`cpu.setSeg(${o.reg},${rmR(o, 16)});`); break;
         }
         // POP Ev moves one stack slot of the current operand size, like PUSH/POP sreg above.
-        // POP Ev — same sequencing as POP r16 above, for the same two reasons: the destination may be
-        // SP, and when the destination is memory based on ESP the effective address is defined to be
-        // computed AFTER the pop's increment.
+        // POP Ev — same sequencing: the destination may be SP, and a memory destination based on ESP
+        // has its address computed AFTER the increment.
         case 0x8f: { const o = modrm(); const t0 = NT(); P(`var ${t0}=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()'};`); P(rmW(o, sz, t0)); break; }
 
         case 0x90: break;                                                               // NOP
@@ -832,10 +819,9 @@ export class Recompiler {
         case 0xca: { const n = f16(); P(`cpu.farRet(${sz === 32 ? 1 : 0},${n},${ipStart});`); P('return;'); ended = true; break; } // RETF imm
         case 0xcb: P(`cpu.farRet(${sz === 32 ? 1 : 0},0,${ipStart});`); P('return;'); ended = true; break; // RETF
 
-        // INT3 / INT n / INTO are SOFTWARE interrupts: privilege-checked against the gate's DPL,
-        // unlike the faults that also route through swInt. softInt takes both the next IP and the
-        // instruction's own address, because #GP on the DPL check is a fault and must save the
-        // latter.
+        // INT3 / INT n / INTO are SOFTWARE interrupts, privilege-checked against the gate's DPL —
+        // unlike the faults that also route through swInt. #GP on that check saves the instruction's
+        // own address, hence both IPs.
         case 0xcc: P(`cpu.softInt(3,${ip},${ipStart});`); P('return;'); ended = true; break; // INT3
         case 0xcd: { const n = f8(); P(`cpu.softInt(${n},${ip},${ipStart});`); P('return;'); ended = true; break; } // INT n
         case 0xce: P(`if(cpu.flags&${OF}){cpu.softInt(4,${ip},${ipStart});return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
@@ -895,9 +881,8 @@ export class Recompiler {
           P(`cpu.eip=${tgt};`); P('return;'); ended = true; break;
         }
         case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ipAdd(ip, rel)); break; } // JMP rel
-        // EIP is set to the instruction's OWN address first: farJmp can now raise #GP on the
-        // target's privilege, and that is a fault, so the saved EIP must point AT the JMP. On
-        // success farJmp overwrites EIP anyway, so this costs nothing.
+        // EIP is set to the instruction's own address first: #GP on the target is a fault, and on
+        // success farJmp overwrites it anyway.
         case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.eip=${ipStart};cpu.farJmp(${s},${o >>> 0});`); P('return;'); ended = true; break; } // JMPF ptr
         case 0xeb: { const rel = fs8(); endJmp('' + ipAdd(ip, rel)); break; }    // JMP rel8
 
@@ -1146,12 +1131,8 @@ export class Recompiler {
                       : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // JMP Ev
-        // JMPF Ev — the far pointer's LAYOUT follows the operand size, exactly as CALLF above already
-        // did: 16-bit takes a word offset with the selector at +2, 32-bit a dword offset with the
-        // selector at +4. Reading the 16-bit layout unconditionally fetched the selector from the
-        // middle of a 32-bit offset, which is zero for any offset below 64 KiB — so an `o32 jmp far
-        // [mem]` silently jumped to selector 0. Moralhardcandy chains its INT 21h handler that way
-        // and landed at 0000:0021 with the offset intact, which is what made it visible.
+        // JMPF Ev — the far pointer's layout follows the operand size, as CALLF above: 16-bit is a
+        // word offset with the selector at +2, 32-bit a dword offset with the selector at +4.
         case 5: { const a = memAddr(o);
           P(sz === 16 ? `var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`
                       : `var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o>>>0;`);
@@ -1244,12 +1225,9 @@ export class Recompiler {
           if (!o.isReg) memAddr(o);
           return;
         }
-        // CLTS — clear CR0.TS (bit 3). A DOS extender issues it after a task switch so the next x87
-        // instruction does not raise #NM. We do not model TS at all, so clearing it is exact.
+        // CLTS — clear CR0.TS. We do not model TS, so clearing it is exact.
         case 0x06: P('cpu.cr0&=~8;'); return;
-        // LAR / LSL Gv,Ew — query a selector without loading it. ZF reports accessibility and the
-        // destination is left untouched when it is not, so the helper returns -1 for "no" and the
-        // emitted code tests that once.
+        // LAR / LSL Gv,Ew. ZF reports accessibility; the helper returns -1 so this tests once.
         case 0x02: case 0x03: {
           const o = modrm(); const t = NT();
           P(`var ${t}=${op2 === 0x02 ? `cpu.larRights(${rmR(o, 16)},${sz === 32 ? 1 : 0})` : `cpu.lslLimit(${rmR(o, 16)})`};`);

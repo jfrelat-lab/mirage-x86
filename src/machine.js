@@ -13,6 +13,7 @@ import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
 import { resolveProfile } from './cpu-profile.js';
 import { resolveMemStrategy } from './mem-strategy.js';
+import { EMS_SEG } from './ems.js';
 
 export const BIOS_SEG = 0xf000;
 // Where every UNSERVICED interrupt vector points. 0xFF53 is the address a real IBM BIOS uses for its
@@ -139,14 +140,10 @@ export class Machine {
     // TSR/game pattern, e.g. Keen's INT 8 handler) executes a clean IRET instead of running
     // off into uninitialised BIOS memory. (The INT-n → JS-handler fast path is unaffected:
     // swInt dispatches by number and never executes these bytes.)
-    //
-    // Unserviced vectors all point at ONE shared dummy, the way a real BIOS does (F000:FF53 is the
-    // IBM dummy IRET). Giving every vector its own offset made the table look like 256 distinct
-    // installed handlers, which no real machine ever shows: DOS/4GW scans low memory backwards
-    // looking for two adjacent identical vectors — the standard way to find free vector space — and
-    // in a table where every entry differs it never finds any. Doom span 12.4M times in that scan.
-    // hookInterrupt re-points a vector to its own F000:00nn stub when a JS service claims it, so the
-    // per-vector identity the inline BIOS-call path depends on survives for exactly those.
+    // Unserviced vectors share ONE dummy, as a real BIOS does: a table of 256 distinct handlers is
+    // something no real machine shows, and programs scan for adjacent identical entries to find free
+    // vector space. hookInterrupt re-points a vector to its own F000:00nn stub when a service claims
+    // it, keeping the per-vector identity the inline BIOS-call path decodes from the address.
     for (let n = 0; n < 256; n++) { this.setVector(n, BIOS_SEG, DUMMY_INT_OFF); this.mem.u8[(BIOS_SEG << 4) + n] = 0xcf; }
     this.mem.u8[(BIOS_SEG << 4) + DUMMY_INT_OFF] = 0xcf;
   }
@@ -176,18 +173,13 @@ export class Machine {
       cpu.setSeg(CS, BIOS_SEG); cpu.eip = n;
       return;
     }
-    // A service may TRANSFER control rather than return — DPMI's 0300/0302 switch to real mode and
-    // set CS:IP on the routine to run, finishing later at their sentinel. Consuming the frame here
-    // would overwrite exactly that. The symptom was precise: the client chained into our INT 31h
-    // stub, 0300 set CS:IP to the real-mode ISR, and this epilogue immediately replaced it with the
-    // sentinel address, so the ISR never ran, AX came back unchanged and the client retried 341,385
-    // times. The handler having pushed a real-mode call is the signal that it owns CS:IP now.
+    // A service may TRANSFER control rather than return: 0300/0302 switch to real mode and set CS:IP
+    // themselves, finishing later at their sentinel. Having pushed a real-mode call is the signal
+    // that the handler owns CS:IP now, and consuming the frame here would overwrite it.
     if (this.dpmi && this.dpmi.rmCalls.length > depth0) return;
 
-    // Pop the frame at the width it was PUSHED at. In real mode that is 16-bit, as it always was.
-    // But a DPMI client reaches these stubs by CHAINING to the old vector after its own handler ran,
-    // and the frame waiting there is the one softInt pushed for a 32-bit client — three dwords, not
-    // three words. Popping 16 bits from it returned to selector 0 with a shredded EIP.
+    // Pop the frame at the width it was pushed at: 16-bit in real mode, but a client chaining into
+    // these stubs left the 32-bit frame softInt pushed for it.
     const is32 = (cpu.cr0 & 1) && this.dpmi && this.dpmi.active && this.dpmi.is32;
     if (is32) {
       cpu.eip = cpu.pop32() >>> 0;
@@ -213,13 +205,10 @@ export class Machine {
    */
   protInt(n, err, faultIp) {
     const cpu = this.cpu, m = this.mem;
-    // A DPMI client has no IDT of ours to fall through to (see dpmi.js): every software interrupt is
-    // reflected in softInt, so reaching here means a genuine EXCEPTION. Name it rather than
-    // dispatching through an empty table, which is how a fault turns into "the program exited
-    // cleanly" with nothing to go on.
+    // No IDT for a client (see dpmi.js): software interrupts are reflected, so reaching here means a
+    // genuine exception. Name it rather than dispatching through an empty table.
     if (this.dpmi && this.dpmi.active) {
-      // An exception handler the client installed with 0203 gets the fault, with the frame the DPMI
-      // spec describes. Only an UNCLAIMED exception is a defect on our side worth naming.
+      // A handler installed with 0203 gets the fault; only an unclaimed one is worth naming.
       const ev = n < 32 ? this.dpmi.excVec[n] : null;
       if (ev) {
         const is32 = this.dpmi.is32;
@@ -249,12 +238,8 @@ export class Machine {
     const conforming = target && !target.sys && (target.type & 0x0c) === 0x0c;
     const newCpl = (target && !conforming) ? target.dpl : cpl;
 
-    // An interrupt may only go INWARD or stay put. A gate whose target code segment is LESS
-    // privileged than the current CPL is illegal — #GP with that segment's selector. MIRAGE instead
-    // dropped to the lower ring while staying on the inner stack, so test386's `int 0x22` at CPL 0
-    // (its handler lives in a DPL-3 segment) entered ring 3 on the ring-0 stack, and the handler's
-    // `esp == ESP_R3_PROT - 0x14` assertion failed. Conforming targets follow the same DPL <= CPL
-    // rule. src/test386.asm:899 states it: protModeFaultTest EX_GP, CU_SEG_PROT32, int 0x22.
+    // An interrupt goes inward or stays put. A target code segment LESS privileged than CPL is
+    // illegal — #GP with its selector. Conforming targets follow the same DPL <= CPL rule.
     if (target && !target.sys && target.dpl > cpl) {
       // On this fault the saved EIP must point AT the INT, not past it; softInt supplies that.
       if (faultIp !== undefined) cpu.eip = faultIp >>> 0;
@@ -278,30 +263,18 @@ export class Machine {
   }
 
   /**
-   * INT n / INT3 / INTO — a SOFTWARE interrupt, which unlike a fault is privilege-checked against
-   * the gate: `INT n` at CPL > gate.DPL raises #GP with the IDT-style error code (n<<3)|2, so a
-   * ring-3 program cannot call a kernel-only vector. Without this check every gate was reachable
-   * from ring 3, and test386's kernel-only handler was entered from CPL 3 instead of faulting — it
-   * then failed its own stack-frame assertion, which is how POST 20 died.
-   *
-   * The distinction matters: BOUND and #UD also route through swInt, and those are FAULTS, so they
-   * must not be DPL-checked. Only the three software-interrupt opcodes call this.
-   *
-   * faultIp is the address of the INT instruction and nextIp the one after it. #GP here is a fault,
-   * so the saved EIP must point AT the instruction, not past it — test386 checks that return address.
+   * INT n / INT3 / INTO. Unlike a fault, a software interrupt is privilege-checked against the gate:
+   * at CPL > gate.DPL it raises #GP with the IDT-style error code (n<<3)|2. BOUND and #UD also route
+   * through swInt but are FAULTS and must NOT be checked, so only the three opcodes call this.
+   * #GP here is a fault, hence faultIp: the saved EIP points AT the instruction, not past it.
    */
   softInt(n, nextIp, faultIp) {
     const cpu = this.cpu;
     if (cpu.cr0 & 1) {
-      // A DPMI host REFLECTS a software interrupt issued in protected mode to the real-mode handler.
-      // Ours are JS services, so reflection is simply calling them — no IDT gate, no frame, no mode
-      // change. Without this the client's first INT went through an IDT whose gates pointed at a
-      // stub that was described in a comment and never written, and Doom ended up executing zeros
-      // at 000b:09b3.
+      // A host reflects a protected-mode software interrupt to the real-mode handler. Ours are JS
+      // services, so reflection is calling them: no gate, no frame, no mode change.
       if (this.dpmi && this.dpmi.active) {
-        // A handler the client installed with INT 31h AX=0205 wins: push a protected-mode interrupt
-        // frame and enter it, so its own IRET returns here. Reflecting to the JS service instead
-        // would silently ignore the hook the client just asked us to honour.
+        // A handler installed with 0205 wins: push a protected-mode frame so its IRET returns here.
         const v = this.dpmi.pmVec[n];
         if (v) {
           cpu.eip = nextIp;
@@ -316,10 +289,7 @@ export class Machine {
           this.intHandlers[n](cpu, this);
           return;
         }
-        // Nobody claims this vector. In real mode it would reach the BIOS dummy IRET, so the
-        // equivalent here is simply to return — the emitted code has already advanced EIP. Falling
-        // through to protInt instead read an IDT we deliberately do not have, and reported INT 41h
-        // as "exception 65".
+        // Unclaimed: return, as the real-mode dummy IRET would. EIP is already past the INT.
         cpu.eip = nextIp;
         this.unhandledInts[n]++;
         return;
@@ -338,7 +308,8 @@ export class Machine {
     // would swallow them.
     if (this.cpu.cr0 & 1) return this.protInt(n);
     const v = this.getVector(n);
-    if (v.seg === BIOS_SEG) {
+    // EMS has its own segment (the name must sit at <vector segment>:000A) but is still ours.
+    if (v.seg === BIOS_SEG || (v.seg === EMS_SEG && this.ems)) {
       const h = this.intHandlers[n];
       if (h) h(this.cpu, this);          // JS handler; eip already points past the INT
       else if (this.mem.u8[((BIOS_SEG << 4) + v.off) & this.mem.mask] !== 0xcf) {

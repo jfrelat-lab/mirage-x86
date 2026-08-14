@@ -136,14 +136,11 @@ export class CPU {
   }
 
   /**
-   * LAR / LSL — read a descriptor's access rights or limit WITHOUT loading it, so a program can ask
-   * "may I use this selector, and how big is it?" before committing. Both set ZF on success and
-   * leave the destination untouched on failure, which is how the caller tells them apart; these
-   * return -1 for "not accessible" so the emitted code has one thing to test.
+   * LAR / LSL — a descriptor's access rights or limit WITHOUT loading it. Both set ZF on success and
+   * leave the destination untouched otherwise, so these return -1 for "not accessible".
    *
-   * Accessibility: a non-null selector, inside its table, present, and — for everything except a
-   * CONFORMING code segment — DPL >= max(CPL, RPL). Conforming code is readable from anywhere.
-   * Some system types are not valid LAR/LSL operands at all; the table below is the 386 set.
+   * Accessible: non-null, inside its table, present, and — except for CONFORMING code, readable from
+   * anywhere — DPL >= max(CPL, RPL). Only the 386 system types below are valid operands.
    */
   _descVisible(sel) {
     sel &= 0xffff;
@@ -240,17 +237,12 @@ export class CPU {
     };
     if (!(this.cr0 & 1)) return plain();
     const d = this.readDesc(sel);
-    // An ordinary code segment — same privilege rule as farJmp, and for the same reason: a far CALL
-    // straight to a code segment does not change rings (only a CALL GATE does that, below). So a
-    // non-conforming target demands CPL == DPL exactly plus RPL <= CPL, a conforming one only
-    // DPL <= CPL. test386 runs the identical check for CALL and for JMP — its macro parameterises
-    // the instruction — so `call far 0xd3:0` from CPL 3 must raise #GP just as the JMP does.
+    // An ordinary code segment: same rule as farJmp. Only a CALL GATE (below) changes rings.
     if (d && !d.sys) {
       const cpl = this.seg[CS] & 3;
       const conforming = (d.type & 0x0c) === 0x0c;
       if (conforming ? d.dpl > cpl : ((sel & 3) > cpl || d.dpl !== cpl)) {
-        // EIP currently holds the RETURN address, which is what a successful call pushes. #GP is a
-        // fault, so the saved EIP must instead point AT the CALL — hence faultIp from the emitter.
+        // EIP holds the return address a successful call would push; a fault must save the CALL's.
         if (faultIp !== undefined) this.eip = faultIp >>> 0;
         return this.raise(13, sel & 0xfffc);
       }
@@ -291,11 +283,8 @@ export class CPU {
         this.eip = (g32 ? ((d.w0 | ((d.b6 | (d.b7 << 8)) << 16)) >>> 0) : d.w0) >>> 0;
         return;
       }
-      // A far JMP to a code segment cannot CHANGE privilege, only stay at it. So a NON-CONFORMING
-      // target demands CPL == DPL exactly (plus RPL <= CPL); a conforming one demands only
-      // DPL <= CPL. Without this, ring 3 could jump straight into ring-0 code and keep running —
-      // which is what test386's `jmp far 0xd3:0` did (a DPL-0 segment entered from CPL 3) instead of
-      // raising #GP. The error code is the selector with its RPL bits cleared.
+      // A far JMP cannot change privilege, only stay at it: a non-conforming target demands
+      // CPL == DPL exactly plus RPL <= CPL, a conforming one only DPL <= CPL.
       if (d && !d.sys) {
         const cpl = this.seg[CS] & 3;
         const conforming = (d.type & 0x0c) === 0x0c;
@@ -315,11 +304,9 @@ export class CPU {
     const esp0 = this.reg[4];                       // to restore if the return is not permitted
     const eip = is32 ? (pop() >>> 0) : pop();
     const cs = pop() & 0xffff;
-    // A far RET may only return OUTWARD or stay put — never inward. So the target's RPL must be
-    // >= CPL, and (for a non-conforming segment) its DPL must equal that RPL. test386 checks this by
-    // making a ring-3 program push `error` and RETF to a DPL-0 selector: if the return wrongly
-    // succeeds you land in the error routine, which is exactly where MIRAGE was landing. The stack
-    // is rewound because a fault leaves it untouched.
+    // A far RET goes outward or stays put, never inward: the target's RPL must be >= CPL, and a
+    // non-conforming segment's DPL must equal that RPL. The stack is rewound — a fault consumes
+    // nothing.
     if (this.cr0 & 1) {
       const rpl = cs & 3;
       const d = this.readDesc(cs);
