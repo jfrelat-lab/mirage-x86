@@ -440,6 +440,10 @@ export function installDOS(machine, vfs) {
         cpu.al = 0; ok(); break;
       }
       case 0x62: cpu.bx = dos.psp; ok(); break;                      // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
+      // 51h is the older twin of 62h, and 50h its setter. An extender moves the current PSP around
+      // the client it loads, so it needs both halves: a getter alone loses the set silently.
+      case 0x51: cpu.bx = dos.psp; ok(); break;
+      case 0x50: dos.psp = cpu.bx & 0xffff; ok(); break;
       case 0x29: {                                                   // parse filename into an FCB — Ski or Die
         // DS:SI = text, ES:DI = FCB. Fill drive (0 = default, else 1-based), then the 8.3 name
         // blank-padded and uppercased. AL returns 1 if the name held a wildcard, else 0; SI is left

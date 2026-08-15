@@ -1,4 +1,8 @@
-// dosoracle.mjs — diff MIRAGE's DOS/BIOS behaviour against DOSBox-X's own debug log.
+// dbx-oracle.mjs — diff MIRAGE's DOS/BIOS behaviour against DOSBox-X's own debug log.
+//
+// Not to be confused with dos-oracle.mjs, which records INT 21h in/out registers from a REAL DOS
+// kernel booted on our BIOS. That one is the authority on what a call RETURNS; this one is the
+// authority on the SEQUENCE a real program produces.
 //
 // DOSBox-X's `-debug -log-fileio` prints, for every program it runs, which files were opened, read,
 // sought and closed, and every video mode set. That is an EXTERNAL reference for a layer the
@@ -13,10 +17,14 @@
 // relative order is not something either emulator promises — interleaving them into one sequence
 // reported a divergence for Keen 1 that was only "the mode was set a few opens later".
 //
-//   node tools/dosoracle.mjs games/DOOM DOOM.EXE          one title (log must already exist)
-//   node tools/dosoracle.mjs --capture games/DOOM DOOM.EXE
-//   node tools/dosoracle.mjs --sweep [filter]             the whole corpus, one line each
+//   node tools/dbx-oracle.mjs games/DOOM DOOM.EXE          one title (log must already exist)
+//   node tools/dbx-oracle.mjs --capture games/DOOM DOOM.EXE
+//   node tools/dbx-oracle.mjs --sweep [filter]             the whole corpus, one line each
 //   --strict   also compare byte counts and seek offsets, not just which files are touched
+//
+// The comparison ENDS wherever MIRAGE offers a service DOSBox does not. DOSBox answers no DPMI host
+// on INT 2Fh AX=1687, so Jazz loads its bundled DPMI.000; we answer, so Jazz skips straight to
+// RTM.000. Neither side is wrong and the streams part company there for good.
 //
 // Read sizes differ legitimately: DOSBox's EXEC reads the image through its own buffering, MIRAGE's
 // loader reads it straight out of the VFS. Hence the default granularity is file-level, and --strict
@@ -109,12 +117,16 @@ function parseDosbox(text, prog) {
 // ---------------------------------------------------------------- the MIRAGE side
 
 function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
+  // Mount the game directory AS the root of C:, which is what `mount c games/X` gives DOSBox. Our
+  // other tools mount under \\NAME\\ so several titles can coexist, and that silently breaks any
+  // program addressing its own files absolutely — Jazz opens "C:\\dpmi.000", which under a
+  // subdirectory mount resolves to a root that holds nothing.
   const vfs = new VFS();
-  const mount = '\\' + basename(dir).toUpperCase() + '\\';
+  const mount = '\\';
   for (const rel of walk(dir)) {
     vfs.addFile(mount + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(dir, rel))));
   }
-  vfs.chdir(mount.replace(/\\$/, ''));
+  vfs.chdir('\\');
 
   const { mc, dos } = makeMachine({ vfs });
   const cpu = mc.cpu;
@@ -220,7 +232,7 @@ if (SWEEP) {
   }
 } else {
   const dir = argv[0], prog = argv[1];
-  if (!dir || !prog) { console.error('usage: dosoracle.mjs [--capture] [--strict] <dir> <prog>  |  --sweep [filtre]'); process.exit(1); }
+  if (!dir || !prog) { console.error('usage: dbx-oracle.mjs [--capture] [--strict] <dir> <prog>  |  --sweep [filtre]'); process.exit(1); }
   const r = compare(dir, prog);
   if (r.err) { console.error(r.err); process.exit(1); }
   console.log(`=== ${dir}/${prog} ===`);
