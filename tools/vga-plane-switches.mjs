@@ -30,11 +30,11 @@ const walk = (d, pre) => {
   for (const n of readdirSync(d)) {
     const p = `${d}/${n}`;
     if (statSync(p).isDirectory()) walk(p, pre + n + '\\');
-    else vfs.addFile('\\GAMES\\' + pre + n, new Uint8Array(readFileSync(p)));
+    else vfs.addFile('\\' + pre + n, new Uint8Array(readFileSync(p)));
   }
 };
-walk(base, dir + '\\');
-vfs.chdir('C:\\GAMES\\' + dir);
+walk(base, '');            // games/<dir> mounted AS C:\ — see VFS.mountAt()
+vfs.chdir('C:\\');
 
 const st = {
   ports: 0,          // positive control: every port write seen
@@ -61,7 +61,7 @@ mc.cpu.ioWrite = (p, sz, v) => {
   return oW(p, sz, v);
 };
 
-dos.load(new Uint8Array(readFileSync(`${base}/${exe}`)), '', 'C:\\GAMES\\' + dir + '\\' + exe);
+dos.load(new Uint8Array(readFileSync(`${base}/${exe}`)), '', 'C:\\' + exe);
 const t0 = now();
 while (now() - t0 < Number(secs || 5) * 1000 && !fault && !dos.programDone) mc.runSlice(20000);
 

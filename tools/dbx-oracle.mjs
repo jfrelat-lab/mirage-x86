@@ -119,10 +119,8 @@ function parseDosbox(text, prog) {
 // ---------------------------------------------------------------- the MIRAGE side
 
 function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
-  // Mount the game directory AS the root of C:, which is what `mount c games/X` gives DOSBox. Our
-  // other tools mount under \\NAME\\ so several titles can coexist, and that silently breaks any
-  // program addressing its own files absolutely — Jazz opens "C:\\dpmi.000", which under a
-  // subdirectory mount resolves to a root that holds nothing.
+  // The game directory IS the root of C:, which is what `mount c games/X` gives DOSBox — the same
+  // view src/shell.js and the other tools now use. See VFS.mountAt().
   const vfs = new VFS();
   const mount = '\\';
   for (const rel of walk(dir)) {

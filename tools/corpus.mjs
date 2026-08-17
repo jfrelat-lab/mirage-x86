@@ -21,6 +21,12 @@ export function walk(dir, base = dir, out = []) {
 }
 
 /**
+ * `mount` is always the root of C:. A title's directory IS the drive, the way `mount c <dir>` gives
+ * it to DOSBox and the way the original media was addressed — see VFS.mountAt(). Mounting under
+ * \GAMES\<TITLE>\ instead is observable from inside the guest: a program reconstructs paths from
+ * argv0, so the mount point ends up in its own state (Jazz Jackrabbit branches on it), and anything
+ * hard-coding C:\<file> or scanning the root cannot work at all.
+ *
  * @param {string} [filter] match against the game subdirectory name (intros are skipped when set)
  * @returns {{label:string, dir:string, mount:string, prog:string}[]}
  */
@@ -37,13 +43,13 @@ export function targets(filter) {
       const progs = readdirSync(d).filter((f) => ['.EXE', '.COM'].includes(extname(f).toUpperCase()))
         .map((f) => ({ f, size: statSync(join(d, f)).size }))
         .sort((a, b) => b.size - a.size);
-      if (progs.length) out.push({ label: `games/${sub}/${progs[0].f}`, dir: d, mount: `\\GAMES\\${sub}\\`, prog: progs[0].f });
+      if (progs.length) out.push({ label: `games/${sub}/${progs[0].f}`, dir: d, mount: '\\', prog: progs[0].f });
     }
   }
   const introsRoot = join(ROOT, 'intros');
   if (existsSync(introsRoot) && !filter) {
     for (const f of readdirSync(introsRoot).filter((f) => extname(f).toLowerCase() === '.com')) {
-      out.push({ label: `intros/${f}`, dir: introsRoot, mount: '\\INTROS\\', prog: f });
+      out.push({ label: `intros/${f}`, dir: introsRoot, mount: '\\', prog: f });
     }
   }
   return out;

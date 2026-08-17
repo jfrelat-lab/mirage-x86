@@ -76,8 +76,10 @@ export class Mirage {
     // Mount the bundles listed in each dir's manifest.json (if served): the committed nasm
     // demos at the root of C:, plus any local (gitignored) third-party intros under C:\INTROS
     // and multi-file games under C:\GAMES\<game>\ so you can `CD INTROS`/`CD GAMES\<game>` and
-    // run them. A games manifest entry keeps its subdir (e.g. "ALLEYCAT/CAT.EXE") so each
-    // game's files land together and its relative data-file opens resolve. Skipped when unserved.
+    // run them. A games manifest entry keeps its subdir (e.g. "ALLEYCAT/CAT.EXE") so each game's
+    // files land together. That layout is the SHELL's catalogue view, not the guest's: launching a
+    // program narrows C:\ to the program's own directory for as long as it runs, so a title sees
+    // the drive it shipped expecting — see VFS.mountAt() and Shell.launch(). Skipped when unserved.
     for (const [dir, prefix] of [['demos', '\\'], ['intros', '\\INTROS\\']]) {
       try {
         const manifest = await (await fetch(dir + '/manifest.json')).json();

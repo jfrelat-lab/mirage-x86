@@ -793,6 +793,33 @@ function asciiz(mc, cpu, off, str) {
   ok('3Ah actually removed it', !c.vfs.exists('C:\\SAVES'));
 }
 
+// ---------------------------------------------------------------- the mount base (VFS.mountAt)
+// A title's own directory is the root of C: while it runs — `mount c games/X`, which is the drive
+// the original media presented. Before this, every title lived under \GAMES\<TITLE>\ and the guest
+// could tell: it reconstructs paths from argv0, so the mount point became part of its own state.
+{
+  const c = mk({ '\\GAMES\\JAZZ\\JAZZ.EXE': 'exe', '\\GAMES\\JAZZ\\RTM.000': 'rtm',
+                 '\\GAMES\\KEEN\\KEEN.EXE': 'keen', '\\README.TXT': 'hi' });
+  const at = (off, s) => asciiz(c.mc, c.cpu, off, s);
+  const open = (p) => int21(c, 0x3d, (cpu) => { cpu.reg[2] = at(0x200, p); });
+
+  eq('before mounting, a title is only reachable through \\GAMES', open('C:\\RTM.000').cf, CF);
+
+  const view = c.vfs.mountAt('\\GAMES\\JAZZ');
+  eq('mounted: the title addresses itself absolutely', open('C:\\RTM.000').cf, 0);
+  eq('mounted: 47h reports the root', (int21(c, 0x47, (cpu) => { cpu.reg[6] = 0x280; }),
+     String.fromCharCode(...c.mc.mem.readStr((c.cpu.seg[3] << 4) + 0x280, 0))), '');
+  eq('mounted: what is above the mount point is gone', open('C:\\README.TXT').cf, CF);
+  eq('mounted: so is every other title', open('C:\\GAMES\\KEEN\\KEEN.EXE').cf, CF);
+  eq('mounted: .. cannot climb out of the mount, as on DOS', open('C:\\..\\..\\README.TXT').cf, CF);
+  c.vfs.writeFile('C:\\SAVE.001', Uint8Array.of(1));   // a save file, written where the title expects
+
+  c.vfs.restore(view);
+  ok('a file the title created at C:\\ landed inside its directory', c.vfs.exists('\\GAMES\\JAZZ\\SAVE.001'));
+  eq('restored: the shell browses the whole tree again', open('C:\\README.TXT').cf, 0);
+  eq('restored: including the title it just ran', open('C:\\GAMES\\JAZZ\\RTM.000').cf, 0);
+}
+
 // ---------------------------------------------------------------- XMS
 {
   const { mc, cpu } = mk();

@@ -26,7 +26,7 @@ const WALL = Number(process.env.WALL) || 4000;
 const h = (n, w = 4) => (n >>> 0).toString(16).padStart(w, '0');
 
 const vfs = new VFS();
-const mount = '\\' + dir.split('/').pop().toUpperCase() + '\\';
+const mount = '\\';                       // the target directory IS C: — see VFS.mountAt()
 for (const rel of walk(dir)) {
   vfs.addFile(mount + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(dir, rel))));
 }

@@ -25,23 +25,21 @@ const vfs = new VFS();
 const { mc, dos } = makeMachine({ vfs, memSize: process.env.MEM_MB ? Number(process.env.MEM_MB) << 20 : undefined });
 let fault = null; mc.onError = (e) => { fault = e; };
 
-// mount every file under games/<sub> into \GAMES\<sub>\...
+// Mount games/<sub> AS the root of C: — `mount c games/<sub>`, which is the drive the title shipped
+// expecting. See VFS.mountAt(): a subdirectory mount is visible to the guest through argv0.
 function walk(dir) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     if (statSync(p).isDirectory()) walk(p);
-    else {
-      const rel = relative(ROOT, p).split('/').join('\\');
-      vfs.addFile('\\GAMES\\' + rel, new Uint8Array(readFileSync(p)));
-    }
+    else vfs.addFile('\\' + relative(gameDir, p).split('/').join('\\'), new Uint8Array(readFileSync(p)));
   }
 }
 walk(gameDir);
-vfs.chdir('\\GAMES\\' + sub);
+vfs.chdir('\\');
 
 const exeBytes = readFileSync(join(gameDir, prog));
 const tail = process.env.RUNTAIL || '';           // command-line args (e.g. RUNTAIL="ENG VGA ADL")
-dos.load(new Uint8Array(exeBytes), tail, 'C:\\GAMES\\' + sub + '\\' + prog);
+dos.load(new Uint8Array(exeBytes), tail, 'C:\\' + prog);
 
 const fb = mc.mem.u8;
 const modeAt = () => mc.mem.r8(0x449);
