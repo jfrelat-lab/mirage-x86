@@ -11,6 +11,9 @@ const MEM_TOP = 0xa000;     // end of conventional memory (640K), in paragraphs
 
 export function installDOS(machine, vfs) {
   const mem = machine.mem, cpu = machine.cpu;
+  // The EMS driver answers to its name in the device chain, and that — not the INT 67h vector — is
+  // how Wolf3D and Doom test for it. DOS is installed after the BIOS, so machine.ems is already set.
+  if (machine.ems) vfs.addDevice('EMMXXXX0');
   const dos = {
     machine, vfs,
     psp: PSP_SEG,
@@ -385,7 +388,12 @@ export function installDOS(machine, vfs) {
         switch (cpu.al) {
           // DOS opens FIVE standard handles: 0-2 are the console streams, 3 is AUX, 4 is PRN, and all
           // five are character devices.
-          case 0x00: cpu.dx = (cpu.bx <= 4) ? 0x80 : 0; cpu.ax = cpu.dx; ok(); break;   // get device info
+          // Bit 7 says "character device", and a handle opened on a driver by name is one — Wolf3D
+          // opens EMMXXXX0 and abandons EMS unless this bit comes back set.
+          case 0x00: {
+            const hd = vfs.handles.get(cpu.bx & 0xffff);
+            cpu.dx = (cpu.bx <= 4 || (hd && hd.device)) ? 0x80 : 0; cpu.ax = cpu.dx; ok(); break;
+          }
           case 0x01: ok(); break;                                                        // set device info
           case 0x06: case 0x07:                                                          // input / output status
             cpu.al = (cpu.bx <= 4 || vfs.handles.has(cpu.bx & 0xffff)) ? 0xff : 0x00;    // FF = ready, 00 = not

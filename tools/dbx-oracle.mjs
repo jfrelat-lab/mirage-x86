@@ -102,7 +102,9 @@ function parseDosbox(text, prog) {
     else if ((m = line.match(/^INT10:Set Video Mode ([0-9A-Fa-f]+)$/))) { ev.video.push(`mode ${parseInt(m[1], 16).toString(16)}`); continue; }
     // Only AH. AL is whatever the register happened to hold for functions that do not take it, so
     // comparing it reports differences that mean nothing.
-    else if ((m = line.match(/^DOSMISC:Executing interrupt 21, ah=([0-9a-f]+)/))) { ev.int21.push(m[1]); continue; }
+    // DOSBox prints AH unpadded ("ah=e"), so pad both sides or every single-digit function reads
+    // as a divergence.
+    else if ((m = line.match(/^DOSMISC:Executing interrupt 21, ah=([0-9a-f]+)/))) { ev.int21.push(m[1].padStart(2, '0')); continue; }
     if (!kind) continue;
     file = norm(file);
     if (loading) {

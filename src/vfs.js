@@ -14,6 +14,7 @@ export class VFS {
     this.cwd = [];                 // path components from root, uppercased
     this.handles = new Map();      // fd -> { node, pos, path, write }
     this.nextFd = 5;               // 0..4 reserved for std streams
+    this.extraDevices = new Set(); // names contributed by loaded drivers — see addDevice
     this.label = 'MIRAGE';
   }
 
@@ -125,9 +126,18 @@ export class VFS {
             'LPT1', 'LPT2', 'LPT3', 'COM1', 'COM2', 'COM3', 'COM4'].includes(leaf) ? leaf : null;
   }
 
+  /**
+   * A driver loaded at boot adds its own name to the device chain, and a program opens that name to
+   * test whether the driver is there: Wolf3D opens EMMXXXX0 rather than reading the INT 67h vector.
+   * Static `deviceOf` cannot know, since which drivers exist is decided per machine.
+   * @param {string} name bare device name, uppercase
+   */
+  addDevice(name) { this.extraDevices.add(name.toUpperCase()); }
+
   /** @param {{create?:boolean, truncate?:boolean}} opts */
   openFile(path, opts = {}) {
-    const device = VFS.deviceOf(path);
+    const leaf = String(path).toUpperCase().replace(/\//g, '\\').split('\\').pop().split('.')[0];
+    const device = this.extraDevices.has(leaf) ? leaf : VFS.deviceOf(path);
     if (device) {
       const fd = this.nextFd++;
       this.handles.set(fd, { device, pos: 0, path });   // no node: reads and writes go to dos.js
