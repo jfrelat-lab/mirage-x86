@@ -22,6 +22,14 @@
 //   node tools/dbx-oracle.mjs --sweep [filter]             the whole corpus, one line each
 //   --strict   also compare byte counts and seek offsets, not just which files are touched
 //
+// FREE CONVENTIONAL MEMORY differs and produces divergences that are not defects. Our HLE DOS is
+// resident in almost nothing, so the PSP sits at 0x0100 where DOSBox's is around 0x0800 — about
+// 29 KB more for the program. A title that binary-searches for its largest block (SCUMM does, in
+// AH=48/49 pairs) converges elsewhere and the AH sequence parts company: Indy 3 diverges at int21
+// #22 for exactly this, 496 KB against 448-480 KB, with all 204 of its file events agreeing.
+// Deliberately NOT auto-flagged — a real allocator defect looks identical from outside, so measure
+// the sizes before concluding.
+//
 // The comparison ENDS wherever MIRAGE offers a service DOSBox does not. DOSBox answers no DPMI host
 // on INT 2Fh AX=1687, so Jazz loads its bundled DPMI.000; we answer, so Jazz skips straight to
 // RTM.000. Neither side is wrong and the streams part company there for good.
