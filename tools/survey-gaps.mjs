@@ -39,6 +39,10 @@ function probe(gameDir, mountPrefix, prog) {
   for (let t = 0; t < FRAMES && !fault && !dos.programDone; t++) {
     mc.runSlice(200000);
     mc.tickTimer();
+    // A HOST-TIME bound cannot tell "took a different path" from "ran out of time", and it moves
+    // under load: several surveys at once starved this one into ~40 of 47 titles failing inside the
+    // emulator. Three separate wrong conclusions have come from that. Bound in CYCLES for anything
+    // you intend to compare, run it alone, and read a wall-clock stop as "unknown", never as a result.
     if (Date.now() - t0 > 12000) break;                 // some titles idle on input forever
   }
   return {

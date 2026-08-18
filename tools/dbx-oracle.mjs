@@ -46,6 +46,10 @@ const SECS = Number(process.env.SECS) || 30;
 // A sweep is a SCREEN, not an investigation: the first divergence is within the opening events for
 // every title that has one, so a per-title budget in the hundreds of milliseconds finds the same
 // answer as one in seconds. Raise it with WALL/CYCLES when drilling into a single title.
+//
+// CYCLES is the bound to trust. WALL is a safety net for a title that idles on input forever, and a
+// run that stops on it has told you nothing — it cannot distinguish "took a different path" from
+// "ran out of time", and it moves under load. Never sweep in parallel with another sweep.
 const WALL = Number(process.env.WALL) || (SWEEP ? 1200 : 6000);
 const CYCLES = Number(process.env.CYCLES) || (SWEEP ? 4e7 : 3e8);
 const CACHE = join(ROOT, '.dbxlogs');
