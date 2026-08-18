@@ -119,10 +119,9 @@ function parseDosbox(text, prog) {
 // ---------------------------------------------------------------- the MIRAGE side
 
 function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
-  // Mount the game directory AS the root of C:, which is what `mount c games/X` gives DOSBox. The
-  // mount has to match the reference or the comparison measures the layout, not the engine: a title
-  // that rebuilds paths from argv0 asks for a DIFFERENT STRING under a subdirectory mount, and Jazz
-  // branches on that string even though the open succeeds either way.
+  // The game directory IS the root of C:, which is what `mount c games/X` gives DOSBox — the same
+  // view src/shell.js and the other tools now use. See VFS.mountAt(). Here it is also a measurement
+  // rule: mount differently from the reference and the diff reports the layout, not the engine.
   const vfs = new VFS();
   const mount = '\\';
   for (const rel of walk(dir)) {

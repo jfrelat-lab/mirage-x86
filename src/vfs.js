@@ -11,7 +11,8 @@ function fileNode(name, data) { return { type: 'file', name, attr: ATTR_ARCHIVE,
 export class VFS {
   constructor() {
     this.root = dirNode('');
-    this.cwd = [];                 // path components from root, uppercased
+    this.base = [];                // the directory the guest sees as C:\ — see mountAt()
+    this.cwd = [];                 // path components from the base, uppercased
     this.handles = new Map();      // fd -> { node, pos, path, write }
     this.nextFd = 5;               // 0..4 reserved for std streams
     this.extraDevices = new Set(); // names contributed by loaded drivers — see addDevice
@@ -19,6 +20,7 @@ export class VFS {
   }
 
   // ---- path handling ------------------------------------------------------
+  /** Components of `path`, relative to the mount base. `..` at the base stays there, as on DOS. */
   _split(path) {
     let p = String(path).toUpperCase().replace(/\//g, '\\');
     let abs = false;
@@ -35,11 +37,23 @@ export class VFS {
     return parts;
   }
 
+  /** The node the guest's C:\ points at. Null if the base directory is gone. */
+  _baseNode() {
+    let cur = this.root;
+    for (const seg of this.base) {
+      const next = cur.children.get(seg);
+      if (!next || next.type !== 'dir') return null;
+      cur = next;
+    }
+    return cur;
+  }
+
   /** Resolve to { parent, name, node }. node is null if the leaf doesn't exist. */
   resolve(path) {
     const parts = this._split(path);
-    if (parts.length === 0) return { parent: null, name: '', node: this.root };
-    let cur = this.root;
+    let cur = this._baseNode();
+    if (!cur) return { parent: null, name: '', node: null };
+    if (parts.length === 0) return { parent: null, name: '', node: cur };
     for (let i = 0; i < parts.length - 1; i++) {
       const next = cur.children.get(parts[i]);
       if (!next || next.type !== 'dir') return { parent: null, name: parts[i], node: null };
@@ -48,6 +62,32 @@ export class VFS {
     const name = parts[parts.length - 1];
     return { parent: cur, name, node: cur.children.get(name) || null };
   }
+
+  /**
+   * Make `path` the directory the guest sees as C:\ — DOSBox's `mount c <dir>`, which is how the
+   * media a game shipped on was addressed. Returns the previous view so the caller can put it back.
+   *
+   * The alternative — keeping one flat C: with every title under \GAMES\<TITLE>\ — is a divergence
+   * the guest can SEE. Programs reconstruct their own paths from argv0 (the environment's program
+   * path), and that string is then part of the program's state: Jazz Jackrabbit derives its
+   * extender's path from it, and takes a different branch depending on what it finds. Anything
+   * that hard-codes C:\<file>, or scans the root, has no chance at all under a subdirectory mount.
+   */
+  mountAt(path) {
+    const prev = { base: this.base, cwd: this.cwd };
+    this.base = this.base.concat(Array.isArray(path) ? path : this._split(path));
+    this.cwd = [];
+    return prev;
+  }
+
+  /** Put back a view returned by mountAt(). */
+  restore(view) { this.base = view.base; this.cwd = view.cwd; }
+
+  /** The directory part of `path`, as a base-relative component list (for mountAt). */
+  dirOf(path) { const parts = this._split(path); parts.pop(); return parts; }
+
+  /** The last component of `path`, normalised — the name a program sees as its own. */
+  leafOf(path) { const parts = this._split(path); return parts[parts.length - 1] || ''; }
 
   cwdString() { return 'C:\\' + this.cwd.join('\\'); }
 
@@ -188,7 +228,8 @@ export class VFS {
   /** Add a file at an absolute-ish DOS path (creating parent dirs). */
   addFile(path, bytes) {
     const parts = this._split(path);
-    let cur = this.root;
+    let cur = this._baseNode();
+    if (!cur) return;
     for (let i = 0; i < parts.length - 1; i++) {
       let next = cur.children.get(parts[i]);
       if (!next) { next = dirNode(parts[i]); cur.children.set(parts[i], next); }

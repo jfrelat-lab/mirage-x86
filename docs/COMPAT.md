@@ -63,7 +63,7 @@ in `modrm()` + the address path. `test.js` has 11 targeted cases — each ends w
 conformance vectors are 16-bit-only and cannot reach this class). Should help other 386-era
 demos, not just Heaven.
 
-## Games (in `games/`, gitignored; mounted at C:\GAMES\ from `games/manifest.json`)
+## Games (in `games/`, gitignored; listed at C:\GAMES\ from `games/manifest.json`, and each one mounted AS C:\ while it runs)
 
 | Game | Mode | Status |
 |---|---|---|

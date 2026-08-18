@@ -26,7 +26,12 @@ export class Shell {
     this.prompt();
   }
 
-  prompt() { this.print(this.vfs.cwdString() + '>'); this.state = 'input'; this.line = ''; }
+  /** Back to the shell — which browses the whole of C:, so the program's own view goes away here.
+   *  Every route back passes through prompt(): a normal exit, a Ctrl+C, and the UI's fault handler. */
+  prompt() {
+    if (this._view) { this.vfs.restore(this._view); this._view = null; }
+    this.print(this.vfs.cwdString() + '>'); this.state = 'input'; this.line = '';
+  }
 
   // ---- line editor (called each frame while idle) ----
   pump() {
@@ -70,16 +75,24 @@ export class Shell {
   }
 
   // ---- program launching ----
+  // A program runs with ITS OWN DIRECTORY as the root of C:, which is what `mount c <dir>` gives it
+  // under DOSBox and what the floppy or the install directory gave it originally. The shell keeps
+  // browsing the whole tree (C:\GAMES\<TITLE>\...) — the narrowed view lasts exactly as long as the
+  // program does, and prompt() puts it back. See VFS.mountAt() for why the mount point is visible
+  // to the guest at all.
   launch(name, args) {
     const tryNames = /\.[A-Z]{2,3}$/i.test(name) ? [name] : [name + '.COM', name + '.EXE', name + '.BAT'];
     for (const n of tryNames) {
-      const data = this.vfs.readFile(n) || this.vfs.readFile('\\' + n);
-      if (!data) continue;
-      if (n.toUpperCase().endsWith('.BAT')) { this.runBatch(data); return true; }
-      const tail = args ? ' ' + args : '';
-      this.dos.load(data, tail, this.vfs.cwdString() + '\\' + n);
-      this.state = 'running';
-      return true;
+      for (const path of [n, '\\' + n]) {                    // as typed (cwd-relative), then the root
+        const data = this.vfs.readFile(path);
+        if (!data) continue;
+        if (n.toUpperCase().endsWith('.BAT')) { this.runBatch(data); return true; }
+        const leaf = this.vfs.leafOf(path);
+        this._view = this.vfs.mountAt(this.vfs.dirOf(path));
+        this.dos.load(data, args ? ' ' + args : '', 'C:\\' + leaf);
+        this.state = 'running';
+        return true;
+      }
     }
     return false;
   }
