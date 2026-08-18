@@ -58,7 +58,10 @@ const SECS = Number(process.env.SECS) || 30;
 // CYCLES is the bound to trust. WALL is a safety net for a title that idles on input forever, and a
 // run that stops on it has told you nothing — it cannot distinguish "took a different path" from
 // "ran out of time", and it moves under load. Never sweep in parallel with another sweep.
-const WALL = Number(process.env.WALL) || (SWEEP ? 1200 : 6000);
+// WALL is a safety net for a title that idles on input, never the bound that decides a run: at 1200 ms
+// a sweep produced per-title counts that did not reproduce — Duke 1 read 1869 events in one sweep and
+// 16218 in the next, from identical code. Leave the cycle budget in charge.
+const WALL = Number(process.env.WALL) || (SWEEP ? 20000 : 6000);
 const CYCLES = Number(process.env.CYCLES) || (SWEEP ? 4e7 : 3e8);
 const CACHE = join(ROOT, '.dbxlogs');
 
