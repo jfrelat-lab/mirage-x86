@@ -77,6 +77,9 @@ function dosboxLog(dir, prog, force) {
  * Parse a DOSBox-X debug log into events, starting at the moment it EXECs `prog`. Everything before
  * that is the shell running AUTOEXEC.BAT and MOUNT.COM, which MIRAGE has no equivalent of.
  */
+/** DOSBox answers no DPMI host, so an extender there falls back to VCPI/EMS. See parseDosbox. */
+const dbxLacksDPMI = (text) => /INT 2F Unhandled call AX=1687/.test(text);
+
 function parseDosbox(text, prog) {
   const ev = { file: [], video: [], int21: [] };
   let started = false;
@@ -172,6 +175,10 @@ function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
     return r;
   };
 
+  const prev2f = mc.intHandlers[0x2f];
+  let servedDPMI = false;
+  mc.hookInterrupt(0x2f, (c, m) => { if (c.ax === 0x1687) servedDPMI = true; if (prev2f) prev2f(c, m); });
+
   const int10 = mc.intHandlers[0x10];
   mc.intHandlers[0x10] = (c, m) => {
     if ((c.ax >> 8) === 0x00) ev.video.push(`mode ${(c.ax & 0x7f).toString(16)}`);
@@ -189,7 +196,7 @@ function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
     if (cpu.cycles > cycles || Date.now() - t0 > wall) break;
   }
   return {
-    ev,
+    ev, servedDPMI,
     stop: fault ? 'FAUTE ' + fault.message : dos.programDone ? 'programme termine' : 'toujours en cours',
     mcycles: cpu.cycles / 1e6,
   };
@@ -212,9 +219,14 @@ function compare(dir, prog, opts = {}) {
   const ref = parseDosbox(text, prog);
   if (!ref.file.length) return { err: `DOSBox n a jamais execute ${prog}` };
   const mine = runMirage(dir, prog, opts);
+  // An extender that finds a DPMI host takes a path the reference cannot: DOSBox answers none, so
+  // its copy falls back to hunting VCPI/EMS and reads the INT 67h vector we never touch. Measured on
+  // Doom — INT 2Fh AX=1687 lands between int21 #15 and the #16 that diverges. Flag it rather than
+  // report it as a finding, or the same three titles mislead every reader of the sweep.
+  const dpmiSplit = mine.servedDPMI && dbxLacksDPMI(text);
   const at = {};
   for (const ch of CHANNELS) at[ch] = firstDiff(ref[ch], mine.ev[ch]);
-  return { ref, ...mine, at };
+  return { ref, ...mine, at, dpmiSplit };
 }
 
 // ---------------------------------------------------------------- entry points
@@ -229,9 +241,9 @@ if (SWEEP) {
     if (r.err) { console.log(`${name} ${r.err}`); continue; }
     const okOf = (ch) => r.at[ch] < 0 ? Math.min(r.ref[ch].length, r.ev[ch].length) : r.at[ch];
     const bad = CHANNELS.filter((ch) => r.at[ch] >= 0);
-    const verdict = bad.length
-      ? bad.map((ch) => `${ch}#${r.at[ch]}: dbx="${r.ref[ch][r.at[ch]]}" mir="${r.ev[ch][r.at[ch]] ?? '(fin)'}"`).join('  |  ')
-      : 'prefixe exact';
+    const verdict = !bad.length ? 'prefixe exact'
+      : (r.dpmiSplit ? 'chemins DPMI divergents (attendu) — ' : '') +
+        bad.map((ch) => `${ch}#${r.at[ch]}: dbx="${r.ref[ch][r.at[ch]]}" mir="${r.ev[ch][r.at[ch]] ?? '(fin)'}"`).join('  |  ');
     console.log(`${name} ${String(r.ref.file.length).padStart(5)}/${String(r.ev.file.length).padStart(5)}/` +
       `${String(okOf('file')).padStart(5)}  ${String(okOf('video')).padStart(5)}   ${verdict}`);
   }
