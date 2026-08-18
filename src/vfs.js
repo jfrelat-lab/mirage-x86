@@ -14,7 +14,6 @@ export class VFS {
     this.base = [];                // the directory the guest sees as C:\ — see mountAt()
     this.cwd = [];                 // path components from the base, uppercased
     this.handles = new Map();      // fd -> { node, pos, path, write }
-    this.nextFd = 5;               // 0..4 reserved for std streams
     this.extraDevices = new Set(); // names contributed by loaded drivers — see addDevice
     this.label = 'MIRAGE';
   }
@@ -174,12 +173,16 @@ export class VFS {
    */
   addDevice(name) { this.extraDevices.add(name.toUpperCase()); }
 
+  /** The lowest free entry, as DOS allocates from its 20-slot handle table. A monotonic counter
+   *  instead handed out numbers past the end of that table once a program had opened enough files. */
+  _allocFd() { let fd = 5; while (this.handles.has(fd)) fd++; return fd; }
+
   /** @param {{create?:boolean, truncate?:boolean}} opts */
   openFile(path, opts = {}) {
     const leaf = String(path).toUpperCase().replace(/\//g, '\\').split('\\').pop().split('.')[0];
     const device = this.extraDevices.has(leaf) ? leaf : VFS.deviceOf(path);
     if (device) {
-      const fd = this.nextFd++;
+      const fd = this._allocFd();
       this.handles.set(fd, { device, pos: 0, path });   // no node: reads and writes go to dos.js
       return fd;
     }
@@ -189,7 +192,7 @@ export class VFS {
       if (!opts.create || !parent) return -1;
       n = fileNode(name, new Uint8Array(0)); parent.children.set(name, n);
     } else if (opts.truncate) n.data = new Uint8Array(0);
-    const fd = this.nextFd++;
+    const fd = this._allocFd();
     this.handles.set(fd, { node: n, pos: 0, path });
     return fd;
   }

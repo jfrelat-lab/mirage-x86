@@ -118,6 +118,9 @@ export function installDOS(machine, vfs) {
   mem.w8((DIB_SEG << 4) + INDOS_OFF, 0);
   mem.w8((DIB_SEG << 4) + CRITERR_OFF, 0);
 
+  /** Bytes of a DS:DX transfer that fit before the segment wraps. */
+  const segCap = (count, off) => Math.min(count, 0x10000 - off);
+
   // allocTop = the top of the program block plus every live dynamic allocation. Recomputed after a
   // free/resize so reclaimed memory is actually handed back (a bump allocator that never lowered
   // allocTop made games that alloc-a-temp-then-free-it-then-alloc-the-real-heap — e.g. the SCUMM
@@ -360,15 +363,18 @@ export function installDOS(machine, vfs) {
       // so there is nothing to free, but reporting "invalid handle" is wrong and FreeDOS's shell
       // does it five times during a boot (tools/dos-oracle.mjs).
       case 0x3e: (vfs.close(cpu.bx) || (cpu.bx & 0xffff) <= 4) ? ok() : err(6); break;   // close
+      // A transfer stops at the end of the buffer's SEGMENT: DOS never wraps DS:DX and never runs on
+      // past 64 KB. Keen asks for a hard-coded 0FFFFh into a buffer at offset 4 and must get 65532.
       case 0x3f: {                                                   // read
-        const data = vfs.read(cpu.bx, cpu.cx & 0xffff);
+        const n = segCap(cpu.cx & 0xffff, cpu.dx & 0xffff);
+        const data = vfs.read(cpu.bx, n);
         if (data === null) { err(6); break; }
         let p = cpu.base[DS] + (cpu.dx & 0xffff);
         for (let i = 0; i < data.length; i++) mem.w8(p + i, data[i]);
         cpu.ax = data.length; ok(); break;
       }
       case 0x40: {                                                   // write
-        const n = cpu.cx & 0xffff; let p = cpu.base[DS] + (cpu.dx & 0xffff);
+        const n = segCap(cpu.cx & 0xffff, cpu.dx & 0xffff); let p = cpu.base[DS] + (cpu.dx & 0xffff);
         const dev = vfs.handles.get(cpu.bx & 0xffff);
         // stdout/stderr, or a handle opened on CON, goes to the screen; the other devices swallow it.
         if (cpu.bx === 1 || cpu.bx === 2 || (dev && dev.device === 'CON')) { for (let i = 0; i < n; i++) out(mem.r8(p + i)); cpu.ax = n; ok(); break; }

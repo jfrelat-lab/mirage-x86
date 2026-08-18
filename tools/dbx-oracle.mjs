@@ -68,6 +68,7 @@ const norm = (p) => basename(String(p).replace(/\\/g, '/').trim()).toUpperCase()
 // happened, never how long it was.
 const DEVICE = /^(CON|AUX|PRN|NUL|CLOCK\$|EMMXXXX0)$/;
 const strictFor = (file) => STRICT && !DEVICE.test(file);
+const segCap = (count, off) => Math.min(count, 0x10000 - off);
 
 // ---------------------------------------------------------------- the DOSBox side
 
@@ -170,8 +171,11 @@ function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
     if (ah === 0x4b) pre = `exec ${norm(asciiz(dsdx))}`;
     else if (ah === 0x3c || ah === 0x3d) pre = `open ${norm(asciiz(dsdx))}`;
     else if (ah === 0x3e) pre = `close ${nameOf(c.reg[3])}`;
-    else if (ah === 0x3f) { const f = nameOf(c.reg[3]); pre = strictFor(f) ? `read ${f} ${c.reg[1] & 0xffff}` : `read ${f}`; }
-    else if (ah === 0x40) { const f = nameOf(c.reg[3]); pre = strictFor(f) ? `write ${f} ${c.reg[1] & 0xffff}` : `write ${f}`; }
+    // The count DOS will actually transfer, not the count asked for: a request runs out at the end of
+    // the buffer's segment, and that capped value is what the reference logs. Keen asks for a
+    // hard-coded 0FFFFh into a buffer at offset 4 and both sides move 65532.
+    else if (ah === 0x3f) { const f = nameOf(c.reg[3]); pre = strictFor(f) ? `read ${f} ${segCap(c.reg[1] & 0xffff, c.reg[2] & 0xffff)}` : `read ${f}`; }
+    else if (ah === 0x40) { const f = nameOf(c.reg[3]); pre = strictFor(f) ? `write ${f} ${segCap(c.reg[1] & 0xffff, c.reg[2] & 0xffff)}` : `write ${f}`; }
     else if (ah === 0x42) {
       const f = nameOf(c.reg[3]), off = ((c.reg[1] & 0xffff) << 16) | (c.reg[2] & 0xffff);
       pre = strictFor(f) ? `seek ${f} ${off | 0} ${c.ax & 0xff}` : `seek ${f}`;
