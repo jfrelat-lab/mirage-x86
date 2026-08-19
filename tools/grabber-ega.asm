@@ -9,6 +9,13 @@
 ;
 ; Writes EGA.BIN (4 x 8000 bytes, plane 0 first), PAL.BIN (768 DAC bytes) and INFO.BIN
 ; (mode, offset, startHi, startLo, then 16 attribute entries).
+;
+; HARD LIMIT, measured on Baby Jo: this counts OUR INT 8 invocations, so it can only reach a moment
+; the guest still lets us see. A game that installs its own INT 8 without chaining — which is what
+; reprogramming the PIT for a fast music/logic tick usually comes with — cuts this handler out, the
+; counter stops, and nothing is ever dumped. Baby Jo captures fine at 60 and 200 ticks and never at
+; 45000: it takes the timer over after its language screen. For those, the trigger has to be
+; something the guest does not own.
 
 %ifndef KTICKS
 %define KTICKS 24

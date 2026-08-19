@@ -42,7 +42,7 @@ writeFileSync(join(work, 'dbx.conf'),
 // outside once the files have appeared.
 const child = execFileSync('/bin/sh', ['-c',
   `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ${DOSBOX} -conf ${join(work, 'dbx.conf')} -nomenu -fastlaunch >/dev/null 2>&1 & ` +
-  `p=$!; for i in $(seq 1 60); do [ -s ${join(work, 'INFO.BIN')} ] && break; sleep 1; done; sleep 1; kill -9 $p 2>/dev/null; wait $p 2>/dev/null; true`],
+  `p=$!; for i in $(seq 1 900); do [ -s ${join(work, 'INFO.BIN')} ] && break; sleep 1; done; sleep 1; kill -9 $p 2>/dev/null; wait $p 2>/dev/null; true`],
   { encoding: 'utf8' });
 
 const need = ['EGA.BIN', 'PAL.BIN', 'INFO.BIN'].map((f) => join(work, f));
