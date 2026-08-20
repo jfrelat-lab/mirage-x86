@@ -1,6 +1,8 @@
 // egaref.mjs — capture a whole GAME's EGA/VGA planar frame from real DOSBox-X, as a reference.
 //
 //   node tools/egaref.mjs <gameSubdir> <PROG.EXE> [ticks] [out.png] [tail]
+//   KEYS="-w 8 enter" drives DOSBox-X's AUTOTYPE, the only scriptable way in: its screenshot is a
+//   host hotkey (F12+P) with no command and no config trigger, so the grabber stays the dump path.
 //
 // dosdiff.js covers one self-contained mode-13h program. Most of the corpus is neither: a multi-file
 // game in a 16-colour planar mode. The whole game directory is copied beside the grabber, which goes
@@ -19,6 +21,7 @@ import { composePlanar, writePNG } from './frame.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url)), ROOT = join(HERE, '..');
 const NASM = '/opt/homebrew/bin/nasm', DOSBOX = '/opt/homebrew/bin/dosbox-x';
 const [sub, prog, ticksArg, outArg, tail] = process.argv.slice(2);
+const KEYS = process.env.KEYS || '';   // e.g. "-w 8 enter" — see AUTOTYPE /?
 if (!sub || !prog) { console.error('usage: node tools/egaref.mjs <subdir> <PROG.EXE> [ticks] [out.png] [tail]'); process.exit(2); }
 const K = Number(ticksArg) || 60;
 const out = outArg || `/tmp/${sub}-dosbox.png`;
@@ -36,7 +39,7 @@ execFileSync(NASM, ['-f', 'bin', `-dKTICKS=${K}`, join(HERE, 'grabber-ega.asm'),
 
 writeFileSync(join(work, 'dbx.conf'),
   `[sdl]\noutput=surface\nautolock=false\n[log]\nlogfile=\n[dosbox]\nmachine=svga_s3\n[cpu]\ncore=normal\ncycles=fixed 20000\n` +
-  `[autoexec]\nmount c ${work}\nc:\nGREGA.COM\n${prog}${tail ? ' ' + tail : ''}\n`);
+  `[autoexec]\nmount c ${work}\nc:\nGREGA.COM\n${KEYS ? `AUTOTYPE ${KEYS}\n` : ''}${prog}${tail ? ' ' + tail : ''}\n`);
 
 // DOSBox never exits on its own here — the grabber halts the guest after K ticks — so kill it from
 // outside once the files have appeared.
