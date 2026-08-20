@@ -191,7 +191,11 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 
 1. **DPMI / protected mode** — none. The single biggest gap: blocks Raptor, Jazz, Doom-class
    (DOS4GW), and advanced 64K demos. Real-mode games/≤4K demos do NOT need it.
-2. **EMS** — none (XMS *is* implemented, see `xms.js`). Some games probe for EMS; most degrade.
+2. ~~**EMS** — none~~ **DONE 2026-08-17** (`src/ems.js`, `58cc60b` + `b3e41fa`). LIM EMS 4.0 behind an
+   `ems` option beside `xms`. The half that mattered was **detection**: programs find EMS by OPENING
+   the character device `EMMXXXX0` and confirming bit 7 of IOCTL 4400h, **never** by reading the INT
+   67h vector. Installed-but-undiscoverable EMS is worth nothing — Wolf3D's first divergence against
+   the reference moved from file event #7 to #155 the moment the device existed.
 3. **Audio** — SB/OPL are detection stubs only (no synthesis). Silent, but detection passes.
 4. **Mode X / unchained VGA** — not implemented. No demo/game we currently have exercises it, but
    it's a genuine future need (Second Reality, some VGA action games). Would need a hand test.
@@ -247,6 +251,22 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
    ⚠️ Still to verify: how Keen Vorticons actually behaves uncapped, side by side with DOSBox.
 
 ## Fixes this frontier came from (recent)
+
+- **BIOS ROM identity at the top of F000 (`beb766d`, 2026-08-19):** F000:FFF0 far JMP, FFF5 the
+  8-byte release date, FFFE the model byte, FFFF the submodel — read off the reference with
+  `tools/biosid.asm`, not invented. Ours held zeros; **Turbo Pascal** scans that region, ran clean off
+  the end of memory, wrapped past 1 MB and executed the interrupt vector table. It now runs (24 M
+  cycles and going, against a fault at 0.1 M). Found with the co-sim.
+- **INT 10h AH=05h moves the CRTC display start (`225c677`, 2026-08-18):** we recorded the page number
+  in the BDA and nothing else, so a game drawing to the hidden page showed page 0 for ever. Baby Jo
+  alternates pages 1375 times each through this call.
+- **Transfers stop at the segment end; DOS handles are reused (`50a326e`, 2026-08-18):** AH=3Fh/40h
+  ran past 64 KB where DOS truncates (Keen asks for a hard-coded 0FFFFh into a buffer at offset 4),
+  and the handle counter was monotonic, so numbers climbed past the 20-entry table DOS gives a
+  program and Keen leaked a handle it never closed. **Keen 1 is now event-exact** against the
+  reference on all three channels.
+- **INT 21h AH=50h/51h (`4cdd8a7`, 2026-08-17):** set/get current PSP, found by diffing the corpus's
+  whole INT 21h surface against `src/dos.js`. `AH=31h` and `AH=5Dh` are still missing (Jazz).
 
 - **1 MiB address wrap + A20 gate (`76d0e90`, 2026-08-01):** real-mode addresses now wrap at 1 MiB
   regardless of installed RAM (was `size-1`, so the browser's 16 MiB had no wrap while headless's

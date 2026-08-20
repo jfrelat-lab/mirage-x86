@@ -141,6 +141,93 @@ from a real kernel's, which is a more tractable question than "which DOS is corr
 
 The recording is committed, so `check` runs without a boot image.
 
+## The DOSBox-log oracle (`tools/dbx-oracle.mjs`)
+
+Not to be confused with `dos-oracle.mjs` above — one hyphen apart and a different question.
+`dos-oracle` is the authority on what a call **returns**; this one is the authority on the
+**sequence** a real program produces.
+
+DOSBox-X's `-debug -log-fileio -log-int21` prints every file a program opens, reads, seeks, creates,
+deletes and closes, every INT 21h function, and every video mode. Both sides are normalised to one
+event vocabulary and compared as a **prefix** — DOSBox is killed from outside and MIRAGE stops on its
+own budget, so only the common prefix means anything.
+
+    node tools/dbx-oracle.mjs games/DOOM DOOM.EXE      # one title (cached log under .dbxlogs/)
+    node tools/dbx-oracle.mjs --capture games/X Y.EXE  # re-capture the reference
+    node tools/dbx-oracle.mjs --sweep [filter]         # the whole corpus, ~2 min
+    --strict                                           # compare byte counts and seek offsets too
+
+**Three separate channels** (file / video / int21), never interleaved: they are independent
+subsystems whose relative order neither emulator promises. Comparing them as one stream reported a
+divergence for Keen 1 that was only "the mode was set a few opens later".
+
+### The normalisations, every one of which was a false positive first
+
+Building this cost six wrong readings, all in the tool rather than the engine. They are listed
+because each looks like a defect and none is:
+
+| Trap | What it looked like | What it was |
+|---|---|---|
+| AH printed unpadded (`ah=e`) | six titles diverging on the first call | pad both sides to two digits |
+| failed opens suppressed on our side | eight titles diverging where the reference opens a settings or high-score file | DOSBox logs the **attempt**; those files are absent from the directory |
+| creates and deletes | Roc diverging at its second event | they have their **own** line shapes, neither of which looks like an open |
+| empty filename | Dave carrying one event more, for ever | `file open command 0 file ` with nothing after; `(.+)` needed a character |
+| EXEPACK | Maniac Mansion diverging from its first INT 21h | the reference **exited 255** on "Packed file is corrupt"; retried through LOADFIX automatically |
+| a wall-clock budget | Duke 1 apparently going from 1869 events to 16218 | noise; **bound in cycles**, run the sweep alone |
+
+### Environmental differences that are NOT defects
+
+Two of these are permanent and documented in the tool's header. Rule them out before chasing
+anything.
+
+**Free conventional memory.** Our HLE DOS is resident in almost nothing, so the PSP sits at 0x0100
+where DOSBox's is around 0x0800 — about 29 KB more for the program. Any title that binary-searches
+for its largest block (SCUMM does, in AH=48/49 pairs) converges elsewhere: Indy 3, Maniac Mansion and
+Monkey Island diverge for exactly this and nothing else, with every one of their file events
+agreeing. Deliberately **not** auto-flagged, because a real allocator defect looks identical from
+outside — measure the sizes before concluding.
+
+**A DPMI host.** DOSBox answers none on INT 2Fh AX=1687, so an extender there falls back to hunting
+VCPI/EMS. Doom, OMF and Heaven Seven all read the INT 67h vector at INT 21h call #16 where we go
+straight on, and Jazz loads its bundled DPMI.000 where we skip to RTM.000. The sweep labels these
+"chemins DPMI divergents (attendu)".
+
+## The EGA/VGA pixel reference (`tools/egaref.mjs`, `tools/shot.mjs`, `tools/frame.mjs`)
+
+`dosdiff.js` covers one self-contained mode-13h program. Most of the corpus is neither: a multi-file
+game in a 16-colour planar mode, and until 2026-08-18 none of those had any pixel reference at all.
+
+    node tools/egaref.mjs BABYJO BABY.EXE 2600 /tmp/ref.png   # DOSBox side, K = timer interrupts
+    node tools/shot.mjs   BABYJO BABY.EXE 2600 /tmp/ours.png  # ours, same clock
+    KEYS="-w 8 enter" node tools/egaref.mjs ...               # AUTOTYPE, to get past a menu
+    RUNS=1 ...                                                # print per-row pixel runs instead of eyeballing
+
+`grabber-ega.asm` goes resident, chains INT 8, and dumps the four planes through the Graphics
+Controller's read-map-select plus the CRTC offset/start and the sixteen attribute entries. Both sides
+compose through `frame.mjs` **on purpose**: with separate renderers, a difference in the picture would
+not say whether the DATA differs or only the two renderers disagree.
+
+Three things to know before using it:
+
+- **Bound on the BIOS tick counter (0040:006C), never on host iterations.** `run-game.mjs`'s loop
+  advances ~150 guest ticks per iteration, so its "frame 40" is minutes of guest time.
+- **The two tick rates are not the same clock.** A game that reprograms the PIT (Baby Jo runs it at
+  291 Hz) makes our counter race DOSBox's 18.2 Hz grabber ticks by 16×. Asking the reference for our
+  tick count once asked it for 41 minutes.
+- **The grabber dies when the guest takes over INT 8** without chaining, which is what reprogramming
+  the PIT usually comes with. Baby Jo captures at 60 and 200 ticks and never at 45000. Later screens
+  need a trigger the guest does not own.
+
+DOSBox-X has **no scriptable screenshot** — it is the F12+P host hotkey, with no command and no config
+trigger — so the grabber is the only dump path headless. `AUTOTYPE` *is* a real internal command and
+is how you drive the guest past a menu.
+
+## Reading the ROM identity (`tools/biosid.asm`)
+
+A one-shot COM that writes F000:FFF0..FFFF to a file, so the values a real machine carries can be read
+off the reference instead of invented. Ours were zeros; Turbo Pascal scans that region, ran off the
+end of memory and executed the interrupt vector table.
+
 ## Surveying the I/O bus (`tools/survey-ports.mjs`)
 
 The port-bus counterpart of `survey-gaps.mjs`. Runs the same corpus (`tools/corpus.mjs`) with
@@ -171,11 +258,12 @@ build bare machines and do not use it.
 | **386 semantics vs Unicorn** | `node tools/test-x86-uc.mjs` (`--capture` to refresh) | 2086 cases — 86 hand-written plus **2000 generated** (`tools/x86-gen.mjs`) (single instructions + multi-instruction **sequences**) whose expected values are **observed from Unicorn** (QEMU's TCG core), not hand-derived: `0x67` ModRM/SIB forms, `0x66` operand size (CWDE/CDQ, PUSHAD/PUSHFD, 32-bit ALU), BT/BTS/BTR/BTC bit-string offsets on memory, string ops/XLAT/LOOP under `0x67`, shift/rotate flag corners, and sequences that exercise the **dead-flag elimination** pass (producer → consumer → killer, INC/DEC preserving CF, shifts with a runtime count of 0, REP with CX=0, LAHF/PUSHF reading the whole word, bounded loops). The captured reference is committed, so the gate needs neither Python nor Unicorn. ⚠️ **BCD (27/2f/37/3f) is deliberately excluded** — Unicorn models the later-CPU algorithm; the 8088 differs and `conformance` covers it with real silicon (40000/40000). | 2086/2086 |
 | **DOS/BIOS services** | `node tools/test-dos-api.js` | 243 cases against the INT 21h / 10h / 16h / 1Ah / 2Fh surface: file handles, find-first/next, memory (4Ah then 48h/49h), EXEC child block sizing, directories (39h/3Ah/3Bh/47h), the boot-sector INT 19h handoff, INT 13h over sector images (CHS decoding, geometry, error codes, and a two-sector boot image that loads its own second sector), DTA, the **CF-on-success convention**, and the XMS driver (move bounds/overlap/even length, realloc relocation, lock/free refusal, plus an end-to-end check that an AH=0Bh overlay swap invalidates the cached compiled block) - the layer `conformance`/`golden` cannot see | 243/243 |
 | **Conformance** | `node tools/conformance.js` | 555,764 SingleStepTests vectors (8088 silicon, run under the `8088` profile — no skips) — per-instruction reg/flag/memory exactness | **100%**, non-negotiable |
-| **Golden** | `node tools/golden.js check` | deterministic output fingerprint of 20 demos (framebuffer + planes + DAC + fault) | 20/20 |
+| **Golden** | `node tools/golden.js check` | deterministic output fingerprint of 22 workloads (framebuffer + planes + DAC + fault) | 22/22 |
 | **Region fuzzer** | `node tools/fuzz-region.js 20000` | tier-2 region output == tier-1 (`stepOne`) on 20k random programs | `region == tier-1 on all` |
 | **Flag fuzzer** | `node tools/fuzz-flags.js` | randomized flag-producing sequences vs a reference | clean |
 | **Bench** | `node tools/bench.js` | p50 ms/frame for tube/memories/plasma13/xormunch/kaneda/lattice/puls | within ~±3% (A/B, this machine) |
-| **DOSBox diff** | `node tools/dosdiff.js <prog.com>` | frame-matched pixel compare vs real DOSBox-X | visual signal (see below) |
+| **DOSBox diff** | `node tools/dosdiff.js <prog.com>` | frame-matched pixel compare vs real DOSBox-X, mode 13h | visual signal (see below) |
+| **DOS/BIOS sequence** | `node tools/dbx-oracle.mjs --sweep` | file / video / INT 21h event streams vs real DOSBox-X, whole corpus | 30/47 exact prefixes (2026-08-19) |
 
 `test-demos.js` / `test-dos.js` / `test-gfx.js` are additional targeted suites.
 
@@ -213,13 +301,37 @@ programs render from `machine.vga.planes` (see the planar renderer in `video.js`
 
 ## The CPU co-sim (found the real CPU bugs)
 
-Not in `tools/` — an ad-hoc harness (scratchpad) that snapshots MIRAGE's exact CPU+memory state
-and single-steps it against **Unicorn Engine** (QEMU's core, `pip install --user unicorn`) as a
-trusted x86 oracle, diffing registers/memory each instruction. Same initial state ⇒ only genuine
-CPU-emulation bugs surface (no need to match two DOSes). It found the `push dword` SP bug and the
-`popf` 386-flag-mask bug. For BIOS/DOS INTs it *adopts* MIRAGE's after-state (device behaviour,
-not CPU); it replays MIRAGE's port reads and runs whole REP ops as one step. Reach for it when a
-game derails and you need to localize a wrong branch/computation. See the `cosim_tool` memory.
+`tools/cosim/` — snapshots MIRAGE's exact CPU+memory state and single-steps it against **Unicorn
+Engine** (QEMU's core, `pip3 install --user unicorn`) as a trusted x86 oracle, diffing
+registers/memory each instruction. Same initial state ⇒ only genuine CPU-emulation bugs surface (no
+need to match two DOSes). It found the `push dword` SP bug, the `popf` 386-flag-mask bug, and the
+BIOS ROM identity gap behind Turbo Pascal's derail.
+
+    GAME=TURBOPAS EXE=TURBO.EXE node tools/cosim/mirage-cosim.mjs   # snapshot a pure-CPU window
+    python3 tools/cosim/uc-cosim.py                                 # replay it in Unicorn
+    node tools/cosim/cosim-diff.mjs                                 # first divergence + culprit
+
+Parameterised by `GAME`/`EXE`/`TAIL`/`MOUNT`/`SNAPBACK`, not edited per title — it used to be a
+template you rewrote, which lost the previous wiring every time.
+
+**The pure-CPU window is the whole contract.** Unicorn has no BIOS or DOS, so the snapshot must land
+*between* services. The driver picks that point by watching entries into them — and that means
+`biosCallback` as well as `swInt`, since BIOS services now run as inline far-calls to `f000:n`.
+Missing them put a snapshot inside a BIOS call, and Unicorn then differed on AX at the IRET: a
+divergence that is the harness's, not the engine's.
+
+**Unicorn has blind spots too — read its verdicts, do not swallow them.** Measured on Turbo Pascal:
+
+- it **clears AF after `SHR`** where we set it. The flag is architecturally *undefined* there, so
+  neither is wrong; ignore AF-only differences on shifts.
+- it does **not wrap a real-mode word read at the 1 MB boundary**, where we do — and we are right.
+  A `LODSW` at `f000:ffff` reads one byte below 1 MB and one at linear 0.
+- its real-mode single-step mishandles self-modified code (stale JIT cache); a Unicorn-side fault on
+  an SMC'd byte is an artifact. Verify by comparing runtime opcode bytes.
+
+**A derail reproduced by BOTH engines is not a CPU bug.** That was the Lemmings result in 2026-08-01
+and the Turbo Pascal result here: the guest faithfully executes garbage that both engines produce
+from the same RAM, so the corruption was set up earlier — by a service, a device, or missing data.
 
 ## What "verify a change" means here
 
