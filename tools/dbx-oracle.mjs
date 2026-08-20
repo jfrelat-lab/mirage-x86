@@ -79,10 +79,18 @@ const segCap = (count, off) => Math.min(count, 0x10000 - off);
 function dosboxLog(dir, prog, force) {
   if (!existsSync(CACHE)) mkdirSync(CACHE);
   const out = join(CACHE, `${basename(dir)}-${prog}.log`);
-  if (force || !existsSync(out)) {
-    execFileSync(join(ROOT, 'tools', 'dbxlog.sh'), [dir, prog, String(SECS), out], { stdio: 'ignore' });
+  const run = (env) => execFileSync(join(ROOT, 'tools', 'dbxlog.sh'), [dir, prog, String(SECS), out],
+    { stdio: 'ignore', env: { ...process.env, ...env } });
+  if (force || !existsSync(out)) run({});
+  let text = existsSync(out) ? readFileSync(out, 'latin1') : null;
+  // An EXEPACK'd program loaded in the first 64 KB dies with "Packed file is corrupt" before doing
+  // anything — Maniac Mansion exits 255 on its first INT 21h. A reference that never ran is worse
+  // than none, so retry it the way a player would have: through LOADFIX.
+  if (text && /Packed file is corrupt/.test(text)) {
+    run({ LOADFIX: '1' });
+    text = existsSync(out) ? readFileSync(out, 'latin1') : text;
   }
-  return existsSync(out) ? readFileSync(out, 'latin1') : null;
+  return text;
 }
 
 /**
