@@ -46,12 +46,32 @@ our paging is RIGHT for it: measured at that instant, CR0=0x80000011 (PG=1, PE=1
 PDE[896]=0x00004003 present, PTE[244]=0x000f4003 present → physical 0x000F4F6D, where the bytes are
 `66 8c c8 66 83 e0 03` = `mov eax,cs / and eax,3 / cmp eax,0` — real code, a CPL check.
 
-So the page walk resolves and the block translates; what goes wrong is what happens *after* executing
-it. Worth checking first: whether the instruction-fetch path applies the page walk or masks the
-linear address to the RAM size. For this particular address the two coincide (0xE00F4F6D & 0xFFFFFF
-= 0x0F4F6D = the physical address), which would hide a missing translation until an address where
-they differ. Second: the block cache key, which is documented as `(lin & 0xfff) | (csD << 12)` —
-verify it disambiguates 0xE00F4F6D from a low address sharing those 12 bits.
+**ROOT CAUSE, measured 2026-08-19 — the real-mode 1 MB wrap is applied to LINEAR addresses in
+protected mode.** Single-stepped across the transition with the runner's own A20 wiring:
+
+    A20=false  mem.mask=0x000fffff  rec.MM=0x000fffff  csD=1  CR0=0x80000011 (PE=1, PG=1)
+    step 0  00d8:e00f4f6d  linear=0xe00f4f6d  masked=0x000f4f6d  bytes 66 8c c8 66 83   <- correct code
+    step 1  00d8:00004f6f  linear=0x00004f6f                     bytes 00 00 00 00 00   <- EIP truncated
+
+`recompiler.js` computes `lin = (cpu.base[CS] + ip0) & this.MM` and lives in that masked space: it
+indexes the block cache by it, fetches the bytes from it, and the executed block writes EIP back from
+it. So **every linear address above 1 MB loses its high bits**, and with it EIP. The block at the
+alias decodes correctly only because 0xE00F4F6D & 0xFFFFF happens to equal its physical address; the
+very next instruction lands at 0x4f6f in zeroed RAM, and the guest then walks upward through memory
+until it reaches the IDT.
+
+A20 gates address line 20 of the **physical** bus. Linear addresses are not subject to it: paging
+translates linear → physical and *only then* does A20 mask bit 20. Masking the linear address before
+the walk — which is exactly what real mode needs and what this code was written for — is wrong the
+moment PG is set.
+
+So the fix is not a one-liner: instruction fetch has to go linear → page walk → physical, and the
+block cache is keyed on the masked linear today. Test386 is the gate for it, and note that A20 is
+still CLOSED at this point in the test, so the two spaces genuinely differ.
+
+⚠️ Measured twice: the first attempt stubbed port 0x92 to a no-op in an ad-hoc harness and would have
+blamed the engine for the harness. `tools/run-test386.mjs:37` is the correct wiring — it calls
+`setA20` and refreshes `rec.MM`. Reproduce with that, not with a hand-rolled machine.
 
 **The historical call-gate analysis, kept for the descriptor-decoding lesson:** POST 20 spins on a `call far 0x013b:0`. The descriptor at GDT[0x138] reads `46 2d d0 00 00 ec 00 00`, and the access byte is the whole story: **0xec = 1110 1100 → P=1, DPL=3, S=0, type=0xC**. S=0 means a SYSTEM descriptor and type 0xC is a **386 call gate**, so the fields are not base/limit but **selector 0x00d0 : offset 0x00002d46** — which is exactly the `mov esi,0xd0` / `mov edi,0x2d46` the caller loads. We treat it as a code segment and jump to its "base" 0xd0, which still holds the real-mode IVT, and execute the vector table as code. test386 confirms the intent: `defGDTDesc RING0_GATE ; placeholder for a call gate used to switch to ring 0`, then `; Test call gates now` / `jmp testCallGateWithParameters`. So a far transfer must check S/type before using a descriptor, take selector:offset from a gate, and — when the target DPL is lower — switch stacks through the TSS and copy the gate's parameter dwords across. That also supplies `switchToRing0`, whose mechanism was unidentified until now. ⚠️ An earlier revision of this entry said the blocker was "a missing copy of the routine into low memory": that was wrong, from misreading the access byte as a code segment. Three further hypotheses were tested and refuted on this symptom (virtual-8086 mode, the TSS, paging), each of which still exposed a genuine missing feature. `node tools/trace386.mjs boot/test386.bin` locates the failing assertion; `SPIN_AFTER=<post>` arms its spin detector. | L |
 | B5 | ✅ **DONE (browser)** (`92e4741`) — virtual CPU clock in `ui.js` (`VCPU_HZ` ≈ 8 MHz) caps guest cycles/wall-second; 0x3DA beam derived from it stays 70 Hz. Fixed raw-CPU-speed-bound code (Keen Vorticons menus flying by). Headless keeps its deterministic timing. Tunable constant. | — | done |
