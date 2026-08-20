@@ -265,7 +265,11 @@ export class Recompiler {
   /** Run exactly one basic block from the current CS:IP. Returns its length. */
   step() {
     const cpu = this.cpu;
-    const ip0 = cpu.eip & 0xffff;
+    // A 32-bit code segment has a 32-bit EIP. Truncating it to 16 bits unconditionally — as all
+    // three dispatch sites did — silently discards the high half: test386 jumps to its paged alias
+    // 0xE00F4F6D, we dispatched 0x4F6D, decoded zeroed RAM there and walked memory until the IDT.
+    // `ipAdd` inside translate has been width-aware all along; only entry was not.
+    const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
     const lin = (cpu.base[CS] + ip0) & this.MM;
     // O(1) array index, no hashing. blk.ip0 guards the rare case of one linear addr
     // reached via different CS:IP (the emitted jump targets bake in ip0).
@@ -302,7 +306,7 @@ export class Recompiler {
           if (machine.hwIrqPending) machine.serviceHwInts();                     // queued keyboard IRQ
           if (machine.timerAuto && cpu.cycles >= machine.nextTimerCycle) machine.serviceTimer(); // PIT tick(s) due mid-slice
         }
-        const ip0 = cpu.eip & 0xffff, lin = (cpu.base[CS] + ip0) & MM;
+        const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff), lin = (cpu.base[CS] + ip0) & MM;
         // Trap Flag (hardware single-step): when TF is set, run exactly ONE instruction and
         // then fire INT 1. Uncached — each trapped instruction is freshly decoded, so a
         // self-modifying tracer (copy-protection decrypting code one step at a time inside
@@ -357,7 +361,7 @@ export class Recompiler {
    *  and the (future) step debugger. Does not pollute the block cache. */
   stepOne() {
     const cpu = this.cpu;
-    const ip0 = cpu.eip & 0xffff;
+    const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
     const lin = (cpu.base[CS] + ip0) & this.MM;
     const blk = this.translate(lin, ip0, 1);
     blk.fn(cpu);
