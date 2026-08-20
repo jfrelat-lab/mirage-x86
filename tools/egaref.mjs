@@ -59,6 +59,28 @@ const PLANELEN = 8000;
 if (planes.length < PLANELEN * 4) { console.error(`EGA.BIN tronque: ${planes.length} octets`); process.exit(1); }
 
 writePNG(out, composePlanar(planes, PLANELEN, dac, attr, stride, start));
+
+// RUNS=1 prints the same per-row contiguous runs tools/shot.mjs's analysis uses, so the reference
+// and MIRAGE are measured by identical code rather than by eye.
+if (process.env.RUNS) {
+  const px = (x, y) => {
+    const off = (start + y * stride + (x >> 3)) % PLANELEN, b = 7 - (x & 7);
+    let i = 0; for (let p = 0; p < 4; p++) i |= ((planes[p * PLANELEN + off] >> b) & 1) << p;
+    return i;
+  };
+  console.log('  y    segments dessines (x0-x1, largeur, centre)');
+  for (let y = 128; y <= 200; y += 4) {
+    const runs = []; let s0 = -1;
+    for (let x = 0; x <= 319; x++) {
+      const on = px(x, y) !== 0;
+      if (on && s0 < 0) s0 = x;
+      if ((!on || x === 319) && s0 >= 0) { runs.push([s0, x - 1]); s0 = -1; }
+    }
+    const t = runs.filter(([a, b]) => b - a >= 4)
+      .map(([a, b]) => `${a}-${b} (l=${b - a + 1}, c=${((a + b) / 2).toFixed(1)})`).join('   ');
+    console.log(`  ${String(y).padStart(3)}  ${t || '—'}`);
+  }
+}
 console.log(`${sub}/${prog} @ ${K} ticks — mode 0x${mode.toString(16)} stride=${stride} start=${start} -> ${out}`);
 console.log(`  palette attributs: ${Array.from(attr).map((x) => x.toString(16).padStart(2, '0')).join(' ')}`);
 rmSync(work, { recursive: true, force: true });
