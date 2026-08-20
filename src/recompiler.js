@@ -68,6 +68,18 @@ function condExpr(cc) {
   }
 }
 
+/**
+ * The address is LINEAR, and saying so matters: an address below 0x400 means the guest ran off into
+ * the interrupt vector table, so the bytes are a vector pair and not code at all. Turbo Pascal jumps
+ * to fffe:0002, runs past the 1 MB wrap and decodes IVT entry 0 (0f53:010c) as "0f 53" — an SSE
+ * opcode that nothing in a 1989 program could have contained.
+ */
+function unimplemented(what, lin) {
+  const where = lin < 0x400 ? ` at linear 0x${lin.toString(16)} — INSIDE THE IVT (vector ${(lin >> 2)}), the guest jumped out of its code`
+    : ` at linear 0x${lin.toString(16)}`;
+  return `mirage: unimplemented opcode 0x${what}${where}`;
+}
+
 export class Recompiler {
   constructor(cpu) {
     this.cpu = cpu;
@@ -911,7 +923,7 @@ export class Recompiler {
         case 0x0f: { decode0F(sz); break; }
 
         default:
-          throw new Error('mirage: unimplemented opcode 0x' + op.toString(16).padStart(2, '0') + ' at ' + ((linStart - ip0 + ip - 1) & MM).toString(16));
+          throw new Error(unimplemented(op.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 1) & MM));
       }
     }
 
@@ -1298,7 +1310,7 @@ export class Recompiler {
         case 0xbf: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 16)})<<16>>16)`)); return; } // MOVSX r,Ew
         case 0xc0: case 0xc1: { const o = modrm(); const size = op2 === 0xc0 ? 8 : sz; const d = NT(), s = NT(), rr = NT(); P(`var ${d}=${rmR(o, size)},${s}=${rR(o.reg, size)};var ${rr}=(${d}+${s})${M(size)};${rW(o.reg, size, d)}${rmW(o, size, rr)}cpu.setAdd(${d},${s},${rr},${size});`); return; } // XADD
         default:
-          throw new Error('mirage: unimplemented opcode 0x0f 0x' + op2.toString(16).padStart(2, '0') + ' at ' + ((linStart - ip0 + ip - 2) & MM).toString(16));
+          throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 2) & MM));
       }
     }
   }
