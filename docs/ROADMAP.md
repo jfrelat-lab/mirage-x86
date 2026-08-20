@@ -46,8 +46,37 @@ our paging is RIGHT for it: measured at that instant, CR0=0x80000011 (PG=1, PE=1
 PDE[896]=0x00004003 present, PTE[244]=0x000f4003 present → physical 0x000F4F6D, where the bytes are
 `66 8c c8 66 83 e0 03` = `mov eax,cs / and eax,3 / cmp eax,0` — real code, a CPL check.
 
-**ROOT CAUSE, measured 2026-08-19 — the real-mode 1 MB wrap is applied to LINEAR addresses in
-protected mode.** Single-stepped across the transition with the runner's own A20 wiring:
+**✅ POST 20 CLEARED (`78c6a6f`, 2026-08-19) — a 32-bit code segment has a 32-bit EIP.** All three
+dispatch sites in `recompiler.js` opened with `cpu.eip & 0xffff`, truncating EIP whatever CS.D said
+(`ipAdd` inside `translate` had been width-aware all along; only entry was not). test386 jumps to its
+paged alias 0xE00F4F6D — its own source explains why — and we dispatched 0x4F6D, decoded zeroed RAM
+and walked memory into the IDT, where an access-byte pair surfaced as "unimplemented opcode 0x0f
+0xe0". **POST 0x20 → 0x21**, fault gone, no bench cost (tube 118.41 ms → 117.93).
+
+**CURRENT BLOCKER (2026-08-19): VIRTUAL-8086 MODE.** Traced with `SPIN_AFTER=0x21 SPIN=2 node
+tools/trace386.mjs`, the test writes POST 0x21 and immediately does:
+
+    00005628  EE            out dx, al               ; POST 0x21
+    0000562B  E8FDD5FFFF    call switchToRing3V86_0  ; <- enter V86
+    00005630  CD22          int 0x22
+
+Measured at the transition: `CS` becomes 0xf000 with **base 0x00000000**, EIP = EDX = 0x5630. In V86
+a segment register is a REAL-MODE value — base must be `CS << 4` = 0xF0000 — so the transfer itself is
+right and only the segment semantics are wrong: we resolve 0xf000 as a selector (GDT index 0x1e00,
+far past the limit) and get base 0. The guest then walks forward through the ROM, reaches the
+copyright string at f000:0004 and spins there.
+
+`grep -n "VM\b" src/cpu.js` finds nothing: **EFLAGS.VM is not modelled at all.** What POST 0x21 needs
+is the mode itself — VM set by IRETD from ring 0, segment loads that take a real-mode base, CPL
+forced to 3, and INT dispatch through the IDT with the IOPL/sensitive-instruction checks that make a
+V86 monitor work. That is the feature, not a patch.
+
+⚠️ An earlier revision of this entry blamed "the 1 MB wrap applied to linear addresses under paging".
+That is a real design question — `lin = (base[CS] + ip0) & this.MM` does mask before any page walk —
+but it is NOT what broke POST 20: with EIP intact, (0 + 0xE00F4F6D) & 0xFFFFF is 0x0F4F6D, exactly
+what the walk resolves to. Kept below as its own unmeasured item.
+
+**Unmeasured, separate: the 1 MB wrap under paging.** Single-stepped across the transition with the runner's own A20 wiring:
 
     A20=false  mem.mask=0x000fffff  rec.MM=0x000fffff  csD=1  CR0=0x80000011 (PE=1, PG=1)
     step 0  00d8:e00f4f6d  linear=0xe00f4f6d  masked=0x000f4f6d  bytes 66 8c c8 66 83   <- correct code
