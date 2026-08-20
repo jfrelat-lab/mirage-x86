@@ -1,6 +1,13 @@
-// MIRAGE side of the Lemmings co-sim: reach the derail, snapshot RAM+CPU at a pure-CPU point,
-// then single-step to the fault logging registers. SNAPBACK env = how many instructions before
-// the fault to snapshot (default 4000). Writes /tmp/cosim-snap.bin + /tmp/cosim-mirage.json.
+// MIRAGE side of the DOS-program co-sim: reach the derail, snapshot RAM+CPU at a pure-CPU point,
+// then single-step to the fault logging registers. Writes /tmp/cosim-snap.bin + /tmp/cosim-mirage.json.
+//
+// Parameterised rather than edited per game, which is how it was used before — one derail per copy
+// of the file loses the previous wiring every time.
+//   GAME=TURBOPAS EXE=TURBO.EXE node tools/cosim/mirage-cosim.mjs
+//   GAME=LEMMINGS EXE=VGALEMMI.EXE TAIL=/v MOUNT=sub node tools/cosim/mirage-cosim.mjs
+// MOUNT=sub keeps the old \GAMES\<NAME>\ layout; the default mounts the game AS the root of C:,
+// which is what src/shell.js now gives a program and what the reference runs.
+// SNAPBACK = instructions before the fault to snapshot (default 4000).
 import { readdirSync, statSync, readFileSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
 const ROOT='/Users/julienfrelat/Projects/mirage';
@@ -10,6 +17,9 @@ const { installBIOS } = await import(ROOT+'/src/bios.js');
 const { installDOS } = await import(ROOT+'/src/dos.js');
 const { VFS } = await import(ROOT+'/src/vfs.js');
 
+const GAME=process.env.GAME||'LEMMINGS', EXE=process.env.EXE||'VGALEMMI.EXE';
+const TAIL=process.env.TAIL||'', MOUNT=process.env.MOUNT||'root';
+
 function fresh() {
   const mc = new Machine({ memSize: 1<<20 });
   installBIOS(mc);
@@ -17,10 +27,11 @@ function fresh() {
   try{ mc.font8x8=new Uint8Array(readFileSync(ROOT+'/assets/vga-rom-8x8.bin')); }catch{}
   try{ mc.font8x14=new Uint8Array(readFileSync(ROOT+'/assets/vga-rom-8x14.bin')); }catch{}
   const vfs=new VFS(); const dos=installDOS(mc, vfs);
-  const G=ROOT+'/games/LEMMINGS';
-  (function walk(d){for(const n of readdirSync(d)){const p=join(d,n);statSync(p).isDirectory()?walk(p):vfs.addFile('\\GAMES\\'+relative(ROOT+'/games',p).split('/').join('\\'),new Uint8Array(readFileSync(p)));}})(G);
-  vfs.chdir('\\GAMES\\LEMMINGS');
-  dos.load(new Uint8Array(readFileSync(G+'/VGALEMMI.EXE')), '/v', 'C:\\GAMES\\LEMMINGS\\VGALEMMI.EXE');
+  const G=ROOT+'/games/'+GAME;
+  const pre = MOUNT==='sub' ? '\\GAMES\\'+GAME+'\\' : '\\';
+  (function walk(d){for(const n of readdirSync(d)){const p=join(d,n);statSync(p).isDirectory()?walk(p):vfs.addFile(pre+relative(G,p).split('/').join('\\'),new Uint8Array(readFileSync(p)));}})(G);
+  vfs.chdir(pre.replace(/\\$/,'') || '\\');
+  dos.load(new Uint8Array(readFileSync(G+'/'+EXE)), TAIL, 'C:'+pre+EXE);
   return { mc, dos };
 }
 const SNAPBACK = +(process.env.SNAPBACK||4000);
@@ -32,7 +43,12 @@ function passA(){
   const cpu=mc.cpu, rec=mc.rec; let fault=null; mc.onError=(e)=>{fault=e;};
   mc.nextTimerCycle=mc.pitReload;
   let step=0, lastInt=0;
+  // Every entry into a service, not just swInt: BIOS services now run on inline far-calls to f000:n
+  // (0xCF-guarded), which swInt never sees. Missing them put the "pure CPU" snapshot INSIDE a BIOS
+  // call, and Unicorn — which has no BIOS — then differed on AX at the IRET. That reads as a CPU
+  // divergence and is not one.
   const oSw=mc.swInt.bind(mc); mc.swInt=(n)=>{ lastInt=step; return oSw(n); };
+  if (mc.biosCallback) { const oBc=mc.biosCallback.bind(mc); mc.biosCallback=(n)=>{ lastInt=step; return oBc(n); }; }
   for(; step<50_000_000 && !fault && !dos.programDone; step++){
     while(cpu.cycles>=mc.nextTimerCycle) mc.serviceTimer();
     if(mc.blocked){ mc.keyQueue.push({ascii:0x0d}); mc.blocked=false; }

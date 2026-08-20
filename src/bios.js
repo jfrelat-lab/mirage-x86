@@ -25,6 +25,17 @@ const COLS = 80, ROWS = 25;
 export function installBIOS(machine, opts = {}) {
   const mem = machine.mem, cpu = machine.cpu;
 
+  // The ROM identity a real machine carries at the very top of F000. Ours held zeros there, and a
+  // program that SCANS this region for it finds nothing and keeps going: Turbo Pascal's runtime runs
+  // its scan to f000:ffff, wraps past the 1 MB boundary and ends up executing the interrupt vector
+  // table. Values read out of the reference rather than invented (tools/biosid.asm):
+  //   FFF0 far JMP to the power-on entry, FFF5 the 8-byte release date, FFFE the model byte
+  //   (FCh = AT class), FFFF the submodel.
+  for (const [off, b] of [[0xffff0, 0xea], [0xffff1, 0x5b], [0xffff2, 0xe0], [0xffff3, 0x00], [0xffff4, 0xf0],
+                          [0xffffd, 0x00], [0xffffe, 0xfc], [0xfffff, 0x55]]) mem.w8(off, b);
+  const romDate = '01/01/92';
+  for (let i = 0; i < romDate.length; i++) mem.w8(0xffff5 + i, romDate.charCodeAt(i));
+
   const bios = {
     machine,
     attr: 0x07,
