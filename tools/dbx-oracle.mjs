@@ -119,8 +119,11 @@ function parseDosbox(text, prog) {
     }
     if (!started) continue;
     let kind = null, file = null, extra = '';
-    if ((m = line.match(/^FILES:file open command (\d+) file (.+)$/))) { kind = 'open'; file = m[2]; }
-    else if ((m = line.match(/^FILES:Closing file (.+)$/))) { kind = 'close'; file = m[1]; }
+    // `(.*)`, not `(.+)`: a program can open an EMPTY name, and the reference logs it as
+    // "file open command 0 file " with nothing after. Requiring a character dropped that line on the
+    // DOSBox side only, so Dave carried one event more than the reference from its fourth event on.
+    if ((m = line.match(/^FILES:file open command (\d+) file (.*)$/))) { kind = 'open'; file = m[2]; }
+    else if ((m = line.match(/^FILES:Closing file (.*)$/))) { kind = 'close'; file = m[1]; }
     else if ((m = line.match(/^FILES:Reading (\d+) bytes from (.+?)\s*$/))) { kind = 'read'; file = m[2]; extra = m[1]; }
     else if ((m = line.match(/^FILES:Writing (\d+) bytes to (.+?)\s*$/))) { kind = 'write'; file = m[2]; extra = m[1]; }
     else if ((m = line.match(/^FILES:Seeking to (-?\d+) bytes from position type \((\d)\) in (.+?)\s*$/)))
