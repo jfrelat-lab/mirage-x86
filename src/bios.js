@@ -25,6 +25,14 @@ const COLS = 80, ROWS = 25;
 export function installBIOS(machine, opts = {}) {
   const mem = machine.mem, cpu = machine.cpu;
 
+  // Storage inside the BIOS segment for the two things a VbeInfoBlock points at. Well clear of the
+  // per-vector stub table and of the DPMI/EMS entries above.
+  const VBE_SEG = 0xf000, VBE_OEM_OFF = 0x0700, VBE_MODES_OFF = 0x0740;
+  for (let i = 0; i < 0x60; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, 0);
+  const oem = 'MIRAGE VGA';
+  for (let i = 0; i < oem.length; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, oem.charCodeAt(i));
+  mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF) >>> 0, 0xffff);      // empty mode list, terminator only
+
   // The ROM identity a real machine carries at the very top of F000. Ours held zeros there, and a
   // program that SCANS this region for it finds nothing and keeps going: Turbo Pascal's runtime runs
   // its scan to f000:ffff, wraps past the 1 MB boundary and ends up executing the interrupt vector
@@ -341,6 +349,25 @@ export function installBIOS(machine, opts = {}) {
         break;
       }
       case 0x1a: cpu.ax = (cpu.ax & 0xff00) | 0x1a; cpu.bx = 0x0008; break; // get DCC: AL=1Ah = supported, BL=08h = VGA colour
+      // ---- VESA VBE ----------------------------------------------------------------------------
+      // Only the discovery call, and it advertises an EMPTY mode list, because no VBE mode is
+      // implemented yet: mode 0x10E (320x200 hi-colour) needs a 16-bpp path and bank switching that
+      // do not exist. Answering honestly beats not answering — Stash asks 4F00h once and, getting
+      // nothing back, sits in text mode for ever. A caller that reads a valid block with no modes
+      // can at least take its fallback.
+      case 0x4f: {
+        if (cpu.al !== 0x00) { cpu.ax = 0x014f; break; }        // AH=01 = "failed", AL=4F = supported
+        const p = (cpu.base[0] + (cpu.di & 0xffff)) >>> 0;   // base[0] = ES
+        for (let i = 0; i < 256; i++) mem.w8(p + i, 0);
+        for (let i = 0; i < 4; i++) mem.w8(p + i, 'VESA'.charCodeAt(i));
+        mem.w16(p + 4, 0x0102);                                  // VBE 1.2
+        mem.w16(p + 6, VBE_OEM_OFF); mem.w16(p + 8, VBE_SEG);   // OemStringPtr
+        mem.w16(p + 10, 0); mem.w16(p + 12, 0);                   // capabilities: none
+        mem.w16(p + 14, VBE_MODES_OFF); mem.w16(p + 16, VBE_SEG);  // VideoModePtr
+        mem.w16(p + 18, 4);                                      // 256 KB, in 64 KB blocks
+        cpu.ax = 0x004f;
+        break;
+      }
       case 0x1c: {                               // save/restore video state — VGA-only, so games use it to probe VGA
         // AL=00 return buffer size (BX = 64-byte blocks for the states requested in CX); AL=01 save, AL=02 restore.
         // We present as VGA: acknowledge with AL=1Ch. Secret Agent keys "is this VGA?" on CMP AL,1Ch — without it,
