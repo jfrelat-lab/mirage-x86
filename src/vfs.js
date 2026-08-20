@@ -15,6 +15,7 @@ export class VFS {
     this.cwd = [];                 // path components from the base, uppercased
     this.handles = new Map();      // fd -> { node, pos, path, write }
     this.extraDevices = new Set(); // names contributed by loaded drivers — see addDevice
+    this.openStdHandles();
     this.label = 'MIRAGE';
   }
 
@@ -175,7 +176,17 @@ export class VFS {
 
   /** The lowest free entry, as DOS allocates from its 20-slot handle table. A monotonic counter
    *  instead handed out numbers past the end of that table once a program had opened enough files. */
-  _allocFd() { let fd = 5; while (this.handles.has(fd)) fd++; return fd; }
+  _allocFd() { let fd = 0; while (this.handles.has(fd)) fd++; return fd; }
+
+  /** The five handles DOS opens for every program: 0-2 the console streams, 3 AUX, 4 PRN. They are
+   *  real entries, not an implicit range, because a program may CLOSE them and reopen — Windows 3.0's
+   *  kernel closes all five and opens CON five times expecting 0,1,2,3,4 back. Starting the allocator
+   *  at 5 handed it 5,6,7,8,9 and it kept trying. */
+  openStdHandles() {
+    for (const [fd, device] of [[0, 'CON'], [1, 'CON'], [2, 'CON'], [3, 'AUX'], [4, 'PRN']]) {
+      this.handles.set(fd, { device, pos: 0, path: device });
+    }
+  }
 
   /** @param {{create?:boolean, truncate?:boolean}} opts */
   openFile(path, opts = {}) {

@@ -362,7 +362,7 @@ export function installDOS(machine, vfs) {
       // Closing a standard stream (0-4) must succeed: we do not model the per-process handle table,
       // so there is nothing to free, but reporting "invalid handle" is wrong and FreeDOS's shell
       // does it five times during a boot (tools/dos-oracle.mjs).
-      case 0x3e: (vfs.close(cpu.bx) || (cpu.bx & 0xffff) <= 4) ? ok() : err(6); break;   // close
+      case 0x3e: vfs.close(cpu.bx) ? ok() : err(6); break;   // close (0-4 are real entries: see VFS.openStdHandles)
       // A transfer stops at the end of the buffer's SEGMENT: DOS never wraps DS:DX and never runs on
       // past 64 KB. Keen asks for a hard-coded 0FFFFh into a buffer at offset 4 and must get 65532.
       case 0x3f: {                                                   // read
@@ -453,6 +453,12 @@ export function installDOS(machine, vfs) {
         dos.time = { h, mi, sec, hs };
         cpu.al = 0; ok(); break;
       }
+      // AH=DCh — MS-NET "get station number". No network here, so the station is 0, and AL is what
+      // matters: Windows 3.0's kernel calls AH=30h straight after WITHOUT reloading AL, so whatever
+      // DCh leaves there selects which version query it makes. Leaving AL alone sent it down the
+      // OEM path (30h/01h) and it concluded "Incorrect DOS version". Compared against DOSBox-X,
+      // which answers AL=0 and gets 30h/00h — the sequences agree for twelve calls once we do too.
+      case 0xdc: cpu.al = 0; cpu.cx = 0; ok(); break;
       case 0x62: cpu.bx = dos.psp; ok(); break;                      // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
       // 51h is the older twin of 62h, and 50h its setter. An extender moves the current PSP around
       // the client it loads, so it needs both halves: a getter alone loses the set silently.
