@@ -123,6 +123,11 @@ function parseDosbox(text, prog) {
     // "file open command 0 file " with nothing after. Requiring a character dropped that line on the
     // DOSBox side only, so Dave carried one event more than the reference from its fourth event on.
     if ((m = line.match(/^FILES:file open command (\d+) file (.*)$/))) { kind = 'open'; file = m[2]; }
+    // A create and a delete get their OWN line shapes, neither of which looks like an open. Missing
+    // them dropped one reference event per temporary file: Roc creates, closes and deletes
+    // bgbuf.tmp before doing anything else.
+    else if ((m = line.match(/^FILES:file create attributes (\S+) file (.*)$/))) { kind = 'create'; file = m[2]; }
+    else if ((m = line.match(/^FILES:Deleting file (.*)$/))) { kind = 'delete'; file = m[1]; }
     else if ((m = line.match(/^FILES:Closing file (.*)$/))) { kind = 'close'; file = m[1]; }
     else if ((m = line.match(/^FILES:Reading (\d+) bytes from (.+?)\s*$/))) { kind = 'read'; file = m[2]; extra = m[1]; }
     else if ((m = line.match(/^FILES:Writing (\d+) bytes to (.+?)\s*$/))) { kind = 'write'; file = m[2]; extra = m[1]; }
@@ -183,7 +188,9 @@ function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
     // names BEFORE close (the handle is gone afterwards).
     let pre = null;
     if (ah === 0x4b) pre = `exec ${norm(asciiz(dsdx))}`;
-    else if (ah === 0x3c || ah === 0x3d) pre = `open ${norm(asciiz(dsdx))}`;
+    else if (ah === 0x3c) pre = `create ${norm(asciiz(dsdx))}`;
+    else if (ah === 0x41) pre = `delete ${norm(asciiz(dsdx))}`;
+    else if (ah === 0x3d) pre = `open ${norm(asciiz(dsdx))}`;
     else if (ah === 0x3e) pre = `close ${nameOf(c.reg[3])}`;
     // The count DOS will actually transfer, not the count asked for: a request runs out at the end of
     // the buffer's segment, and that capped value is what the reference logs. Keen asks for a
