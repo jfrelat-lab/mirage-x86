@@ -335,6 +335,22 @@ export class Machine {
         if (n === 0x03 || n === 0x01) return;
         this.unhandledInts[n]++;
         this.cpu.flags |= CF;
+        // A processor EXCEPTION returns to the FAULTING instruction, not past it, so an unhandled
+        // one re-runs it and re-raises for ever. MS-DOS 6.22 spent 3 million blocks that way: it had
+        // wandered into the IVT, where the bytes 62 07 decode as BOUND, and every retry raised #BR
+        // again in silence. Report the loop instead — the vector alone said nothing, the ADDRESS is
+        // the whole diagnosis.
+        if (n <= 0x07) {
+          const at = ((this.cpu.seg[1] << 16) | (this.cpu.eip & 0xffff)) >>> 0;
+          if (at === this._excAt) {
+            if (++this._excN === 100000) {
+              const h = (x, w) => (x >>> 0).toString(16).padStart(w, '0');
+              throw new Error(`mirage: unhandled exception INT ${h(n, 2)}h re-raised 100000x at the same ` +
+                `address ${h(this.cpu.seg[1], 4)}:${h(this.cpu.eip & 0xffff, 4)} — the guest is stuck on one ` +
+                'instruction. An exception resumes at the faulting instruction, so nothing will change.');
+            }
+          } else { this._excAt = at; this._excN = 1; }
+        }
       }
     } else {
       this.realInt(n, v.seg, v.off);     // guest-installed ISR
