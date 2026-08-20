@@ -53,3 +53,28 @@ is not the problem there. Widening to the whole init from instruction 0 runs int
 after MUL that cascade — Unicorn-vs-8088 artifacts rather than bugs — so the derail in
 `docs/COMPAT.md` is **still unexplained**. The tool is sound; the remaining artifacts are what to
 tighten next if this is picked up again.
+
+## 2026-08-19 — three harness defects fixed, and one limit that stands
+
+Driving it at Mystic Towers exposed three ways the co-sim was not running the same guest as
+everything else. All fixed:
+
+- **It built its own machine** (1 MiB, no mouse, no ROM fonts) instead of going through
+  `tools/harness.mjs`. Mystic ran 50 M instructions without terminating under it, where the real
+  harness has it exit on a #DE after 0.16 M. Now uses `makeMachine`.
+- **Pass A stepped instruction by instruction.** A hand-rolled `stepOne` loop is a different guest;
+  pass A now runs the PRODUCTION path (`runSlice`) and reports the stop point in CYCLES.
+- **Both passes called `tickTimer()` per slice.** The run loop owns the PIT, so calling it made the
+  tick cadence depend on the SLICE SIZE — pass A (slices of 2000) and pass B (slices of 1 near the
+  target) were two different runs and never met at the same cycle.
+
+New: `STOPINT=<vector>` ends the window at a raised vector instead of a fault, for a guest that
+handles what it raises (Mystic takes #DE into Turbo Pascal's error handler and exits 200). The
+stopping vector is deliberately not counted as a service entry.
+
+**The limit that stands: the traced window still uses `stepOne`, and under it the PIT never
+advances.** For a short pure-CPU window that is the point — it is what makes MIRAGE and Unicorn
+comparable. But a program whose next 42 instructions depend on a timer tick does not reach the same
+place: Mystic's trace ran the full 2800-step budget without reaching its #DE. Lemmings and Turbo
+Pascal were fine because their windows are genuinely pure CPU. **Before trusting a window, check that
+the trace actually reaches the stop point** — "traced N steps, final fault=null" means it did not.

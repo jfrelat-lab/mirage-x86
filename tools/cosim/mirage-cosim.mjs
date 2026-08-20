@@ -12,64 +12,74 @@ import { readdirSync, statSync, readFileSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
 const ROOT='/Users/julienfrelat/Projects/mirage';
 process.env.MIRAGE_NOTIER2='1';
-const { Machine } = await import(ROOT+'/src/machine.js');
-const { installBIOS } = await import(ROOT+'/src/bios.js');
-const { installDOS } = await import(ROOT+'/src/dos.js');
 const { VFS } = await import(ROOT+'/src/vfs.js');
+const { makeMachine } = await import(ROOT+'/tools/harness.mjs');
 
 const GAME=process.env.GAME||'LEMMINGS', EXE=process.env.EXE||'VGALEMMI.EXE';
 const TAIL=process.env.TAIL||'', MOUNT=process.env.MOUNT||'root';
 
 function fresh() {
-  const mc = new Machine({ memSize: 1<<20 });
-  installBIOS(mc);
-  try{ mc.font=new Uint8Array(readFileSync(ROOT+'/assets/vga-rom-8x16.bin')); }catch{}
-  try{ mc.font8x8=new Uint8Array(readFileSync(ROOT+'/assets/vga-rom-8x8.bin')); }catch{}
-  try{ mc.font8x14=new Uint8Array(readFileSync(ROOT+'/assets/vga-rom-8x14.bin')); }catch{}
-  const vfs=new VFS(); const dos=installDOS(mc, vfs);
-  const G=ROOT+'/games/'+GAME;
-  const pre = MOUNT==='sub' ? '\\GAMES\\'+GAME+'\\' : '\\';
+  // Through makeMachine, like every other game-level tool. Building a machine here instead — 1 MiB,
+  // no mouse, no ROM fonts — reproduced a DIFFERENT guest: Mystic Towers ran 50 M instructions
+  // without terminating, where the real harness has it exit on a #DE after 0.16 M. A co-sim of a
+  // program that behaves differently answers nothing. (harness.mjs exists for exactly this; only
+  // the instruction-level tools should build bare machines.)
+  const vfs = new VFS();
+  const G = ROOT + '/games/' + GAME;
+  const pre = MOUNT === 'sub' ? '\\GAMES\\' + GAME + '\\' : '\\';
   (function walk(d){for(const n of readdirSync(d)){const p=join(d,n);statSync(p).isDirectory()?walk(p):vfs.addFile(pre+relative(G,p).split('/').join('\\'),new Uint8Array(readFileSync(p)));}})(G);
   vfs.chdir(pre.replace(/\\$/,'') || '\\');
-  dos.load(new Uint8Array(readFileSync(G+'/'+EXE)), TAIL, 'C:'+pre+EXE);
+  const { mc, dos } = makeMachine({ vfs });
+  dos.load(new Uint8Array(readFileSync(G + '/' + EXE)), TAIL, 'C:' + pre + EXE);
   return { mc, dos };
 }
+
 const SNAPBACK = +(process.env.SNAPBACK||4000);
+const STOPINT = process.env.STOPINT === undefined ? -1 : Number(process.env.STOPINT);
+const STOPPED = { stopped: 1 };
 const regs = (cpu,mem)=>({cs:cpu.seg[1],ip:cpu.eip&0xffff, op:mem?[0,1,2,3].map(k=>mem.r8(((cpu.seg[1]<<4)+((cpu.eip+k)&0xffff))&0xfffff)):null, ax:cpu.reg[0]&0xffff,cx:cpu.reg[1]&0xffff,dx:cpu.reg[2]&0xffff,bx:cpu.reg[3]&0xffff,sp:cpu.reg[4]&0xffff,bp:cpu.reg[5]&0xffff,si:cpu.reg[6]&0xffff,di:cpu.reg[7]&0xffff, es:cpu.seg[0],ss:cpu.seg[2],ds:cpu.seg[3], fl:cpu.flags&0xffff});
 
-// Pass A: run to fault, count steps + last INT step
+// Pass A runs on the PRODUCTION path (runSlice), not stepOne. A hand-rolled stepOne loop is not the
+// same guest: Mystic Towers ran 50 M instructions without terminating under it, where runSlice has it
+// raise #DE after 0.16 M. Pass A only needs WHERE to stop, expressed in cycles; the instruction-level
+// trace still uses stepOne, over the short pure-CPU window where the two agree.
 function passA(){
   const { mc, dos } = fresh();
-  const cpu=mc.cpu, rec=mc.rec; let fault=null; mc.onError=(e)=>{fault=e;};
-  mc.nextTimerCycle=mc.pitReload;
-  let step=0, lastInt=0;
-  // Every entry into a service, not just swInt: BIOS services now run on inline far-calls to f000:n
-  // (0xCF-guarded), which swInt never sees. Missing them put the "pure CPU" snapshot INSIDE a BIOS
-  // call, and Unicorn — which has no BIOS — then differed on AX at the IRET. That reads as a CPU
-  // divergence and is not one.
-  const oSw=mc.swInt.bind(mc); mc.swInt=(n)=>{ lastInt=step; return oSw(n); };
-  if (mc.biosCallback) { const oBc=mc.biosCallback.bind(mc); mc.biosCallback=(n)=>{ lastInt=step; return oBc(n); }; }
-  for(; step<50_000_000 && !fault && !dos.programDone; step++){
-    while(cpu.cycles>=mc.nextTimerCycle) mc.serviceTimer();
-    if(mc.blocked){ mc.keyQueue.push({ascii:0x0d}); mc.blocked=false; }
-    try{ rec.stepOne(); }catch(e){ fault=e; break; }
+  const cpu=mc.cpu; let fault=null; mc.onError=(e)=>{fault=e;};
+  let stopCycles=-1, lastIntCycles=0;
+  const oSw=mc.swInt.bind(mc);
+  // The stopping vector must not count as a service entry, and pass A must END there — letting it
+  // run on updated lastInt past the point of interest and made the window negative.
+  mc.swInt=(n,ni,fi)=>{ if(n===STOPINT){ stopCycles=cpu.cycles; throw STOPPED; } lastIntCycles=cpu.cycles; return oSw(n,ni,fi); };
+  if (mc.biosCallback) { const oBc=mc.biosCallback.bind(mc); mc.biosCallback=(n)=>{ lastIntCycles=cpu.cycles; return oBc(n); }; }
+  let g=0;
+  while(stopCycles<0 && !fault && !dos.programDone && g++<200000){
+    try{ mc.runSlice(2000); }catch(e){ if(e===STOPPED) break; fault=e; break; }
   }
-  return { faultStep:step, lastInt, faultMsg:fault&&fault.message };
+  return { stopCycles: stopCycles<0 ? cpu.cycles : stopCycles, lastIntCycles,
+           why: stopCycles>=0 ? `INT ${STOPINT} raised` : fault ? fault.message : dos.programDone ? 'program exited' : 'budget' };
 }
 const a = passA();
-const snapStep = Math.max(a.lastInt+1, a.faultStep - SNAPBACK);
-console.error('passA: faultStep=%d lastInt=%d faultMsg=%s -> snapStep=%d (%d before fault)', a.faultStep, a.lastInt, a.faultMsg, snapStep, a.faultStep-snapStep);
+const snapCycles = Math.max(a.lastIntCycles+1, a.stopCycles - SNAPBACK);
+console.error('passA: stop at %d cycles (%s), lastInt at %d -> snapshot at %d (%d cycles before)',
+  a.stopCycles, a.why, a.lastIntCycles, snapCycles, a.stopCycles-snapCycles);
 
-// Pass B: run to snapStep, snapshot, then trace to fault (NO more timer INTs after snapshot -> pure CPU window)
+// Pass B: production path up to the snapshot, then instruction-level tracing from there.
 const { mc, dos } = fresh();
 const cpu=mc.cpu, rec=mc.rec; let fault=null; mc.onError=(e)=>{fault=e;};
-mc.nextTimerCycle=mc.pitReload;
-let step=0;
-for(; step<snapStep && !fault; step++){
-  while(cpu.cycles>=mc.nextTimerCycle) mc.serviceTimer();
-  if(mc.blocked){ mc.keyQueue.push({ascii:0x0d}); mc.blocked=false; }
-  try{ rec.stepOne(); }catch(e){ fault=e; break; }
+let stopped=false;
+if (STOPINT >= 0) { const o=mc.swInt.bind(mc); mc.swInt=(n,ni,fi)=>{ if(n===STOPINT){ stopped=true; throw STOPPED; } return o(n,ni,fi); }; }
+let g=0;
+// runSlice takes a BLOCK budget, so a slice of 200 blows straight past a 42-instruction window.
+// Coarse until close, then one block at a time.
+//
+// And NO tickTimer() in either pass: the run loop owns the PIT. Calling it per slice made the tick
+// cadence depend on the SLICE SIZE, so pass A (slices of 2000) and pass B (slices of 1 near the
+// target) were two different guests and never met at the same cycle.
+while(cpu.cycles<snapCycles && !fault && !dos.programDone && !stopped && g++<2000000){
+  try{ mc.runSlice(cpu.cycles < snapCycles-2000 ? 200 : 1); }catch(e){ if(e===STOPPED) break; fault=e; break; }
 }
+let step=0;
 // snapshot
 writeFileSync('/tmp/cosim-snap.bin', Buffer.from(mc.mem.u8.buffer, 0, 1<<20));
 const snap = { reg:[...cpu.reg], seg:[...cpu.seg], base:[...cpu.base], eip:cpu.eip, flags:cpu.flags, atStep:step };
@@ -79,7 +89,7 @@ const trace=[];
 for(let s=0; s<SNAPBACK+2000 && !fault && !dos.programDone; s++){
   if(mc.blocked){ mc.keyQueue.push({ascii:0x0d}); mc.blocked=false; }
   trace.push(regs(cpu, mc.mem));
-  try{ rec.stepOne(); }catch(e){ fault=e; trace.push({FAULT:e.message}); break; }
+  try{ rec.stepOne(); }catch(e){ if(e===STOPPED){ trace.push({FAULT:`INT ${STOPINT} raised`}); break; } fault=e; trace.push({FAULT:e.message}); break; }
 }
 writeFileSync('/tmp/cosim-mirage-trace.json', JSON.stringify(trace));
 console.error('snapshot at step %d; traced %d steps; final fault=%s', step, trace.length, fault&&fault.message);
