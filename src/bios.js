@@ -217,7 +217,26 @@ export function installBIOS(machine, opts = {}) {
       case 0x03: cpu.dx = (getRow() << 8) | getCol();
         cpu.cx = (((bios.cursor.hidden ? 0x20 : 0) | (bios.cursor.start & 0x1f)) << 8) | (bios.cursor.end & 0x1f);
         break; // get cursor position + shape
-      case 0x05: mem.w16(BDA + 0x62, cpu.al); break; // set active page
+      case 0x05: {                               // set active display page
+        const page = cpu.al & 0xff;
+        mem.w16(BDA + 0x62, page);
+        // Recording the page number is only half of it: the BIOS also moves the CRTC display start,
+        // and THAT is the page flip. Without it a game that draws to the hidden page and flips shows
+        // page 0 for ever, so the screen is a blend of two frames — Baby Jo alternates 0 and 1
+        // through this call 1375 times each, and its menu character came out with the head from one
+        // frame above the body from another. Planar modes only: there the CRTC start counts bytes
+        // per plane, which is what the page size is measured in. Text pages count characters and
+        // have no reference here, so they are left alone.
+        const md = mem.r8(0x449);
+        const size = md === 0x0d ? 0x2000 : md === 0x0e ? 0x4000 : (md === 0x0f || md === 0x10) ? 0x8000 : 0;
+        if (size && mem.planar && machine.vga) {
+          const start = (page * size) & 0xffff;
+          mem.w16(BDA + 0x4e, start);
+          machine.vga.crtc[0x0c] = (start >> 8) & 0xff;
+          machine.vga.crtc[0x0d] = start & 0xff;
+        }
+        break;
+      }
       case 0x06: case 0x07: {                    // AH=06 scroll up / AH=07 scroll down, in a window
         const lines = cpu.al, bh = (cpu.bx >> 8) & 0xff;
         const top = (cpu.cx >> 8) & 0xff, left = cpu.cx & 0xff;
