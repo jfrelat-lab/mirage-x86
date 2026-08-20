@@ -4,7 +4,7 @@
 // corpus" — the same reason tools/harness.mjs exists. A survey is only as trustworthy as the
 // agreement between what it measured and what you think it measured.
 
-import { readdirSync, statSync, existsSync } from 'fs';
+import { readdirSync, statSync, existsSync, readFileSync } from 'fs';
 import { join, relative, extname, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -38,12 +38,35 @@ export function targets(filter) {
       const d = join(gamesRoot, sub);
       if (!statSync(d).isDirectory()) continue;
       if (filter && !sub.toUpperCase().includes(filter.toUpperCase())) continue;
-      // One entry point per game: the biggest .EXE/.COM at the top level is nearly always it.
-      // (Nearly — for LOOM it picks the bundled !RAWCOPY.EXE, so read the labels, not just totals.)
-      const progs = readdirSync(d).filter((f) => ['.EXE', '.COM'].includes(extname(f).toUpperCase()))
+      const names = readdirSync(d);
+      const progs = names.filter((f) => ['.EXE', '.COM'].includes(extname(f).toUpperCase()))
         .map((f) => ({ f, size: statSync(join(d, f)).size }))
         .sort((a, b) => b.size - a.size);
-      if (progs.length) out.push({ label: `games/${sub}/${progs[0].f}`, dir: d, mount: '\\', prog: progs[0].f });
+      if (!progs.length) continue;
+      // A .BAT beside the game names the entry point; "biggest .EXE" only guesses it, and guessed
+      // wrong three times — LOOM's bundled !RAWCOPY.EXE, KEEN1's CATALOG.EXE, and Pinball Fantasies'
+      // SETSOUND.EXE, which is the sound-config utility PINBALL.BAT runs BEFORE pf.exe. Comparing an
+      // emulator against a reference on the wrong program tells you nothing.
+      //
+      // Only when the batch names exactly ONE program, though. Arctic Adventure's run.bat is a menu
+      // offering four volumes: there is no single answer there, and picking the last one would have
+      // swapped a title that already matches the reference for an arbitrary sibling.
+      let prog = progs[0].f;
+      const bat = names.find((f) => extname(f).toUpperCase() === '.BAT');
+      if (bat) {
+        const known = new Map(progs.map((p) => [p.f.toUpperCase().replace(/\.(EXE|COM)$/, ''), p.f]));
+        const launched = new Set();
+        for (const raw of readFileSync(join(d, bat), 'latin1').split(/\r?\n/)) {
+          const line = raw.trim().replace(/^@/, '');
+          const head = line.split(/\s+/)[0] || '';
+          // A CALL is a launcher running its setup first, not the game — Pinball calls setsound.
+          if (!line || line.startsWith(':') || /^(echo|cls|if|goto|rem|set|call|choice|pause|exit)$/i.test(head)) continue;
+          const hit = known.get(head.toUpperCase().replace(/\.(EXE|COM)$/, ''));
+          if (hit) launched.add(hit);
+        }
+        if (launched.size === 1) prog = [...launched][0];
+      }
+      out.push({ label: `games/${sub}/${prog}`, dir: d, mount: '\\', prog });
     }
   }
   const introsRoot = join(ROOT, 'intros');
