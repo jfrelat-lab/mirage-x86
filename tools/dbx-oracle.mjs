@@ -184,9 +184,12 @@ function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
       pre = strictFor(f) ? `seek ${f} ${off | 0} ${c.ax & 0xff}` : `seek ${f}`;
     }
     const r = int21(c, m);
-    // An open that FAILED opened nothing: DOSBox logs the line only on success, so a failed open on
-    // our side must not appear either, or every miss shifts the whole stream by one.
-    if (pre && !((ah === 0x3c || ah === 0x3d) && (c.flags & 1))) ev.file.push(pre);
+    // Log an open whether or not it SUCCEEDED. DOSBox logs the attempt: measured on eight titles that
+    // probe for a settings or high-score file absent from the directory — CONFIG.WL6, COSMO3.CFG,
+    // CC1.HS, HIGHSCOR.DA1, CTLPANEL.DD2, KEYS.DN1, DYSIN.GOT, SCORE.MB1 — every one of which appears
+    // in the reference log. Suppressing our failures shifted the stream by one and read as a
+    // divergence on all eight.
+    if (pre) ev.file.push(pre);
     return r;
   };
 
