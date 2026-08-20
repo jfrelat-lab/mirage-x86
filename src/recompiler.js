@@ -839,6 +839,11 @@ export class Recompiler {
         // unlike the faults that also route through swInt. #GP on that check saves the instruction's
         // own address, hence both IPs.
         case 0xcc: P(`cpu.softInt(3,${ip},${ipStart});`); P('return;'); ended = true; break; // INT3
+        // F1 — ICEBP / INT1, undocumented but real on every x86 since the 386: a one-byte trap to
+        // vector 1. Copy protections use it precisely because it is undocumented (Pinball Fantasies'
+        // SETSOUND runs one inside its decryptor). Vector 1's default handler is a bare IRET, which
+        // is the correct behaviour with no debugger present, so this simply resumes.
+        case 0xf1: P(`cpu.softInt(1,${ip},${ipStart});`); P('return;'); ended = true; break;
         case 0xcd: { const n = f8(); P(`cpu.softInt(${n},${ip},${ipStart});`); P('return;'); ended = true; break; } // INT n
         case 0xce: P(`if(cpu.flags&${OF}){cpu.softInt(4,${ip},${ipStart});return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
         // IRET pops the frame at the OPERAND size: iretd (32-bit) pops EIP/CS/EFLAGS as dwords.
