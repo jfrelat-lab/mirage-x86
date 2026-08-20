@@ -37,9 +37,16 @@ const TICKS = 60, BUDGET = 400000;
 // gitignored, so `check` silently skips any that are absent on this machine.
 const WORKLOADS = [
   ['demos/PLASMA13.COM'], ['demos/XORMUNCH.COM'], ['demos/PLANAR.COM'], ['demos/CGA.COM'],
-  ...['256b', '256bytef', 'above', 'chaosequ', 'difze', 'intoanew', 'intro', 'intro256',
-      'kaneda', 'lattice', 'memories', 'oktaeder', 'puls', 'revitro', 'rv256', 'tube', 'upup']
+  // Every intro in intros/ that renders, not a subset. Thirteen of these were unpinned and therefore
+  // unguarded — measured with tools/probe-intro.js, all thirteen set their mode and fill the
+  // framebuffer with no fault, so a regression in any of them would have gone unnoticed. Pinning
+  // what already works is the cheapest coverage there is.
+  ...['256b', '256bytef', 'above', 'abstract', 'animate', 'chaosequ', 'difze', 'dirojed', 'endless',
+      'intoanew', 'intro', 'intro256', 'kaneda', 'lattice', 'memories', 'mirrors', 'nibble',
+      'oktaeder', 'paleozoa', 'paralaxa', 'pitman', 'puls', 'qblove', 'revitro', 'rv256', 'symetrie',
+      'tube', 'upup', 'warp', 'worm']
     .map((n) => [`intros/${n}.com`]),
+  ['intros/mars.exe'],
   // Boot-sector workloads run through the INT 19h handoff with no DOS installed at all. Pinning one
   // here is what keeps that second entry point from silently rotting: nothing else exercises it.
   ['boot/BOOTCHESS.IMG', { boot: true }],

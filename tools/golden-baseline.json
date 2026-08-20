@@ -34,6 +34,16 @@
     "mode": 19,
     "fault": null
   },
+  "intros/abstract.com": {
+    "hash": "ff2f345e5ddb47620323f6d77bf23c5de6da87dd",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/animate.com": {
+    "hash": "0bb27dc25d7f58de2bfee351450c97041e25a5d0",
+    "mode": 3,
+    "fault": null
+  },
   "intros/chaosequ.com": {
     "hash": "f87b83df523b110bfab2589ea6a4dd36b286f678",
     "mode": 19,
@@ -41,6 +51,16 @@
   },
   "intros/difze.com": {
     "hash": "37254de1f6ba14f469592b6d772c91ac97f6cef4",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/dirojed.com": {
+    "hash": "65031538eddd57eb7be7ccb180b3b0c7733163da",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/endless.com": {
+    "hash": "4715191caa3bc2116b58cc3ae98cb5006f663861",
     "mode": 19,
     "fault": null
   },
@@ -74,13 +94,43 @@
     "mode": 19,
     "fault": null
   },
+  "intros/mirrors.com": {
+    "hash": "67dd2573d3ac8748efc5cc964da0865f59202be6",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/nibble.com": {
+    "hash": "d959c84a07c7f91912d778cc5c7026b4564a0b22",
+    "mode": 19,
+    "fault": null
+  },
   "intros/oktaeder.com": {
+    "hash": "52a47656fd5ac5c8098f29801ef30ea82f585913",
+    "mode": 3,
+    "fault": null
+  },
+  "intros/paleozoa.com": {
+    "hash": "61027bf4300f70111c91aee55a9736c94adbc9a0",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/paralaxa.com": {
+    "hash": "14484aaef9c22c128f7f0b13d6b104f18c7b572c",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/pitman.com": {
     "hash": "52a47656fd5ac5c8098f29801ef30ea82f585913",
     "mode": 3,
     "fault": null
   },
   "intros/puls.com": {
     "hash": "660d315007aefedb996f1622004f5d5cdcff0276",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/qblove.com": {
+    "hash": "92bb954897a10ec800725870df46e6cbaed23f8e",
     "mode": 19,
     "fault": null
   },
@@ -94,6 +144,11 @@
     "mode": 19,
     "fault": null
   },
+  "intros/symetrie.com": {
+    "hash": "890a1758b24a5f1d237d1f714c54956a87a85510",
+    "mode": 19,
+    "fault": null
+  },
   "intros/tube.com": {
     "hash": "ce99e50fed8e0bfd871a5da5196a37a8b0786b20",
     "mode": 19,
@@ -101,6 +156,21 @@
   },
   "intros/upup.com": {
     "hash": "812978902c772cbe2a1dcc3e338f4cb8568f7ec6",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/warp.com": {
+    "hash": "111414acccb8f27aa4523486e7de2e8b19fd64be",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/worm.com": {
+    "hash": "c9cd9a1fc0020644e5c564fce8790d937951dc22",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/mars.exe": {
+    "hash": "cde0736acce020dc16b482a9eac4e87fba30aa7f",
     "mode": 19,
     "fault": null
   },
