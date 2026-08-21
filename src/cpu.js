@@ -49,6 +49,11 @@ export class CPU {
     this.cr3 = 0;                    // page-directory physical base (bits 31:12)
     this.cr2 = 0;                    // faulting linear address, set on #PF
     this.cr0 = 0x00000010;           // machine status word: PE=0 (real mode), ET=1 (387 present).
+    // Set when a write lands inside the block that is CURRENTLY EXECUTING. A block is compiled from
+    // the bytes it saw at translation time, so an in-place decryptor that rewrites its own tail runs
+    // the stale form: Mystic Towers executed INT 2Fh as INT 00h that way. Declared here rather than
+    // assigned on first use so the shape stays monomorphic on the dispatch path.
+    this.smcSelf = 0;
                                      // SMSW reads it; LMSW and MOV CR0 write it, and bit 0 (PE) now
                                      // really switches how setSeg resolves a selector.
 

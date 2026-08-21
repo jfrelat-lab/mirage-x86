@@ -91,6 +91,7 @@ export class Recompiler {
     // (V8's Map always routes through FindOrderedHashMapEntry even for SMI keys).
     // Indexed by (lin & 0xfff) | (csD << 12): the same bytes decode differently under a 16-bit and a
     // 32-bit code segment, so a block is only valid for the CS.D it was translated with.
+    this.curBlk = null;            // the block executing right now, for the self-modification guard
     this.blockPages = [];          // page -> Array(8192) of block | undefined
     this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
     // Per-page block-coverage bounds [pageLo, pageHi) — the min linStart / max linEnd of
@@ -131,6 +132,7 @@ export class Recompiler {
   }
 
   _evict(blk, lin) {
+    if (blk === this.curBlk) this.cpu.smcSelf = 1;   // it is running RIGHT NOW — see the guard in translate
     const pg = this.blockPages[lin >>> 12];
     if (pg !== undefined) { pg[lin & 0xfff] = undefined; pg[(lin & 0xfff) | 0x1000] = undefined; }   // both CS.D variants
     this.heat.delete(lin);
@@ -251,6 +253,7 @@ export class Recompiler {
   }
 
   _evictRegion(region, rootLin) {
+    if (region === this.curBlk) this.cpu.smcSelf = 1;
     region.dead = 1;   // stop any in-flight execution of this region at its next iteration
     const pg = this.blockPages[rootLin >>> 12];
     if (pg !== undefined) { pg[rootLin & 0xfff] = undefined; pg[(rootLin & 0xfff) | 0x1000] = undefined; }
@@ -279,6 +282,7 @@ export class Recompiler {
     if (this.profiling) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
     this.stats.exec++;
     cpu.tbudget = 1 << 20;   // a region (if one is installed) self-bounds against this
+    this.curBlk = blk;
     blk.fn(cpu, blk);
     cpu.cycles += blk.count;
     return blk.count;
@@ -314,6 +318,7 @@ export class Recompiler {
         // for the handler; its IRET restores TF and traps the next instruction in turn.
         if (cpu.flags & TF) {
           const blk = this.translate(lin, ip0, 1);
+          this.curBlk = blk;
           blk.fn(cpu, blk);
           cpu.cycles += blk.count;
           cpu.tbudget--; n++;
@@ -324,6 +329,7 @@ export class Recompiler {
         let blk = page !== undefined ? page[(lin & 0xfff) | (cpu.csD << 12)] : undefined;
         if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
         if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
+        this.curBlk = blk;
         blk.fn(cpu, blk);
         cpu.cycles += blk.count;
         if (blk.kind === 0) { cpu.tbudget--; if (TIER2 && ++blk.hot === T2_HOT) this._promote(lin, ip0); }
@@ -364,6 +370,7 @@ export class Recompiler {
     const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
     const lin = (cpu.base[CS] + ip0) & this.MM;
     const blk = this.translate(lin, ip0, 1);
+    this.curBlk = blk;
     blk.fn(cpu);
     cpu.cycles += blk.count;
     return blk;
@@ -608,6 +615,7 @@ export class Recompiler {
       }
       const sz = opsize;
       count++;
+      const outMark = out.length;        // see the self-modification guard at the end of this loop
       cur = { flagIdx: -1, def: 0, use: 0 };   // fresh dead-flag record for this instruction
       instrs.push(cur);
 
@@ -933,6 +941,31 @@ export class Recompiler {
 
         default:
           throw new Error(unimplemented(op.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 1) & MM));
+      }
+
+      // Self-modification guard. A block holds the bytes it was translated from, so an instruction
+      // that rewrites a LATER byte of its own block leaves the rest of the block running the stale
+      // form — Mystic Towers rewrites 00 to 2f and we kept executing INT 00h. The cache is already
+      // invalidated by mem.onCodeWrite; what was missing is stopping the block that is running.
+      //
+      // Emitted only after an instruction that actually writes memory, detected from the code just
+      // produced rather than from a list of opcodes — string ops write through m.w8/m.w16 and would
+      // have been missed by one. `ip` here is the NEXT instruction, which is where re-dispatch must
+      // resume, and that is why the check cannot live inside the write emitter.
+      if (!ended) {
+        const abort = `if(cpu.smcSelf){cpu.smcSelf=0;cpu.eip=${ip};return;}`;
+        let helperWrite = false;
+        for (let i = outMark; i < out.length; i++) {
+          // The inline write emitter leaves a marker INSIDE its code-page branch; patch it now that
+          // the resume address is known. Costing nothing on a write to a page that holds no code is
+          // the whole point — emitting the check after every write instead cost memories 5.5%.
+          if (out[i].includes('/*SMCABORT*/')) out[i] = out[i].split('/*SMCABORT*/').join(abort);
+          // Helper writes (m.w8/w16/w32) carry no marker: string ops and the paged strategy go that
+          // way, and those are exactly a decryptor's instructions, so they get the guard after the
+          // instruction. They are rare enough on a hot path not to matter.
+          else if (out[i].includes('m.w8(') || out[i].includes('m.w16(') || out[i].includes('m.w32(')) helperWrite = true;
+        }
+        if (helperWrite) P(abort);
       }
     }
 

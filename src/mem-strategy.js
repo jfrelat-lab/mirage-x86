@@ -84,12 +84,15 @@ const READ = {
 
 // ---- write ----------------------------------------------------------------------------------
 
+// /*SMCABORT*/ marks where the recompiler patches in its self-modification guard: inside the branch
+// that already fired m._dirty, so a write to a page holding no code costs nothing. The recompiler
+// fills it in after the instruction is fully emitted, because only then is the resume address known.
 const WRITE = {
   inline: (MM, NT) => (a, sz, v) => {
-    if (sz === 8) return `if(m.planar&&(${a}>>>16)===10)m.vga.writeByte(${a},(${v}));else{u8[${a}]=(${v});if(cp[${a}>>>12]!==0)m._dirty(${a},1);}`;
+    if (sz === 8) return `if(m.planar&&(${a}>>>16)===10)m.vga.writeByte(${a},(${v}));else{u8[${a}]=(${v});if(cp[${a}>>>12]!==0){m._dirty(${a},1);/*SMCABORT*/}}`;
     const t = NT();
-    if (sz === 16) return `if(m.planar&&(${a}>>>16)===10)m.w16(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;if(cp[${a}>>>12]|cp[((${a}+1)&${MM})>>>12])m._dirty(${a},2);}`;
-    return `if(m.planar&&(${a}>>>16)===10)m.w32(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;u8[(${a}+2)&${MM}]=${t}>>>16;u8[(${a}+3)&${MM}]=${t}>>>24;if(cp[${a}>>>12]|cp[((${a}+3)&${MM})>>>12])m._dirty(${a},4);}`;
+    if (sz === 16) return `if(m.planar&&(${a}>>>16)===10)m.w16(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;if(cp[${a}>>>12]|cp[((${a}+1)&${MM})>>>12]){m._dirty(${a},2);/*SMCABORT*/}}`;
+    return `if(m.planar&&(${a}>>>16)===10)m.w32(${a},(${v}));else{var ${t}=(${v});u8[${a}]=${t};u8[(${a}+1)&${MM}]=${t}>>>8;u8[(${a}+2)&${MM}]=${t}>>>16;u8[(${a}+3)&${MM}]=${t}>>>24;if(cp[${a}>>>12]|cp[((${a}+3)&${MM})>>>12]){m._dirty(${a},4);/*SMCABORT*/}}`;
   },
 
   // The write table folds BOTH of today's probes into one: a page is "plain" only if it is neither
