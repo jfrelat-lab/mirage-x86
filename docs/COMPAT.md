@@ -22,6 +22,28 @@ frontier instead of re-surveying. Update it when you unblock something.
 21 workloads are covered by the golden gate: `plasma13`, `xormunch`, `planar` (hand-written EGA
 write-mode test), `cga` (hand-written CGA test), plus third-party intros `256b 256bytef above
 chaosequ difze intoanew intro intro256 kaneda lattice memories oktaeder puls revitro rv256 tube
+
+**Demo tier, swept 2026-08-22: 31 of 32 intros render.** The one that does not is `oktaeder.com`,
+and it is now diagnosed rather than merely pinned. It is three blocks long before it leaves:
+
+    0100  mov ax,cs / shl ax,4      ; linear base of its own segment
+    0128  mov [0x11a],ax            ; patch that base into its GDT at 0108..0127
+    012F  mov bx,sp / cli / lgdt [bx]
+    0135  mov cr0,edx               ; enter protected mode -- with EDX **as DOS left it**
+    013B  jmp 0x18:0x140
+
+There is no load of EDX anywhere. DOS leaves `DX = the PSP segment` at `.COM` entry, so the intro
+enters protected mode **only when that segment happens to be odd**. Ours is 0x0100 — even — so CR0
+stays 0x100, PE never sets, the far jump is taken as a real-mode one and the guest walks off into the
+DOS environment block (which is how `src/derail.js` reports it: executing `"C:\oktaeder.com"`).
+Forcing DX odd sets CR0 to 0x101 and it does enter protected mode, confirming the mechanism.
+
+It still draws nothing after that, and the rest of the disassembly says why: `mov dx,0xcf8` then
+`out dx,ax`, and `0xcfc` — **PCI configuration space**. This is a demo driving real hardware.
+Measured on dosbox-x in the same configuration, `.COM` entry gives `DX = CS = 0x0814`, also even, so
+the reference would derail at the same instruction. Not a MIRAGE-specific failure, and not worth
+chasing; the golden entry stays as a fault fingerprint.
+
 upup`. `memories`/`tube`/`kaneda` exercise the FPU path. `256bytef intoanew memories` are
 timer-paced (a phase shift on timing changes is a golden re-bless after visual check, not a
 regression). **Mars** (Tim Clarke voxel landscape, 8K MZ-EXE) renders + steers via INT 33h mouse.

@@ -117,7 +117,7 @@ blamed the engine for the harness. `tools/run-test386.mjs:37` is the correct wir
 | C2 | **Add Baby Jo (Loriciel)** | S | Another EGA title to widen coverage. |
 | C3 | **Add Dune (Cryo)** | M | North-star game. Large 1992 VGA title — may need EMS/DPMI/Mode X; even a "how far does it get" run is valuable recon. |
 | C4 | **Add top-rated MS-DOS demos as test candidates** | S | See the sizecoding survey below. |
-| C5 | ✅ **DONE (2026-07-20):** curated `intros/` — triaged all (24/28 rendered), added **dirojed, paralaxa, warp** (32b) + **symetrie** (256b) from Řrřola, removed dead `cantorus` (exits blank), added `tools/intros-manifest.mjs`, regenerated `intros/manifest.json` (→31). Chrome Revenge skipped (`0F 38`+VESA); BootChess skipped (boot sector, not DOS). `oktaeder` stays (golden fault-fingerprint, needs protected mode); `256b` sparse but golden-pinned; `pitman` is text. | S | done |
+| C5 | ✅ **DONE (2026-07-20):** curated `intros/` — triaged all (24/28 rendered), added **dirojed, paralaxa, warp** (32b) + **symetrie** (256b) from Řrřola, removed dead `cantorus` (exits blank), added `tools/intros-manifest.mjs`, regenerated `intros/manifest.json` (→31). Chrome Revenge skipped (`0F 38`+VESA); BootChess skipped (boot sector, not DOS). `oktaeder` stays (golden fault-fingerprint; diagnosed 2026-08-22 — it needs an ODD PSP segment and PCI config space, and the reference derails on the same instruction: see COMPAT.md); `256b` sparse but golden-pinned; `pitman` is text. | S | done |
 
 ### pouet.net sizecoding survey — top MS-DOS by thumbs-up, per size tier (captured 2026-07-20)
 
