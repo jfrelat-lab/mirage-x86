@@ -318,6 +318,18 @@ now wakes a `HLT` on the BIOS-default timer (a `STI;HLT` before the guest instal
 - **CGA renderer** (`video.js:_renderCGA`) + 0x3D9 colour-select → Alley Cat title renders.
 - **EGA planar** path (`vga.js`) + CRTC scroll → Keen/Cosmo/PoP-intro/Stryker render.
 
+## Windows 3.0 (real / standard / 386 enhanced)
+
+`tools/win30-install.mjs` builds a runnable tree from the four install floppies without SETUP (the
+files are SZDD-compressed; `WIN.COM` is `WIN.CNF` + `VGALOGO.LGO` + `VGALOGO.RLE` concatenated).
+Disks and tree live under `boot/`, gitignored.
+
+| Mode | Where it gets |
+|---|---|
+| `win /r` (real) | loads and EXECs **KERNEL.EXE**, switches to **mode 0x12 (VGA 640x480x16 planar)**, then stops on *"Incorrect DOS version: DOS 3.1 or greater required."* AH=30h is correct for both AL=0 and AL=1; the last INT 21h calls before the refusal are `34h, 35h/21h, 35h/2Fh, DCh, 30h/01h`, so what it validates through the InDOS flag and the 21h/2Fh vectors is where to look. |
+| `win` / `win /s` (standard) | opens `EMMXXXX0`, picks standard mode, EXECs `DOSX.EXE`, prints its own *"Cannot load Windows in standard mode; try running in real mode."* |
+| **`win /3` (386 enhanced)** | **reaches its own memory check** since 2026-08-22 — no fault, program exits cleanly, printing *"The conventional memory in your system is fragmented and Windows cannot run in 386 enhanced mode."* Two things had to land: **virtual-8086 mode** (ROADMAP B4), and **#UD as a service** — the loader hooks INT 6 through DOS (`mov ax,2506h / int 21h`) and then executes `0f a6` deliberately to identify the processor. We answered "unimplemented opcode 0x0f 0xa6" for an opcode that is invalid on every CPU and is *meant* to fault. The remaining blocker is our conventional-memory layout, which is ROADMAP G1 (realistic PSP) territory, not the CPU. |
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 boots** to its `A:\>` prompt, verified interactively (`tools/run-boot.mjs

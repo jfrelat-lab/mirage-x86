@@ -80,6 +80,21 @@ function condExpr(cc) {
 // privileged instruction sails through — which is exactly how HLT, CLI and IN survived in V86.
 const CPL_EXPR = `((cpu.flags&0x20000)?3:(cpu.seg[${CS}]&3))`;
 
+/**
+ * Does the guest own INT 6? An invalid-opcode fault is a real CPU service, and programs USE it: the
+ * Windows 3.0 loader hooks INT 6 through DOS (`mov ax,2506h / int 21h`) and then deliberately
+ * executes `0f a6` to identify the processor. Throwing there reported "unimplemented opcode 0x0f
+ * 0xa6" for an opcode that is invalid on every CPU and is *meant* to fault.
+ *
+ * So: raise #UD when the guest has installed a handler, and keep throwing when it has not — an
+ * unhandled #UD would otherwise re-raise forever and turn a precise diagnostic into "INT 06h looped".
+ * Read from the IVT at translate time, which is free; the guest installing its handler later is not
+ * a problem, because when it had none we threw and no block was cached.
+ */
+function guestOwnsUD(mem) {
+  return mem.r16(6 * 4 + 2) !== 0xf000;
+}
+
 function unimplemented(what, lin, mem, rec) {
   let msg = `mirage: unimplemented opcode 0x${what} at linear 0x${lin.toString(16)}`;
   const where = describeRegion(mem, lin, rec && rec.cpu);
@@ -971,6 +986,9 @@ export class Recompiler {
         case 0x0f: { decode0F(sz); break; }
 
         default:
+          if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {   // the guest asked for #UD; give it #UD
+            P(`cpu.eip=${ipStart};cpu.raise(6);`); P('return;'); ended = true; break;
+          }
           throw new Error(unimplemented(op.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 1) & MM, mem, rec));
       }
 
@@ -1383,6 +1401,11 @@ export class Recompiler {
         case 0xbf: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 16)})<<16>>16)`)); return; } // MOVSX r,Ew
         case 0xc0: case 0xc1: { const o = modrm(); const size = op2 === 0xc0 ? 8 : sz; const d = NT(), s = NT(), rr = NT(); P(`var ${d}=${rmR(o, size)},${s}=${rR(o.reg, size)};var ${rr}=(${d}+${s})${M(size)};${rW(o.reg, size, d)}${rmW(o, size, rr)}cpu.setAdd(${d},${s},${rr},${size});`); return; } // XADD
         default:
+          // Same as the one-byte default: `0f a6` is invalid on every CPU and Windows 3.0's loader
+          // executes it on purpose, through its own INT 6 handler, to identify the processor.
+          if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {
+            P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;   // ip-2: the 0F
+          }
           throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 2) & MM, mem, rec));
       }
     }

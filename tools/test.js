@@ -389,6 +389,36 @@ function eq(name, got, want) {
   eq('an unknown profile is refused rather than silently ignored', threw, true);
 }
 
+// ---- #UD is a service the guest can ask for -------------------------------------------------
+// The Windows 3.0 loader hooks INT 6 through DOS (`mov ax,2506h / int 21h`) and then executes
+// `0f a6` on purpose to identify the processor. Reporting "unimplemented opcode 0x0f 0xa6" for an
+// opcode that is invalid on every CPU and is MEANT to fault was the wrong answer.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const cpu = mc.cpu;
+  mc.setVector(6, 0x2000, 0x100);                    // a guest #UD handler, as Windows installs
+  cpu.setSeg(CS, 0x100); cpu.eip = 0;
+  cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mc.mem.blit(0x1000, Uint8Array.from([0x0f, 0xa6, 0xca, 0xf4]));   // <invalid> ; hlt
+  let threw = null;
+  try { mc.rec.step(); } catch (e) { threw = e.message; }
+  eq('an invalid opcode raises #UD when the guest owns INT 6', threw, null);
+  eq('...entering the guest handler', `${cpu.seg[CS].toString(16)}:${(cpu.eip >>> 0).toString(16)}`, '2000:100');
+  eq('...with the FAULTING address pushed, not the next one', mc.mem.r16((0x300 << 4) + (cpu.sp & 0xffff)), 0x0000);
+
+  // With no guest handler the loud diagnostic must survive: an unhandled #UD would re-raise forever
+  // and turn "unimplemented opcode 0x0f 0xa6" into "INT 06h looped".
+  const mc2 = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc2);
+  mc2.cpu.setSeg(CS, 0x100); mc2.cpu.eip = 0;
+  mc2.mem.blit(0x1000, Uint8Array.from([0x0f, 0xa6, 0xca, 0xf4]));
+  let msg = '';
+  try { mc2.rec.step(); } catch (e) { msg = e.message; }
+  eq('...but with no guest handler it is still reported as an unimplemented opcode',
+     msg.includes('unimplemented opcode 0x0f 0xa6'), true);
+}
+
 // ---- virtual-8086 mode: EFLAGS.VM, its segment semantics, and the IOPL-sensitive set ---------
 // test386's POST 0x21 is the gate for this; these pin the pieces individually so a regression says
 // WHICH one, rather than "POST 21" again.
