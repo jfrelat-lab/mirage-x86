@@ -8,6 +8,7 @@
 // which is what lets games install INT 9 / INT 1Ch handlers and have them fire.
 
 import { Memory } from './memory.js';
+import { describeRegion, recentBlocks } from './derail.js';
 import { CPU, CS, CF, IF, TF } from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
@@ -345,9 +346,13 @@ export class Machine {
           if (at === this._excAt) {
             if (++this._excN === 100000) {
               const h = (x, w) => (x >>> 0).toString(16).padStart(w, '0');
+              const at = ((this.cpu.seg[1] << 4) + (this.cpu.eip & 0xffff)) & this.mem.mask;
+              const where = describeRegion(this.mem, at, this.cpu);
+              const path = recentBlocks(this.rec);
               throw new Error(`mirage: unhandled exception INT ${h(n, 2)}h re-raised 100000x at the same ` +
-                `address ${h(this.cpu.seg[1], 4)}:${h(this.cpu.eip & 0xffff, 4)} — the guest is stuck on one ` +
-                'instruction. An exception resumes at the faulting instruction, so nothing will change.');
+                `address ${h(this.cpu.seg[1], 4)}:${h(this.cpu.eip & 0xffff, 4)} (linear 0x${at.toString(16)}) — ` +
+                'the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing ' +
+                `will change${where ? '. ' + where : ''}${path ? '. Recent block starts (oldest first, the last is this one): ' + path : ''}`);
             }
           } else { this._excAt = at; this._excN = 1; }
         }

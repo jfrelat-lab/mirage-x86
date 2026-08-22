@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mirage",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["tools/serve.py", "8761"],
+      "port": 8761
+    }
+  ]
+}

@@ -228,6 +228,43 @@ A one-shot COM that writes F000:FFF0..FFFF to a file, so the values a real machi
 off the reference instead of invented. Ours were zeros; Turbo Pascal scans that region, ran off the
 end of memory and executed the interrupt vector table.
 
+## Classifying a derail (`src/derail.js`)
+
+Four investigations in one day began with a message naming an opcode, and in all four the opcode was
+innocent — the guest had left its own code and we were decoding whatever it landed in:
+
+| Title | Where it actually was | What the message said |
+|---|---|---|
+| Turbo Pascal | the real-mode IVT, after a 1 MB wrap | `unimplemented opcode 0x0f 0x53` (an SSE opcode, in a 1989 program) |
+| MS-DOS 6.22 | the same table, where `62 07` reads as BOUND | an unhandled `#BR`, looping |
+| test386 | the IDT — gate access bytes `8e`/`ee` | an instruction |
+| Crystal Dream 2 | its own error string, `"Exception fault."` | `INT 06h` re-raised |
+
+Every time, the first move was to implement or investigate the opcode, and every time that was wrong.
+So the two diagnostic paths — the unimplemented-opcode throw in `recompiler.js` and the
+exception-loop detector in `machine.js` — now classify the address before printing it:
+
+```
+mirage: unimplemented opcode 0x0f 0x53 at linear 0x30 — INSIDE THE REAL-MODE IVT (vector 12) —
+the guest left its own code. Implementing the opcode would be the wrong fix.
+Recent block starts (oldest first, the last is this one): 0003:0
+```
+
+`describeRegion(mem, lin, cpu)` recognises the IVT, the BIOS data area, the IDT/GDT/LDT (from the
+CPU's own registers, so it follows a guest that reloads them), a run of zeros, and text. It returns
+`''` for anything that looks like ordinary code, because a false positive sends the reader the wrong
+way — `tools/test.js` asserts that on hand-written code.
+
+The text test is a run of eight printable bytes, at least 60 % of them letters or spaces, and the
+quote is taken from the *start* of the run rather than from the fault address: Crystal Dream 2 lands
+mid-string, and "ception faul" is much harder to recognise than `"Exception fault."`. Requiring a
+whole printable window — the first version — rejected that very case, since the message embeds a
+`0x12` separator.
+
+The block path comes from a 16-entry ring the recompiler writes in `translate()`. That is the
+*compile* path, entered once per new block, not the hot execution path, so it costs nothing
+measurable (`bench.js tube memories` unchanged).
+
 ## Surveying the I/O bus (`tools/survey-ports.mjs`)
 
 The port-bus counterpart of `survey-gaps.mjs`. Runs the same corpus (`tools/corpus.mjs`) with

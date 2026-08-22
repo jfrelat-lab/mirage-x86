@@ -21,6 +21,7 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 import { resolveMemStrategy, memEmitters, memPrologue } from './mem-strategy.js';
+import { describeRegion, recentBlocks } from './derail.js';
 
 // Which memory-dispatch emission to use; see mem-strategy.js. Default reproduces the previous
 // emission character-for-character, so selecting it is provably a no-op.
@@ -74,10 +75,13 @@ function condExpr(cc) {
  * to fffe:0002, runs past the 1 MB wrap and decodes IVT entry 0 (0f53:010c) as "0f 53" — an SSE
  * opcode that nothing in a 1989 program could have contained.
  */
-function unimplemented(what, lin) {
-  const where = lin < 0x400 ? ` at linear 0x${lin.toString(16)} — INSIDE THE IVT (vector ${(lin >> 2)}), the guest jumped out of its code`
-    : ` at linear 0x${lin.toString(16)}`;
-  return `mirage: unimplemented opcode 0x${what}${where}`;
+function unimplemented(what, lin, mem, rec) {
+  let msg = `mirage: unimplemented opcode 0x${what} at linear 0x${lin.toString(16)}`;
+  const where = describeRegion(mem, lin, rec && rec.cpu);
+  if (where) msg += ` — ${where}. Implementing the opcode would be the wrong fix`;
+  const path = recentBlocks(rec);
+  if (path) msg += `. Recent block starts (oldest first, the last is this one): ${path}`;
+  return msg;
 }
 
 export class Recompiler {
@@ -92,6 +96,11 @@ export class Recompiler {
     // Indexed by (lin & 0xfff) | (csD << 12): the same bytes decode differently under a 16-bit and a
     // 32-bit code segment, so a block is only valid for the CS.D it was translated with.
     this.curBlk = null;            // the block executing right now, for the self-modification guard
+    // Where the last few blocks started, for the derail report. Written once per TRANSLATION — the
+    // compile path, not the hot execution path — so a derail can say how the guest got there.
+    this.recentCs = new Int32Array(16).fill(-1);
+    this.recentIp = new Int32Array(16);
+    this.recentI = 0;
     this.blockPages = [];          // page -> Array(8192) of block | undefined
     this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
     // Per-page block-coverage bounds [pageLo, pageHi) — the min linStart / max linEnd of
@@ -379,6 +388,8 @@ export class Recompiler {
   // -------------------------------------------------------------------------
   translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD) {
     const mem = this.mem, MM = this.MM;
+    const rec = this;                    // the decoders below are nested closures, where `this` is not us
+    { const k = this.recentI; this.recentCs[k] = this.cpu.seg[CS]; this.recentIp[k] = ip0; this.recentI = (k + 1) % 16; }
     // The CPU generation, read once per block. Every use below is a compile-time constant folded
     // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
     const PROF = this.cpu.profile, SHIFT_MASK = PROF.shiftCountMask;
@@ -940,7 +951,7 @@ export class Recompiler {
         case 0x0f: { decode0F(sz); break; }
 
         default:
-          throw new Error(unimplemented(op.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 1) & MM));
+          throw new Error(unimplemented(op.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 1) & MM, mem, rec));
       }
 
       // Self-modification guard. A block holds the bytes it was translated from, so an instruction
@@ -1352,7 +1363,7 @@ export class Recompiler {
         case 0xbf: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 16)})<<16>>16)`)); return; } // MOVSX r,Ew
         case 0xc0: case 0xc1: { const o = modrm(); const size = op2 === 0xc0 ? 8 : sz; const d = NT(), s = NT(), rr = NT(); P(`var ${d}=${rmR(o, size)},${s}=${rR(o.reg, size)};var ${rr}=(${d}+${s})${M(size)};${rW(o.reg, size, d)}${rmW(o, size, rr)}cpu.setAdd(${d},${s},${rr},${size});`); return; } // XADD
         default:
-          throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 2) & MM));
+          throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 2) & MM, mem, rec));
       }
     }
   }

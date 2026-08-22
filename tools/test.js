@@ -11,6 +11,7 @@ import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
 import { installBIOS } from '../src/bios.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
+import { describeRegion } from '../src/derail.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -386,6 +387,31 @@ function eq(name, got, want) {
   let threw = false;
   try { new Machine({ memSize: 1 << 20, cpu: 'z80' }); } catch { threw = true; }
   eq('an unknown profile is refused rather than silently ignored', threw, true);
+}
+
+// ---- derail classification: what the guest is executing when it is not executing code -------
+// Four investigations began from a message naming an opcode that turned out to be innocent, so the
+// address gets classified. These assert the SHAPE of the four regions we actually walked into.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  const say = (lin) => describeRegion(mc.mem, lin, mc.cpu);
+
+  eq('derail: the IVT is named as the IVT, with the vector', say(0x30).includes('IVT (vector 12)'), true);
+  eq('derail: the BIOS data area is named', say(0x480).includes('BIOS data area'), true);
+
+  mc.mem.blit(0x50000, Uint8Array.from([...'Exception fault.'].map(c => c.charCodeAt(0)).concat([0x12])));
+  eq('derail: a string is quoted from its start, not from the fault address',
+     say(0x50008), 'INSIDE A STRING — "Exception fault." — the guest is executing text, not code');
+
+  eq('derail: zeroed memory is named', say(0x60000).includes('zero bytes'), true);
+
+  // Ordinary code must NOT be classified — a false positive would send the reader the wrong way.
+  mc.mem.blit(0x70000, Uint8Array.from([0xb8, 0x34, 0x12, 0x8e, 0xd8, 0x89, 0xc3, 0xcd, 0x21, 0xf4]));
+  eq('derail: real code is left unclassified', say(0x70000), '');
+
+  // A descriptor table: test386 decoded gate access bytes as an instruction.
+  mc.cpu.idtr = { base: 0x80000, limit: 0x7ff };
+  eq('derail: the IDT is named, with the entry number', say(0x80048).includes('IDT (entry 9)'), true);
 }
 
 // ----------------------------------------------------------------------------
