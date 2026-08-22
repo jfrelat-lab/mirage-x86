@@ -144,6 +144,9 @@ export class Memory {
     const phys = this.walk(a);
     if (phys < 0) {
       this.pfCount = (this.pfCount || 0) + 1; this.lastPF = a >>> 0;
+      // `pfTrace` attaches a JS stack to the fault. Off by default because building one per fault
+      // is expensive and Windows takes millions; on, it names the CALLER — which is how the
+      // TSS stack switch was identified as the thing reading past the GDT.
       if (this.pfRaise) { const f = new PageFault(a, write); if (this.pfTrace) f.stack = new Error().stack; throw f; }
       return -1;                                   // no run loop to catch it: the old silent zero
     }
