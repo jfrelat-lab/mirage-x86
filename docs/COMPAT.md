@@ -328,7 +328,7 @@ Disks and tree live under `boot/`, gitignored.
 |---|---|
 | `win /r` (real) | loads and EXECs **KERNEL.EXE**, switches to **mode 0x12 (VGA 640x480x16 planar)**, then stops on *"Incorrect DOS version: DOS 3.1 or greater required."* AH=30h is correct for both AL=0 and AL=1; the last INT 21h calls before the refusal are `34h, 35h/21h, 35h/2Fh, DCh, 30h/01h`, so what it validates through the InDOS flag and the 21h/2Fh vectors is where to look. |
 | `win` / `win /s` (standard) | opens `EMMXXXX0`, picks standard mode, EXECs `DOSX.EXE`, prints its own *"Cannot load Windows in standard mode; try running in real mode."* |
-| **`win /3` (386 enhanced)** | **runs** since 2026-08-22 — no fault and, for the first time, **no refusal message**: WIN386 gets past every check and keeps executing. Five defects had to go, and four of them were general engine bugs found by diffing our INT 21h stream against a `dosbox-x -debug -log-int21` capture of the same tree. See the list below. |
+| **`win /3` (386 enhanced)** | **BOOTS** since 2026-08-22 — WIN386 enters protected mode with paging (CR0 = 0x80000011) and draws the **Windows 3.0 startup logo** in mode 0x12 (640x480x16 planar): the Microsoft wordmark, "Windows / Version 3.0", the 1985-1990 copyright line. Six defects had to go, five of them general engine bugs found by diffing our INT 21h stream against a `dosbox-x -debug -log-int21` capture of the same tree. See the list below. |
 
 **How `win /3` got there — the five defects, in the order Windows hit them.** Each was found by
 comparing our INT 21h sequence against DOSBox-X's for the same tree; the divergence point named the
@@ -351,7 +351,16 @@ bug every time. Only the last is Windows-specific.
    ISR answers by writing the flags IMAGE on the stack, so every DOS error was invisible to a hooking
    program. WIN386 read AX=2 from a failed open as a file handle. **This one is not about Windows**:
    it is the ubiquitous TSR idiom, and it was silently wrong for every program using it.
-5. **The environment's program path on EXEC.** After an environment block's terminating double NUL
+5. **Multi-byte memory access ignored paging.** Only `r8`/`w8` translated; `r16`/`r32`/`w16`/`w32`
+   did `a &= this.mask`, which treats a LINEAR address as physical — and `loadDescriptor` mixes
+   `r16` and `r8`, so every descriptor load under paging was HALF translated. WIN386 puts its GDT at
+   linear **0x8010011c**; we read the descriptor from physical 0x0010011c, got a 16-bit segment with
+   base 0xc95e, and walked forward through memory in 0x180 steps until CS went null. `src/derail.js`
+   named that walk on the first try. ⚠️ Watch the cost: `pagingOn` is a getter over two CR0 bits, and
+   calling it per access cost **tube +6.3%, memories +12.2%** measured against HEAD back to back. It
+   is a cached `mem.paged` flag now, kept in sync by `rebuildPageTables()`, and the bench is back on
+   baseline.
+6. **The environment's program path on EXEC.** After an environment block's terminating double NUL
    come a word 1 and the ASCIIZ full path of the program that owns it. DOS gives a child a *copy*
    ending in the CHILD's path; we handed over the parent's block — and WIN.COM appends `windir=` to
    that block in place, overwriting the word and the path outright. WIN386 **reopens itself** through

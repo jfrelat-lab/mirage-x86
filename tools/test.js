@@ -389,6 +389,38 @@ function eq(name, got, want) {
   eq('an unknown profile is refused rather than silently ignored', threw, true);
 }
 
+// ---- multi-byte memory access is translated under paging -------------------------------------
+// Only r8/w8 translated; r16/r32/w16/w32 did `a &= this.mask`, which treats a LINEAR address as
+// physical. loadDescriptor mixes r16 and r8, so every descriptor load was HALF translated. Windows
+// 3.0's WIN386 puts its GDT at linear 0x8010011c and we read the descriptor from 0x0010011c.
+{
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;   // without A20 the mask is 20 bits and every
+                                           // address above 1 MiB folds back onto zero
+  // One page directory at 0x1000, one table at 0x2000: linear 0x00400000 -> physical 0x00300000.
+  mem.w32(0x1000, 0x2003);                                     // PDE[0] -> table, present+rw
+  for (let i = 0; i < 1024; i++) mem.w32(0x2000 + i * 4, ((i << 12) | 3) >>> 0);   // identity
+  mem.w32(0x1000 + 1 * 4, 0x3003);                             // PDE[1] -> a second table
+  for (let i = 0; i < 1024; i++) mem.w32(0x3000 + i * 4, (((0x300 + i) << 12) | 3) >>> 0);
+  mem.w32(0x300000, 0xdeadbeef);                               // the physical frame linear 0x400000 maps to
+  cpu.setCR3(0x1000);
+  cpu.setCR0(0x80000001);                                      // PE | PG
+  eq('paging: an 8-bit read is translated', mem.r8(0x400000), 0xef);
+  eq('paging: a 16-bit read is translated too', mem.r16(0x400000), 0xbeef);
+  eq('paging: and a 32-bit one', mem.r32(0x400000) >>> 0, 0xdeadbeef);
+  mem.w32(0x400004, 0x12345678);
+  eq('paging: a 32-bit write lands in the mapped frame', mem.r32(0x300004) >>> 0, 0x12345678);
+  mem.w16(0x400008, 0xabcd);
+  eq('paging: and a 16-bit one', mem.r16(0x300008), 0xabcd);
+  // Clearing PG turns translation off even with PE still set — the cached `paged` flag has to follow
+  // BOTH bits. 0x400000 now means physical 0x400000, which on this 4 MiB machine wraps to 0, not to
+  // the frame the page tables pointed at.
+  cpu.setCR0(0x00000001);
+  eq('paging: clearing PG stops translation, even with PE still set',
+     (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
+}
+
 // ---- #UD is a service the guest can ask for -------------------------------------------------
 // The Windows 3.0 loader hooks INT 6 through DOS (`mov ax,2506h / int 21h`) and then executes
 // `0f a6` on purpose to identify the processor. Reporting "unimplemented opcode 0x0f 0xa6" for an

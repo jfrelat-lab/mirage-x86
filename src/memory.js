@@ -10,6 +10,7 @@ export class Memory {
   constructor(size = 16 * 1024 * 1024) {
     if ((size & (size - 1)) !== 0) throw new Error('Memory size must be a power of two');
     this.size = size;
+    this.paged = false;              // cached cpu.pagingOn — see syncPaging()
     // Real-mode addressing wraps at 1 MiB (the 8086's 20-bit bus / the AT's A20 gate disabled at
     // reset). Default to that wrap regardless of how much RAM is installed, so segment:offset
     // arithmetic near FFFF:xxxx behaves like real hardware — DOS EXEPACK stubs and lots of startup
@@ -55,7 +56,13 @@ export class Memory {
    * which is cheap enough to do outright on a CR3 reload or a paging transition rather than
    * maintaining per-entry validity.
    */
+  /** Kept in sync by rebuildPageTables, which every paging change already goes through. `pagingOn`
+   *  is a getter over two CR0 bits, and calling it per access cost 6-12% on the intro bench once the
+   *  multi-byte accessors needed it too — measured against HEAD, back to back, on an idle machine. */
+  syncPaging() { this.paged = !!(this.cpu && this.cpu.pagingOn); }
+
   rebuildPageTables() {
+    this.syncPaging();
     const n = this.rdOfs.length, pagesInRange = (this.mask + 1) >>> PAGE_BITS;
     const cpu = this.cpu, paging = cpu && cpu.pagingOn;
     for (let p = 0; p < n; p++) {
@@ -123,7 +130,7 @@ export class Memory {
    * and a silent zero surfaces as a later POST failing rather than as a wrong answer nobody sees.
    */
   xlat(a) {
-    if (!(this.cpu && this.cpu.pagingOn)) return a & this.mask;
+    if (!this.paged) return a & this.mask;
     const phys = this.walk(a);
     if (phys < 0) { this.pfCount = (this.pfCount || 0) + 1; this.lastPF = a >>> 0; return -1; }
     return (phys | (a & 0xfff)) & (this.size - 1);
@@ -134,29 +141,41 @@ export class Memory {
   // everything else is a direct typed-array read. `planar` is false for text/mode-13h/demos
   // so the check is a single predicted branch on the common path.
   r8(a)  {
-    if (this.cpu && this.cpu.pagingOn) { const t = this.xlat(a); return t < 0 ? 0 : this.u8[t]; }
+    if (this.paged) { const t = this.xlat(a); return t < 0 ? 0 : this.u8[t]; }
     a &= this.mask; return (this.planar && a >= 0xa0000 && a < 0xb0000) ? this.vga.readByte(a) : this.u8[a];
   }
-  r16(a) { a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return this.r8(a) | (this.r8((a + 1) & this.mask) << 8);
+  // Under paging these go byte at a time, because only r8/w8 translate — and a multi-byte access can
+  // straddle a page boundary, where the two halves land in unrelated frames. Composing was not just a
+  // tidiness point: `a &= this.mask` treats a LINEAR address as physical, so every descriptor load
+  // read half-translated (loadDescriptor mixes r16 and r8). Windows 3.0's WIN386 puts its GDT at
+  // linear 0x8010011c, and we read the descriptor from physical 0x0010011c.
+  r16(a) { if (this.paged) return this.r8(a) | (this.r8(a + 1) << 8);
+    a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return this.r8(a) | (this.r8((a + 1) & this.mask) << 8);
     return this.u8[a] | (this.u8[(a + 1) & this.mask] << 8); }
-  r32(a) { a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return (this.r8(a) | (this.r8((a + 1) & this.mask) << 8) | (this.r8((a + 2) & this.mask) << 16) | (this.r8((a + 3) & this.mask) << 24)) >>> 0;
+  r32(a) { if (this.paged) return (this.r8(a) | (this.r8(a + 1) << 8) | (this.r8(a + 2) << 16) | (this.r8(a + 3) << 24)) >>> 0;
+    a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return (this.r8(a) | (this.r8((a + 1) & this.mask) << 8) | (this.r8((a + 2) & this.mask) << 16) | (this.r8((a + 3) & this.mask) << 24)) >>> 0;
     return (this.u8[a] | (this.u8[(a + 1) & this.mask] << 8) | (this.u8[(a + 2) & this.mask] << 16) | (this.u8[(a + 3) & this.mask] << 24)) >>> 0; }
 
   // ---- writes (with SMC tracking) -----------------------------------------
   w8(a, v) {
-    if (this.cpu && this.cpu.pagingOn) { const t = this.xlat(a); if (t >= 0) { this.u8[t] = v; if (this.codePage[t >> PAGE_BITS]) this._dirty(t, 1); } return; }
+    if (this.paged) { const t = this.xlat(a); if (t >= 0) { this.u8[t] = v; if (this.codePage[t >> PAGE_BITS]) this._dirty(t, 1); } return; }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.vga.writeByte(a, v & 0xff); return; }
     this.u8[a] = v;
     if (this.codePage[a >> PAGE_BITS]) this._dirty(a, 1);
   }
   w16(a, v) {
+    if (this.paged) { this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff); return; }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.w8(a, v & 0xff); this.w8((a + 1) & this.mask, (v >> 8) & 0xff); return; }
     this.u8[a] = v; this.u8[(a + 1) & this.mask] = v >> 8;
     if (this.codePage[a >> PAGE_BITS] || this.codePage[(a + 1) >> PAGE_BITS]) this._dirty(a, 2);
   }
   w32(a, v) {
+    if (this.paged) {
+      this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff);
+      this.w8(a + 2, (v >> 16) & 0xff); this.w8(a + 3, (v >>> 24) & 0xff); return;
+    }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.w8(a, v & 0xff); this.w8((a + 1) & this.mask, (v >> 8) & 0xff); this.w8((a + 2) & this.mask, (v >> 16) & 0xff); this.w8((a + 3) & this.mask, (v >>> 24) & 0xff); return; }
     this.u8[a] = v; this.u8[(a + 1) & this.mask] = v >> 8;

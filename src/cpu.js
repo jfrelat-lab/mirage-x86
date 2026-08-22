@@ -471,9 +471,11 @@ export class CPU {
    * whatever the GDT happens to contain at those indices. It is also what makes "unreal mode" work.
    */
   setCR0(v) {
-    const wasPg = (this.cr0 >>> 31) & 1;
+    // Notify on any change to PAGING-IN-EFFECT, which is PG *and* PE: clearing PE with PG still set
+    // turns translation off just as clearing PG does, and memory caches that answer.
+    const was = this.pagingOn;
     this.cr0 = v >>> 0;
-    if (((this.cr0 >>> 31) & 1) !== wasPg) this.onPagingChange && this.onPagingChange();
+    if (this.pagingOn !== was) this.onPagingChange && this.onPagingChange();
   }
 
   /** CR3 reload: the whole software TLB is stale. */
