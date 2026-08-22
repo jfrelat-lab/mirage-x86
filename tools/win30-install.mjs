@@ -71,9 +71,45 @@ for (const [name, data] of all) writeFileSync(join(out, name.replace(/\\/g, '_')
 const need = (n) => { const d = all.get(n); if (!d) { console.error(`absent des disques: ${n}`); process.exit(1); } return Buffer.from(d); };
 writeFileSync(join(out, 'WIN.COM'), Buffer.concat([need('WIN.CNF'), need('VGALOGO.LGO'), need('VGALOGO.RLE')]));
 
-// SETUP writes these from the .SRC templates; it also substitutes the chosen drivers, which the
-// templates already default to for a plain VGA machine.
-writeFileSync(join(out, 'SYSTEM.INI'), Buffer.from(need('SYSTEM.SRC')));
+/**
+ * SETUP writes SYSTEM.INI from SYSTEM.SRC and fills in the machine's drivers. The template's [boot]
+ * and [keyboard] keys are EMPTY — "the templates already default to a plain VGA machine" was wrong,
+ * and an empty [boot] is what made WIN386 answer "Cannot find the system initialization file needed
+ * to run Windows; run Setup again" even though SYSTEM.INI opened fine four times. [386Enh] does come
+ * filled in, which is why the file looked complete at a glance.
+ *
+ * These are the choices SETUP makes for a plain VGA machine, and every file named here is on the
+ * disks. Note 3.0's grabber extensions: .GR3 is the 386 grabber, .GR2 the 286 one.
+ */
+const BOOT = {
+  'shell': 'progman.exe', 'display.drv': 'vga.drv', 'system.drv': 'system.drv',
+  'comm.drv': 'comm.drv', 'network.drv': '', 'oemfonts.fon': 'vgaoem.fon',
+  'fonts.fon': 'vgasys.fon', 'fixedfon.fon': 'vgafix.fon', '386grabber': 'vga.gr3',
+  '286grabber': 'vgacolor.gr2', 'mouse.drv': 'mouse.drv', 'keyboard.drv': 'keyboard.drv',
+  'sound.drv': 'sound.drv', 'language.dll': '',
+};
+const KEYBOARD = { 'type': '4', 'subtype': '', 'keyboard.dll': '', 'oemansi.bin': '' };
+
+/** Fill the empty `key =` lines of one section, leaving every other line byte-identical. */
+function fillSection(text, section, values) {
+  const lines = text.split(/\r?\n/);
+  let inSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t.startsWith('[')) { inSection = t.toLowerCase().startsWith('[' + section); continue; }
+    if (!inSection) continue;
+    const m = lines[i].match(/^(\s*)([\w.]+)(\s*=\s*)(.*)$/);
+    if (m && m[4].trim() === '' && values[m[2].toLowerCase()] !== undefined) {
+      lines[i] = m[1] + m[2] + m[3].replace(/\s+$/, ' ') + values[m[2].toLowerCase()];
+    }
+  }
+  return lines.join('\r\n');
+}
+
+let systemIni = need('SYSTEM.SRC').toString('latin1');
+systemIni = fillSection(systemIni, 'boot', BOOT);
+systemIni = fillSection(systemIni, 'keyboard', KEYBOARD);
+writeFileSync(join(out, 'SYSTEM.INI'), Buffer.from(systemIni, 'latin1'));
 writeFileSync(join(out, 'WIN.INI'), Buffer.from(need('WIN.SRC')));
 
 const sz = (n) => { const f = all.get(n); return f ? f.length : 0; };

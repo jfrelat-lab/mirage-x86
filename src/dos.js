@@ -55,8 +55,35 @@ export function installDOS(machine, vfs) {
     // without BLASTER set, even when they fall back to no sound.
     put('BLASTER=A220 I7 D1 H5 T6');
     mem.w8(p++, 0);                 // end of env vars
-    mem.w16(p, 1); p += 2;          // count of following strings
-    for (let i = 0; i < progPath.length; i++) mem.w8(p++, progPath.charCodeAt(i)); mem.w8(p++, 0);
+    setEnvProgramPath(ENV_SEG, progPath);
+  }
+
+  /**
+   * Write the program path that follows an environment block: after the strings' terminating double
+   * NUL comes a word 1 and then the ASCIIZ full path of the program that owns the block. Programs
+   * find their own file through it — Jazz Jackrabbit derives its extender's path from it, and
+   * Windows 3.0's WIN386 REOPENS ITSELF that way to load the VxDs out of its own image.
+   *
+   * It has to be rewritten on EXEC. DOS gives a child a COPY of the environment ending in the
+   * CHILD's path; we hand over the parent's block, so the path in it was the parent's — and worse,
+   * WIN.COM appends `windir=` to that block in place, which overwrote the word and the path
+   * outright. WIN386 then opened a zero-length filename and reported "Unable to start Windows in
+   * 386 enhanced mode".
+   *
+   * @param {number} envSeg  the block's segment
+   * @param {string} path    full path of the program that will own it
+   */
+  function setEnvProgramPath(envSeg, path) {
+    let p = envSeg << 4;
+    for (let guard = 0; guard < 0x8000; guard++) {        // scan to the strings' double NUL
+      if (mem.r8(p) === 0) break;
+      while (mem.r8(p) !== 0) p++;                        // skip this string
+      p++;                                                // and its terminator
+    }
+    p++;                                                  // past the empty string that ends the block
+    mem.w16(p, 1); p += 2;                                // count of following strings
+    for (let i = 0; i < path.length; i++) mem.w8(p++, path.charCodeAt(i));
+    mem.w8(p, 0);
   }
 
   function buildPSP(seg, tail) {
@@ -96,9 +123,19 @@ export function installDOS(machine, vfs) {
     for (let i = 5; i < 16; i++) mem.w8(b + i, 0);        // reserved + 8-byte owner name (blank)
   };
   const syncMCB = () => {
-    const top = Math.min(dos.allocTop | 0, MEM_TOP);
+    // One block per program that is loaded: every frame on the EXEC stack, oldest first, then the
+    // program running now, then whatever is left above as a single free block. A chain of exactly two
+    // blocks was fine until EXEC, which left the child's block undescribed — and worse, put the
+    // child's PSP ON the free block's MCB header, so the header read as the child's first opcode.
+    // Windows 3.0's WIN386 walks the chain and refused with "conventional memory is fragmented".
+    const progs = dos.execStack.map((f) => ({ psp: f.psp, top: Math.min(f.allocTop | 0, MEM_TOP) }));
+    progs.push({ psp: dos.psp, top: Math.min(dos.allocTop | 0, MEM_TOP) });
+    const top = progs[progs.length - 1].top;
     const hasFree = top < MEM_TOP - 1;
-    writeMCB(PSP_SEG - 1, hasFree ? 0x4d : 0x5a, PSP_SEG, top - PSP_SEG);   // program block: 'M', or 'Z' if it owns all of memory
+    for (let i = 0; i < progs.length; i++) {
+      const last = i === progs.length - 1 && !hasFree;
+      writeMCB(progs[i].psp - 1, last ? 0x5a : 0x4d, progs[i].psp, progs[i].top - progs[i].psp);
+    }
     if (hasFree) writeMCB(top, 0x5a, 0x0000, MEM_TOP - top - 1);            // free block: 'Z' (last), owner 0
     mem.w16((DIB_SEG << 4) + DIB_OFF - 2, PSP_SEG - 1);                     // list-of-lists: word before it = first MCB (the program's, at PSP-1)
     // PSP:0002 is "first paragraph past this program's block", and it was hard-wired to 0xA000 —
@@ -217,9 +254,13 @@ export function installDOS(machine, vfs) {
   function execChild(path, pbLin) {
     const bytes = vfs.readFile(path) || vfs.readFile('\\' + path);
     if (!bytes) return 2;                                 // file not found
-    const childPsp = dos.allocTop;                        // first free paragraph (parent shrank via 4Ah)
+    // +1: the MCB header of the block being handed to the child lives in the paragraph BELOW its PSP,
+    // exactly as the parent's does at PSP_SEG - 1. Putting the child's PSP on that paragraph
+    // overwrote the header, and the chain then read as corrupt from there on.
+    const childPsp = dos.allocTop + 1;                    // first free paragraph (parent shrank via 4Ah)
     if (childPsp + 0x11 >= MEM_TOP) return 8;             // no room for even a PSP+stack
     const envSeg = mem.r16(pbLin) || ENV_SEG;             // 0 in the param block = inherit parent's env
+    setEnvProgramPath(envSeg, path.startsWith('C:') || path.startsWith('\\') ? path : 'C:\\' + path.replace(/^\\/, ''));
     const tOff = mem.r16(pbLin + 2), tSeg = mem.r16(pbLin + 4), tLin = (tSeg << 4) + tOff;
     let tail = ''; const tLen = mem.r8(tLin);
     for (let i = 0; i < tLen; i++) tail += String.fromCharCode(mem.r8(tLin + 1 + i));
@@ -253,6 +294,7 @@ export function installDOS(machine, vfs) {
     // e_maxalloc fix (98c25f0) never made it into the EXEC path while the parser was duplicated.
     // A .COM child still owns everything, which is what DOS does.
     dos.memFloor = childTop; dos.allocTop = childTop;
+    syncMCB();                                            // the child's block joins the chain
     cpu.halted = false;
     return 0;                                             // success — cpu now points at the child
   }
@@ -286,6 +328,7 @@ export function installDOS(machine, vfs) {
       cpu.eip = ctx.eip; cpu.flags = ctx.flags & ~CF;    // EXEC succeeded → CF clear for the parent
       dos.psp = ctx.psp; dos.dta = ctx.dta; dos.allocTop = ctx.allocTop;
       dos.allocs = ctx.allocs; dos.memFloor = ctx.memFloor;
+      syncMCB();                                          // the child's block goes back to the free pool
       cpu.halted = false;
     } else { dos.programDone = true; cpu.halted = true; }
   };

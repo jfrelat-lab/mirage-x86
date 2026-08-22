@@ -328,7 +328,36 @@ Disks and tree live under `boot/`, gitignored.
 |---|---|
 | `win /r` (real) | loads and EXECs **KERNEL.EXE**, switches to **mode 0x12 (VGA 640x480x16 planar)**, then stops on *"Incorrect DOS version: DOS 3.1 or greater required."* AH=30h is correct for both AL=0 and AL=1; the last INT 21h calls before the refusal are `34h, 35h/21h, 35h/2Fh, DCh, 30h/01h`, so what it validates through the InDOS flag and the 21h/2Fh vectors is where to look. |
 | `win` / `win /s` (standard) | opens `EMMXXXX0`, picks standard mode, EXECs `DOSX.EXE`, prints its own *"Cannot load Windows in standard mode; try running in real mode."* |
-| **`win /3` (386 enhanced)** | **reaches its own memory check** since 2026-08-22 — no fault, program exits cleanly, printing *"The conventional memory in your system is fragmented and Windows cannot run in 386 enhanced mode."* Two things had to land: **virtual-8086 mode** (ROADMAP B4), and **#UD as a service** — the loader hooks INT 6 through DOS (`mov ax,2506h / int 21h`) and then executes `0f a6` deliberately to identify the processor. We answered "unimplemented opcode 0x0f 0xa6" for an opcode that is invalid on every CPU and is *meant* to fault. The remaining blocker is our conventional-memory layout, which is ROADMAP G1 (realistic PSP) territory, not the CPU. |
+| **`win /3` (386 enhanced)** | **runs** since 2026-08-22 — no fault and, for the first time, **no refusal message**: WIN386 gets past every check and keeps executing. Five defects had to go, and four of them were general engine bugs found by diffing our INT 21h stream against a `dosbox-x -debug -log-int21` capture of the same tree. See the list below. |
+
+**How `win /3` got there — the five defects, in the order Windows hit them.** Each was found by
+comparing our INT 21h sequence against DOSBox-X's for the same tree; the divergence point named the
+bug every time. Only the last is Windows-specific.
+
+1. **Virtual-8086 mode** (ROADMAP B4).
+2. **#UD is a service the guest asks for.** The loader hooks INT 6 through DOS
+   (`mov ax,2506h / int 21h`) and then executes `0f a6` *deliberately*. This is not a gap in our
+   opcode coverage: the routine above it is the classic CPU identification ladder — the 8086 flags
+   test, the 286 test, then `pushfd`/`popfd` on **EFLAGS.AC (bit 18)**, which only a 486 can set.
+   We present as a 386, so Windows goes on to check for the **386 B1 stepping**, whose tell is that
+   `XBTS` (`0f a6`) executes instead of faulting. Raising #UD is the *right* answer; throwing was not.
+   (DOSBox presents as a 486, so it never runs this check — which is why the probe looked suspicious.)
+3. **The MCB chain across EXEC.** The child's PSP was placed ON the free block's MCB header, and no
+   MCB was written for the child's block at all, so the chain read as corrupt from there on:
+   *"The conventional memory in your system is fragmented."*
+4. **The carry flag was lost on a CHAINED return.** A program that hooks INT 21h and chains does not
+   `int 21h` — it pushes a flags image and far-CALLs `f000:21`, returning through
+   `machine.biosCallback`, which popped that frame and restored the caller's flags *verbatim*. A real
+   ISR answers by writing the flags IMAGE on the stack, so every DOS error was invisible to a hooking
+   program. WIN386 read AX=2 from a failed open as a file handle. **This one is not about Windows**:
+   it is the ubiquitous TSR idiom, and it was silently wrong for every program using it.
+5. **The environment's program path on EXEC.** After an environment block's terminating double NUL
+   come a word 1 and the ASCIIZ full path of the program that owns it. DOS gives a child a *copy*
+   ending in the CHILD's path; we handed over the parent's block — and WIN.COM appends `windir=` to
+   that block in place, overwriting the word and the path outright. WIN386 **reopens itself** through
+   that path to load its VxDs, and was opening a zero-length filename.
+
+
 
 ## Booting a real DOS kernel
 

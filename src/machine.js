@@ -181,6 +181,16 @@ export class Machine {
 
     // Pop the frame at the width it was pushed at: 16-bit in real mode, but a client chaining into
     // these stubs left the 32-bit frame softInt pushed for it.
+    //
+    // The RESULT flags must survive the pop. A real ISR returns its answer by writing the flags
+    // IMAGE on the stack — DOS sets carry there, then IRETs — so restoring the caller's copy
+    // verbatim threw away every error the service had just reported. Only this path was affected:
+    // an `INT 21h` runs the JS handler with no frame at all, so its CF stood. But a program that
+    // HOOKS INT 21h and chains to the saved vector comes through here, and that is the ubiquitous
+    // TSR idiom — Windows 3.0's WIN386 does it, then read AX=2 from a failed open as if it were a
+    // file handle, because carry had been wiped on the way back.
+    const ARITH = CF | 0x04 | 0x10 | 0x40 | 0x80 | 0x800;   // CF PF AF ZF SF OF
+    const result = cpu.flags;
     const is32 = (cpu.cr0 & 1) && this.dpmi && this.dpmi.active && this.dpmi.is32;
     if (is32) {
       cpu.eip = cpu.pop32() >>> 0;
@@ -191,6 +201,7 @@ export class Machine {
       cpu.setSeg(CS, cpu.pop16());
       cpu.flags = (cpu.pop16() & 0x7fd5) | 2;
     }
+    cpu.flags = (cpu.flags & ~ARITH) | (result & ARITH);
     cpu.halted = false;
   }
 

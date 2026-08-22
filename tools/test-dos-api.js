@@ -64,6 +64,27 @@ function asciiz(mc, cpu, off, str) {
   return off;
 }
 
+// ------------------------------------------------- CF survives a CHAINED return (the TSR idiom)
+// A program that hooks INT 21h and chains to the saved vector does not `int 21h`: it pushes a flags
+// image and far-CALLs f000:21, and our service returns through machine.biosCallback, which pops that
+// frame. Restoring the caller's flags verbatim threw away the carry the service had just set, so
+// EVERY DOS error was invisible to a hooking program. Windows 3.0's WIN386 hooks INT 21h, and then
+// read AX=2 from a failed open as if it were a file handle.
+{
+  const c = mk();
+  const { mc, cpu } = c;
+  const off = asciiz(mc, cpu, 0x200, 'C:\\NOSUCH.XYZ');
+  cpu.setSeg(2, 0x100); cpu.sp = 0x800;                 // a stack inside the PSP segment
+  cpu.ah = 0x3d; cpu.al = 0; cpu.reg[2] = off;
+  cpu.flags &= ~CF;                                     // the caller's saved flags have carry CLEAR
+  // pushf ; call far f000:0021 ; hlt — exactly what a chaining ISR executes.
+  mc.mem.blit((0x100 << 4) + 0x400, Uint8Array.from([0x9c, 0x9a, 0x21, 0x00, 0x00, 0xf0, 0xf4]));
+  cpu.setSeg(1, 0x100); cpu.eip = 0x400;
+  for (let i = 0; i < 8 && !cpu.halted; i++) mc.rec.step();
+  eq('a chained INT 21h reports its error: CF survives the IRET', (cpu.flags & CF) !== 0, true);
+  eq('...with the DOS error code in AX', cpu.reg[0] & 0xffff, 2);
+}
+
 // ---------------------------------------------------------------- CF convention
 // The defect this catches: ~23 INT 21h functions used to `break` without touching CF, so they
 // returned whatever the caller had. `stc / mov ah,30h / int 21h / jc no_dos` took the error branch.
@@ -186,9 +207,14 @@ function asciiz(mc, cpu, off, str) {
   const pb = 0x280; for (let i = 0; i < 14; i++) c.mc.mem.w8((c.cpu.seg[3] << 4) + pb + i, 0);
   const r = int21(c, 0x4b, (cpu) => { cpu.al = 0; cpu.reg[2] = nameOff; cpu.setSeg(0, cpu.seg[3]); cpu.reg[3] = pb; });
   eq('4Bh EXEC succeeds', r.cf, 0);
-  // parent PSP 0x100 + 0x200 shrunk paragraphs = child PSP 0x300; block = PSP(0x10) + 32-byte image(2)
-  // + maxalloc(0x10) = 0x22 paragraphs. Before this, the child was handed everything up to 0xa000.
-  eq('EXEC child block is header-sized, not all of memory', c.dos.allocTop, 0x322);
+  // Parent PSP 0x100 + 0x200 shrunk paragraphs puts the free block's MCB header at 0x300, so the
+  // child's PSP is 0x301 — the header lives in the paragraph BELOW the PSP it describes, exactly as
+  // the parent's does at PSP-1. Its block is PSP(0x10) + 32-byte image(2) + maxalloc(0x10) = 0x22
+  // paragraphs, hence 0x323. Before the header was reserved, the child's PSP landed ON it.
+  eq('EXEC child block is header-sized, not all of memory', c.dos.allocTop, 0x323);
+  eq('...and the child PSP leaves its MCB header a paragraph', c.dos.psp, 0x301);
+  eq('...which describes the child block', String.fromCharCode(c.mc.mem.r8(0x300 << 4)), 'M');
+  eq('...and is owned by the child', c.mc.mem.r16((0x300 << 4) + 1), 0x301);
 }
 
 // ---------------------------------------------------------------- DTA get/set round-trip
