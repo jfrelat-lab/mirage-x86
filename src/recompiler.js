@@ -22,6 +22,7 @@ const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 import { resolveMemStrategy, memEmitters, memPrologue } from './mem-strategy.js';
 import { describeRegion, recentBlocks } from './derail.js';
+import { PageFault } from './memory.js';
 
 // Which memory-dispatch emission to use; see mem-strategy.js. Default reproduces the previous
 // emission character-for-character, so selecting it is provably a no-op.
@@ -366,6 +367,27 @@ export class Recompiler {
       }
     } catch (e) {
       this.stats.exec += n;
+      if (e instanceof PageFault) {
+        // CR2 holds the address that faulted; the error code's bit 0 is "page was present", which a
+        // not-present fault leaves clear, bit 1 is write, bit 2 is user mode. EIP already points at
+        // the faulting instruction — the per-instruction store above put it there.
+        cpu.cr2 = e.lin;
+        try {
+          machine.protInt(14, (e.write ? 2 : 0) | (cpu.cpl === 3 ? 4 : 0));
+        } catch (e2) {
+          // A fault while DELIVERING a fault is a double fault on real hardware. We do not model
+          // #DF, but it must not reach the host as a JS exception either: report it, with the two
+          // addresses, because the second one is what actually needs explaining.
+          if (!(e2 instanceof PageFault)) throw e2;
+          const msg = `mirage: #PF at linear 0x${e.lin.toString(16)} could not be delivered — the ` +
+            `delivery itself faulted at linear 0x${e2.lin.toString(16)} (a double fault). ` +
+            `TR=0x${cpu.tr.sel.toString(16)} GDT=0x${(cpu.gdtr.base >>> 0).toString(16)}/` +
+            `0x${cpu.gdtr.limit.toString(16)} IDT=0x${(cpu.idtr.base >>> 0).toString(16)}`;
+          if (machine.onError) { machine.onError(new Error(msg)); return n; }
+          throw new Error(msg);
+        }
+        return n;                        // the slice ends here; the next one starts in the handler
+      }
       if (machine.onError) { machine.onError(e); return n; }
       throw e;
     }
@@ -409,6 +431,7 @@ export class Recompiler {
   translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD) {
     const mem = this.mem, MM = this.MM;
     const rec = this;                    // the decoders below are nested closures, where `this` is not us
+    const pfRestart = this.memStrategy.read === 'paged' || this.memStrategy.write === 'paged';
     { const k = this.recentI; this.recentCs[k] = this.cpu.seg[CS]; this.recentIp[k] = ip0; this.recentI = (k + 1) % 16; }
     // The CPU generation, read once per block. Every use below is a compile-time constant folded
     // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
@@ -625,6 +648,13 @@ export class Recompiler {
     while (!ended && count < maxOps) {
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
       const ipStart = ip;                 // instruction start ip — fault return address (#BR etc.)
+      // A #PF is raised from INSIDE a memory access, so the run loop has to know which instruction
+      // to restart — and only this store knows. It is emitted per instruction ONLY under the paged
+      // strategy, which the machine selects exactly when paging is on, so nothing outside protected
+      // mode pays for it. (Instruction restart is approximate: side effects a faulting instruction
+      // had already committed are not undone. Demand paging faults on the access itself, which is
+      // the case that matters; a REP MOVS straddling a missing page is not.)
+      if (pfRestart) P(`cpu.eip=${ipStart};`);
       // prefixes. Bounded: x86 caps an instruction at 15 bytes, so a longer prefix run is not
       // real code — it is garbage the tier-2 region walker speculatively reached (a Jcc/JMP
       // successor that lands in data). Without this cap the loop would consume prefix bytes

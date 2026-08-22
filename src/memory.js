@@ -1,3 +1,12 @@
+/**
+ * A page fault in flight. Thrown out of the memory accessors and caught by the recompiler's run
+ * loop, which turns it into #PF — the only way to deliver a fault raised from INSIDE an access,
+ * short of making every access site able to end its block.
+ */
+export class PageFault {
+  constructor(lin, write) { this.lin = lin >>> 0; this.write = !!write; }
+}
+
 // memory.js — flat physical RAM with little-endian accessors and self-modifying-code
 // (SMC) tracking. The engine is DOM-free so it runs identically in Node and the
 // browser; everything visual is layered on top of this.
@@ -11,6 +20,7 @@ export class Memory {
     if ((size & (size - 1)) !== 0) throw new Error('Memory size must be a power of two');
     this.size = size;
     this.paged = false;              // cached cpu.pagingOn — see syncPaging()
+    this.pfRaise = false;            // Machine turns this on; see xlat()
     // Real-mode addressing wraps at 1 MiB (the 8086's 20-bit bus / the AT's A20 gate disabled at
     // reset). Default to that wrap regardless of how much RAM is installed, so segment:offset
     // arithmetic near FFFF:xxxx behaves like real hardware — DOS EXEPACK stubs and lots of startup
@@ -129,10 +139,14 @@ export class Memory {
    * memory accessor needs the same block-ending treatment as #DE and #UD, which is its own step —
    * and a silent zero surfaces as a later POST failing rather than as a wrong answer nobody sees.
    */
-  xlat(a) {
+  xlat(a, write) {
     if (!this.paged) return a & this.mask;
     const phys = this.walk(a);
-    if (phys < 0) { this.pfCount = (this.pfCount || 0) + 1; this.lastPF = a >>> 0; return -1; }
+    if (phys < 0) {
+      this.pfCount = (this.pfCount || 0) + 1; this.lastPF = a >>> 0;
+      if (this.pfRaise) { const f = new PageFault(a, write); if (this.pfTrace) f.stack = new Error().stack; throw f; }
+      return -1;                                   // no run loop to catch it: the old silent zero
+    }
     return (phys | (a & 0xfff)) & (this.size - 1);
   }
 
@@ -141,7 +155,7 @@ export class Memory {
   // everything else is a direct typed-array read. `planar` is false for text/mode-13h/demos
   // so the check is a single predicted branch on the common path.
   r8(a)  {
-    if (this.paged) { const t = this.xlat(a); return t < 0 ? 0 : this.u8[t]; }
+    if (this.paged) { const t = this.xlat(a, false); return t < 0 ? 0 : this.u8[t]; }
     a &= this.mask; return (this.planar && a >= 0xa0000 && a < 0xb0000) ? this.vga.readByte(a) : this.u8[a];
   }
   // Under paging these go byte at a time, because only r8/w8 translate — and a multi-byte access can
@@ -158,7 +172,7 @@ export class Memory {
 
   // ---- writes (with SMC tracking) -----------------------------------------
   w8(a, v) {
-    if (this.paged) { const t = this.xlat(a); if (t >= 0) { this.u8[t] = v; if (this.codePage[t >> PAGE_BITS]) this._dirty(t, 1); } return; }
+    if (this.paged) { const t = this.xlat(a, true); if (t >= 0) { this.u8[t] = v; if (this.codePage[t >> PAGE_BITS]) this._dirty(t, 1); } return; }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.vga.writeByte(a, v & 0xff); return; }
     this.u8[a] = v;

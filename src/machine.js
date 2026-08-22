@@ -29,6 +29,7 @@ const IO_MASK = [0, 0xff, 0xffff, 0, 0xffffffff];
 export class Machine {
   constructor(opts = {}) {
     this.mem = new Memory(opts.memSize || 16 * 1024 * 1024);
+    this.mem.pfRaise = true;         // there is a run loop here to catch it — see Memory.xlat
     this.cpu = new CPU(this.mem);
     // Which x86 generation this machine is. Read by the recompiler at TRANSLATION time, so every
     // difference becomes a constant in the emitted code — see src/cpu-profile.js.
@@ -215,7 +216,25 @@ export class Machine {
    * the TSS, which is the next step. Nothing here checks privilege, so a fault that should be #GP
    * still gets delivered — wrong, but it surfaces as a later POST rather than as silence.
    */
+  /**
+   * Exception delivery can itself fault — loading the handler's CS, switching to the TSS stack —
+   * and that recursion has to stop somewhere. Real hardware escalates: a fault during delivery is
+   * #DF, and a fault while delivering #DF shuts the processor down. We do not model #DF, so this
+   * reports instead, which is more useful than a JS stack overflow (the first thing Windows 3.0's
+   * enhanced mode produced here: #PF -> load SS from an un-LTR'd TSS -> #GP -> repeat).
+   */
   protInt(n, err, faultIp) {
+    if ((this._excDepth = (this._excDepth || 0) + 1) > 3) {
+      this._excDepth = 0;
+      throw new Error(`mirage: exception ${n} raised while already delivering one, three deep — ` +
+        `the delivery path itself is faulting. TR=0x${this.cpu.tr.sel.toString(16)} ` +
+        `GDT=0x${(this.cpu.gdtr.base >>> 0).toString(16)}/0x${this.cpu.gdtr.limit.toString(16)} ` +
+        `CR2=0x${(this.cpu.cr2 >>> 0).toString(16)}`);
+    }
+    try { return this._protInt(n, err, faultIp); } finally { this._excDepth--; }
+  }
+
+  _protInt(n, err, faultIp) {
     const cpu = this.cpu, m = this.mem;
     // No IDT for a client (see dpmi.js): software interrupts are reflected, so reaching here means a
     // genuine exception. Name it rather than dispatching through an empty table.

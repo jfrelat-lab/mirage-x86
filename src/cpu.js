@@ -35,6 +35,7 @@ export class CPU {
     // Always 0 in real mode. It selects the DEFAULT that 0x66/0x67 invert, so translated code is
     // only valid for one value of it — the block cache is keyed by it (recompiler.js).
     this.csD = 0;
+    this._cpl = 0;                   // stored CPL — see the `cpl` getter
     // Stack-segment B bit: 0 = the stack pointer is SP (16-bit, wraps in 64 KiB), 1 = ESP (32-bit).
     // Independent of the operand size, which decides how MUCH is pushed, not WHERE. Always 0 in
     // real mode. test386 POST 9 exists to catch exactly this confusion.
@@ -97,11 +98,13 @@ export class CPU {
   get v86() { return (this.flags & VM) !== 0; }
 
   /**
-   * Current privilege level. In V86 it is 3 by definition, whatever CS's RPL says — and CS there is
-   * an 8086 value like 0xf000, whose low two bits are 0. Reading CPL as `seg[CS] & 3` in V86 gives
-   * ring 0 and every privilege check silently passes.
+   * Current privilege level. It is STORED, not derived from CS's RPL, because between `mov cr0` (PE
+   * on) and the far jump that reloads CS, the selector register still holds the REAL-MODE value —
+   * and its low two bits mean nothing. Windows 3.0 runs there with CS = 0x13b, so a derived CPL read
+   * 3 and the very next instruction, a far jump to a DPL-0 selector, was rejected with #GP(8).
+   * On real hardware CPL lives in the CS descriptor cache, which that transition leaves at 0.
    */
-  get cpl() { return (this.flags & VM) ? 3 : (this.cr0 & 1) ? (this.seg[CS] & 3) : 0; }
+  get cpl() { return this._cpl; }
 
   /** I/O privilege level. In V86 it gates the whole sensitive-instruction set. */
   get iopl() { return (this.flags >>> 12) & 3; }
@@ -114,10 +117,12 @@ export class CPU {
     if (!(this.cr0 & 1) || (this.flags & VM)) {
       this.base[i] = sel << 4;
       this.limit[i] = 0xffff;
-      if (i === CS) this.csD = 0; else if (i === SS) this.ssB = 0;
+      if (i === CS) { this.csD = 0; this._cpl = (this.flags & VM) ? 3 : 0; }
+      else if (i === SS) this.ssB = 0;
       return;
     }
     this.loadDescriptor(i, sel);
+    if (i === CS) this._cpl = sel & 3;             // a protected-mode CS load sets CPL, nothing else
   }
 
   /** Cache base/limit (and, for CS, the D bit) from the descriptor `sel` selects. */
@@ -128,6 +133,11 @@ export class CPU {
       return;
     }
     const tbl = (sel & 4) ? this.ldtr : this.gdtr;          // TI bit picks GDT or LDT
+    // A selector past the table's limit is #GP(selector), not a read past the table. Without this
+    // we followed a garbage selector into unmapped memory: delivering Windows' first #PF loads SS
+    // from a TSS that has never been LTR'd, and the resulting nonsense selector read 0xff50 bytes
+    // beyond a 0x10f-byte GDT.
+    if ((sel & 0xfff8) + 7 > tbl.limit) return this.raise(13, sel & 0xfffc);
     const a = (tbl.base + (sel & 0xfff8)) >>> 0;            // the index is already scaled by 8
     const m = this.mem;
     const lo = m.r16(a), b0 = m.r16(a + 2);
@@ -148,6 +158,7 @@ export class CPU {
     sel &= 0xffff;
     if ((sel & 0xfffc) === 0) return null;
     const tbl = (sel & 4) ? this.ldtr : this.gdtr;
+    if ((sel & 0xfff8) + 7 > tbl.limit) return null;        // past the table: no descriptor to read
     const a = (tbl.base + (sel & 0xfff8)) >>> 0, m = this.mem;
     const access = m.r8(a + 5);
     return {

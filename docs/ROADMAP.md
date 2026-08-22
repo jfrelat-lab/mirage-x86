@@ -23,7 +23,30 @@ for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMP
 | B1 | ✅ **DONE** (`76d0e90`) — the browser's 16 MiB buffer had no 1 MiB address wrap (headless's 1 MiB did), so EXEPACK stubs' segment arithmetic broke → "Packed file is corrupt". Fixed by wrapping real-mode addresses at 1 MiB regardless of RAM (+ A20 gate on port 0x92). **Prince of Persia renders** its VGA title; unblocks all EXEPACK'd programs in-browser. | — | done |
 | B2 | **Wolf3D PML memory manager** (`PML_GetPageBuffer: Purged main block`). ⚠️ **The "blocked on compile-bound slowness" diagnosis was WRONG — retracted 2026-08-09.** Measured with `tools/d6-profile.mjs`: Wolf3D executes **749 M cycles in 6 s (~125 Mcycles/s, full engine speed)** and spends **1.0%** of that in `new Function` and 98.5% executing. The old "0.05–0.13 Mblk/s, translate-per-block dominates" reading was almost certainly taken with **tier-2 on** — the default in Node until 2026-08-09, and documented as ~5× slower on exactly this title. So B2 does **not** depend on D5/D6. Current state (`node tools/run-game.mjs WOLF3DSW WOLF3D.EXE 4000`): mode 13h + Mode-X planar, 88411 non-zero plane bytes, no fault, stable — the signon screen, unchanged over 4000 ticks. The real blocker is PML itself and needs diagnosing on its own terms, likely with the co-sim. | M |
 | B3 | ✅ **DONE** (`58cc60b`, `b3e41fa`) — LIM EMS 4.0 in `src/ems.js` behind an `ems` option (XMS was already there). The subtle half is **detection**: programs open the character device `EMMXXXX0` and check bit 7 of IOCTL 4400h; **nobody reads the INT 67h vector**. Both had to be added — a device-chain entry (`vfs.addDevice`, since static `deviceOf` cannot know which drivers a machine loaded) and bit 7 for handles above 4. Wolf3D's first divergence against the reference moved from file event #7 to #155. | — | done |
-| B4 | **DPMI / protected mode** — *CPU side under way, measured by test386's POST sequence: **POST 8 → 20***. Landed 2026-08-09: CS.D in the block-cache key; GDT/LDT/IDT registers with a CR0.PE that really switches; `SS.B` stack width; `LLDT`; IDT gate dispatch (286/386 interrupt and trap gates) with `IRETD`; `IRET` across a privilege change (five-element frame); `ARPL`; and **guest paging** — CR3, the directory/table walk, and a software TLB built on the biased-offset page tables (`MOV CR3` previously discarded its operand, so every linear address was used as physical). Enabling paging switches the recompiler to the `paged` memory strategy, which is why that strategy exists. Real mode is untouched throughout: golden 22/22, conformance 555764/555764 after every step. ⚠️ **Not done, and now the single thing blocking Windows 3.0 enhanced mode (measured 2026-08-22: linear page 0x80110000 faults 93,076,264 times in one run — Windows' VMM demand-pages and waits for the fault):** `#PF` (a not-present page is counted in `mem.pfCount` and reads zero — raising from inside a memory accessor needs the block-ending treatment `#DE`/`#UD` get), privilege/type checks with `#GP`, call gates, TSS task switching. **⚠️ The call-gate blocker below is CLOSED — gates are implemented in `cpu.js` `farCall`, TSS stack
+| B4 | **DPMI / protected mode** — *CPU side under way, measured by test386's POST sequence: **POST 8 → 20***. Landed 2026-08-09: CS.D in the block-cache key; GDT/LDT/IDT registers with a CR0.PE that really switches; `SS.B` stack width; `LLDT`; IDT gate dispatch (286/386 interrupt and trap gates) with `IRETD`; `IRET` across a privilege change (five-element frame); `ARPL`; and **guest paging** — CR3, the directory/table walk, and a software TLB built on the biased-offset page tables (`MOV CR3` previously discarded its operand, so every linear address was used as physical). Enabling paging switches the recompiler to the `paged` memory strategy, which is why that strategy exists. Real mode is untouched throughout: golden 22/22, conformance 555764/555764 after every step. ✅ **`#PF` DONE (2026-08-22).** A not-present page THROWS a `PageFault` out of `Memory.xlat()`, and
+the recompiler's run loop catches it, sets CR2, and dispatches INT 14 with the error code (bit 0
+present, bit 1 write, bit 2 user). The instruction is restartable because the paged strategy emits
+`cpu.eip = <ipStart>` per instruction — only under that strategy, which the machine selects exactly
+when paging is on, so nothing outside protected mode pays for it. ⚠️ Restart is approximate: side
+effects a faulting instruction already committed are not undone. Demand paging faults on the access
+itself, which is the case that matters; a `REP MOVS` straddling a missing page is not.
+
+Three gaps surfaced immediately, each fixed and tested:
+- **The descriptor-table limit was never checked.** A selector past the GDT/LDT limit read past the
+  table instead of raising #GP(selector) — 0xff50 bytes past a 0x10f-byte GDT, in the case that
+  found it.
+- **Exception delivery could recurse without end.** #PF → load SS from an un-LTR'd TSS → #GP →
+  repeat, which reached the host as a JS stack overflow. Delivery is depth-guarded now and reports
+  what is faulting (TR, GDT, CR2) instead.
+- **CPL was derived from `seg[CS] & 3`.** Between `mov cr0` and the far jump that reloads CS, the
+  selector register still holds the REAL-MODE value, whose low two bits mean nothing. Windows 3.0
+  sits there with CS = 0x13b, so CPL read 3 and the very next instruction — a far jump to its DPL-0
+  code selector — was rejected with #GP(8), one instruction into protected mode. CPL is stored now,
+  as it is on real hardware (it lives in the CS descriptor cache).
+
+Still not done: `#DF`, task switching, VME. **Windows 3.0 enhanced mode now gets past the protected-
+mode entry and takes real page faults; the next thing it needs is a valid TSS before it can take an
+inward fault (`TR=0x0` when the first one arrives).**, privilege/type checks with `#GP`, call gates, TSS task switching. **⚠️ The call-gate blocker below is CLOSED — gates are implemented in `cpu.js` `farCall`, TSS stack
 switch and parameter copying included. Re-measured 2026-08-19; the blocker has MOVED, and the
 paragraph after it is kept only for the descriptor-decoding lesson.**
 

@@ -389,6 +389,55 @@ function eq(name, got, want) {
   eq('an unknown profile is refused rather than silently ignored', threw, true);
 }
 
+// ---- #PF, CPL, and the descriptor-table limit ------------------------------------------------
+{
+  // CPL is STORED. Between `mov cr0` (PE on) and the far jump that reloads CS, the selector register
+  // still holds the REAL-MODE value, whose low two bits mean nothing. Windows 3.0 sits there with
+  // CS = 0x13b, and a CPL derived from `seg[CS] & 3` read 3 — so the far jump to its DPL-0 code
+  // selector was rejected with #GP(8), one instruction into protected mode.
+  const mc = new Machine({ memSize: 1 << 20 });
+  const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x13b);
+  eq('CPL is 0 in real mode whatever CS looks like', cpu.cpl, 0);
+  cpu.setCR0(cpu.cr0 | 1);                            // PE on, CS not yet reloaded
+  eq('...and stays 0 across the PE transition, before CS is reloaded', cpu.cpl, 0);
+}
+{
+  // A selector past the table limit is #GP(selector), not a read past the table.
+  const mc = new Machine({ memSize: 1 << 20 });
+  const cpu = mc.cpu;
+  let raised = null;
+  mc.protInt = (n, err) => { raised = { n, err }; };
+  cpu.cr0 |= 1;
+  cpu.gdtr = { base: 0x2000, limit: 0x0f };           // two descriptors only
+  cpu.setSeg(DS, 0x40);                               // index 8 — well past it
+  eq('a selector past the GDT limit raises #GP', raised && raised.n, 13);
+  eq('...with that selector as the error code', raised && raised.err, 0x40);
+  eq('readDesc reports no descriptor there rather than reading past', cpu.readDesc(0x40), null);
+}
+{
+  // #PF: a not-present page raises INT 14 with CR2 and the error code, instead of reading zero.
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  mem.w32(0x1000, 0x2003);                            // PDE[0] present -> table at 0x2000
+  mem.w32(0x2000, 0x0003);                            // PTE[0] present, everything else absent
+  cpu.setCR3(0x1000); cpu.setCR0(0x80000001);
+  eq('paging: the mapped page reads back', mem.r8(0), mem.u8[0]);
+  let caught = null;
+  try { mem.r8(0x9000); } catch (e) { caught = e; }
+  eq('a not-present page throws a PageFault instead of reading zero', caught && caught.constructor.name, 'PageFault');
+  eq('...carrying the faulting linear address', caught && caught.lin, 0x9000);
+  eq('...and whether it was a write', caught && caught.write, false);
+  let w = null;
+  try { mem.w8(0x9000, 1); } catch (e) { w = e; }
+  eq('...a write says so', w && w.write, true);
+  // A bare Memory has no run loop to catch it, so it keeps the old silent zero.
+  const bare = new Machine({ memSize: 1 << 20 }).mem;
+  bare.pfRaise = false;
+  eq('with pfRaise off it still reads zero, for inspectors', bare.r8(0x1234) >= 0, true);
+}
+
 // ---- multi-byte memory access is translated under paging -------------------------------------
 // Only r8/w8 translated; r16/r32/w16/w32 did `a &= this.mask`, which treats a LINEAR address as
 // physical. loadDescriptor mixes r16 and r8, so every descriptor load was HALF translated. Windows
