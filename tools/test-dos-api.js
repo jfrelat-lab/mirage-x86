@@ -508,8 +508,25 @@ function asciiz(mc, cpu, off, str) {
   const sp1 = mc.cpu.sp & 0xffff;
   mc.tickTimer();
   eq('a masked timer tick does not', mc.cpu.sp & 0xffff, sp1);
-  eq('...though the BDA tick still advances, as the counter is not the interrupt',
-     mc.mem.r32(0x46c) > 0, true);
+  // 0040:006C is a SOFTWARE counter kept by the BIOS INT 8 handler, not the PIT counter. Measured on
+  // dosbox-x with tools/tickq.asm and its own control: IRQ0 unmasked "BDA TICK ADVANCED", IRQ0 masked
+  // "BDA TICK FROZEN". This assertion used to claim the opposite ("the counter is not the
+  // interrupt"), and machine.tickTimer bumped the tick per PIT tick to match — so a game that
+  // reprograms counter 0 ran the BDA clock at ITS rate (Monkey Island: 473 Hz) instead of 18.2 Hz.
+  eq('...and the BDA tick does not advance either: it is the BIOS ISR that keeps it',
+     mc.mem.r32(0x46c), 0);
+  // A guest ISR that never chains to f000:08 freezes the DOS clock — the period-correct behaviour,
+  // and why games chain.
+  mc.ioWrite(0x21, 1, 0x00);                                    // unmask
+  mc.pic.eoi(0);
+  mc.tickTimer();
+  eq('a guest ISR that does not chain leaves the BDA tick alone', mc.mem.r32(0x46c), 0);
+  // With no guest ISR we ARE the BIOS handler, so the tick advances.
+  const mc2 = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc2);
+  mc2.cpu.setSeg(2, 0x4000); mc2.cpu.sp = 0x200; mc2.cpu.flags |= 0x200;
+  mc2.tickTimer();
+  eq('with no guest ISR the BIOS handler advances the tick', mc2.mem.r32(0x46c), 1);
 }
 
 // ---------------------------------------------------------------- ports the corpus hammers

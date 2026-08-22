@@ -222,6 +222,33 @@ DOSBox-X has **no scriptable screenshot** — it is the F12+P host hotkey, with 
 trigger — so the grabber is the only dump path headless. `AUTOTYPE` *is* a real internal command and
 is how you drive the guest past a menu.
 
+## Is the BDA tick the PIT counter? (`tools/tickq.asm`)
+
+`0040:006C` — ticks since midnight — is either the PIT's own counter or a software counter kept by
+the BIOS `INT 8` handler. It decides where the increment belongs, and `tools/test-dos-api.js`
+asserted the first answer in so many words ("the counter is not the interrupt"), with
+`machine.tickTimer` bumping it per PIT tick to match.
+
+That is wrong, and the cost was large: a title that reprograms counter 0 then ran the DOS clock at
+*its* rate. Monkey Island programs 2521 (473 Hz), so `0040:006C` advanced ~16x too fast and every
+capture bounded on the BIOS tick — `tools/shot.mjs`, and with it every DOSBox pixel comparison that
+claims to stop at "the same moment" — photographed a screen the game had not drawn yet.
+
+`tools/tickq.asm` asks the reference instead. It masks IRQ0 at the PIC, busy-loops, and reports
+whether the tick moved; `-DNOMASK` builds the control, same loop, same length, IRQ0 left alone.
+
+    control (IRQ0 unmasked): RESULT: BDA TICK ADVANCED
+    masked:                  RESULT: BDA TICK FROZEN
+
+So it is software, and the increment lives in `bios.js`'s `INT 8` hook — the one a guest ISR chains
+to. A game that reprograms the PIT keeps the DOS clock at 18.2 Hz by chaining once every N of its own
+ticks, and Monkey Island now chains **24.8:1** against the **26:1** its divider implies. (The
+residual is the anti-storm clamp on `pitReload`, which is D7, not this.)
+
+⚠️ Run it on a SLOW clock. DOSBox `cycles = fixed N` is N cycles per **millisecond**, so at anything
+brisk the whole loop finishes inside half a tick and the *control* reads "frozen" too — which is
+exactly how the first run of this looked like a result and was not one. `cycles = fixed 3000` works.
+
 ## Reading the ROM identity (`tools/biosid.asm`)
 
 A one-shot COM that writes F000:FFF0..FFFF to a file, so the values a real machine carries can be read

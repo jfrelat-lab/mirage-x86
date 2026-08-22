@@ -39,6 +39,11 @@ const ticks = () => (mc.mem.r16(0x46c) | (mc.mem.r16(0x46e) << 16)) >>> 0;
 let fed = false, guard = 0;
 while (ticks() < K && !fault && !dos.programDone && guard++ < 500000) {
   if (!fed && KEYS.length && ticks() >= K >> 1 && mc.pushScancodes) { mc.pushScancodes(KEYS); fed = true; }
+  // pushScancodes only QUEUES; pumpKeyboard is what stages a byte into the 8042 and raises IRQ1.
+  // Without it the KEYS argument did nothing at all, and SCUMM — which reads the INT 9 path, not the
+  // DOS buffer — sat on "Press ENTER to continue…" forever while the browser (ui.js, which does pump)
+  // went past it. That was half of the "browser and headless disagree" report.
+  if (mc.pumpKeyboard) mc.pumpKeyboard();
   mc.runSlice(20000);
 }
 

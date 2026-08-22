@@ -398,8 +398,6 @@ export class Machine {
   // ---- hardware interrupt injection ---------------------------------------
   /** Fire the 18.2 Hz timer: bump the BIOS tick and run the user timer ISR. */
   tickTimer() {
-    const a = 0x46c;                          // BDA 0040:006C — ticks since midnight
-    this.mem.w32(a, (this.mem.r32(a) + 1) >>> 0);
     if (!(this.cpu.flags & IF)) return;
     // Raise IRQ0 on the PIC and let it decide. This is where masking and in-service state start
     // mattering: a guest that has masked IRQ0 in the IMR no longer receives the tick (it used to,
@@ -419,10 +417,16 @@ export class Machine {
     if (v8.seg !== BIOS_SEG) { this.realInt(8, v8.seg, v8.off); return; }
     // No guest ISR: we are the BIOS timer handler. A real one ends with `mov al,20h; out 20h,al`,
     // and so must we — otherwise ISR bit 0 stays set and the timer never ticks again.
+    // We ARE the BIOS INT 8 handler on this path, so do what it does — including the BDA tick, which
+    // the guest-ISR path gets instead when it chains to f000:08 (see bios.js).
+    this.bumpBiosTick();
     const v1c = this.getVector(0x1c);
     if (v1c.seg !== BIOS_SEG) this.realInt(0x1c, v1c.seg, v1c.off);
     if (pic) pic.eoi(0);
   }
+
+  /** Advance 0040:006C, the BDA's ticks-since-midnight. Only the BIOS INT 8 handler does this. */
+  bumpBiosTick() { const a = 0x46c; this.mem.w32(a, (this.mem.r32(a) + 1) >>> 0); }
 
   /** Deliver PIT ticks that have come due (cpu.cycles crossed a reload boundary). Called from
    *  the run loop only when IF is set. A long IF-off gap is coalesced into a single tick so a

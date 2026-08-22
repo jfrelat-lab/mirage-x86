@@ -465,9 +465,16 @@ export function installBIOS(machine, opts = {}) {
   // expecting the BIOS handler to finish the job — which on real hardware ends with
   // `mov al,20h; out 20h,al`. Our f000:08 was a bare IRET, so with a real PIC in place ISR bit 0
   // stayed set after the first tick and the timer never fired again: COSMO, HOCUS, MI2 and
-  // GODTHUND all went black. The BDA tick is bumped by machine.tickTimer before delivery, so all
-  // that is left here is the end-of-interrupt.
-  machine.hookInterrupt(0x08, () => { if (machine.pic) machine.pic.eoi(0); });
+  // GODTHUND all went black.
+  //
+  // The BDA tick belongs HERE, not in machine.tickTimer. tickTimer fires at whatever rate the PIT is
+  // programmed to, and a game that reprograms counter 0 chains to this handler only once every N of
+  // its own ticks — which is precisely how 0040:006C stays at 18.2 Hz on real hardware while the
+  // game's ISR runs at 473 Hz. Bumping it per PIT tick instead made the BDA clock run at the GAME's
+  // rate: Monkey Island reprograms to 2521 (473 Hz, clamped to 291 Hz here), so every capture bounded
+  // on the BIOS tick — tools/shot.mjs, and with it every DOSBox pixel comparison — stopped 16x too
+  // early and photographed a screen the game had not drawn yet.
+  machine.hookInterrupt(0x08, () => { machine.bumpBiosTick(); if (machine.pic) machine.pic.eoi(0); });
 
   // ---- INT 09h: the BIOS keyboard handler ----
   // Same shape: an ISR that chains to the original INT 9 expects the BIOS to acknowledge IRQ1.
