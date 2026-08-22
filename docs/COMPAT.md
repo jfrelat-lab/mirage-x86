@@ -368,6 +368,27 @@ bug every time. Only the last is Windows-specific.
 
 
 
+**Where `win /3` stops now, measured 2026-08-22.** It boots, draws the logo, reopens itself, opens
+`EMMXXXX0`, and then spins in a two-block loop. The cause is a single page:
+
+    pages linéaires en faute (top):
+      lin 0x80110000 x93076264
+      lin 0xf61000  x2
+    distinctes: 2
+
+Windows' VMM does **demand paging**: it touches a not-present page, expects `#PF` (INT 14), maps it
+in the handler, and re-executes. `Memory.xlat()` counts the fault and **reads zero** instead — which
+its own comment has flagged as provisional since the paging work landed:
+
+> NOT YET a #PF: a non-present page is counted and reads as zero. Raising the fault from inside a
+> memory accessor needs the same block-ending treatment as #DE and #UD, which is its own step.
+
+So the next step for Windows is exactly that step, and nothing else is in the way: the descriptor
+tables read correctly (`walk(0x8010011c)` → physical `0x14211c`, and selector 8 is a flat ring-0 code
+segment as it should be), A20 is open, the 16 MiB machine is enough, and the page tables Windows
+built are intact — PDE#512 present, PTE#256 present. It is asking us for a page fault we do not
+raise.
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 boots** to its `A:\>` prompt, verified interactively (`tools/run-boot.mjs
