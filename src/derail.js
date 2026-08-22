@@ -14,46 +14,66 @@
 // So the address gets classified rather than merely printed. This runs only on a diagnostic path —
 // a fault that is about to be reported — never on the hot path.
 
-/** Length of the printable run starting at `lin`, capped at `n`. */
-function printableRun(mem, lin, n) {
-  let i = 0;
-  for (; i < n; i++) {
-    const b = mem.u8[(lin + i) & (mem.size - 1)];
-    if (b < 0x20 || b >= 0x7f) break;
-  }
-  return i;
+/**
+ * The printable run CONTAINING `lin` — scanning back as well as forward. A derail lands wherever the
+ * jump pointed, which is generally inside the text, not at its start: Crystal Dream 2 stops three
+ * words into "Exception fault.", oktaeder three bytes from the end of "C:\\oktaeder.com". Measuring
+ * only forward — the first version — missed both.
+ */
+function runAround(mem, lin, back = 40, fwd = 48) {
+  const at = (i) => mem.u8[(lin + i) & (mem.size - 1)];
+  const printable = (b) => b >= 0x20 && b < 0x7f;
+  if (!printable(at(0))) return { start: lin, len: 0 };
+  let s = 0; while (s > -back && printable(at(s - 1))) s--;
+  let e = 1; while (e < fwd && printable(at(e))) e++;
+  return { start: (lin + s) >>> 0, len: e - s };
 }
 
 /**
- * True when the bytes at `lin` are plausibly text. A run of eight printable bytes is the test, most
- * of them letters or spaces: Crystal Dream 2's string is "ception fault.\x12Break", so demanding
- * that a whole 16-byte window be printable — which the first version did — rejected the very case
- * this exists for. The 0x12 is a separator inside the message, not the end of the text.
+ * True when the bytes at `lin` are plausibly text: a run of at least eight printable bytes, most of
+ * them letters or spaces. Crystal Dream 2's message is "Exception fault.\x12Break", so demanding a
+ * whole printable window — the first version — rejected the very case this exists for; the 0x12 is a
+ * separator inside the message, not the end of the text.
  */
 function looksLikeText(mem, lin) {
-  const run = printableRun(mem, lin, 32);
-  if (run < 8) return false;
+  const { start, len } = runAround(mem, lin);
+  if (len < 8) return false;
   let wordy = 0;
-  for (let i = 0; i < run; i++) {
-    const b = mem.u8[(lin + i) & (mem.size - 1)];
+  for (let i = 0; i < len; i++) {
+    const b = mem.u8[(start + i) & (mem.size - 1)];
     if (b === 0x20 || (b | 32) >= 0x61 && (b | 32) <= 0x7a) wordy++;
   }
-  return wordy * 5 >= run * 3;                       // 60% letters or spaces
+  return wordy * 5 >= len * 3;                       // 60% letters or spaces
 }
 
-/** The printable text around `lin`, taken from the start of its run so the quote reads. */
-function textAt(mem, lin, back = 24, fwd = 32) {
-  let start = lin;
-  for (let i = 0; i < back; i++) {
-    const b = mem.u8[(start - 1) & (mem.size - 1)];
-    if (b < 0x20 || b >= 0x7f) break;
-    start--;
+/** The printable text around `lin`, quoted from the start of its run so it reads. */
+function textAt(mem, lin) {
+  const { start, len } = runAround(mem, lin);
+  let out = '';
+  for (let i = 0; i < len; i++) out += String.fromCharCode(mem.u8[(start + i) & (mem.size - 1)]);
+  return out;
+}
+
+/**
+ * True when the bytes AROUND `lin` look like packed data — a bitmap mask, a table — rather than
+ * code. Pinball Fantasies executes a sprite mask, `ff fc 00 ff ff c0 ff ff f8 00 7f ff 80 …`, and
+ * surfaced as "unimplemented opcode 0x0f 0xff".
+ *
+ * The window straddles the address because a fault can land a dozen bytes into the run, where the
+ * forward bytes alone are unremarkable. The thresholds are measured, not guessed: over 380 583 block
+ * starts the recompiler actually translated and ran across the corpus, a zero-density test alone
+ * fires on 75 % of REAL code — code is full of zero bytes — while additionally requiring six 0xff
+ * bytes drops that to 4 in 380 583 (0.001 %). So the 0xff count is the whole discriminator, and the
+ * density is what makes the phrase worth printing.
+ */
+function looksLikePackedData(mem, lin, back = 24, fwd = 40) {
+  let zero = 0, ones = 0, n = 0;
+  for (let i = -back; i < fwd; i++) {
+    const b = mem.u8[(lin + i) & (mem.size - 1)];
+    n++;
+    if (b === 0) zero++; else if (b === 0xff) ones++;
   }
-  let s = '';
-  for (let i = 0, n = printableRun(mem, start, (lin - start) + fwd); i < n; i++) {
-    s += String.fromCharCode(mem.u8[(start + i) & (mem.size - 1)]);
-  }
-  return s;
+  return ones >= 6 && (zero + ones) * 10 >= n * 3 ? { zero, ones, n } : null;
 }
 
 function allZero(mem, lin, n = 16) {
@@ -87,20 +107,49 @@ export function describeRegion(mem, lin, cpu) {
       }
     }
     if (allZero(mem, lin)) return 'in a run of zero bytes — the guest is running through empty memory';
+    const packed = looksLikePackedData(mem, lin);
+    if (packed) {
+      return `INSIDE PACKED DATA — ${packed.zero + packed.ones} of the ${packed.n} bytes around it ` +
+        `are 0x00 or 0xff — the guest is executing a bitmap or a table, not code`;
+    }
     if (looksLikeText(mem, lin)) return `INSIDE A STRING — "${textAt(mem, lin)}" — the guest is executing text, not code`;
     return '';
   } catch { return ''; }
 }
 
-/** Formats the recompiler's recent-block ring as "how it got here", oldest first. */
+/**
+ * Formats the recompiler's recent-block ring as "how it got here", oldest first.
+ *
+ * A run of identical positive steps gets called out. Real code branches; equal steps mean the
+ * decoder is walking straight forward through whatever it finds, one maximum-length block at a time,
+ * which says the derail happened BEFORE the address being reported. test386 walked upward in ~0x180
+ * steps for a long way before it reached the IDT and surfaced as an opcode, and reading that walk as
+ * the symptom rather than the trail cost real time.
+ */
 export function recentBlocks(rec, n = 6) {
   if (!rec || !rec.recentCs) return '';
-  const out = [];
+  const cs = [], ip = [];
   const N = rec.recentCs.length;
   for (let i = 0; i < N; i++) {
     const k = (rec.recentI + i) % N;
     if (rec.recentCs[k] < 0) continue;
-    out.push(`${(rec.recentCs[k] >>> 0).toString(16).padStart(4, '0')}:${(rec.recentIp[k] >>> 0).toString(16)}`);
+    cs.push(rec.recentCs[k] >>> 0); ip.push(rec.recentIp[k] >>> 0);
   }
-  return out.slice(-n).join(' -> ');
+  if (!cs.length) return '';
+  const shown = cs.map((c, i) => `${c.toString(16).padStart(4, '0')}:${ip[i].toString(16)}`).slice(-n);
+  let out = shown.join(' -> ');
+
+  let run = 0, best = 0, step = 0;
+  for (let i = 2; i < cs.length; i++) {
+    const d1 = ip[i] - ip[i - 1], d0 = ip[i - 1] - ip[i - 2];
+    if (d1 > 0 && d1 === d0 && cs[i] === cs[i - 1] && cs[i - 1] === cs[i - 2]) {
+      run = run ? run + 1 : 2;
+      if (run > best) { best = run; step = d1; }
+    } else run = 0;
+  }
+  if (best >= 3) {
+    out += ` — ${best + 1} of those advance by exactly 0x${step.toString(16)}, so the decoder is ` +
+      'walking forward through memory rather than branching: the derail is EARLIER than this address';
+  }
+  return out;
 }

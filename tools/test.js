@@ -11,7 +11,7 @@ import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
 import { installBIOS } from '../src/bios.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
-import { describeRegion } from '../src/derail.js';
+import { describeRegion, recentBlocks } from '../src/derail.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -408,6 +408,21 @@ function eq(name, got, want) {
   // Ordinary code must NOT be classified — a false positive would send the reader the wrong way.
   mc.mem.blit(0x70000, Uint8Array.from([0xb8, 0x34, 0x12, 0x8e, 0xd8, 0x89, 0xc3, 0xcd, 0x21, 0xf4]));
   eq('derail: real code is left unclassified', say(0x70000), '');
+
+  // Packed data: Pinball Fantasies executes a sprite mask. The window straddles the address because
+  // the fault lands inside the run, not at its start.
+  mc.mem.blit(0x90000, Uint8Array.from([
+    0xff, 0xfc, 0x00, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xf8, 0x00, 0x7f, 0xff, 0x80, 0x00, 0x00, 0x1f,
+    0x80, 0x07, 0xff, 0xff, 0xc0, 0x0f, 0xff, 0xfe, 0x00, 0x00, 0x01, 0xff, 0x80, 0x7e, 0xaa, 0xaa]));
+  eq('derail: a bitmap is named as data, from a fault inside it', say(0x90015).includes('PACKED DATA'), true);
+
+  // The block trail: equal steps mean the decoder is walking, so the derail started earlier.
+  const ring = (ips) => ({ recentCs: Int32Array.from(ips.map(() => 0x18)),
+                           recentIp: Int32Array.from(ips), recentI: 0 });
+  eq('derail: a forward walk through memory is called out',
+     recentBlocks(ring([0x481, 0x601, 0x781, 0x901, 0xa81])).includes('walking forward'), true);
+  eq('derail: ordinary branching is not called out',
+     recentBlocks(ring([0x481, 0x601, 0x120, 0x904, 0xa11])).includes('walking forward'), false);
 
   // A descriptor table: test386 decoded gate access bytes as an instruction.
   mc.cpu.idtr = { base: 0x80000, limit: 0x7ff };

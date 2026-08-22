@@ -251,7 +251,8 @@ Recent block starts (oldest first, the last is this one): 0003:0
 ```
 
 `describeRegion(mem, lin, cpu)` recognises the IVT, the BIOS data area, the IDT/GDT/LDT (from the
-CPU's own registers, so it follows a guest that reloads them), a run of zeros, and text. It returns
+CPU's own registers, so it follows a guest that reloads them), a run of zeros, text, and packed
+data. It returns
 `''` for anything that looks like ordinary code, because a false positive sends the reader the wrong
 way — `tools/test.js` asserts that on hand-written code.
 
@@ -260,6 +261,34 @@ quote is taken from the *start* of the run rather than from the fault address: C
 mid-string, and "ception faul" is much harder to recognise than `"Exception fault."`. Requiring a
 whole printable window — the first version — rejected that very case, since the message embeds a
 `0x12` separator.
+
+**Packed data** — a bitmap, a table. Pinball Fantasies executes a sprite mask,
+`ff fc 00 ff ff c0 ff ff f8 00 7f ff 80 …`, and surfaced as `unimplemented opcode 0x0f 0xff`. The
+thresholds here are measured rather than guessed: over **380 583 block starts the recompiler actually
+translated and ran** across the corpus, a zero-density test alone fires on **75 % of real code** —
+code is full of zero bytes — while additionally requiring six `0xff` bytes in the window drops that
+to **4 in 380 583 (0.001 %)**. The `0xff` count is the whole discriminator.
+
+**The forward walk.** Real code branches. When the recent blocks advance by an identical positive
+step three times over, the decoder is walking straight through memory a maximum-length block at a
+time, and the derail is *earlier* than the address being reported. test386 walked upward in ~0x180
+steps for a long way before it reached the IDT and surfaced as an opcode; reading that walk as the
+symptom rather than the trail cost real time.
+
+Applied to the corpus, all three faults `tools/survey-gaps.mjs` finds across 84 programs are now
+named rather than merely located:
+
+| Program | Was | Is |
+|---|---|---|
+| `games/CD2/CD2.EXE` | `INT 06h re-raised at 2e1d:0165` | executing `"Exception fault."`, its own error string |
+| `games/PINBALL/PF.EXE` | `unimplemented opcode 0x0f 0xff` | executing a sprite mask |
+| `intros/oktaeder.com` | `INT 06h re-raised at 0018:0ad4` | executing the DOS **environment block** — `"C:\oktaeder.com"`, right after `BLASTER=A220 I7 D1 H5 T6` |
+
+Two lessons are baked into the heuristics, both from getting them wrong first: a fault lands
+*inside* the region, not at its start, so the printable run is measured **around** the address in
+both directions (Crystal Dream 2 stops three words into its message, oktaeder three bytes from the
+end of its path); and the exception-loop detector must use `cpu.base[CS]`, not `seg[CS] << 4`, since
+in protected mode the shift is fiction.
 
 The block path comes from a 16-entry ring the recompiler writes in `translate()`. That is the
 *compile* path, entered once per new block, not the hot execution path, so it costs nothing

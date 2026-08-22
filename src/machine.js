@@ -346,11 +346,15 @@ export class Machine {
           if (at === this._excAt) {
             if (++this._excN === 100000) {
               const h = (x, w) => (x >>> 0).toString(16).padStart(w, '0');
-              const at = ((this.cpu.seg[1] << 4) + (this.cpu.eip & 0xffff)) & this.mem.mask;
+              // base[CS], not seg[CS] << 4: in protected mode CS is a selector and the shift is
+              // fiction — it reported oktaeder's fault at 0xc54, an address it never executed.
+              // The EIP width follows CS.D for the same reason the dispatch sites do.
+              const at = (this.cpu.base[1] + (this.cpu.csD ? this.cpu.eip >>> 0 : this.cpu.eip & 0xffff)) & this.mem.mask;
               const where = describeRegion(this.mem, at, this.cpu);
               const path = recentBlocks(this.rec);
               throw new Error(`mirage: unhandled exception INT ${h(n, 2)}h re-raised 100000x at the same ` +
-                `address ${h(this.cpu.seg[1], 4)}:${h(this.cpu.eip & 0xffff, 4)} (linear 0x${at.toString(16)}) — ` +
+                `address ${h(this.cpu.seg[1], 4)}:${h(this.cpu.csD ? this.cpu.eip >>> 0 : this.cpu.eip & 0xffff, 4)} ` +
+                `(linear 0x${at.toString(16)}) — ` +
                 'the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing ' +
                 `will change${where ? '. ' + where : ''}${path ? '. Recent block starts (oldest first, the last is this one): ' + path : ''}`);
             }
