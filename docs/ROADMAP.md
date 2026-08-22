@@ -53,7 +53,38 @@ paged alias 0xE00F4F6D — its own source explains why — and we dispatched 0x4
 and walked memory into the IDT, where an access-byte pair surfaced as "unimplemented opcode 0x0f
 0xe0". **POST 0x20 → 0x21**, fault gone, no bench cost (tube 118.41 ms → 117.93).
 
-**CURRENT BLOCKER (2026-08-19): VIRTUAL-8086 MODE.** Traced with `SPIN_AFTER=0x21 SPIN=2 node
+**✅ VIRTUAL-8086 MODE LANDED (2026-08-22) — POST 0x20 → 0x21 → 0x22.** The whole V86 section
+passes; the test now stops in a later section at POST 0x0b. What it took, each step measured by the
+POST counter and located with `LST=boot/test386.lst node tools/trace386.mjs`:
+
+1. **`EFLAGS.VM` and a real CPL.** `cpu.cpl` is 3 in V86 whatever CS says — CS there is an 8086 value
+   like 0xf000 whose low two bits are 0, so every `seg[CS] & 3` privilege check read ring 0 and
+   sailed through. That one idiom was the bug behind HLT, CLI/STI and IN/OUT all working in V86;
+   `recompiler.js` now emits a single shared `CPL_EXPR` so a fourth site cannot forget.
+2. **Segment semantics.** `setSeg` treats a V86 selector as an 8086 value (base = sel << 4, limit
+   0xffff, D = 0), which is what makes CS 0xf000 land on the ROM instead of GDT index 0x1e00.
+3. **`IRETD` into V86** — the only way in short of a task switch. The frame is NINE dwords: the four
+   data segments ride on it because no descriptor can describe an 8086 value. `switchToRing3V86_0`
+   builds exactly that (`or [esp],0x20200` sets VM and IF, `and [esp],0xF0FFF` sets IOPL 0).
+4. **Interrupt exit from V86**, pushing GS/FS/DS/ES/SS/ESP/EFLAGS/CS/EIP, clearing VM *before* the
+   ring-0 SS is loaded, and nulling the 8086 data segments so their `sel << 4` bases do not survive
+   into the monitor.
+5. **The IOPL-sensitive set** — CLI, STI, PUSHF, POPF, INT n, IRET all trap at IOPL < 3. And POPF
+   may not write VM, may not write IOPL below ring 0, and may not write IF when CPL > IOPL; the old
+   one-line mask wrote all three.
+6. **The TSS I/O permission bitmap.** IN/OUT used to raise #GP for *every* CPL > IOPL, so a port the
+   bitmap PERMITS was refused as well. Base is a word at TSS+0x66, the map runs to the TSS limit, and
+   a byte past that limit denies — which is how the minimum 386 TSS (limit 0x67) gets no I/O at all.
+7. **Gate targets.** From V86 an interrupt gate must land in a NON-CONFORMING DPL-0 segment;
+   anything else is #GP with that selector. test386 checks both halves separately.
+8. **`IRET` saves the faulting EIP**, since it can now fault.
+
+Not done, and each its own step: `#PF`, task switching (V86 via a task gate), VME, and the
+sensitive-instruction *emulation* a real monitor does. Gates after: conformance 555764/555764,
+golden 36/36, test.js 130/130 (15 new), bench tube 122.9 / memories 82.1 (both faster than the
+pre-change run).
+
+**Historical, kept for the diagnosis: the blocker as it read on 2026-08-19.** Traced with `SPIN_AFTER=0x21 SPIN=2 node
 tools/trace386.mjs`, the test writes POST 0x21 and immediately does:
 
     00005628  EE            out dx, al               ; POST 0x21

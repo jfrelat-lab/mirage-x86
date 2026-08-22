@@ -9,7 +9,7 @@
 
 import { Memory } from './memory.js';
 import { describeRegion, recentBlocks } from './derail.js';
-import { CPU, CS, CF, IF, TF } from './cpu.js';
+import { CPU, CS, CF, IF, TF, VM} from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
 import { resolveProfile } from './cpu-profile.js';
@@ -235,24 +235,49 @@ export class Machine {
     // handler for #GP, checks which ring it is running in, and asks for a different saved CS in
     // each case, which is how that showed up.
     const target = cpu.readDesc(sel);
-    const cpl = cpu.seg[1] & 3;
+    const cpl = cpu.cpl;
     const conforming = target && !target.sys && (target.type & 0x0c) === 0x0c;
     const newCpl = (target && !conforming) ? target.dpl : cpl;
 
     // An interrupt goes inward or stays put. A target code segment LESS privileged than CPL is
     // illegal — #GP with its selector. Conforming targets follow the same DPL <= CPL rule.
+    // From a virtual-8086 task the gate must land in ring 0, in a NON-CONFORMING segment: the monitor
+    // is the only thing allowed to see the guest's interrupts, and a conforming target would keep CPL
+    // at 3. Anything else is #GP with that segment's selector —
+    // test386 checks exactly this ("interrupt with IOPL 3 to non-V86 privilege level 0 faults with
+    // #GP(usermodesegment)"). Without it we entered the DPL-3 handler from the previous section.
+    if ((cpu.flags & VM) && target && !target.sys && (target.dpl !== 0 || conforming)) {
+      if (faultIp !== undefined) cpu.eip = faultIp >>> 0;
+      return this.protInt(13, sel & 0xfffc);
+    }
     if (target && !target.sys && target.dpl > cpl) {
       // On this fault the saved EIP must point AT the INT, not past it; softInt supplies that.
       if (faultIp !== undefined) cpu.eip = faultIp >>> 0;
       return this.protInt(13, sel & 0xfffc);
     }
-    if (newCpl < cpl) {                              // inward: the inner stack comes from the TSS
+    // Leaving a virtual-8086 task. The frame is the widest the architecture has: the four data
+    // segments ride on it because a V86 task's segment registers are 8086 values, and the monitor
+    // has to be able to put them back. VM must be cleared BEFORE the ring-0 SS is loaded, or setSeg
+    // would treat that selector as an 8086 value and the handler would run on a nonsense stack.
+    const savedFlags = cpu.flags;                    // VM lives in here; the pushed copy must keep it
+    if (cpu.flags & VM) {
+      const oldSS = cpu.seg[2], oldESP = cpu.reg[4] >>> 0;
+      const gs = cpu.seg[5], fs = cpu.seg[4], ds = cpu.seg[3], es = cpu.seg[0];
+      const inner = cpu.tssStack(newCpl);
+      cpu.flags &= ~VM;
+      cpu.setSeg(2, inner.ss); cpu.reg[4] = inner.esp;
+      cpu.push32(gs); cpu.push32(fs); cpu.push32(ds); cpu.push32(es);
+      cpu.push32(oldSS); cpu.push32(oldESP);
+      // The 8086 data segments must not stay loaded in the monitor: their cached bases are
+      // sel << 4 and would survive into ring 0 as if they were descriptors.
+      cpu.setSeg(0, 0); cpu.setSeg(3, 0); cpu.setSeg(4, 0); cpu.setSeg(5, 0);
+    } else if (newCpl < cpl) {                       // inward: the inner stack comes from the TSS
       const oldSS = cpu.seg[2], oldESP = cpu.reg[4] >>> 0;
       const inner = cpu.tssStack(newCpl);
       cpu.setSeg(2, inner.ss); cpu.reg[4] = inner.esp;
       cpu.pushW(oldSS, is32); cpu.pushW(oldESP, is32);
     }
-    cpu.pushW(cpu.flags, is32);
+    cpu.pushW(savedFlags, is32);
     cpu.pushW(cpu.seg[1], is32);
     cpu.pushW(cpu.eip >>> 0, is32);
     if (err !== undefined) cpu.pushW(err, is32);
@@ -271,6 +296,17 @@ export class Machine {
    */
   softInt(n, nextIp, faultIp) {
     const cpu = this.cpu;
+    // In virtual-8086 mode INT n is IOPL-sensitive like CLI/STI/PUSHF/POPF/IRET: below IOPL 3 it
+    // traps to the monitor instead of taking the gate, which is how a V86 monitor gets to see the
+    // guest's software interrupts at all. test386 enters V86 with IOPL 0 (switchToRing3V86_0) and
+    // then does `int 0x22` expecting exactly this; without the check we took the gate and landed in
+    // the ring-3 handler from the previous section, which asserts a 0x14-byte frame.
+    if (cpu.flags & VM) {
+      if (cpu.iopl < 3) {
+        if (faultIp !== undefined) cpu.eip = faultIp >>> 0;
+        return this.protInt(13, 0);
+      }
+    }
     if (cpu.cr0 & 1) {
       // A host reflects a protected-mode software interrupt to the real-mode handler. Ours are JS
       // services, so reflection is calling them: no gate, no frame, no mode change.

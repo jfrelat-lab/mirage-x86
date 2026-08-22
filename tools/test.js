@@ -389,6 +389,71 @@ function eq(name, got, want) {
   eq('an unknown profile is refused rather than silently ignored', threw, true);
 }
 
+// ---- virtual-8086 mode: EFLAGS.VM, its segment semantics, and the IOPL-sensitive set ---------
+// test386's POST 0x21 is the gate for this; these pin the pieces individually so a regression says
+// WHICH one, rather than "POST 21" again.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  const cpu = mc.cpu;
+  cpu.cr0 |= 1;                                                 // protected mode, no descriptors yet
+
+  // A V86 segment register is an 8086 value: base = sel << 4, whatever the GDT says.
+  cpu.flags |= 0x20000;
+  cpu.setSeg(CS, 0xf000);
+  eq('V86: a segment register is an 8086 value, not a selector', cpu.base[CS], 0xf0000);
+  eq('V86: the limit is 64K', cpu.limit[CS], 0xffff);
+  eq('V86: CPL is 3 even though CS & 3 is 0', cpu.cpl, 3);
+  eq('V86: CS.D is 16-bit', cpu.csD, 0);
+}
+{
+  // IRETD from ring 0 with VM set in the popped EFLAGS is the only way in, and its frame is NINE
+  // dwords: the four data segments ride along because no descriptor can describe an 8086 value.
+  const mc = new Machine({ memSize: 1 << 20 });
+  const cpu = mc.cpu;
+  cpu.cr0 |= 1;
+  cpu.base[SS] = 0; cpu.limit[SS] = 0xfffff; cpu.ssB = 1; cpu.reg[4] = 0x1000;
+  const frame = [0x1234, 0xf000, 0x20202, 0x7ffe, 0x1000, 0x3040, 0x2010, 0x5060, 0x7080];
+  let a = 0x1000;
+  for (const v of frame) { mc.mem.w32(a, v); a += 4; }
+  cpu.iret(1);
+  eq('IRETD with VM set enters virtual-8086 mode', (cpu.flags & 0x20000) !== 0, true);
+  eq('...at CS:EIP from the frame', `${cpu.seg[CS].toString(16)}:${(cpu.eip >>> 0).toString(16)}`, 'f000:1234');
+  eq('...with the 8086 CS base', cpu.base[CS], 0xf0000);
+  eq('...and SS:ESP from the frame', `${cpu.seg[SS].toString(16)}:${(cpu.reg[4] >>> 0).toString(16)}`, '1000:7ffe');
+  eq('...ES, DS, FS and GS all ride on the frame',
+     [cpu.seg[ES], cpu.seg[DS], cpu.seg[4], cpu.seg[5]].map((x) => x.toString(16)).join(','), '3040,2010,5060,7080');
+
+  // POPF may never write VM: only IRETD from ring 0 (and a task switch) set it.
+  cpu.flags |= 0x3000;                                          // IOPL 3, so POPF does not trap
+  cpu.reg[4] = 0x2000; mc.mem.w32(cpu.base[SS] + 0x2000, 0x0002);
+  const rec = mc.rec;
+  // `jmp $` ends the block, not HLT: HLT is privileged now, so it would trap out of V86 and clear
+  // VM before the assertion could look at it.
+  mc.mem.blit((0xf000 << 4) + 0x1234, Uint8Array.from([0x9d, 0xeb, 0xfe]));   // popf ; jmp $
+  cpu.eip = 0x1234;
+  rec.step();
+  eq('POPF cannot leave virtual-8086 mode', (cpu.flags & 0x20000) !== 0, true);
+}
+{
+  // The TSS I/O permission bitmap. Before this, IN/OUT raised #GP for every CPL > IOPL, so a port
+  // the bitmap PERMITS was refused too.
+  const mc = new Machine({ memSize: 1 << 20 });
+  const cpu = mc.cpu;
+  cpu.cr0 |= 1; cpu.flags |= 0x20000;                           // V86: CPL 3, IOPL 0
+  cpu.tr.base = 0x4000; cpu.tr.limit = 0x67 + 0x2000;
+  mc.mem.w16(0x4000 + 0x66, 0x68);                              // bitmap starts right after the TSS
+  for (let i = 0; i < 0x2000; i++) mc.mem.w8(0x4000 + 0x68 + i, 0xff);   // deny everything
+  mc.mem.w8(0x4000 + 0x68 + (0x60 >> 3), 0x00);                 // ...except ports 0x60-0x67
+  eq('I/O bitmap: a permitted port is allowed in V86', cpu.ioDenied(0x60, 1), false);
+  eq('I/O bitmap: a denied port faults', cpu.ioDenied(0x64 + 4, 1), true);
+  eq('I/O bitmap: a word access needs BOTH bytes permitted', cpu.ioDenied(0x67, 2), true);
+  cpu.tr.limit = 0x67;                                          // the minimum 386 TSS: no bitmap
+  eq('I/O bitmap: a map past the TSS limit denies everything', cpu.ioDenied(0x60, 1), true);
+  cpu.flags &= ~0x20000; cpu.flags |= 0x3000;                   // IOPL 3, not V86
+  cpu.setSeg(CS, 0);
+  eq('at CPL <= IOPL the bitmap is not consulted at all', cpu.ioDenied(0x60, 1), false);
+}
+
 // ---- derail classification: what the guest is executing when it is not executing code -------
 // Four investigations began from a message naming an opcode that turned out to be innocent, so the
 // address gets classified. These assert the SHAPE of the four regions we actually walked into.

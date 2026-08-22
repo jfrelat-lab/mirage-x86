@@ -12,7 +12,8 @@
 
 // EFLAGS bit masks
 export const CF = 1 << 0, PF = 1 << 2, AF = 1 << 4, ZF = 1 << 6,
-             SF = 1 << 7, TF = 1 << 8, IF = 1 << 9, DF = 1 << 10, OF = 1 << 11;
+             SF = 1 << 7, TF = 1 << 8, IF = 1 << 9, DF = 1 << 10, OF = 1 << 11,
+             NT = 1 << 14, RF = 1 << 16, VM = 1 << 17, IOPL = 3 << 12;
 
 // Segment register indices
 export const ES = 0, CS = 1, SS = 2, DS = 3, FS = 4, GS = 5;
@@ -92,10 +93,25 @@ export class CPU {
   // and type checks with #GP, call gates, task switching. A selector that would fault on real
   // hardware is loaded here instead of raising — wrong, but wrong in a way that surfaces as a later
   // POST failing rather than as silence.
+  /** Virtual-8086 mode: EFLAGS.VM. A V86 task runs 8086 code with protection still on underneath. */
+  get v86() { return (this.flags & VM) !== 0; }
+
+  /**
+   * Current privilege level. In V86 it is 3 by definition, whatever CS's RPL says — and CS there is
+   * an 8086 value like 0xf000, whose low two bits are 0. Reading CPL as `seg[CS] & 3` in V86 gives
+   * ring 0 and every privilege check silently passes.
+   */
+  get cpl() { return (this.flags & VM) ? 3 : (this.cr0 & 1) ? (this.seg[CS] & 3) : 0; }
+
+  /** I/O privilege level. In V86 it gates the whole sensitive-instruction set. */
+  get iopl() { return (this.flags >>> 12) & 3; }
+
   setSeg(i, sel) {
     sel &= 0xffff;
     this.seg[i] = sel;
-    if (!(this.cr0 & 1)) {                        // real mode: the selector is the base, shifted
+    // Real mode, and virtual-8086 mode: the selector IS the base, shifted. In V86 protection is
+    // still on underneath, but a segment register holds an 8086 value and never indexes a table.
+    if (!(this.cr0 & 1) || (this.flags & VM)) {
       this.base[i] = sel << 4;
       this.limit[i] = 0xffff;
       if (i === CS) this.csD = 0; else if (i === SS) this.ssB = 0;
@@ -162,7 +178,7 @@ export class CPU {
     }
     const conforming = !d.sys && (d.type & 0x0c) === 0x0c;
     if (!conforming) {
-      const cpl = this.seg[CS] & 3, rpl = sel & 3;
+      const cpl = this.cpl, rpl = sel & 3;
       if (d.dpl < cpl || d.dpl < rpl) return null;
     }
     return d;
@@ -202,6 +218,33 @@ export class CPU {
   tssStack(pl) {
     const m = this.mem, b = this.tr.base >>> 0;
     return { esp: m.r32(b + 4 + pl * 8) >>> 0, ss: m.r16(b + 8 + pl * 8) & 0xffff };
+  }
+
+  /**
+   * Is this port access denied? Protected mode only. At CPL <= IOPL it is always allowed; above
+   * that — and ALWAYS in virtual-8086 mode, where CPL is 3 — the TSS's I/O permission bitmap
+   * decides, one bit per port, and a set bit denies.
+   *
+   * The bitmap's base is a word at TSS offset 0x66, and it runs to the TSS limit. A byte that would
+   * lie past the limit denies: that is how a task with no bitmap (limit 0x67, the minimum 386 TSS)
+   * gets no I/O at all. Before this, IN/OUT raised #GP for every CPL > IOPL, so a task the bitmap
+   * PERMITS was refused as well; test386 tests both halves.
+   *
+   * @param {number} port  first port
+   * @param {number} size  1, 2 or 4 — a word access needs both its bytes permitted
+   */
+  ioDenied(port, size) {
+    if (!(this.cr0 & 1)) return false;
+    if (!(this.flags & VM) && this.cpl <= this.iopl) return false;
+    const b = this.tr.base >>> 0, lim = this.tr.limit >>> 0;
+    if (lim < 0x67) return true;                          // not even a full 386 TSS
+    const mapBase = this.mem.r16(b + 0x66);
+    for (let i = 0; i < size; i++) {
+      const p = (port + i) & 0xffff, off = mapBase + (p >>> 3);
+      if (off > lim) return true;
+      if (this.mem.r8((b + off) >>> 0) & (1 << (p & 7))) return true;
+    }
+    return false;
   }
 
   pushW(v, is32) { if (is32) this.push32(v); else this.push16(v); }
@@ -244,7 +287,7 @@ export class CPU {
     const d = this.readDesc(sel);
     // An ordinary code segment: same rule as farJmp. Only a CALL GATE (below) changes rings.
     if (d && !d.sys) {
-      const cpl = this.seg[CS] & 3;
+      const cpl = this.cpl;
       const conforming = (d.type & 0x0c) === 0x0c;
       if (conforming ? d.dpl > cpl : ((sel & 3) > cpl || d.dpl !== cpl)) {
         // EIP holds the return address a successful call would push; a fault must save the CALL's.
@@ -259,7 +302,7 @@ export class CPU {
     const gOff = g32 ? ((d.w0 | ((d.b6 | (d.b7 << 8)) << 16)) >>> 0) : d.w0;
     const params = d.b4 & 0x1f;
     const target = this.readDesc(gSel);
-    const cpl = this.seg[CS] & 3;
+    const cpl = this.cpl;
     const tdpl = target ? target.dpl : cpl;
     if (tdpl < cpl) {                                        // inward: switch to the TSS's stack
       const oldSS = this.seg[SS], oldESP = this.reg[4] >>> 0;
@@ -291,7 +334,7 @@ export class CPU {
       // A far JMP cannot change privilege, only stay at it: a non-conforming target demands
       // CPL == DPL exactly plus RPL <= CPL, a conforming one only DPL <= CPL.
       if (d && !d.sys) {
-        const cpl = this.seg[CS] & 3;
+        const cpl = this.cpl;
         const conforming = (d.type & 0x0c) === 0x0c;
         if (conforming ? d.dpl > cpl : ((sel & 3) > cpl || d.dpl !== cpl)) {
           this.raise(13, sel & 0xfffc);
@@ -305,7 +348,7 @@ export class CPU {
   /** Far RET. Like IRET, an outward return also restores the caller's SS:ESP. */
   farRet(is32, popBytes, faultIp) {
     const pop = is32 ? () => this.pop32() : () => this.pop16();
-    const cpl = (this.cr0 & 1) ? (this.seg[CS] & 3) : 0;
+    const cpl = this.cpl;
     const esp0 = this.reg[4];                       // to restore if the return is not permitted
     const eip = is32 ? (pop() >>> 0) : pop();
     const cs = pop() & 0xffff;
@@ -352,10 +395,24 @@ export class CPU {
       this.flags = (pop() & 0x7fd5) | 2;
       return;
     }
-    const cpl = this.seg[CS] & 3;
+    // Inside a V86 task, IRET is one of the IOPL-sensitive instructions: at IOPL < 3 it must trap to
+    // the monitor instead of returning. At IOPL 3 it behaves as the 8086's, and cannot touch VM/IOPL.
+    if (this.flags & VM) {
+      if (this.iopl < 3) return this.raise(13, 0);
+      const keep = this.flags & (VM | IOPL);
+      this.eip = is32 ? (pop() >>> 0) : pop();
+      this.setSeg(CS, pop() & 0xffff);
+      this.flags = ((pop() & 0x7fd5) | 2 | keep) >>> 0;
+      return;
+    }
+    const cpl = this.cpl;
     const eip = is32 ? (pop() >>> 0) : pop();
     const cs = pop() & 0xffff;
     const fl = pop();
+    // IRETD from ring 0 with VM set in the popped EFLAGS is the ONLY way into virtual-8086 mode
+    // short of a task switch. The frame is nine dwords, not three: the four data segments ride in it
+    // because a V86 task's segment registers are 8086 values that no descriptor can describe.
+    if (is32 && cpl === 0 && (fl & VM)) return this.enterV86(eip, cs, fl);
     if ((cs & 3) > cpl) {                        // outward transition: the frame carries the stack
       const esp = is32 ? (pop() >>> 0) : pop();
       const ss = pop() & 0xffff;
@@ -365,7 +422,24 @@ export class CPU {
     } else {
       this.setSeg(CS, cs); this.eip = eip;
     }
-    this.flags = (fl & 0x7fd5) | 2;
+    this.flags = (fl & 0x27fd5) | 2;
+  }
+
+  /**
+   * Enter virtual-8086 mode from an IRETD frame whose EFLAGS has VM set. EIP, CS and EFLAGS are
+   * already popped; what remains is ESP, SS, ES, DS, FS and GS — six more dwords, always dwords
+   * whatever the segment they hold. VM must be set BEFORE the segments are loaded, since it is what
+   * makes setSeg treat them as 8086 values rather than selectors.
+   */
+  enterV86(eip, cs, fl) {
+    const esp = this.pop32() >>> 0, ss = this.pop32() & 0xffff;
+    const es = this.pop32() & 0xffff, ds = this.pop32() & 0xffff;
+    const fs = this.pop32() & 0xffff, gs = this.pop32() & 0xffff;
+    this.flags = ((fl & 0x27fd5) | 2) >>> 0;              // VM is inside the mask
+    this.setSeg(CS, cs); this.eip = eip >>> 0;
+    this.setSeg(SS, ss); this.reg[4] = esp;
+    this.setSeg(ES, es); this.setSeg(DS, ds); this.setSeg(FS, fs); this.setSeg(GS, gs);
+    this.ssB = 0;                                          // an 8086 stack is 16-bit
   }
 
   /**

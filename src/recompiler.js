@@ -75,6 +75,11 @@ function condExpr(cc) {
  * to fffe:0002, runs past the 1 MB wrap and decodes IVT entry 0 (0f53:010c) as "0f 53" — an SSE
  * opcode that nothing in a 1989 program could have contained.
  */
+// Current privilege level, as emitted source. In virtual-8086 mode CPL is 3 by definition and CS
+// holds an 8086 value whose low two bits are 0, so `seg[CS] & 3` reads ring 0 there and every
+// privileged instruction sails through — which is exactly how HLT, CLI and IN survived in V86.
+const CPL_EXPR = `((cpu.flags&0x20000)?3:(cpu.seg[${CS}]&3))`;
+
 function unimplemented(what, lin, mem, rec) {
   let msg = `mirage: unimplemented opcode 0x${what} at linear 0x${lin.toString(16)}`;
   const where = describeRegion(mem, lin, rec && rec.cpu);
@@ -785,9 +790,22 @@ export class Recompiler {
           P(`cpu.eip=${ip};cpu.farCall(${s},${o >>> 0},${sz === 32 ? 1 : 0},${ipStart});`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
         // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
-        case 0x9c: cur.use |= lALL; P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);'
+        case 0x9c: cur.use |= lALL; canFault = true;
+          P(`if((cpu.flags&0x20000)&&((cpu.flags>>>12)&3)<3){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);'
           : `cpu.push16((cpu.flags${PROF.pushfSetsReserved ? '|0xf000' : ''})&0xffff);`); break;
-        case 0x9d: P(sz === 32 ? 'cpu.flags=(cpu.pop32()&0x27fd5)|2;' : 'cpu.flags=(cpu.pop16()&0x7fd5)|2;'); break;         // POPF / POPFD (66; RF/VM not modelled)
+        // POPF / POPFD. Three fields it may NOT write, all of which the old one-line mask did: VM
+        // (only IRETD from ring 0 sets that), IOPL (ring 0 only), and IF when CPL > IOPL. And in V86
+        // at IOPL < 3 the instruction itself traps — that is how a monitor virtualises the flags.
+        case 0x9d: {
+          canFault = true;
+          P(`if((cpu.flags&0x20000)&&((cpu.flags>>>12)&3)<3){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          const t = NT(), c = NT(), i = NT(), f = NT();
+          P(`var ${t}=${sz === 32 ? 'cpu.pop32()' : 'cpu.pop16()'};var ${c}=cpu.cpl,${i}=(cpu.flags>>>12)&3;`);
+          P(`var ${f}=(${t}&0x4fd5)|2|(cpu.flags&0x20000)|(${c}?(cpu.flags&0x3000):(${t}&0x3000));`);
+          P(`if(${c}>${i})${f}=(${f}&~${IF})|(cpu.flags&${IF});cpu.flags=${f};`);
+          break;
+        }
         case 0x9e: P('cpu.flags=(cpu.flags&~0xff)|(((r[0]>>>8)&0xd5))|2;'); break;       // SAHF
         case 0x9f: cur.use |= lC | lP | lA | lZ | lS; P('r[0]=(r[0]&~0xff00)|((((cpu.flags&0xd5)|2)&0xff)<<8);'); break; // LAHF (reads CPAZS)
 
@@ -868,7 +886,9 @@ export class Recompiler {
         // IRET pops the frame at the OPERAND size: iretd (32-bit) pops EIP/CS/EFLAGS as dwords.
         // The frame was pushed at the gate's width, and a 32-bit gate is entered from 32-bit code,
         // so the two agree without needing to know which gate delivered us.
-        case 0xcf: P(`cpu.iret(${sz === 32 ? 1 : 0});`); P('return;'); ended = true; break;
+        // IRET is IOPL-sensitive in V86 and can raise #GP, and a fault must save the address OF the
+        // IRET. Every other path overwrites EIP from the popped frame, so setting it first is free.
+        case 0xcf: canFault = true; P(`cpu.eip=${ipStart};cpu.iret(${sz === 32 ? 1 : 0});`); P('return;'); ended = true; break;
 
         case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.eip=${ipStart};if(cpu.aam(${f8()}))return;`); break; // AAM (#DE on base 0 — abort the block)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
@@ -899,14 +919,14 @@ export class Recompiler {
         // IN/OUT are IOPL-sensitive: at CPL > IOPL they raise #GP(0) unless the TSS's I/O permission
         // bitmap allows the port. The bitmap is not modelled yet, so this is the strict reading —
         // which is what test386 asks for here (it clears IOPL, then expects `in al,0x64` to fault).
-        case 0xe4: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, 8, `cpu.ioRead(${p},1)`)); break; }
-        case 0xe5: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, sz, `cpu.ioRead(${p},${sz / 8})`)); break; }
-        case 0xe6: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(${p},1,${rR(0, 8)});`); break; }
-        case 0xe7: { const p = f8(); P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(${p},${sz / 8},${rR(0, sz)});`); break; }
-        case 0xec: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, 8, 'cpu.ioRead(r[2]&0xffff,1)')); break;
-        case 0xed: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, sz, `cpu.ioRead(r[2]&0xffff,${sz / 8})`)); break;
-        case 0xee: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(r[2]&0xffff,1,${rR(0, 8)});`); break;
-        case 0xef: P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(r[2]&0xffff,${sz / 8},${rR(0, sz)});`); break;
+        case 0xe4: { const p = f8(); P(`if((cpu.cr0&1)&&cpu.ioDenied(${p},1)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, 8, `cpu.ioRead(${p},1)`)); break; }
+        case 0xe5: { const p = f8(); P(`if((cpu.cr0&1)&&cpu.ioDenied(${p},${sz / 8})){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, sz, `cpu.ioRead(${p},${sz / 8})`)); break; }
+        case 0xe6: { const p = f8(); P(`if((cpu.cr0&1)&&cpu.ioDenied(${p},1)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(${p},1,${rR(0, 8)});`); break; }
+        case 0xe7: { const p = f8(); P(`if((cpu.cr0&1)&&cpu.ioDenied(${p},${sz / 8})){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(${p},${sz / 8},${rR(0, sz)});`); break; }
+        case 0xec: P(`if((cpu.cr0&1)&&cpu.ioDenied(r[2]&0xffff,1)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, 8, 'cpu.ioRead(r[2]&0xffff,1)')); break;
+        case 0xed: P(`if((cpu.cr0&1)&&cpu.ioDenied(r[2]&0xffff,${sz / 8})){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(rW(0, sz, `cpu.ioRead(r[2]&0xffff,${sz / 8})`)); break;
+        case 0xee: P(`if((cpu.cr0&1)&&cpu.ioDenied(r[2]&0xffff,1)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(r[2]&0xffff,1,${rR(0, 8)});`); break;
+        case 0xef: P(`if((cpu.cr0&1)&&cpu.ioDenied(r[2]&0xffff,${sz / 8})){cpu.eip=${ipStart};cpu.raise(13,0);return;}`); canFault = true; P(`cpu.ioWrite(r[2]&0xffff,${sz / 8},${rR(0, sz)});`); break;
 
         // ---- CALL / JMP ----
         // CALL/JMP rel under a 0x66 prefix take a 32-bit displacement AND, for CALL, push a 32-bit
@@ -928,7 +948,7 @@ export class Recompiler {
 
         case 0xf4:                                                                      // HLT
           canFault = true;
-          P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          P(`if((cpu.cr0&1)&&${CPL_EXPR}){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
           P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break;
         case 0xf5: cur.use |= lC; P(`cpu.flags^=${CF};`); break;                        // CMC (reads CF)
         case 0xf6: emitGroup3(8, ipStart); break;
@@ -937,11 +957,11 @@ export class Recompiler {
         case 0xf9: P(`cpu.flags|=${CF};`); break;                                       // STC
         case 0xfa:                                                                      // CLI
           canFault = true;
-          P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          P(`if((cpu.cr0&1)&&${CPL_EXPR}>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
           P(`cpu.flags&=~${IF};`); break;
         case 0xfb:                                                                      // STI
           canFault = true;
-          P(`if((cpu.cr0&1)&&(cpu.seg[${CS}]&3)>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
+          P(`if((cpu.cr0&1)&&${CPL_EXPR}>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
           P(`cpu.flags|=${IF};`); break;
         case 0xfc: P(`cpu.flags&=~${DF};`); break;                                      // CLD
         case 0xfd: P(`cpu.flags|=${DF};`); break;                                       // STD
