@@ -44,9 +44,27 @@ Three gaps surfaced immediately, each fixed and tested:
   code selector — was rejected with #GP(8), one instruction into protected mode. CPL is stored now,
   as it is on real hardware (it lives in the CS descriptor cache).
 
-Still not done: `#DF`, task switching, VME. **Windows 3.0 enhanced mode now gets past the protected-
-mode entry and takes real page faults; the next thing it needs is a valid TSS before it can take an
-inward fault (`TR=0x0` when the first one arrives).**, privilege/type checks with `#GP`, call gates, TSS task switching. **⚠️ The call-gate blocker below is CLOSED — gates are implemented in `cpu.js` `farCall`, TSS stack
+Two more found by following Windows past that point:
+- **A faulted selector load moved CPL anyway.** `loadDescriptor` raises and returns, and `setSeg`
+  then set `_cpl = sel & 3` from the selector it had just refused — putting the machine at ring 2
+  out of nowhere.
+- **Self-modification bookkeeping is LINEAR, and the paged write path used the PHYSICAL address.**
+  `codePage` is filled from `blk.linStart` and the block cache is keyed by linear address, so under
+  paging every self-modifying write tested the wrong page and reported the wrong one. That is
+  precisely what an OS relocating code does.
+
+⚠️ **A sizing limit this exposed, not yet fixed:** `rdOfs`/`wrOfs`/`codePage` are indexed by LINEAR
+page but sized from INSTALLED RAM, so a guest mapping code above that — Windows lives at linear
+0x80000000 — has no entry at all and always takes the slow helper path. Correctness is fine (the
+helper re-walks live); coverage and speed are not.
+
+⚠️ **Refuted, so nobody re-checks it:** the `66` prefix decode in a 32-bit code segment is CORRECT.
+`66 b8 30 00 / 66 8e d0 / f4` decodes to exactly 8 bytes in a D=1 segment, asserted in `test.js`.
+The mid-instruction EIP that suggested otherwise came from a stale block, not from the decoder.
+
+Still not done: `#DF`, task switching, VME. **Windows 3.0 enhanced mode gets past the protected-mode
+entry, takes real page faults, and no longer derails into its own exception handler; it still stops
+before the Program Manager.**, privilege/type checks with `#GP`, call gates, TSS task switching. **⚠️ The call-gate blocker below is CLOSED — gates are implemented in `cpu.js` `farCall`, TSS stack
 switch and parameter copying included. Re-measured 2026-08-19; the blocker has MOVED, and the
 paragraph after it is kept only for the descriptor-decoding lesson.**
 

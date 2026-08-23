@@ -175,7 +175,15 @@ export class Memory {
 
   // ---- writes (with SMC tracking) -----------------------------------------
   w8(a, v) {
-    if (this.paged) { const t = this.xlat(a, true); if (t >= 0) { this.u8[t] = v; if (this.codePage[t >> PAGE_BITS]) this._dirty(t, 1); } return; }
+    // The SMC bookkeeping is LINEAR, not physical: codePage is filled from blk.linStart and the block
+    // cache is keyed by linear address, so testing the translated address here checked the wrong page
+    // and reported the wrong one — every self-modifying write under paging missed its invalidation,
+    // which is exactly what an OS relocating code does.
+    if (this.paged) {
+      const t = this.xlat(a, true);
+      if (t >= 0) { this.u8[t] = v; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 1); }
+      return;
+    }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.vga.writeByte(a, v & 0xff); return; }
     this.u8[a] = v;

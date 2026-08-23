@@ -121,8 +121,10 @@ export class CPU {
       else if (i === SS) this.ssB = 0;
       return;
     }
-    this.loadDescriptor(i, sel);
-    if (i === CS) this._cpl = sel & 3;             // a protected-mode CS load sets CPL, nothing else
+    // A load that FAULTED must not move CPL: loadDescriptor reports that, because raising leaves the
+    // selector register written but the descriptor cache untouched, and taking CPL from a selector
+    // we just refused put the machine at ring 2 out of nowhere.
+    if (this.loadDescriptor(i, sel) !== false && i === CS) this._cpl = sel & 3;
   }
 
   /** Cache base/limit (and, for CS, the D bit) from the descriptor `sel` selects. */
@@ -137,7 +139,7 @@ export class CPU {
     // we followed a garbage selector into unmapped memory: delivering Windows' first #PF loads SS
     // from a TSS that has never been LTR'd, and the resulting nonsense selector read 0xff50 bytes
     // beyond a 0x10f-byte GDT.
-    if ((sel & 0xfff8) + 7 > tbl.limit) return this.raise(13, sel & 0xfffc);
+    if ((sel & 0xfff8) + 7 > tbl.limit) { this.raise(13, sel & 0xfffc); return false; }
     const a = (tbl.base + (sel & 0xfff8)) >>> 0;            // the index is already scaled by 8
     const m = this.mem;
     const lo = m.r16(a), b0 = m.r16(a + 2);

@@ -470,6 +470,34 @@ function eq(name, got, want) {
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
 }
 
+// ---- self-modification bookkeeping is LINEAR, including under paging -------------------------
+// codePage is filled from blk.linStart and the block cache is keyed by linear address, but the paged
+// write path tested and reported the TRANSLATED address. Every self-modifying write under paging
+// missed its invalidation — which is exactly what an OS relocating code does.
+{
+  // 16 MiB, because rdOfs/wrOfs/codePage are indexed by LINEAR page and sized from installed RAM:
+  // linear page 0x400 needs at least 0x401 entries to exist. (That sizing is itself a limit — a
+  // guest mapping code above installed RAM, as Windows does at 0x80000000, has no entry at all.)
+  const mc = new Machine({ memSize: 16 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  mem.w32(0x1000, 0x2003);                                     // PDE[0] -> table
+  for (let i = 0; i < 1024; i++) mem.w32(0x2000 + i * 4, ((i << 12) | 3) >>> 0);
+  mem.w32(0x1000 + 4, 0x3003);                                 // PDE[1] -> second table
+  for (let i = 0; i < 1024; i++) mem.w32(0x3000 + i * 4, (((0x300 + i) << 12) | 3) >>> 0);
+  cpu.setCR3(0x1000); cpu.setCR0(0x80000001);                  // linear 0x400000 -> physical 0x300000
+  const hits = [];
+  mem.onCodeWrite = (addr, len) => hits.push(addr >>> 0);
+  mem.markCodePage(0x400);                                     // the LINEAR page holding code
+  mem.w8(0x400010, 0x90);
+  eq('a write to a code page under paging is reported', hits.length, 1);
+  eq('...by its LINEAR address, which is how blocks are keyed', hits[0], 0x400010);
+  eq('...and the byte still lands in the mapped frame', mem.u8[0x300010], 0x90);
+  hits.length = 0;
+  mem.w8(0x401010, 0x90);                                      // a different linear page: no report
+  eq('a write to a non-code page is not reported', hits.length, 0);
+}
+
 // ---- #UD is a service the guest can ask for -------------------------------------------------
 // The Windows 3.0 loader hooks INT 6 through DOS (`mov ax,2506h / int 21h`) and then executes
 // `0f a6` on purpose to identify the processor. Reporting "unimplemented opcode 0x0f 0xa6" for an
