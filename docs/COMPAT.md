@@ -418,6 +418,32 @@ width and both general:
 PIC remapped, 194 timer interrupts serviced, and stops later on a #GP cascade at `34c0:80006224` —
 a segment that looks real-mode, so the next thing to look at is the first V86 transition.
 
+**Next blocker for `win /3`, located 2026-08-22: a STALE BLOCK.** With the page faults gone, Windows
+runs on and then dies in a #GP cascade. The cause is not a privilege bug — it is that we execute code
+that is no longer there:
+
+    block ip0 = 0x80006366, linStart..linEnd = 0x80006366..0x80006368   (two bytes)
+    emitted: cpu.softInt(32, …)        i.e. it decoded `CD 20` = INT 20h
+    memory at 0x80006366 now reads:    ff 15 c0 34 01 80  = call dword [0x800134c0]
+
+So the page's **content or mapping changed after we translated it**, and nothing dropped the cached
+block. Everything downstream follows from executing an `INT 20h` that is not in the program: EIP
+becomes 0x6368 (the address truncated by the interrupt path), ESP goes odd again, and the frame reads
+two bytes off exactly as before.
+
+Three candidates, in order of likelihood, none yet measured:
+1. The guest remaps the linear page **without a CR3 reload**. A 386 has no `INVLPG` (that is a 486
+   instruction) so it should reload CR3, which we do handle — but our `INVLPG` emitter is still a
+   no-op, and it is reached in the `0F 01 /7` group.
+2. The page is written through a **different linear alias** than the one it executes at. Our
+   self-modification tracking is keyed by LINEAR page, so a write through another alias to the same
+   physical frame invalidates nothing. Under paging, that tracking has to be keyed by PHYSICAL frame
+   with a reverse map back to the linear pages holding code.
+3. The block was translated while the page held something else entirely (a transient mapping).
+
+The distinguishing measurement is cheap: watch `setCR3`, the `0F 01 /7` decode, and every write whose
+translated physical frame backs linear 0x80006000, and see which of the three fires.
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 boots** to its `A:\>` prompt, verified interactively (`tools/run-boot.mjs
