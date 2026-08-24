@@ -483,6 +483,30 @@ low memory, and V86MMGR's whole job is to virtualise a real driver. Making this 
 providing a genuine real-mode XMS/EMS driver image for it to take over, or answering the takeover
 protocol (INT 2Fh AX=1605h participation and the V86 API entry) directly. It is a feature, not a bug.
 
+**Maniac Mansion's residual divergence, narrowed 2026-08-22.** After the memory-accounting
+corrections our base map matches dosbox-x *exactly* — `tools/mem.asm` run with `games/MANIAC` mounted
+answers `LARGEST-FREE-PARAS=96EA  PSP=0814  PSP0002=9FFF` on **both** sides. Yet MANIAC.EXE's
+allocation stream still diverges.
+
+Aligning the two streams by hand (the oracle's own index counts other channels too, so its "#20" is
+not the step number) puts the first real difference at **step 7 of the alloc sequence**:
+
+    step:      1  2  3  4  5  6  7  8  9
+    DOSBox:   48 48 49 48 49 48 48 48 49
+    MIRAGE:   48 48 49 48 49 48 49 48 48
+
+Our own log, with sizes, shows step 6 is `AH=48 BX=0x7000` and that it **succeeds** for us (a success
+is followed by a free, hence our 49 at step 7; a failure is followed by a smaller retry, hence
+DOSBox's 48). Our search then converges cleanly on **0x774a**, which is exactly
+`0x9fff - allocTop - 1` with `allocTop = 0x814 + 0x20a0` — the 0x20a0 being MANIAC's own AH=4Ah
+shrink.
+
+So **DOSBox has less memory available to this program than we do** — enough that 0x7000 paragraphs
+will not fit, i.e. its `allocTop` is at least 0x14A paragraphs (~5 KiB) above ours. Since the .COM
+map is identical, the difference is in how the EXE's OWN block is sized or placed, not in the base
+layout. That is the next thing to measure, and it is a narrower question than "the SCUMM titles
+diverge".
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 BOOTS TO ITS SHELL (2026-08-22).** `boot/FREEDOS14.IMG` reaches FreeCom 0.86 and its
