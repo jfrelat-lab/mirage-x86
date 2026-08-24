@@ -368,6 +368,27 @@ bug every time. Only the last is Windows-specific.
 
 
 
+**MS-DOS 6.22, re-tested 2026-08-22 after the SMC fix — unchanged, and now named exactly.** It
+prints *"Starting MS-DOS..."* and then derails; today's fixes, which unblocked FreeDOS, do not touch
+it. The classifier reports it in one line:
+
+    INT 05h re-raised 100000x at 0009:0013 (linear 0xa3) — INSIDE THE REAL-MODE IVT (vector 40)
+    … 11 of those advance by exactly 0x180, so the decoder is walking forward through memory
+
+and the first entry into non-code is earlier, at linear 0xf09b, *"in a run of zero bytes"*. Tracing
+back gives the exact instruction:
+
+    0070:07c9  push ax / push bx / mov ah,5 / call far [cs:0x000e]
+
+The far pointer at `0070:000e` reads **0009:f00b** — linear 0xf09b, which is all zeros. So IO.SYS
+calls through a dispatch slot that nothing has filled in. That is the same blocker as before, but it
+is now a single named pointer rather than "derails in IO.SYS init", and the question is what should
+install it.
+
+Consequence for ROADMAP G1: **MS-DOS's own PSP cannot be measured here yet.** The two oracles that do
+answer bracket it — dosbox-x's DOS puts a `.COM` at 0x0814, FreeDOS 1.4 puts the first program at
+0x1108 — and MS-DOS 6.22's value depends on its CONFIG.SYS anyway. Ours is 0x0100 either way.
+
 **Where `win /3` stops now, measured 2026-08-22 (after #PF and the linear-address fix).** It is
 *running*: WIN386 loads its TSS (`TR=0x18`), remaps the PIC (timer IRQs arrive on vector 0x20, 92 of
 them in a run), and services its own page faults through its stub table at linear 0x80005ee4
