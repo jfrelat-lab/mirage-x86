@@ -193,14 +193,14 @@ export class Memory {
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.vga.writeByte(a, v & 0xff); return; }
     this.u8[a] = v;
-    if (this.codePage[a >> PAGE_BITS]) this._dirty(a, 1);
+    if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 1);
   }
   w16(a, v) {
     if (this.paged) { this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff); return; }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.w8(a, v & 0xff); this.w8((a + 1) & this.mask, (v >> 8) & 0xff); return; }
     this.u8[a] = v; this.u8[(a + 1) & this.mask] = v >> 8;
-    if (this.codePage[a >> PAGE_BITS] || this.codePage[(a + 1) >> PAGE_BITS]) this._dirty(a, 2);
+    if (this.codePage[a >>> PAGE_BITS] || this.codePage[(a + 1) >>> PAGE_BITS]) this._dirty(a, 2);
   }
   w32(a, v) {
     if (this.paged) {
@@ -211,7 +211,7 @@ export class Memory {
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.w8(a, v & 0xff); this.w8((a + 1) & this.mask, (v >> 8) & 0xff); this.w8((a + 2) & this.mask, (v >> 16) & 0xff); this.w8((a + 3) & this.mask, (v >>> 24) & 0xff); return; }
     this.u8[a] = v; this.u8[(a + 1) & this.mask] = v >> 8;
     this.u8[(a + 2) & this.mask] = v >> 16; this.u8[(a + 3) & this.mask] = v >> 24;
-    if (this.codePage[a >> PAGE_BITS] || this.codePage[(a + 3) >> PAGE_BITS]) this._dirty(a, 4);
+    if (this.codePage[a >>> PAGE_BITS] || this.codePage[(a + 3) >>> PAGE_BITS]) this._dirty(a, 4);
   }
 
   // SMC: report the written byte range so the recompiler can invalidate only the
@@ -228,7 +228,7 @@ export class Memory {
   blit(addr, bytes) {
     addr &= this.mask;
     this.u8.set(bytes, addr);
-    const first = addr >> PAGE_BITS, last = (addr + bytes.length - 1) >> PAGE_BITS;
+    const first = addr >>> PAGE_BITS, last = (addr + bytes.length - 1) >>> PAGE_BITS;
     for (let p = first; p <= last; p++) if (this.codePage[p]) { this._dirty(addr, bytes.length); break; }
   }
 
@@ -240,7 +240,7 @@ export class Memory {
   move(dst, src, len) {
     if (len <= 0) return;
     this.u8.copyWithin(dst, src, src + len);
-    const first = dst >> PAGE_BITS, last = (dst + len - 1) >> PAGE_BITS;
+    const first = dst >>> PAGE_BITS, last = (dst + len - 1) >>> PAGE_BITS;
     for (let p = first; p <= last; p++) if (this.codePage[p]) { this._dirty(dst, len); break; }
   }
 

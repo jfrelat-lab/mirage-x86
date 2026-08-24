@@ -418,31 +418,28 @@ width and both general:
 PIC remapped, 194 timer interrupts serviced, and stops later on a #GP cascade at `34c0:80006224` —
 a segment that looks real-mode, so the next thing to look at is the first V86 transition.
 
-**Next blocker for `win /3`, located 2026-08-22: a STALE BLOCK.** With the page faults gone, Windows
-runs on and then dies in a #GP cascade. The cause is not a privilege bug — it is that we execute code
-that is no longer there:
+**The stale block, found and fixed 2026-08-22 — `invalidate()` used a SIGNED shift.** With the page
+faults gone, `win /3` died in a #GP cascade, and printing the emitted source of the block it was
+running settled what that was:
 
-    block ip0 = 0x80006366, linStart..linEnd = 0x80006366..0x80006368   (two bytes)
-    emitted: cpu.softInt(32, …)        i.e. it decoded `CD 20` = INT 20h
-    memory at 0x80006366 now reads:    ff 15 c0 34 01 80  = call dword [0x800134c0]
+    block ip0 = 0x80006366, linStart..linEnd = 0x80006366..0x80006368
+    emitted: cpu.softInt(32, …)      i.e. it decoded `CD 20` = INT 20h
+    memory there now reads:          ff 15 c0 34 01 80 = call dword [0x800134c0]
 
-So the page's **content or mapping changed after we translated it**, and nothing dropped the cached
-block. Everything downstream follows from executing an `INT 20h` that is not in the program: EIP
-becomes 0x6368 (the address truncated by the interrupt path), ESP goes odd again, and the frame reads
-two bytes off exactly as before.
+Measured rather than guessed, in two steps. First, the physical frame behind that linear page **never
+changed** (0x105000 throughout) while the bytes went from `cd 20` to `ff 15` — so it was a write, not
+a remap, and only 2 `setCR3` calls happened all run. Second, every write reaching that frame came
+through the **same** linear page it executes at, `codePage[0x80006]` was set, and `_dirty` fired on
+0x80006366. Everything upstream worked.
 
-Three candidates, in order of likelihood, none yet measured:
-1. The guest remaps the linear page **without a CR3 reload**. A 386 has no `INVLPG` (that is a 486
-   instruction) so it should reload CR3, which we do handle — but our `INVLPG` emitter is still a
-   no-op, and it is reached in the `0F 01 /7` group.
-2. The page is written through a **different linear alias** than the one it executes at. Our
-   self-modification tracking is keyed by LINEAR page, so a write through another alias to the same
-   physical frame invalidates nothing. Under paging, that tracking has to be keyed by PHYSICAL frame
-   with a reverse map back to the linear pages holding code.
-3. The block was translated while the page held something else entirely (a transient mapping).
+`Recompiler.invalidate` then did `for (let p = addr >> 12; …)`. **`>>`, not `>>>`**: a linear address
+at or above 2 GiB is negative as a signed int32, so the page number was negative and the lookup
+missed every time. The same trap was in five more places in `memory.js`'s write and bulk-copy paths.
 
-The distinguishing measurement is cheap: watch `setCR3`, the `0F 01 /7` decode, and every write whose
-translated physical frame backs linear 0x80006000, and see which of the three fires.
+**Result: `win /3` completes its enhanced-mode initialisation** and exits with Windows' own diagnostic
+instead of a derail — *"ERROR: Cannot install the 386 enhanced mode Expanded Memory driver."* With
+`ems: false` it says the same of XMS, so what it wants next is for **V86MMGR to take over the
+real-mode memory driver**, which is a named feature rather than a bug.
 
 ## Booting a real DOS kernel
 

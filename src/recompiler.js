@@ -151,8 +151,13 @@ export class Recompiler {
    *  what keeps demos that stash variables in their code page (tube, darnit) from
    *  recompiling every block on every write. */
   invalidate(addr, len) {
+    // `>>>`, not `>>`. A linear address at or above 2 GiB is negative as a signed int32, so a signed
+    // shift gave a negative page number and the lookup missed every time — Windows 3.0 pages its
+    // kernel in at linear 0x80006000 AFTER we have translated blocks there, and we kept running the
+    // stale ones (a block decoded as `CD 20` where the memory now says `FF 15`).
+    addr = addr >>> 0;
     const end = addr + len;
-    for (let p = addr >> 12; p <= (end - 1) >> 12; p++) {
+    for (let p = addr >>> 12; p <= (end - 1) >>> 12; p++) {
       const set = this.pageBlocks.get(p);
       if (!set) continue;
       if (end <= this.pageLo[p] || addr >= this.pageHi[p]) continue;   // write outside all blocks on this page

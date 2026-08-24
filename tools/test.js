@@ -470,6 +470,34 @@ function eq(name, got, want) {
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
 }
 
+// ---- self-modification invalidation works above 2 GiB ----------------------------------------
+// `invalidate` computed its page index with a SIGNED shift, so a linear address at or above 2 GiB
+// came out negative and the lookup missed every time. Windows 3.0 pages its kernel in at linear
+// 0x80006000 AFTER blocks there are translated, and we kept running the stale ones — a block decoded
+// as `CD 20` (INT 20h) where the memory had since been rewritten to `FF 15 …` (an indirect call).
+{
+  const mc = new Machine({ memSize: 16 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  mem.w32(0x1000, 0x2003);
+  for (let i = 0; i < 1024; i++) mem.w32(0x2000 + i * 4, ((i << 12) | 3) >>> 0);
+  mem.w32(0x1000 + 512 * 4, 0x3003);                     // PDE[512]: linear 0x80000000 -> 0x500000
+  for (let i = 0; i < 1024; i++) mem.w32(0x3000 + i * 4, (((0x500 + i) << 12) | 3) >>> 0);
+  cpu.setCR3(0x1000); cpu.setCR0(0x80000001);
+  const hits = [];
+  const orig = mc.rec.invalidate.bind(mc.rec);
+  mc.rec.invalidate = (a, l) => { hits.push(a >>> 0); return orig(a, l); };
+  mem.markCodePage(0x80006);
+  mem.w8(0x80006366, 0x90);
+  eq('a write to a code page above 2 GiB reaches the invalidator', hits.length, 1);
+  eq('...with the address unsigned', hits[0], 0x80006366);
+  // And the invalidator itself must index the page unsigned, or it silently does nothing.
+  mc.rec.invalidate = orig;
+  let ok2 = true;
+  try { mc.rec.invalidate(0x80006366, 1); } catch { ok2 = false; }
+  eq('invalidate() survives an address above 2 GiB', ok2, true);
+}
+
 // ---- the STACK is a linear address too -------------------------------------------------------
 // push/pop masked with mem.mask, which is the PHYSICAL wrap. Windows 3.0's kernel stack lives at
 // linear 0x800131e8; with A20 closed that became 0x131e8, so every push landed in low memory and
