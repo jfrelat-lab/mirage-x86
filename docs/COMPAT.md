@@ -441,6 +441,27 @@ instead of a derail — *"ERROR: Cannot install the 386 enhanced mode Expanded M
 `ems: false` it says the same of XMS, so what it wants next is for **V86MMGR to take over the
 real-mode memory driver**, which is a named feature rather than a bug.
 
+**Where `win /3` stops now (2026-08-22, after the invalidation fix): the V86MMGR takeover.** It runs
+its whole enhanced-mode initialisation and exits cleanly with Windows' own diagnostic. Three
+measurements bound the problem:
+
+| Configuration | What Windows says |
+|---|---|
+| `xms: true, ems: true` (default) | *"ERROR: Cannot install the 386 enhanced mode Expanded Memory driver."* |
+| `xms: true, ems: false` | *"ERROR: Cannot install the 386 enhanced mode XMS driver."* |
+| `xms: false` (with or without EMS) | *"Missing HIMEM.SYS; install HIMEM.SYS from your Windows Setup disks."* |
+
+So HIMEM is mandatory — enhanced mode will not start without XMS — and whichever memory driver is
+present, the **takeover** is what fails. The INT 2Fh trail ends `4300 / 4310 / 4310 / 1606`: it finds
+the XMS driver, asks twice for its entry point, and then broadcasts 1606h (Windows exiting). **It
+never calls that entry point** — no XMS call reaches our dispatch at all — so it is failing before
+the call, at the point where it wants the driver's real-mode CODE to map into each VM.
+
+That is the crux: ours is a JS service behind a guarded `f000:100` stub, not 8086 code sitting in
+low memory, and V86MMGR's whole job is to virtualise a real driver. Making this work means either
+providing a genuine real-mode XMS/EMS driver image for it to take over, or answering the takeover
+protocol (INT 2Fh AX=1605h participation and the V86 API entry) directly. It is a feature, not a bug.
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 boots** to its `A:\>` prompt, verified interactively (`tools/run-boot.mjs
