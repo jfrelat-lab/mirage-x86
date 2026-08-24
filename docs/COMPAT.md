@@ -368,26 +368,27 @@ bug every time. Only the last is Windows-specific.
 
 
 
-**Where `win /3` stops now, measured 2026-08-22.** It boots, draws the logo, reopens itself, opens
-`EMMXXXX0`, and then spins in a two-block loop. The cause is a single page:
+**Where `win /3` stops now, measured 2026-08-22 (after #PF and the linear-address fix).** It is
+*running*: WIN386 loads its TSS (`TR=0x18`), remaps the PIC (timer IRQs arrive on vector 0x20, 92 of
+them in a run), and services its own page faults through its stub table at linear 0x80005ee4
+(`pusha / mov esi,0x38 / jmp common` — 0x38/4 = 14, the #PF entry). 387 exceptions in a run, against
+39,634,604 before. No fault reported.
 
-    pages linéaires en faute (top):
-      lin 0x80110000 x93076264
-      lin 0xf61000  x2
-    distinctes: 2
+It stops because **seven pages fault forever**:
 
-Windows' VMM does **demand paging**: it touches a not-present page, expects `#PF` (INT 14), maps it
-in the handler, and re-executes. `Memory.xlat()` counts the fault and **reads zero** instead — which
-its own comment has flagged as provisional since the paging work landed:
+    0xc0010000 x90   0xf000e000 x86   0xf000d000 x85   0xf000f000 x82   0xf000c000 x50
 
-> NOT YET a #PF: a non-present page is counted and reads as zero. Raising the fault from inside a
-> memory accessor needs the same block-ending treatment as #DE and #UD, which is its own step.
+`0xC0000000` is where a **recursive page-directory mapping** lives — the alias a VMM gives itself so
+it can edit its own page tables — and `PDE#768` is simply never created: only PDE#0 and PDE#512 are
+present in CR3's directory. `0xF000c000`-`0xF000f000` is the ROM window the first V86 machine needs.
+So Windows' own #PF handler runs, cannot satisfy the fault, and re-takes it.
 
-So the next step for Windows is exactly that step, and nothing else is in the way: the descriptor
-tables read correctly (`walk(0x8010011c)` → physical `0x14211c`, and selector 8 is a flat ring-0 code
-segment as it should be), A20 is open, the 16 MiB machine is enough, and the page tables Windows
-built are intact — PDE#512 present, PTE#256 present. It is asking us for a page fault we do not
-raise.
+Delivery itself checks out, which is worth recording so it is not re-suspected: the 0x38 stub has no
+`sub esp,4` where its neighbours (0x3c, …) do — the standard "this vector pushes an error code"
+convention — so the frame we push is the shape it expects, and CR2 and the error code follow the
+architecture (bit 0 present, bit 1 write, bit 2 user).
+
+The next question is why that handler cannot map its own alias.
 
 ## Booting a real DOS kernel
 
