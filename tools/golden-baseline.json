@@ -90,7 +90,7 @@
     "fault": null
   },
   "intros/memories.com": {
-    "hash": "29689356ec2d594bc15540b1f9cd5fb4ed6cde5e",
+    "hash": "1dc81d9ac84afd6b2eab23d68855b294344d2a3c",
     "mode": 19,
     "fault": null
   },
@@ -105,9 +105,9 @@
     "fault": null
   },
   "intros/oktaeder.com": {
-    "hash": "52a47656fd5ac5c8098f29801ef30ea82f585913",
+    "hash": "834c8e2115d733dfc6d91a8a482d72dbc9778fcc",
     "mode": 3,
-    "fault": null
+    "fault": "mirage: unhandled exception INT 00h re-raised 100000x at the same address 0cf0:8226 (linear 0x15126) — the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing will change. Recent block starts (oldest first, the last is this one): 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226"
   },
   "intros/paleozoa.com": {
     "hash": "61027bf4300f70111c91aee55a9736c94adbc9a0",
@@ -170,7 +170,7 @@
     "fault": null
   },
   "intros/mars.exe": {
-    "hash": "cde0736acce020dc16b482a9eac4e87fba30aa7f",
+    "hash": "3c13f2f3b6b6791efc568e4f819bc73e84007891",
     "mode": 19,
     "fault": null
   },

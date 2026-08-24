@@ -195,6 +195,7 @@ function asciiz(mc, cpu, off, str) {
   // was duplicated this half of the e_maxalloc fix never reached the EXEC path, so a child that
   // asked for a bounded block was handed all of memory and its own AH=48h then had nowhere to go.
   const c = mk();
+  const parentPsp = c.dos.psp;
   int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });   // parent shrinks, as a stub loader does
   // minimal MZ: 1 page, header 1 para, no relocs, minalloc=0, maxalloc=0x10 (a bounded request)
   const mz = new Uint8Array(48);
@@ -207,14 +208,16 @@ function asciiz(mc, cpu, off, str) {
   const pb = 0x280; for (let i = 0; i < 14; i++) c.mc.mem.w8((c.cpu.seg[3] << 4) + pb + i, 0);
   const r = int21(c, 0x4b, (cpu) => { cpu.al = 0; cpu.reg[2] = nameOff; cpu.setSeg(0, cpu.seg[3]); cpu.reg[3] = pb; });
   eq('4Bh EXEC succeeds', r.cf, 0);
-  // Parent PSP 0x100 + 0x200 shrunk paragraphs puts the free block's MCB header at 0x300, so the
-  // child's PSP is 0x301 — the header lives in the paragraph BELOW the PSP it describes, exactly as
-  // the parent's does at PSP-1. Its block is PSP(0x10) + 32-byte image(2) + maxalloc(0x10) = 0x22
-  // paragraphs, hence 0x323. Before the header was reserved, the child's PSP landed ON it.
-  eq('EXEC child block is header-sized, not all of memory', c.dos.allocTop, 0x323);
-  eq('...and the child PSP leaves its MCB header a paragraph', c.dos.psp, 0x301);
-  eq('...which describes the child block', String.fromCharCode(c.mc.mem.r8(0x300 << 4)), 'M');
-  eq('...and is owned by the child', c.mc.mem.r16((0x300 << 4) + 1), 0x301);
+  // Derived from the PSP, not hard-coded: G1 moved it from 0x0100 to the measured 0x0814 and every
+  // literal here had to change. The parent shrinks to 0x200 paragraphs, so the free block's MCB
+  // header lands at parentPsp + 0x200 and the child's PSP one paragraph above it — the header lives
+  // BELOW the PSP it describes, exactly as the parent's does at PSP-1. The child's block is
+  // PSP(0x10) + 32-byte image(2) + maxalloc(0x10) = 0x22 paragraphs.
+  const childMcb = parentPsp + 0x200, childPsp = childMcb + 1;
+  eq('EXEC child block is header-sized, not all of memory', c.dos.allocTop, childPsp + 0x22);
+  eq('...and the child PSP leaves its MCB header a paragraph', c.dos.psp, childPsp);
+  eq('...which describes the child block', String.fromCharCode(c.mc.mem.r8(childMcb << 4)), 'M');
+  eq('...and is owned by the child', c.mc.mem.r16((childMcb << 4) + 1), childPsp);
 }
 
 // ---------------------------------------------------------------- DTA get/set round-trip
@@ -449,7 +452,7 @@ function asciiz(mc, cpu, off, str) {
   eq('PSP:0002 starts at the top of memory for a .COM that owns everything',
      c.mc.mem.r16((c.dos.psp << 4) + 2), 0xa000);
   int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });   // shrink to 0x200 paras
-  eq('PSP:0002 follows the block after a shrink', c.mc.mem.r16((c.dos.psp << 4) + 2), 0x100 + 0x200);
+  eq('PSP:0002 follows the block after a shrink', c.mc.mem.r16((c.dos.psp << 4) + 2), c.dos.psp + 0x200);
 }
 { // AH=49h accepted any segment, so a double free looked fine and left the allocator wrong
   const c = mk();

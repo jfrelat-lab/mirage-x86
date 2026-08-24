@@ -5,8 +5,15 @@
 
 import { CF, ZF, CS, DS, ES, SS } from './cpu.js';
 
-const PSP_SEG = 0x0100;     // first program's PSP   (linear 0x1000)
-const ENV_SEG = 0x00c0;     // environment block     (linear 0x0C00)
+// Where a real DOS puts the first program, measured rather than chosen (ROADMAP G1). Two independent
+// oracles: dosbox-x's DOS gives a .COM `CS = DX = 0x0814` (tools/regs.asm, identical across memsize
+// 16 and 32 MiB and with EMS/XMS on and off), and a booted FreeDOS 1.4 kernel builds an MCB chain
+// whose first program block owns PSP 0x1108. We used 0x0100, handing every program ~29 KiB of
+// conventional memory it would not have on a real machine — which is exactly what the SCUMM titles'
+// AH=48/49 free-memory binary search measures, and the only place their event streams diverge from
+// the reference. 0x0814 matches the oracle the corpus is diffed against.
+const PSP_SEG = 0x0814;     // first program's PSP
+const ENV_SEG = 0x00c0;     // environment block     (linear 0x0C00) — inside DOS's own arena, as it is on a real machine
 const MEM_TOP = 0xa000;     // end of conventional memory (640K), in paragraphs
 
 export function installDOS(machine, vfs) {

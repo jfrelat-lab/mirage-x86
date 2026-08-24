@@ -1,6 +1,7 @@
 // golden.js — deterministic output-fingerprint gate for the recompiler.
 //
 //   node tools/golden.js capture           # write tools/golden-baseline.json from current engine
+//   node tools/golden.js capture <file>    # re-bless ONE entry, leaving the rest alone
 //   node tools/golden.js check             # recompute + diff against the baseline (exit 1 on mismatch)
 //   node tools/golden.js check <file.com>  # check a single program
 //
@@ -86,14 +87,21 @@ const mode = process.argv[2] || 'check';
 const only = process.argv[3];
 
 if (mode === 'capture') {
-  const out = {};
+  // `capture <file>` re-blesses ONE entry and leaves the rest of the baseline alone. The policy this
+  // enforces is written in ROADMAP D7: a golden moves per program, after checking that program is at
+  // least as faithful as before — never by recapturing the set, which turns any regression into the
+  // new truth. Without the filter, `capture` was all-or-nothing and the safe path was hard to take.
+  const out = only && existsSync(BASELINE) ? JSON.parse(readFileSync(BASELINE, 'utf8')) : {};
+  let n = 0;
   for (const [rel, opts] of WORKLOADS) {
+    if (only && !rel.includes(only)) continue;
     const fp = fingerprint(rel, opts);
-    if (fp) { out[rel] = fp; console.log(`  ${rel}: ${fp.hash.slice(0, 12)} mode=0x${fp.mode.toString(16)}${fp.fault ? ' FAULT:' + fp.fault : ''}`); }
+    if (fp) { out[rel] = fp; n++; console.log(`  ${rel}: ${fp.hash.slice(0, 12)} mode=0x${fp.mode.toString(16)}${fp.fault ? ' FAULT:' + fp.fault : ''}`); }
     else console.log(`  ${rel}: (absent — skipped)`);
   }
+  if (only && !n) { console.error(`no workload matches "${only}"`); process.exit(2); }
   writeFileSync(BASELINE, JSON.stringify(out, null, 2) + '\n');
-  console.log(`\nwrote ${Object.keys(out).length} fingerprints → ${BASELINE}`);
+  console.log(`\nwrote ${n} fingerprint${n === 1 ? '' : 's'} → ${BASELINE}${only ? ' (rest of the baseline untouched)' : ''}`);
 } else if (mode === 'check') {
   if (!existsSync(BASELINE)) { console.error('no baseline — run: node tools/golden.js capture'); process.exit(2); }
   const base = JSON.parse(readFileSync(BASELINE, 'utf8'));
