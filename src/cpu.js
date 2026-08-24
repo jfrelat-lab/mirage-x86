@@ -498,7 +498,8 @@ export class CPU {
   get pagingOn() { return ((this.cr0 >>> 31) & 1) !== 0 && (this.cr0 & 1) !== 0; }
 
   /** Linear address of CS:IP — where the recompiler fetches the next block. */
-  csip() { return (this.base[CS] + (this.eip & 0xffff)) & this.mem.mask; }
+  csip() { const a = this.base[CS] + (this.csD ? (this.eip >>> 0) : (this.eip & 0xffff));
+    return this.mem.paged ? (a >>> 0) : (a & this.mem.mask); }
 
   // ---- real-mode stack -----------------------------------------------------
   /** The stack pointer in use: SP or ESP, per the SS descriptor's B bit. */
@@ -509,21 +510,32 @@ export class CPU {
     else this.reg[4] = (this.reg[4] & ~0xffff) | ((this.reg[4] + n) & 0xffff);
   }
 
+  /**
+   * Linear address of the stack top. The RAM/A20 mask belongs to PHYSICAL addresses, so it must not
+   * be applied once paging is on — Windows 3.0's kernel stack lives at linear 0x800131e8, and with
+   * A20 closed that was masked to 0x131e8: every push landed in low memory and every pop read zeros,
+   * so its exception dispatcher read a return address of 0 and called through a wild pointer.
+   */
+  get stackLin() {
+    const a = this.base[SS] + this.stackPtr;
+    return this.mem.paged ? (a >>> 0) : (a & this.mem.mask);
+  }
+
   push16(v) {
     this.spAdd(-2);
-    this.mem.w16((this.base[SS] + this.stackPtr) & this.mem.mask, v & 0xffff);
+    this.mem.w16(this.stackLin, v & 0xffff);
   }
   pop16() {
-    const v = this.mem.r16((this.base[SS] + this.stackPtr) & this.mem.mask);
+    const v = this.mem.r16(this.stackLin);
     this.spAdd(2);
     return v;
   }
   push32(v) {
     this.spAdd(-4);
-    this.mem.w32((this.base[SS] + this.stackPtr) & this.mem.mask, v >>> 0);
+    this.mem.w32(this.stackLin, v >>> 0);
   }
   pop32() {
-    const v = this.mem.r32((this.base[SS] + this.stackPtr) & this.mem.mask);
+    const v = this.mem.r32(this.stackLin);
     this.spAdd(4);
     return v >>> 0;
   }

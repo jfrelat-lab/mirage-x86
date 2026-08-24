@@ -919,15 +919,30 @@ export class Recompiler {
         case 0xc5: { const o = modrm(); P(loadPtr(o, DS, sz)); break; } // LDS
         case 0xc6: { const o = modrm(); const i = f8(); P(rmW(o, 8, '' + i)); break; }
         case 0xc7: { const o = modrm(); const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(rmW(o, sz, '' + i)); break; }
-        case 0xc8: {                                                                    // ENTER size,level (make stack frame)
+        // ENTER size,level. The operand size decides the WIDTH of everything it touches: at 32 bits it
+        // pushes EBP, sets EBP (not just BP) and copies nested frame pointers as dwords. This was
+        // hard-wired to the 16-bit form, so a 32-bit `enter` pushed two bytes instead of four and
+        // left ESP odd — Windows 3.0's enhanced-mode kernel opens a frame with `enter 0xa8,0`, and
+        // from there every interrupt frame it read was two bytes off, which is how its exception
+        // dispatcher ended up calling through a wild pointer.
+        case 0xc8: {
           const szv = f16(), lvl = f8() & 0x1f; const ft = NT();
-          P(`cpu.push16(r[5]);var ${ft}=cpu.stackPtr;`);                                       // push BP; frameTemp = SP
-          for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]&~0xffff)|((r[5]-2)&0xffff);cpu.push16(m.r16(${AM("sb[2]+(r[5]&0xffff)")}));`); // copy nested frame pointers
-          if (lvl > 0) P(`cpu.push16(${ft});`);
-          P(`r[5]=(r[5]&~0xffff)|${ft};cpu.spAdd(-${szv});`);   // BP = frameTemp; SP -= size
+          if (sz === 32) {
+            P(`cpu.push32(r[5]>>>0);var ${ft}=cpu.stackPtr;`);                                 // push EBP; frameTemp = ESP
+            for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]-4)>>>0;cpu.push32(m.r32(${AM("sb[2]+(r[5]>>>0)")})>>>0);`);
+            if (lvl > 0) P(`cpu.push32(${ft});`);
+            P(`r[5]=${ft}>>>0;cpu.spAdd(-${szv});`);                                           // EBP = frameTemp; ESP -= size
+          } else {
+            P(`cpu.push16(r[5]);var ${ft}=cpu.stackPtr;`);                                     // push BP; frameTemp = SP
+            for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]&~0xffff)|((r[5]-2)&0xffff);cpu.push16(m.r16(${AM("sb[2]+(r[5]&0xffff)")}));`);
+            if (lvl > 0) P(`cpu.push16(${ft});`);
+            P(`r[5]=(r[5]&~0xffff)|${ft};cpu.spAdd(-${szv});`);                                // BP = frameTemp; SP -= size
+          }
           break;
         }
-        case 0xc9: P('r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break; // LEAVE
+        // LEAVE undoes it, and is width-sensitive for the same reason.
+        case 0xc9: P(sz === 32 ? 'r[4]=r[5]>>>0;r[5]=cpu.pop32()>>>0;'
+                               : 'r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break;
         // RETF pops what CALLF pushed — two dwords under 0x66, two words without. The selector is
         // popped as a dword too and its upper half discarded.
         // farRet can now raise #GP on the target's privilege; that is a fault, so it needs the

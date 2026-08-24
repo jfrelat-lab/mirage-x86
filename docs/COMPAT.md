@@ -388,36 +388,35 @@ Delivery itself checks out, which is worth recording so it is not re-suspected: 
 convention — so the frame we push is the shape it expects, and CR2 and the error code follow the
 architecture (bit 0 present, bit 1 write, bit 2 user).
 
-**Followed further, 2026-08-22 — those seven pages are a CONSEQUENCE, not the cause.** Windows never
-writes to its own page directory (watched every write that lands in CR3's page: zero), so it is not
-failing to map the alias — it never tries.
+**Followed further, 2026-08-22 — those seven pages were a CONSEQUENCE, and both causes are fixed.**
+Windows never wrote to its own page directory (every write landing in CR3's page was watched: zero),
+so it was not failing to map its recursive alias — it never tried. Reading its own dispatcher gave
+the chain:
 
-The real chain, read off its own code:
-
-    80005fc2  call 0x80005d34            ; the per-vector stub, one CALL per vector
+    80005fc2  call 0x80005d34             ; one CALL stub per vector
     80005d34  pusha
-    80005d35  mov esi,[esp+0x20]         ; = the CALL's return address
-    80005d39  sub esi,0x80005ec7         ; ...minus the table base
-    80005d3f  shr esi,1                  ; = the vector, as a table offset
-    ...
+    80005d35  mov esi,[esp+0x20]          ; = the CALL's return address
+    80005d39  sub esi,0x80005ec7          ; ...minus the table base
+    80005d3f  shr esi,1                   ; = the vector as a table offset
     80005e0f  call dword [esi+0x80013a9c] ; dispatch
 
-`esi` at that dispatch was **0x3fffd09c**, and inverting the arithmetic gives `[esp+0x20]` =
-**0xFFFFFFFF** instead of a return address — so Windows dispatches through a wild pointer, which is
-what lands on 0xC0010B38 and on the 0xF000c000 window. The reason the slot is wrong is that **ESP is
-misaligned by 2** on entry: `mov ebp,esp` in the handler leaves EBP = 0x800131ca, and 0xca is not a
-multiple of 4.
+`esi` was 0x3fffd09c, i.e. `[esp+0x20]` read **0xFFFFFFFF**, so Windows dispatched through a wild
+pointer — and *that* is what touched 0xC0010B38 and the 0xF000c000 window. Two defects, both about
+width and both general:
 
-Two things checked and cleared, so they are not re-suspected:
-- **The timer delivery is correct.** Windows remaps the PIC and the timer arrives on vector 0x20;
-  measured, its gate is type 0xE (386 interrupt gate), `is32` true, and delivery pushes exactly 12
-  bytes with no error code — but `espBefore` was **already** 0x800131fa, odd. The misalignment is
-  older than this interrupt.
-- **`push fs` / `push gs` honour the operand size** (`0F A0`/`0F A8` emit `push32` in a D=1 segment).
+1. **`ENTER`/`LEAVE` were hard-wired to the 16-bit form.** The operand size decides the width of
+   everything they touch; at 32 bits `ENTER` pushes EBP and sets EBP, not BP. Windows opens a frame
+   with `enter 0xa8,0`, so it pushed two bytes instead of four and left ESP odd — every frame read
+   downstream was two bytes off.
+2. **The stack helpers masked a LINEAR address.** `push16/pop16/push32/pop32` (and `csip`) applied
+   `mem.mask`, which is the PHYSICAL RAM/A20 wrap. Windows' kernel stack is at linear 0x800131e8;
+   with A20 closed that became 0x131e8, so **every push landed in low memory and every pop read
+   zeros** — hence the 0 return address. Same bug class as the recompiler's, in the CPU's own
+   helpers.
 
-So the next step is not the page tables at all: find the 2-byte push. Something in the run pushes 16
-bits where the 32-bit kernel expects 32, and everything downstream is a frame read off by two.
-
+**Result: zero page faults**, from 495 on seven phantom pages. `win /3` now runs with TR loaded, the
+PIC remapped, 194 timer interrupts serviced, and stops later on a #GP cascade at `34c0:80006224` —
+a segment that looks real-mode, so the next thing to look at is the first V86 transition.
 
 ## Booting a real DOS kernel
 

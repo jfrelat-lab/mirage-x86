@@ -470,6 +470,34 @@ function eq(name, got, want) {
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
 }
 
+// ---- the STACK is a linear address too -------------------------------------------------------
+// push/pop masked with mem.mask, which is the PHYSICAL wrap. Windows 3.0's kernel stack lives at
+// linear 0x800131e8; with A20 closed that became 0x131e8, so every push landed in low memory and
+// every pop read zeros — its exception dispatcher read a return address of 0 and called through a
+// wild pointer, which is where 495 page faults on seven phantom pages came from.
+{
+  const mc = new Machine({ memSize: 16 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(false); mc.rec.MM = mem.mask;               // A20 CLOSED, as Windows leaves it
+  mem.w32(0x1000, 0x2003);
+  for (let i = 0; i < 1024; i++) mem.w32(0x2000 + i * 4, ((i << 12) | 3) >>> 0);
+  mem.w32(0x1000 + 512 * 4, 0x3003);                     // PDE[512]: linear 0x80000000 -> physical 0x500000
+  for (let i = 0; i < 1024; i++) mem.w32(0x3000 + i * 4, (((0x500 + i) << 12) | 3) >>> 0);
+  cpu.setCR3(0x1000); cpu.setCR0(0x80000001);
+  cpu.base[SS] = 0; cpu.ssB = 1; cpu.reg[4] = 0x800131e8;
+  cpu.push32(0x80005fc7);                                // a return address, as a CALL would
+  // linear 0x800131e4 -> PDE 512, PTE 0x13 -> frame (0x500+0x13)<<12 = 0x513000, offset 0x1e4
+  const phys = 0x5131e4;
+  const dw = (mem.u8[phys] | (mem.u8[phys + 1] << 8) | (mem.u8[phys + 2] << 16) | (mem.u8[phys + 3] << 24)) >>> 0;
+  eq('a 32-bit push under paging goes to the mapped frame', dw, 0x80005fc7);
+  eq('...and low memory is untouched', mem.u8[0x131e4], 0);
+  eq('...and it pops back', cpu.pop32() >>> 0, 0x80005fc7);
+  cpu.setCR0(0x00000001);                                // paging off: the physical wrap returns
+  cpu.reg[4] = 0x800131e8;
+  cpu.push16(0x1234);
+  eq('with paging off the stack masks again', mem.r16(0x131e6), 0x1234);
+}
+
 // ---- a linear address is not masked under paging ---------------------------------------------
 // A20 gates a PHYSICAL address line and the RAM-size wrap is physical too, so applying either
 // BEFORE the page walk truncates the guest's address space. Windows 3.0 runs its kernel at linear
