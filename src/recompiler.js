@@ -1071,18 +1071,24 @@ export class Recompiler {
       // resume, and that is why the check cannot live inside the write emitter.
       if (!ended) {
         const abort = `if(cpu.smcSelf){cpu.smcSelf=0;cpu.eip=${ip};return;}`;
-        let helperWrite = false;
+        let helperWrite = false, inlineMark = false;
         for (let i = outMark; i < out.length; i++) {
-          // The inline write emitter leaves a marker INSIDE its code-page branch; patch it now that
-          // the resume address is known. Costing nothing on a write to a page that holds no code is
-          // the whole point — emitting the check after every write instead cost memories 5.5%.
-          if (out[i].includes('/*SMCABORT*/')) out[i] = out[i].split('/*SMCABORT*/').join(abort);
+          // The inline write emitter leaves a marker INSIDE its code-page branch. It must only RECORD
+          // that the block has to stop — never return from there, because that is the middle of an
+          // instruction. Returning there skipped everything the instruction had left to do: FreeDOS's
+          // kernel decompressor does `sub byte [cs:si+0x12],0x10` on its own code, and the abort fired
+          // between the store and `cpu.setSub`, so the following `jnc` read a stale carry, looped when
+          // it should have fallen through, and the copy that followed wrapped past 1 MiB over the
+          // kernel itself. The check moves to the instruction boundary, where the resume address is
+          // also the correct one; a local flag keeps it off the path of writes to ordinary pages.
+          if (out[i].includes('/*SMCABORT*/')) { out[i] = out[i].split('/*SMCABORT*/').join('if(cpu.smcSelf)_smc=1;'); inlineMark = true; }
           // Helper writes (m.w8/w16/w32) carry no marker: string ops and the paged strategy go that
           // way, and those are exactly a decryptor's instructions, so they get the guard after the
           // instruction. They are rare enough on a hot path not to matter.
           else if (out[i].includes('m.w8(') || out[i].includes('m.w16(') || out[i].includes('m.w32(')) helperWrite = true;
         }
-        if (helperWrite) P(abort);
+        if (inlineMark) P(`if(_smc){_smc=0;cpu.smcSelf=0;cpu.eip=${ip};return;}`);
+        else if (helperWrite) P(abort);
       }
     }
 

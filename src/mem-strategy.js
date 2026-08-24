@@ -45,6 +45,7 @@ export function resolveMemStrategy(opts = {}) {
  */
 export function memPrologue(strategy) {
   const parts = [];
+  parts.push('var _smc=0;');   // set by the inline write marker, tested at the instruction boundary
   if (strategy.read === 'paged' || strategy.write === 'paged') parts.push('var _po=0;');
   if (strategy.read === 'paged') parts.push('var rdo=m.rdOfs;');
   if (strategy.write === 'paged') parts.push('var wro=m.wrOfs;');

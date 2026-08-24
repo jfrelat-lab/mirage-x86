@@ -470,6 +470,28 @@ function eq(name, got, want) {
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
 }
 
+// ---- a self-modifying instruction still commits its FLAGS before the block stops ------------
+// The guard used to `return` from inside the write emitter — the middle of an instruction — so
+// everything the instruction had left to do was skipped. FreeDOS's kernel decompressor does
+// `sub byte [cs:si+0x12],0x10` on its own code and then branches on the carry: the abort fired
+// between the store and `cpu.setSub`, the following `jnc` read a stale carry, and the loop that
+// should have fallen through ran a second pass whose segment arithmetic wrapped past 1 MiB over the
+// kernel itself. The check belongs at the instruction boundary.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.setSeg(DS, 0x100); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  cpu.eip = 0;
+  // sub byte [0x0003],0x10 ; hlt — the target is byte 3 OF THIS INSTRUCTION, so the write lands
+  // inside the running block and must stop it.
+  mc.mem.blit(0x1000, Uint8Array.from([0x80, 0x2e, 0x03, 0x00, 0x10, 0xf4]));
+  cpu.flags &= ~CF;
+  mc.rec.step();
+  eq('a self-modifying SUB still writes its result', mc.mem.u8[0x1003], 0xf0);
+  eq('...and still commits its flags: 0x00 - 0x10 borrows', (cpu.flags & CF) !== 0, true);
+  eq('...and the block stops AFTER it, not inside it', cpu.eip >>> 0, 5);
+}
+
 // ---- self-modification invalidation works above 2 GiB ----------------------------------------
 // `invalidate` computed its page index with a SIGNED shift, so a linear address at or above 2 GiB
 // came out negative and the lookup missed every time. Windows 3.0 pages its kernel in at linear
