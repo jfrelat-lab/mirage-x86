@@ -477,10 +477,34 @@ into empty memory. Each step was checked against the image itself rather than in
   arranged so the copy ends 31 bytes short of the stub itself) and then `xor ax,ax / jmp ax` — into
   what is now linear 0x600. Checked afterwards: 0x600 holds `b9 7f 5a be fc b4 …`, exactly file
   offset 0x20. Correct.
-- **The derail is right after that**, in the second stage: `60:0 -> 60:21 -> 60:a -> 60:1b` and then
-  the classifier's signature — *"in a run of zero bytes"*, *"11 of those advance by exactly 0x180, so
-  the decoder is walking forward through memory"*. That stage sets up `std` and string ops (a
-  decompressor), so it is a short, well-bounded piece of code to step through.
+- **The derail is right after that**, and stage two is now read: it is a **self-modifying
+  decompression loop**.
+
+        0000  mov cx,0x5a7f
+        0003  mov si,0xb4fc / mov di,si / push ds
+        0009  a9 b5 80          test ax,0x80b5      <- 0x0a is INSIDE this: `b5 80` = mov ch,0x80
+        000c  mov ax,cs / add ax,0x0005 / mov ds,ax / add ax,0x723 / mov es,ax
+        0018  std / rep movsw
+        001b  cld
+        001c  sub byte [cs:si+0x12],0x10            <- rewrites the immediate at 0x0f-0x10, IN THIS BLOCK
+        0021  jnc 0xa                               <- loops back to the OVERLAPPING instruction
+
+  So each pass rewrites the high byte of its own `add ax,0x0005` and re-enters at an address that is
+  mid-instruction on the first pass — the G6 class, plus overlapping decode. Sixteen passes bring
+  that byte back to 0x00.
+
+  **What we measured at the failure:** `si=0xfffe`, `cx=0`, **`ds=0xf065`, `es=0xf788`**. So the copy's
+  destination is `0xF788:0xb4fc` = linear **0x102D7C, past 1 MiB** — and **A20 is closed** (FreeDOS
+  never touches port 0x92, 0x64 or 0x60 before this; the only port traffic in the whole run is 4530
+  reads of 0x100, which is post-derail noise). The write therefore wraps into low memory and the
+  kernel overwrites its own code: `[0x61b]` reads **0x00**, which is exactly why the block at `60:1b`
+  decoded 0x180 bytes of nothing and walked.
+
+  ⚠️ **Not yet determined, and the whole question:** whether that segment sequence is what real
+  hardware produces — in which case the wrap is intended and A20 is the thing to look at — or whether
+  our re-translation after the self-modification hands back a STALE immediate, in which case the
+  0xF005 is ours. Stepping the first two passes and printing the immediate at 0x610 each time
+  separates them.
 
 It is also **slow**: 160 M cycles in 45 s, against ~125 M cycles/s on Wolf3D. Worth a look on its own.
 
