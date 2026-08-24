@@ -470,6 +470,38 @@ function eq(name, got, want) {
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
 }
 
+// ---- a linear address is not masked under paging ---------------------------------------------
+// A20 gates a PHYSICAL address line and the RAM-size wrap is physical too, so applying either
+// BEFORE the page walk truncates the guest's address space. Windows 3.0 runs its kernel at linear
+// 0x80201b5e; with A20 closed that was masked to 0x1b5e and we decoded whatever sat in low memory.
+{
+  const mc = new Machine({ memSize: 16 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(false); mc.rec.MM = mem.mask;              // A20 CLOSED: the 1 MiB wrap, as Windows leaves it
+  eq('with A20 closed the real-mode mask is 1 MiB', mem.mask, 0xfffff);
+  mem.w32(0x1000, 0x2003);                              // PDE[0] -> table, identity
+  for (let i = 0; i < 1024; i++) mem.w32(0x2000 + i * 4, ((i << 12) | 3) >>> 0);
+  mem.w32(0x1000 + 512 * 4, 0x3003);                    // PDE[512] covers linear 0x80000000+
+  for (let i = 0; i < 1024; i++) mem.w32(0x3000 + i * 4, (((0x500 + i) << 12) | 3) >>> 0);
+  mem.u8[0x500000] = 0xf4;                              // a HLT at the frame linear 0x80000000 maps to
+  cpu.setCR3(0x1000); cpu.setCR0(0x80000001);
+  eq('the recompiler knows paging is on', mc.rec.pagedMode, true);
+  const blk = mc.rec.translate(0x80000000, 0x80000000, 4, 1);
+  eq('a block above 1 MiB keeps its full linear address', blk.linStart >>> 0, 0x80000000);
+  eq('...and decodes the byte the page tables point at', blk.count, 1);
+  // Turning paging off restores the wrap, so real mode still gets it.
+  cpu.setCR0(0x00000001);
+  eq('clearing PG restores masking', mc.rec.pagedMode, false);
+}
+{
+  // A paging change must END the slice: run() hoists pagedMode into a local at entry, so the rest of
+  // a slice that turned paging on would keep masking — and cache those blocks under the masked key.
+  const mc = new Machine({ memSize: 1 << 20 });
+  mc.cpu.tbudget = 500;
+  mc.cpu.setCR0(mc.cpu.cr0 | 0x80000001);
+  eq('turning paging on ends the current slice', mc.cpu.tbudget, 0);
+}
+
 // ---- self-modification bookkeeping is LINEAR, including under paging -------------------------
 // codePage is filled from blk.linStart and the block cache is keyed by linear address, but the paged
 // write path tested and reported the TRANSLATED address. Every self-modifying write under paging

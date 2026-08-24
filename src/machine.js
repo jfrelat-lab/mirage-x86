@@ -52,6 +52,13 @@ export class Machine {
       if (this.cpu.pagingOn) this.rec.memStrategy = { read: 'paged', write: 'paged' };
       this.mem.rebuildPageTables();
       this.rec.reset();
+      // End the slice. The run loop hoists `pagedMode` into a local at entry — it is read once per
+      // slice, not once per block, because it sits on the dispatch path. Turning paging on mid-slice
+      // therefore left the REST of that slice masking linear addresses, and those blocks were cached
+      // under the masked key: the first blocks of a protected-mode kernel, compiled from the wrong
+      // address and never re-looked-up. Windows 3.0 enables paging and far-jumps to linear
+      // 0x80201b5e in the same slice.
+      this.cpu.tbudget = 0;
     };
 
     this.intHandlers = new Array(256).fill(null); // n -> (cpu, machine) => void

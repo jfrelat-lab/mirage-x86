@@ -119,6 +119,12 @@ export class Recompiler {
     this.curBlk = null;            // the block executing right now, for the self-modification guard
     // Where the last few blocks started, for the derail report. Written once per TRANSLATION — the
     // compile path, not the hot execution path — so a derail can say how the guest got there.
+    // True when paging is on (the machine switches the memory strategy then). Linear addresses must
+    // NOT be masked in that mode: A20 gates a PHYSICAL address line and the RAM-size wrap is physical
+    // too, so applying either BEFORE the page walk truncates the guest's address space. Windows 3.0
+    // runs its kernel at linear 0x80201b5e; with A20 closed we masked that to 0x1b5e and decoded
+    // whatever sat in low memory — the block that faulted had ip0 0x80201b5e and linStart 0x1b5e.
+    this.pagedMode = false;
     this.recentCs = new Int32Array(16).fill(-1);
     this.recentIp = new Int32Array(16);
     this.recentI = 0;
@@ -172,7 +178,13 @@ export class Recompiler {
     }
   }
 
-  reset() { this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageLo = []; this.pageHi = []; this.t2evict.clear(); this.t2blacklist.clear(); }
+  reset() {
+    // Tied to paging being ON, not to the strategy's NAME: the paged emitters can be selected by
+    // hand in real mode (MIRAGE_MEM_READ=paged), and real mode still needs the 1 MiB wrap — that
+    // wrap is what makes EXEPACK stubs' segment arithmetic work. Every paging transition calls
+    // reset(), so this stays in sync.
+    this.pagedMode = !!(this.cpu && this.cpu.pagingOn);
+    this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageLo = []; this.pageHi = []; this.t2evict.clear(); this.t2blacklist.clear(); }
 
   // ===================== tier-2 region compiler =====================
 
@@ -185,7 +197,7 @@ export class Recompiler {
     // root block may have just done a far transfer (CS changed) before this call, and using
     // the live base would walk successors in the wrong segment — pulling in blocks that merely
     // share the same IP offset (a CS:IP alias), whose fused code then derails the guest.
-    const base = (rootLin - rootIp0) & this.MM;
+    const base = this.pagedMode ? ((rootLin - rootIp0) >>> 0) : ((rootLin - rootIp0) & this.MM);
     const byIp = new Map();     // ip -> tier-1 block (or null if unusable)
     const order = [];           // member ips, in discovery order
     const queue = [rootIp0];
@@ -193,7 +205,7 @@ export class Recompiler {
     while (queue.length && order.length < T2_MAXBLK && ins < T2_MAXINS) {
       const ip = queue.shift();
       if (byIp.has(ip)) continue;
-      const blk = this._blockFor((base + ip) & this.MM, ip);
+      const blk = this._blockFor(this.pagedMode ? ((base + ip) >>> 0) : ((base + ip) & this.MM), ip);
       if (!blk || blk.kind !== 0 || blk.canFault) { byIp.set(ip, null); continue; }   // absent/aliased/region/faulting → not a member
       byIp.set(ip, blk); order.push(ip); ins += blk.count;
       const t = blk.term;
@@ -303,7 +315,7 @@ export class Recompiler {
     // 0xE00F4F6D, we dispatched 0x4F6D, decoded zeroed RAM there and walked memory until the IDT.
     // `ipAdd` inside translate has been width-aware all along; only entry was not.
     const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
-    const lin = (cpu.base[CS] + ip0) & this.MM;
+    const lin = this.pagedMode ? ((cpu.base[CS] + ip0) >>> 0) : ((cpu.base[CS] + ip0) & this.MM);
     // O(1) array index, no hashing. blk.ip0 guards the rare case of one linear addr
     // reached via different CS:IP (the emitted jump targets bake in ip0).
     const page = this.blockPages[lin >>> 12];
@@ -326,6 +338,7 @@ export class Recompiler {
    *  step() stays for single-block callers (tests, conformance stepOne is separate). */
   run(machine, maxBlocks) {
     const cpu = this.cpu, MM = this.MM, pages = this.blockPages, prof = this.profiling;
+    const paged = this.pagedMode;
     // One shared block-execution budget: a tier-1 block costs 1, and a region decrements it
     // once per internal iteration (so a fused loop can't outrun the slice or hang the host).
     cpu.tbudget = maxBlocks;
@@ -340,7 +353,8 @@ export class Recompiler {
           if (machine.hwIrqPending) machine.serviceHwInts();                     // queued keyboard IRQ
           if (machine.timerAuto && cpu.cycles >= machine.nextTimerCycle) machine.serviceTimer(); // PIT tick(s) due mid-slice
         }
-        const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff), lin = (cpu.base[CS] + ip0) & MM;
+        const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
+        const lin = paged ? ((cpu.base[CS] + ip0) >>> 0) : ((cpu.base[CS] + ip0) & MM);
         // Trap Flag (hardware single-step): when TF is set, run exactly ONE instruction and
         // then fire INT 1. Uncached — each trapped instruction is freshly decoded, so a
         // self-modifying tracer (copy-protection decrypting code one step at a time inside
@@ -419,7 +433,7 @@ export class Recompiler {
   stepOne() {
     const cpu = this.cpu;
     const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
-    const lin = (cpu.base[CS] + ip0) & this.MM;
+    const lin = this.pagedMode ? ((cpu.base[CS] + ip0) >>> 0) : ((cpu.base[CS] + ip0) & this.MM);
     const blk = this.translate(lin, ip0, 1);
     this.curBlk = blk;
     blk.fn(cpu);
@@ -431,7 +445,11 @@ export class Recompiler {
   translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD) {
     const mem = this.mem, MM = this.MM;
     const rec = this;                    // the decoders below are nested closures, where `this` is not us
-    const pfRestart = this.memStrategy.read === 'paged' || this.memStrategy.write === 'paged';
+    const pfRestart = this.pagedMode;
+    // Address masking, in one place. Under paging there is no mask — and `& 0xffffffff` is not one,
+    // since JS `&` yields a signed int32 and every address above 2 GiB would come out negative.
+    const AM = pfRestart ? ((e) => `((${e})>>>0)`) : ((e) => `((${e})&${MM})`);
+    const mask = pfRestart ? ((x) => x >>> 0) : ((x) => x & MM);
     { const k = this.recentI; this.recentCs[k] = this.cpu.seg[CS]; this.recentIp[k] = ip0; this.recentI = (k + 1) % 16; }
     // The CPU generation, read once per block. Every use below is a compile-time constant folded
     // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
@@ -440,7 +458,7 @@ export class Recompiler {
     // Its position depends on the operand size — +2 for a word offset, +4 for a dword.
     const loadPtr = (o, segIdx, size) => {
       const a = memAddr(o);
-      return `${rW(o.reg, size, size === 16 ? `m.r16(${a})` : `m.r32(${a})>>>0`)}cpu.setSeg(${segIdx},m.r16((${a}+${size === 16 ? 2 : 4})&${MM}));`;
+      return `${rW(o.reg, size, size === 16 ? `m.r16(${a})` : `m.r32(${a})>>>0`)}cpu.setSeg(${segIdx},m.r16(${AM(`${a}+${size === 16 ? 2 : 4}`)}));`;
     };
     // BIOS service entry (f000:00..ff). Reached when a guest calls the ISR *inline* — reads the
     // vector from the IVT and far-JMP/CALLs f000:n instead of executing `INT n` (Secret Agent's
@@ -520,8 +538,8 @@ export class Recompiler {
     const ipAdd = d ? (a, b) => (a + b) >>> 0 : (a, b) => (a + b) & 0xffff;
 
     // ---- byte fetch (decode-time reads from memory) ----
-    const f8 = () => { const b = mem.r8((linStart - ip0 + ip) & MM); ip = ipAdd(ip, 1); return b; };
-    const f16 = () => { const w = mem.r16((linStart - ip0 + ip) & MM); ip = ipAdd(ip, 2); return w; };
+    const f8 = () => { const b = mem.r8(mask(linStart - ip0 + ip)); ip = ipAdd(ip, 1); return b; };
+    const f16 = () => { const w = mem.r16(mask(linStart - ip0 + ip)); ip = ipAdd(ip, 2); return w; };
     const fs8 = () => { const b = f8(); return b < 128 ? b : b - 256; };
     const f32 = () => { const lo = f16(), hi = f16(); return (lo | (hi << 16)) >>> 0; };   // disp32 / moffs32 (0x67)
 
@@ -537,7 +555,7 @@ export class Recompiler {
       : sz === 16 ? `r[${i}]=(r[${i}]&~0xffff)|((${v})&0xffff);` : `r[${i}]=(${v})>>>0;`;
 
     // ---- ModR/M ----
-    const lin = (seg, off) => `((sb[${seg}]+${off})&${MM})`;
+    const lin = (seg, off) => AM(`sb[${seg}]+${off}`);
     // 32-bit effective address (after a 0x67 prefix): the mod/rm grid is the 386 one — rm=100 means a
     // SIB byte follows, rm=101 with mod=0 means a bare disp32, and every other rm is a 32-bit register.
     // The default segment is SS when the BASE register is ESP or EBP, DS otherwise. Decoding this is
@@ -752,7 +770,7 @@ export class Recompiler {
           canFault = true; const o = modrm(); const a = memAddr(o);
           const rd = sz === 16 ? 'r16' : 'r32', sx = sz === 16 ? '<<16>>16' : '|0', d = sz >> 3;
           const idx = NT(), lo = NT(), hi = NT();
-          P(`var ${idx}=(${rR(o.reg, sz)})${sx};var ${lo}=(m.${rd}(${a}))${sx};var ${hi}=(m.${rd}((${a}+${d})&${MM}))${sx};`);
+          P(`var ${idx}=(${rR(o.reg, sz)})${sx};var ${lo}=(m.${rd}(${a}))${sx};var ${hi}=(m.${rd}(${AM(`${a}+${d}`)}))${sx};`);
           P(`if(${idx}<${lo}||${idx}>${hi}){cpu.eip=${ipStart};cpu.swInt(5);return;}`); break;
         }
 
@@ -904,7 +922,7 @@ export class Recompiler {
         case 0xc8: {                                                                    // ENTER size,level (make stack frame)
           const szv = f16(), lvl = f8() & 0x1f; const ft = NT();
           P(`cpu.push16(r[5]);var ${ft}=cpu.stackPtr;`);                                       // push BP; frameTemp = SP
-          for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]&~0xffff)|((r[5]-2)&0xffff);cpu.push16(m.r16((sb[2]+(r[5]&0xffff))&${MM}));`); // copy nested frame pointers
+          for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]&~0xffff)|((r[5]-2)&0xffff);cpu.push16(m.r16(${AM("sb[2]+(r[5]&0xffff)")}));`); // copy nested frame pointers
           if (lvl > 0) P(`cpu.push16(${ft});`);
           P(`r[5]=(r[5]&~0xffff)|${ft};cpu.spAdd(-${szv});`);   // BP = frameTemp; SP -= size
           break;
@@ -1019,7 +1037,7 @@ export class Recompiler {
           if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {   // the guest asked for #UD; give it #UD
             P(`cpu.eip=${ipStart};cpu.raise(6);`); P('return;'); ended = true; break;
           }
-          throw new Error(unimplemented(op.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 1) & MM, mem, rec));
+          throw new Error(unimplemented(op.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
       }
 
       // Self-modification guard. A block holds the bytes it was translated from, so an instruction
@@ -1075,7 +1093,7 @@ export class Recompiler {
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
-    return { fn, linStart, linEnd: (linStart - ip0 + ip) & MM, ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, canFault, hot: 0, kind: 0 };
+    return { fn, linStart, linEnd: mask(linStart - ip0 + ip), ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, canFault, hot: 0, kind: 0 };
 
     // ===================== nested emit helpers =====================
 
@@ -1091,7 +1109,7 @@ export class Recompiler {
     function emitFPUMem(op, reg, o) {
       const a = memAddr(o);
       const fb = () => P(`cpu.fpuMem(${op},${reg},${a});`);
-      const smc = (len) => `if(cp[${a}>>>12]|cp[((${a}+${len - 1})&${MM})>>>12])m._dirty(${a},${len});`;
+      const smc = (len) => `if(cp[${a}>>>12]|cp[(${AM(`${a}+${len - 1}`)})>>>12])m._dirty(${a},${len});`;
       switch (op) {
         case 0xd9:                                                   // f32 load/store + control
           if (reg === 0) return fpush(`dv.getFloat32(${a},true)`);           // FLD m32
@@ -1260,15 +1278,15 @@ export class Recompiler {
         case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
         // CALLF under 0x66 pushes CS and a 32-bit return offset, and reads a 48-bit far pointer.
         case 3: { const a = memAddr(o);
-          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`
-                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o>>>0;`);
+          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}));cpu.eip=_o;`
+                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}));cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // JMP Ev
         // JMPF Ev — the far pointer's layout follows the operand size, as CALLF above: 16-bit is a
         // word offset with the selector at +2, 32-bit a dword offset with the selector at +4.
         case 5: { const a = memAddr(o);
-          P(sz === 16 ? `var _o=m.r16(${a});cpu.setSeg(${CS},m.r16((${a}+2)&${MM}));cpu.eip=_o;`
-                      : `var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16((${a}+4)&${MM}));cpu.eip=_o>>>0;`);
+          P(sz === 16 ? `var _o=m.r16(${a});cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}));cpu.eip=_o;`
+                      : `var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}));cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // JMPF
         case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }
@@ -1295,8 +1313,8 @@ export class Recompiler {
           P(addr32 ? 'r[1]=_c>>>0;' : 'r[1]=(r[1]&~0xffff)|_c;');
         } else { P(body); }
       };
-      const SI = `((sb[${srcSeg}]+${iR(6)})&${MM})`;
-      const DI = `((sb[${ES}]+${iR(7)})&${MM})`;
+      const SI = AM(`sb[${srcSeg}]+${iR(6)}`);
+      const DI = AM(`sb[${ES}]+${iR(7)}`);
       const adv = iAdv(6) + iAdv(7);
       const advDI = iAdv(7);
       const advSI = iAdv(6);
@@ -1337,7 +1355,7 @@ export class Recompiler {
         }
         const base = memAddr(o), ofs = NT(), ad = NT();
         P(`var ${ofs}=(${bitExpr})${sz === 16 ? '<<16>>16' : '|0'};`);      // signed bit index
-        P(`var ${ad}=(${base}+(${ofs}>>3))&${MM};`);                        // arithmetic shift: floors
+        P(`var ${ad}=${AM(`${base}+(${ofs}>>3)`)};`);                        // arithmetic shift: floors
         P(`var ${b}=${ofs}&7;var ${v}=${memRead(ad, 8)};`);
         P(`cpu.flags=(cpu.flags&~${CF})|((${v}>>>${b})&1);`);
         if (kind === 'bts') P(memW(ad, 8, `(${v}|(1<<${b}))`));
@@ -1374,7 +1392,7 @@ export class Recompiler {
           // SGDT/SIDT store a 6-byte pseudo-descriptor: 16-bit limit then 32-bit base.
           if (o.reg === 0 || o.reg === 1) {
             const a = memAddr(o), t = o.reg === 0 ? 'gdtr' : 'idtr';
-            P(`m.w16(${a},cpu.${t}.limit&0xffff);m.w32((${a}+2)&${MM},cpu.${t}.base>>>0);`);
+            P(`m.w16(${a},cpu.${t}.limit&0xffff);m.w32(${AM(`${a}+2`)},cpu.${t}.base>>>0);`);
             return;
           }
           // LGDT/LIDT load it. Without a 0x66 prefix the base is truncated to 24 bits on a 386 —
@@ -1382,7 +1400,7 @@ export class Recompiler {
           // from a 16-bit segment relies on knowing it.
           if (o.reg === 2 || o.reg === 3) {
             const a = memAddr(o), t = o.reg === 2 ? 'gdtr' : 'idtr';
-            P(`cpu.${t}.limit=m.r16(${a});cpu.${t}.base=(m.r32((${a}+2)&${MM})&${sz === 32 ? '0xffffffff' : '0xffffff'})>>>0;`);
+            P(`cpu.${t}.limit=m.r16(${a});cpu.${t}.base=(m.r32(${AM(`${a}+2`)})&${sz === 32 ? '0xffffffff' : '0xffffff'})>>>0;`);
             return;
           }
           if (!o.isReg) memAddr(o);                                                      // INVLPG → no-op (no paging yet)
@@ -1436,7 +1454,7 @@ export class Recompiler {
           if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {
             P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;   // ip-2: the 0F
           }
-          throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), (linStart - ip0 + ip - 2) & MM, mem, rec));
+          throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 2), mem, rec));
       }
     }
   }

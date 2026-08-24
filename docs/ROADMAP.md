@@ -53,10 +53,30 @@ Two more found by following Windows past that point:
   paging every self-modifying write tested the wrong page and reported the wrong one. That is
   precisely what an OS relocating code does.
 
-⚠️ **A sizing limit this exposed, not yet fixed:** `rdOfs`/`wrOfs`/`codePage` are indexed by LINEAR
-page but sized from INSTALLED RAM, so a guest mapping code above that — Windows lives at linear
-0x80000000 — has no entry at all and always takes the slow helper path. Correctness is fine (the
-helper re-walks live); coverage and speed are not.
+✅ **The 1 MB wrap under paging is FIXED (2026-08-22)** — the item this roadmap had carried as
+"unmeasured, separate" since 2026-08-19. A20 gates a PHYSICAL address line and the RAM-size wrap is
+physical too, so applying either BEFORE the page walk truncates the guest's address space. Windows
+3.0 runs its kernel at linear 0x80201b5e; with A20 closed we masked that to **0x1b5e** and decoded
+whatever sat in low memory — the block that faulted had `ip0` 0x80201b5e and `linStart` 0x1b5e, and
+the `call far [ds:esi]` it decoded out of the wrong bytes is where every #GP came from. Masking is
+now tied to paging being OFF, at every dispatch site and in the emitted address arithmetic (`>>>0`,
+not `& 0xffffffff`, which in JS yields a signed int32 and makes every address above 2 GiB negative).
+
+⚠️ **And the subtle half:** `run()` hoists that decision into a local **once per slice**, because it
+sits on the dispatch path. Turning paging on mid-slice therefore left the REST of that slice masking
+— and cached those blocks under the masked key, so they were never re-looked-up. A paging change now
+ends the slice. Windows enables paging and far-jumps to its 32-bit kernel in the same slice, so this
+one line is the difference between 39,634,604 exceptions and 387.
+
+**Result:** Windows 3.0 enhanced mode loads its TSS (`TR=0x18`), takes and SERVES real demand-paging
+faults (295 in a run), and raises 387 exceptions instead of 39.6 million. Still stops before the
+Program Manager.
+
+⚠️ **A sizing limit, fixed only halfway:** `codePage` now covers the whole 4 GiB linear space (1 MiB
+of flags), so code above installed RAM can be marked — `markCodePage` past the end of a typed array
+is silently dropped, and Windows' kernel pages could not be marked at all, so no write to them was
+ever reported. `rdOfs`/`wrOfs` are still sized from installed RAM: a miss there only costs the
+(correct) helper path, so this is speed and coverage, not correctness.
 
 ⚠️ **Refuted, so nobody re-checks it:** the `66` prefix decode in a 32-bit code segment is CORRECT.
 `66 b8 30 00 / 66 8e d0 / f4` decodes to exactly 8 bytes in a D=1 segment, asserted in `test.js`.

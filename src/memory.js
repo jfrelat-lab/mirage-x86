@@ -34,7 +34,13 @@ export class Memory {
 
     // Pages that currently hold translated code. A write into one of these
     // pages tells the recompiler to throw the affected blocks away (SMC).
-    this.codePage = new Uint8Array(size >> PAGE_BITS);
+    // Indexed by LINEAR page, so it must cover the whole linear space — not just installed RAM.
+    // markCodePage on an index past the end is silently dropped by a typed array, and Windows 3.0
+    // runs its enhanced-mode kernel at linear 0x80000000: its code pages could not be marked at all,
+    // so no write to them was ever reported and the recompiler kept executing stale blocks.
+    // 1 MiB of flags for the full 4 GiB at 4 KiB granularity, which is cheap; rdOfs/wrOfs stay sized
+    // to RAM, because those are a speed cache and a miss there just takes the (correct) helper.
+    this.codePage = new Uint8Array(1 << 20);
     this.onCodeWrite = null; // (page) => void, wired up by the recompiler
     this.planar = false;     // true in EGA/VGA 16-colour modes → A000 writes go through vga.js
     this.vga = null;         // the VGA planar device (set by installVGA); used on A000 writes
@@ -214,8 +220,8 @@ export class Memory {
 
   // A page gaining or losing translated code moves it in and out of the write fast path. wrOfs
   // mirrors rdOfs when the page is clean, so a device page stays a device page either way.
-  markCodePage(page) { this.codePage[page] = 1; this.wrOfs[page] = -1; }
-  clearCodePage(page) { this.codePage[page] = 0; this.wrOfs[page] = this.rdOfs[page]; }
+  markCodePage(page) { this.codePage[page] = 1; if (page < this.wrOfs.length) this.wrOfs[page] = -1; }
+  clearCodePage(page) { this.codePage[page] = 0; if (page < this.wrOfs.length) this.wrOfs[page] = this.rdOfs[page]; }
 
   // ---- bulk helpers --------------------------------------------------------
   /** Copy bytes in, marking SMC if they land on code pages. */
