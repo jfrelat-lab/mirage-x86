@@ -464,6 +464,27 @@ protocol (INT 2Fh AX=1605h participation and the V86 API entry) directly. It is 
 
 ## Booting a real DOS kernel
 
+**FreeDOS 1.4, re-measured 2026-08-22 — the loader is exonerated; the derail is in the kernel's
+second stage.** `boot/FREEDOS14.IMG` boots, loads and relocates its kernel correctly, then walks off
+into empty memory. Each step was checked against the image itself rather than inferred:
+
+- **The kernel loads byte-perfect.** Comparing memory at 0x600 against `KERNEL.SYS` extracted from
+  the FAT12 image, all **46,485 bytes are identical** at the moment control reaches `0060:0000`. The
+  boot sector's cluster walk and our INT 13h are correct (114 reads).
+- **The relocation stub works.** `0060:0000` is a 32-byte header (`eb 1b` + "CONFIG"); `jmp 0x1d`
+  goes to `jmp 0xb573`, the last code in the file, which strips that header by copying the image
+  down one segment-and-a-bit (`es = cs - 2`, `rep movsb` of 0xb573 bytes from `ds:1` to `es:1`,
+  arranged so the copy ends 31 bytes short of the stub itself) and then `xor ax,ax / jmp ax` — into
+  what is now linear 0x600. Checked afterwards: 0x600 holds `b9 7f 5a be fc b4 …`, exactly file
+  offset 0x20. Correct.
+- **The derail is right after that**, in the second stage: `60:0 -> 60:21 -> 60:a -> 60:1b` and then
+  the classifier's signature — *"in a run of zero bytes"*, *"11 of those advance by exactly 0x180, so
+  the decoder is walking forward through memory"*. That stage sets up `std` and string ops (a
+  decompressor), so it is a short, well-bounded piece of code to step through.
+
+It is also **slow**: 160 M cycles in 45 s, against ~125 M cycles/s on Wolf3D. Worth a look on its own.
+
+
 **FreeDOS 1.4 boots** to its `A:\>` prompt, verified interactively (`tools/run-boot.mjs
 boot/FREEDOS14.IMG 9000000 4e,0d`), with no unimplemented INT vector and no unhandled port along
 the way. Its INT 21h behaviour is the DOS oracle's reference (`tools/dos-oracle.mjs`).
