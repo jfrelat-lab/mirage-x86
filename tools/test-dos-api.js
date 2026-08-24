@@ -447,12 +447,16 @@ function asciiz(mc, cpu, off, str) {
   eq('44h AL=06 on a bogus handle fails', int21(c, 0x44, (cpu) => { cpu.al = 6; cpu.reg[3] = 0x99; }).cf, CF);
   eq('44h with an unknown subfunction fails', int21(c, 0x44, (cpu) => { cpu.al = 0x7f; cpu.reg[3] = 0; }).cf, CF);
 }
-{ // PSP:0002 ("first paragraph past this block") was hard-wired to 0xA000 for every program
+{ // PSP:0002, "first paragraph past this program's block". Measured with tools/mem.asm rather than
+  // reasoned about: dosbox-x gives a .COM 0x9FFF, and STILL 0x9FFF after it shrinks to 0x100
+  // paragraphs. So the loader writes it once, from the block it hands over, and AH=4Ah does not
+  // revise it. We used to follow the shrink — the reasoning was that a program sizing its heap from
+  // a stale number would go wrong, and the oracle says the stale number is exactly what DOS gives.
   const c = mk();
-  eq('PSP:0002 starts at the top of memory for a .COM that owns everything',
-     c.mc.mem.r16((c.dos.psp << 4) + 2), 0xa000);
+  eq('PSP:0002 is the top of memory for a .COM, which owns everything',
+     c.mc.mem.r16((c.dos.psp << 4) + 2), 0x9fff);
   int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });   // shrink to 0x200 paras
-  eq('PSP:0002 follows the block after a shrink', c.mc.mem.r16((c.dos.psp << 4) + 2), c.dos.psp + 0x200);
+  eq('PSP:0002 does NOT follow a shrink', c.mc.mem.r16((c.dos.psp << 4) + 2), 0x9fff);
 }
 { // AH=49h accepted any segment, so a double free looked fine and left the allocator wrong
   const c = mk();

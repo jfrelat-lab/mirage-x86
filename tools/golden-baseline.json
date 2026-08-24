@@ -50,12 +50,12 @@
     "fault": null
   },
   "intros/difze.com": {
-    "hash": "37254de1f6ba14f469592b6d772c91ac97f6cef4",
+    "hash": "244bb1c9933b3aebe28629a3088840c7e03e551c",
     "mode": 19,
     "fault": null
   },
   "intros/dirojed.com": {
-    "hash": "65031538eddd57eb7be7ccb180b3b0c7733163da",
+    "hash": "73e92e944fb6811c14dccfd6d552360922bf8531",
     "mode": 19,
     "fault": null
   },
@@ -90,7 +90,7 @@
     "fault": null
   },
   "intros/memories.com": {
-    "hash": "1dc81d9ac84afd6b2eab23d68855b294344d2a3c",
+    "hash": "cc1673c9cb447ce6e26b8c84bc765f6d3c9d35f1",
     "mode": 19,
     "fault": null
   },
@@ -105,9 +105,9 @@
     "fault": null
   },
   "intros/oktaeder.com": {
-    "hash": "834c8e2115d733dfc6d91a8a482d72dbc9778fcc",
+    "hash": "52a47656fd5ac5c8098f29801ef30ea82f585913",
     "mode": 3,
-    "fault": "mirage: unhandled exception INT 00h re-raised 100000x at the same address 0cf0:8226 (linear 0x15126) — the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing will change. Recent block starts (oldest first, the last is this one): 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226 -> 0cf0:8226"
+    "fault": null
   },
   "intros/paleozoa.com": {
     "hash": "61027bf4300f70111c91aee55a9736c94adbc9a0",
@@ -115,7 +115,7 @@
     "fault": null
   },
   "intros/paralaxa.com": {
-    "hash": "14484aaef9c22c128f7f0b13d6b104f18c7b572c",
+    "hash": "d39fc81fefcacab6b15410fa19757c113a606bc4",
     "mode": 19,
     "fault": null
   },
@@ -160,7 +160,7 @@
     "fault": null
   },
   "intros/warp.com": {
-    "hash": "111414acccb8f27aa4523486e7de2e8b19fd64be",
+    "hash": "db9afa6bdab267bc7874f5ebe8c5adc415057c84",
     "mode": 19,
     "fault": null
   },

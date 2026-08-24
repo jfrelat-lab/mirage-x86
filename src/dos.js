@@ -14,7 +14,10 @@ import { CF, ZF, CS, DS, ES, SS } from './cpu.js';
 // the reference. 0x0814 matches the oracle the corpus is diffed against.
 const PSP_SEG = 0x0814;     // first program's PSP
 const ENV_SEG = 0x00c0;     // environment block     (linear 0x0C00) — inside DOS's own arena, as it is on a real machine
-const MEM_TOP = 0xa000;     // end of conventional memory (640K), in paragraphs
+// One PAST the last usable paragraph. 0x9fff, not 0xa000: measured with tools/mem.asm, dosbox-x
+// offers a program that shrank to 0x100 paragraphs a largest-free block of 0x96EA, which is
+// 0x9fff - allocTop - 1 (the -1 being the free block's own MCB header). We answered 0x96EC.
+const MEM_TOP = 0x9fff;     // end of conventional memory, in paragraphs
 
 export function installDOS(machine, vfs) {
   const mem = machine.mem, cpu = machine.cpu;
@@ -149,7 +152,9 @@ export function installDOS(machine, vfs) {
     // i.e. every program was told it owned all of conventional memory no matter how it had been
     // sized or how much it had already shrunk. A program that sizes its heap from this word (rather
     // than asking AH=48h) computed it from a number that was never true after an AH=4Ah.
-    mem.w16((dos.psp << 4) + 0x02, top);
+    // NOT PSP:0002. That word is the top of the program's block AT LOAD TIME, and DOS never revises
+    // it: measured with tools/mem.asm, dosbox-x still reports 0x9FFF after the program has shrunk to
+    // 0x100 paragraphs. It is written once, by the loader, from the block it actually handed over.
   };
   dos.syncMCB = syncMCB;
   // INT 21h AH=52 "get list of lists" (SysVars) hands back ES:BX; the word at [ES:BX-2] is the
@@ -239,6 +244,10 @@ export function installDOS(machine, vfs) {
     applyRelocs(h.relocs, loadSeg, loadSeg);
     exeEntry(pspSeg, loadSeg, h);
     dos.memFloor = sizeBlock(pspSeg, h);
+    // PSP:0002 = the top of the block the loader hands over. For a .COM that is the top of memory;
+    // for an MZ it is bounded by e_maxalloc, and writing the top of memory there told a program that
+    // sizes its heap from this word that it owned everything.
+    mem.w16((pspSeg << 4) + 0x02, dos.memFloor);
     dos.allocTop = dos.memFloor; syncMCB();
     cpu.halted = false;
   };
@@ -292,6 +301,7 @@ export function installDOS(machine, vfs) {
       exeEntry(childPsp, loadSeg, h);
       cpu.bx = childPsp;
       childTop = sizeBlock(childPsp, h);            // size the child's block from its own header too
+      mem.w16((childPsp << 4) + 0x02, childTop);   // and its PSP:0002, once, as the loader does
     } else {                                              // .COM child (GAME.TDT is one: JMP entry, no MZ)
       mem.blit((childPsp << 4) + 0x100, bytes);
       comEntry(childPsp);
@@ -462,7 +472,11 @@ export function installDOS(machine, vfs) {
       case 0x47: { let p = cpu.base[DS] + (cpu.si & 0xffff); const s = vfs.cwd.join('\\'); for (let i = 0; i < s.length; i++) mem.w8(p + i, s.charCodeAt(i)); mem.w8(p + s.length, 0); ok(); break; } // get cwd
       case 0x48: {                                                   // allocate a block
         const par = cpu.bx & 0xffff;
-        if (dos.allocTop + par > MEM_TOP) { err(8); cpu.bx = MEM_TOP - dos.allocTop; break; }
+        // The size reported on failure is the largest block that could actually be HANDED OUT, so it
+        // excludes the paragraph its MCB header would take. Ours reported the raw span, which is one
+        // more than our own MCB chain says — the allocator and the chain disagreed with each other.
+        const avail = Math.max(0, MEM_TOP - dos.allocTop - 1);
+        if (par > avail) { err(8); cpu.bx = avail; break; }
         const seg = dos.allocTop; dos.allocs.set(seg, par); dos.allocTop = seg + par; syncMCB(); cpu.ax = seg; ok(); break;
       }
       case 0x49: {                                                   // free a block (reclaims)
