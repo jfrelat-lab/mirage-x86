@@ -483,29 +483,28 @@ low memory, and V86MMGR's whole job is to virtualise a real driver. Making this 
 providing a genuine real-mode XMS/EMS driver image for it to take over, or answering the takeover
 protocol (INT 2Fh AX=1605h participation and the V86 API entry) directly. It is a feature, not a bug.
 
-**Maniac Mansion's residual divergence, narrowed 2026-08-22.** After the memory-accounting
-corrections our base map matches dosbox-x *exactly* — `tools/mem.asm` run with `games/MANIAC` mounted
-answers `LARGEST-FREE-PARAS=96EA  PSP=0814  PSP0002=9FFF` on **both** sides. Yet MANIAC.EXE's
-allocation stream still diverges.
+**Maniac Mansion's residual divergence: the memory hypothesis is REFUTED (2026-08-22).** After the
+accounting corrections our base map matches dosbox-x exactly, and the natural next thought — that the
+environment block's own MCB pushes the program higher on a real DOS, leaving it less room — turned
+out to be wrong. `tools/memx.asm` settles it by replicating MANIAC's exact profile: an MZ EXE with
+`maxalloc=0xFFFF` that shrinks to 0x20a0 paragraphs, replays its first alloc/free cycles, and then
+asks. Both sides answer, field for field:
 
-Aligning the two streams by hand (the oracle's own index counts other channels too, so its "#20" is
-not the step number) puts the first real difference at **step 7 of the alloc sequence**:
+    LARGEST-FREE-PARAS=774A   PSP=0814   DOSVER-AX=0005
+    0x7000-FITS-AFTER-CYCLES=0001        PSP0002=9FFF
 
-    step:      1  2  3  4  5  6  7  8  9
-    DOSBox:   48 48 49 48 49 48 48 48 49
-    MIRAGE:   48 48 49 48 49 48 49 48 48
+Identical. So the map, the DOS version and the allocator's behaviour under alloc/free churn are
+indistinguishable, and 0x7000 fits on both — yet MANIAC's own search diverges at int21 event #20,
+where DOSBox retries with a smaller request and we free after a success.
 
-Our own log, with sizes, shows step 6 is `AH=48 BX=0x7000` and that it **succeeds** for us (a success
-is followed by a free, hence our 49 at step 7; a failure is followed by a smaller retry, hence
-DOSBox's 48). Our search then converges cleanly on **0x774a**, which is exactly
-`0x9fff - allocTop - 1` with `allocTop = 0x814 + 0x20a0` — the 0x20a0 being MANIAC's own AH=4Ah
-shrink.
+Two readings were tried and dropped on the way, both recorded so they are not repeated: the streams
+do NOT diverge at "step 7 of the alloc sequence" (the oracle's index counts every AH, so #20 is the
+21st INT 21h call — which is our free after the successful 0x7000, matching the sized log), and
+DOSBox does not fragment its free list where we do not.
 
-So **DOSBox has less memory available to this program than we do** — enough that 0x7000 paragraphs
-will not fit, i.e. its `allocTop` is at least 0x14A paragraphs (~5 KiB) above ours. Since the .COM
-map is identical, the difference is in how the EXE's OWN block is sized or placed, not in the base
-layout. That is the next thing to measure, and it is a narrower question than "the SCUMM titles
-diverge".
+What is left is the prefix the two runs share: `30, 4a, 30, 35, 25, 44, 44, 44, 44, 44, 35, 25, 19,
+25` — identical in function, but their *returned values* have never been compared. Five IOCTL calls
+and a current-drive query is a small enough surface to diff directly, and that is the next step.
 
 ## Booting a real DOS kernel
 
