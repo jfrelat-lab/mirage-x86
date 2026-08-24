@@ -388,7 +388,36 @@ Delivery itself checks out, which is worth recording so it is not re-suspected: 
 convention — so the frame we push is the shape it expects, and CR2 and the error code follow the
 architecture (bit 0 present, bit 1 write, bit 2 user).
 
-The next question is why that handler cannot map its own alias.
+**Followed further, 2026-08-22 — those seven pages are a CONSEQUENCE, not the cause.** Windows never
+writes to its own page directory (watched every write that lands in CR3's page: zero), so it is not
+failing to map the alias — it never tries.
+
+The real chain, read off its own code:
+
+    80005fc2  call 0x80005d34            ; the per-vector stub, one CALL per vector
+    80005d34  pusha
+    80005d35  mov esi,[esp+0x20]         ; = the CALL's return address
+    80005d39  sub esi,0x80005ec7         ; ...minus the table base
+    80005d3f  shr esi,1                  ; = the vector, as a table offset
+    ...
+    80005e0f  call dword [esi+0x80013a9c] ; dispatch
+
+`esi` at that dispatch was **0x3fffd09c**, and inverting the arithmetic gives `[esp+0x20]` =
+**0xFFFFFFFF** instead of a return address — so Windows dispatches through a wild pointer, which is
+what lands on 0xC0010B38 and on the 0xF000c000 window. The reason the slot is wrong is that **ESP is
+misaligned by 2** on entry: `mov ebp,esp` in the handler leaves EBP = 0x800131ca, and 0xca is not a
+multiple of 4.
+
+Two things checked and cleared, so they are not re-suspected:
+- **The timer delivery is correct.** Windows remaps the PIC and the timer arrives on vector 0x20;
+  measured, its gate is type 0xE (386 interrupt gate), `is32` true, and delivery pushes exactly 12
+  bytes with no error code — but `espBefore` was **already** 0x800131fa, odd. The misalignment is
+  older than this interrupt.
+- **`push fs` / `push gs` honour the operand size** (`0F A0`/`0F A8` emit `push32` in a D=1 segment).
+
+So the next step is not the page tables at all: find the 2-byte push. Something in the run pushes 16
+bits where the 32-bit kernel expects 32, and everything downstream is a frame read off by two.
+
 
 ## Booting a real DOS kernel
 
