@@ -90,8 +90,12 @@ function capture(imgPath) {
     for (let i = 0; i < 128; i++) { const c = mc.mem.u8[(lin + i) & 0xfffff]; if (!c) break; out += String.fromCharCode(c); }
     return out;
   };
-  const origSwInt = cpu.swInt;
-  cpu.swInt = (n) => {
+  // Hook the MACHINE's swInt, not cpu.swInt. `cpu.swInt` is a binding the machine installs for code
+  // that has only a CPU; the dispatch path from emitted code is cpu.softInt -> machine.softInt ->
+  // `this.swInt(n)`, which resolves on the machine and never touches that binding. Wrapping the CPU
+  // side recorded nothing at all — 4,274,325 softInt calls and zero captures.
+  const origSwInt = mc.swInt.bind(mc);
+  mc.swInt = (n) => {
     if (n === 0x21) {
       const ah = cpu.ah;
       const rec = {
@@ -274,6 +278,19 @@ if (mode === 'capture') {
     .map(([ah, n]) => `${ah.toString(16).padStart(2, '0')}h x${n}`).join(' '));
   const nSeq = comparable.filter((r) => SEQUENTIAL.has((r.in.r[0] >> 8) & 0xff)).length;
   console.log(`${comparable.length} will be compared (${comparable.length - nSeq} state-light, ${nSeq} sequential file calls)`);
+  // Refuse to replace a good recording with a poor one. A capture that suddenly records far less than
+  // the baseline means the harness broke, not that the kernel changed — and the failure is silent:
+  // this wrote an EMPTY capture over a 3978-record baseline the day the swInt hook stopped matching
+  // the dispatch path, and only `git checkout` got it back. Pass --force to overwrite deliberately.
+  if (existsSync(RECORDING) && !process.argv.includes("--force")) {
+    let prev = 0;
+    try { prev = (JSON.parse(readFileSync(RECORDING, 'utf8')).records || []).length; } catch { /* unreadable: treat as empty */ }
+    if (comparable.length < prev * 0.9) {
+      console.error(`\nREFUSING to overwrite: ${comparable.length} comparable calls against ${prev} in the existing ` +
+        `recording. That is a broken capture, not a smaller kernel. Fix the harness, or pass --force.`);
+      process.exit(1);
+    }
+  }
   writeFileSync(RECORDING, JSON.stringify({ image: img.split('/').pop(), records: comparable }));
   console.log(`wrote ${RECORDING}`);
   process.exit(0);

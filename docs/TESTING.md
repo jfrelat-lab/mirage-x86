@@ -141,6 +141,23 @@ from a real kernel's, which is a more tractable question than "which DOS is corr
 
 The recording is committed, so `check` runs without a boot image.
 
+## ⚠️ The DOS oracle was silently recording nothing (fixed 2026-08-22)
+
+`tools/dos-oracle.mjs capture` wrapped **`cpu.swInt`**. That is a binding the machine installs for
+code holding only a CPU; the path from emitted code is `cpu.softInt` → `machine.softInt` → `this.swInt(n)`,
+which resolves on the MACHINE and never touches it. So the hook saw **4,274,325 softInt calls and
+captured zero**, and `capture` then wrote that empty result over a 3978-record baseline — recoverable
+only because the file is in git. It hooks `mc.swInt` now, and `capture` refuses to replace a
+recording with one under 90% of its size unless you pass `--force`.
+
+The lesson generalises past this tool: a hook placed on the wrong side of a dispatch chain fails
+*quietly*, and a capture tool that overwrites its own baseline turns that silence into data loss.
+
+With it working, the answer is worth having: **3964/3964 calls match** a real FreeDOS kernel
+(1408 state-light, 2556 sequential file calls, 14 skipped because their handle predates the
+recording). This is the authority on what a call RETURNS, where `dbx-oracle.mjs` is the authority on
+the SEQUENCE a program produces — and it is now usable again, because FreeDOS boots to its shell.
+
 ## The DOSBox-log oracle (`tools/dbx-oracle.mjs`)
 
 Not to be confused with `dos-oracle.mjs` above — one hyphen apart and a different question.
