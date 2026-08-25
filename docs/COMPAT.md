@@ -535,6 +535,12 @@ the BIOS calls — each leaving a real fix behind. Our DOS answers match a real 
 handed; the remaining possibility is memory it inspects directly, and that is a much larger search
 than the return of a call.
 
+**A behaviour change worth naming, 2026-08-22.** Setting the equipment word's coprocessor and
+pointing-device bits (BDA 0x410, 0x0021 → 0x0027) moves **Wolf3D from 88411 to 88185 non-zero plane
+bytes**. A/B'd on that word alone. It is the more faithful number: this machine ships an x87 and an
+INT 33h mouse, and dosbox-x announces both too — Wolf3D simply draws differently once it knows. The
+old figure appears in older notes; 88185 is current.
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 BOOTS TO ITS SHELL (2026-08-22).** `boot/FREEDOS14.IMG` reaches FreeCom 0.86 and its

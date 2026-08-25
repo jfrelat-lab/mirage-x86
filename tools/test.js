@@ -10,6 +10,7 @@
 import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
 import { installBIOS } from '../src/bios.js';
+import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
 
@@ -468,6 +469,63 @@ function eq(name, got, want) {
   cpu.setCR0(0x00000001);
   eq('paging: clearing PG stops translation, even with PE still set',
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
+}
+
+// ---- Mode X (unchained 256-colour) ----------------------------------------------------------
+// Implemented since the planar work and exercised in anger by Wolf3D (88411 non-zero plane bytes),
+// but nothing in the gate set pinned it, so a regression would have surfaced as "a game looks wrong"
+// rather than as a failing test. The layout: clearing bit 3 of Sequencer index 4 (memory mode) while
+// in mode 13h unchains the framebuffer, and pixel (x,y) then lives in plane (x&3) at plane offset
+// start + y*stride + (x>>2) — four bytes of VRAM per four horizontal pixels, one per plane.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const cpu = mc.cpu, vga = mc.vga, mem = mc.mem;
+  cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);                 // mode 13h, chained
+  eq('mode 13h starts CHAINED', vga.modeX, false);
+  eq('...and is not routed through the plane logic', mem.planar, false);
+
+  mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, vga.memMode & ~0x08);   // clear chain-4
+  eq('clearing chain-4 in mode 13h enters Mode X', vga.modeX, true);
+  eq('...which routes A000 through the plane logic', mem.planar, true);
+
+  // One byte, one plane: with the map mask selecting plane 2 only, a write to A000:0005 must land in
+  // plane 2 at offset 5 and nowhere else.
+  mc.ioWrite(0x3c4, 1, 2); mc.ioWrite(0x3c5, 1, 0x04);            // map mask = plane 2
+  mem.w8(0xa0000 + 5, 0xab);
+  eq('a Mode X write lands in the selected plane', vga.planes[2 * 0x10000 + 5], 0xab);
+  eq('...and in no other', [0, 1, 3].map((p) => vga.planes[p * 0x10000 + 5]).join(), '0,0,0');
+
+  // Reads come from the plane the Graphics Controller's read-map-select names, not from the mask.
+  mc.ioWrite(0x3ce, 1, 4); mc.ioWrite(0x3cf, 1, 2);               // read map select = plane 2
+  eq('a Mode X read comes from the read-map-selected plane', mem.r8(0xa0000 + 5), 0xab);
+  mc.ioWrite(0x3cf, 1, 0);
+  eq('...and a different plane reads its own byte', mem.r8(0xa0000 + 5), 0x00);
+
+  // The mask takes several planes at once, which is how a Mode X clear fills four pixels per write.
+  mc.ioWrite(0x3c4, 1, 2); mc.ioWrite(0x3c5, 1, 0x0f);
+  mem.w8(0xa0000 + 6, 0x7e);
+  eq('a full map mask writes every plane', [0, 1, 2, 3].map((p) => vga.planes[p * 0x10000 + 6]).join(), '126,126,126,126');
+
+  // And the RENDERER's half of the contract: plane p at offset o is the pixel at x = o%stride*4 + p,
+  // y = o/stride. With the default stride of 80, plane 2 offset 5 is (22, 0) and plane 0 offset 6 is
+  // (24, 0) — the memory layout above is only half the feature if the mapping back is wrong.
+  const fakeCanvas = {
+    width: 0, height: 0,
+    getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }) }),
+  };
+  mc.bios.dac[0xab * 3] = 0x3f;                                   // make index 0xab distinguishable
+  const video = new Video(mc, fakeCanvas);
+  video._palette(); video._renderModeX();
+  const at = (x, y) => video.u32[y * 320 + x];
+  eq('Mode X renders plane 2 offset 5 at x=22', at(22, 0), video.pal[0xab]);
+  eq('...and nothing at x=21', at(21, 0), video.pal[0]);
+  eq('...and plane 0 offset 6 at x=24', at(24, 0), video.pal[0x7e]);
+
+  // Restoring chain-4 leaves Mode X again — a game that switches back must not stay unchained.
+  mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, vga.memMode | 0x08);
+  eq('restoring chain-4 leaves Mode X', vga.modeX, false);
+  eq('...and stops routing A000 through the planes', mem.planar, false);
 }
 
 // ---- a self-modifying instruction still commits its FLAGS before the block stops ------------
