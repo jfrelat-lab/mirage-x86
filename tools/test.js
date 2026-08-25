@@ -802,6 +802,31 @@ function eq(name, got, want) {
 }
 
 // ----------------------------------------------------------------------------
+
+// A HARDWARE interrupt handler owes the interrupted instruction its flags byte for byte; only a
+// SERVICE reports back through the flags image on the stack. MIRAGE carried the handler's arithmetic
+// flags back for both, which rewrote a carry the guest was mid-way through consuming: Dune's
+// decompressor runs `shr bp,1` / `jnz` / `rcl cx,1`, so a timer tick on that boundary shifted a 0
+// into a match length of 3, and the resource it was unpacking came out corrupt from that byte on.
+{
+  const mkFrame = (n, callerFlags, handlerFlags) => {
+    const mc = new Machine({ memSize: 1 << 20 });
+    const cpu = mc.cpu;
+    cpu.setSeg(CS, 0xf000); cpu.eip = n;
+    cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+    cpu.push16(callerFlags); cpu.push16(0x0100); cpu.push16(0x0042);   // FLAGS, CS, IP
+    cpu.flags = handlerFlags;
+    mc.biosCallback(n);
+    return cpu.flags & CF;
+  };
+  // caller had CF=1, handler ends with CF=0
+  eq('IRQ 8 restores the interrupted CF', mkFrame(0x08, 0x0203, 0x0202), CF);
+  eq('IRQ 1Ch restores the interrupted CF', mkFrame(0x1c, 0x0203, 0x0202), CF);
+  // a service must still report its own carry back to a chained caller
+  eq('INT 21h reports the service CF', mkFrame(0x21, 0x0202, 0x0203), CF);
+  eq('INT 21h clears CF when the service did', mkFrame(0x21, 0x0203, 0x0202), 0);
+}
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

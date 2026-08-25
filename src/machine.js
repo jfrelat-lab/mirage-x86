@@ -197,6 +197,13 @@ export class Machine {
     // HOOKS INT 21h and chains to the saved vector comes through here, and that is the ubiquitous
     // TSR idiom — Windows 3.0's WIN386 does it, then read AX=2 from a failed open as if it were a
     // file handle, because carry had been wiped on the way back.
+    // ...but only a SERVICE reports through that image. A HARDWARE interrupt handler returns
+    // nothing, and its IRET owes the interrupted instruction its flags byte for byte — carrying the
+    // handler's arithmetic flags back instead silently rewrites the flag the guest was mid-way
+    // through using. Dune decompresses with `shr bp,1` / `jnz` / `rcl cx,1`, so a timer tick landing
+    // on that boundary shifted a 0 into the match length where the carry said 1: one short copy,
+    // then a resource whose sprite records read as zero-height, then a blitter looping 65536 rows.
+    const isIRQ = (n >= 0x08 && n <= 0x0f) || (n >= 0x70 && n <= 0x77) || n === 0x1c;
     const ARITH = CF | 0x04 | 0x10 | 0x40 | 0x80 | 0x800;   // CF PF AF ZF SF OF
     const result = cpu.flags;
     const is32 = (cpu.cr0 & 1) && this.dpmi && this.dpmi.active && this.dpmi.is32;
@@ -209,7 +216,7 @@ export class Machine {
       cpu.setSeg(CS, cpu.pop16());
       cpu.flags = (cpu.pop16() & 0x7fd5) | 2;
     }
-    cpu.flags = (cpu.flags & ~ARITH) | (result & ARITH);
+    if (!isIRQ) cpu.flags = (cpu.flags & ~ARITH) | (result & ARITH);
     cpu.halted = false;
   }
 

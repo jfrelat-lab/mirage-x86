@@ -541,117 +541,66 @@ bytes**. A/B'd on that word alone. It is the more faithful number: this machine 
 INT 33h mouse, and dosbox-x announces both too — Wolf3D simply draws differently once it knows. The
 old figure appears in older notes; 88185 is current.
 
-## Dune (Cryo) — recon, 2026-08-25 (ROADMAP C3)
+## Dune (Cryo) — SOLVED, 2026-08-25 (ROADMAP C3)
 
-`DUNEDEM.EXE`, launched as `DUNE.BAT` does it (`ENG VGA ADL HIM 386`).
+**Dune's intro renders**, in its full `DUNEDEM ENG VGA ADL HIM 386` path — the Cryo logo, then the
+desert, then Feyd-Rautha and his Harkonnen guards, animating instead of freezing. One engine bug was
+behind all of it, and the chain from that bug to the pixels is worth keeping.
 
-**It renders the Cryo logo perfectly** — 143 colours, gradients, antialiasing, at t=1000. That one
-image exonerates the whole art pipeline: the HSQ decompressor, the blit and the palette all work.
-The 2026-08-22 conclusion recorded here — *"a CPU-semantics bug in Dune's decompressor"* — was wrong,
-and so was the earlier reading of the t=4000 frame as garbage: that frame is a fade in progress.
+### The bug
 
-Three layers were then cleared **by measurement, not by argument**:
+A **hardware** interrupt handler owes the interrupted instruction its flags byte for byte; only a
+**service** reports back through the flags image on the stack. `machine.js`'s `biosCallback` carried
+the handler's arithmetic flags back for *both*. That rule had been added for a real reason — a TSR
+that hooks INT 21h and chains to the saved vector comes through this path, and restoring the caller's
+flags verbatim threw away every error the service reported — but it was applied one class too wide.
 
-| Layer | How it was checked | Result |
-|---|---|---|
-| Files / DOS | every `INT 21h AH=3F` compared byte-for-byte with the host file | **16/16 exact** |
-| XMS | every `AH=0Bh` move re-read from the destination block afterwards | **14/14 exact** |
-| Protected / unreal / EMS | CR0 writes, `INT 67h`, real-mode segments with a limit > 64 K | **0, 0, 0** |
+Dune's HSQ decompressor reads its bit stream as `shr bp,1` / `jnz` / `rcl cx,1`: the carry crosses an
+instruction boundary. A timer tick landing on that boundary came back with the handler's carry, so
+`rcl` shifted in a 0 where the stream said 1, and a match length of 3 became 2.
 
-That last row kills the XMS hypothesis outright: Dune *writes* its assets to extended memory and
-**never reads them back** during the intro, so the driver cannot be corrupting anything. `HIM` only
-changes which memory plan the game picks for itself. (It also no longer faults on `0F 00` — the
-protected-mode gap that entry described is gone.)
+Fixed by excluding vectors 0x08-0x0F, 0x70-0x77 and 0x1C. Regression test in `tools/test.js`
+(it fails without the fix); 189 tests, 36 goldens, conformance 555764/555764 all green.
 
-**Run it without `HIM` and the desert scene appears**: sky gradient, ridgeline, dunes. Two defects
-remain, and they are the same defect:
+### The chain, from one bit to the screen
 
-**One runaway call to the sprite blitter at `23a2:12bc`.** The routine is a 4-bit-per-pixel blitter
-with transparency — `lodsw`, split each byte into nibbles, `and al,dl` (mask `0x0f`), skip if zero,
-`add al,dh` (palette base), `stosb`; `dec bp` counts columns, `add di,0x140` steps a 320-wide row,
-`loop` counts rows. `dh = 0x10` is why the bad frames use exactly the indices `0x11`-`0x1f`.
+One short copy corrupted `SHAI2.SQZ` from output byte **0x3334** onward — 40 918 of its 62 626 bytes.
+That resource is a bank of 20 sprites behind a word table at `5d3b:0002`. Records #16, #18 and #19
+came out as `f9 01 00 00` where the file says `02 00 01 00`: **height 0** instead of 1. A real sprite
+has bit 15 set in its first word, which sends it down the `js 0xdc3` path at `23a2:0d9b`; a positive
+one falls through to `23a2:0dba`, where `xor ch,ch` makes `CX` the row count, and reaches the blitter
+at `23a2:12bc`. Dune's blitter has no `jcxz`, so `loop` ran **65 536** times, `DI` walked past the
+64 000-byte buffer and wrapped the segment. That single call was both the noise bands at the top and
+bottom of the screen and the frozen frame.
 
-Its **first** entry (tick 10639) carries a plausible row count. Later entries run with
-**`CX` ≈ 58 000-62 000 rows** and a **`DI` already past the 64 000-byte buffer** (`0xfc30`), so the
-blit wraps the segment — which is precisely the shape of the two noise bands, one at the top of the
-screen and one at the bottom. And because `CX` is that large the routine never returns: from t≈10639
-onward the frame is byte-identical through t=28000, the intro is frozen, and its palette fade stops
-half-way (hence the magenta cast instead of sand).
+### How it was found, and what wasted time
 
-So the whole residual bug is: **who passes that blitter a garbage row count?** The caller is Dune's
-own script VM — `23a2:2178` dispatches `jmp word [cs:bx+0x210b]` on an opcode reduced mod `0x3e`,
-with self-modified immediates — so the answer is inside that interpreter, not in the blitter.
+`tools/hsq.mjs` is the oracle that cracked it: an independent HSQ decompressor to say what a resource
+*must* contain. Two things about it are worth remembering.
 
-⚠️ `DUNE.BAT` passes `ENG VGA ADL HIM 386`, and `tools/corpus.mjs` takes the entry point from a
-`.BAT` but **not its arguments**, so the corpus runs Dune bare. The oracle's DOSBox side does not
-pass them either — fixing one without the other would break the comparison.
+- **Transcribe, do not infer.** Every attempt to deduce the format from outside failed. Reading Dune's
+  own routine at `0824:bc29` gave it in ten minutes — including the detail that the `shr bp,1 / jz`
+  queue throws away the shift that empties it, so returning that sentinel as data yields 17 bits per
+  word and desynchronises everything.
+- **The obvious check was vacuous.** "32/32 files decompress to exactly the declared size" proves
+  nothing: the loop is bounded by that size, so it always reaches it unless it stops early. The honest
+  check is INPUT consumption — a correct decode ends exactly 3 bytes short of the file.
+
+Dead ends, all refuted by measurement rather than argument: file I/O (16/16 reads byte-exact), the XMS
+driver (14/14 moves byte-exact, and the intro never reads extended memory back), self-modifying-code
+invalidation (flushing the cache before *every* block gives a bit-identical run), interrupt phase,
+dead-flag elimination (`MIRAGE_NOSTRIP=1` changes nothing) and tier-2 regions (off by default).
+
+Two measurement traps cost a pass each: Dune's INT 8 handler at `0824:b8e0` saves neither BX, CX nor
+DX, so a range-based "execution entered the blitter" detector counts every IRET back into a running
+blit as a fresh call; and `0824:bc63` is only a block start for LONG matches, so a probe anchored
+there sees no short match at all.
 
 ⚠️ `tools/dosdiff.js` can stage a whole game directory now (`DDEXE` / `DDTAIL`), but it still cannot
 capture Dune: `grabber.asm` is a TSR on INT 8 and Dune takes INT 8.
 
-### What the blitter actually is, and two hypotheses killed (2026-08-25)
-
-The routine is not straight-line code. Its setup at `23a2:125f` clips the sprite
-(`sub word [cs:0x12bd],ax` / `jle`, where `0x12bd` holds the sprite **width** — it takes the values
-127, 96, 32, 4, so it is not a frame counter), then picks one of five entry points from a word table
-at `cs:0x12b4`, **patches the selected code** (`mov [cs:0x146b],al`) and enters it with `jmp bp`.
-Cryo compiled its blitter. `CX` is the caller's, saved and restored around the setup (`push cx` at
-`0x1266`, `pop cx` at `0x12a0`), so the bad row count is passed in from further up.
-
-**Self-modifying code / block-cache invalidation is NOT the cause.** Flushing the whole recompiler
-cache (`rec.reset()`) before *every single block* over the window t=10600..10750 produces a
-**bit-identical run** — same 2 663 622 steps, same runaway `CX`. If a stale translation were the
-problem, over-invalidation would have hidden it.
-
-**Interrupt phase is not the cause either.** The same window run with coarse slices and with
-one-block slices behaves identically, so the defect does not depend on where the timer lands.
-
-**Do not read the blitter's re-entries as separate calls.** Dune's INT 8 handler is `0824:b8e0`
-(it ends `out 0x20,al` / `iret` and reaches the drawing through `call word far [0x44c0]`), and it
-does **not** save BX/CX/DX. A naive "execution entered the blitter's address range" detector counts
-every IRET back into the running blit as a fresh call, and reports the loop's own wrapped counter
-(`0xfffe`) as if it were an argument. That mistake cost a full pass here.
-
-### Where CX comes from — traced to a 4-byte record (2026-08-25)
-
-The blitter's entry is **`23a2:12bc`**, not the code before it: `0x12bc` is `mov bp,imm16`, and that
-immediate at `0x12bd` is the **width**, patched per sprite (hence its values 127/96/32/4). Nothing in
-`[0x1200,0x12bc)` executes at all in this window — a block-start census over 3.5 M steps found zero
-entries there.
-
-The path in is:
-
-```
-0824:9594  mov es,[0x5ff0] / lds si,[0x5fd7]   ; DS:SI = sprite table (5d3b:0002)
-0824:959e  and bp,0x1ff / shl bp,1
-0824:95a4  add si,[ds:bp+si]                   ; header = 0x0002 + table[index]
-0824:95aa  lodsw -> DI                         ; word 1
-0824:95b2  lodsw -> CX                         ; word 2 = palette base (CH) + HEIGHT (CL)
-0824:95c8  call far [ss:0x4418]
-23a2:0d99  or di,di / js 0xdc3                 ; two record shapes
-23a2:0dba  mov dh,ch / xor ch,ch               ; CX = CL = row count
-23a2:0dc0  jmp 0x12bc
-```
-
-The index comes from Dune's script VM: `0824:40a6 mov si,[0x54a9]` (script pointer), `lodsw` (sprite
-id), table base from `[0x53ee]`. The script walks the scene's sprites in order — 11, 12, 13, 14, 15,
-**16** — and the first five draw correctly.
-
-Dumping the table settles it. Records #0-#15 and #17 all have word 1 with **bit 15 set**
-(`0x80a0`, `0x8124`, `0x80c9`, `0x81xx`…) and heights of 80-204. Records **#16, #18 and #19** are
-byte-identical 6-byte stubs — word 1 `0x01f9`, word 2 `0x0000`. Being positive, they miss the
-`js 0xdc3` that carries every real sprite to the other path, fall through to `0x0dba`, and reach the
-blitter with **`CX = CL = 0`**. Dune's blitter has no `jcxz`, so `loop` runs **65 536** times, `DI`
-walks far past the 64 000-byte buffer and wraps the segment.
-
-That is the whole visible defect: the two noise bands are the wrap, and the freeze is the loop.
-
-**The open question is now four bytes wide.** Either those `f9 01 00 00` stubs are what the real
-resource contains — in which case Dune's script must not be requesting #16, and the divergence is in
-the VM's state — or our in-memory decompression wrote them, in which case it is a resource bug. The
-stubs being *identical* at three records, and 6 bytes long, argues for a genuine filler rather than
-corruption, which points at the script state. Note also that table entry #20 (`0x80a0`) breaks the
-otherwise monotonic offset sequence, so the table's valid range ends around #19.
+⚠️ `DUNE.BAT` passes `ENG VGA ADL HIM 386`, and `tools/corpus.mjs` takes the entry point from a `.BAT`
+but **not its arguments**, so the corpus runs Dune bare — as does the oracle's DOSBox side.
 
 ## Booting a real DOS kernel
 
