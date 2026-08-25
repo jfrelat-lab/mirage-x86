@@ -612,7 +612,46 @@ does **not** save BX/CX/DX. A naive "execution entered the blitter's address ran
 every IRET back into the running blit as a fresh call, and reports the loop's own wrapped counter
 (`0xfffe`) as if it were an argument. That mistake cost a full pass here.
 
-Open: which code sets `CX` before the setup at `23a2:125f`.
+### Where CX comes from — traced to a 4-byte record (2026-08-25)
+
+The blitter's entry is **`23a2:12bc`**, not the code before it: `0x12bc` is `mov bp,imm16`, and that
+immediate at `0x12bd` is the **width**, patched per sprite (hence its values 127/96/32/4). Nothing in
+`[0x1200,0x12bc)` executes at all in this window — a block-start census over 3.5 M steps found zero
+entries there.
+
+The path in is:
+
+```
+0824:9594  mov es,[0x5ff0] / lds si,[0x5fd7]   ; DS:SI = sprite table (5d3b:0002)
+0824:959e  and bp,0x1ff / shl bp,1
+0824:95a4  add si,[ds:bp+si]                   ; header = 0x0002 + table[index]
+0824:95aa  lodsw -> DI                         ; word 1
+0824:95b2  lodsw -> CX                         ; word 2 = palette base (CH) + HEIGHT (CL)
+0824:95c8  call far [ss:0x4418]
+23a2:0d99  or di,di / js 0xdc3                 ; two record shapes
+23a2:0dba  mov dh,ch / xor ch,ch               ; CX = CL = row count
+23a2:0dc0  jmp 0x12bc
+```
+
+The index comes from Dune's script VM: `0824:40a6 mov si,[0x54a9]` (script pointer), `lodsw` (sprite
+id), table base from `[0x53ee]`. The script walks the scene's sprites in order — 11, 12, 13, 14, 15,
+**16** — and the first five draw correctly.
+
+Dumping the table settles it. Records #0-#15 and #17 all have word 1 with **bit 15 set**
+(`0x80a0`, `0x8124`, `0x80c9`, `0x81xx`…) and heights of 80-204. Records **#16, #18 and #19** are
+byte-identical 6-byte stubs — word 1 `0x01f9`, word 2 `0x0000`. Being positive, they miss the
+`js 0xdc3` that carries every real sprite to the other path, fall through to `0x0dba`, and reach the
+blitter with **`CX = CL = 0`**. Dune's blitter has no `jcxz`, so `loop` runs **65 536** times, `DI`
+walks far past the 64 000-byte buffer and wraps the segment.
+
+That is the whole visible defect: the two noise bands are the wrap, and the freeze is the loop.
+
+**The open question is now four bytes wide.** Either those `f9 01 00 00` stubs are what the real
+resource contains — in which case Dune's script must not be requesting #16, and the divergence is in
+the VM's state — or our in-memory decompression wrote them, in which case it is a resource bug. The
+stubs being *identical* at three records, and 6 bytes long, argues for a genuine filler rather than
+corruption, which points at the script state. Note also that table entry #20 (`0x80a0`) breaks the
+otherwise monotonic offset sequence, so the table's valid range ends around #19.
 
 ## Booting a real DOS kernel
 
