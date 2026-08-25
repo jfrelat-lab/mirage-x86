@@ -59,7 +59,14 @@ export function installBIOS(machine, opts = {}) {
   defaultPalette(bios.dac);
 
   // ---- BIOS Data Area defaults ----
-  mem.w16(BDA + 0x10, 0x0021);   // equipment: 80x25 colour, has FPU
+  // Equipment word. bit 0 floppy fitted, bit 1 math coprocessor, bit 2 pointing device, bits 4-5 the
+  // initial video mode (10b = 80x25 colour), bits 6-7 floppies minus one, bits 9-11 serial ports,
+  // bits 14-15 parallel ports. The old comment claimed "has FPU" while bit 1 was CLEAR — we ship an
+  // x87 and an INT 33h mouse, so both bits are now set to what is actually true of this machine.
+  // ⚠️ Deliberately NOT dosbox-x's 0x4467, measured with tools/dcc.asm: it claims two floppies, two
+  // serial ports and one parallel port, and this machine fits none of them — see the INT 14h/17h
+  // note below, which depends on the port counts reading zero.
+  mem.w16(BDA + 0x10, 0x0027);   // floppy + FPU + mouse, 80x25 colour, no ports
   mem.w16(BDA + 0x13, 640);      // conventional memory KB
   mem.w16(BDA + 0x49, 0x0003);   // current video mode = 3 (low byte) — see helpers below
   mem.w8(BDA + 0x49, 0x03);
@@ -348,7 +355,11 @@ export function installBIOS(machine, opts = {}) {
         }
         break;
       }
-      case 0x1a: cpu.ax = (cpu.ax & 0xff00) | 0x1a; cpu.bx = 0x0008; break; // get DCC: AL=1Ah = supported, BL=08h = VGA colour
+      // Get display combination code. Only AL carries the answer (1Ah = the call exists) and AH comes
+      // back ZERO — measured against dosbox-x with tools/dcc.asm, which returns AX=001A. Preserving
+      // the caller's AH gave AX=1A1A, since the caller necessarily set AH=1Ah to make the call; a
+      // program comparing the whole of AX rather than AL saw an answer no BIOS gives.
+      case 0x1a: cpu.ax = 0x001a; cpu.bx = 0x0008; break;   // BL=08h = VGA colour, BH=0 = no second display
       // ---- VESA VBE ----------------------------------------------------------------------------
       // Only the discovery call, and it advertises an EMPTY mode list, because no VBE mode is
       // implemented yet: mode 0x10E (320x200 hi-colour) needs a 16-bpp path and bank switching that

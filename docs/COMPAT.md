@@ -509,10 +509,31 @@ bit 4 special, bit 6 not-at-EOF, bit 7 device. We answered a bare **0x0080** —
 neither stdin nor stdout and was sitting at EOF — and 0 for a file where DOS gives its drive number.
 Fixed and now matching. `AH=19h` (current drive = 2) and `AH=30h` (version = 5) already matched.
 
-So every value in the prefix that can be compared now agrees, and **Maniac's divergence is unmoved**
-(int21 #20, and Loom sits at #20 too). Whatever drives its allocation sizes is not in the INT 21h
-stream at all — the next place to look is what it reads outside DOS: BIOS services, or memory it
-inspects directly.
+So every value in the prefix that can be compared now agrees, and Maniac's divergence was unmoved.
+
+**What it reads outside DOS, measured too — and the chase is now CLOSED as refuted.** Logging its
+non-INT-21h calls turns up exactly two, both INT 10h: `AX=1A00` (get display combination code) after
+the 14-call prefix and immediately BEFORE the first allocation, and `AX=000D` (set mode 0Dh) much
+later. `tools/dcc.asm` compares what those return, plus the equipment word and memory size:
+
+|                 | dosbox-x | MIRAGE before | after |
+|---|---|---|---|
+| `1A00` → AX     | `001A`   | `1A1A`        | `001A` |
+| `1A00` → BX     | `0008`   | `0008`        | `0008` |
+| `INT 11h` equip | `4467`   | `0021`        | `0027` |
+| `INT 12h` KiB   | `0280`   | `0280`        | `0280` |
+
+Two real defects, both fixed: `1A00` returned the caller's own AH (necessarily 1Ah) alongside AL, an
+answer no BIOS gives; and the equipment word claimed "has FPU" in its comment while bit 1 was clear,
+with the pointing-device bit clear too, though we ship both. It still differs from dosbox-x on
+purpose — that machine fits two floppies, two serial and one parallel port, and ours fits none.
+
+**Neither moved the divergence, and Maniac never calls INT 11h at all.** Four hypotheses have now
+been tested and refuted — the PSP segment, the memory accounting, the INT 21h prefix by value, and
+the BIOS calls — each leaving a real fix behind. Our DOS answers match a real FreeDOS kernel on
+3964/3964 comparable calls. Whatever makes MANIAC's allocation sizes differ is not any value it is
+handed; the remaining possibility is memory it inspects directly, and that is a much larger search
+than the return of a call.
 
 ## Booting a real DOS kernel
 
