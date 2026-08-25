@@ -589,6 +589,31 @@ pass them either — fixing one without the other would break the comparison.
 ⚠️ `tools/dosdiff.js` can stage a whole game directory now (`DDEXE` / `DDTAIL`), but it still cannot
 capture Dune: `grabber.asm` is a TSR on INT 8 and Dune takes INT 8.
 
+### What the blitter actually is, and two hypotheses killed (2026-08-25)
+
+The routine is not straight-line code. Its setup at `23a2:125f` clips the sprite
+(`sub word [cs:0x12bd],ax` / `jle`, where `0x12bd` holds the sprite **width** — it takes the values
+127, 96, 32, 4, so it is not a frame counter), then picks one of five entry points from a word table
+at `cs:0x12b4`, **patches the selected code** (`mov [cs:0x146b],al`) and enters it with `jmp bp`.
+Cryo compiled its blitter. `CX` is the caller's, saved and restored around the setup (`push cx` at
+`0x1266`, `pop cx` at `0x12a0`), so the bad row count is passed in from further up.
+
+**Self-modifying code / block-cache invalidation is NOT the cause.** Flushing the whole recompiler
+cache (`rec.reset()`) before *every single block* over the window t=10600..10750 produces a
+**bit-identical run** — same 2 663 622 steps, same runaway `CX`. If a stale translation were the
+problem, over-invalidation would have hidden it.
+
+**Interrupt phase is not the cause either.** The same window run with coarse slices and with
+one-block slices behaves identically, so the defect does not depend on where the timer lands.
+
+**Do not read the blitter's re-entries as separate calls.** Dune's INT 8 handler is `0824:b8e0`
+(it ends `out 0x20,al` / `iret` and reaches the drawing through `call word far [0x44c0]`), and it
+does **not** save BX/CX/DX. A naive "execution entered the blitter's address range" detector counts
+every IRET back into the running blit as a fresh call, and reports the loop's own wrapped counter
+(`0xfffe`) as if it were an argument. That mistake cost a full pass here.
+
+Open: which code sets `CX` before the setup at `23a2:125f`.
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 BOOTS TO ITS SHELL (2026-08-22).** `boot/FREEDOS14.IMG` reaches FreeCom 0.86 and its
