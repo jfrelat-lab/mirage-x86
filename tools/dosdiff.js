@@ -10,27 +10,41 @@
 // the side-by-side + diff image are the real signal; integer effects should be ~100%.
 
 import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, mkdtempSync, copyFileSync, existsSync, rmSync, mkdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, mkdtempSync, copyFileSync, cpSync, existsSync, rmSync, mkdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, basename } from 'path';
 import { tmpdir } from 'os';
 import { deflateSync } from 'zlib';
 import { makeMachine } from './harness.mjs';
+import { VFS } from '../src/vfs.js';
+import { walk } from './corpus.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const NASM = '/opt/homebrew/bin/nasm', DOSBOX = '/opt/homebrew/bin/dosbox-x';
 const prog = process.argv[2], K = Number(process.argv[3]) || 24, outdir = process.argv[4] || '/tmp/dosdiff';
 if (!prog) { console.error('usage: node tools/dosdiff.js <prog.com> [ticks] [outdir]'); process.exit(2); }
 mkdirSync(outdir, { recursive: true });
-const name = basename(prog).replace(/\.[^.]+$/, '').toLowerCase();
+const name = (process.env.DDEXE || basename(prog)).replace(/\.[^.]+$/, '').toLowerCase();
 
 function dosboxCapture() {
   const work = mkdtempSync(join(tmpdir(), 'dd-'));
   try {
     execSync(`${NASM} -f bin -dKTICKS=${K} "${join(HERE, 'grabber.asm')}" -o "${join(work, 'GRABBER.COM')}"`, { stdio: 'ignore' });
-    copyFileSync(prog, join(work, 'PROG.COM'));
+    // `prog` may be a DIRECTORY: a game needs its data files beside it, and the single-file staging
+    // could only ever capture a self-contained .COM. Dune is the case that needed it — DUNEDEM.EXE
+    // reads a dozen .SQZ/.HSQ archives and takes a command line (DDEXE / DDTAIL).
+    let run;
+    if (statSync(prog).isDirectory()) {
+      cpSync(prog, work, { recursive: true });
+      const exe = process.env.DDEXE;
+      if (!exe) throw new Error('a directory needs DDEXE=<PROGRAM.EXE> (and optionally DDTAIL="...")');
+      run = process.env.DDTAIL ? `${exe} ${process.env.DDTAIL}` : exe;
+    } else {
+      copyFileSync(prog, join(work, 'PROG.COM'));
+      run = 'PROG.COM';
+    }
     writeFileSync(join(work, 'db.conf'),
-      `[sdl]\noutput=surface\nautolock=false\n[dosbox]\nlogfile=\n[cpu]\ncore=normal\ncputype=pentium\ncycles=max\n[autoexec]\nmount c ${work}\nc:\nGRABBER.COM\nPROG.COM\n`);
+      `[sdl]\noutput=surface\nautolock=false\n[dosbox]\nlogfile=\n[cpu]\ncore=normal\ncputype=pentium\ncycles=max\n[autoexec]\nmount c ${work}\nc:\nGRABBER.COM\n${run}\n`);
     try { execSync(`SDL_VIDEODRIVER=dummy perl -e 'alarm 7; exec @ARGV' ${DOSBOX} -conf "${join(work, 'db.conf')}" -exit`, { stdio: 'ignore', timeout: 12000 }); }
     catch { /* the alarm kills DOSBox — expected */ }
     const out = join(work, 'OUT.BIN'), pal = join(work, 'PAL.BIN');
@@ -42,9 +56,22 @@ function dosboxCapture() {
 function mirageCapture() {
   // Composed like the browser — see harness.mjs. Comparing a fontless MIRAGE against a real DOSBox
   // was comparing a screen we never show a player.
-  const { mc, dos } = makeMachine();
+  let vfs, img, tail = '', path = 'C:\\PROG';
+  if (statSync(prog).isDirectory()) {
+    // Same staging as DOSBox above: the whole directory becomes C:, and DDEXE is the program.
+    vfs = new VFS();
+    for (const rel of walk(prog)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(prog, rel))));
+    vfs.chdir('\\');
+    const exe = process.env.DDEXE;
+    img = new Uint8Array(readFileSync(join(prog, exe)));
+    tail = process.env.DDTAIL ? ' ' + process.env.DDTAIL : '';
+    path = 'C:\\' + exe.toUpperCase();
+  } else {
+    img = new Uint8Array(readFileSync(prog));
+  }
+  const { mc, dos } = makeMachine(vfs ? { vfs } : undefined);
   let fault = null; mc.onError = (e) => { fault = e; };
-  dos.load(new Uint8Array(readFileSync(prog)), '', 'C:\\PROG');
+  dos.load(img, tail, path);
   for (let t = 0; t < K && !fault && !dos.programDone; t++) { mc.runSlice(1_500_000); mc.tickTimer(); }
   mc.runSlice(1_500_000);  // settle the current frame
   return { fb: mc.mem.u8.slice(0xa0000, 0xa0000 + 64000), dac: mc.bios.dac.slice(), fault: fault ? fault.message : null };
