@@ -502,9 +502,17 @@ do NOT diverge at "step 7 of the alloc sequence" (the oracle's index counts ever
 21st INT 21h call — which is our free after the successful 0x7000, matching the sized log), and
 DOSBox does not fragment its free list where we do not.
 
-What is left is the prefix the two runs share: `30, 4a, 30, 35, 25, 44, 44, 44, 44, 44, 35, 25, 19,
-25` — identical in function, but their *returned values* have never been compared. Five IOCTL calls
-and a current-drive query is a small enough surface to diff directly, and that is the next step.
+The shared prefix has now been diffed by VALUE, with `tools/ioc.asm`, and it turned up one real
+defect — which did **not** explain the divergence. `AH=44h AL=00h` returns a handle's device
+information word, and dosbox-x answers **0x80D3** for a character device: bit 0 stdin, bit 1 stdout,
+bit 4 special, bit 6 not-at-EOF, bit 7 device. We answered a bare **0x0080** — a device that was
+neither stdin nor stdout and was sitting at EOF — and 0 for a file where DOS gives its drive number.
+Fixed and now matching. `AH=19h` (current drive = 2) and `AH=30h` (version = 5) already matched.
+
+So every value in the prefix that can be compared now agrees, and **Maniac's divergence is unmoved**
+(int21 #20, and Loom sits at #20 too). Whatever drives its allocation sizes is not in the INT 21h
+stream at all — the next place to look is what it reads outside DOS: BIOS services, or memory it
+inspects directly.
 
 ## Booting a real DOS kernel
 

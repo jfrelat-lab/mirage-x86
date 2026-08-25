@@ -456,9 +456,17 @@ export function installDOS(machine, vfs) {
           // five are character devices.
           // Bit 7 says "character device", and a handle opened on a driver by name is one — Wolf3D
           // opens EMMXXXX0 and abandons EMS unless this bit comes back set.
+          // The word is more than its device bit. Measured with tools/ioc.asm: dosbox-x answers
+          // 0x80D3 for a character device — bit 0 stdin, bit 1 stdout, bit 4 special (the INT 29h
+          // fast console), bit 6 not-at-EOF, bit 7 device, bit 15 reserved-set — and a plain FILE
+          // answers its drive number with bit 7 CLEAR. We answered a bare 0x0080 for devices and 0
+          // for files, so a program reading the flags saw a device that was neither stdin nor
+          // stdout and was sitting at EOF.
           case 0x00: {
             const hd = vfs.handles.get(cpu.bx & 0xffff);
-            cpu.dx = (cpu.bx <= 4 || (hd && hd.device)) ? 0x80 : 0; cpu.ax = cpu.dx; ok(); break;
+            const isDev = (cpu.bx & 0xffff) <= 4 || (hd && hd.device);
+            cpu.dx = isDev ? 0x80d3 : (2 & 0x3f);        // files: the drive they live on (C: = 2)
+            cpu.ax = cpu.dx; ok(); break;
           }
           case 0x01: ok(); break;                                                        // set device info
           case 0x06: case 0x07:                                                          // input / output status
