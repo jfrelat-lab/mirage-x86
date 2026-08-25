@@ -541,32 +541,53 @@ bytes**. A/B'd on that word alone. It is the more faithful number: this machine 
 INT 33h mouse, and dosbox-x announces both too — Wolf3D simply draws differently once it knows. The
 old figure appears in older notes; 88185 is current.
 
-## Dune (Cryo) — recon, 2026-08-22 (ROADMAP C3)
+## Dune (Cryo) — recon, 2026-08-25 (ROADMAP C3)
 
 `DUNEDEM.EXE`, launched as `DUNE.BAT` does it (`ENG VGA ADL HIM 386`).
 
-**It runs, and its DOS behaviour is exact.** `tools/dbx-oracle.mjs` reports **no divergence on any
-channel** against dosbox-x — file 37/37, video 2/2, int21 50/50 — with no fault, no unhandled
-interrupt and no unhandled INT 21h function. Whatever is wrong is not a missing service.
+**It renders the Cryo logo perfectly** — 143 colours, gradients, antialiasing, at t=1000. That one
+image exonerates the whole art pipeline: the HSQ decompressor, the blit and the palette all work.
+The 2026-08-22 conclusion recorded here — *"a CPU-semantics bug in Dune's decompressor"* — was wrong,
+and so was the earlier reading of the t=4000 frame as garbage: that frame is a fade in progress.
 
-**It renders the Cryo logo correctly** (mode 13h, ~13.5k non-zero bytes at t=1500), then clears the
-screen for a transition (0 bytes from t=2000 to t=3500), then from **t≈4200** draws a full-screen
-image that is **stable** for thousands of ticks — so not a frame caught mid-blit.
+Three layers were then cleared **by measurement, not by argument**:
 
-**The palette is right; the pixels are not.** The image uses exactly the 15 indices `0x11`-`0x1f`,
-and the DAC entries there are a sand-and-sunset gradient — `15: 63,63,38`, `18: 63,45,0`,
-`19: 54,36,10`, `1b: 45,0,0`. Scanlines alternate pairs (`17 19 17 19 …`), which is Cryo's
-characteristic dithering, so the *structure* is intentional. But the picture is horizontal streaks
-rather than a scene.
+| Layer | How it was checked | Result |
+|---|---|---|
+| Files / DOS | every `INT 21h AH=3F` compared byte-for-byte with the host file | **16/16 exact** |
+| XMS | every `AH=0Bh` move re-read from the destination block afterwards | **14/14 exact** |
+| Protected / unreal / EMS | CR0 writes, `INT 67h`, real-mode segments with a limit > 64 K | **0, 0, 0** |
 
-Since the file reads match dosbox-x byte for byte, the compressed source Dune reads is identical, and
-it decompresses in its own code. **So this is a CPU-semantics bug in Dune's decompressor** — the same
-shape as Wolf3D's push-dword defect, which `tools/cosim/` found. That is the tool for it.
+That last row kills the XMS hypothesis outright: Dune *writes* its assets to extended memory and
+**never reads them back** during the intro, so the driver cannot be corrupting anything. `HIM` only
+changes which memory plan the game picks for itself. (It also no longer faults on `0F 00` — the
+protected-mode gap that entry described is gone.)
 
-⚠️ Noticed while setting this up: `DUNE.BAT` passes `ENG VGA ADL HIM 386`, and `tools/corpus.mjs`
-takes the entry point from a `.BAT` but **not its arguments** — so the corpus has always run Dune
-bare. It makes no difference here (both renders are identical), but the oracle's DOSBox side does not
-pass them either, so fixing one without the other would break the comparison.
+**Run it without `HIM` and the desert scene appears**: sky gradient, ridgeline, dunes. Two defects
+remain, and they are the same defect:
+
+**One runaway call to the sprite blitter at `23a2:12bc`.** The routine is a 4-bit-per-pixel blitter
+with transparency — `lodsw`, split each byte into nibbles, `and al,dl` (mask `0x0f`), skip if zero,
+`add al,dh` (palette base), `stosb`; `dec bp` counts columns, `add di,0x140` steps a 320-wide row,
+`loop` counts rows. `dh = 0x10` is why the bad frames use exactly the indices `0x11`-`0x1f`.
+
+Its **first** entry (tick 10639) carries a plausible row count. Later entries run with
+**`CX` ≈ 58 000-62 000 rows** and a **`DI` already past the 64 000-byte buffer** (`0xfc30`), so the
+blit wraps the segment — which is precisely the shape of the two noise bands, one at the top of the
+screen and one at the bottom. And because `CX` is that large the routine never returns: from t≈10639
+onward the frame is byte-identical through t=28000, the intro is frozen, and its palette fade stops
+half-way (hence the magenta cast instead of sand).
+
+So the whole residual bug is: **who passes that blitter a garbage row count?** The caller is Dune's
+own script VM — `23a2:2178` dispatches `jmp word [cs:bx+0x210b]` on an opcode reduced mod `0x3e`,
+with self-modified immediates — so the answer is inside that interpreter, not in the blitter.
+
+⚠️ `DUNE.BAT` passes `ENG VGA ADL HIM 386`, and `tools/corpus.mjs` takes the entry point from a
+`.BAT` but **not its arguments**, so the corpus runs Dune bare. The oracle's DOSBox side does not
+pass them either — fixing one without the other would break the comparison.
+
+⚠️ `tools/dosdiff.js` can stage a whole game directory now (`DDEXE` / `DDTAIL`), but it still cannot
+capture Dune: `grabber.asm` is a TSR on INT 8 and Dune takes INT 8.
 
 ## Booting a real DOS kernel
 
