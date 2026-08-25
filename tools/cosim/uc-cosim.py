@@ -41,7 +41,11 @@ def rd():
         fl=uc.reg_read(UC_X86_REG_EFLAGS)&0xffff)
 
 trace=[]
-for step in range(2500):
+# Unicorn single-steps each REP ITERATION, where MIRAGE runs the whole repeat as one step, so a
+# window over string-heavy code (any decompressor) needs far more steps on this side than on that.
+# UCSTEPS raises it; cosim-diff.mjs resynchronises the two traces across those repeats.
+import os
+for step in range(int(os.environ.get('UCSTEPS', '2500'))):
     st = rd(); trace.append(st)
     begin = ((st['cs']<<4) + st['ip']) & 0xfffff
     try:

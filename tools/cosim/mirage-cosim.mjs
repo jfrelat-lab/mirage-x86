@@ -36,6 +36,14 @@ function fresh() {
 
 const SNAPBACK = +(process.env.SNAPBACK||4000);
 const STOPINT = process.env.STOPINT === undefined ? -1 : Number(process.env.STOPINT);
+// Stop at an ADDRESS, not only at a fault or an INT. A program that produces the WRONG OUTPUT never
+// faults, so there is nothing for the fault trigger to catch — Dune's decompressor draws a scrambled
+// picture and runs on perfectly happily. STOPTICK gets us cheaply into the neighbourhood (BIOS ticks,
+// coarse slices), then STOPAT single-blocks until CS:IP matches, HITS times.
+//   STOPTICK=4100 STOPAT=23a2:1074 HITS=200 GAME=DUNE EXE=DUNEDEM.EXE …
+const STOPAT = process.env.STOPAT ? process.env.STOPAT.split(':').map((x) => parseInt(x, 16)) : null;
+const STOPTICK = process.env.STOPTICK ? Number(process.env.STOPTICK) : 0;
+const HITS = Number(process.env.HITS || 1);
 const STOPPED = { stopped: 1 };
 const regs = (cpu,mem)=>({cs:cpu.seg[1],ip:cpu.eip&0xffff, op:mem?[0,1,2,3].map(k=>mem.r8(((cpu.seg[1]<<4)+((cpu.eip+k)&0xffff))&0xfffff)):null, ax:cpu.reg[0]&0xffff,cx:cpu.reg[1]&0xffff,dx:cpu.reg[2]&0xffff,bx:cpu.reg[3]&0xffff,sp:cpu.reg[4]&0xffff,bp:cpu.reg[5]&0xffff,si:cpu.reg[6]&0xffff,di:cpu.reg[7]&0xffff, es:cpu.seg[0],ss:cpu.seg[2],ds:cpu.seg[3], fl:cpu.flags&0xffff});
 
@@ -52,12 +60,21 @@ function passA(){
   // run on updated lastInt past the point of interest and made the window negative.
   mc.swInt=(n,ni,fi)=>{ if(n===STOPINT){ stopCycles=cpu.cycles; throw STOPPED; } lastIntCycles=cpu.cycles; return oSw(n,ni,fi); };
   if (mc.biosCallback) { const oBc=mc.biosCallback.bind(mc); mc.biosCallback=(n)=>{ lastIntCycles=cpu.cycles; return oBc(n); }; }
+  const bios = () => (mc.mem.r16(0x46c) | (mc.mem.r16(0x46e) << 16)) >>> 0;
   let g=0;
   while(stopCycles<0 && !fault && !dos.programDone && g++<200000){
+    if (STOPAT && bios() >= STOPTICK) {                       // in the neighbourhood: one block at a time
+      let hit = 0;
+      while (stopCycles < 0 && !fault && !dos.programDone && g++ < 20000000) {
+        try { mc.runSlice(1); } catch (e) { if (e === STOPPED) break; fault = e; break; }
+        if (cpu.seg[1] === STOPAT[0] && (cpu.eip & 0xffff) === STOPAT[1] && ++hit >= HITS) stopCycles = cpu.cycles;
+      }
+      break;
+    }
     try{ mc.runSlice(2000); }catch(e){ if(e===STOPPED) break; fault=e; break; }
   }
   return { stopCycles: stopCycles<0 ? cpu.cycles : stopCycles, lastIntCycles,
-           why: stopCycles>=0 ? `INT ${STOPINT} raised` : fault ? fault.message : dos.programDone ? 'program exited' : 'budget' };
+           why: stopCycles>=0 ? (STOPAT ? `reached ${process.env.STOPAT} (hit ${HITS})` : `INT ${STOPINT} raised`) : fault ? fault.message : dos.programDone ? 'program exited' : 'budget' };
 }
 const a = passA();
 const snapCycles = Math.max(a.lastIntCycles+1, a.stopCycles - SNAPBACK);

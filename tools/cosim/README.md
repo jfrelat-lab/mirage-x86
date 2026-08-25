@@ -19,6 +19,47 @@ pure-CPU (Unicorn has no BIOS/DOS — it stops at INT boundaries). Unicorn's rea
 single-step mishandles self-modified code (stale JIT cache) — a Unicorn-side fault on an
 SMC'd byte is an artifact, not a MIRAGE bug (verify by comparing runtime opcode bytes).
 
+## Stopping somewhere other than a fault (2026-08-22)
+
+A program that produces the WRONG OUTPUT never faults, so the fault and `STOPINT` triggers have
+nothing to catch. `STOPTICK` + `STOPAT` + `HITS` stop at an ADDRESS instead: coarse slices until the
+BIOS tick counter reaches `STOPTICK`, then one block at a time until `CS:IP` matches `STOPAT` for the
+`HITS`-th time.
+
+    GAME=DUNE EXE=DUNEDEM.EXE TAIL=" ENG VGA ADL HIM 386" \
+      STOPTICK=3950 STOPAT=23a2:afa HITS=20 SNAPBACK=4000 node tools/cosim/mirage-cosim.mjs
+
+⚠️ `TAIL` needs its **leading space**, as DOS puts in the PSP. Without it Dune got a different command
+line, took a different path and derailed — a co-sim of a program behaving differently answers nothing.
+
+## Three artifacts that are the TOOL's, not the guest's
+
+Each of these reported a "first divergence" that was not one:
+
+- **Undefined flags PROPAGATE.** The shift and rotate groups leave AF undefined, as MUL/DIV do. The
+  diff already masked the defining instruction, but the difference stays in the flags register for
+  every step afterwards — so it reported the NEXT instruction instead, a `jz`, which writes no flags
+  at all. AF is now dropped from the comparison for good once something leaves it undefined.
+- **`REP` is one step here and CX steps there.** MIRAGE's emitted block runs the whole repeat;
+  Unicorn single-steps each iteration. Index-for-index comparison therefore reports "CS:IP differ" at
+  the first `rep movsw` — which is to say immediately, in any decompressor. `cosim-diff.mjs`
+  resynchronises across them, and `UCSTEPS` raises Unicorn's budget (string-heavy code needs far more
+  steps on that side: 13,263 absorbed in the Dune window).
+- **Port I/O ends the window.** Unicorn has no VGA, so `in al,0x3da` returns 0xFF there and a real
+  beam status here. That is the same "must be pure-CPU" caveat as INT boundaries.
+
+## 2026-08-22 result — Dune (Cryo) draws a scrambled picture
+
+Two windows over the decompressor, ~5000 instructions in total: **no CPU divergence at all.** The
+first ended cleanly, the second at the `in al,0x3da` above. Combined with `dbx-oracle` reporting no
+divergence from dosbox-x on any channel, and the palette being correct, the CPU and the DOS layer are
+both exonerated for this bug.
+
+What that leaves is **timing**: Dune polls 0x3DA and is timer-paced (it reprograms PIT counter 0 to
+~200 Hz), and a wrong beam would place writes at wrong moments — which is what horizontal streaking
+over a correct palette looks like. That is the next hypothesis, and it is testable against the
+0x3DA model rather than against the CPU.
+
 ## 2026-08-01 result — Lemmings (VGALEMMI /v) derail
 MIRAGE matches Unicorn for the entire 266-instruction window up to the derail — **the CPU is
 correct**. The game faithfully executes garbage (INT 3, then `PUSH AX; JMP 0x74F` into
