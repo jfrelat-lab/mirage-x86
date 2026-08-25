@@ -541,6 +541,33 @@ bytes**. A/B'd on that word alone. It is the more faithful number: this machine 
 INT 33h mouse, and dosbox-x announces both too — Wolf3D simply draws differently once it knows. The
 old figure appears in older notes; 88185 is current.
 
+## Dune (Cryo) — recon, 2026-08-22 (ROADMAP C3)
+
+`DUNEDEM.EXE`, launched as `DUNE.BAT` does it (`ENG VGA ADL HIM 386`).
+
+**It runs, and its DOS behaviour is exact.** `tools/dbx-oracle.mjs` reports **no divergence on any
+channel** against dosbox-x — file 37/37, video 2/2, int21 50/50 — with no fault, no unhandled
+interrupt and no unhandled INT 21h function. Whatever is wrong is not a missing service.
+
+**It renders the Cryo logo correctly** (mode 13h, ~13.5k non-zero bytes at t=1500), then clears the
+screen for a transition (0 bytes from t=2000 to t=3500), then from **t≈4200** draws a full-screen
+image that is **stable** for thousands of ticks — so not a frame caught mid-blit.
+
+**The palette is right; the pixels are not.** The image uses exactly the 15 indices `0x11`-`0x1f`,
+and the DAC entries there are a sand-and-sunset gradient — `15: 63,63,38`, `18: 63,45,0`,
+`19: 54,36,10`, `1b: 45,0,0`. Scanlines alternate pairs (`17 19 17 19 …`), which is Cryo's
+characteristic dithering, so the *structure* is intentional. But the picture is horizontal streaks
+rather than a scene.
+
+Since the file reads match dosbox-x byte for byte, the compressed source Dune reads is identical, and
+it decompresses in its own code. **So this is a CPU-semantics bug in Dune's decompressor** — the same
+shape as Wolf3D's push-dword defect, which `tools/cosim/` found. That is the tool for it.
+
+⚠️ Noticed while setting this up: `DUNE.BAT` passes `ENG VGA ADL HIM 386`, and `tools/corpus.mjs`
+takes the entry point from a `.BAT` but **not its arguments** — so the corpus has always run Dune
+bare. It makes no difference here (both renders are identical), but the oracle's DOSBox side does not
+pass them either, so fixing one without the other would break the comparison.
+
 ## Booting a real DOS kernel
 
 **FreeDOS 1.4 BOOTS TO ITS SHELL (2026-08-22).** `boot/FREEDOS14.IMG` reaches FreeCom 0.86 and its
