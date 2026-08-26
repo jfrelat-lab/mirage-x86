@@ -459,7 +459,17 @@ export function installDOS(machine, vfs) {
       }
       case 0x41: vfs.unlink(asciiz(cpu.base[DS] + (cpu.dx & 0xffff))) ? ok() : err(2); break; // delete
       case 0x42: { const pos = vfs.seek(cpu.bx, ((cpu.cx << 16) | cpu.dx) | 0, cpu.al); if (pos < 0) { err(6); break; } cpu.dx = (pos >>> 16) & 0xffff; cpu.ax = pos & 0xffff; ok(); break; } // lseek
-      case 0x43: { ok(); cpu.cx = 0x20; break; }                     // get/set attr (stub)
+      // get/set file attributes. This used to succeed unconditionally with CX=0x20, which made every
+      // path a program probed look like an existing file. Turbo Pascal asks about TURBO.REZ, which is
+      // not in its directory: real DOS answers "file not found" and it moves on to its next candidate,
+      // where we said "here it is" and sent it to open a file that does not exist.
+      case 0x43: {
+        const path = asciiz((cpu.seg[DS] << 4) + (cpu.dx & 0xffff));
+        if (!vfs.exists(path)) { err(2); break; }                  // 2 = file not found
+        if (cpu.al === 0x01) { ok(); break; }                      // set: accepted and ignored — we store no attributes
+        ok(); cpu.cx = vfs.isDir(path) ? 0x10 : 0x20;              // directory bit, else archive
+        break;
+      }
       case 0x44:                                                     // IOCTL — AL selects the subfunction
         // AL was ignored, so AL=06/07 (input/output status) always answered "ready". A program that
         // polls a handle until it reports ready spins forever on the answer it wanted; one that
