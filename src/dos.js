@@ -102,6 +102,14 @@ export function installDOS(machine, vfs) {
     mem.w8(b + 0x00, 0xcd); mem.w8(b + 0x01, 0x20);   // INT 20h
     mem.w16(b + 0x02, MEM_TOP);                        // top of memory (paragraphs)
     mem.w8(b + 0x05, 0xcd); mem.w8(b + 0x06, 0x21); mem.w8(b + 0x07, 0xcb); // INT 21h; RETF
+    // 0A/0E/12 are the INT 22h/23h/24h vectors AS THEY STOOD when the program was loaded. DOS saves
+    // them here so a program can restore them on exit — and they are read, not just stored: DOS4GW
+    // takes PSP:000A as the address it returns through when the extender finishes, hooks its own in
+    // its place, and then IRETs to what it read. Leaving these zero made that IRET load the null
+    // selector, and Heretic ran off from linear 0 for 20000 blocks (tools/derailcheck.mjs).
+    mem.w32(b + 0x0a, mem.r32(0x22 * 4));              // terminate address
+    mem.w32(b + 0x0e, mem.r32(0x23 * 4));              // Ctrl-Break handler
+    mem.w32(b + 0x12, mem.r32(0x24 * 4));              // critical-error handler
     mem.w16(b + 0x2c, ENV_SEG);                        // environment segment
     mem.w8(b + 0x50, 0xcd); mem.w8(b + 0x51, 0x21); mem.w8(b + 0x52, 0xcb);
     const t = (tail || '').slice(0, 126);
