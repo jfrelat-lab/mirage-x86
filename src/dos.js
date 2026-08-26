@@ -350,8 +350,22 @@ export function installDOS(machine, vfs) {
     } else { dos.programDone = true; cpu.halted = true; }
   };
 
+  // Terminate but KEEP the program's block (AH=31h, and INT 27h for the .COM-era form). The parent
+  // resumes exactly as after a normal exit; the difference is that the resident paragraphs stay
+  // allocated, so the next EXEC or AH=48h loads ABOVE them instead of over a handler that is still
+  // hooked into the IVT. The reservation goes into the PARENT's alloc map — the block starts one
+  // paragraph below the child's PSP, which is where EXEC put its MCB header.
+  const terminateResident = (code, keepPara) => {
+    const psp = dos.psp, hadParent = dos.execStack.length > 0;
+    terminate(code);
+    if (hadParent) { dos.allocs.set(psp - 1, Math.max(1, keepPara) + 1); recomputeTop(); }
+  };
+
   // ---- INT 20h / 21h ------------------------------------------------------
   machine.hookInterrupt(0x20, () => terminate(0));
+  // INT 27h takes DX as the offset PAST the last byte to keep, in the current segment (CS == PSP for
+  // the .COM programs that use it), where AH=31h takes paragraphs outright.
+  machine.hookInterrupt(0x27, (cpu) => terminateResident(0, ((cpu.dx & 0xffff) + 15) >> 4));
 
   machine.hookInterrupt(0x21, (cpu) => {
     const ah = cpu.ah;
@@ -624,6 +638,7 @@ export function installDOS(machine, vfs) {
         if (rc) err(rc);   // failure → CF=1, AX=error (parent context untouched); success switched to the child
         break;
       }
+      case 0x31: terminateResident(cpu.al, cpu.dx & 0xffff); break;  // TSR — keep DX paragraphs
       case 0x4c: terminate(cpu.al); break;                           // terminate w/ code
       case 0x4d: cpu.ax = dos.exitCode; break;                       // get return code
       case 0x4e: findFirst(); break;
