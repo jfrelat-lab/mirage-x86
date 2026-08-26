@@ -22,7 +22,8 @@ export function installEMS(machine) {
     handles: new Map(),          // handle -> { pages, base, name }
     nextHandle: 1,
     mapped: new Array(FRAME_PAGES).fill(null),   // slot -> { handle, page } currently in the window
-    reset() { this.handles = new Map(); this.nextHandle = 1; this.mapped = new Array(FRAME_PAGES).fill(null); },
+    saved: new Map(),                           // handle -> stack of saved `mapped` snapshots (AH=47/48)
+    reset() { this.handles = new Map(); this.nextHandle = 1; this.mapped = new Array(FRAME_PAGES).fill(null); this.saved = new Map(); },
   };
 
   // Pages come from the same pool as XMS, sharing its top as the bump: XMS and EMS grow up, DPMI
@@ -101,7 +102,31 @@ export function installEMS(machine) {
       }
 
       case 0x46: c.al = 0x40; return ok();                          // version 4.0
-      case 0x47: case 0x48: return ok();                            // save/restore map: nothing to keep
+      // Save / restore the page map. Returning success while keeping NOTHING is not a harmless stub:
+      // the universal idiom is save → remap a page → restore, and without the restore the caller goes
+      // on reading through a window that still points at whatever it borrowed. Turbo Pascal 7.1 does
+      // this around every library access and died with "Fatal error: Disk or EMS I/O failure." — it
+      // renders its whole IDE with `ems: false`, which is how the EMS layer was identified.
+      // A stack per handle rather than the spec's single slot (which answers 0x8D/0x8E): nesting then
+      // works, and we keep returning success where we used to, so no program can newly fail here.
+      case 0x47: {                                                 // save page map
+        const key = c.dx & 0xffff;
+        if (!ems.saved.has(key)) ems.saved.set(key, []);
+        ems.saved.get(key).push(ems.mapped.map((m) => (m ? { handle: m.handle, page: m.page } : null)));
+        return ok();
+      }
+      case 0x48: {                                                  // restore page map
+        const stack = ems.saved.get(c.dx & 0xffff);
+        if (!stack || !stack.length) return ok();                   // nothing saved — as before, a no-op
+        const snap = stack.pop();
+        for (let slot = 0; slot < FRAME_PAGES; slot++) {
+          const want = snap[slot], cur = ems.mapped[slot];
+          const same = (want ? want.handle : -1) === (cur ? cur.handle : -1) &&
+                       (want ? want.page : -1) === (cur ? cur.page : -1);
+          if (!same) mapPage(slot, want ? want.handle : 0xffff, want ? want.page : 0xffff);
+        }
+        return ok();
+      }
       case 0x4b: c.bx = ems.handles.size; return ok();              // handle count
       case 0x4c: {                                                  // pages owned by one handle
         const h = ems.handles.get(c.dx & 0xffff);

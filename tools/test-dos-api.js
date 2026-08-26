@@ -1003,6 +1003,33 @@ function asciiz(mc, cpu, off, str) {
 }
 
 // ----------------------------------------------------------------------------
+// EMS save/restore of the page map (INT 67h AH=47/48). These used to return success while keeping
+// nothing, which is not a harmless stub: the universal idiom is save -> remap -> restore, and a
+// caller that skips the restore keeps reading through a window pointing at whatever it borrowed.
+// Turbo Pascal 7.1 does this around every library access and died with "Fatal error: Disk or EMS
+// I/O failure."; it renders its whole IDE once the restore actually restores.
+{
+  const { mc, cpu } = mk();
+  const ems = (ah, pre) => { cpu.ah = ah; if (pre) pre(); mc.intHandlers[0x67](cpu, mc); return cpu.ah; };
+  eq('EMS present', ems(0x40), 0);
+  const frame = (cpu.ah = 0x41, mc.intHandlers[0x41] ? 0 : 0, ems(0x41), cpu.bx & 0xffff);
+  eq('EMS allocates 4 pages', ems(0x43, () => { cpu.bx = 4; }), 0);
+  const h = cpu.dx & 0xffff;
+  // Distinguish two logical pages by their first byte, then map page 0 into slot 0.
+  const lin = (seg, off) => ((seg << 4) + off) >>> 0;
+  eq('EMS maps logical page 0 into slot 0', ems(0x44, () => { cpu.al = 0; cpu.bx = 0; cpu.dx = h; }), 0);
+  mc.mem.u8[lin(frame, 0)] = 0xa1;
+  eq('EMS saves the page map', ems(0x47, () => { cpu.dx = h; }), 0);
+  eq('EMS remaps slot 0 to logical page 1', ems(0x44, () => { cpu.al = 0; cpu.bx = 1; cpu.dx = h; }), 0);
+  mc.mem.u8[lin(frame, 0)] = 0xb2;
+  eq('EMS restores the page map', ems(0x48, () => { cpu.dx = h; }), 0);
+  eq('the restored window shows logical page 0 again', mc.mem.u8[lin(frame, 0)], 0xa1);
+  // and the borrowed page kept what was written to it
+  eq('EMS re-maps logical page 1', ems(0x44, () => { cpu.al = 0; cpu.bx = 1; cpu.dx = h; }), 0);
+  eq('logical page 1 kept its own byte', mc.mem.u8[lin(frame, 0)], 0xb2);
+}
+
+// ----------------------------------------------------------------------------
 console.log(`\nmirage DOS/BIOS services: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');
