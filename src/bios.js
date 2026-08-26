@@ -451,8 +451,8 @@ export function installBIOS(machine, opts = {}) {
   });
 
   // ---- INT 15h: system services ----
-  // Only AH=86h, because that is the only subfunction the corpus actually asks for — 16384 calls
-  // from `revitro` alone (tools/survey-gaps.mjs). Until now INT 15h had no handler at all, so the
+  // Only the subfunctions the corpus actually asks for (tools/survey-gaps.mjs): AH=86h — 16384 calls
+  // from `revitro` alone — and AH=88h, which ZONE66 asks once. Until AH=86h had a handler at all the
   // wait returned instantly: a demo that paces itself with it ran as fast as the host could go,
   // which is a very plausible reason revitro's animation sits at a different phase from DOSBox's.
   // Everything else still increments machine.unhandledInts[0x15] so the survey keeps seeing it.
@@ -465,6 +465,15 @@ export function installBIOS(machine, opts = {}) {
       // was waiting for anyway.
       cpu.cycles += us * (machine.pitBase * 1.193182 / 65536);
       cpu.flags &= ~CF;                        // CF clear = the wait completed
+      return;
+    }
+    if (cpu.ah === 0x88) {                     // extended memory size, KB above 1 MiB
+      // An XMS driver OWNS extended memory and hooks this vector to report none, so nobody else
+      // claims it behind its back. Measured, not assumed: `tools/xms15.asm` under dosbox-x with XMS
+      // installed answers KB=0000 CF=0 — so reporting our real 15 MiB here would be the wrong answer
+      // for the configuration we actually boot.
+      cpu.ax = machine.xms ? 0 : Math.min(0xffff, (mem.size - 0x100000) >> 10);
+      cpu.flags &= ~CF;
       return;
     }
     machine.unhandledInts[0x15]++;
