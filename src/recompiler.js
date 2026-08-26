@@ -831,7 +831,12 @@ export class Recompiler {
           // block for the same reason DIV's #DE does — otherwise the terminator overwrites cpu.eip
           // and silently discards the interrupt on a stack that already holds an IRET frame.
           if (o.reg === 1) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; }
-          P(`cpu.setSeg(${o.reg},${rmR(o, 16)});`); break;
+          // A selector past the table limit, or a null one in SS, is #GP — and the exception has to
+          // END THE BLOCK for the reason the MOV CS case above spells out. test386's POST-B fault
+          // test loads DS with 0xFFF8 and expects #GP(0xFFF8); we raised it and then carried on
+          // into the next instruction, which is that test's failure path.
+          canFault = true;
+          P(`cpu.eip=${ipStart};if(cpu.setSeg(${o.reg},${rmR(o, 16)})===false)return;`); break;
         }
         // POP Ev moves one stack slot of the current operand size, like PUSH/POP sreg above.
         // POP Ev — same sequencing: the destination may be SP, and a memory destination based on ESP

@@ -124,7 +124,11 @@ export class CPU {
     // A load that FAULTED must not move CPL: loadDescriptor reports that, because raising leaves the
     // selector register written but the descriptor cache untouched, and taking CPL from a selector
     // we just refused put the machine at ring 2 out of nowhere.
-    if (this.loadDescriptor(i, sel) !== false && i === CS) this._cpl = sel & 3;
+    // Report the fault to the CALLER: a segment load that raises has to end the block, or the
+    // terminator overwrites cpu.eip and discards the interrupt (the same reason MOV CS and DIV
+    // return early). Returns false when the descriptor load raised, undefined otherwise.
+    if (this.loadDescriptor(i, sel) === false) return false;
+    if (i === CS) this._cpl = sel & 3;
   }
 
   /** Cache base/limit (and, for CS, the D bit) from the descriptor `sel` selects. */
@@ -149,6 +153,10 @@ export class CPU {
     const m = this.mem;
     const lo = m.r16(a), b0 = m.r16(a + 2);
     const b1 = m.r8(a + 4), access = m.r8(a + 5), gran = m.r8(a + 6), b2 = m.r8(a + 7);
+    // P=0 is a fault, not a usable descriptor: #NP(selector), or #SS(selector) when the load is into
+    // the stack segment. Without it a not-present segment loaded silently and addressed whatever base
+    // the table happened to hold — test386's POST-B expects EX_NP here and got a normal retirement.
+    if (!(access & 0x80)) { this.raise(i === SS ? 12 : 11, sel & 0xfffc); return false; }
     let limit = (lo | ((gran & 0x0f) << 16)) >>> 0;
     if (gran & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;   // G: the limit counts 4 KiB pages
     this.base[i] = (b0 | (b1 << 16) | (b2 << 24)) >>> 0;
