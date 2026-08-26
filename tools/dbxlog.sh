@@ -23,10 +23,16 @@ cycles = fixed 20000
 EOF
 rm -f "$out"
 export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
+# Mount a COPY, never the corpus directory itself. The reference run WRITES: it left HIGH.MR1 in
+# MATHRESC, GRAWAGA.CFG in PREHIST and a TP*.$$$ in TURBOPAS. Every MIRAGE run afterwards then saw a
+# directory the reference never saw, and the diff reported our own tooling. MATHRESC read as diverging
+# at file event 48 for that reason alone — 98 once the artifact was gone.
+work=$(mktemp -d /tmp/dbxrun.XXXXXX)
+cp -R "$dir"/. "$work"/
 dosbox-x -conf "$conf" -debug -log-int21 -log-fileio -nomenu -fastlaunch -exit \
-  -c "mount c $dir" -c "c:" -c "${LOADFIX:+LOADFIX }$prog" -c "exit" >/dev/null 2>&1 &
+  -c "mount c $work" -c "c:" -c "${LOADFIX:+LOADFIX }$prog" -c "exit" >/dev/null 2>&1 &
 p=$!
 sleep "$secs"
 kill -9 $p 2>/dev/null
 wait $p 2>/dev/null
-rm -f "$conf"
+rm -rf "$conf" "$work"

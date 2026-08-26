@@ -249,6 +249,15 @@ baseline: tube ×3.9, lattice ×3.9, plasma ×3.5, memories ×1.66.
 
 ## G · Corpus conformance against DOSBox-X (opened 2026-08-19)
 
+⚠️ **The reference capture used to WRITE INTO THE CORPUS** (fixed 2026-08-25). `dbxlog.sh`
+mounted the game directory itself, so the DOSBox run left `HIGH.MR1` in MATHRESC, `GRAWAGA.CFG`
+in PREHIST and a `TP*.$$$` in TURBOPAS. Every MIRAGE run afterwards then saw a directory the
+reference never saw, and the diff reported our own tooling: MATHRESC read as diverging at file
+event **48** for that reason alone, **98** once the artifact was gone. It mounts a copy now.
+Removing the artifacts also un-masked a real defect — PREHIST needs `GRAWAGA.CFG` and without it
+takes its first-run path, where we diverge at INT 21h #21 (dbx `44`, us `35`) after 16 events
+instead of 415.
+
 `tools/dbx-oracle.mjs --sweep` compares the file / video / INT 21h event streams of all 47 games
 against real DOSBox-X. **36/51 are an exact prefix** (2026-08-25), up from 20 when the tool was calibrated. See
 [TESTING.md](TESTING.md) for the six normalisation traps this cost and the two environmental
