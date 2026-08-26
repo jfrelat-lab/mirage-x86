@@ -122,7 +122,12 @@ function parseDosbox(text, prog) {
     // `(.*)`, not `(.+)`: a program can open an EMPTY name, and the reference logs it as
     // "file open command 0 file " with nothing after. Requiring a character dropped that line on the
     // DOSBox side only, so Dave carried one event more than the reference from its fourth event on.
-    if ((m = line.match(/^FILES:file open command (\d+) file (.*)$/))) { kind = 'open'; file = m[2]; }
+    // DOSBox prints an open two ways — "file open command <mode> file X" and "Special file open
+    // command <mode> file X" (240 lines across the 47 logs, and the second form carries a full path).
+    // Matching only the first shape silently DROPPED those opens from the reference, so a program
+    // that opened its own EXE looked like MIRAGE inventing an open: TURBO.EXE diverged at file event
+    // 2 for that reason alone, with the int21 channel agreeing on 200 calls either side of it.
+    if ((m = line.match(/^FILES:(?:Special )?file open command (\S+) file (.*)$/))) { kind = 'open'; file = m[2]; }
     // A create and a delete get their OWN line shapes, neither of which looks like an open. Missing
     // them dropped one reference event per temporary file: Roc creates, closes and deletes
     // bgbuf.tmp before doing anything else.
