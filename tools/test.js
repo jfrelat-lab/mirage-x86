@@ -757,7 +757,9 @@ function eq(name, got, want) {
   cpu.tr.limit = 0x67;                                          // the minimum 386 TSS: no bitmap
   eq('I/O bitmap: a map past the TSS limit denies everything', cpu.ioDenied(0x60, 1), true);
   cpu.flags &= ~0x20000; cpu.flags |= 0x3000;                   // IOPL 3, not V86
-  cpu.setSeg(CS, 0);
+  // Set CPL directly. This used to say `setSeg(CS, 0)`, which is not a way to reach CPL 0 — loading
+  // the null selector into CS is #GP(0) on a 386, and once the CPU enforced that, the shortcut faulted.
+  cpu._cpl = 0;
   eq('at CPL <= IOPL the bitmap is not consulted at all', cpu.ioDenied(0x60, 1), false);
 }
 
@@ -825,6 +827,33 @@ function eq(name, got, want) {
   // a service must still report its own carry back to a chained caller
   eq('INT 21h reports the service CF', mkFrame(0x21, 0x0202, 0x0203), CF);
   eq('INT 21h clears CF when the service did', mkFrame(0x21, 0x0203, 0x0202), 0);
+}
+
+// A null selector is legal to LOAD into a data segment and faults later, on use; into CS or SS it is
+// #GP(0) at once. MIRAGE accepted it everywhere, which is why Heretic's DOS4GW — leaving through an
+// IRET whose saved CS:IP reads back 0:0 — got CS base 0 and ran from linear 0 for 20000 blocks
+// instead of stopping at the instruction that broke.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  const cpu = mc.cpu;
+  cpu.cr0 |= 1;                                        // protected mode, not V86
+  const raised = [];
+  cpu.raise = (n, err) => { raised.push(`${n},${err}`); return true; };
+
+  cpu.setSeg(DS, 0);
+  eq('null selector into DS does not fault', raised.length, 0);
+  eq('null selector into DS gives a zero base', cpu.base[DS], 0);
+
+  raised.length = 0; cpu.setSeg(CS, 0);
+  eq('null selector into CS is #GP(0)', raised.join('|'), '13,0');
+
+  raised.length = 0; cpu.setSeg(SS, 0);
+  eq('null selector into SS is #GP(0)', raised.join('|'), '13,0');
+
+  // Not while an exception is being DELIVERED: there a null CS/SS means the gate or the TSS is
+  // uninitialised, and raising would recurse instead of letting the depth guard report.
+  raised.length = 0; cpu._delivering = true; cpu.setSeg(CS, 0); cpu._delivering = false;
+  eq('while delivering, a null CS is accepted so the depth guard can report', raised.length, 0);
 }
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);

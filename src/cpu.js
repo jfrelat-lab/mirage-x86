@@ -129,7 +129,12 @@ export class CPU {
 
   /** Cache base/limit (and, for CS, the D bit) from the descriptor `sel` selects. */
   loadDescriptor(i, sel) {
-    if ((sel & 0xfffc) === 0) {                   // null selector: legal to load, faults on use
+    if ((sel & 0xfffc) === 0) {
+      // A null selector is legal to LOAD into a data segment — it faults later, on use. Into CS or
+      // SS it is #GP(0) at once. The difference is diagnostic as much as architectural: Heretic's
+      // DOS4GW leaves through an IRET whose saved CS:IP reads back 0:0, and accepting that gave CS
+      // base 0, so the guest ran from linear 0 for 20000 blocks instead of stopping where it broke.
+      if ((i === CS || i === SS) && !this._delivering) { this.raise(13, 0); return false; }
       this.base[i] = 0; this.limit[i] = 0;
       if (i === CS) this.csD = 0; else if (i === SS) this.ssB = 0;
       return;

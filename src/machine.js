@@ -245,7 +245,11 @@ export class Machine {
         `GDT=0x${(this.cpu.gdtr.base >>> 0).toString(16)}/0x${this.cpu.gdtr.limit.toString(16)} ` +
         `CR2=0x${(this.cpu.cr2 >>> 0).toString(16)}`);
     }
-    try { return this._protInt(n, err, faultIp); } finally { this._excDepth--; }
+    // While DELIVERING, a null CS/SS in a gate or an un-LTR'd TSS is not the guest's #GP to take:
+    // raising there recurses instead of reporting, and the depth guard above is the diagnosis.
+    const wasDelivering = this.cpu._delivering; this.cpu._delivering = true;
+    try { return this._protInt(n, err, faultIp); }
+    finally { this._excDepth--; this.cpu._delivering = wasDelivering; }
   }
 
   _protInt(n, err, faultIp) {
