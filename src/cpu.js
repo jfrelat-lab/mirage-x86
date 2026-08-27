@@ -171,6 +171,12 @@ export class CPU {
     // whole V86 section (POST 0x0B back to 0x20). Those need the transfer's own privilege logic, not
     // this one.
     const dpl = (access >> 5) & 3, conforming = isCode && (access & 0x04) !== 0;
+    // DATA registers only — and the exclusion of SS is a KNOWN GAP, not caution. The SS rule (RPL and
+    // DPL must both equal CPL) is what test386's POST-B needs next, but turning it on rejects
+    // test386's OWN ring-switch helper: at `cs=0xab, eip=0x2d46` it loads SS=0x118 (DPL 0) while our
+    // `_cpl` says 3. That load is legitimate on real silicon, so the rule is not wrong — our CPL
+    // tracking through the ring-switch path is. Fix that first; the rule then costs nothing.
+    // CS is excluded for a different reason: it is loaded by the transfers that CHANGE CPL.
     if (i !== SS && i !== CS && !conforming && dpl < Math.max(this._cpl, sel & 3)) {
       this.raise(13, sel & 0xfffc); return false;
     }
