@@ -101,14 +101,24 @@ export class Memory {
 
   /** Translate a linear page to a physical address, or -1 if not present. Sets walkRW as a side
    *  channel for the writability of the last successful walk. */
-  walk(lin) {
+  walk(lin, write) {
     const cpu = this.cpu;
     const dir = (cpu.cr3 & 0xfffff000) >>> 0;
-    const pde = this.r32phys(dir + ((lin >>> 22) * 4));
+    const pdeA = (dir + ((lin >>> 22) * 4)) >>> 0;
+    const pde = this.r32phys(pdeA);
     if (!(pde & 1)) { this.walkRW = false; return -1; }
     const pt = (pde & 0xfffff000) >>> 0;
-    const pte = this.r32phys(pt + (((lin >>> 12) & 0x3ff) * 4));
+    const pteA = (pt + (((lin >>> 12) & 0x3ff) * 4)) >>> 0;
+    const pte = this.r32phys(pteA);
     if (!(pte & 1)) { this.walkRW = false; return -1; }
+    // ACCESSED on both levels, DIRTY on the leaf when the access writes. The processor sets these
+    // itself and never clears them; an OS reads them to pick a page to evict and to know whether it
+    // must be written back. Tested directly by test386's POST 0x11, which touches a page and then
+    // asserts A in the PDE and the PTE, and D in the PTE for a write. Written straight to physical
+    // memory: a page table is not guest code, and routing it through w32 would re-enter translation.
+    if (!(pde & 0x20)) this.dv.setUint32(pdeA & (this.size - 1), (pde | 0x20) >>> 0, true);
+    const need = write ? 0x60 : 0x20;
+    if ((pte & need) !== need) this.dv.setUint32(pteA & (this.size - 1), (pte | need) >>> 0, true);
     this.walkRW = !!(pde & 2) && !!(pte & 2);          // both levels must allow writing
     return (pte & 0xfffff000) >>> 0;
   }
@@ -147,7 +157,7 @@ export class Memory {
    */
   xlat(a, write) {
     if (!this.paged) return a & this.mask;
-    const phys = this.walk(a);
+    const phys = this.walk(a, write);
     if (phys < 0) {
       this.pfCount = (this.pfCount || 0) + 1; this.lastPF = a >>> 0;
       // `pfTrace` attaches a JS stack to the fault. Off by default because building one per fault

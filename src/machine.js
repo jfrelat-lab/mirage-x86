@@ -313,6 +313,7 @@ export class Machine {
       const gs = cpu.seg[5], fs = cpu.seg[4], ds = cpu.seg[3], es = cpu.seg[0];
       const inner = cpu.tssStack(newCpl);
       cpu.flags &= ~VM;
+      cpu._cpl = newCpl;                             // the inner stack is checked at the NEW ring
       cpu.setSeg(2, inner.ss); cpu.reg[4] = inner.esp;
       cpu.push32(gs); cpu.push32(fs); cpu.push32(ds); cpu.push32(es);
       cpu.push32(oldSS); cpu.push32(oldESP);
@@ -322,6 +323,7 @@ export class Machine {
     } else if (newCpl < cpl) {                       // inward: the inner stack comes from the TSS
       const oldSS = cpu.seg[2], oldESP = cpu.reg[4] >>> 0;
       const inner = cpu.tssStack(newCpl);
+      cpu._cpl = newCpl;                             // the inner stack is checked at the NEW ring
       cpu.setSeg(2, inner.ss); cpu.reg[4] = inner.esp;
       cpu.pushW(oldSS, is32); cpu.pushW(oldESP, is32);
     }

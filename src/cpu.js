@@ -178,10 +178,10 @@ export class CPU {
     // tracking through the ring-switch path is. Fix that first; the rule then costs nothing.
     // CS is excluded for a different reason: it is loaded by the transfers that CHANGE CPL.
     if (i === SS) {
-      // SS is stricter: RPL and DPL must BOTH equal CPL. Skipped only while an exception is being
-      // DELIVERED, where a gate loads SS from the TSS before CS and `_cpl` is still the old value.
-      // A call gate sets _cpl before its own stack switch, so it needs no exemption.
-      if (!this._delivering && ((sel & 3) !== this._cpl || dpl !== this._cpl)) {
+      // SS is stricter: RPL and DPL must BOTH equal CPL. No exemption is needed: both paths that load
+      // SS before CS — a call gate and exception delivery — set `_cpl` to the ring they are entering
+      // first, because that is the ring the inner stack is actually checked against.
+      if ((sel & 3) !== this._cpl || dpl !== this._cpl) {
         this.raise(13, sel & 0xfffc); return false;
       }
     } else if (i !== CS && !conforming && dpl < Math.max(this._cpl, sel & 3)) {
