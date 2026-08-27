@@ -570,9 +570,19 @@ export class Recompiler {
       let seg = DS, disp = 0; const parts = [];
       if (rm === 4) {                                     // SIB: scale(2) index(3) base(3)
         const sib = f8(), scale = sib >> 6, index = (sib >> 3) & 7, base = sib & 7;
-        if (index !== 4) parts.push(scale ? `((r[${index}]>>>0)*${1 << scale})` : `(r[${index}]>>>0)`);
+        const noIndex = index === 4;                       // 100b in the index field = no index term
+        if (!noIndex) parts.push(scale ? `((r[${index}]>>>0)*${1 << scale})` : `(r[${index}]>>>0)`);
         if (base === 5 && mod === 0) disp = f32() | 0;     // no base register: disp32 follows
-        else { parts.push(`(r[${base}]>>>0)`); if (base === 4 || base === 5) seg = SS; }
+        else {
+          // With no index, the manual calls the scale irrelevant. The SILICON does not: the 80386EX
+          // vectors (tools/conformance386.mjs) apply it to the BASE instead, and they are unanimous —
+          // every failing SIB case had index=100b with a non-zero scale, every other form passed
+          // 960/960, and the ones that "passed" with this shape were the ones whose base held 0, where
+          // the two formulas coincide. No compiler emits a scale without an index, so this only ever
+          // shows up against hardware vectors — which is the point of having them.
+          parts.push(noIndex && scale ? `((r[${base}]>>>0)*${1 << scale})` : `(r[${base}]>>>0)`);
+          if (base === 4 || base === 5) seg = SS;
+        }
       } else if (rm === 5 && mod === 0) {
         disp = f32() | 0;                                  // bare disp32
       } else {
@@ -1384,9 +1394,13 @@ export class Recompiler {
           else if (kind === 'btc') P(rmW(o, sz, `(${v}^(1<<${b}))`));
           return;
         }
-        const base = memAddr(o), ofs = NT(), ad = NT();
+        const ofs = NT(), ad = NT();
         P(`var ${ofs}=(${bitExpr})${sz === 16 ? '<<16>>16' : '|0'};`);      // signed bit index
-        P(`var ${ad}=${AM(`${base}+(${ofs}>>3)`)};`);                        // arithmetic shift: floors
+        // The byte displacement belongs to the EFFECTIVE ADDRESS, not the linear one: under 16-bit
+        // addressing it wraps inside the segment, and a register bit offset is easily large enough to
+        // reach that. Adding it to the linear address instead walked out of the segment entirely —
+        // which is every failing `bt [bp+di],edx` in the 80386 vectors.
+        P(`var ${ad}=${lin(o.seg, `((${o.off}+(${ofs}>>3))${addr32 ? '>>>0' : '&0xffff'})`)};`);
         P(`var ${b}=${ofs}&7;var ${v}=${memRead(ad, 8)};`);
         P(`cpu.flags=(cpu.flags&~${CF})|((${v}>>>${b})&1);`);
         if (kind === 'bts') P(memW(ad, 8, `(${v}|(1<<${b}))`));
