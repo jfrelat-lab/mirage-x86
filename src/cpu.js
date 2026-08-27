@@ -111,23 +111,23 @@ export class CPU {
 
   setSeg(i, sel) {
     sel &= 0xffff;
-    this.seg[i] = sel;
     // Real mode, and virtual-8086 mode: the selector IS the base, shifted. In V86 protection is
     // still on underneath, but a segment register holds an 8086 value and never indexes a table.
     if (!(this.cr0 & 1) || (this.flags & VM)) {
+      this.seg[i] = sel;
       this.base[i] = sel << 4;
       this.limit[i] = 0xffff;
       if (i === CS) { this.csD = 0; this._cpl = (this.flags & VM) ? 3 : 0; }
       else if (i === SS) this.ssB = 0;
       return;
     }
-    // A load that FAULTED must not move CPL: loadDescriptor reports that, because raising leaves the
-    // selector register written but the descriptor cache untouched, and taking CPL from a selector
-    // we just refused put the machine at ring 2 out of nowhere.
-    // Report the fault to the CALLER: a segment load that raises has to end the block, or the
-    // terminator overwrites cpu.eip and discards the interrupt (the same reason MOV CS and DIV
-    // return early). Returns false when the descriptor load raised, undefined otherwise.
+    // A load that FAULTS leaves the segment register ALONE — the descriptor is validated first and
+    // the selector is committed only on success. Writing it up front left DS holding the selector we
+    // had just refused, so the handler's own `mov ax,ds / push ax` saved 0xFFF8 and restored it into
+    // DS on the way out, faulting again: test386's POST-B fails its SECOND fault test that way, not
+    // its first. It also must not move CPL, for the same reason.
     if (this.loadDescriptor(i, sel) === false) return false;
+    this.seg[i] = sel;
     if (i === CS) this._cpl = sel & 3;
   }
 
