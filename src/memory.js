@@ -4,7 +4,9 @@
  * short of making every access site able to end its block.
  */
 export class PageFault {
-  constructor(lin, write) { this.lin = lin >>> 0; this.write = !!write; }
+  /** `present` distinguishes a PROTECTION violation (page there, access refused) from a
+   *  not-present page. It is bit 0 of the error code the handler reads. */
+  constructor(lin, write, present) { this.lin = lin >>> 0; this.write = !!write; this.present = !!present; }
 }
 
 // memory.js — flat physical RAM with little-endian accessors and self-modifying-code
@@ -106,20 +108,33 @@ export class Memory {
     const dir = (cpu.cr3 & 0xfffff000) >>> 0;
     const pdeA = (dir + ((lin >>> 22) * 4)) >>> 0;
     const pde = this.r32phys(pdeA);
-    if (!(pde & 1)) { this.walkRW = false; return -1; }
+    if (!(pde & 1)) { this.walkRW = false; this.walkProt = false; return -1; }
     const pt = (pde & 0xfffff000) >>> 0;
     const pteA = (pt + (((lin >>> 12) & 0x3ff) * 4)) >>> 0;
     const pte = this.r32phys(pteA);
-    if (!(pte & 1)) { this.walkRW = false; return -1; }
-    // ACCESSED on both levels, DIRTY on the leaf when the access writes. The processor sets these
-    // itself and never clears them; an OS reads them to pick a page to evict and to know whether it
-    // must be written back. Tested directly by test386's POST 0x11, which touches a page and then
-    // asserts A in the PDE and the PTE, and D in the PTE for a write. Written straight to physical
-    // memory: a page table is not guest code, and routing it through w32 would re-enter translation.
+    if (!(pte & 1)) { this.walkRW = false; this.walkProt = false; return -1; }
+    this.walkRW = !!(pde & 2) && !!(pte & 2);          // both levels must allow writing
+    // PAGE-LEVEL PROTECTION. U/S and R/W are ANDed down the two levels, exactly like the write bit
+    // above. A user access to a supervisor page is refused outright; a user WRITE also needs R/W on
+    // both levels. A supervisor write to a read-only page is allowed on a 386 unless CR0.WP is set —
+    // that bit exists so a kernel can be made to honour its own copy-on-write mappings.
+    // These faults report `present`, which is bit 0 of the error code: the page is there, the access
+    // was refused. Without any of this a ring-3 program wrote through a read-only mapping and
+    // test386's POST 0x11 never saw the fault it was waiting for.
+    const user = this.cpu.cpl === 3;
+    const us = !!(pde & 4) && !!(pte & 4);
+    if ((user && !us) || (write && !this.walkRW && (user || (this.cpu.cr0 & 0x10000) !== 0))) {
+      this.walkProt = true; return -1;
+    }
+    this.walkProt = false;
+    // ACCESSED on both levels, DIRTY on the leaf when the access writes — and only now, AFTER the
+    // protection checks: an access that FAULTS sets neither. test386's page-fault handler asserts
+    // exactly that, reading the PDE and PTE from inside the fault and requiring A and D clear.
+    // Written straight to physical memory: a page table is not guest code, and routing the update
+    // through w32 would re-enter translation.
     if (!(pde & 0x20)) this.dv.setUint32(pdeA & (this.size - 1), (pde | 0x20) >>> 0, true);
     const need = write ? 0x60 : 0x20;
     if ((pte & need) !== need) this.dv.setUint32(pteA & (this.size - 1), (pte | need) >>> 0, true);
-    this.walkRW = !!(pde & 2) && !!(pte & 2);          // both levels must allow writing
     return (pte & 0xfffff000) >>> 0;
   }
 
@@ -163,7 +178,7 @@ export class Memory {
       // `pfTrace` attaches a JS stack to the fault. Off by default because building one per fault
       // is expensive and Windows takes millions; on, it names the CALLER — which is how the
       // TSS stack switch was identified as the thing reading past the GDT.
-      if (this.pfRaise) { const f = new PageFault(a, write); if (this.pfTrace) f.stack = new Error().stack; throw f; }
+      if (this.pfRaise) { const f = new PageFault(a, write, this.walkProt); if (this.pfTrace) f.stack = new Error().stack; throw f; }
       return -1;                                   // no run loop to catch it: the old silent zero
     }
     return (phys | (a & 0xfff)) & (this.size - 1);

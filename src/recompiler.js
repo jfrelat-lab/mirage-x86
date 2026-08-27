@@ -392,7 +392,7 @@ export class Recompiler {
         // the faulting instruction — the per-instruction store above put it there.
         cpu.cr2 = e.lin;
         try {
-          machine.protInt(14, (e.write ? 2 : 0) | (cpu.cpl === 3 ? 4 : 0));
+          machine.protInt(14, (e.present ? 1 : 0) | (e.write ? 2 : 0) | (cpu.cpl === 3 ? 4 : 0));
         } catch (e2) {
           // A fault while DELIVERING a fault is a double fault on real hardware. We do not model
           // #DF, but it must not reach the host as a JS exception either: report it, with the two
