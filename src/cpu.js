@@ -153,6 +153,27 @@ export class CPU {
     const m = this.mem;
     const lo = m.r16(a), b0 = m.r16(a + 2);
     const b1 = m.r8(a + 4), access = m.r8(a + 5), gran = m.r8(a + 6), b2 = m.r8(a + 7);
+    // TYPE first, then presence — the order the manual checks them in.
+    //   S=0 is a SYSTEM descriptor (LDT, TSS, gate): never loadable into a segment register.
+    //   Into a data register, a code segment is only loadable if it is READABLE (bit 1).
+    //   Into SS, only a WRITABLE DATA segment will do.
+    // Without these, an LDT or TSS descriptor loaded as if it were a segment and addressed whatever
+    // its base and limit fields happened to encode — test386's POST-B expects #GP(selector).
+    const isSys = !(access & 0x10), isCode = (access & 0x08) !== 0, rw = (access & 0x02) !== 0;
+    if (isSys || (i === SS ? (isCode || !rw) : (isCode && !rw))) { this.raise(13, sel & 0xfffc); return false; }
+    // PRIVILEGE. A data load needs max(CPL, RPL) <= DPL; a CONFORMING code segment is exempt, since
+    // its whole point is to be reachable from less privileged code. SS is stricter still: RPL and DPL
+    // must both equal CPL. test386 runs the whole fault series a second time from ring 3, and this is
+    // what it catches there — a DPL-1 segment loaded happily at CPL 3.
+    // ...DATA registers only. SS and CS are loaded by the very transfers that CHANGE CPL — exception
+    // delivery through a gate, IRET back to ring 3 — where `_cpl` is still the old value at the moment
+    // of the load, so the same rule applied there rejects legitimate transitions and cost test386 its
+    // whole V86 section (POST 0x0B back to 0x20). Those need the transfer's own privilege logic, not
+    // this one.
+    const dpl = (access >> 5) & 3, conforming = isCode && (access & 0x04) !== 0;
+    if (i !== SS && i !== CS && !conforming && dpl < Math.max(this._cpl, sel & 3)) {
+      this.raise(13, sel & 0xfffc); return false;
+    }
     // P=0 is a fault, not a usable descriptor: #NP(selector), or #SS(selector) when the load is into
     // the stack segment. Without it a not-present segment loaded silently and addressed whatever base
     // the table happened to hold — test386's POST-B expects EX_NP here and got a normal retirement.
