@@ -291,6 +291,10 @@ All three fields now match dosbox-x exactly.
 
 ## E · Tooling / infra
 
+| # | Task | Size | Notes |
+|---|---|---|---|
+| E0 | ✅ **80386 conformance vectors integrated (2026-08-25)** — `tools/moo.mjs` + `tools/conformance386.mjs`. The 8088 vectors `conformance.js` runs are 16-bit real mode, so nothing in them reaches a 32-bit operand (`0x66`), a 32-bit address (`0x67`), the two together, or the `0F` space. [SingleStepTests/80386](https://github.com/SingleStepTests/80386) is the same idea a generation later: captured from an actual 80386EX over an Arduino interface, each test run twice and replayed to verify. 941 opcode files published, real mode only — protected mode is announced but not out, and the reason is instructive (memory cannot be randomised there without triple-faulting on entry). Format is chunked binary `MOO`, not JSON, hence the reader. **A 48-opcode cut scores 103371/105807 = 97.70%.** ⚠️ Two things learned while getting there, both harness rather than engine: the byte stream ends in a `HLT` and the captured final state is taken AFTER it retires, so stepping once reads as an off-by-one on EIP everywhere; and the vectors are silicon, so architecturally UNDEFINED flags do have values — comparing them tests which 386 the capture used. Masking them (the table `conformance.js` already has for the 8088) took 76.09% → 97.70%. **The residual 2.3% is a real defect and it is isolated**: every remaining failure is a 32-bit address form with a SIB byte. Worked case — `mov eax,[ds:esi+4Dh]`, `67 66 8b 44 e6 4d`: the hardware puts the data where `esi*8 + 0x4D` points, we read `esi + 0x4D`. So the silicon treats ESI as a SCALED INDEX where we take it for the base — a scale/index/base field discrepancy in SIB decoding, 11 cases in 803. | — | done; the SIB finding is open |
+
 | # | Task | Effort | Why |
 |---|---|---|---|
 | E1 | Fold `tools/run-game.mjs` conveniences (auto-detect main EXE, screenshot PNG) | S | Faster headless game triage. |

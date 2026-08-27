@@ -21,3 +21,4 @@ games/
 # boot-sector images fetched for local testing (not redistributed)
 boot/
 .dbxlogs/
+tools/sst386/
