@@ -177,7 +177,14 @@ export class CPU {
     // `_cpl` says 3. That load is legitimate on real silicon, so the rule is not wrong — our CPL
     // tracking through the ring-switch path is. Fix that first; the rule then costs nothing.
     // CS is excluded for a different reason: it is loaded by the transfers that CHANGE CPL.
-    if (i !== SS && i !== CS && !conforming && dpl < Math.max(this._cpl, sel & 3)) {
+    if (i === SS) {
+      // SS is stricter: RPL and DPL must BOTH equal CPL. Skipped only while an exception is being
+      // DELIVERED, where a gate loads SS from the TSS before CS and `_cpl` is still the old value.
+      // A call gate sets _cpl before its own stack switch, so it needs no exemption.
+      if (!this._delivering && ((sel & 3) !== this._cpl || dpl !== this._cpl)) {
+        this.raise(13, sel & 0xfffc); return false;
+      }
+    } else if (i !== CS && !conforming && dpl < Math.max(this._cpl, sel & 3)) {
       this.raise(13, sel & 0xfffc); return false;
     }
     // P=0 is a fault, not a usable descriptor: #NP(selector), or #SS(selector) when the load is into
@@ -365,6 +372,10 @@ export class CPU {
         const a = (this.base[SS] + ((oldESP + i * (g32 ? 4 : 2)) >>> 0)) >>> 0;
         args.push(g32 ? this.mem.r32(a) : this.mem.r16(a));
       }
+      // The new CPL applies to the STACK SWITCH, not just to CS: the inner SS is checked against the
+      // ring we are entering, and setSeg(CS) below only sets _cpl afterwards. Loading SS while _cpl
+      // still read the caller's ring made the SS privilege rule reject the gate's own stack.
+      this._cpl = tdpl;
       this.setSeg(SS, inner.ss); this.reg[4] = inner.esp;
       this.pushW(oldSS, g32); this.pushW(oldESP, g32);
       for (let i = params - 1; i >= 0; i--) this.pushW(args[i], g32);
