@@ -777,10 +777,19 @@ export class Recompiler {
             // pushes go, never what the value is. test386 POST 9 asserts exactly this.
             ? 'var _sp=cpu.reg[4]>>>0;cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);'
             : 'var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
-        case 0x61: // POPA / POPAD (66) — the pushed SP/ESP slot is discarded
-          P(sz === 32
-            ? `${rW(7, 32, 'cpu.pop32()')}${rW(6, 32, 'cpu.pop32()')}${rW(5, 32, 'cpu.pop32()')}cpu.pop32();${rW(3, 32, 'cpu.pop32()')}${rW(2, 32, 'cpu.pop32()')}${rW(1, 32, 'cpu.pop32()')}${rW(0, 32, 'cpu.pop32()')}`
-            : `${rW(7, 16, 'cpu.pop16()')}${rW(6, 16, 'cpu.pop16()')}${rW(5, 16, 'cpu.pop16()')}cpu.pop16();${rW(3, 16, 'cpu.pop16()')}${rW(2, 16, 'cpu.pop16()')}${rW(1, 16, 'cpu.pop16()')}${rW(0, 16, 'cpu.pop16()')}`); break;
+        // POPA / POPAD. "The pushed SP/ESP slot is discarded" is the effect, not the mechanism, and the
+        // difference shows under a 32-bit operand on a 16-bit stack: the slot IS loaded into ESP, and
+        // the stack-pointer adjustment then rewrites SP at the STACK's width, leaving the popped value's
+        // HIGH half behind. Verified on the 80386EX vectors — the final ESP's high half is the discarded
+        // slot's high half in every case, its low half is SP+32. Discarding the slot outright loses it.
+        case 0x61: {
+          const pops = (i) => rW(i, sz, `cpu.pop${sz}()`);
+          P(`${pops(7)}${pops(6)}${pops(5)}`);
+          P(`var _sp=cpu.stackPtr;${rW(4, sz, `cpu.pop${sz}()`)}`);      // ESP is loaded, then restored
+          P(`if(cpu.ssB){r[4]=(_sp+${sz / 8})>>>0;}else{r[4]=(r[4]&~0xffff)|((_sp+${sz / 8})&0xffff);}`);
+          P(`${pops(3)}${pops(2)}${pops(1)}${pops(0)}`);
+          break;
+        }
         case 0x62: {                                                                   // BOUND Gv,Ma → #BR (INT 5) if index ∉ [lower,upper] (signed)
           canFault = true; const o = modrm(); const a = memAddr(o);
           const rd = sz === 16 ? 'r16' : 'r32', sx = sz === 16 ? '<<16>>16' : '|0', d = sz >> 3;
@@ -818,7 +827,11 @@ export class Recompiler {
         case 0x89: { const o = modrm(); P(rmW(o, sz, rR(o.reg, sz))); break; }
         case 0x8a: { const o = modrm(); P(rW(o.reg, 8, rmR(o, 8))); break; }
         case 0x8b: { const o = modrm(); P(rW(o.reg, sz, rmR(o, sz))); break; }
-        case 0x8c: { const o = modrm(); P(rmW(o, 16, `cpu.seg[${o.reg}]`)); break; }   // MOV Ew,Sw
+        // MOV Ew,Sw. A MEMORY destination takes two bytes whatever the operand size — that is the
+        // rule this opcode is known for. A REGISTER destination under a 32-bit operand size is the
+        // other half of it: the selector is ZERO-EXTENDED into the full register, not merged into
+        // its low half. The 80386EX vectors give ebx=0000009F where merging leaves 1934009F.
+        case 0x8c: { const o = modrm(); P(rmW(o, o.isReg && sz === 32 ? 32 : 16, `cpu.seg[${o.reg}]`)); break; }
         case 0x8d: { const o = modrm(); P(rW(o.reg, sz, '(' + o.off + ')')); break; }   // LEA
         // ARPL r/m16, r16 — adjust the destination's RPL up to the source's, setting ZF when it had
         // to. Protected mode only: a 386 in real mode raises #UD on 0x63, and a CPU-detection
