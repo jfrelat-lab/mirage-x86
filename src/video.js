@@ -52,11 +52,34 @@ export class Video {
     this.frame++;
     this._palette();
     const mode = this.mem.r8(0x449);
-    if (mode === 0x13) { if (this.machine.vga && this.machine.vga.modeX) this._renderModeX(); else this._renderGfx13(); }
+    if (this.machine.vbe) this._renderVBE();
+    else if (mode === 0x13) { if (this.machine.vga && this.machine.vga.modeX) this._renderModeX(); else this._renderGfx13(); }
     else if (this.mem.planar && this.machine.vga) this._renderPlanar();
     else if (mode === 4 || mode === 5 || mode === 6) this._renderCGA(mode);
     else this._renderText();
     this.ctx.putImageData(this.image, 0, 0);
+  }
+
+  // VESA VBE: the framebuffer is plain RAM at vbe.base, one packed pixel per 1/2/4 bytes. 8 bpp goes
+  // through the DAC like mode 13h; 16 bpp is 5:6:5 and 32 bpp is 8:8:8:8, matching what 4F01 reports
+  // in the ModeInfoBlock — a client picks its mode from those masks, so they have to agree.
+  _renderVBE() {
+    const v = this.machine.vbe, W = v.width, H = v.height;
+    this._ensure(W, H);
+    const u32 = this.u32, pal = this.pal, u8 = this.mem.u8, base = v.base, pitch = v.pitch;
+    for (let y = 0; y < H; y++) {
+      let src = base + y * pitch, dst = y * W;
+      if (v.bpp === 8) { for (let x = 0; x < W; x++) u32[dst++] = pal[u8[src++]]; }
+      else if (v.bpp === 16) {
+        for (let x = 0; x < W; x++, src += 2) {
+          const p = u8[src] | (u8[src + 1] << 8);
+          const r = ((p >> 11) & 31) * 255 / 31, g = ((p >> 5) & 63) * 255 / 63, b = (p & 31) * 255 / 31;
+          u32[dst++] = (0xff << 24) | ((b | 0) << 16) | ((g | 0) << 8) | (r | 0);
+        }
+      } else {
+        for (let x = 0; x < W; x++, src += 4) u32[dst++] = (0xff << 24) | (u8[src] << 16) | (u8[src + 1] << 8) | u8[src + 2];
+      }
+    }
   }
 
   // EGA/VGA 16-colour planar: assemble each pixel's 4-bit index from the four bit-planes,

@@ -10,7 +10,7 @@
     "test:gfx": "node tools/test-gfx.js",
     "test:demos": "node tools/test-demos.js",
     "conformance": "node tools/conformance.js",
-    "demos": "nasm -f bin demos/xormunch.asm -o demos/XORMUNCH.COM && nasm -f bin demos/plasma13.asm -o demos/PLASMA13.COM && nasm -f bin demos/bootload.asm -o demos/BOOTLOAD.IMG",
+    "demos": "nasm -f bin demos/xormunch.asm -o demos/XORMUNCH.COM && nasm -f bin demos/plasma13.asm -o demos/PLASMA13.COM && nasm -f bin demos/bootload.asm -o demos/BOOTLOAD.IMG && nasm -f bin demos/vesa.asm -o demos/VESA.COM",
     "serve": "python3 tools/serve.py 8761",
     "test:dosapi": "node tools/test-dos-api.js",
     "test:all": "node tools/test.js && node tools/test-x86-uc.mjs && node tools/test-dos-api.js && node tools/test-dos.js && node tools/test-gfx.js && node tools/test-demos.js && node tools/golden.js",

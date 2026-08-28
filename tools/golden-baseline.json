@@ -203,5 +203,10 @@
     "hash": "ae91bd391a70c0ab9f0454df14c5591f92f8c179",
     "mode": 13,
     "fault": null
+  },
+  "demos/VESA.COM": {
+    "hash": "0652cc134e6a96c7177906c1d687e72d9c3d738a",
+    "mode": 3,
+    "fault": null
   }
 }

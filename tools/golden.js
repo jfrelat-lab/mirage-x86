@@ -45,6 +45,7 @@ const TICK_OVERRIDE = { animate: 20, freality: 20, mesha: 400, omniscent: 120, s
 // gitignored, so `check` silently skips any that are absent on this machine.
 const WORKLOADS = [
   ['demos/PLASMA13.COM'], ['demos/XORMUNCH.COM'], ['demos/PLANAR.COM'], ['demos/CGA.COM'],
+  ['demos/VESA.COM'],   // VESA VBE: mode-list walk, 4F01/4F02, and five 4F05 bank switches
   // Every intro in intros/ that renders, not a subset. Thirteen of these were unpinned and therefore
   // unguarded — measured with tools/probe-intro.js, all thirteen set their mode and fill the
   // framebuffer with no fault, so a regression in any of them would have gone unnoticed. Pinning
@@ -75,7 +76,11 @@ function fingerprint(relPath, opts = {}) {
   // it exits to, not the one it drew: `animate` is a flat fill at 60 ticks. Pin the show, not the
   // curtain -- `opts.ticks` moves the sample to where the picture actually is.
   const ticks = opts.ticks || TICKS;
-  for (let t = 0; t < ticks && !fault && !(dos && dos.programDone); t++) { mc.runSlice(BUDGET); }  // run loop owns the PIT timer now
+  let vbeSeen = null;
+  for (let t = 0; t < ticks && !fault && !(dos && dos.programDone); t++) {
+    mc.runSlice(BUDGET);                          // run loop owns the PIT timer now
+    if (mc.vbe) vbeSeen = { ...mc.vbe };          // a VESA program restores text mode before it exits
+  }
   const h = createHash('sha1');
   const meta = Buffer.alloc(8);
   meta[0] = mc.mem.r8(0x449);                     // video mode
@@ -88,6 +93,13 @@ function fingerprint(relPath, opts = {}) {
     h.update(mc.vga.planes);                               // the picture lives in the four bit-planes,
     h.update(mc.vga.palette);                              // the attribute palette,
     h.update(Buffer.from([mc.vga.crtc[0x0c], mc.vga.crtc[0x0d], mc.vga.crtc[0x13]]));  // and the CRTC start/stride
+  }
+  // A VESA mode's picture is in the reserved framebuffer, not in A000 — hash it, and the geometry
+  // with it, or VESA.COM's fingerprint would be "text mode, empty A000" like any failing program.
+  if (vbeSeen) {
+    h.update(Buffer.from([vbeSeen.number & 0xff, vbeSeen.number >> 8, vbeSeen.bpp, vbeSeen.linear ? 1 : 0,
+                          vbeSeen.width & 0xff, vbeSeen.width >> 8, vbeSeen.height & 0xff, vbeSeen.height >> 8]));
+    h.update(mc.mem.u8.subarray(vbeSeen.base, vbeSeen.base + vbeSeen.height * vbeSeen.pitch));
   }
   const md = mc.mem.r8(0x449);
   if (md === 3 || md === 2 || md === 7) {                  // TEXT modes: the picture is the B800 cell

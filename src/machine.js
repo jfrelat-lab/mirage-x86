@@ -72,6 +72,7 @@ export class Machine {
     this.devices = [];
     this.onError = null;                           // (err) => void
     this.blocked = false;                          // set by a handler waiting on input
+    this.vbe = null;                               // active VESA VBE mode, if any (see setVbeMode)
     this.keyQueue = [];                            // {ascii, scan} pushed by the UI
     this.hwIrqPending = false;                      // a hardware IRQ (keyboard) waits for IF to be set
     this.unhandledInts = new Uint32Array(256);      // per-vector count of INTs we don't implement
@@ -538,6 +539,27 @@ export class Machine {
     this.pitReload = Math.max(this.pitBase >> 4, r);
     this.nextTimerCycle = this.cpu.cycles + this.pitReload;
     this.cpu.deadline = this.nextTimerCycle;
+  }
+
+  /** Enter a VESA VBE mode. The framebuffer is plain RAM at `vbeFbBase` (reserved by installBIOS),
+   *  so a client that maps PhysBasePtr and writes through it needs no device hook at all — and the
+   *  A000 window is a 64 KiB view of the same bytes, moved by VBE function 4F05. `vbe` being non-null
+   *  is what tells the renderer to ignore the BDA mode byte, which has no VBE encoding. */
+  setVbeMode(m, linear) {
+    const [number, width, height, bpp] = m;
+    const pitch = width * (bpp >> 3);
+    this.vbe = { number, width, height, bpp, pitch, linear, base: this.vbeFbBase >>> 0, bank: 0 };
+    this.mem.u8.fill(0, this.vbe.base, this.vbe.base + height * pitch);
+    this.vbeWindow(0);
+    this.mem.setPlanar(true);      // route the A000 window through the VGA device (see vga.js vbeWin)
+  }
+
+  /** Point the A000 window at 64 KiB of the framebuffer (VBE 4F05, granularity 64 KiB). */
+  vbeWindow(bank) {
+    if (!this.vbe) return;
+    this.vbe.bank = bank >>> 0;
+    const src = (this.vbe.base + this.vbe.bank * 0x10000) >>> 0;
+    this.vbe.windowSrc = src;
   }
 
   /** Deliver a hardware IRQ to a DPMI client's own protected-mode handler, at the client's frame

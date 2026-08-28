@@ -30,7 +30,7 @@ const SEL_MAX = LDT_ENTRIES * 8;
 export function installDPMI(machine) {
   const mem = machine.mem, cpu = machine.cpu;
 
-  const HOST_BASE = mem.size - HOST_SIZE;
+  const HOST_BASE = (machine.vbeFbBase || mem.size) - HOST_SIZE;   // below the VBE framebuffer, if one is reserved
   const LDT_BASE = HOST_BASE, LDT_LIMIT = LDT_ENTRIES * 8 - 1;
 
   // Keep XMS out of the host's block, or a game's allocation overwrites the descriptor tables.
@@ -44,6 +44,7 @@ export function installDPMI(machine) {
     is32: false,
     nextSel: SEL_CLIENT,           // bump allocator over the LDT
     unimplemented: new Map(),      // INT 31h AX values a client asked for and we refused
+    segSels: new Map(),            // 0002: real-mode segment -> selector, never freed
     // Protected-mode interrupt vectors the client installed with 0205. A null entry means "still
     // ours", and softInt reflects those to the JS service as before.
     pmVec: new Array(256).fill(null),
@@ -55,7 +56,7 @@ export function installDPMI(machine) {
     memTop: 0,                     // DPMI heap: grows DOWN from the host tables (set below)
     blocks: new Map(),             // handle -> { base, size }
     log: null,                     // set by a probe to record real-mode call targets
-    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.segSels = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
   };
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
@@ -148,6 +149,13 @@ export function installDPMI(machine) {
     return off + 7 <= LDT_LIMIT ? off : -1;
   };
 
+  // A descriptor a client writes must carry the CLIENT's privilege level, and this host runs clients
+  // at ring 0. DPMI requires the DPL a client sets to equal its own, and a client written against a
+  // ring-3 host hard-codes DPL 3: Void 3 builds a 32-bit code alias with access byte 0xFB and far
+  // RETFs into it, which is #GP(sel) here because a non-conforming code segment must have DPL == CPL.
+  // Normalising the field is what makes the descriptor mean the same thing on either kind of host.
+  const clientDPL = (access) => ((access & ~0x60) | ((cpu.cpl & 3) << 5)) & 0xff;
+
   /** ES:(E)DI, the buffer both descriptor calls use. A 16-bit client passes DI, a 32-bit one EDI. */
   const bufAddr = () => (cpu.base[ES] + (dpmi.is32 ? (cpu.reg[7] >>> 0) : (cpu.reg[7] & 0xffff))) >>> 0;
 
@@ -169,6 +177,7 @@ export function installDPMI(machine) {
         if (off < 0) return fail(ERR_INVALID_SELECTOR);
         const dst = (LDT_BASE + off) >>> 0, src = bufAddr();
         for (let i = 0; i < 8; i++) mem.w8((dst + i) >>> 0, mem.r8((src + i) >>> 0));
+        mem.w8((dst + 5) >>> 0, clientDPL(mem.r8((dst + 5) >>> 0)));
         return ok();
       }
 
@@ -209,6 +218,23 @@ export function installDPMI(machine) {
         }
         dpmi.nextSel += count * 8;
         c.ax = base | TI;
+        return ok();
+      }
+
+      // 0002 — Segment to Descriptor. A data selector over a real-mode segment: this is how a
+      // protected-mode client reaches the VGA window at A000, and it is the call Void 3 makes right
+      // after setting its VBE mode. The spec says these descriptors are never freed, so one per
+      // segment is cached and handed back again. Refusing it returned 0x8001 in AX, which the client
+      // loaded straight into ES as if it were a selector.
+      case 0x0002: {
+        const seg = c.reg[3] & 0xffff;                                  // BX
+        let sel = dpmi.segSels.get(seg);
+        if (sel === undefined) {
+          sel = allocClientSel(seg, false);
+          if (!sel) return fail(0x8011);                                // descriptor unavailable
+          dpmi.segSels.set(seg, sel);
+        }
+        c.ax = sel;
         return ok();
       }
 
@@ -312,7 +338,10 @@ export function installDPMI(machine) {
       //   in: BX:CX = size;  out: BX:CX = linear address, SI:DI = handle
       case 0x0501: {
         const size = ((((c.reg[3] & 0xffff) << 16) | (c.reg[1] & 0xffff)) >>> 0) || 1;
-        const base = (dpmi.memTop - ((size + 0xfff) & ~0xfff)) >>> 0;   // page-aligned, growing down
+        // Signed on purpose: `>>> 0` turned an over-large request into a huge positive address, so the
+        // "physical memory unavailable" test could never fire. Void 3 asks for a flat 16 MiB and was
+        // handed 0xFFDF0000 -- past the end of RAM -- with CF clear.
+        const base = dpmi.memTop - ((size + 0xfff) & ~0xfff);           // page-aligned, growing down
         if (base < heapFloor()) return fail(0x8013);                    // physical memory unavailable
         dpmi.memTop = base;
         if (machine.xms) machine.xms.max = Math.min(machine.xms.max, base);
@@ -366,7 +395,7 @@ export function installDPMI(machine) {
         const off = descOffset(c.reg[3] & 0xffff);
         if (off < 0) return fail(ERR_INVALID_SELECTOR);
         const a = (LDT_BASE + off) >>> 0;
-        mem.w8(a + 5, c.reg[1] & 0xff);
+        mem.w8(a + 5, clientDPL(c.reg[1] & 0xff));
         mem.w8(a + 6, ((c.reg[1] >> 8) & 0xf0) | (mem.r8(a + 6) & 0x0f));
         return ok();
       }

@@ -28,10 +28,26 @@ export function installBIOS(machine, opts = {}) {
   // Storage inside the BIOS segment for the two things a VbeInfoBlock points at. Well clear of the
   // per-vector stub table and of the DPMI/EMS entries above.
   const VBE_SEG = 0xf000, VBE_OEM_OFF = 0x0700, VBE_MODES_OFF = 0x0740;
+  // The VBE framebuffer is real RAM at the top of the machine's memory, reserved the same way the
+  // DPMI host reserves its descriptor tables — a client is told this address as PhysBasePtr, maps it
+  // with INT 31h 0800h and writes straight into it, so it has to be memory that exists and that no
+  // allocator will hand out. 2 MiB covers the largest advertised mode (640x480x32 = 1.2 MiB).
+  const VBE_FB_BYTES = 2 * 1024 * 1024;
+  const VBE_FB_LIN = (mem.size - VBE_FB_BYTES) >>> 0;
+  machine.vbeFbBase = VBE_FB_LIN;
   for (let i = 0; i < 0x60; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, 0);
   const oem = 'MIRAGE VGA';
   for (let i = 0; i < oem.length; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, oem.charCodeAt(i));
-  mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF) >>> 0, 0xffff);      // empty mode list, terminator only
+  // The advertised VBE mode list. 0x101-0x112 are the standard VBE numbers; 0x140+ are OEM numbers,
+  // which VBE explicitly allows and which is the only way to offer 320x240 — the standard set has no
+  // such mode, yet it is exactly what Void 3 scans for (320x240 at 32 bpp, from its SRC/SHIVA.RM).
+  // A client matches on the geometry in the ModeInfoBlock, not on the number, so the number is free.
+  const VBE_MODES = [
+    [0x101, 640, 480, 8], [0x103, 800, 600, 8], [0x10e, 320, 200, 16], [0x111, 640, 480, 16],
+    [0x112, 640, 480, 32], [0x140, 320, 200, 32], [0x141, 320, 240, 32], [0x142, 320, 240, 8],
+  ];
+  VBE_MODES.forEach(([n], i) => mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF + i * 2) >>> 0, n));
+  mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF + VBE_MODES.length * 2) >>> 0, 0xffff);   // terminator
 
   // The ROM identity a real machine carries at the very top of F000. Ours held zeros there, and a
   // program that SCANS this region for it finds nothing and keeps going: Turbo Pascal's runtime runs
@@ -208,6 +224,7 @@ export function installBIOS(machine, opts = {}) {
     const ah = cpu.ah;
     switch (ah) {
       case 0x00: {                              // set video mode
+        machine.vbe = null;                     // a plain BIOS mode set leaves any VBE mode
         bios.mode = cpu.al & 0x7f;
         mem.w8(BDA + 0x49, bios.mode);
         mem.w16(BDA + 0x63, bios.mode === 7 ? 0x03b4 : 0x03d4);  // CRTC base (mono mode 7 vs colour)
@@ -361,22 +378,61 @@ export function installBIOS(machine, opts = {}) {
       // program comparing the whole of AX rather than AL saw an answer no BIOS gives.
       case 0x1a: cpu.ax = 0x001a; cpu.bx = 0x0008; break;   // BL=08h = VGA colour, BH=0 = no second display
       // ---- VESA VBE ----------------------------------------------------------------------------
-      // Only the discovery call, and it advertises an EMPTY mode list, because no VBE mode is
-      // implemented yet: mode 0x10E (320x200 hi-colour) needs a 16-bpp path and bank switching that
-      // do not exist. Answering honestly beats not answering — Stash asks 4F00h once and, getting
-      // nothing back, sits in text mode for ever. A caller that reads a valid block with no modes
-      // can at least take its fallback.
       case 0x4f: {
-        if (cpu.al !== 0x00) { cpu.ax = 0x014f; break; }        // AH=01 = "failed", AL=4F = supported
-        const p = (cpu.base[0] + (cpu.di & 0xffff)) >>> 0;   // base[0] = ES
-        for (let i = 0; i < 256; i++) mem.w8(p + i, 0);
-        for (let i = 0; i < 4; i++) mem.w8(p + i, 'VESA'.charCodeAt(i));
-        mem.w16(p + 4, 0x0102);                                  // VBE 1.2
-        mem.w16(p + 6, VBE_OEM_OFF); mem.w16(p + 8, VBE_SEG);   // OemStringPtr
-        mem.w16(p + 10, 0); mem.w16(p + 12, 0);                   // capabilities: none
-        mem.w16(p + 14, VBE_MODES_OFF); mem.w16(p + 16, VBE_SEG);  // VideoModePtr
-        mem.w16(p + 18, 4);                                      // 256 KB, in 64 KB blocks
-        cpu.ax = 0x004f;
+        const es = (cpu.base[0] + (cpu.di & 0xffff)) >>> 0;    // base[0] = ES; ES:DI is the buffer
+        const findMode = (n) => VBE_MODES.find((m) => m[0] === (n & 0x1ff));
+        switch (cpu.al) {
+          case 0x00: {                                          // VbeInfoBlock
+            for (let i = 0; i < 256; i++) mem.w8(es + i, 0);
+            for (let i = 0; i < 4; i++) mem.w8(es + i, 'VESA'.charCodeAt(i));
+            mem.w16(es + 4, 0x0200);                             // VBE 2.0 — required for PhysBasePtr
+            mem.w16(es + 6, VBE_OEM_OFF); mem.w16(es + 8, VBE_SEG);
+            mem.w32(es + 10, 0x00000001);                        // capabilities: DAC is switchable
+            mem.w16(es + 14, VBE_MODES_OFF); mem.w16(es + 16, VBE_SEG);
+            mem.w16(es + 18, VBE_FB_BYTES >> 16);                // video memory, in 64 KB blocks
+            cpu.ax = 0x004f; break;
+          }
+          case 0x01: {                                          // ModeInfoBlock for CX
+            const m = findMode(cpu.cx);
+            if (!m) { cpu.ax = 0x014f; break; }
+            const [, w, h, bpp] = m, pitch = w * (bpp >> 3);
+            for (let i = 0; i < 256; i++) mem.w8(es + i, 0);
+            // bit0 supported, bit1 extra info, bit3 colour, bit4 graphics, bit7 linear framebuffer
+            mem.w16(es + 0, 0x009b);
+            mem.w8(es + 2, 0x07); mem.w8(es + 3, 0x00);          // window A readable/writable, no window B
+            mem.w16(es + 4, 64); mem.w16(es + 6, 64);            // granularity / size, in KB
+            mem.w16(es + 8, 0xa000);                             // window A at A000
+            mem.w16(es + 16, pitch);
+            mem.w16(es + 18, w); mem.w16(es + 20, h);
+            mem.w8(es + 22, 8); mem.w8(es + 23, 16);
+            mem.w8(es + 24, 1); mem.w8(es + 25, bpp);            // one plane, packed
+            mem.w8(es + 26, 1); mem.w8(es + 27, bpp === 8 ? 4 : 6);   // 4 = packed pixel, 6 = direct colour
+            mem.w8(es + 29, 0);
+            if (bpp === 16) { mem.w8(es + 31, 5); mem.w8(es + 32, 11); mem.w8(es + 33, 6); mem.w8(es + 34, 5); mem.w8(es + 35, 5); mem.w8(es + 36, 0); }
+            if (bpp === 32) {
+              mem.w8(es + 31, 8); mem.w8(es + 32, 16); mem.w8(es + 33, 8); mem.w8(es + 34, 8);
+              mem.w8(es + 35, 8); mem.w8(es + 36, 0); mem.w8(es + 37, 8); mem.w8(es + 38, 24);
+            }
+            mem.w32(es + 40, VBE_FB_LIN);                        // PhysBasePtr (VBE 2.0)
+            cpu.ax = 0x004f; break;
+          }
+          case 0x02: {                                          // set mode (BX; bit 14 = linear)
+            const m = findMode(cpu.bx);
+            if (!m) { cpu.ax = 0x014f; break; }
+            machine.setVbeMode(m, !!(cpu.bx & 0x4000));
+            cpu.ax = 0x004f; break;
+          }
+          case 0x05: {                                          // window control (BH=0 set, 1 get)
+            if (!machine.vbe) { cpu.ax = 0x014f; break; }
+            if ((cpu.bx >> 8) & 0xff) cpu.dx = machine.vbe.bank;
+            else machine.vbeWindow(cpu.dx & 0xffff);
+            cpu.ax = 0x004f; break;
+          }
+          case 0x03:                                            // get mode
+            cpu.bx = machine.vbe ? (machine.vbe.number | (machine.vbe.linear ? 0x4000 : 0)) : 0;
+            cpu.ax = 0x004f; break;
+          default: cpu.ax = 0x014f;                             // AH=01 failed, AL=4F supported
+        }
         break;
       }
       case 0x1c: {                               // save/restore video state — VGA-only, so games use it to probe VGA
@@ -706,6 +762,7 @@ export function installBIOS(machine, opts = {}) {
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
   if (opts.xms !== false) installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
+  if (machine.xms) machine.xms.max = Math.min(machine.xms.max, VBE_FB_LIN);   // keep XMS out of the framebuffer
   if (opts.ems !== false) installEMS(machine);   // EMS — after XMS: shares its pool via xms.top
   installDPMI(machine);  // DPMI host (INT 2Fh AX=1687h + f000:0200 mode-switch entry). AFTER XMS:
                          // it chains that INT 2Fh hook and caps the XMS pool below its own tables.

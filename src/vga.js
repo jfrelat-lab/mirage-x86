@@ -70,7 +70,14 @@ export function installVGA(machine) {
   const alu = (fn, v, l) => fn === 1 ? (v & l) : fn === 2 ? (v | l) : fn === 3 ? (v ^ l) : v;
 
   // The EGA/VGA write pipeline. `off` is the offset within the A000 window (0..0xFFFF).
+  // A VESA VBE mode borrows the A000 window: it is a 64 KiB view of the linear framebuffer, moved by
+  // VBE function 4F05. Routing it through this device (mem.setPlanar) is what makes the window a
+  // window at all — otherwise A000 stays ordinary RAM and a real-mode program's pixels never reach
+  // the framebuffer the renderer reads.
+  const vbeWin = () => (machine.vbe ? machine.vbe.windowSrc : -1);
+
   vga.writeByte = (off, val) => {
+    { const w = vbeWin(); if (w >= 0) { mem.u8[(w + (off & 0xffff)) >>> 0] = val & 0xff; return; } }
     off &= 0xffff;
     // Under MIRAGE_MEM_READ=shadow nothing loads the latches any more (reads bypass this file
     // entirely), so load them from the write address — exact for read-then-write-same-address,
@@ -141,6 +148,7 @@ export function installVGA(machine) {
   // A CPU read loads all four latches (that is what makes read-modify-write blitting work)
   // and returns the plane chosen by the read-map-select register (read mode 0).
   vga.readByte = (off) => {
+    { const w = vbeWin(); if (w >= 0) return mem.u8[(w + (off & 0xffff)) >>> 0]; }
     off &= 0xffff;
     latches[0] = planes[off]; latches[1] = planes[PLANE + off];
     latches[2] = planes[2 * PLANE + off]; latches[3] = planes[3 * PLANE + off];
