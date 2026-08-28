@@ -414,13 +414,29 @@ export function installDOS(machine, vfs) {
       case 0x0e: cpu.al = 1; break;                                  // select disk → 1 drive
       case 0x19: cpu.al = 2; break;                                  // current drive = C
       case 0x1a: dos.dta = cpu.base[DS] + (cpu.dx & 0xffff); break;  // set DTA
-      case 0x25: machine.setVector(cpu.al, cpu.seg[DS], cpu.dx & 0xffff); break; // set vector
+      // Set/get vector. For a DPMI client running in protected mode these address the client's
+      // PROTECTED-MODE vector table, not the real-mode IVT: DS:(E)DX is a selector:offset. Writing
+      // that to the IVT puts a selector where a segment belongs, and the IRQ then arrives through
+      // realInt with a 16-bit frame. Mesha's PMODE4K installs its 32-bit timer ISR exactly here
+      // (AX=2508h, DS = its code32 selector); its POPAD/IRETD epilogue popped that frame as three
+      // dwords and took a garbage CS.
+      case 0x25:
+        if (machine.dpmi && machine.dpmi.active && (cpu.cr0 & 1)) {
+          machine.dpmi.pmVec[cpu.al] = { sel: cpu.seg[DS], off: machine.dpmi.is32 ? (cpu.reg[2] >>> 0) : (cpu.dx & 0xffff) };
+          break;
+        }
+        machine.setVector(cpu.al, cpu.seg[DS], cpu.dx & 0xffff); break;
       case 0x2a: { cpu.cx = 1990; cpu.dx = 0x0101; cpu.al = 1; break; } // get date (fixed)
       case 0x2c: { cpu.cx = 0; cpu.dx = 0; break; }                  // get time (fixed)
       case 0x2f: { cpu.setSeg(ES, (dos.dta >> 4) & 0xffff); cpu.bx = dos.dta & 0xf; break; } // get DTA
       case 0x30: cpu.ax = (dos.version[1] << 8) | dos.version[0]; cpu.bx = 0; cpu.cx = 0; break; // version
       case 0x33: cpu.dx = 0; break;                                  // ctrl-break state
-      case 0x35: { const v = machine.getVector(cpu.al); cpu.setSeg(ES, v.seg); cpu.bx = v.off; break; } // get vector
+      case 0x35: {                                                    // get vector — see 0x25 above
+        if (machine.dpmi && machine.dpmi.active && (cpu.cr0 & 1)) {
+          const p = machine.dpmi.pmVec[cpu.al];
+          if (p) { cpu.setSeg(ES, p.sel); if (machine.dpmi.is32) cpu.reg[3] = p.off >>> 0; else cpu.bx = p.off & 0xffff; break; }
+        }
+        const v = machine.getVector(cpu.al); cpu.setSeg(ES, v.seg); cpu.bx = v.off; break; }
       case 0x36: { cpu.ax = 4; cpu.bx = 0x4000; cpu.cx = 512; cpu.dx = 0xffff; break; } // free space
       // Directory operations. The VFS has done this all along — the shell's own MD and CD call
       // straight into it — but a *program* got "invalid function" from the default arm, so an

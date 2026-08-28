@@ -57,10 +57,22 @@ Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/vie
 |---|---|
 | **Helium** (ocsa, ASM'97) | ✅ **renders** — orange balloon + gem. A *finite* intro (plays ~48 ticks, restores mode 3, exits — not a hang). Needed the CRTC-Offset fix: it sets offset=32 (256-byte virtual line) where mode 13h defaults to 40 → `_renderGfx13` hardcoded a 320 stride and tore the picture. |
 | **Heaven** (NoooN, ASM'95) | ✅ **runs** — animated vortex/tunnel effect. Was derailing at ~52.5 M cycles; root cause was the missing **`0x67` address-size prefix**, implemented in `7e1e162` (ROADMAP F3, details below). Now past 70 M cycles with CS intact. ⚠️ Not verified frame-exact against DOSBox: `dosdiff` double-delivers INT 8 (it calls `tickTimer()` *and* leaves `timerAuto` on), and animated demos differ by phase anyway — use `render-com.js` for visual checks. |
-| **Mesha** (ASM'98), **Void 3** (MS'99), **Juggler 2001** (MS'01) | ❌ stuck in text mode 0x3 — never switch to graphics. Likely a DOS extender or a sound-card probe; not investigated. |
+| **Mesha** (ASM'98) | ✅ **renders** — textured 3D mesh. Its PMODE4K stub installs a 32-bit timer ISR with `INT 21h AX=2508h` *from protected mode*, which under DPMI addresses the client's PM vector table; we wrote it to the real-mode IVT and then delivered IRQ0 through `realInt`'s 16-bit frame, so the ISR's `POPAD`/`IRETD` popped three words as three dwords and `#GP`'d on a garbage CS. Fixed in `dos.js` (25h/35h) + `machine.dpmiIrq()`. |
+| **Void 3** (MS'99) | ❌ **needs VESA VBE** — `320×240×32bpp` with a linear framebuffer. `4F00h` succeeds but our mode list (`f000:740`) holds only the `FFFF` terminator, so its scan falls straight through to `@vesaerror` and it prints `vesa?` and exits. Confirmed against the released source (`SRC/SHIVA.RM`): `vesa?` is an ERROR string, not a prompt. |
+| **Juggler 2001** (MS'01) | ✅ **renders** once it gets a keystroke — it *asks* for the General MIDI port (`GMIDI @ 3x0h?`) and blocks on `INT 16h AH=00`. A headless probe has no keyboard, which is what "stuck in text mode" actually was. |
+| **Pitman** (Tristar) | ✅ **fully playable** — title screen, menu and level 1. It is a TEXT-mode game, so a probe that only counts pixels in `A000` reports it as blank. |
+| **Omniscent** (Sanction '97), **Forever Reality** (7dUMP '23), **StarPort BBS 2** (Future Crew '93, EGA `0Dh`), **Another Soul Lost** (Traction '03) | ✅ render. |
 
 Most *famous* 4Ks (Elevated, fr-08, cdak) are protected-mode/Windows → out of scope for the
 real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
+
+**pouët MS-Dos 4K top 10, swept 2026-08-28: 9/10 render, one blocked (Void 3, VESA).** Three of them
+had been filed as engine failures and none was: two were *waiting on a keypress* they had asked for
+in a printed message, and one is a text-mode game. The triage rule that follows: `probe-intro.js`
+counts non-zero bytes in chained `A000`, which is silent about `B800` text and about EGA planes, and
+"non-zero" is not "content" — a solid fill scores 64000/64000 and is a blank screen. Score frames by
+DISTINCT values, read what the program PRINTS before it blocks, and check the released source when
+there is one (`vesa?` looked like a prompt and is an error string).
 
 #### Engine gap found by the Heaven trace: the `0x67` address-size prefix (FIXED, `7e1e162`)
 

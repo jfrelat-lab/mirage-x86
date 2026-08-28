@@ -22,9 +22,18 @@ const vga = mc.vga || {}, fb = mc.mem.u8;
 let chained = 0; for (let i = 0; i < 64000; i++) if (fb[0xa0000 + i]) chained++;
 let planar = 0; const planes = vga.planes; if (planes) for (let i = 0; i < planes.length; i++) if (planes[i]) planar++;
 const dac = mc.bios.dac; let dacNonGray = 0; for (let i = 0; i < 768; i++) if ((dac[i] & 63) !== 0) dacNonGray++;
+// Chained A000 is not the only surface a program can draw on, and a probe that reports only that one
+// files a text-mode game as blank -- which is how Pitman was once recorded as broken. Report B800
+// too, and count DISTINCT values: a solid fill is 64000 non-zero bytes AND a blank screen.
+const mode = mc.mem.r8(0x449);
+let cells = 0; for (let i = 0; i < 80 * 25; i++) { const c = fb[0xb8000 + i * 2]; if (c && c !== 32) cells++; }
+const hist = new Uint8Array(256); for (let i = 0; i < 64000; i++) hist[fb[0xa0000 + i]] = 1;
+let distinct = 0; for (let i = 0; i < 256; i++) distinct += hist[i];
+const textual = mode === 0x03 || mode === 0x02 || mode === 0x07;
 console.log(`${prog}
-  mode=0x${mc.mem.r8(0x449).toString(16)}  modeX=${!!vga.modeX}  planar=${!!vga.planar}  fault=${fault ? fault.message : 'none'}  done=${dos.programDone}
-  chained A000 nonzero: ${chained}/64000   planes nonzero: ${planar}   DAC set entries: ${dacNonGray}/768`);
+  mode=0x${mode.toString(16)}  modeX=${!!vga.modeX}  planar=${!!vga.planar}  fault=${fault ? fault.message : 'none'}  done=${dos.programDone}
+  chained A000 nonzero: ${chained}/64000 (${distinct} distinct)   planes nonzero: ${planar}   DAC set entries: ${dacNonGray}/768
+  B800 text cells used: ${cells}/2000${textual && cells && !chained ? '   <- drawing in TEXT mode; not a failure' : ''}`);
 
 // render through the real video path if available, else naive chained read
 if (outArg) {

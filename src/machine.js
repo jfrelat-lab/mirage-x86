@@ -499,6 +499,7 @@ export class Machine {
     this.cpu.halted = false;                  // the timer IRQ wakes a HLT even with the BIOS-default
                                               // ISR (a `STI;HLT` before the guest installs its own
                                               // INT 8 — e.g. Moktar's GAME.TDT init — must resume)
+    if (this.dpmiIrq(8)) return;              // a DPMI client's own PM handler comes first
     const v8 = this.getVector(8);
     if (v8.seg !== BIOS_SEG) { this.realInt(8, v8.seg, v8.off); return; }
     // No guest ISR: we are the BIOS timer handler. A real one ends with `mov al,20h; out 20h,al`,
@@ -539,6 +540,23 @@ export class Machine {
     this.cpu.deadline = this.nextTimerCycle;
   }
 
+  /** Deliver a hardware IRQ to a DPMI client's own protected-mode handler, at the client's frame
+   *  width. Without this the IRQ goes out through the real-mode IVT and realInt's 16-bit frame,
+   *  which a 32-bit ISR then pops as three dwords — Mesha's PMODE4K timer ISR ends in POPAD/IRETD
+   *  and took a garbage CS from it. Returns true when it delivered. */
+  dpmiIrq(n, pic) {
+    if (!(this.cpu.cr0 & 1) || !this.dpmi || !this.dpmi.active) return false;
+    const v = this.dpmi.pmVec[n];
+    if (!v) return false;
+    if (pic) pic.acknowledge();
+    const cpu = this.cpu, is32 = this.dpmi.is32;
+    cpu.pushW(cpu.flags, is32); cpu.pushW(cpu.seg[CS], is32); cpu.pushW(cpu.eip >>> 0, is32);
+    cpu.flags &= ~(IF | TF);
+    cpu.setSeg(CS, v.sel); cpu.eip = v.off >>> 0;
+    cpu.halted = false;
+    return true;
+  }
+
   /** Raise IRQ1 (keyboard) into a guest-installed INT 9 handler, if any. */
   raiseKeyboardIRQ() {
     if (!(this.cpu.flags & IF)) return false;
@@ -547,6 +565,7 @@ export class Machine {
       pic.raise(1);
       if (pic.pending() !== 1) return false;  // masked, or a higher-priority ISR is still open
     }
+    if (this.dpmiIrq(9, pic)) return true;
     const v = this.getVector(9);
     if (v.seg === BIOS_SEG) {
       // No guest handler; the BIOS buffer path handles the scancode itself, so acknowledge and end
