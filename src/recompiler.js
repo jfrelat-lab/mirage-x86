@@ -1507,7 +1507,11 @@ export class Recompiler {
         case 0xab: { const o = modrm(); bt(o, 'bts', rR(o.reg, sz)); return; }           // BTS
         case 0xb3: { const o = modrm(); bt(o, 'btr', rR(o.reg, sz)); return; }           // BTR
         case 0xbb: { const o = modrm(); bt(o, 'btc', rR(o.reg, sz)); return; }           // BTC
-        case 0xba: { const o = modrm(); const imm = f8(); bt(o, ['bt', 'bt', 'bt', 'bt', 'bt', 'bts', 'btr', 'btc'][o.reg], '' + imm); return; }
+        // BT/BTS/BTR/BTC with an IMMEDIATE offset takes it modulo the operand size even for a memory
+        // operand — only the REGISTER-offset form addresses an absolute bit and can leave the operand.
+        // Treating the immediate as absolute sent `bt word [bx],0AFh` to bit 175 (byte +21) instead
+        // of bit 15 of the addressed word.
+        case 0xba: { const o = modrm(); const imm = f8() & (sz - 1); bt(o, ['bt', 'bt', 'bt', 'bt', 'bt', 'bts', 'btr', 'btc'][o.reg], '' + imm); return; }
         case 0xb2: { const o = modrm(); P(loadPtr(o, SS, sz)); return; } // LSS
         case 0xb4: { const o = modrm(); P(loadPtr(o, FS, sz)); return; } // LFS
         case 0xb5: { const o = modrm(); P(loadPtr(o, GS, sz)); return; } // LGS

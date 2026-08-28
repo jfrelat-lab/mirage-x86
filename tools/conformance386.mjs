@@ -58,6 +58,15 @@ const DEFAULT = [
   'E8', 'E9', 'EA', 'EB', '9A', '9C', '9D',
   '66C2', '66C3', '66C8', '66C9', '66CA', '66CB', '66CF',      // ...32-bit operand
   '66E8', '66E9', '66EA', '66EB', '669A', '669C', '669D',
+  '08', '09', '20', '21', '28', '29', '30', '31', '8A', '8B',  // the rest of the 16-bit ALU/MOV grid
+  '0FA4', '0FAC', '0FBA.4', '0FBA.5', '0FBA.6', '0FBA.7',      // SHLD/SHRD and the BT immediate group
+  '660FA5', '660FAD', '660FBA.4', '660FBA.7', 'C0.4', 'D2.4', 'D3.4',
+  '670F90', '670F94', '670FA3', '670FA4', '670FAB', '670FAF', '670FB2', '670FB4', '670FB6',
+  '670FBA.4', '670FBB', '670FBC', '670FBE',                    // the 0F space under a 32-bit address
+  '6780.0', '6781.5', '6782.0', '6783.5', '6784', '6786', '6788', '678A', '678C', '678E', '678F',
+  '67C0.4', '67C1.4', '67C4', '67C5', '67C6', '67C7', '67D0.4', '67D1.4', '67D2.4', '67D3.4',
+  '67D7', '67E0', '67E2', '67E3', '67F6.4', '67F7.4',          // LES/LDS, XLAT and LOOP addressed 32-bit
+  '67660FA3', '67660FAF', '67660FB6', '6766C1.4', '6766C4', '6766D3.4', '6766F7.4',
 ];
 async function vectors(op) {
   mkdirSync(CACHE, { recursive: true });
@@ -84,7 +93,8 @@ function undefMask(op) {
   if (/^(C0|C1|D0|D1|D2|D3)\./.test(core)) return AF | OF;               // shifts and rotates
   if (/^0FAF$/.test(core)) return SF | ZF | AF | PF;                     // IMUL r,r/m
   if (/^0F(A4|A5|AC|AD)$/.test(core)) return AF | OF;                    // SHLD / SHRD
-  if (/^0F(A3|AB|B3|BB)$/.test(core)) return OF | SF | ZF | AF | PF;     // BT / BTS / BTR / BTC
+  if (/^0F(A3|AB|B3|BB)$/.test(core) || /^0FBA\.[4-7]$/.test(core))
+    return OF | SF | ZF | AF | PF;                                      // BT / BTS / BTR / BTC, both forms
   if (/^0F(BC|BD)$/.test(core)) return CF | OF | SF | AF | PF;           // BSF / BSR — only ZF is defined
   if (/^(27|2F)$/.test(core)) return OF;                                // DAA / DAS
   if (/^(37|3F)$/.test(core)) return OF | SF | ZF | PF;                 // AAA / AAS
@@ -111,6 +121,9 @@ async function runOp(op) {
   const isShiftDouble = /^0F(A4|A5|AC|AD)$/.test(core);
   const clForm = /^0F(A5|AD)$/.test(core);
   const opBits = /^66/.test(op) ? 32 : 16;
+  const shiftGroup = /^(C0|C1|D0|D1|D2|D3)\./.test(core);
+  const shiftCL = /^(D2|D3)\./.test(core);
+  const shiftBits = /^(C0|D0|D2)\./.test(core) ? 8 : opBits;
   if (!m) return { op, missing: true };
   const mc = new Machine({ memSize: 16 << 20, cpu: '386' });
   mc.mem.setA20(true); mc.rec.MM = mc.mem.mask; mc.rec.reset();
@@ -124,6 +137,14 @@ async function runOp(op) {
     // undefined, so the vector records what this 80386EX happened to produce rather than something to
     // conform to — and unlike the undefined FLAGS, no mask accompanies it. Verified before skipping:
     // every count at or below the operand size matches the ordinary formula exactly.
+    // A shift or rotate whose masked count reaches or passes the operand width leaves CF undefined,
+    // and again no mask comes with the vector. Below the width every case matches, so the skip is
+    // exactly the undefined region.
+    if (shiftGroup) {
+      const b = t.bytes;
+      const cnt = shiftCL ? ((t.initial.regs32.ecx >>> 0) & 0xff) : b[b.length - 2];
+      if ((cnt & 31) >= shiftBits) { skipped++; continue; }
+    }
     if (isShiftDouble) {
       const b = t.bytes; let k = 0; while (b[k] === 0x66 || b[k] === 0x67 || b[k] === 0x2e || b[k] === 0x36 ||
         b[k] === 0x3e || b[k] === 0x26 || b[k] === 0x64 || b[k] === 0x65) k++;
