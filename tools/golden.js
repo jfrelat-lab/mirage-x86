@@ -34,6 +34,13 @@ const ROOT = join(HERE, '..');
 const BASELINE = join(HERE, 'golden-baseline.json');
 const TICKS = 60, BUDGET = 400000;
 
+// Intros whose picture is not on screen at the default 60 ticks — measured, not guessed, by counting
+// DISTINCT framebuffer values across candidate budgets. `animate` had already finished and cleared to
+// a flat fill (2 values) at 60; `mesha` needs ~400 ticks to finish precomputing and draws nothing
+// before that. The engine is deterministic, so any budget is reproducible — the choice is only about
+// sampling where the content is.
+const TICK_OVERRIDE = { animate: 20, freality: 20, mesha: 400, omniscent: 120, starport: 200 };
+
 // Fixed workload set: both own demos + every third-party intro. Third-party binaries are
 // gitignored, so `check` silently skips any that are absent on this machine.
 const WORKLOADS = [
@@ -42,11 +49,14 @@ const WORKLOADS = [
   // unguarded — measured with tools/probe-intro.js, all thirteen set their mode and fill the
   // framebuffer with no fault, so a regression in any of them would have gone unnoticed. Pinning
   // what already works is the cheapest coverage there is.
+  // The 2026-08-28 additions are the pouet MS-Dos 4K top ten (see COMPAT). `juggler` is left out
+  // because it blocks on a keypress before it draws, and `void3` because it needs VESA and exits.
   ...['256b', '256bytef', 'above', 'abstract', 'animate', 'chaosequ', 'difze', 'dirojed', 'endless',
-      'intoanew', 'intro', 'intro256', 'kaneda', 'lattice', 'memories', 'mirrors', 'nibble',
-      'oktaeder', 'paleozoa', 'paralaxa', 'pitman', 'puls', 'qblove', 'revitro', 'rv256', 'symetrie',
-      'tube', 'upup', 'warp', 'worm']
-    .map((n) => [`intros/${n}.com`]),
+      'freality', 'intoanew', 'intro', 'intro256', 'kaneda', 'lattice', 'memories', 'mesha',
+      'mirrors', 'nibble', 'oktaeder', 'omniscent', 'paleozoa', 'paralaxa', 'pitman', 'puls',
+      'qblove', 'revitro', 'rv256', 'soullost', 'starport', 'symetrie', 'tube', 'upup', 'warp',
+      'worm']
+    .map((n) => [`intros/${n}.com`, TICK_OVERRIDE[n] ? { ticks: TICK_OVERRIDE[n] } : undefined]),
   ['intros/mars.exe'],
   // Boot-sector workloads run through the INT 19h handoff with no DOS installed at all. Pinning one
   // here is what keeps that second entry point from silently rotting: nothing else exercises it.
@@ -61,7 +71,11 @@ function fingerprint(relPath, opts = {}) {
   let fault = null; mc.onError = (e) => { fault = e; };
   if (opts.boot) bootSector(mc, new Uint8Array(readFileSync(abs)));
   else dos.load(new Uint8Array(readFileSync(abs)), '', 'C:\\PROG');
-  for (let t = 0; t < TICKS && !fault && !(dos && dos.programDone); t++) { mc.runSlice(BUDGET); }  // run loop owns the PIT timer now
+  // Per-workload tick budget. A program that FINISHES inside the default budget leaves the screen
+  // it exits to, not the one it drew: `animate` is a flat fill at 60 ticks. Pin the show, not the
+  // curtain -- `opts.ticks` moves the sample to where the picture actually is.
+  const ticks = opts.ticks || TICKS;
+  for (let t = 0; t < ticks && !fault && !(dos && dos.programDone); t++) { mc.runSlice(BUDGET); }  // run loop owns the PIT timer now
   const h = createHash('sha1');
   const meta = Buffer.alloc(8);
   meta[0] = mc.mem.r8(0x449);                     // video mode
@@ -76,6 +90,11 @@ function fingerprint(relPath, opts = {}) {
     h.update(Buffer.from([mc.vga.crtc[0x0c], mc.vga.crtc[0x0d], mc.vga.crtc[0x13]]));  // and the CRTC start/stride
   }
   const md = mc.mem.r8(0x449);
+  if (md === 3 || md === 2 || md === 7) {                  // TEXT modes: the picture is the B800 cell
+    h.update(mc.mem.u8.subarray(0xb8000, 0xb8000 + 4000)); // grid, and nothing above covers it — so a
+  }                                                        // text-mode program's golden was hashing an
+  // empty A000 plus its mode byte and could not fail. Pitman is a text-mode GAME and sat in this list
+  // fully unguarded; it is the reason this arm exists.
   if (md === 4 || md === 5 || md === 6) {                  // CGA graphics: the picture is in B800,
     h.update(mc.mem.u8.subarray(0xb8000, 0xb8000 + 16384));  // interleaved even/odd banks,
     h.update(Buffer.from([mc.bios.cga.color]));            // through the CGA colour-select register

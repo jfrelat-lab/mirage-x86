@@ -40,8 +40,8 @@
     "fault": null
   },
   "intros/animate.com": {
-    "hash": "0bb27dc25d7f58de2bfee351450c97041e25a5d0",
-    "mode": 3,
+    "hash": "71dbbec9c0728a2140b19b5ffda087cb33a33c46",
+    "mode": 19,
     "fault": null
   },
   "intros/chaosequ.com": {
@@ -105,7 +105,7 @@
     "fault": null
   },
   "intros/oktaeder.com": {
-    "hash": "52a47656fd5ac5c8098f29801ef30ea82f585913",
+    "hash": "00313cc187fe91da472f36191f4f8db9a713f60d",
     "mode": 3,
     "fault": null
   },
@@ -120,7 +120,7 @@
     "fault": null
   },
   "intros/pitman.com": {
-    "hash": "52a47656fd5ac5c8098f29801ef30ea82f585913",
+    "hash": "6f4eafe9cb59ff22d9a6dfa4f08c548372b4eb4e",
     "mode": 3,
     "fault": null
   },
@@ -177,6 +177,31 @@
   "boot/BOOTCHESS.IMG": {
     "hash": "fa3da5a932b09237af1fa21f10e74f2243e701b5",
     "mode": 19,
+    "fault": null
+  },
+  "intros/freality.com": {
+    "hash": "ed5e395ae6e034bdbda133a944223149b814b68c",
+    "mode": 19,
+    "fault": null
+  },
+  "intros/mesha.com": {
+    "hash": "00f75f2b301cb107dba35260b6d1a8e7b6fef5cf",
+    "mode": 3,
+    "fault": null
+  },
+  "intros/omniscent.com": {
+    "hash": "46d9f46df0c9ebc2d4e7dd29830c2fab5b3de4af",
+    "mode": 3,
+    "fault": null
+  },
+  "intros/soullost.com": {
+    "hash": "52372285d351906f3e5cfd39f4890e3da76a639a",
+    "mode": 3,
+    "fault": null
+  },
+  "intros/starport.com": {
+    "hash": "ae91bd391a70c0ab9f0454df14c5591f92f8c179",
+    "mode": 13,
     "fault": null
   }
 }
