@@ -765,13 +765,19 @@ export class CPU {
   daa() {
     const oldAL = this.reg[0] & 0xff, oldCF = this.flags & CF ? 1 : 0; let al = oldAL, cf = 0, af = 0;
     if ((al & 0x0f) > 9 || (this.flags & AF)) { const s = al + 6; al = s & 0xff; cf = (oldCF || s > 0xff) ? 1 : 0; af = 1; }
-    if (oldAL > ((this.flags & AF) ? 0x9f : 0x99) || oldCF) { al = (al + 0x60) & 0xff; cf = 1; }
+    if (oldAL > (this.profile.bcdAdjustsAX ? 0x99 : ((this.flags & AF) ? 0x9f : 0x99)) || oldCF) { al = (al + 0x60) & 0xff; cf = 1; }
     this.al = al; this._szp(al); this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
   }
   das() {
     const oldAL = this.reg[0] & 0xff, oldCF = this.flags & CF ? 1 : 0; let al = oldAL, cf = 0, af = 0;
-    if ((al & 0x0f) > 9 || (this.flags & AF)) { al = (al - 6) & 0xff; af = 1; }  // low borrow does NOT set CF
-    if (oldAL > ((this.flags & AF) ? 0x9f : 0x99) || oldCF) { al = (al - 0x60) & 0xff; cf = 1; }
+    // The borrow out of AL-6 sets CF on a 386; on an 8088 it does not. Same generational split as
+    // the AAA/AAS carry and the 0x99 threshold above, and measured the same way.
+    if ((al & 0x0f) > 9 || (this.flags & AF)) {
+      const borrow = al < 6;
+      al = (al - 6) & 0xff; af = 1;
+      if (this.profile.bcdAdjustsAX && (oldCF || borrow)) cf = 1;
+    }
+    if (oldAL > (this.profile.bcdAdjustsAX ? 0x99 : ((this.flags & AF) ? 0x9f : 0x99)) || oldCF) { al = (al - 0x60) & 0xff; cf = 1; }
     this.al = al; this._szp(al); this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
   }
   aaa() {
