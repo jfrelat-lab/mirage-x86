@@ -44,6 +44,10 @@ const DEFAULT = [
   '84', '85', '86', '87', '8F', '60', '61', '62', '68', '69', '6A', '6B',
   'E4', 'E5', 'E6', 'E7', 'EC', 'ED', 'EE', 'EF',              // port I/O
   'F5', 'F8', 'F9', 'FA', 'FB', 'FC', 'FD', '9B',              // flag ops
+  '0F06', '0FA0', '0FA1', '0FA5', '0FAB', '0FAD', '0FB2', '0FB4', '0FB5', '0FBC', '0FBD',  // the 0F space
+  '0F80', '0F84', '0F88', '0F8C', '0F90', '0F94', '0F98', '0F9C',   // long conditionals, SETcc
+  '70', '74', '78', '7C', '90', '91', '96', '97',              // short conditionals, XCHG
+  'B0', 'B4', 'B8', 'BC', '8C', '8E', '8F',                    // MOV imm, segment moves, POP r/m
   'C2', 'C3', 'C8', 'C9', 'CA', 'CB', 'CC', 'CD', 'CE', 'CF',  // control transfers and the stack frame
   'E8', 'E9', 'EA', 'EB', '9A', '9C', '9D',
   '66C2', '66C3', '66C8', '66C9', '66CA', '66CB', '66CF',      // ...32-bit operand
@@ -97,6 +101,10 @@ function apply(cpu, r) {
 async function runOp(op) {
   const m = await vectors(op);
   const arch = undefMask(op);
+  const core = op.replace(/^(66|67)+/, '');
+  const isShiftDouble = /^0F(A4|A5|AC|AD)$/.test(core);
+  const clForm = /^0F(A5|AD)$/.test(core);
+  const opBits = /^66/.test(op) ? 32 : 16;
   if (!m) return { op, missing: true };
   const mc = new Machine({ memSize: 16 << 20, cpu: '386' });
   mc.mem.setA20(true); mc.rec.MM = mc.mem.mask; mc.rec.reset();
@@ -106,6 +114,16 @@ async function runOp(op) {
   for (const t of m.tests) {
     if (!t.initial || !t.final) { skipped++; continue; }
     if (t.exception) { skipped++; continue; }        // exception cases need the IVT the capture used
+    // SHLD/SHRD with a masked count LARGER than the operand size: the architecture leaves the result
+    // undefined, so the vector records what this 80386EX happened to produce rather than something to
+    // conform to — and unlike the undefined FLAGS, no mask accompanies it. Verified before skipping:
+    // every count at or below the operand size matches the ordinary formula exactly.
+    if (isShiftDouble) {
+      const b = t.bytes; let k = 0; while (b[k] === 0x66 || b[k] === 0x67 || b[k] === 0x2e || b[k] === 0x36 ||
+        b[k] === 0x3e || b[k] === 0x26 || b[k] === 0x64 || b[k] === 0x65) k++;
+      const cl = clForm ? ((t.initial.regs32.ecx >>> 0) & 0xff) : b[b.length - 2];
+      if ((cl & 31) > opBits) { skipped++; continue; }
+    }
     apply(cpu, t.initial.regs32);
     for (const [a, v] of t.initial.ram) u8[a & mask] = v;
     cpu.halted = false;
