@@ -40,6 +40,10 @@ const DEFAULT = [
   '66A5', '66A7', '66AB', '66AD', '66AF',                      // ...32-bit operand
   '67A4', '67A5', '67A6', '67A7', '67AA', '67AB', '67AC', '67AD', '67AE', '67AF',   // ...32-bit address
   '6766A5', '6766A7', '6766AB', '6766AD', '6766AF',            // ...both
+  'C2', 'C3', 'C8', 'C9', 'CA', 'CB', 'CC', 'CD', 'CE', 'CF',  // control transfers and the stack frame
+  'E8', 'E9', 'EA', 'EB', '9A', '9C', '9D',
+  '66C2', '66C3', '66C8', '66C9', '66CA', '66CB', '66CF',      // ...32-bit operand
+  '66E8', '66E9', '66EA', '66EB', '669A', '669C', '669D',
 ];
 async function vectors(op) {
   mkdirSync(CACHE, { recursive: true });
@@ -103,15 +107,21 @@ async function runOp(op) {
     // sitting on it: a long `rep stos` can overwrite its own terminator, and "step until halted" then
     // runs whatever follows and drifts the registers. That is what the last handful of string-op
     // failures were — the engine was right and the harness kept going.
-    const hltAt = ((t.initial.regs32.eip >>> 0) + t.bytes.length - 1) >>> 0;
-    const hltLin = ((((t.initial.regs32.cs & 0xffff) << 4) + hltAt) & mask) >>> 0;
+    // The capture terminates each test with a HLT and reports the state AFTER it retires — so the
+    // expected EIP is one past it. The HLT sits wherever execution ARRIVES, which for a CALL, RET or
+    // IRET is the branch target, not the next address: keying on "initial eip + length" works for
+    // straight-line code and reports every control transfer as an off-by-one on EIP.
+    // Look for it under CS:EIP instead. If it is not there, either a long `rep stos` wrote over its
+    // own terminator or the transfer landed somewhere without one; the capture's CPU then ran
+    // whatever was there, so its final state describes an arbitrary continuation and there is nothing
+    // to conform to. Skip those, as conformance.js skips its own untestable cases.
     try {
       mc.rec.stepOne();
-      // A long `rep stos` can write over its own terminator. The capture's CPU then ran whatever the
-      // store left behind, so its final state describes an arbitrary continuation rather than the
-      // instruction — there is nothing to conform to. Detect it by looking for the HLT and skip.
-      if (u8[hltLin] !== 0xf4) { skipped++; continue; }
-      if (!cpu.halted && (cpu.eip >>> 0) === hltAt) mc.rec.stepOne();
+      if (!cpu.halted) {
+        const at = (((cpu.base[1] >>> 0) + (cpu.eip >>> 0)) & mask) >>> 0;
+        if (u8[at] !== 0xf4) { skipped++; continue; }
+        mc.rec.stepOne();
+      }
     } catch (e) { threw++; if (ex.length < 3) ex.push(`${t.name}: ${e.message}`); continue; }
     const want = { ...t.initial.regs32, ...t.final.regs32 };
     let ok = true, why = '';

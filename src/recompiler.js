@@ -875,7 +875,11 @@ export class Recompiler {
         // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
         case 0x9c: cur.use |= lALL; canFault = true;
           P(`if((cpu.flags&0x20000)&&((cpu.flags>>>12)&3)<3){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
-          P(sz === 32 ? 'cpu.push32(cpu.flags>>>0);'
+          // A 386 has no EFLAGS bit above 17 (VM): the rest are reserved and push as zero. Our
+          // flags word can hold more — an IRET frame or a POPFD supplies whatever the guest had —
+          // so mask on the way out, which is what the 80386EX vectors show (0xFFFC0493 pushes as
+          // 0x00000493).
+          P(sz === 32 ? 'cpu.push32(cpu.flags&0x3ffff);'
           : `cpu.push16((cpu.flags${PROF.pushfSetsReserved ? '|0xf000' : ''})&0xffff);`); break;
         // POPF / POPFD. Three fields it may NOT write, all of which the old one-line mask did: VM
         // (only IRETD from ring 0 sets that), IOPL (ring 0 only), and IF when CPL > IOPL. And in V86
@@ -961,8 +965,15 @@ export class Recompiler {
           break;
         }
         // LEAVE undoes it, and is width-sensitive for the same reason.
-        case 0xc9: P(sz === 32 ? 'r[4]=r[5]>>>0;r[5]=cpu.pop32()>>>0;'
-                               : 'r[4]=(r[4]&~0xffff)|r[5]&0xffff;r[5]=(r[5]&~0xffff)|cpu.pop16();'); break;
+        // LEAVE moves the frame pointer at the STACK's width and pops at the OPERAND's — two different
+        // widths, and branching on the operand size for both is wrong wherever they differ. `o32 leave`
+        // on a 16-bit stack (every real-mode program) writes SP from BP and then pops 32 bits into EBP;
+        // we wrote all of EBP into ESP and carried its high half in. ssB is only known at run time, and
+        // LEAVE is not hot enough for that to matter.
+        case 0xc9:
+          P('if(cpu.ssB){r[4]=r[5]>>>0;}else{r[4]=(r[4]&~0xffff)|(r[5]&0xffff);}');
+          P(sz === 32 ? 'r[5]=cpu.pop32()>>>0;' : 'r[5]=(r[5]&~0xffff)|cpu.pop16();');
+          break;
         // RETF pops what CALLF pushed — two dwords under 0x66, two words without. The selector is
         // popped as a dword too and its upper half discarded.
         // farRet can now raise #GP on the target's privilege; that is a fault, so it needs the
