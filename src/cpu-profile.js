@@ -30,12 +30,19 @@ export const PROFILES = {
     shiftCountMask: 0xff,
     pushSPOriginal: false,     // PUSH SP pushes SP *after* the decrement
     pushfSetsReserved: true,   // bits 12-15 always read back as 1
+    // AAA/AAS adjust AL and AH SEPARATELY here: AL+6 is masked to 8 bits before AH is incremented,
+    // so the carry out of AL never reaches AH. Measured — making it AX-wide costs 366 of the 8088
+    // vectors. The 386 does the opposite; see below.
+    bcdAdjustsAX: false,
   },
   '286': {
     name: '286',
     shiftCountMask: 0x1f,      // 286+ masks the count to 5 bits
     pushSPOriginal: true,      // 286+ pushes the value SP had on entry
     pushfSetsReserved: false,  // cleared in real mode
+    // NOT measured on a 286 — no hardware vectors for it here. It follows the 386 because that is the
+    // likelier of the two, and saying so is better than implying it was checked.
+    bcdAdjustsAX: true,
   },
   // Today's default and what the corpus wants. Identical to 286 in the fields above; the difference
   // is the instruction set, which the decoder already provides unconditionally.
@@ -44,6 +51,9 @@ export const PROFILES = {
     shiftCountMask: 0x1f,
     pushSPOriginal: true,
     pushfSetsReserved: false,
+    // AAA/AAS adjust AX AS A WHOLE: the carry out of AL+6 reaches AH and the +1 rides on top of it.
+    // With AX=1FFFh the 80386EX vectors give AH=21h where the split form gives 20h.
+    bcdAdjustsAX: true,
   },
 };
 

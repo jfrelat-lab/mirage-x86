@@ -40,6 +40,10 @@ const DEFAULT = [
   '66A5', '66A7', '66AB', '66AD', '66AF',                      // ...32-bit operand
   '67A4', '67A5', '67A6', '67A7', '67AA', '67AB', '67AC', '67AD', '67AE', '67AF',   // ...32-bit address
   '6766A5', '6766A7', '6766AB', '6766AD', '6766AF',            // ...both
+  '27', '2F', '37', '3F', 'D4', 'D5', 'D6', 'D7', '98', '99',  // BCD, XLAT, sign extension
+  '84', '85', '86', '87', '8F', '60', '61', '62', '68', '69', '6A', '6B',
+  'E4', 'E5', 'E6', 'E7', 'EC', 'ED', 'EE', 'EF',              // port I/O
+  'F5', 'F8', 'F9', 'FA', 'FB', 'FC', 'FD', '9B',              // flag ops
   'C2', 'C3', 'C8', 'C9', 'CA', 'CB', 'CC', 'CD', 'CE', 'CF',  // control transfers and the stack frame
   'E8', 'E9', 'EA', 'EB', '9A', '9C', '9D',
   '66C2', '66C3', '66C8', '66C9', '66CA', '66CB', '66CF',      // ...32-bit operand
@@ -72,6 +76,10 @@ function undefMask(op) {
   if (/^0F(A4|A5|AC|AD)$/.test(core)) return AF | OF;                    // SHLD / SHRD
   if (/^0F(A3|AB|B3|BB)$/.test(core)) return OF | SF | ZF | AF | PF;     // BT / BTS / BTR / BTC
   if (/^0F(BC|BD)$/.test(core)) return CF | OF | SF | AF | PF;           // BSF / BSR — only ZF is defined
+  if (/^(27|2F)$/.test(core)) return OF;                                // DAA / DAS
+  if (/^(37|3F)$/.test(core)) return OF | SF | ZF | PF;                 // AAA / AAS
+  if (/^(D4|D5)$/.test(core)) return OF | AF | CF;                      // AAM / AAD
+  if (/^(69|6B)$/.test(core)) return SF | ZF | AF | PF;                 // IMUL r,r/m,imm
   return 0;
 }
 

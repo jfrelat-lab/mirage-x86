@@ -775,15 +775,27 @@ export class CPU {
     this.al = al; this._szp(al); this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
   }
   aaa() {
-    let al = this.reg[0] & 0xff, ah = (this.reg[0] >> 8) & 0xff, cf = 0, af = 0;
-    if ((al & 0x0f) > 9 || (this.flags & AF)) { al = (al + 6) & 0xff; ah = (ah + 1) & 0xff; af = 1; cf = 1; }
-    al &= 0x0f; this.reg[0] = (this.reg[0] & ~0xffff) | (ah << 8) | al;
+    // The adjustment is on AX, not on AL and AH separately: AL+6 CARRIES into AH, and the +1 is on
+    // top of that carry. Masking AL to 8 bits first swallows it — with AX=1FFFh the 80386EX vectors
+    // give AH=21h where the split form gives 20h.
+    let ax = this.reg[0] & 0xffff, cf = 0, af = 0;
+    if ((ax & 0x0f) > 9 || (this.flags & AF)) {
+      ax = this.profile.bcdAdjustsAX ? ((ax + 0x106) & 0xffff)
+        : ((ax & 0xff00) | ((ax + 6) & 0xff)) + 0x100 & 0xffff;
+      af = 1; cf = 1;
+    }
+    ax &= 0xff0f; this.reg[0] = (this.reg[0] & ~0xffff) | ax;
     this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
   }
   aas() {
-    let al = this.reg[0] & 0xff, ah = (this.reg[0] >> 8) & 0xff, cf = 0, af = 0;
-    if ((al & 0x0f) > 9 || (this.flags & AF)) { al = (al - 6) & 0xff; ah = (ah - 1) & 0xff; af = 1; cf = 1; }
-    al &= 0x0f; this.reg[0] = (this.reg[0] & ~0xffff) | (ah << 8) | al;
+    // Same as aaa: the borrow out of AL-6 reaches AH, so the adjustment is on AX as a whole.
+    let ax = this.reg[0] & 0xffff, cf = 0, af = 0;
+    if ((ax & 0x0f) > 9 || (this.flags & AF)) {
+      ax = this.profile.bcdAdjustsAX ? ((ax - 0x106) & 0xffff)
+        : ((ax & 0xff00) | ((ax - 6) & 0xff)) - 0x100 & 0xffff;
+      af = 1; cf = 1;
+    }
+    ax &= 0xff0f; this.reg[0] = (this.reg[0] & ~0xffff) | ax;
     this.flags = (this.flags & ~(CF | AF)) | (cf ? CF : 0) | (af ? AF : 0);
   }
 
