@@ -953,7 +953,14 @@ export class Recompiler {
           const szv = f16(), lvl = f8() & 0x1f; const ft = NT();
           if (sz === 32) {
             P(`cpu.push32(r[5]>>>0);var ${ft}=cpu.stackPtr;`);                                 // push EBP; frameTemp = ESP
-            for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]-4)>>>0;cpu.push32(m.r32(${AM("sb[2]+(r[5]>>>0)")})>>>0);`);
+            // The nested copies walk the frame pointer at the STACK's width and push at the OPERAND's,
+            // the same pair LEAVE confuses: on a 16-bit stack BP steps and wraps in 16 bits, and the
+            // read is at SS:BP. Using EBP there sent the read wherever its high half pointed, so every
+            // copy came back zero.
+            for (let i = 1; i < lvl; i++) {
+              P('if(cpu.ssB){r[5]=(r[5]-4)>>>0;}else{r[5]=(r[5]&~0xffff)|((r[5]-4)&0xffff);}');
+              P(`cpu.push32(m.r32(${AM("sb[2]+(cpu.ssB?(r[5]>>>0):(r[5]&0xffff))")})>>>0);`);
+            }
             if (lvl > 0) P(`cpu.push32(${ft});`);
             P(`r[5]=${ft}>>>0;cpu.spAdd(-${szv});`);                                           // EBP = frameTemp; ESP -= size
           } else {
