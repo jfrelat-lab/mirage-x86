@@ -198,7 +198,13 @@ async function runOp(op) {
   return { op, pass, regFail, ramFail, threw, skipped, total: m.tests.length, ex };
 }
 
-const ops = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT;
+// `all` runs the entire published corpus (941 files, 1.44 M cases, ~600 MB of cache). DEFAULT is the
+// curated subset that a gate run can afford; the manifest is versioned so `all` is reproducible
+// without a network listing.
+const argv = process.argv.slice(2);
+const ops = argv.length === 1 && argv[0] === 'all'
+  ? readFileSync(new URL('./sst386-manifest.txt', import.meta.url), 'utf8').split('\n').filter(Boolean)
+  : argv.length ? argv : DEFAULT;
 let P = 0, T = 0;
 for (const op of ops) {
   const r = await runOp(op);

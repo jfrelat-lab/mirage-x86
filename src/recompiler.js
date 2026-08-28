@@ -518,7 +518,7 @@ export class Recompiler {
     }
     const out = ['var t;'];
     const P = (s) => out.push(s);
-    let ip = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false;
+    let ip = ip0, ipLast = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false;
     const NT = () => '_' + (tmp++);
 
     // Terminator descriptor. Static, same-CS transfers (JMP rel / Jcc / LOOP / JCXZ) record
@@ -541,6 +541,14 @@ export class Recompiler {
     // EIP is a full 32-bit offset in a 32-bit code segment; only a 16-bit one wraps at 0xFFFF. `d` is
     // the CS D bit, which the block cache is already keyed by.
     const ipAdd = d ? (a, b) => (a + b) >>> 0 : (a, b) => (a + b) & 0xffff;
+    // ...but the SEQUENTIAL advance does not truncate: an instruction whose last byte sits at 0xFFFF
+    // leaves EIP = 0x10000. Only a near JMP/CALL with a 16-bit operand size zeroes the high half,
+    // which is what `ipAdd` above models for the branch targets. `ip` is the wrapped FETCH offset,
+    // so recover the untruncated value when the current instruction crossed the top of the segment.
+    // Fetch and the block-cache key stay wrapped -- step() re-masks EIP to 16 bits on entry -- so
+    // only the observable register changes. Executing AT 0x10000 in real mode should #GP on the
+    // segment limit; we still wrap there instead, which no DOS guest exercises deliberately.
+    const SEQ = () => (!d && ip < ipLast) ? ip + 0x10000 : ip;
 
     // ---- byte fetch (decode-time reads from memory) ----
     const f8 = () => { const b = mem.r8(mask(linStart - ip0 + ip)); ip = ipAdd(ip, 1); return b; };
@@ -680,7 +688,7 @@ export class Recompiler {
     // ===================== main decode loop =====================
     while (!ended && count < maxOps) {
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
-      const ipStart = ip;                 // instruction start ip — fault return address (#BR etc.)
+      const ipStart = ip; ipLast = ip;    // instruction start ip — fault return address (#BR etc.)
       // A #PF is raised from INSIDE a memory access, so the run loop has to know which instruction
       // to restart — and only this store knows. It is emitted per instruction ONLY under the paged
       // strategy, which the machine selects exactly when paging is on, so nothing outside protected
@@ -883,7 +891,7 @@ export class Recompiler {
         // a CALL GATE, whose fields are selector:offset rather than base/limit. cpu.farCall/farJmp
         // make that decision; real mode takes the same path and behaves as before.
         case 0x9a: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16();
-          P(`cpu.eip=${ip};cpu.farCall(${s},${o >>> 0},${sz === 32 ? 1 : 0},${ipStart});`); P('return;'); ended = true; break; } // CALLF ptr
+          P(`cpu.eip=${SEQ()};cpu.farCall(${s},${o >>> 0},${sz === 32 ? 1 : 0},${ipStart});`); P('return;'); ended = true; break; } // CALLF ptr
         case 0x9b: break;                                                               // WAIT
         // PUSHF: an 8086/88 always reads bits 12-15 back as 1; a 286+ clears them in real mode.
         case 0x9c: cur.use |= lALL; canFault = true;
@@ -1004,14 +1012,14 @@ export class Recompiler {
         // INT3 / INT n / INTO are SOFTWARE interrupts, privilege-checked against the gate's DPL —
         // unlike the faults that also route through swInt. #GP on that check saves the instruction's
         // own address, hence both IPs.
-        case 0xcc: P(`cpu.softInt(3,${ip},${ipStart});`); P('return;'); ended = true; break; // INT3
+        case 0xcc: P(`cpu.softInt(3,${SEQ()},${ipStart});`); P('return;'); ended = true; break; // INT3
         // F1 — ICEBP / INT1, undocumented but real on every x86 since the 386: a one-byte trap to
         // vector 1. Copy protections use it precisely because it is undocumented (Pinball Fantasies'
         // SETSOUND runs one inside its decryptor). Vector 1's default handler is a bare IRET, which
         // is the correct behaviour with no debugger present, so this simply resumes.
-        case 0xf1: P(`cpu.softInt(1,${ip},${ipStart});`); P('return;'); ended = true; break;
-        case 0xcd: { const n = f8(); P(`cpu.softInt(${n},${ip},${ipStart});`); P('return;'); ended = true; break; } // INT n
-        case 0xce: P(`if(cpu.flags&${OF}){cpu.softInt(4,${ip},${ipStart});return;}cpu.eip=${ip};`); P('return;'); ended = true; break; // INTO
+        case 0xf1: P(`cpu.softInt(1,${SEQ()},${ipStart});`); P('return;'); ended = true; break;
+        case 0xcd: { const n = f8(); P(`cpu.softInt(${n},${SEQ()},${ipStart});`); P('return;'); ended = true; break; } // INT n
+        case 0xce: P(`if(cpu.flags&${OF}){cpu.softInt(4,${SEQ()},${ipStart});return;}cpu.eip=${SEQ()};`); P('return;'); ended = true; break; // INTO
         // IRET pops the frame at the OPERAND size: iretd (32-bit) pops EIP/CS/EFLAGS as dwords.
         // The frame was pushed at the gate's width, and a 32-bit gate is entered from 32-bit code,
         // so the two agree without needing to know which gate delivered us.
@@ -1066,7 +1074,7 @@ export class Recompiler {
         case 0xe8: {
           const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16));
           const tgt = ipAdd(ip, rel);
-          P(sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`);
+          P(sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`);
           P(`cpu.eip=${tgt};`); P('return;'); ended = true; break;
         }
         case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ipAdd(ip, rel)); break; } // JMP rel
@@ -1078,7 +1086,7 @@ export class Recompiler {
         case 0xf4:                                                                      // HLT
           canFault = true;
           P(`if((cpu.cr0&1)&&${CPL_EXPR}){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
-          P('cpu.halted=true;'); P(`cpu.eip=${ip};`); P('return;'); ended = true; break;
+          P('cpu.halted=true;'); P(`cpu.eip=${SEQ()};`); P('return;'); ended = true; break;
         case 0xf5: cur.use |= lC; P(`cpu.flags^=${CF};`); break;                        // CMC (reads CF)
         case 0xf6: emitGroup3(8, ipStart); break;
         case 0xf7: emitGroup3(sz, ipStart); break;
@@ -1116,7 +1124,7 @@ export class Recompiler {
       // have been missed by one. `ip` here is the NEXT instruction, which is where re-dispatch must
       // resume, and that is why the check cannot live inside the write emitter.
       if (!ended) {
-        const abort = `if(cpu.smcSelf){cpu.smcSelf=0;cpu.eip=${ip};return;}`;
+        const abort = `if(cpu.smcSelf){cpu.smcSelf=0;cpu.eip=${SEQ()};return;}`;
         let helperWrite = false, inlineMark = false;
         for (let i = outMark; i < out.length; i++) {
           // The inline write emitter leaves a marker INSIDE its code-page branch. It must only RECORD
@@ -1133,12 +1141,12 @@ export class Recompiler {
           // instruction. They are rare enough on a hot path not to matter.
           else if (out[i].includes('m.w8(') || out[i].includes('m.w16(') || out[i].includes('m.w32(')) helperWrite = true;
         }
-        if (inlineMark) P(`if(_smc){_smc=0;cpu.smcSelf=0;cpu.eip=${ip};return;}`);
+        if (inlineMark) P(`if(_smc){_smc=0;cpu.smcSelf=0;cpu.eip=${SEQ()};return;}`);
         else if (helperWrite) P(abort);
       }
     }
 
-    if (!ended) P(`cpu.eip=${ip};`);
+    if (!ended) P(`cpu.eip=${SEQ()};`);
 
     // ---- dead-flag elimination ----
     // Backward liveness over the block's instructions: strip a flag-setting call whose
@@ -1347,11 +1355,11 @@ export class Recompiler {
         case 1: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}-1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break; }
         // Same 0x66 rule as CALL rel: the pushed return address is a dword and the target operand is
         // read at the prefixed size. `o32 call ebx` is test386's POST-5 %%rm32 case.
-        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${ip});` : `cpu.push32(${ip});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
+        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
         // CALLF under 0x66 pushes CS and a 32-bit return offset, and reads a 48-bit far pointer.
         case 3: { const a = memAddr(o);
-          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${ip});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}));cpu.eip=_o;`
-                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${ip});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}));cpu.eip=_o>>>0;`);
+          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${SEQ()});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}));cpu.eip=_o;`
+                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${SEQ()});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}));cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // JMP Ev
         // JMPF Ev — the far pointer's layout follows the operand size, as CALLF above: 16-bit is a
@@ -1489,8 +1497,8 @@ export class Recompiler {
         // after it must be translated under the new CS.D.
         case 0x22: {
           const o = modrm();
-          if (o.reg === 0) { P(`cpu.setCR0(${rR(o.rm, 32)});cpu.eip=${ip};`); P('return;'); ended = true; }
-          else if (o.reg === 3) { P(`cpu.setCR3(${rR(o.rm, 32)});cpu.eip=${ip};`); P('return;'); ended = true; }
+          if (o.reg === 0) { P(`cpu.setCR0(${rR(o.rm, 32)});cpu.eip=${SEQ()};`); P('return;'); ended = true; }
+          else if (o.reg === 3) { P(`cpu.setCR3(${rR(o.rm, 32)});cpu.eip=${SEQ()};`); P('return;'); ended = true; }
           else if (o.reg === 2) P(`cpu.cr2=${rR(o.rm, 32)}>>>0;`);
           else P(`${rR(o.rm, 32)};`);
           return;
