@@ -706,7 +706,13 @@ export function installBIOS(machine, opts = {}) {
   // Programs that install their own INT 9h handler — QBasic's IDE, and most games — take input
   // as hardware scancodes read from port 0x60 on each keyboard IRQ, NOT via the BIOS INT 16h
   // buffer. Deliver queued keys as make/break scancodes and fire IRQ1 so those handlers see them.
-  const kb = { data: 0, obf: false, scans: [] };   // scans: FIFO of pending make/break scancodes
+  // The 8042 data port RETAINS the last scancode; it does not read back as zero. A program is
+  // launched from a prompt by pressing Enter and letting it go, so what a freshly started guest finds
+  // at port 0x60 is Enter's BREAK code, 0x9C — and DOS-era code reads the port directly and depends
+  // on that. Chrome Revenge ends each frame with `IN AL,60H / DAS / JC nextframe`: DAS sets CF only
+  // for a value above 0x99, i.e. exactly "the last thing that happened was a key being RELEASED".
+  // Reading back 0 made it exit after drawing one single frame.
+  const kb = { data: 0x9c, obf: false, scans: [] };   // scans: FIFO of pending make/break scancodes
   machine.kb = kb;
   machine.onPortRead(0x60, () => { const d = kb.data; kb.obf = false; return d; });   // read scancode, clear OBF
   machine.onPortRead(0x64, () => (kb.obf ? 0x1d : 0x1c));     // status byte; bit0 = output-buffer-full

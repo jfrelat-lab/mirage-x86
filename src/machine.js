@@ -12,6 +12,7 @@ import { describeRegion, recentBlocks } from './derail.js';
 import { CPU, CS, CF, IF, TF, VM} from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
+import { installSSE } from './sse.js';
 import { resolveProfile } from './cpu-profile.js';
 import { resolveMemStrategy } from './mem-strategy.js';
 import { EMS_SEG } from './ems.js';
@@ -38,6 +39,7 @@ export class Machine {
     this.cpu.profile = resolveProfile(opts.cpu);
     this.cpu.shiftMask = this.cpu.profile.shiftCountMask;   // read by the shift/rotate helpers
     installFPU(this.cpu);                           // x87 coprocessor
+    installSSE(this.cpu);                           // XMM register file + the SSE subset (src/sse.js)
     this.rec = new Recompiler(this.cpu);
     // Paging plumbing. Memory needs the CPU to walk CR3, and any change to the mapping invalidates
     // both the software TLB and every translated block (their emitted addresses assumed the old

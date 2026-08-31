@@ -18,11 +18,14 @@ import { dirname, join } from 'path';
 import { Machine } from '../src/machine.js';
 import { CASES as HAND, SCRATCH_PATTERN } from './x86-cases.mjs';
 import { generateCases } from './x86-gen.mjs';
+import { SSE_CASES, X87_CMP_CASES } from './x86-sse-cases.mjs';
 
 // The hand-written cases encode intent (each one is a regression lock with a comment); the generated
 // ones enumerate the ModRM/SIB/prefix grid mechanically, because the 0x67 bug lived in a corner
 // nobody thought to write a case for. Both go through the same oracle.
-const CASES = [...HAND, ...generateCases()];
+// The SSE cases end by storing XMM back into the scratch, which is how an oracle that never reads
+// XMM still checks it — see x86-sse-cases.mjs.
+const CASES = [...HAND, ...generateCases(), ...SSE_CASES, ...X87_CMP_CASES];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXPECTED = join(HERE, 'x86-uc-expected.json');

@@ -8,6 +8,8 @@
 // 256-byte intros — HellMood's "Memories", for instance, needs only fild/fidivr/
 // fstp, but the broader set means transcendental intros work too.
 
+import { CF, PF, AF, ZF, SF, OF } from './cpu.js';
+
 export function installFPU(cpu) {
   const st = new Float64Array(8);
   cpu.fst = st;
@@ -34,6 +36,19 @@ export function installFPU(cpu) {
   const toInt = (x) => { const fl = Math.floor(x), d = x - fl; return d < 0.5 ? fl : d > 0.5 ? fl + 1 : (fl % 2 === 0 ? fl : fl + 1); };
 
   // set condition codes from a compare (C3,C2,C0 in status word bits 14,10,8)
+  // FCOMI/FUCOMI (P6) write EFLAGS DIRECTLY, unlike every other x87 compare, which writes the status
+  // word: unordered -> ZF=PF=CF=1, less -> CF, equal -> ZF, and OF/SF/AF cleared. They are the only
+  // x87 compare a Jcc can read without an FNSTSW/SAHF round trip, so leaving them as no-ops does not
+  // fail loudly — the branch just reads whatever flags happened to be there. Chrome Revenge gates its
+  // whole ray/sphere test on three of them and drew a black screen for exactly that reason.
+  const cmpi = (a, b) => {
+    let fl = cpu.flags & ~(CF | PF | AF | ZF | SF | OF);
+    if (Number.isNaN(a) || Number.isNaN(b)) fl |= CF | PF | ZF;
+    else if (a < b) fl |= CF;
+    else if (a === b) fl |= ZF;
+    cpu.flags = fl;
+  };
+
   const setcc = (a, b) => {
     cpu.fsw &= ~0x4500;
     if (Number.isNaN(a) || Number.isNaN(b)) cpu.fsw |= 0x4500;
@@ -135,10 +150,14 @@ export function installFPU(cpu) {
         if (b < 0xe0) { setST(rm, ST(0)); pop(); return; }  // fstp st(i)
         setcc(ST(0), ST(rm)); if (b >= 0xe8) pop(); return; // fucom / fucomp
       case 0xdb:
-        if (b === 0xe3) { cpu.ftop = 0; cpu.fsw = 0; st.fill(0); }   // fninit
+        if (b === 0xe3) { cpu.ftop = 0; cpu.fsw = 0; st.fill(0); return; }   // fninit
+        if (b >= 0xe8 && b <= 0xef) return cmpi(ST(0), ST(b - 0xe8));        // fucomi st0,st(i)
+        if (b >= 0xf0 && b <= 0xf7) return cmpi(ST(0), ST(b - 0xf0));        // fcomi  st0,st(i)
         return;                                             // (feni/fdisi/fnclex: no-op)
       case 0xdf:
-        if (b === 0xe0) { cpu.ax = cpu.fpuStatus(); }       // fnstsw ax
+        if (b === 0xe0) { cpu.ax = cpu.fpuStatus(); return; }                // fnstsw ax
+        if (b >= 0xe8 && b <= 0xef) { cmpi(ST(0), ST(b - 0xe8)); return pop(); }   // fucomip
+        if (b >= 0xf0 && b <= 0xf7) { cmpi(ST(0), ST(b - 0xf0)); return pop(); }   // fcomip
         return;
     }
   };

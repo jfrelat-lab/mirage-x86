@@ -12,6 +12,7 @@
 // returning. The machine loop then fetches the next block.
 
 import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
+import { SSE, XMM_SCRATCH } from './sse.js';
 
 const MAXOPS = 192;               // cap basic-block length
 const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
@@ -1417,6 +1418,60 @@ export class Recompiler {
       if (op2 >= 0x90 && op2 <= 0x9f) { cur.use |= lALL; const o = modrm(); P(rmW(o, 8, `${condExpr(op2 & 0xf)}?1:0`)); return; }
       // BSWAP r32 (0F C8+r): reverse the byte order of a 32-bit register (486+); flags untouched
       if (op2 >= 0xc8 && op2 <= 0xcf) { const r = op2 - 0xc8, b = NT(); P(`var ${b}=r[${r}]>>>0;r[${r}]=((${b}<<24)|((${b}&0xff00)<<8)|((${b}>>>8)&0xff00)|(${b}>>>24))>>>0;`); return; }
+      // ---- SSE / SSE2 / SSE4.1 on XMM ----------------------------------------------------------
+      // The set real DOS software reaches for, not the whole ISA — see src/sse.js. The mandatory
+      // prefixes select the instruction here rather than the operand size, so `0x66` is read back off
+      // `sz` (the prefix loop already consumed it) and `0xF3` off `rep`.
+      {
+        const p66 = d ? sz === 16 : sz === 32, pF3 = rep === 0xf3;
+        // A memory operand is loaded into the scratch slot first, so every op sees two registers.
+        const xmmSrc = (o, len) => {
+          if (o.isReg) return o.rm;
+          canFault = true;
+          P(`cpu.xmmLoad(${memAddr(o)},${len});`);
+          return XMM_SCRATCH;
+        };
+        const xmmStore = (o, reg, len) => {
+          canFault = true;
+          const a = memAddr(o), t = NT();
+          P(`var ${t}=${a};cpu.xmmStore(${t},${reg},${len});`);
+          P(`if(cp[${t}>>>12]|cp[(${AM(`${t}+${len - 1}`)})>>>12])m._dirty(${t},${len});`);
+        };
+        const simple = (code, len = 16) => { const o = modrm(); P(`cpu.sse(${code},${o.reg},${xmmSrc(o, len)},0);`); };
+        const withImm = (code, len = 16) => {
+          const o = modrm(); const src = xmmSrc(o, len); const imm = f8();
+          P(`cpu.sse(${code},${o.reg},${src},${imm});`);
+        };
+        if (!p66 && !pF3 && op2 === 0x28) { simple(SSE.MOVAPS_LD); return; }
+        if (!p66 && !pF3 && op2 === 0x29) { const o = modrm(); if (o.isReg) P(`cpu.sse(${SSE.MOVAPS_ST},${o.rm},${o.reg},0);`); else xmmStore(o, o.reg, 16); return; }
+        if (pF3 && op2 === 0x10) { const o = modrm(); P(`cpu.sse(${o.isReg ? SSE.MOVSS_LD : SSE.MOVSS_LD_M},${o.reg},${xmmSrc(o, 4)},0);`); return; }
+        if (pF3 && op2 === 0x11) { const o = modrm(); if (o.isReg) P(`cpu.sse(${SSE.MOVSS_ST},${o.rm},${o.reg},0);`); else xmmStore(o, o.reg, 4); return; }
+        if (!p66 && !pF3 && op2 === 0x58) { simple(SSE.ADDPS); return; }
+        if (!p66 && !pF3 && op2 === 0x59) { simple(SSE.MULPS); return; }
+        if (!p66 && !pF3 && op2 === 0x5c) { simple(SSE.SUBPS); return; }
+        if (!p66 && !pF3 && op2 === 0x57) { simple(SSE.XORPS); return; }
+        if (!p66 && !pF3 && op2 === 0x52) { simple(SSE.RSQRTPS); return; }
+        if (!p66 && !pF3 && op2 === 0x5b) { simple(SSE.CVTDQ2PS); return; }
+        if (!p66 && !pF3 && op2 === 0xc6) { withImm(SSE.SHUFPS); return; }
+        if (p66 && op2 === 0x5b) { simple(SSE.CVTPS2DQ); return; }
+        if (p66 && op2 === 0x76) { simple(SSE.PCMPEQD); return; }
+        if (p66 && op2 === 0x67) { simple(SSE.PACKUSWB); return; }
+        if (p66 && op2 === 0x6b) { simple(SSE.PACKSSDW); return; }
+        if (p66 && op2 === 0xe0) { simple(SSE.PAVGB); return; }
+        if (p66 && op2 === 0x38) {                       // three-byte 0F 38 escape
+          const op3 = f8();
+          if (op3 === 0x23) { simple(SSE.PMOVSXWD, 8); return; }
+          if (op3 === 0x31) { simple(SSE.PMOVZXBD, 4); return; }
+          throw new Error(unimplemented(`0f 38 ` + op3.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
+        }
+        if (p66 && op2 === 0x3a) {                       // three-byte 0F 3A escape
+          const op3 = f8();
+          if (op3 === 0x21) { withImm(SSE.INSERTPS, 4); return; }
+          if (op3 === 0x40) { withImm(SSE.DPPS); return; }
+          throw new Error(unimplemented(`0f 3a ` + op3.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
+        }
+      }
+
       // BTx Ev,Gv (reg bit offset) and group 0F BA Ev,imm8
       // BT/BTS/BTR/BTC. For a REGISTER destination the bit offset is masked to the operand width.
       // For MEMORY it is a **full signed bit-string index**: the byte accessed is base + (ofs>>3)

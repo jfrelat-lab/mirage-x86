@@ -63,6 +63,8 @@ Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/vie
 | **Pitman** (Tristar) | ✅ **fully playable** — title screen, menu and level 1. It is a TEXT-mode game, so a probe that only counts pixels in `A000` reports it as blank. |
 | **Omniscent** (Sanction '97), **Forever Reality** (7dUMP '23), **StarPort BBS 2** (Future Crew '93, EGA `0Dh`), **Another Soul Lost** (Traction '03) | ✅ render. |
 
+**Chrome Revenge** (Abaddon, 1K, Assembly 2020) — ✅ **renders**: a realtime SSE raytracer in VESA 640x480x32. It needed three things, and only the first was the one we expected. (1) VBE 2.0, for mode 0x112. (2) Sixteen XMM instructions through SSE4.1 (`src/sse.js`, ROADMAP F1). (3) Two defects that had nothing to do with either: `FCOMI`/`FUCOMI` were no-ops — the only x87 compares that write EFLAGS — so its ray/sphere test always missed and the screen stayed black; and port 0x60 read back as 0, where the 8042 retains the last scancode, so `IN AL,60H / DAS / JC` ended the intro after a single frame. Both also improved existing goldens (`qblove`, `symetrie`). Verified against the author's own bundled screenshots: same scene, different animation phase.
+
 Most *famous* 4Ks (Elevated, fr-08, cdak) are protected-mode/Windows → out of scope for the
 real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
 

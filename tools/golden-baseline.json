@@ -130,7 +130,7 @@
     "fault": null
   },
   "intros/qblove.com": {
-    "hash": "cf61a09af3eb9928ec689a4392bb0a49c15a8ed9",
+    "hash": "26ee4caec6e694d5e53f6e2dd51b9f0adcf3e6f7",
     "mode": 19,
     "fault": null
   },
@@ -145,7 +145,7 @@
     "fault": null
   },
   "intros/symetrie.com": {
-    "hash": "890a1758b24a5f1d237d1f714c54956a87a85510",
+    "hash": "76a14e276cb53bbbba9786ac03605e9e2aea4328",
     "mode": 19,
     "fault": null
   },
@@ -206,6 +206,11 @@
   },
   "demos/VESA.COM": {
     "hash": "0652cc134e6a96c7177906c1d687e72d9c3d738a",
+    "mode": 3,
+    "fault": null
+  },
+  "intros/crevenge.com": {
+    "hash": "6ea89503d0f5467c005578e6e219bbe3e37335e9",
     "mode": 3,
     "fault": null
   }

@@ -39,7 +39,7 @@ const TICKS = 60, BUDGET = 400000;
 // a flat fill (2 values) at 60; `mesha` needs ~400 ticks to finish precomputing and draws nothing
 // before that. The engine is deterministic, so any budget is reproducible — the choice is only about
 // sampling where the content is.
-const TICK_OVERRIDE = { animate: 20, freality: 20, mesha: 400, omniscent: 120, starport: 200 };
+const TICK_OVERRIDE = { animate: 20, crevenge: 200, freality: 20, mesha: 400, omniscent: 120, starport: 200 };
 
 // Fixed workload set: both own demos + every third-party intro. Third-party binaries are
 // gitignored, so `check` silently skips any that are absent on this machine.
@@ -53,7 +53,7 @@ const WORKLOADS = [
   // The 2026-08-28 additions are the pouet MS-Dos 4K top ten (see COMPAT). `juggler` is left out
   // because it blocks on a keypress before it draws, and `void3` because it needs VESA and exits.
   ...['256b', '256bytef', 'above', 'abstract', 'animate', 'chaosequ', 'difze', 'dirojed', 'endless',
-      'freality', 'intoanew', 'intro', 'intro256', 'kaneda', 'lattice', 'memories', 'mesha',
+      'crevenge', 'freality', 'intoanew', 'intro', 'intro256', 'kaneda', 'lattice', 'memories', 'mesha',
       'mirrors', 'nibble', 'oktaeder', 'omniscent', 'paleozoa', 'paralaxa', 'pitman', 'puls',
       'qblove', 'revitro', 'rv256', 'soullost', 'starport', 'symetrie', 'tube', 'upup', 'warp',
       'worm']

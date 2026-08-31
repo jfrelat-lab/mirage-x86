@@ -22,6 +22,12 @@ def pattern(i): return (i * 7 + 3) & 0xff
 def run(case):
     uc = Uc(UC_ARCH_X86, UC_MODE_16)
     uc.mem_map(0, 0x100000)
+    # SSE is #UD unless the OS has enabled it: CR0.EM clear, CR0.MP set, CR4.OSFXSR set. Without this
+    # every XMM case comes back as {'error': ...} — which the gate SKIPS, so they would all "pass"
+    # without ever running. Verified inert for the pre-SSE cases: re-capturing with these three bits
+    # set reproduced the committed expectations byte for byte.
+    uc.reg_write(UC_X86_REG_CR0, (uc.reg_read(UC_X86_REG_CR0) & ~0x4) | 0x2)
+    uc.reg_write(UC_X86_REG_CR4, uc.reg_read(UC_X86_REG_CR4) | (1 << 9))
     # deterministic scratch at DS:0, code at CS:0
     uc.mem_write(DATA, bytes(pattern(i) for i in range(SCRATCH)))
     code = bytes(case['code'])
