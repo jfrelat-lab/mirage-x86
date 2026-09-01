@@ -78,6 +78,14 @@ real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
 
 **Mirrors Within** (Digimind, 512b) — was rendering an entirely wrong picture (two ringed blobs on a grey diagonal, against DOSBox's two ellipses of nested shapes on black) because **FTST was a no-op**. It calls it 1.96 M times. 40.4% → 82.1% against DOSBox. ⚠️ `freality` carries a **pre-existing** `INT 00h` divide-error loop at 0814:09dd under `dosdiff` (present before the x87 work, unchanged by it) — not yet investigated.
 
+**Hocus Pocus — the x87 state work (2026-08-28) moved it from 13 to 97 matching DOSBox events.**
+`dbx-oracle --sweep` compares event streams as an agreeing PREFIX, so the number is where the two
+first disagree. `FTST` and `FXAM` were no-ops until then (they are in the batch that also fixed the
+control word and the tag word), and `FTST` in particular passed its only oracle case by accident
+because for x > 0 every condition code is zero either way. Wolf3D shifted too — 7 fewer events, same
+248-event agreeing prefix. ⚠️ Caught late: that commit ran the unit, golden and Unicorn gates but not
+the DOSBox sweep, and its message claimed the sweep was unchanged. It was not.
+
 **pouët MS-Dos 4K top 10, swept 2026-08-28: 9/10 render, one blocked (Void 3, VESA).** Three of them
 had been filed as engine failures and none was: two were *waiting on a keypress* they had asked for
 in a printed message, and one is a text-mode game. The triage rule that follows: `probe-intro.js`

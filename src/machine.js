@@ -541,7 +541,12 @@ export class Machine {
     // uncapped rate becomes an INT-8 storm (headless especially, where serviceTimer fires off
     // cpu.cycles). The cap keeps timer-paced games fast enough (200 Hz Dune / 140 Hz GoT are
     // unaffected) and matches ui.js's wall-clock clamp.
-    this.pitReload = Math.max(this.pitBase >> 4, r);
+    // The floor is a SPEED accommodation, not a timing one — measured in docs/TIMING.md §2: interrupt
+    // dispatch costs ~0.2 µs and 256x the deliveries cost +8% wall clock, so what an uncapped rate
+    // actually buys is the guest's own ISR running that many more times. `MIRAGE_PITFLOOR` lowers it
+    // for experiments (Chrome Revenge asks for 68 and runs ~33x slower when it gets it).
+    const floor = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITFLOOR) || (this.pitBase >> 4);
+    this.pitReload = Math.max(floor, r);
     this.nextTimerCycle = this.cpu.cycles + this.pitReload;
     this.cpu.deadline = this.nextTimerCycle;
   }

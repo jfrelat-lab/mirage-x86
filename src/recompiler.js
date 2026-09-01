@@ -14,7 +14,10 @@
 import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
 import { SSE, XMM_SCRATCH } from './sse.js';
 
-const MAXOPS = 192;               // cap basic-block length
+// Cap on basic-block length. Overridable because block boundaries are where IRQs are sampled, so
+// moving them is how you measure what depends on that — see docs/TIMING.md §3, where it showed only
+// one golden of 43 is sensitive. Blocks average 2-3 instructions in practice; this cap is rarely hit.
+const MAXOPS = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_MAXOPS) || 192;
 const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 
 // Debug kill switch: MIRAGE_NOFPUINLINE=1 falls back to the cpu.fpuMem/fpuReg runtime
