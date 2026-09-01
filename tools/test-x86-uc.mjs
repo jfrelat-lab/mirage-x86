@@ -19,13 +19,14 @@ import { Machine } from '../src/machine.js';
 import { CASES as HAND, SCRATCH_PATTERN } from './x86-cases.mjs';
 import { generateCases } from './x86-gen.mjs';
 import { SSE_CASES, X87_CMP_CASES, X87_CMOV_CASES } from './x86-sse-cases.mjs';
+import { X87_CASES } from './x87-cases.mjs';
 
 // The hand-written cases encode intent (each one is a regression lock with a comment); the generated
 // ones enumerate the ModRM/SIB/prefix grid mechanically, because the 0x67 bug lived in a corner
 // nobody thought to write a case for. Both go through the same oracle.
 // The SSE cases end by storing XMM back into the scratch, which is how an oracle that never reads
 // XMM still checks it — see x86-sse-cases.mjs.
-const CASES = [...HAND, ...generateCases(), ...SSE_CASES, ...X87_CMP_CASES, ...X87_CMOV_CASES];
+const CASES = [...HAND, ...generateCases(), ...SSE_CASES, ...X87_CMP_CASES, ...X87_CMOV_CASES, ...X87_CASES];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXPECTED = join(HERE, 'x86-uc-expected.json');
@@ -67,7 +68,16 @@ if (!existsSync(EXPECTED)) { console.error('no expectations yet — run: node to
 const want = JSON.parse(readFileSync(EXPECTED, 'utf8'));
 if (want.length !== CASES.length) { console.error(`case count changed (${CASES.length} vs ${want.length}) — re-run --capture`); process.exit(2); }
 
-let pass = 0; const fails = [];
+let pass = 0; const fails = [], tol = [];
+const F64 = new DataView(new ArrayBuffer(8)), I64 = new BigInt64Array(1), F64B = new Float64Array(I64.buffer);
+const asF64 = (mem, off) => { for (let k = 0; k < 8; k++) F64.setUint8(k, mem[off + k]); return F64.getFloat64(0, true); };
+const ulpDiff = (a, b, off) => {
+  const x = asF64(a, off), y = asF64(b, off);
+  if (x === y) return 0;
+  if (Number.isNaN(x) !== Number.isNaN(y) || !Number.isFinite(x) !== !Number.isFinite(y)) return Infinity;
+  F64B[0] = x; const bx = I64[0]; F64B[0] = y; const by = I64[0];
+  return Number(bx > by ? bx - by : by - bx);
+};
 const hex = (n, w = 8) => (n >>> 0).toString(16).padStart(w, '0');
 for (let i = 0; i < CASES.length; i++) {
   const c = CASES[i], w = want[i];
@@ -77,10 +87,28 @@ for (let i = 0; i < CASES.length; i++) {
   for (const r of GP) if (g.regs[r] !== w.regs[r]) diffs.push(`${r}=${hex(g.regs[r])} want ${hex(w.regs[r])}`);
   const mask = FLAGMASK & ~(c.undef || 0);                 // ignore architecturally-undefined flags
   if ((g.flags & mask) !== (w.flags & mask)) diffs.push(`flags=${hex(g.flags & mask, 3)} want ${hex(w.flags & mask, 3)}`);
-  for (let k = 0; k < SCRATCH; k++) if (g.mem[k] !== w.mem[k]) { diffs.push(`mem[${k}]=${hex(g.mem[k], 2)} want ${hex(w.mem[k], 2)}`); break; }
+  // MIRAGE holds the x87 stack as float64; silicon and QEMU use 80-bit extended and round on the
+  // store, so a transcendental can land an ulp away with nothing wrong. `fp` declares which qword
+  // slots are floating-point results and how many ulps that case is allowed — anything outside a
+  // declared slot, or beyond its budget, still fails. Tolerated cases are counted and printed, so
+  // the allowance cannot quietly grow.
+  const slots = c.fp ? (Array.isArray(c.fp) ? c.fp : [c.fp]) : [];
+  const inSlot = (k) => slots.find((sl) => k >= sl.off && k < sl.off + 8);
+  let tolerated = false;
+  for (let k = 0; k < SCRATCH; k++) {
+    if (g.mem[k] === w.mem[k]) continue;
+    const sl = inSlot(k);
+    if (!sl) { diffs.push(`mem[${k}]=${hex(g.mem[k], 2)} want ${hex(w.mem[k], 2)}`); break; }
+    const d = ulpDiff(g.mem, w.mem, sl.off);
+    if (d > sl.ulp) { diffs.push(`mem[${sl.off}] ecart ${d} ulp > ${sl.ulp} tolere`); break; }
+    tolerated = true;
+    k = sl.off + 7;                                        // this slot is accounted for
+  }
+  if (tolerated && !diffs.length) tol.push(`${c.n} (${slots.map((sl) => ulpDiff(g.mem, w.mem, sl.off) + ' ulp').join(', ')})`);
   if (diffs.length) fails.push(`${c.n}: ${diffs.join(', ')}`); else pass++;
 }
 
 console.log(`\nmirage vs unicorn: ${pass} passed, ${fails.length} failed`);
+if (tol.length) { console.log(`  ${tol.length} tolerees (float64 vs 80 bits):`); for (const t of tol) console.log('    ~ ' + t); }
 if (fails.length) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 console.log('all green ✓');

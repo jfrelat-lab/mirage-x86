@@ -1247,8 +1247,10 @@ export class Recompiler {
             case 0xf1: P(setSTe(1, `${STe(1)}*Math.log2(st[cpu.ftop])`)); return P(FPOP); // FYL2X
             case 0xf2: P(setSTe(0, 'Math.tan(st[cpu.ftop])')); return fpush('1');         // FPTAN
             case 0xf3: P(setSTe(1, `Math.atan2(${STe(1)},st[cpu.ftop])`)); return P(FPOP); // FPATAN
-            case 0xf4: { const x = NT(); P(`var ${x}=st[cpu.ftop];${setSTe(0, `${x}-Math.trunc(${x})`)}`); return fpush(`Math.trunc(${x})`); } // FXTRACT-ish
-            case 0xf8: return P(setSTe(0, `st[cpu.ftop]%${STe(1)}`));       // FPREM
+            case 0xf4: return P('cpu.fxtract();');                          // FXTRACT (exponent, then push significand)
+            case 0xf5: return P(setSTe(0, `cpu.frem1(st[cpu.ftop],${STe(1)})`));   // FPREM1 (IEEE remainder)
+            case 0xf8: return P(setSTe(0, `st[cpu.ftop]%${STe(1)}`));       // FPREM (truncating quotient)
+            case 0xf9: P(setSTe(1, `${STe(1)}*cpu.flog2p1(st[cpu.ftop])`)); return P(FPOP);   // FYL2XP1
             case 0xfa: return P(setSTe(0, 'Math.sqrt(st[cpu.ftop])'));      // FSQRT
             case 0xfb: { const x = NT(); P(`var ${x}=st[cpu.ftop];${setSTe(0, `Math.sin(${x})`)}`); return fpush(`Math.cos(${x})`); } // FSINCOS
             case 0xfc: return P(setSTe(0, 'cpu.f2i(st[cpu.ftop])'));        // FRNDINT

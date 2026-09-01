@@ -60,6 +60,42 @@ export function installFPU(cpu) {
     if (cond !== negated) setST(0, ST(b & 7));
   };
 
+  // ---- three operations that were wrong or absent, each found by the x87 oracle ----
+  const dvx = new DataView(new ArrayBuffer(8));
+
+  /** FXTRACT: exponent into ST(0), then PUSH the significand (1 <= |m| < 2). Split on the BITS —
+   *  going through log2 puts the exponent one too high for a value just under a power of two. What
+   *  was here before split integer from fraction, which is a different operation entirely, and it
+   *  was labelled "fxtract-ish" in both copies. */
+  cpu.fxtract = () => {
+    const x = ST(0);
+    if (x === 0) { setST(0, -Infinity); push(x); return; }              // hardware also raises #Z
+    if (!Number.isFinite(x)) { setST(0, Number.isNaN(x) ? x : Infinity); push(x); return; }
+    let v = x, bias = 0;
+    dvx.setFloat64(0, v);
+    if (((dvx.getUint32(0) >>> 20) & 0x7ff) === 0) {                     // denormal: normalise first
+      v = x * 0x10000000000000; bias = -52; dvx.setFloat64(0, v);
+    }
+    const e = (((dvx.getUint32(0) >>> 20) & 0x7ff) - 1023) + bias;
+    dvx.setUint32(0, (dvx.getUint32(0) & 0x800fffff) | (1023 << 20));    // force the exponent to 2^0
+    const m = dvx.getFloat64(0);
+    setST(0, e); push(m);
+  };
+
+  /** FPREM1 is the IEEE remainder: its quotient rounds to NEAREST, ties to even, where FPREM's
+   *  truncates toward zero. JS `%` is FPREM exactly, which is why that one was already right — and
+   *  why reusing it for FPREM1 (or leaving FPREM1 out, as here) is silently wrong. */
+  cpu.frem1 = (a, b) => {
+    if (b === 0 || !Number.isFinite(a)) return NaN;
+    const q = a / b, f = Math.floor(q), d = q - f;
+    const n = d > 0.5 ? f + 1 : d < 0.5 ? f : (f % 2 === 0 ? f : f + 1);
+    return a - b * n;
+  };
+
+  /** log2(1+x). FYL2XP1 exists precisely because it is accurate for x near 0, so it goes through
+   *  log1p rather than log2(1+x). It was absent entirely: the instruction left ST unchanged. */
+  cpu.flog2p1 = (x) => Math.log1p(x) / Math.LN2;
+
   const setcc = (a, b) => {
     cpu.fsw &= ~0x4500;
     if (Number.isNaN(a) || Number.isNaN(b)) cpu.fsw |= 0x4500;
@@ -138,8 +174,10 @@ export function installFPU(cpu) {
           case 0xf1: setST(1, ST(1) * Math.log2(ST(0))); pop(); return; // fyl2x
           case 0xf2: { const t = Math.tan(ST(0)); setST(0, t); push(1); return; } // fptan
           case 0xf3: { const r = Math.atan2(ST(1), ST(0)); setST(1, r); pop(); return; } // fpatan
-          case 0xf4: { const x = ST(0); setST(0, x - Math.trunc(x)); push(Math.trunc(x)); return; } // fxtract-ish
-          case 0xf8: setST(0, ST(0) % ST(1)); return;       // fprem
+          case 0xf4: cpu.fxtract(); return;                 // fxtract
+          case 0xf5: setST(0, cpu.frem1(ST(0), ST(1))); return;   // fprem1 (IEEE remainder)
+          case 0xf8: setST(0, ST(0) % ST(1)); return;       // fprem (truncating quotient)
+          case 0xf9: setST(1, ST(1) * cpu.flog2p1(ST(0))); pop(); return;   // fyl2xp1
           case 0xfa: setST(0, Math.sqrt(ST(0))); return;    // fsqrt
           case 0xfb: { const x = ST(0); setST(0, Math.sin(x)); push(Math.cos(x)); return; } // fsincos → ST0=cos, ST1=sin
           case 0xfc: setST(0, toInt(ST(0))); return;        // frndint
