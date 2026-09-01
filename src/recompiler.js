@@ -1279,7 +1279,11 @@ export class Recompiler {
         case 0xdf:
           if (b === 0xe0) return P(`r[0]=(r[0]&~0xffff)|(((cpu.fsw&0x47ff)|((cpu.ftop&7)<<11))&0xffff);`); // FNSTSW AX
           return fb();
-        default:                                                           // DA/DB reg forms: rare → fallback
+        default:
+          // DA/DB register forms: rare, so they go to the fpu.js fallback rather than being emitted
+          // inline. FCMOVcc lives here and READS EFLAGS, but a fallback call declares no `use`, so
+          // dead-flag elimination would happily strip the CMP or FCOMI that set them. Declare it.
+          cur.use |= lALL;
           return fb();
       }
     }

@@ -81,3 +81,29 @@ export const X87_CMP_CASES = [
   c('fcomip st0,st1 pops', FILD4, FILD0, [0xdf, 0xf1], FSTP8),
   c('fucomi st0,st2', FILD0, FILD4, FILD0, [0xdb, 0xea]),
 ];
+
+// FCMOVcc (P6): DA C0..DF move on a true EFLAGS condition, DB C0..DF on its negation. Like FCOMI
+// they cross between EFLAGS and the x87 stack, and `fpu.js` had no DA arm at all — so its whole
+// register space, FUCOMPP included, was a no-op. FUCOMPP matters twice over: it must POP TWICE, and
+// a missing pop drifts the stack for everything after it. Each case ends with FSTP into the compared
+// scratch, so both the moved value and the stack depth are observable.
+const FILD8 = [0xdb, 0x47, 0x08];            // fild dword [bx+8]
+const FSTP12 = [0xd9, 0x5f, 0x0c];           // fstp dword [bx+12]
+const cf = (n, flags, ...parts) => ({ n, code: parts.flat(), regs: { ebx: 0 }, flags });
+const CF_ = 0x001, PF_ = 0x004, ZF_ = 0x040;
+
+export const X87_CMOV_CASES = [
+  cf('fcmovb taken (CF=1)', CF_, FILD0, FILD4, [0xda, 0xc1], FSTP12),
+  cf('fcmovb not taken (CF=0)', 0, FILD0, FILD4, [0xda, 0xc1], FSTP12),
+  cf('fcmove taken (ZF=1)', ZF_, FILD0, FILD4, [0xda, 0xc9], FSTP12),
+  cf('fcmove not taken', 0, FILD0, FILD4, [0xda, 0xc9], FSTP12),
+  cf('fcmovbe taken (ZF only)', ZF_, FILD0, FILD4, [0xda, 0xd1], FSTP12),
+  cf('fcmovbe not taken', 0, FILD0, FILD4, [0xda, 0xd1], FSTP12),
+  cf('fcmovu taken (PF=1)', PF_, FILD0, FILD4, [0xda, 0xd9], FSTP12),
+  cf('fcmovnb taken (CF=0)', 0, FILD0, FILD4, [0xdb, 0xc1], FSTP12),
+  cf('fcmovnb not taken (CF=1)', CF_, FILD0, FILD4, [0xdb, 0xc1], FSTP12),
+  cf('fcmovne taken', 0, FILD0, FILD4, [0xdb, 0xc9], FSTP12),
+  cf('fcmovnbe not taken (CF=1)', CF_, FILD0, FILD4, [0xdb, 0xd1], FSTP12),
+  cf('fcmovnu taken (PF=0)', 0, FILD0, FILD4, [0xdb, 0xd9], FSTP12),
+  cf('fucompp pops twice', 0, FILD8, FILD0, FILD4, [0xda, 0xe9], FSTP12),
+];

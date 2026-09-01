@@ -49,6 +49,17 @@ export function installFPU(cpu) {
     cpu.flags = fl;
   };
 
+  // FCMOVcc (P6): move ST(i) into ST(0) when an EFLAGS condition holds. DA C0..DF are the plain
+  // forms (B / E / BE / U) and DB C0..DF their negations. Like FCOMI these read or write EFLAGS
+  // rather than the status word, and like FCOMI doing nothing is silent: the value simply never
+  // arrives. qblove draws its entire logo through two of them.
+  const fcmov = (b, negated) => {
+    const fl = cpu.flags, k = (b >> 3) & 3;
+    const cond = k === 0 ? !!(fl & CF) : k === 1 ? !!(fl & ZF)
+      : k === 2 ? !!(fl & (CF | ZF)) : !!(fl & PF);
+    if (cond !== negated) setST(0, ST(b & 7));
+  };
+
   const setcc = (a, b) => {
     cpu.fsw &= ~0x4500;
     if (Number.isNaN(a) || Number.isNaN(b)) cpu.fsw |= 0x4500;
@@ -149,7 +160,14 @@ export function installFPU(cpu) {
         if (b < 0xd8) { setST(rm, ST(0)); return; }         // fst st(i)
         if (b < 0xe0) { setST(rm, ST(0)); pop(); return; }  // fstp st(i)
         setcc(ST(0), ST(rm)); if (b >= 0xe8) pop(); return; // fucom / fucomp
+      // DA had no arm at all: its whole register space was a no-op, FUCOMPP included — and that one
+      // must POP TWICE, so the x87 stack drifted every time a program used it.
+      case 0xda:
+        if (b < 0xe0) return fcmov(b, false);                                // fcmovb/e/be/u
+        if (b === 0xe9) { setcc(ST(0), ST(1)); pop(); return pop(); }        // fucompp
+        return;
       case 0xdb:
+        if (b < 0xe0) return fcmov(b, true);                                 // fcmovnb/ne/nbe/nu
         if (b === 0xe3) { cpu.ftop = 0; cpu.fsw = 0; st.fill(0); return; }   // fninit
         if (b >= 0xe8 && b <= 0xef) return cmpi(ST(0), ST(b - 0xe8));        // fucomi st0,st(i)
         if (b >= 0xf0 && b <= 0xf7) return cmpi(ST(0), ST(b - 0xf0));        // fcomi  st0,st(i)

@@ -65,6 +65,14 @@ Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/vie
 
 **Chrome Revenge** (Abaddon, 1K, Assembly 2020) — ✅ **renders**: a realtime SSE raytracer in VESA 640x480x32. It needed three things, and only the first was the one we expected. (1) VBE 2.0, for mode 0x112. (2) Sixteen XMM instructions through SSE4.1 (`src/sse.js`, ROADMAP F1). (3) Two defects that had nothing to do with either: `FCOMI`/`FUCOMI` were no-ops — the only x87 compares that write EFLAGS — so its ray/sphere test always missed and the screen stayed black; and port 0x60 read back as 0, where the 8042 retains the last scancode, so `IN AL,60H / DAS / JC` ended the intro after a single frame. Both also improved existing goldens (`qblove`, `symetrie`). Verified against the author's own bundled screenshots: same scene, different animation phase.
 
+**qblove** (Abaddon, 1K) — ✅ **renders its logo**, verified against the author's own pouet
+screenshot. It had been in the golden set for months drawing a third of a screen of stripes, which
+read as "renders" because nothing compared it to anything. It is NOT a Mode-X problem — measured:
+it never writes a single VGA register, it is plain chained 13h from `INT 10h AX=0013`. The cause was
+`fpu.js` having **no `DA` arm at all**, so `FCMOVB`/`FCMOVE`/`FCMOVBE`/`FCMOVU` and `FUCOMPP` were
+no-ops — and `FUCOMPP` must POP TWICE, so the x87 stack drifted for everything after it. With
+`FCMOVcc` implemented the intro goes from 34560 to 63822 non-zero pixels.
+
 Most *famous* 4Ks (Elevated, fr-08, cdak) are protected-mode/Windows → out of scope for the
 real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
 
