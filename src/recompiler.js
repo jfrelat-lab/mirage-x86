@@ -264,7 +264,7 @@ export class Recompiler {
       out.push('}');
     }
     out.push('default:cpu.eip=_e;return;', '}}');
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
     const body = pre + '\n' + out.join('\n');
     return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body };
   }
@@ -460,6 +460,7 @@ export class Recompiler {
     // The CPU generation, read once per block. Every use below is a compile-time constant folded
     // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
     const PROF = this.cpu.profile, SHIFT_MASK = PROF.shiftCountMask;
+    const FPREC24 = (this.cpu.fcw & 0x300) === 0;   // x87 precision control = single (see arithE)
     // Shared by LDS/LES/LSS/LFS/LGS: an offset at the effective address, then a 16-bit selector.
     // Its position depends on the operand size — +2 for a word offset, +4 for a dword.
     const loadPtr = (o, segIdx, size) => {
@@ -681,10 +682,20 @@ export class Recompiler {
     // ST(i) as an lvalue/rvalue string; fpush/FPOP mutate cpu.ftop directly (no mirror).
     const STe = (i) => i === 0 ? 'st[cpu.ftop]' : `st[(cpu.ftop+${i})&7]`;
     const setSTe = (i, v) => i === 0 ? `st[cpu.ftop]=${v};` : `st[(cpu.ftop+${i})&7]=${v};`;
-    const fpush = (v) => { const t = NT(); P(`var ${t}=${v};cpu.ftop=(cpu.ftop-1)&7;st[cpu.ftop]=${t};`); };
-    const FPOP = 'cpu.ftop=(cpu.ftop+1)&7;';
-    const arithE = (rg, x, y) => rg === 0 ? `${x}+${y}` : rg === 1 ? `${x}*${y}` : rg === 4 ? `${x}-${y}`
-      : rg === 5 ? `${y}-${x}` : rg === 6 ? `${x}/${y}` : rg === 7 ? `${y}/${x}` : x;   // 2/3 = compare (returns x)
+    // `cpu.focc` tracks which physical registers hold a value — the tag word FNSTENV publishes is
+    // derived from it (see fpu.js). Maintaining it HERE and only here is what makes that possible:
+    // stack motion happens in these two emissions, while st[] is written inline all over.
+    const fpush = (v) => { const t = NT(), q = NT(); P(`var ${t}=${v};var ${q}=(cpu.ftop-1)&7;cpu.ftop=${q};st[${q}]=${t};oc[${q}]=1;`); };
+    const FPOP = 'var _fp=cpu.ftop;oc[_fp]=0;cpu.ftop=(_fp+1)&7;';
+    // Precision control is a TRANSLATION-time constant: PC=single is rare, and reading the control
+    // word per operation would tax every FPU block for it. `cpu.fldcw` resets the cache when the
+    // field moves, the same way a paging change does. Division goes through a helper because it
+    // also has to raise the zero-divide flag, which `x/y` cannot.
+    const arithE = (rg, x, y) => {
+      const e = rg === 0 ? `${x}+${y}` : rg === 1 ? `${x}*${y}` : rg === 4 ? `${x}-${y}`
+        : rg === 5 ? `${y}-${x}` : rg === 6 ? `cpu.fdiv(${x},${y})` : rg === 7 ? `cpu.fdiv(${y},${x})` : x;
+      return (FPREC24 && rg !== 2 && rg !== 3) ? `Math.fround(${e})` : e;   // 2/3 = compare (returns x)
+    };
 
     // ===================== main decode loop =====================
     while (!ended && count < maxOps) {
@@ -1171,7 +1182,7 @@ export class Recompiler {
     // terminator's return form to get the standalone block function.
     const bodyOut = out.slice();
     emitTermReturn();
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv;' : '');
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
     return { fn, linStart, linEnd: mask(linStart - ip0 + ip), ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, canFault, hot: 0, kind: 0 };
@@ -1196,7 +1207,10 @@ export class Recompiler {
           if (reg === 0) return fpush(`dv.getFloat32(${a},true)`);           // FLD m32
           if (reg === 2) return P(`dv.setFloat32(${a},st[cpu.ftop],true);${smc(4)}`);        // FST m32
           if (reg === 3) return P(`dv.setFloat32(${a},st[cpu.ftop],true);${smc(4)}${FPOP}`); // FSTP m32
-          if (reg === 7) return P(`m.w16(${a},0x037f);`);                    // FNSTCW (w16 does SMC)
+          if (reg === 4) return P(`cpu.fldenv(${a});`);                      // FLDENV
+          if (reg === 5) return P(`cpu.fldcw(m.r16(${a}));`);                // FLDCW
+          if (reg === 6) return P(`cpu.fnstenv(${a});`);                     // FNSTENV
+          if (reg === 7) return P(`m.w16(${a},cpu.fcw);`);                   // FNSTCW (w16 does SMC)
           return fb();
         case 0xdd:                                                   // f64 load/store
           if (reg === 0) return fpush(`dv.getFloat64(${a},true)`);           // FLD m64
@@ -1235,7 +1249,8 @@ export class Recompiler {
           switch (b) {
             case 0xe0: return P(setSTe(0, '-st[cpu.ftop]'));                // FCHS
             case 0xe1: return P(setSTe(0, 'Math.abs(st[cpu.ftop])'));       // FABS
-            case 0xe5: return;                                             // FXAM (cc omitted, as fpu.js)
+            case 0xe4: return P('cpu.ftst();');                            // FTST
+            case 0xe5: return P('cpu.fxam();');                            // FXAM
             case 0xe8: return fpush('1');                                  // FLD1
             case 0xe9: return fpush('Math.log2(10)');                      // FLDL2T
             case 0xea: return fpush('Math.LOG2E');                         // FLDL2E
@@ -1253,6 +1268,8 @@ export class Recompiler {
             case 0xf9: P(setSTe(1, `${STe(1)}*cpu.flog2p1(st[cpu.ftop])`)); return P(FPOP);   // FYL2XP1
             case 0xfa: return P(setSTe(0, 'Math.sqrt(st[cpu.ftop])'));      // FSQRT
             case 0xfb: { const x = NT(); P(`var ${x}=st[cpu.ftop];${setSTe(0, `Math.sin(${x})`)}`); return fpush(`Math.cos(${x})`); } // FSINCOS
+            case 0xf6: return P('cpu.ftop=(cpu.ftop-1)&7;');                // FDECSTP (tags untouched)
+            case 0xf7: return P('cpu.ftop=(cpu.ftop+1)&7;');                // FINCSTP
             case 0xfc: return P(setSTe(0, 'cpu.f2i(st[cpu.ftop])'));        // FRNDINT
             case 0xfd: return P(setSTe(0, `st[cpu.ftop]*Math.pow(2,Math.trunc(${STe(1)}))`)); // FSCALE
             case 0xfe: return P(setSTe(0, 'Math.sin(st[cpu.ftop])'));       // FSIN
@@ -1274,7 +1291,7 @@ export class Recompiler {
           if (b === 0xd9) { P(`cpu.fcmp(st[cpu.ftop],${STe(1)});`); P(FPOP); return P(FPOP); } // FCOMPP
           P(setSTe(rm, arithE(reg, 'st[cpu.ftop]', STe(rm)))); return P(FPOP);
         case 0xdd:
-          if (b < 0xc8) return;                                            // FFREE ST(i)
+          if (b < 0xc8) return P(`cpu.ffree(${rm});`);                     // FFREE ST(i)
           if (b < 0xd8) return P(setSTe(rm, 'st[cpu.ftop]'));              // FST ST(i)
           if (b < 0xe0) { P(setSTe(rm, 'st[cpu.ftop]')); return P(FPOP); } // FSTP ST(i)
           P(`cpu.fcmp(st[cpu.ftop],${STe(rm)});`); if (b >= 0xe8) P(FPOP); return; // FUCOM/FUCOMP

@@ -40,6 +40,9 @@ export class Machine {
     this.cpu.shiftMask = this.cpu.profile.shiftCountMask;   // read by the shift/rotate helpers
     installFPU(this.cpu);                           // x87 coprocessor
     installSSE(this.cpu);                           // XMM register file + the SSE subset (src/sse.js)
+    // FLDCW changing PRECISION CONTROL invalidates every translated FPU block: the rounding is folded
+    // into the emitted code, exactly as the CPU profile's constants are.
+    this.cpu.onFcwPrecChange = () => { this.rec.reset(); this.cpu.tbudget = 0; };
     this.rec = new Recompiler(this.cpu);
     // Paging plumbing. Memory needs the CPU to walk CR3, and any change to the mapping invalidates
     // both the software TLB and every translated block (their emitted addresses assumed the old

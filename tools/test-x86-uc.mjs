@@ -20,13 +20,14 @@ import { CASES as HAND, SCRATCH_PATTERN } from './x86-cases.mjs';
 import { generateCases } from './x86-gen.mjs';
 import { SSE_CASES, X87_CMP_CASES, X87_CMOV_CASES } from './x86-sse-cases.mjs';
 import { X87_CASES } from './x87-cases.mjs';
+import { X87_STACK_CASES } from './x87-stack-cases.mjs';
 
 // The hand-written cases encode intent (each one is a regression lock with a comment); the generated
 // ones enumerate the ModRM/SIB/prefix grid mechanically, because the 0x67 bug lived in a corner
 // nobody thought to write a case for. Both go through the same oracle.
 // The SSE cases end by storing XMM back into the scratch, which is how an oracle that never reads
 // XMM still checks it — see x86-sse-cases.mjs.
-const CASES = [...HAND, ...generateCases(), ...SSE_CASES, ...X87_CMP_CASES, ...X87_CMOV_CASES, ...X87_CASES];
+const CASES = [...HAND, ...generateCases(), ...SSE_CASES, ...X87_CMP_CASES, ...X87_CMOV_CASES, ...X87_CASES, ...X87_STACK_CASES];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXPECTED = join(HERE, 'x86-uc-expected.json');
@@ -92,11 +93,16 @@ for (let i = 0; i < CASES.length; i++) {
   // slots are floating-point results and how many ulps that case is allowed — anything outside a
   // declared slot, or beyond its budget, still fails. Tolerated cases are counted and printed, so
   // the allowance cannot quietly grow.
+  // `skip` declares byte ranges that CANNOT match by construction — FNSTENV writes the address of
+  // the last x87 instruction, which MIRAGE does not model. Declared per case and listed below, so
+  // it is visible rather than an invisible hole in the comparison.
+  const skips = c.skip || [];
+  const skipped = (k) => skips.some((sk) => k >= sk.off && k < sk.off + sk.len);
   const slots = c.fp ? (Array.isArray(c.fp) ? c.fp : [c.fp]) : [];
   const inSlot = (k) => slots.find((sl) => k >= sl.off && k < sl.off + 8);
   let tolerated = false;
   for (let k = 0; k < SCRATCH; k++) {
-    if (g.mem[k] === w.mem[k]) continue;
+    if (g.mem[k] === w.mem[k] || skipped(k)) continue;
     const sl = inSlot(k);
     if (!sl) { diffs.push(`mem[${k}]=${hex(g.mem[k], 2)} want ${hex(w.mem[k], 2)}`); break; }
     const d = ulpDiff(g.mem, w.mem, sl.off);
@@ -109,6 +115,8 @@ for (let i = 0; i < CASES.length; i++) {
 }
 
 console.log(`\nmirage vs unicorn: ${pass} passed, ${fails.length} failed`);
+const skipCount = CASES.filter((x) => x.skip).length;
+if (skipCount) console.log(`  ${skipCount} cas avec des octets declares non comparables (pointeur d'instruction FNSTENV)`);
 if (tol.length) { console.log(`  ${tol.length} tolerees (float64 vs 80 bits):`); for (const t of tol) console.log('    ~ ' + t); }
 if (fails.length) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 console.log('all green ✓');

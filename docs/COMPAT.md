@@ -76,6 +76,8 @@ no-ops — and `FUCOMPP` must POP TWICE, so the x87 stack drifted for everything
 Most *famous* 4Ks (Elevated, fr-08, cdak) are protected-mode/Windows → out of scope for the
 real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
 
+**Mirrors Within** (Digimind, 512b) — was rendering an entirely wrong picture (two ringed blobs on a grey diagonal, against DOSBox's two ellipses of nested shapes on black) because **FTST was a no-op**. It calls it 1.96 M times. 40.4% → 82.1% against DOSBox. ⚠️ `freality` carries a **pre-existing** `INT 00h` divide-error loop at 0814:09dd under `dosdiff` (present before the x87 work, unchanged by it) — not yet investigated.
+
 **pouët MS-Dos 4K top 10, swept 2026-08-28: 9/10 render, one blocked (Void 3, VESA).** Three of them
 had been filed as engine failures and none was: two were *waiting on a keypress* they had asked for
 in a printed message, and one is a text-mode game. The triage rule that follows: `probe-intro.js`
