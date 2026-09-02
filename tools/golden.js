@@ -39,7 +39,10 @@ const TICKS = 60, BUDGET = 400000;
 // a flat fill (2 values) at 60; `mesha` needs ~400 ticks to finish precomputing and draws nothing
 // before that. The engine is deterministic, so any budget is reproducible — the choice is only about
 // sampling where the content is.
-const TICK_OVERRIDE = { animate: 20, crevenge: 200, freality: 20, mesha: 400, omniscent: 120, starport: 200 };
+// Re-measured 2026-09-02 after the machine speed was calibrated to the reference (TIMING.md §6):
+// a timer-paced program advances by TICKS, so changing how many instructions a tick is worth moves
+// where its picture is. Only `freality` needed moving (20 -> 40, 2 distinct values -> 90).
+const TICK_OVERRIDE = { animate: 20, crevenge: 200, freality: 40, mesha: 400, omniscent: 120, starport: 200 };
 
 // Fixed workload set: both own demos + every third-party intro. Third-party binaries are
 // gitignored, so `check` silently skips any that are absent on this machine.

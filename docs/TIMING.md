@@ -214,3 +214,55 @@ about how fast this machine should be.
 > question as [mirage_speed_baseline] in ROADMAP D: one comparable unit between us and the reference.
 > The beam stays behind `MIRAGE_BEAM=crtc` until that is settled, because flipping it at today's speed
 > still regresses a working intro — for a reason that is now understood rather than mysterious.
+
+## 7. Calibrated to the reference — 2026-09-02
+
+`pitBase` is now **182584**, and the CRTC-derived beam is on by default. A cycle here is one retired
+instruction, so that number IS the emulated machine's speed: it went from about a fast 286 to about
+a low-end 386, which is what the reference we diff against runs. `tools/beamperiod.asm` reports
+`0x2E60` on both sides now, digit for digit.
+
+**The instrument had to be fixed first, and it changed what "fidelity" reads.** `dosdiff` compares a
+frame at K ticks, and the two sides did not mean the same thing by a tick: the DOSBox grabber hooks
+INT 8 and snapshots after K TIMER ticks, while this side ran K slices of 1.5 M blocks and FORCED a
+`tickTimer()` after each — ignoring `pitReload`, double-driving the timer, and executing several
+ticks' worth of work per "tick". It now counts the ticks the run loop actually delivers. The effect
+on numbers that were quoted for months:
+
+| intro | misaligned | aligned |
+|---|---|---|
+| intro | 72-77% | **98.3%** |
+| above | 71.7% | **30.5%** |
+| nibble | 64.0% | 55.6% |
+
+So `intro` was never as bad as reported and `above` was never as good. Both are trustworthy now.
+
+**What the calibration itself bought**, measured with the aligned instrument, old (65536 + legacy
+beam) against new:
+
+| intro | old | new |
+|---|---|---|
+| **rv256** | **10.1%** | **44.2%** |
+| upup | 31.5% | 32.0% |
+| chaosequ (3 runs) | 99.3 / 99.3 / 79.2 | 98.7 / 96.7 / 97.7 |
+| intro, 256b, above, nibble | — | identical |
+
+and on the event-stream oracle, which is far steadier than the pixel one:
+
+| title | matching prefix, before → after |
+|---|---|
+| WORDRESC/WR2.EXE | **1 → 85** |
+| ROC/ROC.EXE | 1844 → 1856 |
+| MATHRESC/MR1.EXE | 98 → 107 |
+| DUNE/DUNEDEM.EXE | 46/46, and 6 fewer spurious events |
+| POP/PRINCE.EXE | 188, with 690 → 454 spurious events |
+| MONSTERB/BASH1.EXE | 1691 → **1679** ⚠️ the one regression |
+
+Net **+93 matching events**. 21 of 43 goldens moved and were re-blessed one at a time after checking
+each still renders; `freality`'s tick budget was re-measured (20 → 40) because a timer-paced program
+advances by ticks, and a tick is now worth 2.79x more work.
+
+> **What this does not fix.** The INT 8 rate cap is still `pitBase>>4`, so still ~291 Hz in emulated
+> terms — §2's conclusion is unchanged, and Chrome Revenge still gets 291 Hz where it asks for 17.5 kHz.
+> What changed is that a tick is now worth 2.79x more guest work, so its animation clock is that much
+> closer without the cap moving at all.

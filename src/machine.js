@@ -88,9 +88,17 @@ export class Machine {
     // the next reload boundary WITH IF set — so a guest that busy-waits on a timer-updated
     // counter INSIDE one runSlice (Wolf3D's VBL loop spins on its TimeCount) actually sees the
     // tick, instead of the old model where the timer only fired between slices.
-    // Reload in cpu.cycles. 65536 = the real PIT channel-0 default, i.e. we treat one retired
-    // instruction as one ~1.19 MHz PIT clock (an emulated ~1.2 MIPS 386). Env override for tuning.
-    this.pitReload = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITRELOAD) || 0x10000;
+    // Reload in cpu.cycles — and this number IS the emulated machine's speed, because a cycle here is
+    // one retired instruction. It used to be 0x10000, the real PIT channel-0 default, which made one
+    // instruction one ~1.19 MHz PIT clock: about a fast 286.
+    //
+    // 182584 instead, because that is what the reference does. tools/beamperiod.asm counts poll
+    // iterations across one 0x3DA frame from INSIDE the guest, and the same binary runs on both
+    // sides: DOSBox-X at `cycles=fixed 20000` gives 0x2E60 = 11872 per frame, we gave 0x10A5 = 4261,
+    // so a guest got 2.79x less work per frame here than in the configuration every dosdiff and
+    // dbx-oracle comparison is made against. 182584 reproduces DOSBox's count exactly, digit for
+    // digit — one comparable unit, at last. See docs/TIMING.md §6.
+    this.pitReload = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITRELOAD) || 182584;
     this.nextTimerCycle = this.pitReload;           // cpu.cycles threshold for the next INT 8
     // pitBase is the default cycles-per-18.2Hz-tick. The 0x3DA VGA beam (70 Hz) scales off THIS,
     // not the dynamic pitReload — a game reprogramming the system timer (below) must not move the

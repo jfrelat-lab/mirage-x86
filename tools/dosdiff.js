@@ -72,8 +72,17 @@ function mirageCapture() {
   const { mc, dos } = makeMachine(vfs ? { vfs } : undefined);
   let fault = null; mc.onError = (e) => { fault = e; };
   dos.load(img, tail, path);
-  for (let t = 0; t < K && !fault && !dos.programDone; t++) { mc.runSlice(1_500_000); mc.tickTimer(); }
-  mc.runSlice(1_500_000);  // settle the current frame
+  // Both sides must mean the same thing by "K ticks". The DOSBox grabber hooks INT 8 and snapshots
+  // after K TIMER ticks, i.e. K/18.2 seconds of emulated time. This side used to run K slices of
+  // 1.5 M blocks and FORCE a tickTimer() after each, which ignored pitReload entirely, double-drove
+  // the timer (the run loop delivers its own), and executed several times a tick's worth of work per
+  // "tick" — so the two frames were never sampled at the same emulated instant, and the mismatch
+  // moved with any change to the machine's speed. Count the timer ticks the run loop actually
+  // delivers instead, in small slices so we stop near the K-th.
+  let ticks = 0, guard = 0;
+  const tickTimer = mc.tickTimer.bind(mc);
+  mc.tickTimer = () => { ticks++; return tickTimer(); };
+  while (ticks < K && !fault && !dos.programDone && guard++ < 4_000_000) mc.runSlice(2048);
   return { fb: mc.mem.u8.slice(0xa0000, 0xa0000 + 64000), dac: mc.bios.dac.slice(), fault: fault ? fault.message : null };
 }
 

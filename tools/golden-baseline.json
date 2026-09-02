@@ -1,11 +1,11 @@
 {
   "demos/PLASMA13.COM": {
-    "hash": "95bcc0adddd50a3cd11b45af966bee61ff57eebf",
+    "hash": "408a17da314979556623c3ae0c82fec3ac7c12ac",
     "mode": 19,
     "fault": null
   },
   "demos/XORMUNCH.COM": {
-    "hash": "c2ed69a3b7fe795ab4d38a39196165d1c39ff762",
+    "hash": "7a8e96c550239caee52e0749c872c9edfa71c13b",
     "mode": 19,
     "fault": null
   },
@@ -20,32 +20,32 @@
     "fault": null
   },
   "intros/256b.com": {
-    "hash": "f1a627e7ba05f27ea65074ec172fe1fa16468eab",
+    "hash": "25fdd48c107337f3c7a61fe513265f28a32e96b4",
     "mode": 19,
     "fault": null
   },
   "intros/256bytef.com": {
-    "hash": "736d05abfa93f961f0b02f8aa7f2decceacccb65",
+    "hash": "61af2b0269ded507a49fc428f6ee3334749cb82b",
     "mode": 19,
     "fault": null
   },
   "intros/above.com": {
-    "hash": "c4ea636359a183b6dc90e8ee9bf9302483f8fb3a",
+    "hash": "466de94c1be756cc928840f30599b4bdd1056978",
     "mode": 19,
     "fault": null
   },
   "intros/abstract.com": {
-    "hash": "ff2f345e5ddb47620323f6d77bf23c5de6da87dd",
+    "hash": "b52eb55840acbc64909a907ccf34c7a70a2a0edf",
     "mode": 19,
     "fault": null
   },
   "intros/animate.com": {
-    "hash": "71dbbec9c0728a2140b19b5ffda087cb33a33c46",
+    "hash": "e0d261aba27b83ce2c06bbabacb719e65d2127b9",
     "mode": 19,
     "fault": null
   },
   "intros/chaosequ.com": {
-    "hash": "f87b83df523b110bfab2589ea6a4dd36b286f678",
+    "hash": "9216fdb88d9b205f6729f446a7d2b71ef5e6aa2e",
     "mode": 19,
     "fault": null
   },
@@ -65,12 +65,12 @@
     "fault": null
   },
   "intros/intoanew.com": {
-    "hash": "213a297471f32c0d17618e438f625a80c52967c3",
+    "hash": "95e3ed5b308f926784bb2dd81da7f69dd3c156a5",
     "mode": 19,
     "fault": null
   },
   "intros/intro.com": {
-    "hash": "13c4b776ad9062a48e01fb18a0c81a21e0bb40d7",
+    "hash": "3e317605730d3d1777e6c21110ccdce956af0583",
     "mode": 19,
     "fault": null
   },
@@ -80,7 +80,7 @@
     "fault": null
   },
   "intros/kaneda.com": {
-    "hash": "7615e7bf1a26db26927e8902c059526c016afc6b",
+    "hash": "2eee07257833044f45cbb905ec3a71965f2ff180",
     "mode": 19,
     "fault": null
   },
@@ -110,7 +110,7 @@
     "fault": null
   },
   "intros/paleozoa.com": {
-    "hash": "61027bf4300f70111c91aee55a9736c94adbc9a0",
+    "hash": "025ed7f62fc4632b9ce03930f553313c39a60106",
     "mode": 19,
     "fault": null
   },
@@ -130,7 +130,7 @@
     "fault": null
   },
   "intros/qblove.com": {
-    "hash": "cedef16b39066f17605ec864788d6632dbed681c",
+    "hash": "692059a301130d3adb805f8f90338cb523bf9321",
     "mode": 19,
     "fault": null
   },
@@ -140,7 +140,7 @@
     "fault": null
   },
   "intros/rv256.com": {
-    "hash": "babe3a8bde9767fdbeb6c48a229157d9dc170218",
+    "hash": "68ae53b5719ba605f72d73f919bae7aede83990d",
     "mode": 19,
     "fault": null
   },
@@ -155,7 +155,7 @@
     "fault": null
   },
   "intros/upup.com": {
-    "hash": "812978902c772cbe2a1dcc3e338f4cb8568f7ec6",
+    "hash": "6c324db3039029c2d53dfe7d2d4f48af3c00c0b3",
     "mode": 19,
     "fault": null
   },
@@ -180,27 +180,27 @@
     "fault": null
   },
   "intros/freality.com": {
-    "hash": "7d5591324b16e724cb224f3335f14f48b6acd391",
+    "hash": "49f31a68578bcdb82ea61b78a6bc92a9659043c5",
     "mode": 19,
     "fault": null
   },
   "intros/mesha.com": {
-    "hash": "00f75f2b301cb107dba35260b6d1a8e7b6fef5cf",
+    "hash": "baded9f0c0bea87e2a374b7cbc0a627713034f97",
     "mode": 3,
     "fault": null
   },
   "intros/omniscent.com": {
-    "hash": "46d9f46df0c9ebc2d4e7dd29830c2fab5b3de4af",
-    "mode": 3,
+    "hash": "210981b7c0f239dfc04bdcdaf40c5fb038a3f9b2",
+    "mode": 19,
     "fault": null
   },
   "intros/soullost.com": {
-    "hash": "52372285d351906f3e5cfd39f4890e3da76a639a",
-    "mode": 3,
+    "hash": "7f68639b05cfde0ed43b6075bfe81bf713d77345",
+    "mode": 19,
     "fault": null
   },
   "intros/starport.com": {
-    "hash": "ae91bd391a70c0ab9f0454df14c5591f92f8c179",
+    "hash": "8ef289b3dfc779430fb4c487be9267fe42fd692a",
     "mode": 13,
     "fault": null
   },
@@ -210,7 +210,7 @@
     "fault": null
   },
   "intros/crevenge.com": {
-    "hash": "6ea89503d0f5467c005578e6e219bbe3e37335e9",
+    "hash": "70934d5507e17955e203984faa6289fdf4622c8f",
     "mode": 3,
     "fault": null
   }

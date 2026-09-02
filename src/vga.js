@@ -81,15 +81,13 @@ export function installVGA(machine) {
   // starport run, so it cannot afford to recompute this per read.
   vga.beam = { blank: 400 / 449, rStart: 412 / 449, rEnd: 414 / 449 };
   vga.beamStamp = 0;
-  // ⚠️ OFF BY DEFAULT — `MIRAGE_BEAM=crtc` turns it on. The derivation below is right: measured
-  // against these registers the shipped constants make the retrace pulse 8% of a frame where the
-  // hardware's is 0.45%, and they do not track the mode at all. But turning it on drives
-  // intros/freality.com into a state where its OWN arithmetic divides by zero (CHESS.INC computes
-  // `S = 33 - AX` and lands on 0), and DOSBox-X runs the same intro for 45 s without ever getting
-  // there. So the duty cycle is not the only thing wrong with our beam, and shipping a change that
-  // is locally correct while it diverges from the reference on a real program would trade a known
-  // error for an unexplained one. docs/TIMING.md §4 has the measurements.
-  const LEGACY_BEAM = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_BEAM === 'crtc');
+  // `MIRAGE_BEAM=legacy` restores the two constants this replaced (blank 0.88, retrace 0.92 to the
+  // end of the frame), which made the retrace pulse 8% of a frame against the hardware's 0.45% and
+  // did not track the mode at all. It was held back for a while because turning it on drove
+  // intros/freality.com into its own divide by zero — and that turned out to be a SPEED artifact,
+  // not a duty-cycle one: with the machine calibrated to the reference (TIMING.md §6) freality runs
+  // its whole show under this beam and exits normally.
+  const LEGACY_BEAM = typeof process !== 'undefined' && process.env && process.env.MIRAGE_BEAM === 'legacy';
   const recomputeBeam = () => {
     if (LEGACY_BEAM) { vga.beam.blank = 0.88; vga.beam.rStart = 0.92; vga.beam.rEnd = 1; vga.beamStamp++; return; }
     const c = vga.crtc, ov = c[0x07];
