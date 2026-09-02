@@ -406,3 +406,76 @@ the mechanism:
 
 MIRAGE is well ahead of DOSBox on both, and self-modifying code costs it 6.3x where it costs DOSBox
 nothing. That gap is real and is what §9 diagnosed; it just is not what makes Chrome Revenge slow.
+
+## 11. How DOSBox makes self-modifying code free — read from its source, 2026-09-02
+
+⚠️ **First, a correction to §10.** Those measurements used `core=normal`, which is DOSBox's
+**interpreter**. SMC is free for an interpreter by construction — it re-decodes from memory every
+time, so there is no compiled cache to throw away. Comparing our recompiler to that says nothing.
+Re-measured with `core=dynamic`, its recompiler, sampling CPU load (wall clock cannot discriminate
+here: `cycles=fixed` self-paces, so 1 s emulated takes 1 s wall by construction whenever it keeps up):
+
+| workload | core=normal | core=dynamic |
+|---|---|---|
+| 17.5 kHz ISR | 6.8-7.3% | 5.2-5.4% |
+| 17.5 kHz **self-modifying** ISR | 7.0-7.2% | **5.3-5.4%** |
+
+So its recompiler really does pay nothing. `src/cpu/core_dynrec/cache.h` and `core_dynrec.cpp` say how.
+
+**1. A write of the SAME value invalidates nothing.**
+```c
+void writeb(PhysPt addr,uint8_t val) {
+    addr &= 4095;
+    if (host_readb(hostmem+addr) == val) return;      // ← identical: nothing happens at all
+```
+
+**2. `write_map[addr]` is per BYTE, not per page** — it counts how many cache blocks cover that byte,
+so a write to a byte no block covers costs one array read.
+
+**3. And the one that actually matters — `invalidation_map[addr]`, a per-byte count of how often a
+write there invalidated code.** `core_dynrec.cpp`:
+```c
+if (!chandler->invalidation_map || (chandler->invalidation_map[ip_point&4095] < 4)) {
+    block = CreateCacheBlock(chandler, ip_point, 32);   // translate, at most 32 instructions
+} else {
+    CPU_Cycles = 1;
+    Bits nc_retcode = CPU_Core_Normal_Run();            // ← INTERPRET one instruction
+}
+```
+
+> **DOSBox does not make its recompiler handle self-modifying code. It stops using the recompiler
+> there.** After four invalidations at an address, that code is interpreted, one instruction at a
+> time, for good; the dynrec never sees it again. And it can afford that because **the interpreter is
+> not a fallback it had to build — it is the other production core**, complete and tested, that
+> `core=normal` selects. Deferring to it costs DOSBox nothing in engineering or in semantic risk.
+
+**What this means for MIRAGE**, taking the three in turn:
+
+| mechanism | our position |
+|---|---|
+| same-value elision | Not free for us. DOSBox's writes to code pages go through a page handler; ours are **emitted inline** (`u8[a]=v` plus a `codePage` guard), so a compare-before-store would tax the hot store path rather than a handler that only code pages reach. Measurable before deciding, not obvious. |
+| per-byte `write_map` | We use `pageLo`/`pageHi` as a range fast-out and then walk the page's block set. Coarser, but the profile in §9 shows these writes DO hit real blocks, so it is not the lever here. |
+| **interpret after N invalidations** | **We have no interpreter.** This is the whole gap. |
+
+Block size is measurably NOT the lever, which is worth recording because it looks like one — DOSBox
+compiles at most 32 instructions and we allow 192:
+
+| `MIRAGE_MAXOPS` | crevenge uncapped |
+|---|---|
+| 192 | 3.46 MIPS, 506111 compilations |
+| 32 | 3.43 MIPS, 506111 |
+| 8 | 3.35 MIPS, 442600 |
+
+No change, because the blocks being invalidated are already 4 and 8-9 instructions long.
+
+> **The design this suggests for us.** Writing a separate interpreter would mean a second
+> implementation of every instruction's semantics — precisely the duplication that let FCOMI,
+> FXTRACT and FPREM1 sit wrong in both `fpu.js` and the recompiler at once. But we do not need one.
+> The same emitter can produce a **generic, non-specialising** form of an instruction, one that reads
+> its immediate and displacement from memory at run time instead of baking them in as constants.
+> Compiled once per opcode form and cached by form rather than by address, that IS an interpreter —
+> written in the emitter we already have and test, with no second copy of the semantics. Blocks whose
+> `invalidation_map` crosses a threshold would be emitted that way and would then survive the writes.
+>
+> §9 listed this as "option 1, do not specialise the written bytes". Reading DOSBox's source says it
+> is also option 2, arrived at from the other end.
