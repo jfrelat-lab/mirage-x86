@@ -172,3 +172,45 @@ reported green without ever running. Cases now declare `fault: 0` and the harnes
 *both* sides faulted, and it prints the skip count on every run so the remaining 5 pre-existing skips
 are visible. The 7 fault cases pass, including the overflow conditions (`FFFF:FFFF / 1`, and IDIV's
 asymmetric `-32768 / -1`) that are the easy ones to get wrong.
+
+## 6. The beam PERIOD — measured 2026-09-02, and it exonerates §4
+
+§4 shipped the CRTC-derived duty cycle behind a flag because it killed `intros/freality.com`, and
+closed by naming the period as the unmeasured piece. It has now been measured, and the period is not
+the problem either — the **ratio between the beam and the guest's execution rate** is.
+
+The duty cycle can be checked against the CRTC. The period cannot: it is a relationship between two
+clocks, and only the guest can see it. So `tools/beamperiod.asm` measures it from the inside — sync to
+a retrace edge, then count poll iterations across one whole frame — and the **same binary** runs on
+both sides, which is what makes the two numbers comparable.
+
+| | iterations per frame | instructions per frame |
+|---|---|---|
+| DOSBox-X, `cycles=fixed 20000` | 0x2E60 = **11872** (stable to ±1 over 8 frames) | ~47500 |
+| MIRAGE, default | 0x10A5 = **4261** | **17045** |
+
+4261 is exactly 17045/4, and the loop body is four instructions — so `vgaPeriod = pitBase / 3.845` is
+internally consistent and the counter measures what it claims. What it shows is that **a guest gets
+2.79x less work per beam frame here than in the DOSBox configuration we diff against**. That is a
+machine-speed choice, not a beam defect: 17045 instructions per 70 Hz frame is roughly a fast 286,
+and DOSBox at those settings is roughly a low-end 386.
+
+`MIRAGE_PITRELOAD=182584` reproduces DOSBox's count **exactly** — 0x2E60, digit for digit. And with
+that calibration:
+
+| beam | pitReload | intros/freality.com |
+|---|---|---|
+| legacy | 65536 (default) | ends at tick 122 |
+| crtc | 65536 (default) | **aborts at tick 36** — divide by zero |
+| legacy | 182584 | still running at 200 |
+| **crtc** | **182584** | **runs its whole show and exits normally at tick 277** |
+
+So freality's divide by zero was an artifact of the machine being too slow per frame, not of the
+retrace pulse being the right width. **The §4 fix is correct and safe**; what gates it is a decision
+about how fast this machine should be.
+
+> **What it would cost.** `MIRAGE_PITRELOAD=182584` moves **20 of 43 goldens** — as any change to the
+> emulated machine's speed must. That is the real size of the calibration question, and it is the same
+> question as [mirage_speed_baseline] in ROADMAP D: one comparable unit between us and the reference.
+> The beam stays behind `MIRAGE_BEAM=crtc` until that is settled, because flipping it at today's speed
+> still regresses a working intro — for a reason that is now understood rather than mysterious.
