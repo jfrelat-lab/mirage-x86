@@ -193,7 +193,12 @@ export class Mirage {
 
     // The timer interrupt is paced at the guest's programmed PIT rate (default 18.2 Hz; games such
     // as Dune/Cosmo reprogram counter 0 to 200–1000 Hz — machine.pitReload tracks it, capped).
-    const tickMs = Math.max(3, TICK_MS * (this.machine.pitReload / 0x10000));
+    // The ratio is against pitBase, NOT a hardcoded 0x10000: pitBase is the machine's speed and it
+    // moved to 182584 when that was calibrated to the reference (docs/TIMING.md §7). Dividing by the
+    // old constant made an unreprogrammed guest tick 2.79x too SLOWLY in the browser — and no
+    // headless gate can see it, because none of them run this loop.
+    // The 3 ms floor is this path's own rate cap, ~333 Hz, independent of the headless pitBase>>4.
+    const tickMs = Math.max(3, TICK_MS * (this.machine.pitReload / (this.machine.pitBase || 0x10000)));
     if (now - this._lastTick > 250) this._lastTick = now;   // drop a big backlog (e.g. after the tab was hidden)
 
     if (this.shell.state === 'running') {

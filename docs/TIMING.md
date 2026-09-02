@@ -266,3 +266,40 @@ advances by ticks, and a tick is now worth 2.79x more work.
 > terms — §2's conclusion is unchanged, and Chrome Revenge still gets 291 Hz where it asks for 17.5 kHz.
 > What changed is that a tick is now worth 2.79x more guest work, so its animation clock is that much
 > closer without the cap moving at all.
+
+## 8. Does DOSBox cap the timer rate? No — measured 2026-09-02
+
+§2 concluded that our `pitBase>>4` floor (~291 Hz) "covers for the engine being slower than the
+hardware", and left it there. It did not ask what the reference does. `tools/pitrate.asm` asks
+directly: hook INT 8, count deliveries across 70 vertical retraces — the beam is 70 Hz and
+independent of counter 0, which is what makes it usable as the clock — and write the count out. Same
+binary on both sides.
+
+| divisor | requested | DOSBox-X | MIRAGE |
+|---|---|---|---|
+| 4096 | 291 Hz | 293 | 290 |
+| 68 | 17546 Hz | **17854** | **290** |
+
+**DOSBox has no cap.** It honours the request. At 291 Hz the two agree; at 17.5 kHz we are 60x below
+the reference, and that is the last deliberate divergence left in the timing model.
+
+What lifting it would cost, at the calibrated speed, is entirely the guest's own ISR:
+
+| title | rate asked | wall clock capped | uncapped |
+|---|---|---|---|
+| WOLF3DSW/WOLF3D.EXE | ~700 Hz | 0.64 s | **0.60 s — free** |
+| intros/crevenge.com | 17546 Hz | 1.35 s | 21.2 s — **15.7x** |
+
+Wolf3D's ISR is a small sound service, so the cap costs it fidelity for nothing. Chrome Revenge's is
+a PWM synth, so the 15.7x is 17500 synth passes per second — real work it is asking for, not
+overhead (§2's dispatch measurement stands: dispatch is ~0.2 µs). Calibrating the machine already
+halved this from 33x.
+
+⚠️ **There is a second, independent cap on the browser path**: `ui.js` floors the tick interval at
+3 ms, about 333 Hz, whatever `pitReload` says. Any decision about the headless floor has to name that
+one too, or the two paths disagree about what a guest gets.
+
+> Found while reading that code: `ui.js` computed its tick interval as `pitReload / 0x10000` with the
+> constant hardcoded, so calibrating `pitBase` to 182584 made an unreprogrammed guest tick **2.79x too
+> slowly in the browser** — 153 ms instead of 54.9 ms. No headless gate can catch it, because none of
+> them run that loop. Fixed to divide by `pitBase`.
