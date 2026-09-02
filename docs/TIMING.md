@@ -303,3 +303,60 @@ one too, or the two paths disagree about what a guest gets.
 > constant hardcoded, so calibrating `pitBase` to 182584 made an unreprogrammed guest tick **2.79x too
 > slowly in the browser** — 153 ms instead of 54.9 ms. No headless gate can catch it, because none of
 > them run that loop. Fixed to divide by `pitBase`.
+
+## 9. Why Chrome Revenge is 15x slower than DOSBox uncapped — measured 2026-09-02
+
+§8 put the cost of uncapping at 15.7x and attributed it to "the guest's own ISR, real work it is
+asking for". Measured properly, that is wrong. The work barely grows; the ENGINE collapses.
+
+| | capped (291 Hz) | uncapped (17546 Hz) |
+|---|---|---|
+| instructions executed | 120.8 M | 152.0 M — **+26%** |
+| wall clock | 2.36 s | 45.4 s — **19x** |
+| throughput | **51.2 MIPS** | **3.35 MIPS** |
+| real-time ratio | 0.06x (16x faster than realtime) | 0.99x (exactly realtime) |
+
+A 26% increase in work costs 19x in time, so the cost is per-interrupt overhead, not guest work.
+Where it goes:
+
+| | capped | uncapped |
+|---|---|---|
+| INT 8 delivered | ~5300 | ~402000 |
+| **translations** | 10708 | **780219** |
+| invalidations | 10644 | 780150 |
+
+Two evictions and two recompilations **per interrupt**, and 83% of the wall clock is inside
+`translate()` — 232083 translations emitting **159.5 MB of JavaScript** in ten ticks.
+
+**The cause is genuine self-modifying code, and our invalidation is right.** The ISR sits at
+0814:0439 = linear 0x8579, and the invalidating writes are at 0x857B (1 byte) and 0x8584 (4 bytes) —
+*inside its own instruction stream*. A 1 KB intro keeps its counters in immediate fields; there is
+nowhere else to put them. Invalidation is already byte-precise (`blk.linStart < end && addr <
+blk.linEnd`, with a `pageLo/pageHi` fast-out), so this is not over-approximation: the guest really is
+rewriting the bytes we compiled.
+
+**Caching compiled functions by content would not fix it.** Distinct byte-contents seen at each hot
+block over ~116000 invalidations:
+
+| block | distinct contents |
+|---|---|
+| 0x8579 | **27** |
+| 0x8580 | 20180 |
+| 0x8582 | **93858** |
+
+0x8582 holds a 32-bit accumulator, so nearly every value is new. One block of three would hit in
+such a cache.
+
+> **What would actually fix it**, in the order I would try them:
+> 1. **Do not specialise the written bytes.** When a block is detected as SMC-hot, re-emit it with
+>    the immediate/displacement at the written address read from memory at RUN time instead of baked
+>    in as a constant. The compiled function then stays valid across the writes and nothing is
+>    recompiled. It reuses the existing emitter and adds no second implementation of the semantics.
+> 2. **An interpreter tier**, which is what DOSBox does — its dynrec falls back to the normal core on
+>    SMC-heavy pages. Architecturally the right answer, but MIRAGE has only a compiler, and a partial
+>    interpreter means two implementations of the same semantics: exactly the duplication that hid
+>    FCOMI, FXTRACT and FPREM1 in `fpu.js` and the recompiler at once.
+>
+> Either way this is ROADMAP **D6**, whose current framing says the compile cost is emitted source
+> volume and notes "Wolf3D was never compile-bound". **Chrome Revenge is** — the first workload in the
+> corpus that is, and the one that makes D6 concrete.
