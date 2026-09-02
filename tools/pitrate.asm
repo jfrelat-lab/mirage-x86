@@ -36,7 +36,10 @@
         out     0x40, al
         sti
 
-        mov     cx, 70                  ; one second of beam time
+%ifndef FRAMES
+%define FRAMES 70
+%endif
+        mov     cx, FRAMES              ; FRAMES/70 seconds of beam time
         mov     dx, 0x03da
 .frame:
 .hi:    in      al, dx
@@ -102,6 +105,16 @@ isr:                                    ; no chaining: the BIOS tick is not the 
         jnz     .no
         inc     word [cs:counter + 2]
 .no:    push    ax
+%ifdef SMC
+        ; -dSMC=1 keeps the ISR's own counter in an IMMEDIATE FIELD and rewrites it every interrupt,
+        ; which is what a 1 KB intro does because it has nowhere else to put it — Chrome Revenge
+        ; writes at 0x857B and 0x8584, inside this same instruction stream. It is the pattern that
+        ; makes a block recompiler throw its cache away on every tick (docs/TIMING.md §9), so this
+        ; measures the mechanism itself rather than one intro that happens to use it.
+patch:  mov     ax, 0x1234              ; the imm16 at patch+1 IS the counter
+        inc     ax
+        mov     [cs:patch + 1], ax      ; ...and the ISR rewrites its own instruction
+%endif
         mov     al, 0x20
         out     0x20, al                ; EOI
         pop     ax

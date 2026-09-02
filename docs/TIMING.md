@@ -360,3 +360,49 @@ such a cache.
 > Either way this is ROADMAP **D6**, whose current framing says the compile cost is emitted source
 > volume and notes "Wolf3D was never compile-bound". **Chrome Revenge is** — the first workload in the
 > corpus that is, and the one that makes D6 concrete.
+
+## 10. How fast IS DOSBox on Chrome Revenge? — measured 2026-09-02
+
+§9 ended by proposing work to "make Chrome Revenge as fast as DOSBox". That assumed DOSBox is fast on
+it. It is not, and the assumption was never checked.
+
+**DOSBox's own timing, measured by timing a known amount of EMULATED time.** `tools/pitrate.asm`
+waits exactly 70 vertical retraces — one second of beam time, and the beam is independent of counter
+0 — then exits, so its wall clock minus DOSBox's startup is the real-to-emulated ratio:
+
+| program | wall clock (3 runs) | 1 s emulated costs |
+|---|---|---|
+| a .COM that exits immediately | 0.25-0.26 s | — (startup) |
+| 17.5 kHz ISR | 1.26-1.29 s | **~1.01 s — realtime** |
+| 17.5 kHz **self-modifying** ISR | 1.26-1.29 s | **~1.01 s — SMC costs nothing** |
+
+Then CPU load, sampled while running, which is what says whether it has headroom:
+
+| workload in DOSBox-X | CPU |
+|---|---|
+| idle at the prompt | 2.6% |
+| 17.5 kHz ISR, 30 s emulated | 6.7% |
+| 17.5 kHz ISR, self-modifying | 6.7% |
+| **intros/crevenge.com** | **99%** |
+
+and that 99% does not move when the cycle budget does — 5000, 20000 and 60000 cycles/ms all peg it —
+so on this demo DOSBox is **host-bound, not budget-bound**: it cannot deliver its configured rate.
+
+> **So DOSBox is saturated on Chrome Revenge, and neither the interrupt rate nor the self-modifying
+> code is why** — both cost it about four points of CPU. What costs it is the demo: SSE ray tracing
+> into a 640x480x32 framebuffer, emulated in its normal core.
+>
+> MIRAGE uncapped runs the same demo at **0.99x realtime** (§9). The two are, roughly, in the same
+> place — which makes "as fast as DOSBox" a target we have already met on this workload, and makes
+> §9's proposal something to justify on its own merits rather than by comparison.
+
+**What the comparison DOES show** is narrower and still worth having. On the same binary, isolating
+the mechanism:
+
+| 1 s emulated at 17.5 kHz | DOSBox | MIRAGE |
+|---|---|---|
+| plain ISR | ~1.01 s | **0.10 s** — 10x faster than realtime |
+| self-modifying ISR | ~1.01 s | **0.63 s** — **6.3x slower than plain** |
+
+MIRAGE is well ahead of DOSBox on both, and self-modifying code costs it 6.3x where it costs DOSBox
+nothing. That gap is real and is what §9 diagnosed; it just is not what makes Chrome Revenge slow.
