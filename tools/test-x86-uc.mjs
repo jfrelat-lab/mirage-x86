@@ -21,13 +21,14 @@ import { generateCases } from './x86-gen.mjs';
 import { SSE_CASES, X87_CMP_CASES, X87_CMOV_CASES } from './x86-sse-cases.mjs';
 import { X87_CASES } from './x87-cases.mjs';
 import { X87_STACK_CASES } from './x87-stack-cases.mjs';
+import { DE_CASES } from './x86-de-cases.mjs';
 
 // The hand-written cases encode intent (each one is a regression lock with a comment); the generated
 // ones enumerate the ModRM/SIB/prefix grid mechanically, because the 0x67 bug lived in a corner
 // nobody thought to write a case for. Both go through the same oracle.
 // The SSE cases end by storing XMM back into the scratch, which is how an oracle that never reads
 // XMM still checks it — see x86-sse-cases.mjs.
-const CASES = [...HAND, ...generateCases(), ...SSE_CASES, ...X87_CMP_CASES, ...X87_CMOV_CASES, ...X87_CASES, ...X87_STACK_CASES];
+const CASES = [...HAND, ...generateCases(), ...SSE_CASES, ...X87_CMP_CASES, ...X87_CMOV_CASES, ...X87_CASES, ...X87_STACK_CASES, ...DE_CASES];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXPECTED = join(HERE, 'x86-uc-expected.json');
@@ -48,11 +49,14 @@ function runMirage(c) {
   cpu.flags = 0x2 | (c.flags || 0);
   cpu.eip = 0;
   // Execute exactly the bytes of the case (one block; REP loops run to completion inside it).
+  const raised = [];
+  const swInt = mc.swInt.bind(mc);
+  mc.swInt = (n, ...rest) => { raised.push(n); mc.cpu.halted = true; return undefined; };
   let guard = 0;
   while (!cpu.halted && guard++ < 4096) mc.rec.step();   // sequences may loop
   const mems = []; for (let i = 0; i < SCRATCH; i++) mems.push(mem.r8((DS << 4) + i));
   const regs = {}; for (let i = 0; i < 8; i++) regs[GP[i]] = cpu.reg[i] >>> 0;
-  return { regs, flags: cpu.flags & FLAGMASK, mem: mems };
+  return { regs, flags: cpu.flags & FLAGMASK, mem: mems, raised };
 }
 
 if (process.argv.includes('--capture')) {
@@ -69,7 +73,7 @@ if (!existsSync(EXPECTED)) { console.error('no expectations yet — run: node to
 const want = JSON.parse(readFileSync(EXPECTED, 'utf8'));
 if (want.length !== CASES.length) { console.error(`case count changed (${CASES.length} vs ${want.length}) — re-run --capture`); process.exit(2); }
 
-let pass = 0; const fails = [], tol = [];
+let pass = 0, faultChecked = 0, oracleSkips = 0; const fails = [], tol = [];
 const F64 = new DataView(new ArrayBuffer(8)), I64 = new BigInt64Array(1), F64B = new Float64Array(I64.buffer);
 const asF64 = (mem, off) => { for (let k = 0; k < 8; k++) F64.setUint8(k, mem[off + k]); return F64.getFloat64(0, true); };
 const ulpDiff = (a, b, off) => {
@@ -82,7 +86,18 @@ const ulpDiff = (a, b, off) => {
 const hex = (n, w = 8) => (n >>> 0).toString(16).padStart(w, '0');
 for (let i = 0; i < CASES.length; i++) {
   const c = CASES[i], w = want[i];
-  if (w.error) { pass++; continue; }                       // the oracle itself faulted — skip
+  // A case that declares `fault` EXPECTS the oracle to have raised an exception — Unicorn reports a
+  // #DE to the embedder rather than dispatching it — and expects MIRAGE to raise the same vector.
+  // Without this arm those cases land in the `w.error` skip below and pass without running.
+  if (c.fault !== undefined) {
+    const oracleFaulted = !!(w.error && /EXCEPTION/i.test(w.error));
+    const g = runMirage(c);
+    const ours = g.raised.includes(c.fault);
+    if (oracleFaulted && ours) { pass++; faultChecked++; continue; }
+    fails.push(`${c.n}: oracle ${oracleFaulted ? 'a faute' : "n'a PAS faute"}, mirage ${ours ? 'a leve INT ' + c.fault : "n'a rien leve"}`);
+    continue;
+  }
+  if (w.error) { pass++; oracleSkips++; continue; }            // the oracle itself faulted — skip
   const g = runMirage(c);
   const diffs = [];
   for (const r of GP) if (g.regs[r] !== w.regs[r]) diffs.push(`${r}=${hex(g.regs[r])} want ${hex(w.regs[r])}`);
@@ -115,6 +130,7 @@ for (let i = 0; i < CASES.length; i++) {
 }
 
 console.log(`\nmirage vs unicorn: ${pass} passed, ${fails.length} failed`);
+console.log(`  ${faultChecked} cas de faute verifies des DEUX cotes, ${oracleSkips} cas sautes (oracle en erreur)`);
 const skipCount = CASES.filter((x) => x.skip).length;
 if (skipCount) console.log(`  ${skipCount} cas avec des octets declares non comparables (pointeur d'instruction FNSTENV)`);
 if (tol.length) { console.log(`  ${tol.length} tolerees (float64 vs 80 bits):`); for (const t of tol) console.log('    ~ ' + t); }

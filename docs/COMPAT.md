@@ -78,6 +78,8 @@ real-mode target. Mid-90s mode-13h party entries are the right hunting ground.
 
 **Mirrors Within** (Digimind, 512b) — was rendering an entirely wrong picture (two ringed blobs on a grey diagonal, against DOSBox's two ellipses of nested shapes on black) because **FTST was a no-op**. It calls it 1.96 M times. 40.4% → 82.1% against DOSBox. ⚠️ `freality` carries a **pre-existing** `INT 00h` divide-error loop at 0814:09dd under `dosdiff` (present before the x87 work, unchanged by it) — not yet investigated.
 
+**Forever Reality — divides by zero under a CRTC-derived 0x3DA beam.** Not shipped for that reason; see [TIMING.md](TIMING.md) §4. Its `CHESS.INC` computes `S = 33 - AX` from an x87 value and divides by it, so any pacing that lands AX on exactly 33 kills it. DOSBox-X runs it 45 s without exiting. Under the shipped (legacy) beam it is unaffected. Since 2026-09-02 an unhandled divide error TERMINATES the program the way DOS does rather than raising an engine error, so even when it happens the outcome is a program that ended, not a crash.
+
 **Hocus Pocus — the x87 state work (2026-08-28) moved it from 13 to 97 matching DOSBox events.**
 `dbx-oracle --sweep` compares event streams as an agreeing PREFIX, so the number is where the two
 first disagree. `FTST` and `FXAM` were no-ops until then (they are in the batch that also fixed the

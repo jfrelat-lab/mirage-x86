@@ -635,16 +635,28 @@ export function installBIOS(machine, opts = {}) {
   const vgaPeriod = machine.vcpuHz
     ? Math.max(1, Math.round(machine.vcpuHz / 70))
     : Math.max(1, Math.round((machine.pitBase || machine.pitReload) / 3.845));
-  const vblankStart = Math.round(vgaPeriod * 0.88), vretraceStart = Math.round(vgaPeriod * 0.92);
   const FRAME_MS = 1000 / 70;
+  // The three fractions come from the CRTC now (vga.js `recomputeBeam`) rather than from constants
+  // here: the retrace pulse ENDS, and where it starts follows the mode. `beamStamp` changes only on
+  // a mode set or a CRTC write, so the common case is one integer compare — this reader runs 24 M
+  // times in a single starport run and cannot recompute per read.
+  let bStamp = -1, fBlank = 400 / 449, fRS = 412 / 449, fRE = 414 / 449;
+  let cBlank = Math.round(vgaPeriod * fBlank), cRS = Math.round(vgaPeriod * fRS), cRE = Math.round(vgaPeriod * fRE);
   const status1 = () => {
-    if (machine.vga) machine.vga.atcFlip = 0;
+    const v = machine.vga;
+    if (v) {
+      v.atcFlip = 0;
+      if (v.beamStamp !== bStamp) {
+        bStamp = v.beamStamp; fBlank = v.beam.blank; fRS = v.beam.rStart; fRE = v.beam.rEnd;
+        cBlank = Math.round(vgaPeriod * fBlank); cRS = Math.round(vgaPeriod * fRS); cRE = Math.round(vgaPeriod * fRE);
+      }
+    }
     if (machine.wallClockMs) {
       const t = machine.wallClockMs() / FRAME_MS, f = t - Math.floor(t);
-      return (f >= 0.88 ? 0x01 : 0) | (f >= 0.92 ? 0x08 : 0);
+      return (f >= fBlank ? 0x01 : 0) | (f >= fRS && f < fRE ? 0x08 : 0);
     }
     const pos = machine.cpu.cycles % vgaPeriod;
-    return (pos >= vblankStart ? 0x01 : 0) | (pos >= vretraceStart ? 0x08 : 0);
+    return (pos >= cBlank ? 0x01 : 0) | (pos >= cRS && pos < cRE ? 0x08 : 0);
   };
   machine.onPortRead(0x3da, status1);
   // 0x3BA is the same register on the mono/MDA address (BDA 0x463 selects which a program uses).

@@ -62,8 +62,49 @@ export function installVGA(machine) {
     const gt = BIOS_GC[mode] || (planar ? BIOS_GC.gfx : null);
     if (gt) for (let i = 0; i < gt.length && i < vga.gc.length; i++) vga.gc[i] = gt[i];
     vga.atcFlip = 0; for (let i = 0; i < 16; i++) vga.palette[i] = i;
+    recomputeBeam();
     syncRouting();
   };
+  // ---- vertical beam timing, DERIVED FROM THE CRTC ------------------------------------------
+  // Port 0x3DA's blank and retrace bits used to come from two constants in bios.js (blank at 0.88 of
+  // a frame, retrace from 0.92 to the END of the frame). Against these registers — which
+  // tools/vga-rom.mjs verified against a real VGA BIOS ROM — that made the retrace pulse EIGHT
+  // percent of a frame where the hardware's is 0.45%, roughly eighteen times too long, and it did
+  // not track the mode at all: 640x350 blanks at 78% of a frame, not 88%. DOSBox derives the same
+  // three numbers from the same registers (vga_misc.cpp), which is what makes a tweaked or Mode-X
+  // CRTC behave.
+  //   Vertical Total         CRTC 06 + overflow bit0 (<<8) + bit5 (<<9), plus the two-line convention
+  //   Vertical Display End   CRTC 12 + overflow bit1 (<<8) + bit6 (<<9)
+  //   Vertical Retrace Start CRTC 10 + overflow bit2 (<<8) + bit7 (<<9)
+  //   Vertical Retrace End   the next line whose LOW FOUR BITS match CRTC 11 & 0x0F
+  // `beamStamp` lets the 0x3DA reader cache its cycle thresholds: that path runs 24 M times in one
+  // starport run, so it cannot afford to recompute this per read.
+  vga.beam = { blank: 400 / 449, rStart: 412 / 449, rEnd: 414 / 449 };
+  vga.beamStamp = 0;
+  // ⚠️ OFF BY DEFAULT — `MIRAGE_BEAM=crtc` turns it on. The derivation below is right: measured
+  // against these registers the shipped constants make the retrace pulse 8% of a frame where the
+  // hardware's is 0.45%, and they do not track the mode at all. But turning it on drives
+  // intros/freality.com into a state where its OWN arithmetic divides by zero (CHESS.INC computes
+  // `S = 33 - AX` and lands on 0), and DOSBox-X runs the same intro for 45 s without ever getting
+  // there. So the duty cycle is not the only thing wrong with our beam, and shipping a change that
+  // is locally correct while it diverges from the reference on a real program would trade a known
+  // error for an unexplained one. docs/TIMING.md §4 has the measurements.
+  const LEGACY_BEAM = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_BEAM === 'crtc');
+  const recomputeBeam = () => {
+    if (LEGACY_BEAM) { vga.beam.blank = 0.88; vga.beam.rStart = 0.92; vga.beam.rEnd = 1; vga.beamStamp++; return; }
+    const c = vga.crtc, ov = c[0x07];
+    const VT = (c[0x06] | ((ov & 1) << 8) | (((ov >> 5) & 1) << 9)) + 2;
+    if (VT < 16) return;                       // CRTC not programmed yet — keep the last good values
+    const VDE = (c[0x12] | (((ov >> 1) & 1) << 8) | (((ov >> 6) & 1) << 9)) + 1;
+    const VRS = c[0x10] | (((ov >> 2) & 1) << 8) | (((ov >> 7) & 1) << 9);
+    let VRE = VRS + 1; const want = c[0x11] & 0x0f;
+    for (let k = 1; k <= 16; k++) if (((VRS + k) & 0x0f) === want) { VRE = VRS + k; break; }
+    if (VRS >= VT || VDE > VT) return;          // half-programmed registers: do not publish nonsense
+    vga.beam.blank = VDE / VT; vga.beam.rStart = VRS / VT; vga.beam.rEnd = Math.min(VRE / VT, 1);
+    vga.beamStamp++;
+  };
+  vga.recomputeBeam = recomputeBeam;
+
   vga.clear = () => planes.fill(0);
 
   const rotr = (v, c) => c ? (((v >>> c) | (v << (8 - c))) & 0xff) : (v & 0xff);
@@ -188,7 +229,7 @@ export function installVGA(machine) {
 
   // CRTC (0x3D4 index / 0x3D5 data): the renderer needs r0C/r0D (display start address,
   // for page-flip / hardware scroll) and r13 (offset = logical scanline width in words).
-  const crtcData = (v) => { vga.crtc[vga.crtcIndex & 0x1f] = v & 0xff; };
+  const crtcData = (v) => { vga.crtc[vga.crtcIndex & 0x1f] = v & 0xff; recomputeBeam(); };
   machine.onPortWrite(0x3d4, (_p, s, v) => { vga.crtcIndex = v & 0x1f; if (s === 2) crtcData((v >> 8) & 0xff); });
   machine.onPortWrite(0x3d5, (_p, _s, v) => crtcData(v & 0xff));
   machine.onPortRead(0x3d5, () => vga.crtc[vga.crtcIndex & 0x1f]);

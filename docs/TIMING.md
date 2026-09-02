@@ -104,3 +104,71 @@ been answered yet, and nothing here answers it.
 
 **Recommended re-scope**: drop (a) and (b); treat the rate cap as a speed problem, not a timing one;
 and reopen (c) only behind a measurement that shows the beam is actually wrong.
+
+## 4. The 0x3DA beam — investigated 2026-09-02, and NOT shipped
+
+§1 left part (c) as "the only part with a case left, but its stated justification is weakened". So
+the beam was measured directly rather than argued about.
+
+**The duty cycle is wrong, and by a lot.** `bios.js` hardcoded two constants: blank from 0.88 of a
+frame, retrace from 0.92 to the frame's END. The CRTC tables `vga.js` already carries — the ones
+`tools/vga-rom.mjs` verified against a real VGA BIOS ROM, register for register — say otherwise:
+
+| mode | total | display end | retrace | blank | retrace start | end | **duty** |
+|---|---|---|---|---|---|---|---|
+| 03 / 0D / 0E / 13 | 449 | 400 | 412-414 | 89.1% | 91.8% | 92.2% | **0.45%** |
+| 10 (640x350) | 449 | 350 | 387-389 | **78.0%** | 86.2% | 86.6% | 0.45% |
+| 12 (640x480) | 525 | 480 | 490-492 | 91.4% | 93.3% | 93.7% | 0.38% |
+| **hardcoded** | | | | **88.0%** | **92.0%** | **100%** | **8.00%** |
+
+So the retrace pulse is roughly **eighteen times too long**, and the constants do not track the mode:
+640x350 blanks at 78% of a frame, not 88%. `vga.js` now derives all three from the CRTC the way
+DOSBox does (`vga_misc.cpp`), cached behind a `beamStamp` because the reader runs 24 M times in one
+`intros/starport.com` run.
+
+**It is off by default (`MIRAGE_BEAM=crtc` enables it), and here is why.**
+
+Blast radius first: 13 of 41 golden workloads read 0x3DA at all, and 3 of them change fingerprint.
+Fidelity against DOSBox, three runs each, in one binary:
+
+| intro | legacy | crtc |
+|---|---|---|
+| chaosequ | 86.4 / 70.0 / 83.3 | 93.9 / 86.5 / 87.5 |
+| above | 71.6 / 71.8 / 71.7 | 71.7 / 71.7 / 71.6 |
+| nibble | 64.7 / 63.3 / 64.0 | 64.7 / 64.0 / 64.0 |
+| upup | 32.5 / 31.9 / 32.1 | 32.5 / 32.9 / 32.3 |
+
+⚠️ **`dosdiff` is not reproducible on progressive plots.** chaosequ varies 90.0-94.7% across identical
+runs with no code change, and a first single-run comparison of this change read as "93.5% → 61.2%,
+a 32-point regression" that did not exist. Any claim resting on one dosdiff number is worth about
+±16 points on that kind of workload. On the three stable programs the change is a wash.
+
+**The blocker is `intros/freality.com`.** Under the CRTC beam it reaches a state where its own
+arithmetic divides by zero — `CHESS.INC` computes `S = 33 - AX` from an x87 value and lands exactly
+on 0, then `div cx`. Under the legacy beam it never gets there, out to 800 ticks. And DOSBox-X runs
+the same intro for **45 seconds without ever exiting** (detected by chaining `ECHO > DONE.TXT` after
+it, which never appears), so the reference does not reach that state either. A locally correct duty
+cycle that diverges from the reference on a real program is trading a known error for an unexplained
+one, so it stays behind the flag until the rest of the beam — period, or the relationship between
+`cpu.cycles` and frame time — is measured too.
+
+## 5. Unhandled INT 00h — fixed, and measured first
+
+Found while investigating the above: MIRAGE had **no INT 00h handler at all**. The vector pointed at
+the BIOS dummy IRET, so the CPU returned to the faulting `DIV` and raised again, for ever; the engine
+gave up with "re-raised 100000x at the same address" — an engine error where a real machine has a
+program that simply ended.
+
+What DOS actually does was measured, not assumed. `tools/divzero.asm` writes a marker to a file and
+**closes it**, divides by zero, then reopens and appends a second marker. Under DOSBox-X the file
+holds `B` alone: **DOS terminates the program**. `dos.js` now does the same.
+
+The CPU half got an oracle too — `tools/x86-de-cases.mjs`, 13 cases through `test-x86-uc.mjs`. Note
+what Unicorn can and cannot say here: it raises #DE to the embedder rather than dispatching it
+through the IVT, so it is an oracle for **which** divisions fault, not for what happens next. An
+earlier version of those cases installed an IVT handler and read back the pushed frame; every
+faulting case came back as an oracle `error`, and the gate SKIPS those — six cases that would have
+reported green without ever running. Cases now declare `fault: 0` and the harness fails them unless
+*both* sides faulted, and it prints the skip count on every run so the remaining 5 pre-existing skips
+are visible. The 7 fault cases pass, including the overflow conditions (`FFFF:FFFF / 1`, and IDIV's
+asymmetric `-32768 / -1`) that are the easy ones to get wrong.

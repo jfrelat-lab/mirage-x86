@@ -371,6 +371,14 @@ export function installDOS(machine, vfs) {
 
   // ---- INT 20h / 21h ------------------------------------------------------
   machine.hookInterrupt(0x20, () => terminate(0));
+  // An unhandled DIVIDE ERROR terminates the program. Measured, not assumed: tools/divzero.asm
+  // writes a marker to a file, closes it, divides by zero, and writes a second marker — under
+  // DOSBox-X only the first survives, so DOS aborts rather than resuming. MIRAGE had no INT 00h
+  // handler at all, so the vector pointed at the BIOS dummy IRET, the CPU returned to the faulting
+  // DIV and raised again for ever; the engine gave up with "re-raised 100000x at the same address",
+  // which is an engine error where a real machine has a program that simply ended. A guest that
+  // installs its own INT 00h still wins — hookInterrupt only serves vectors still pointing at us.
+  machine.hookInterrupt(0x00, () => { for (const ch of 'Divide overflow\r\n') out(ch.charCodeAt(0)); terminate(0xff); });
   // INT 27h takes DX as the offset PAST the last byte to keep, in the current segment (CS == PSP for
   // the .COM programs that use it), where AH=31h takes paragraphs outright.
   machine.hookInterrupt(0x27, (cpu) => terminateResident(0, ((cpu.dx & 0xffff) + 15) >> 4));
