@@ -479,3 +479,78 @@ No change, because the blocks being invalidated are already 4 and 8-9 instructio
 >
 > §9 listed this as "option 1, do not specialise the written bytes". Reading DOSBox's source says it
 > is also option 2, arrived at from the other end.
+
+## 12. Stepping back: where the time goes on NORMAL workloads — profiled 2026-09-03
+
+§9-§11 all measured Chrome Revenge, which is a pathology (genuine SMC in an ISR at 17.5 kHz). Nothing
+had profiled the ordinary case. Four steady-state intros under V8's sampling profiler, after 20 warm-up
+ticks so nothing is compiling (`compiles=0`, `invalidations=0` throughout):
+
+| | tube | memories | chaosequ | puls |
+|---|---|---|---|---|
+| throughput | 173.5 MIPS | 165.4 | 224.2 | 123.2 |
+| **emitted block code** | 65.4% | 41.0% | 52.7% | 52.4% |
+| **`recompiler.js:run` (dispatch)** | **19.9%** | **24.0%** | **37.9%** | **28.3%** |
+| `recompiler.js:invalidate` | 9.4% | 4.7% | — | — |
+| `translate` | 0.2% | 17.0% | 0.6% | 0.5% |
+
+**Between a fifth and two fifths of a steady-state workload is the dispatch loop**, not the guest's
+code and not compilation. Why is visible in the shape of these programs:
+
+| | tube | memories | chaosequ | puls |
+|---|---|---|---|---|
+| distinct blocks executed | **12** | **4** | 26 | 28 |
+| instructions per block | 11.5 | 8.3 | 6.9 | **4.6** |
+| most frequent successor | 87.7% | 100% | 80.0% | 66.4% |
+
+A 4K intro is a handful of tiny loops. We chop them into 4-to-11-instruction blocks and re-dispatch
+15 M times a second — a page-table index, an `ip0` re-check and an indirect call to amortise over
+five instructions.
+
+### (a) Tier 2 already exists, is off, and its stated blocker no longer reproduces
+
+The region compiler fuses a hot block with its statically-reachable successors, which is exactly this
+shape. It is gated `MIRAGE_TIER2=1`, and the comment gating it says `intros/memories.com` "takes >300s
+for work tier-1 does in 8.5ms, a >30,000x cliff". **That is stale** — regions now decrement the shared
+`cpu.tbudget` once per internal iteration, and memories completes normally. Measured:
+
+| | tier 1 | tier 2 | |
+|---|---|---|---|
+| tube | 173.5 MIPS | **194.2** | +12% |
+| memories | 165.4 | 155.4 | **-6%** |
+| chaosequ | 224.2 | **293.9** | **+31%** |
+| puls | 123.2 | **175.5** | **+42%** |
+
+Block executions collapse accordingly: puls 4.0 M -> 0.15 M, tube 4.0 M -> 1.96 M.
+
+**Not yet a green light.** `golden.js check` under `MIRAGE_TIER2=1` gives **42 ok, 1 mismatch
+(`intros/mesha.com`)**, and the corpus run is slower in wall clock than tier 1's 11m27s. The game
+defects in the gating comment (Wolf3D 5x slower, Keen's far-indirect derail) are unretested. But the
+headline reason it was disabled is fixed, and the upside is now a measured 12-42% rather than a guess.
+
+### (b) The SMC write barrier costs 9.4% of tube while evicting nothing
+
+`invalidate` is 9.4% of tube's self time with **zero** invalidations. Counting the calls:
+
+| | barrier calls | on a page holding code | actual evictions |
+|---|---|---|---|
+| tube | **3 030 236** | 3 030 236 | **0** |
+| memories | 1 333 327 | 1 333 327 | **0** |
+| chaosequ | 3 049 | 3 049 | 0 |
+| puls | 0 | 0 | 0 |
+
+tube stashes its pixel buffer *in its own code page* (already noted at `recompiler.js:139`), so the
+barrier genuinely cannot be skipped by page. What saves it is the `pageLo/pageHi` range fast-out — but
+only *after* a `pageBlocks.get(p)` **Map lookup**, three million times a second, to reach two integer
+comparisons. Hoisting those bounds into a flat `Int32Array` indexed by page number would make the
+fast-out two array reads and no Map at all. Small, local, and its correctness argument is the one
+already in the code.
+
+### (c) What is NOT worth doing
+
+Chasing the emitted code itself. It is 41-65% of the time and it is the part actually doing the guest's
+work; the engine overhead around it is the 25-40% that (a) and (b) address.
+
+> **Order I would take these:** (b) first — hours, self-contained, no semantic risk, golden must stay
+> 43/43. Then (a), whose real cost is re-testing the games, not the code. Both are independent of D6,
+> which remains the SMC story of §9-§11.
