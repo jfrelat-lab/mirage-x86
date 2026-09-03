@@ -7,6 +7,13 @@
 ;
 ;   nasm -f bin -dKTICKS=24 grabber.asm -o GRABBER.COM
 ;
+; It dumps through INT 21h from inside the timer ISR, so it must not fire while the interrupted
+; program is itself inside DOS — DOS is not reentrant, and a create/write issued on top of another
+; DOS call corrupts the state both share and produces no file. That is what the InDOS flag is for
+; (INT 21h AH=34h returns its address), and every resident program that calls DOS from an interrupt
+; is required to test it. Without the test this grabber captured nothing at all for any program that
+; ends up waiting inside a DOS call — with no error, because the failure is silent by construction.
+;
 ; Limitations: assumes the program leaves interrupts enabled, drives animation off the
 ; timer, and doesn't hook INT 8 itself or scribble over this resident block.
 
@@ -20,6 +27,10 @@ start:
         int     21h
         mov     [oldptr], bx
         mov     [oldptr + 2], es
+        mov     ax, 3400h            ; DOS InDOS flag -> ES:BX; the ISR must not call DOS unless it is 0
+        int     21h
+        mov     [indosptr], bx
+        mov     [indosptr + 2], es
         mov     ax, 2508h            ; install ours (DS:DX, DS = our segment)
         mov     dx, handler
         int     21h
@@ -30,8 +41,23 @@ start:
 handler:
         pushf
         call    far [cs:oldptr]      ; chain to old INT 8 (EOI + INT 1Ch); it IRETs back
+        cmp     word [cs:counter], 0
+        je      .ret                 ; already dumped
         dec     word [cs:counter]
         jnz     .ret
+        ; The tick budget has run out, but DOS may be busy. Re-arm for one more tick and try again
+        ; on the next one, as often as it takes: the snapshot is then the first frame at or after
+        ; KTICKS at which DOS is callable, which is the best a DOS-writing grabber can do.
+        push    ds
+        push    bx
+        lds     bx, [cs:indosptr]
+        cmp     byte [bx], 0
+        pop     bx
+        pop     ds
+        je      .go
+        mov     word [cs:counter], 1 ; DOS busy — look again next tick
+        jmp     .ret
+.go:    mov     word [cs:counter], 0
         call    dump
         cli
 .hang:  hlt
@@ -81,6 +107,7 @@ dump:
 
 counter dw KTICKS
 oldptr  dd 0
+indosptr dd 0
 fn_out  db "OUT.BIN", 0
 fn_pal  db "PAL.BIN", 0
 palbuf  times 768 db 0

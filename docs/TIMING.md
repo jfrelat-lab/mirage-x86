@@ -675,3 +675,51 @@ ticks, i.e. K/18.2 seconds of emulated time. Every workload pinned past ~120 tic
 (`crevenge` 200, `mesha` 400, `omniscent` 120, `starport` 200). Now scaled with K and overridable with
 `DDALARM`. Verified on a program that hooks nothing: **tube at K=200 fails at 7 s and matches at 44.7 %
 with the computed alarm.**
+
+### §14b. Debugging mesha under DOSBox — what is established, 2026-09-03
+
+§14 left "why the grabber never dumps under mesha" open. It is now localised, with a control.
+
+**The resident INT 8 handler never executes under mesha.** A probe TSR that calls no DOS at all — at
+tick K it sets text mode 3 through the BIOS, which DOSBox announces in its own log — fires for `tube`
+(a fourth `surface consider=720x400` line appears) and never fires for mesha. The instrument is
+working; there is nothing to capture.
+
+Ruled out, each by measurement rather than by plausibility:
+
+| hypothesis | verdict |
+|---|---|
+| the 7 s alarm | no — fails at K=20 as at K=2200 |
+| mesha hooks INT 8 | no — sampled *throughout* the run (it restores what it touches), `0000:0020` stays `f000:0008` |
+| interrupts masked at the PIC | no — it never writes port 21h; IMR reads 0 at exit |
+| mesha scribbles the resident block | no — below its own PSP it touches only page 0 (the BDA) |
+| DOS reentrancy from the ISR | no — added the InDOS guard the grabber was missing; no change |
+| our primed `kb.data = 0x9c` | no — mesha ends at the same cycle (501543260) with 0x9c or 0x00 |
+| DOSBox is too slow to reach K | no — it does not return to DOS in 60 s at any K |
+
+What is left is a **disagreement about mesha itself**, and it is on our side of the line:
+
+| MIRAGE, 214 ticks | tube | mesha |
+|---|---|---|
+| timer services delivered | 5363 | **41956** |
+| dropped: IF clear / PIC busy | 0 / 0 | **0 / 0** |
+| BDA `0040:006C` advanced by | **5363** (1:1) | **5** |
+| run time with IF clear | 0 % | **26.4 %** |
+
+mesha reprograms PIT channel 0 to ~100 Hz (`43h←36h`, `40h←9Bh,2Eh` = 11931) and gets its 41956
+interrupts — every one passes both gates. But the BIOS tick counter, which tracks services exactly for
+tube, advances **five times**. So MIRAGE delivers the interrupts and DOSBox's resident handler never
+sees any; these are not the same statement, and the honest position is that **mesha's INT 8 path
+differs between the two emulators and the discrepancy is not yet explained**.
+
+> **This outranks the tier-2 question that led here.** `intros/mesha.com` is in `golden.js` with a
+> pinned fingerprint, and the run it pins is one DOSBox does not reproduce — it terminates here and
+> does not there. Whether tier 2 shifts its off-screen A000 residue by 0.1 % of timer phase is a
+> detail next to that. Next step is the apples-to-apples test this one was not: run the same probe TSR
+> *in MIRAGE*, chained ahead of mesha, and see whether a guest-side INT 8 handler runs here either.
+
+**Fixed on the way** (`tools/grabber.asm`): the grabber issued INT 21h from inside the timer ISR with
+no **InDOS** test, which every resident program that calls DOS from an interrupt is required to do —
+DOS is not reentrant and the failure is silent, no file and no error. It now re-arms for one more tick
+whenever DOS is busy, so the snapshot is the first frame at or after KTICKS at which DOS is callable.
+Behaviour-neutral where capture already worked: tube reports 27.5 % with and without it.
