@@ -201,6 +201,9 @@ blamed the engine for the harness. `tools/run-test386.mjs:37` is the correct wir
 | B6 | ✅ **DONE (2026-08-22).** Mode X was already IMPLEMENTED — `vga.js` detects the Sequencer's memory-mode index 4 losing bit 3 (chain-4 off in mode 13h) and routes A000 through the plane logic; `video.js` has `_renderModeX()`. What was missing is the TEST, so a regression would have surfaced as "a game looks wrong" instead of a failing gate. `test.js` now pins both halves: the memory layout (a masked write reaches one plane and no other, reads come from the read-map-selected plane, a full mask writes four, and restoring chain-4 leaves the mode) and the RENDERER's mapping back (plane p at offset o is pixel x = o%stride*4 + p). Both halves verified by mutation — disabling the chain-4 detection fails 5 assertions, changing the renderer's `x>>2` to `x>>1` fails 2. | — | done |
 | B7 | **Real audio** (SB/OPL FM synthesis, currently silent stubs) | L | Detection already passes; this is actual sound output. |
 
+| D8 | **Tier 2 is written, works, and is switched off for a reason that no longer holds.** The gating comment says `intros/memories.com` "takes >300s for work tier-1 does in 8.5ms" — stale: regions now decrement the shared `cpu.tbudget` once per internal iteration and memories completes normally. Re-measured 2026-09-03 with `MIRAGE_TIER2=1`: **tube +12 %, chaosequ +31 %, puls +42 %, memories −6 %**, block executions collapsing (puls 4.0 M → 0.15 M). Region fusion is exactly the right shape for a 4K intro's handful of tiny loops. **Not a green light yet**: `golden.js check` gives **42 ok / 1 mismatch (`intros/mesha.com`)** and the game defects in the comment (Wolf3D ~5× slower, Keen's far-indirect derail) are **unretested**. The work is therefore diagnosis, not code: find what mesha's region gets wrong, then re-run the games. | M | The single biggest measured win available, and the code already exists. |
+| D9 | **Byte-granular code coverage for the write barrier.** §12(b)/§13: `invalidate()` cost 9.4 % of tube while evicting **nothing** — 3 030 236 calls per 20 ticks, 0 invalidations. Flat typed-array bounds (shipped `8513a60`) took tube +4.3 % and memories +9.5 % and dropped `invalidate` to 7.3 %, but the residual is the barrier being **called** at all: `cp[]` is per 4 KiB page and tube keeps its pixel buffer *inside its own code page*, so the page-level test emitted into the store path cannot say no. DOSBox's `write_map` is per **BYTE** — §11 dismissed it as "not the lever" for Chrome Revenge (true: that one really does write its own instructions) and that is wrong for tube, where it is exactly the lever. Byte- or 16-byte-granular coverage would let the *emitted* test reject all three million writes with no call. Touches the emitted store path (`mem-strategy.js`), so: golden + conformance as the gate, and the emission-volume cost measured (D6 says the inlined memory path is already 54 % of a big block). | M | Removes the last engine overhead visible on the ordinary profile. |
+
 ## C · Content — games & demos to add and try
 
 | # | Task | Effort | Why |
@@ -232,10 +235,16 @@ already have it. Verify each still runs before adding (some counts/ordering from
 
 ## D · Performance (the JIT ceiling — see the perf plan)
 
-Current state: tier-2 region compiler shipped but **browser-OFF, Node-ON** (a fused region can run
-unbounded work in one runSlice and hang the tab; ~5× slower on Wolf3D — see COMPAT). Post-fusion
-profile says the next levers are flags and indirect calls, not register access. Cumulative vs
-baseline: tube ×3.9, lattice ×3.9, plasma ×3.5, memories ×1.66.
+Current state: the tier-2 region compiler is **OFF everywhere**, opt-in via `MIRAGE_TIER2=1` — see D8,
+which re-measured it. Cumulative vs baseline: tube ×3.9, lattice ×3.9, plasma ×3.5, memories ×1.66.
+
+⭐ **Profiled for the first time on NORMAL workloads, 2026-09-03 ([TIMING.md](TIMING.md) §12).** Every
+earlier perf measurement was on `crevenge`, a self-modifying pathology. Warmed up so nothing compiles,
+four steady-state intros spend **19.9–37.9 % in the dispatch loop**, 41–65 % in emitted block code, and
+~0 in `translate`. The reason is the shape of the programs: **4 to 28 distinct blocks** of **4.6–11.5
+instructions**, whose successor is the same one **66–100 %** of the time, re-dispatched 15 M times a
+second. That reading is what D8 and D9 come from, and it demotes D1/D3 — the emitted code is the part
+doing the guest's work.
 
 | # | Task | Effort | Why |
 |---|---|---|---|
