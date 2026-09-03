@@ -608,3 +608,70 @@ Gates, all on the patched tree: `golden.js check` 43/43, `conformance.js` 555764
 `test-x86-uc` green, `test.js` 194/194, dos/gfx/demos green. `test-dos-api.js` fails one case (INT 15h
 AH=86h advanced the virtual clock, 3324 cycles) — **pre-existing**, identical on the unpatched tree
 down to the cycle count, and unrelated to this change.
+
+## 14. D8 — what tier 2 actually does to `mesha`, and why DOSBox cannot adjudicate it — 2026-09-03
+
+`golden.js check` under `MIRAGE_TIER2=1` is 42 ok / 1 mismatch (`intros/mesha.com`). Bisecting on the
+promotion order (deterministic, so the first N promotions can be allowed and the rest refused) puts it
+on **promotion #114, region root linear `0xa13d`**. Co-simulating the two runs from that instant —
+limit 113 against limit 114, identical by construction before it:
+
+* the region is **entered with byte-identical register state**;
+* the **first three timer services fire at the exact same cycle** in both runs (252164889, 252176818,
+  252188750). The fourth differs: 252200696 against 252200710, same `next=252200679`.
+
+So the fused region is not computing anything wrong. It is **late**, by a hair. Over the whole run:
+
+| | livraisons en retard | total | pire cas |
+|---|---|---|---|
+| tier 1 | 35 631 | 264 070 cycles | 3017 |
+| tier 2 | 35 749 | 264 350 cycles | **3016** |
+
+**+0.1 % cumulative lateness, and a worst case one cycle better.** Tier 1 is itself late on 35 631
+deliveries; neither is "correct" in absolute terms.
+
+What moves in the fingerprint is correspondingly narrow:
+
+| | tier 1 | tier 2 |
+|---|---|---|
+| mode | 3 | 3 |
+| **B800 (the screen actually displayed)** | 6fb20501 | **6fb20501** |
+| DAC | 2e5f1e20 | 2e5f1e20 |
+| A000 | 4d352f1a | **6a59edef** |
+
+mesha ends in **text mode 3**, so A000 — the only thing that differs — is *not on screen*. It is the
+residue of the animation, hashed unconditionally by `golden.js`.
+
+Not noise, though: the entry is stable. Re-run at slice budgets 399999/400000/400001/800000 and the
+hash and the final cycle count are identical (501543260) — mesha runs to completion and its end state
+is a fixed point. Tier 2 really does change it, by chaotic amplification of a 0.1 % phase difference
+over 500 M cycles.
+
+### The oracle is unavailable, and not for the reason the tool said
+
+ROADMAP D7's policy for a moved golden is to re-bless per intro **after `dosdiff` confirms fidelity**.
+`dosdiff` reported `no capture (interrupts off / hooks INT 8 / crashed)` and I first repeated that
+diagnosis. Measured, all three are wrong for mesha:
+
+* **It hooks no vector.** Sampling `0000:0020` throughout the run, not just comparing start to end
+  (mesha restores what it touches), INT 8 stays `f000:0008` from first tick to last. The `OUT 0x20,20h`
+  writes that suggested a guest ISR are **our own BIOS handler's** EOI.
+* **Interrupts are not off**: IF set on 19 998 of 20 000 samples.
+* **Not the alarm** either — it fails at K=20 as at K=2200.
+* DOSBox does run it: its log shows the mode-13h 320x200 surface.
+* The grabber is fine: same harness, `tube` captures at K=20 **and** K=200.
+
+The one behavioural difference found is that mesha reprograms PIT channel 0 to ~100 Hz
+(`43h←36h`, `40h←9Bh,2Eh` = 11931) and restores 65536 on exit. Raising K to 600/1200/2200 to compensate
+changes nothing, so that is **not** the cause either. **Why the grabber never dumps under mesha is
+unresolved**, and the honest statement is that mesha cannot currently be adjudicated against DOSBox —
+not that it hooks INT 8.
+
+### One real defect found on the way
+
+`dosdiff`'s DOSBox side had a **hardcoded 7-second alarm** while the grabber triggers after K *timer*
+ticks, i.e. K/18.2 seconds of emulated time. Every workload pinned past ~120 ticks therefore reported
+`no capture` regardless of the program — which is exactly the set a golden re-bless needs it for
+(`crevenge` 200, `mesha` 400, `omniscent` 120, `starport` 200). Now scaled with K and overridable with
+`DDALARM`. Verified on a program that hooks nothing: **tube at K=200 fails at 7 s and matches at 44.7 %
+with the computed alarm.**

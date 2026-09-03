@@ -45,7 +45,12 @@ function dosboxCapture() {
     }
     writeFileSync(join(work, 'db.conf'),
       `[sdl]\noutput=surface\nautolock=false\n[dosbox]\nlogfile=\n[cpu]\ncore=normal\ncputype=pentium\ncycles=max\n[autoexec]\nmount c ${work}\nc:\nGRABBER.COM\n${run}\n`);
-    try { execSync(`SDL_VIDEODRIVER=dummy perl -e 'alarm 7; exec @ARGV' ${DOSBOX} -conf "${join(work, 'db.conf')}" -exit`, { stdio: 'ignore', timeout: 12000 }); }
+    // The grabber snapshots after K TIMER ticks, i.e. K/18.2 seconds of EMULATED time, so the wall
+    // clock DOSBox needs grows with K. A fixed 7 s silently produced "no capture" for every workload
+    // pinned past ~120 ticks — mesha (400) reads as "hooks INT 8" when it hooks no vector at all.
+    // Scale with K, with a floor for short runs, and let DDALARM override.
+    const alarm = Number(process.env.DDALARM) || Math.max(7, Math.ceil(K / 18.2065 * 2) + 5);
+    try { execSync(`SDL_VIDEODRIVER=dummy perl -e 'alarm ${alarm}; exec @ARGV' ${DOSBOX} -conf "${join(work, 'db.conf')}" -exit`, { stdio: 'ignore', timeout: (alarm + 5) * 1000 }); }
     catch { /* the alarm kills DOSBox — expected */ }
     const out = join(work, 'OUT.BIN'), pal = join(work, 'PAL.BIN');
     if (!existsSync(out) || !existsSync(pal) || statSync(out).size < 64000) return null;
@@ -102,7 +107,7 @@ function writePNG(file, rgb320, S = 2) {
 
 console.log(`# dosdiff ${name} (K=${K} ticks)`);
 const db = dosboxCapture();
-if (!db) { console.log('  DOSBox: no capture (interrupts off / hooks INT 8 / crashed)'); process.exit(1); }
+if (!db) { console.log(`  DOSBox: no capture — the grabber never wrote OUT.BIN. Causes, in the order worth checking: DOSBox did not reach ${K} ticks inside its ${Number(process.env.DDALARM) || Math.max(7, Math.ceil(K / 18.2065 * 2) + 5)}s alarm (raise DDALARM), the program took over INT 8, it ran with interrupts disabled, or it crashed.`); process.exit(1); }
 const mi = mirageCapture();
 const dbRGB = toRGB(db.fb, db.dac), miRGB = toRGB(mi.fb, mi.dac);
 writePNG(join(outdir, name + '-dosbox.png'), dbRGB);
