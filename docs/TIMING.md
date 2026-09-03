@@ -554,3 +554,57 @@ work; the engine overhead around it is the 25-40% that (a) and (b) address.
 > **Order I would take these:** (b) first — hours, self-contained, no semantic risk, golden must stay
 > 43/43. Then (a), whose real cost is re-testing the games, not the code. Both are independent of D6,
 > which remains the SMC story of §9-§11.
+
+## 13. §12(b) implemented — flat page bounds — 2026-09-03
+
+`invalidate()`'s per-page fast-out now reads two integers out of a typed array before touching
+anything else, where it used to reach them through a `Map`:
+
+```js
+const grp = this.pageBounds[p >>> 8];                                  // Int32Array(512), lazily allocated
+if (grp === undefined) continue;
+const b = (p & 0xff) << 1;
+if (end <= (grp[b] >>> 0) || addr >= (grp[b + 1] >>> 0)) continue;
+const set = this.pageBlocks.get(p);                                    // only the SCAN pays for the Map
+```
+
+Two-level and keyed like `blockPages`, so a 4 GiB address space stays sparse; bounds are read back
+**unsigned** because a linear address above 2 GiB is a negative int32 (Windows 3.0's kernel at
+0x80201b5e), and `linEnd` is clamped to 0xffffffff so that `hi === 0` can mean "no block here" —
+an `Int32Array` stores 2**32 as 0, and the page would otherwise read back empty and miss the write.
+
+**Result**, median of 5 fresh processes each (one process's number moves several percent run to run,
+so a claim this size needs the median, not a run):
+
+| | barrier calls / 20 ticks | avant | après | |
+|---|---|---|---|---|
+| tube | 3 030 236 | 172.0 MIPS | **179.4** | **+4.3%** |
+| memories | 1 333 327 | 153.1 | **167.6** | **+9.5%** |
+| chaosequ | 3 049 | 224.8 | 223.2 | -0.7% |
+| puls | 0 | 125.5 | 123.9 | -1.3% |
+
+The two workloads that call the barrier gain; the two that barely call it are flat within noise, which
+is the shape the mechanism predicts.
+
+**But the Map was only a quarter of the cost, not the whole of it.** Re-profiled:
+
+| `recompiler.js:invalidate` self time | avant | après |
+|---|---|---|
+| tube | 9.4% | **7.3%** |
+| memories | 4.7% | **3.7%** |
+
+The residual is the barrier being *called* three million times at all — `u8[a]=v` → `cp[a>>>12]` →
+`m._dirty` → `onCodeWrite` → `invalidate`, three frames deep, for a write that can never hit code.
+`cp[]` is per 4 KiB page and tube keeps its pixel buffer *inside its own code page*, so the page-level
+test cannot say no.
+
+> **Follow-up, and §11 already named the mechanism.** DOSBox's `write_map` is per **BYTE**, not per
+> page. §11 dismissed it as "not the lever" — true for Chrome Revenge, which really does write into
+> its instruction stream, and wrong for tube, where it is exactly the lever: a byte- or 16-byte-granular
+> coverage map would let the *emitted* test reject all three million writes without a call. That is a
+> change to the emitted store path, so it is a separate piece of work with its own gate.
+
+Gates, all on the patched tree: `golden.js check` 43/43, `conformance.js` 555764/555764 (100.00%),
+`test-x86-uc` green, `test.js` 194/194, dos/gfx/demos green. `test-dos-api.js` fails one case (INT 15h
+AH=86h advanced the virtual clock, 3324 cycles) — **pre-existing**, identical on the unpatched tree
+down to the cycle count, and unrelated to this change.

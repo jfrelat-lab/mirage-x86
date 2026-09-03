@@ -134,14 +134,17 @@ export class Recompiler {
     this.recentI = 0;
     this.blockPages = [];          // page -> Array(8192) of block | undefined
     this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
-    // Per-page block-coverage bounds [pageLo, pageHi) — the min linStart / max linEnd of
-    // any block touching a page. A write outside a page's bound can overlap no block, so
-    // invalidate() skips the whole scan (the hot case for demos that write a data buffer
-    // into a page that also holds code, e.g. tube's pixel buffer). Bounds only grow (an
-    // eviction leaves them a safe over-approximation), so a stale-wide bound just falls
-    // back to the full scan — never a missed invalidation.
-    this.pageLo = [];
-    this.pageHi = [];
+    // Per-page block-coverage bounds [lo, hi) — the min linStart / max linEnd of any block
+    // touching a page. A write outside a page's bound can overlap no block, so invalidate()
+    // skips the whole scan (the hot case for demos that write a data buffer into a page that
+    // also holds code, e.g. tube's pixel buffer). Bounds only grow (an eviction leaves them a
+    // safe over-approximation), so a stale-wide bound just falls back to the full scan — never
+    // a missed invalidation.
+    // Two-level and typed, keyed like blockPages: pageBounds[p >>> 8] is an Int32Array(512)
+    // holding (lo, hi) for 256 consecutive pages, allocated on demand so a 4 GiB address space
+    // stays sparse. hi === 0 means no block has ever covered the page, which the same comparison
+    // rejects, so the fast-out needs no separate emptiness test.
+    this.pageBounds = [];
     this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
     this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0 };
@@ -162,9 +165,16 @@ export class Recompiler {
     addr = addr >>> 0;
     const end = addr + len;
     for (let p = addr >>> 12; p <= (end - 1) >>> 12; p++) {
+      // Bounds FIRST, and without touching pageBlocks. This is the fast-out and it must not pay
+      // for the Map that only the scan below needs: tube calls this barrier 3 030 236 times per
+      // 20 ticks and evicts nothing (docs/TIMING.md §12b), so every one of those was reaching two
+      // integer comparisons through a hash lookup.
+      const grp = this.pageBounds[p >>> 8];
+      if (grp === undefined) continue;                                       // no block on these 256 pages
+      const b = (p & 0xff) << 1;
+      if (end <= (grp[b] >>> 0) || addr >= (grp[b + 1] >>> 0)) continue;     // write outside all blocks on this page
       const set = this.pageBlocks.get(p);
       if (!set) continue;
-      if (end <= this.pageLo[p] || addr >= this.pageHi[p]) continue;   // write outside all blocks on this page
       for (const lin of set) {
         const pg = this.blockPages[lin >>> 12];
         const blk = pg !== undefined ? (pg[lin & 0xfff] || pg[(lin & 0xfff) | 0x1000]) : undefined;
@@ -174,6 +184,21 @@ export class Recompiler {
       }
       if (set.size === 0) this.mem.clearCodePage(p);            // page no longer holds code
     }
+  }
+
+  /** Grow page `p`'s block-coverage bounds to include [s, e). Linear addresses at or above 2 GiB
+   *  are negative as signed int32s (Windows 3.0 pages its kernel in at 0x80201b5e), so the stored
+   *  bounds are read back unsigned on every comparison. */
+  _bound(p, s, e) {
+    // hi === 0 is the "page is empty" encoding, and a real block always has linEnd >= 1 — but only
+    // once e is clamped, because an Int32Array stores 2**32 as 0 and the page would read back empty.
+    if (e > 0xffffffff) e = 0xffffffff;
+    let grp = this.pageBounds[p >>> 8];
+    if (grp === undefined) grp = this.pageBounds[p >>> 8] = new Int32Array(512);
+    const b = (p & 0xff) << 1;
+    if ((grp[b + 1] >>> 0) === 0) { grp[b] = s; grp[b + 1] = e; return; }   // first block on this page
+    if (s < (grp[b] >>> 0)) grp[b] = s;
+    if (e > (grp[b + 1] >>> 0)) grp[b + 1] = e;
   }
 
   _evict(blk, lin) {
@@ -193,7 +218,7 @@ export class Recompiler {
     // wrap is what makes EXEPACK stubs' segment arithmetic work. Every paging transition calls
     // reset(), so this stays in sync.
     this.pagedMode = !!(this.cpu && this.cpu.pagingOn);
-    this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageLo = []; this.pageHi = []; this.t2evict.clear(); this.t2blacklist.clear(); }
+    this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageBounds = []; this.t2evict.clear(); this.t2blacklist.clear(); }
 
   // ===================== tier-2 region compiler =====================
 
@@ -295,10 +320,7 @@ export class Recompiler {
       this.mem.markCodePage(p);
       let set = this.pageBlocks.get(p); if (!set) { set = new Set(); this.pageBlocks.set(p, set); }
       set.add(rootLin);
-      for (const [s, e] of region.ranges) {
-        if (this.pageLo[p] === undefined || s < this.pageLo[p]) this.pageLo[p] = s;
-        if (this.pageHi[p] === undefined || e > this.pageHi[p]) this.pageHi[p] = e;
-      }
+      for (const [s, e] of region.ranges) this._bound(p, s, e);
     }
     this.stats.t2compiles++;
   }
@@ -430,8 +452,7 @@ export class Recompiler {
       let s = this.pageBlocks.get(p);
       if (!s) { s = new Set(); this.pageBlocks.set(p, s); }
       s.add(lin);
-      if (this.pageLo[p] === undefined || blk.linStart < this.pageLo[p]) this.pageLo[p] = blk.linStart;
-      if (this.pageHi[p] === undefined || blk.linEnd > this.pageHi[p]) this.pageHi[p] = blk.linEnd;
+      this._bound(p, blk.linStart, blk.linEnd);
     }
     this.stats.compiles++;
     return blk;
