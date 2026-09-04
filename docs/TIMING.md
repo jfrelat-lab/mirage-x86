@@ -819,3 +819,46 @@ correctness question, not a tooling one.
 Also worth keeping: `!!process.env.X` is **true for the string `"0"`**, so the obvious spelling made
 `MIRAGE_NODPMI=0` mean *on* and both arms of the first comparison came back identical. The existing
 knobs (`MIRAGE_TIER2`, `MIRAGE_NOSTRIP`) share the spelling; this one compares against `'0'` and `''`.
+
+### §14e. Does mesha run under DOSBox at all? — and what capture path would settle it
+
+**Bracketing when it blocks real-mode interrupts.** `tools/rtcprobe.asm` at several tick counts, with
+`tube` as the firing control:
+
+| | N=4 (3 ms) | N=64 (62 ms) | N=1024 | N=8192 |
+|---|---|---|---|---|
+| tube | — | **fires** | **fires** | — |
+| mesha | **fires** | mute | mute | mute |
+
+So mesha shuts real-mode interrupt delivery off within **4 to 64 RTC ticks — under 62 ms** of the TSR
+installing, which is during or just after COMMAND.COM loads it.
+
+⚠️ The first attempt at this table was **all mute, including at N=4**, and that reading was an
+artefact: the probe signalled by setting **mode 3**, and at small N the screen is *still* text mode, so
+the BIOS call changed nothing and DOSBox logged nothing. A mute probe and a probe that never ran look
+identical. The signal is now mode **12h** (640x480), which is neither text nor 13h and is therefore
+always a visible change. Same lesson as §14c, fourth time.
+
+**Does it render?** Not established, and I cannot claim it either way:
+
+* it sets mode 13h and never returns to DOS in 60 s;
+* DOSBox-X has no DPMI host (§14d), so it cannot take the client path it takes here;
+* in MIRAGE's no-host path A000 stays **entirely black — 0 non-zero pixels across 400 ticks**.
+
+That last one is suggestive and **cannot be used as evidence**: the no-host path is exactly where §14d
+found our own defect (timer interrupts delivered to the real-mode IVT with PE set), which would produce
+a black screen all by itself. No instrument here has produced a DOSBox pixel of mesha.
+
+**What would.** Surveyed the capture techniques available:
+
+| approach | verdict for mesha |
+|---|---|
+| `grabber.asm` (real-mode TSR on INT 8) | impossible — the client owns the vector and does not chain (§14d) |
+| RTC / IRQ8 TSR | impossible — mesha stops real-mode delivery inside 62 ms |
+| **`qblue/tools/dosbox-compare`** — the guest BSAVEs its own video memory, then SYSTEM | does not transfer: that harness *appends* the epilogue to a `.BAS` it controls. mesha is a third-party binary that never terminates. |
+| DOSBox-X external capture | none exists — no screenshot, savestate or memory-dump CLI (`-helpdebug` is logging only) |
+| **QEMU** — `screendump` on the monitor socket | **the one that works.** An external, guest-independent framebuffer dump: nothing to install in the guest, nothing to hook, immune to protected mode, DPMI and interrupt hijacking alike. Not installed here (`brew install qemu`). |
+| give DOSBox a DPMI host (CWSDPMI is redistributable) | would put both sides on mesha's *client* path and answer "does it run" — but not capture it, since the client still owns INT 8 |
+
+> The structural point: **every capture path we have runs inside the guest, and therefore competes with
+> the guest for the machine.** QEMU's monitor is the first one that does not.

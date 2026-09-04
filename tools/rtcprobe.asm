@@ -60,7 +60,11 @@ handler:
         je      .eoi
         dec     word [cs:count]
         jnz     .eoi
-        mov     ax, 3                   ; BIOS text mode 3 — DOSBox announces it in its log
+        ; Mode 12h (640x480x16), NOT mode 3: the signal has to be a mode the guest is not already in,
+        ; or the BIOS call is a no-op and DOSBox logs nothing. Mode 3 made the probe look silent at
+        ; small N purely because the screen was still text — a mute probe and a probe that never ran
+        ; are indistinguishable. 12h logs 640x480, distinct from text's 720x400 and 13h's 640x400.
+        mov     ax, 0x12
         int     0x10
 .eoi:   mov     al, 0x20
         out     0xa0, al                ; EOI slave
