@@ -690,7 +690,7 @@ Ruled out, each by measurement rather than by plausibility:
 | hypothesis | verdict |
 |---|---|
 | the 7 s alarm | no — fails at K=20 as at K=2200 |
-| mesha hooks INT 8 | no — sampled *throughout* the run (it restores what it touches), `0000:0020` stays `f000:0008` |
+| mesha hooks INT 8 | ~~no~~ **YES — see §14c. This row was wrong.** |
 | interrupts masked at the PIC | no — it never writes port 21h; IMR reads 0 at exit |
 | mesha scribbles the resident block | no — below its own PSP it touches only page 0 (the BDA) |
 | DOS reentrancy from the ISR | no — added the InDOS guard the grabber was missing; no change |
@@ -712,6 +712,9 @@ tube, advances **five times**. So MIRAGE delivers the interrupts and DOSBox's re
 sees any; these are not the same statement, and the honest position is that **mesha's INT 8 path
 differs between the two emulators and the discrepancy is not yet explained**.
 
+> ⚠️ **§14c corrects this section: mesha DOES take INT 8, in protected mode.** Everything below the
+> table about "a disagreement about mesha itself" is wrong and is kept only so the error is legible.
+
 > **This outranks the tier-2 question that led here.** `intros/mesha.com` is in `golden.js` with a
 > pinned fingerprint, and the run it pins is one DOSBox does not reproduce — it terminates here and
 > does not there. Whether tier 2 shifts its off-screen A000 residue by 0.1 % of timer phase is a
@@ -723,3 +726,45 @@ no **InDOS** test, which every resident program that calls DOS from an interrupt
 DOS is not reentrant and the failure is silent, no file and no error. It now re-arms for one more tick
 whenever DOS is busy, so the snapshot is the first frame at or after KTICKS at which DOS is callable.
 Behaviour-neutral where capture already worked: tube reports 27.5 % with and without it.
+
+### §14c. Correction — mesha takes INT 8 as a DPMI client, and dosdiff said so all along
+
+§14 and §14b concluded that mesha hooks no interrupt and that the tool's message
+(`hooks INT 8`) was wrong. **That was my error.** I checked the REAL-MODE IVT at `0000:0020` on a
+program that installs a **protected-mode** vector, so of course it never changed.
+
+Traced at the point where it is actually written — `dpmi.pmVec` behind a Proxy, because mesha issues
+the call from protected mode where the real-mode `swInt` hook never sees it:
+
+```
+INT 31h AX=0205 : vecteur PM 8 <- 3c:92 (cyc 1017324)
+OUT 0x43 <- 0x36 / OUT 0x40 <- 0x9b,0x2e  (cyc 1017336)
+```
+
+mesha calls **INT 2Fh AX=1687**, becomes a DPMI client, installs its own protected-mode INT 8 handler
+at `003c:0092`, and **twelve cycles later** programs channel 0 to ~100 Hz. Install the handler, then
+set the rate — the ordinary sequence.
+
+So the whole chain resolves, and MIRAGE is right at every step:
+
+| | |
+|---|---|
+| `dpmiIrq(8)` returns true 41 951 times | correct — the client owns the vector, `cr0 = 0x11` (PE set), `is32` |
+| BDA `0040:006C` advances only 5 times | correct — the BDA tick belongs to the *BIOS* handler, and mesha's own handler has the interrupt |
+| the resident probe TSR never fires under DOSBox | correct — a **real-mode** TSR cannot see an interrupt taken in protected mode |
+| `tube` 1:1 services-to-BDA | correct — no client, so the BIOS handler runs every time |
+
+**`intros/mesha.com` is therefore not capturable by `tools/grabber.asm` at all**, and no fix to the
+grabber will change that: the instrument is a real-mode TSR and the program takes the vector in
+protected mode. Adjudicating mesha against DOSBox needs a different instrument (a DPMI-aware grabber,
+or a capture path that does not ride on an interrupt).
+
+Nothing above invalidates §14's tier-2 result — the region is **late, not wrong** (byte-identical entry
+state, first three timer services on the same cycle, +0.1 % cumulative lateness) — and the two real
+defects found on the way stand: `dosdiff`'s fixed 7 s alarm, and the grabber calling DOS from an ISR
+with no InDOS test.
+
+**The method lesson, which is the third time this session:** every one of these wrong readings came
+from instrumenting a path the code does not take — `mem.w8` when the recompiler emits inline stores,
+`realInt` when the tick goes through `dpmiIrq`, the real-mode IVT when the vector is protected-mode.
+Before believing a counter that reads zero, make it fire once on purpose.
