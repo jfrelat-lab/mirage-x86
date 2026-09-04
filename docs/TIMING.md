@@ -916,3 +916,38 @@ Two harness bugs found by *looking at the picture*, both of which a blind pass/f
 reported as "the program drew nothing": `boot/FREEDOS14.IMG` is an **installer** disk that stops at
 `Do you want to proceed [Y,N]?`, and MS-DOS 6.22 with no AUTOEXEC.BAT asks for the date and time first,
 so the typed commands were answered with `Invalid date`.
+
+### §14g. Giving QEMU a DPMI host — yes, and what it showed
+
+`tools/qemu-shot.mjs` takes `QSHOT_DPMI=<path to CWSDPMI.EXE>` (Charles Sandmann's freeware DPMI host,
+`csdpmi7b.zip` from delorie.com) and installs it before the program. It is a plain TSR, so it runs off
+the vvfat drive and nothing has to be written into the boot image. **Verified, not assumed**: a .COM
+that calls INT 2Fh AX=1687 and prints AX shows `CWSDPMI V0.90+ (r7)` and then `AX= 0000` — host
+present, against `AX= 1687` without it.
+
+Three failures on the way, each of which a blind pass/fail would have called "the program drew
+nothing", and each found only by *looking at the captured screen*:
+
+1. `cwsdpmi -p` arrived as `cwsdpmip` — the `sendkey` map covered no space and no dash, so those
+   keystrokes were silently dropped and DOS answered `Bad command or file name`. The map now throws on
+   an unmapped character instead of dropping it.
+2. `Error: could not allocate page table memory`. CWSDPMI's own doc names this exact case: *"If the
+   application which calls CWSDPMI internally manages all the DOS memory, the page tables may need to
+   be pre-allocated at DPMI startup time — try using the run option flag 2 in cwsparam."* A `.COM` owns
+   all of conventional memory and PMODE4K manages it itself. Not a memory-size problem: identical at
+   4, 16 and 64 MB. `QSHOT_PRE` now drives `CWSPARAM` to set flag 2.
+3. With that set, mesha clears the error and reaches **mode 13h** — and the screen stays **black at
+   12 s, 40 s and 90 s**.
+
+> So: MIRAGE renders mesha on the DPMI branch; QEMU with a real DPMI host does not. One of the two is
+> wrong and this does not say which. The likely reading is that **the DPMI branch is not the one the
+> intro was developed against** — it is 1998, HIMEM.SYS was on every machine, and `UseXMS` is the
+> branch DOSBox takes and that its authors would have tested. Our host may simply be more permissive
+> than a real one.
+>
+> **The next step is therefore XMS, not more DPMI tuning**: an XMS driver in the QEMU guest puts it on
+> DOSBox's branch and on the intro's own. Neither `boot/MSDOS622.IMG` (no HIMEM.SYS — root listed) nor
+> `boot/FREEDOS14.IMG` (no HIMEMX in `freedos/bin`) carries one, so it has to be added. The FreeDOS
+> image mounts read-write on macOS with
+> `hdiutil attach -imagekey diskimage-class=CRawDiskImage`, so `FDCONFIG.SYS` is editable — that is the
+> route.

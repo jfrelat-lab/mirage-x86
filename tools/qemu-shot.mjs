@@ -32,9 +32,22 @@ if (!existsSync(floppy)) { console.error(`missing ${floppy}`); process.exit(2); 
 
 const work = mkdtempSync(join(tmpdir(), 'qshot-'));
 copyFileSync(prog, join(work, 'PROG.COM'));
+// QSHOT_DPMI=<path to CWSDPMI.EXE> installs a DPMI host before the program runs. The MS-DOS floppy
+// carries neither HIMEM.SYS nor a DPMI host, so an extender that needs one — mesha's PMODE4K wants
+// "XMS,DPMI (no RAW,VCPI)" — takes its InitError path and exits to the prompt in milliseconds.
+// CWSDPMI is a plain TSR, so it runs off the vvfat drive and nothing has to be written into the image.
+const dpmi = process.env.QSHOT_DPMI;
+if (dpmi) { if (!existsSync(dpmi)) { console.error(`no CWSDPMI at ${dpmi}`); process.exit(2); }
+  copyFileSync(dpmi, join(work, 'CWSDPMI.EXE'));
+  // CWSPARAM comes with it and is needed for one documented case: a client that owns all of DOS
+  // memory (a .COM does, and mesha's PMODE4K manages it itself) makes CWSDPMI fail its page-table
+  // allocation with "could not allocate page table memory". Its own doc says to pre-allocate them
+  // with run option flag 2, which only CWSPARAM can set — so ship it and let QSHOT_PRE drive it.
+  const param = join(dirname(dpmi), 'CWSPARAM.EXE');
+  if (existsSync(param)) copyFileSync(param, join(work, 'CWSPARAM.EXE')); }
 
 const qemu = spawn(QEMU, [
-  '-m', '16', '-fda', floppy, '-boot', 'a',
+  '-m', process.env.QSHOT_MEM || '16', '-fda', floppy, '-boot', 'a',
   '-drive', `file=fat:rw:${work},format=raw,if=ide,index=0`,
   '-display', 'none', '-monitor', 'stdio', '-no-reboot',
 ], { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -48,7 +61,14 @@ const mon = (cmd) => { qemu.stdin.write(cmd + '\n'); };
 // `sendkey` names one key per call; a DOS command line is typed one keystroke at a time.
 const type = async (s) => {
   for (const ch of s) {
-    const k = ch === ':' ? 'shift-semicolon' : ch === '\\' ? 'backslash' : ch === '.' ? 'dot' : ch.toLowerCase();
+    // Every character must have a key name. An unmapped one is sent as itself, QEMU rejects it, and
+    // the keystroke is silently dropped — "cwsdpmi -p" arrived as "cwsdpmip" and DOS answered "Bad
+    // command or file name", which looks exactly like the host failing to install.
+    const KEYS = { ':': 'shift-semicolon', '\\': 'backslash', '.': 'dot', ' ': 'spc', '-': 'minus',
+                   '_': 'shift-minus', '/': 'slash', '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
+                   '5': '5', '6': '6', '7': '7', '8': '8', '9': '9' };
+    const k = KEYS[ch] || (/^[a-z]$/i.test(ch) ? ch.toLowerCase() : null);
+    if (!k) throw new Error(`qemu-shot: no sendkey name for ${JSON.stringify(ch)}`);
     mon(`sendkey ${k}`);
     await sleep(30);
   }
@@ -65,6 +85,15 @@ const type = async (s) => {
   mon('sendkey ret'); await sleep(1200);
   await type('c:');                         // vvfat is the first hard disk
   await sleep(800);
+  // QSHOT_PRE runs an arbitrary sequence at the prompt before the program: entries separated by ';',
+  // where '<ret>' is a bare Enter (for answering an interactive tool's prompts) and '<wait>' pauses.
+  // CWSDPMI needs it for a .COM that owns all of conventional memory — see the header note.
+  for (const step of (process.env.QSHOT_PRE || '').split(';').filter(Boolean)) {
+    if (step === '<ret>') { mon('sendkey ret'); await sleep(400); }
+    else if (step === '<wait>') { await sleep(2500); }
+    else { await type(step); await sleep(900); }
+  }
+  if (dpmi) { await type('cwsdpmi -p'); await sleep(2500); }   // -p = stay resident for the next program
   await type('prog');
   await sleep(secs * 1000);
   mon(`screendump ${out}`);
