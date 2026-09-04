@@ -862,3 +862,57 @@ a black screen all by itself. No instrument here has produced a DOSBox pixel of 
 
 > The structural point: **every capture path we have runs inside the guest, and therefore competes with
 > the guest for the machine.** QEMU's monitor is the first one that does not.
+
+### §14f. Settled — mesha's own source, and an external capture path (QEMU)
+
+pouet lists **source code** for mesha (Rhyme, 1st at Assembly 1998, PC 4K):
+`files.scene.org/.../Source/intro/meshasrc.zip`. It contains `PMODE4K.ASM`, the protected-mode
+extender, whose header states the whole thing outright:
+
+```
+; Micro 32bit Protected Mode Manager v2.00                  by Picard 1998 (c)
+;   -XMS,DPMI (no RAW,VCPI)
+;   -NO hardware interrupts, only timer interrupt available
+;   -timer speed to 100Hz (adjustable)
+```
+
+Three measurements this session are confirmed by that comment rather than inferred:
+
+* **"only timer interrupt available"** — the extender masks every hardware interrupt but the timer,
+  which it owns. That is why `rtcprobe.asm` goes mute within 62 ms (§14e) and why no real-mode TSR can
+  ever run. **No in-guest, interrupt-driven grabber can ever capture this program.** Not a tool defect.
+* **"timer speed to 100Hz"** — matches the measured reload `0x2E9B` = 11931 exactly.
+* **"XMS,DPMI (no RAW,VCPI)"** — it needs one of the two, and the init is a plain fallback:
+
+```asm
+        mov AX,1687h        ; check DPMI
+        int 2Fh
+        or  AX,AX
+        jnz UseXMS          ; no host -> try XMS
+UseXMS: mov AX,4300h        ; check himem.sys
+        int 2Fh
+        cmp AL,80h
+        jz  XMS_Ok
+InitError:
+Quit:   mov AL,3 / int 10h / mov AH,4Ch / int 21h   ; otherwise: text mode, exit
+```
+
+**Does mesha run under DOSBox? Yes.** DOSBox provides no DPMI host (§14d) but does provide XMS, so it
+takes the `UseXMS` branch. The proof is the `InitError` path: it exits in **milliseconds**. Under
+DOSBox, a marker program placed after mesha in the autoexec never runs, at 60 s — so mesha did not take
+that branch, i.e. it initialised and is running. Our own runs take the DPMI branch, which is a
+different branch of the same program but not a different program.
+
+**And there is now an external capture path.** `tools/qemu-shot.mjs` boots MS-DOS under QEMU with the
+program's directory exposed through vvfat, types the command with monitor `sendkey`, and takes the
+picture with monitor **`screendump`** — read from the emulated VGA on the HOST side. It does not care
+what mode the CPU is in, who owns the interrupts, or whether the program ever terminates, which is
+precisely what every previous instrument could not survive. Validated on `tube`: mode 13h, the real
+picture. On mesha it returns a bare `C:\>` — correct, and informative: that boot floppy loads neither
+HIMEM.SYS nor a DPMI host, so mesha takes `InitError` and quits. Giving the QEMU guest XMS is what
+would let it be compared frame-to-frame.
+
+Two harness bugs found by *looking at the picture*, both of which a blind pass/fail would have
+reported as "the program drew nothing": `boot/FREEDOS14.IMG` is an **installer** disk that stops at
+`Do you want to proceed [Y,N]?`, and MS-DOS 6.22 with no AUTOEXEC.BAT asks for the date and time first,
+so the typed commands were answered with `Invalid date`.
