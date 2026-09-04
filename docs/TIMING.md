@@ -768,3 +768,54 @@ with no InDOS test.
 from instrumenting a path the code does not take — `mem.w8` when the recompiler emits inline stores,
 `realInt` when the tick goes through `dpmiIrq`, the real-mode IVT when the vector is protected-mode.
 Before believing a counter that reads zero, make it fire once on purpose.
+
+### §14d. The grabber cannot be made DPMI-aware — the two emulators run different programs
+
+Chasing "make `grabber.asm` see a protected-mode client's timer" ended somewhere else, so here is the
+chain, each step measured.
+
+**1. mesha does not chain.** A client that installs a PM handler *and chains* would still reach a
+real-mode TSR through the host's reflection. Watching `dpmi.pmVec[8]` for reads and writes, the first
+event is the write — no `INT 31h AX=0204` first, so nothing is chained to. That closes the easy route.
+
+**2. So use an interrupt the client has NOT taken.** mesha hooks only vector 8, and touches neither
+PIC (`0x21`, `0xA0`, `0xA1` never written — only `0x20`, and only ever `0x20`, the EOI) nor the CMOS.
+The RTC's periodic interrupt (IRQ8 → INT 70h) is an independent source: `rtcprobe.asm` programs CMOS
+reg 0Ah to 1024 Hz, sets PIE in reg 0Bh, unmasks IRQ8 on the slave and IRQ2 on the master, and at tick
+N sets text mode 3 through the BIOS — which DOSBox prints in its log, so the probe needs no DOS at all.
+It **fires for tube and not for mesha**.
+
+**3. Which is when the actual cause turned up. DOSBox-X ships no DPMI host.** A .COM that calls
+INT 2Fh AX=1687 and writes AX to a file answers **`AX=1687`** — unchanged, i.e. no host. (The
+`dbx-oracle.mjs` header already records this for the file-I/O channel; it bites the pixel oracle too.)
+
+So mesha runs **two different code paths**:
+
+| `intros/mesha.com`, 400 ticks | DPMI host present (our default) | no host (`MIRAGE_NODPMI=1`, i.e. DOSBox) |
+|---|---|---|
+| returns to DOS | yes, at 214 ticks | **no — still running** |
+| cycles | 501 543 260 | 590 468 949 |
+| BIOS ticks (`0040:006C`) | 5 | **49 410** |
+| `dpmiIrq(8)` claims | 41 951 | 0 |
+| final mode | 3 (text) | **0x13** (still on screen) |
+| A000 | 4d352f1a | c8640a0b |
+
+The no-host column matches every externally observed DOSBox behaviour: it does not return to DOS in
+60 s, and it stays in mode 13h. **`MIRAGE_NODPMI=1` is the knob** (added to `src/dpmi.js`, default off,
+so nothing changes unless it is set) that puts both sides on the same path.
+
+> **A DPMI-aware grabber is not the fix, and cannot be.** `grabber.asm` is a real-mode TSR; a
+> protected-mode client owns the vector outright and does not chain. What comparability actually needs
+> is for both emulators to answer INT 2Fh AX=1687 the same way — either give DOSBox a host, or run
+> MIRAGE without one.
+
+**And the knob exposes a fidelity gap of our own.** Without a host, mesha still enters protected mode
+by itself (`CR0 = 0x11`, PE set, measured) — but MIRAGE then delivers 49 410 timer interrupts to the
+**real-mode IVT**, because `tickTimer` falls through `dpmiIrq` (false: no client) straight to
+`getVector(8)`. Under DOSBox no real-mode handler runs at all. A hardware interrupt taken with PE set
+belongs to the guest's **IDT**, not the real-mode vector table. That is the next task, and it is a
+correctness question, not a tooling one.
+
+Also worth keeping: `!!process.env.X` is **true for the string `"0"`**, so the obvious spelling made
+`MIRAGE_NODPMI=0` mean *on* and both arms of the first comparison came back identical. The existing
+knobs (`MIRAGE_TIER2`, `MIRAGE_NOSTRIP`) share the spelling; this one compares against `'0'` and `''`.

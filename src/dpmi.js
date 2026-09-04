@@ -623,9 +623,20 @@ export function installDPMI(machine) {
 
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
   // owns the vector (XMS answers 43xx there) rather than replacing it.
+  //
+  // MIRAGE_NODPMI=1 answers "no host", which is what DOSBox-X does — it ships none, measured with a
+  // .COM that reports AX after the call: it comes back 1687 unchanged. A program that can do either
+  // therefore runs a DIFFERENT PATH on each side, and comparing them compares two programs. The
+  // knob exists to put both on the same path: `intros/mesha.com` becomes a DPMI client here (it
+  // installs a protected-mode INT 8 handler with INT 31h AX=0205) and cannot be one under DOSBox,
+  // which is why tools/dosdiff.js can never capture it — see docs/TIMING.md §14d.
+  // Compared against '0' and '' as well as undefined: `!!process.env.X` is TRUE for the string "0",
+  // so the obvious spelling makes MIRAGE_NODPMI=0 mean "on".
+  const NODPMI = typeof process !== 'undefined' && !!process.env &&
+    process.env.MIRAGE_NODPMI !== undefined && process.env.MIRAGE_NODPMI !== '0' && process.env.MIRAGE_NODPMI !== '';
   const prev = machine.intHandlers[0x2f];
   machine.hookInterrupt(0x2f, (c, m) => {
-    if (c.ax === 0x1687) {
+    if (c.ax === 0x1687 && !NODPMI) {
       c.ax = 0;                                  // 0 = host present
       c.reg[3] = (c.reg[3] & ~0xffff) | 1;       // BX bit 0: 32-bit programs supported
       c.reg[1] = (c.reg[1] & ~0xff) | 3;         // CL = processor type (3 = 386)
