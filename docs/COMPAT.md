@@ -889,3 +889,19 @@ Next step is a frame-to-frame reference, which now exists: `tools/qemu-shot.mjs`
 the guest. It needs an XMS driver in the QEMU image to put that side on the same branch (neither
 `boot/MSDOS622.IMG` nor `boot/FREEDOS14.IMG` carries one; the FreeDOS image mounts read-write on macOS
 with `hdiutil attach -imagekey diskimage-class=CRawDiskImage`, so `FDCONFIG.SYS` is editable).
+
+### mesha against a real reference — 2026-09-05
+
+With QEMU on the same branch as DOSBox (XMS, no DPMI — see TESTING.md), mesha can finally be compared
+frame to frame, and the defect is sharper than "the picture is wrong":
+
+| | QEMU (reference) | MIRAGE |
+|---|---|---|
+| first ~10 s | 3D letters, **smoothly shaded white** on black, plus a brown textured slab | **nothing at all** — 0 % of the framebuffer lit for the first 120 ticks |
+| later, full-screen | large extruded shapes in **fine grey and pink bands** | the same *structure*, in flat saturated magenta / cyan / yellow patches |
+
+So two distinct symptoms: **the early scenes are skipped entirely**, and the ones that do render have
+the right geometry with the wrong colour indices. The palette is not involved — mesha never writes the
+DAC (zero writes to 0x3C6-0x3C9, measured) and ours is the authentic IBM default. Saturated CGA-range
+colours where the reference uses the 16-31 greyscale ramp points at the shading index being truncated
+or masked, which is a lead worth tracing in the guest's own arithmetic.

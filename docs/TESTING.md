@@ -488,3 +488,40 @@ must produce a 640x400 capture. Without the first of those, "I added a timeout" 
 
 Send emulator stderr to `/dev/null`, and cap any log you do keep in memory (`qemu-shot.mjs` keeps a
 64 KB tail).
+
+## An external pixel reference for protected-mode programs — QEMU + XMS
+
+`tools/grabber.asm` rides the timer IRQ, so it cannot capture a program that takes the timer for
+itself — which every self-hosted protected-mode intro does (docs/TIMING.md §14d). `tools/qemu-shot.mjs`
+reads the framebuffer from the HOST side through QEMU's monitor `screendump`, so it does not care.
+
+To match DOSBox's configuration — **XMS present, no DPMI host** — the guest needs an XMS driver, and
+neither shipped boot image has one. Recipe (the image lives in gitignored `boot/`, so build it, do not
+commit it):
+
+```sh
+cp boot/FREEDOS14.IMG /tmp/fdx.img
+hdiutil attach -imagekey diskimage-class=CRawDiskImage -nobrowse -mountpoint /tmp/fdm /tmp/fdx.img
+cp HIMEMX.EXE /tmp/fdm/                 # HimemX 3.34, sourceforge.net/projects/himemx
+cat > /tmp/fdm/fdconfig.sys <<'CFG'
+DEVICE=\HIMEMX.EXE
+LASTDRIVE=Z
+FILES=40
+BUFFERS=20
+SHELL=\FREEDOS\BIN\COMMAND.COM \FREEDOS\BIN /E:2048 /P
+CFG
+hdiutil detach /tmp/fdm && cp /tmp/fdx.img boot/FDXMS.IMG
+```
+
+The stock `FREEDOS14.IMG` is an **installer** disk that stops at `Do you want to proceed [Y,N]?`; the
+`SHELL=` line above replaces its menu and its `FDAUTO.BAT`/`SETUP.BAT` chain with a plain prompt. Check
+it before trusting a capture — the boot text must show `HimemX 3.34 … Always on A20 method used`, and
+`tools/dpmiq.asm` must answer `AX= 1687` (no DPMI host):
+
+```sh
+QSHOT_IMG=FDXMS.IMG QSHOT_BOOT=14000 node tools/qemu-shot.mjs intros/mesha.com 10 /tmp/shot.ppm
+```
+
+**And look at the picture.** Two harness bugs and one wrong conclusion in this session came from
+reading counters instead: a FreeDOS installer prompt, an `Invalid date` prompt eating the typed
+commands, and "mesha renders" from a lit-pixel count on an image that is visibly wrong.
