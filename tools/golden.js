@@ -42,7 +42,13 @@ const TICKS = 60, BUDGET = 400000;
 // Re-measured 2026-09-02 after the machine speed was calibrated to the reference (TIMING.md §6):
 // a timer-paced program advances by TICKS, so changing how many instructions a tick is worth moves
 // where its picture is. Only `freality` needed moving (20 -> 40, 2 distinct values -> 90).
-const TICK_OVERRIDE = { animate: 20, crevenge: 200, freality: 40, mesha: 400, omniscent: 120, starport: 200 };
+// mesha is pinned at 170 and NOT at 400 because it EXITS at 214: a later sample catches the demo
+// after it has restored text mode, which resets the DAC, so the entry was blind to the palette. It
+// stayed 43/43 across the fix for INT 10h AL=12h that transformed every frame of it — verified both
+// ways, the 400-tick digest is byte-identical with the bug present and absent, the 170-tick one is
+// not. Pin a program while its picture is on screen; "pin the show, not the curtain" below is the
+// same rule, and this is the case that showed it also applies to the palette.
+const TICK_OVERRIDE = { animate: 20, crevenge: 200, freality: 40, mesha: 170, omniscent: 120, starport: 200 };
 
 // Fixed workload set: both own demos + every third-party intro. Third-party binaries are
 // gitignored, so `check` silently skips any that are absent on this machine.

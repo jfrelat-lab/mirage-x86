@@ -525,3 +525,33 @@ QSHOT_IMG=FDXMS.IMG QSHOT_BOOT=14000 node tools/qemu-shot.mjs intros/mesha.com 1
 **And look at the picture.** Two harness bugs and one wrong conclusion in this session came from
 reading counters instead: a FreeDOS installer prompt, an `Invalid date` prompt eating the typed
 commands, and "mesha renders" from a lit-pixel count on an image that is visibly wrong.
+
+## INT 10h against a real VGA BIOS — `tools/int10-oracle.mjs`
+
+`npm run` gates the CPU exhaustively and the BIOS barely at all. `conformance.js` never touches
+INT 10h; `test-dos-api.js` compares our BIOS against **itself**, so it can only catch a change, never a
+mistake; `golden.js` hashes what a program drew, which is far downstream and, as the mesha case showed,
+can be blind to a whole subsystem.
+
+The defect that motivated this: `INT 10h AH=10h AL=12h` read the starting DAC register from **BX**,
+where hardware takes **BL** (port 0x3C8 is eight bits wide). `intros/mesha.com` calls it with BX =
+0x100 and BL = 0, so its entire palette upload did nothing and every frame it drew had the wrong
+colours. golden was 43/43 through the fix.
+
+The tool turns the question around, as `vga-rom.mjs` does for mode-set: load SeaVGABIOS at C000:0, let
+its POST take the INT 10h vector, and let **real 16-bit BIOS code** drive our device model. Each case
+runs on two fresh machines — one with the ROM, one plain — with the same registers and the same input
+buffer, and diffs the returned registers, the device state (BDA mode, DAC, attribute palette, CRTC,
+GC) and any bytes the call wrote to memory.
+
+```sh
+node tools/int10-oracle.mjs boot/vgabios-stdvga.bin        # every case
+node tools/int10-oracle.mjs boot/vgabios-stdvga.bin dac    # names matching "dac"
+```
+
+The ROM is `pc-bios/vgabios-stdvga.bin` from QEMU (LGPL, SeaVGABIOS) and is not committed — `boot/` is
+gitignored like `intros/` and `games/`.
+
+**First run: 5 identical, 8 different — all reproducible.** The five that agree are the DAC block and
+single-register services, i.e. the ones just fixed, now confirmed against real firmware rather than
+against our own reading of a manual. The eight are listed in ROADMAP F.
