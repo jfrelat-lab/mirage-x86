@@ -1005,3 +1005,33 @@ ours was a soft curved tunnel. Three measurements, in order:
 **This is the same root cause as mesha's missing opening scenes** (above): the machine is too slow
 relative to the timer it is pacing against. Two unrelated-looking visual defects, one cause, and both
 point at the §7 speed calibration rather than at any device or instruction.
+
+### mesha under a REAL FreeDOS kernel + a real XMS driver — 2026-09-05
+
+`boot/FDMESHA.IMG` is `FREEDOS14.IMG` with **HimemX 3.34** added, an `FDCONFIG.SYS` that boots straight
+to a prompt, `MESHA.COM`, and an `AUTOEXEC.BAT` that runs it — the recipe is in
+[TESTING.md](TESTING.md). The same image boots in QEMU and in MIRAGE, so for the first time both sides
+run the same kernel, the same XMS driver and the same binary rather than our HLE DOS against a real one.
+
+MIRAGE boots it cleanly — `A:\>`, no fault, and the only gap is `INT 15h ×3` unimplemented. Then:
+
+```
+INT 21h EXEC x3        COMMAND.COM chain, then MESHA.COM
+INT 10h set mode 0x13  mesha starts
+INT 2Fh AX=1687 x1     it asks for a DPMI host
+INT 2Fh AX=4300 x3     the XMS query
+INT 10h set mode 0x3   ...and it exits
+```
+
+Mode 13h then mode 3 and terminate is PMODE4K's **`InitError`** path. So under a real kernel mesha
+takes neither branch to completion: our DPMI host does not answer `1687` here (it does through our HLE
+DOS), so the extender falls through to `UseXMS`, and that fails too.
+
+> **The HLE path was hiding this.** mesha renders through `tools/run-com.js`, where our own DOS and our
+> own DPMI host are in charge; on a real kernel with a real XMS driver — which is exactly DOSBox's and
+> QEMU's configuration — it quits at startup. The next question is which of the two answers is wrong:
+> why `INT 2Fh AX=1687` is not reaching our host through FreeDOS's own INT 2Fh chain, and why the XMS
+> fallback then fails.
+
+That is a sharper question than anything the HLE path could pose, and it is the payoff of booting a
+real kernel: the two DOS implementations disagree, and only one of them can be right.
