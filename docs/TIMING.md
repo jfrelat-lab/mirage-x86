@@ -991,3 +991,42 @@ well be correct. `LGDT`/`LIDT` are implemented (`recompiler.js:1588`), so that i
 
 Gates on the option change: golden 43/43, conformance 555764/555764, `test.js` 194/194,
 `test-dos-api` 268/268, `dpmi-probe` clean.
+
+### §14i. Tracing mesha's `mov cr0` — and what it corrects — 2026-09-05
+
+`tools/cr0-trace.mjs` hooks `cpu.setCR0`, the single writer, and logs every PE transition in both
+configurations.
+
+```
+DPMI + XMS : 1 bascule PE   PE 0->1  cr0 10->11  a lin=f0200  CS.D=0  gdt=0/0       cyc=1017297
+XMS seul   : 1 bascule PE   PE 0->1  cr0 10->11  a lin=93cb   CS.D=0  gdt=a875/18   cyc=1017315
+```
+
+**One transition each, and never back.** So §14h's reading — *"the extender switches back to real mode
+to service interrupts"* — is **wrong**: PMODE4K never clears PE. And the two entries are different in
+kind: the DPMI branch switches at `f000:0200`, our own JS host entry, with no GDT of its own; the XMS
+branch switches inside mesha's code at `lin 0x93cb` with the GDT it built (base `0xa875`, limit `0x18`).
+
+**The XMS branch is not writing to the wrong place — it is not writing at all.** Comparing memory
+across 15 ticks in mid-run:
+
+| animated regions | |
+|---|---|
+| DPMI | `0xa0000-0xaffff` (the framebuffer), `0x7ca000-0x808fff`, `0x80a000-0x819fff`, three more |
+| **XMS** | **none** |
+
+And the execution profile says why:
+
+| over 10 ticks | DPMI | XMS |
+|---|---|---|
+| **distinct blocks executed** | **108** | **6** |
+| outer loop at `a13d` | 480 | **24 288** |
+| retrace wait at `a482` | 169 172 | **3 950 412** (98.8 % of all block executions) |
+
+`a482` is `IN AL,DX` / `TEST AL,8` / `JZ` — the 0x3DA vertical-retrace wait. It is **not** deadlocked:
+both branches read the port and both see bit 3 set (152 times in 6 ticks on the XMS branch). The loop
+turns; it just never reaches the rest of the program. Six blocks against a hundred and eight.
+
+The loop body calls indirectly — `call dword [ebp-0x2c]`, twice — and `EBP` differs structurally
+between the branches (`0x100000`, the XMS extended-memory base, against `0` at the sampled instant).
+**That indirect target is where to look next**, not the interrupt path and not the mode switch.
