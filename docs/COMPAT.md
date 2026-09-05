@@ -1080,3 +1080,42 @@ exactly.
 > So mesha's `InitError` exit under a real kernel is **two of our defects stacked**, not one: no DPMI
 > host reachable, and no XMS because A20 cannot be negotiated. Implementing INT 15h AX=2400-2403 is the
 > smaller and more general of the two — every XMS driver needs it.
+
+
+### mesha RENDERS under a booted FreeDOS kernel — 2026-09-05
+
+Four defects, each found by following HimemX's own console message, and both of my intermediate
+conclusions were wrong.
+
+**The four fixes.**
+
+1. **`INT 15h AX=2400-2403`** — the BIOS A20 services did not exist. Disable, enable, report state,
+   and report which methods exist (BX bit 0 = 8042, bit 1 = port 92h).
+2. **The 8042 A20 method was inert.** `onPortWrite(0x64, () => {})` discarded everything. HimemX writes
+   0xD1 to 0x64 and then the output-port byte to 0x60, whose bit 1 is A20; the 0xDD/0xDF shorthands and
+   the 0xD0 read-back are handled too.
+3. **A20 was closed at boot.** HimemX's "always on" detection needs to find it already open, and a POST
+   about to boot a kernel opens it. Opened on the **boot path only** — the `.COM` path keeps the 1 MiB
+   wrap that EXEPACK stubs depend on.
+4. **The memory-size calls lied.** `AH=88h` answered 0 KB whenever `machine.xms` existed, including when
+   our own driver is orphaned by a booted kernel; it now answers 0 only while our INT 2Fh stub is still
+   the live one. `AX=E801` and `AH=8Ah` — the two ways past AH=88h's 64 MiB ceiling, and the ones
+   HimemX asks for first — were missing.
+
+HimemX goes from `No Supported A20 method detected / Driver won't be installed` to
+**`Always on A20 method used`**, word for word what QEMU prints.
+
+**And two readings of my own that were wrong**, both worth keeping:
+
+* "`INT 2Fh AX=4300` gets no answer" came from reading AX immediately after `swInt` — but `realInt`
+  **transfers control**, it does not run the guest's handler in place, so AX was still the input value.
+  An in-guest probe (`tools/xmsq.asm`) answers `XMS AL=80`, entry `0290:0620`. Fifth instance this
+  session of measuring at the wrong instant.
+* "mesha exits at startup" came from looking only at the FINAL state — but `mode 3` + `INT 21h AH=4Ch`
+  is also mesha's **normal** exit. Sampled during the run: mode 13h reached, framebuffer 100 % filled.
+
+`tools/xms2.asm` reproduces PMODE4K's exact sequence and confirms it end to end: `AH=03` (global enable
+A20) → `01:00`, `AH=09` (allocate the 6336 KB it wants) → `01:00`, handle `066A`.
+
+> So `boot/FDMESHA.IMG` — FreeDOS + HimemX 3.34 + mesha, the same image QEMU runs — now renders in
+> MIRAGE. Both sides finally execute the same kernel, the same XMS driver and the same binary.

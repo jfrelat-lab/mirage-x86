@@ -27,6 +27,13 @@ export function isBootSector(bytes) {
  * @param {{drive?: number, strict?: boolean}} opts  drive → DL (0x00 = A:, 0x80 = first hard disk)
  */
 export function bootSector(machine, bytes, opts = {}) {
+  // Open A20 before handing over. A bare 8086 leaves it closed and real-mode code relies on the 1 MiB
+  // wrap (EXEPACK stubs do), which is why it stays closed on the .COM path — but a POST that is about
+  // to boot a kernel opens it, and SeaBIOS does. Leaving it closed made HimemX report "No Supported
+  // A20 method detected" and install no XMS driver at all, because its "always on" detection needs to
+  // find A20 already open (docs/COMPAT.md).
+  if (machine.bios && machine.bios.setA20) machine.bios.setA20(true);
+
   const { drive = 0x00, strict = true } = opts;
   if (bytes.length < SECTOR) throw new Error(`boot image is ${bytes.length} bytes, need at least ${SECTOR}`);
   // A real BIOS refuses to boot a sector without the signature. Keep that check on by default: a

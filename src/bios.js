@@ -543,12 +543,48 @@ export function installBIOS(machine, opts = {}) {
       cpu.flags &= ~CF;                        // CF clear = the wait completed
       return;
     }
+    if (cpu.ah === 0x24) {                     // A20 gate services (PS/2 BIOS)
+      // An XMS driver asks 2403 which methods exist and 2402 for the current state before it picks
+      // one; answering neither is why HimemX refused to install. Both mechanisms it can then use —
+      // the 8042 above and port 0x92 — are real here, so report both as supported.
+      if (cpu.al === 0x00) { bios.setA20(false); cpu.ah = 0; cpu.flags &= ~CF; return; }   // disable
+      if (cpu.al === 0x01) { bios.setA20(true);  cpu.ah = 0; cpu.flags &= ~CF; return; }   // enable
+      if (cpu.al === 0x02) { cpu.ax = machine.mem.a20 ? 1 : 0; cpu.flags &= ~CF; return; } // AL = state
+      if (cpu.al === 0x03) { cpu.ax = 0; cpu.bx = 0x0003; cpu.flags &= ~CF; return; }      // BX: bit0 8042, bit1 port 92h
+      machine.unhandledInts[0x15]++;
+      cpu.flags |= CF; cpu.ah = 0x86;
+      return;
+    }
+    // AX=E801 and AH=8Ah are the two ways past AH=88h's 64 MiB ceiling, and an XMS driver asks for
+    // them before it falls back. HimemX asks E801 first; leaving it unanswered made it size its pool
+    // from AH=88h alone.
+    if ((cpu.ax & 0xffff) === 0xe801) {
+      const kb = Math.max(0, (mem.size - 0x100000) >> 10);
+      const below16 = Math.min(kb, 0x3c00);                    // KB in 1..16 MiB, capped at 15 MiB
+      const above16 = Math.max(0, (kb - 0x3c00)) >> 6;         // 64 KiB blocks above 16 MiB
+      cpu.ax = below16; cpu.cx = below16;
+      cpu.bx = above16; cpu.dx = above16;
+      cpu.flags &= ~CF;
+      return;
+    }
+    if (cpu.ah === 0x8a) {                     // extended memory size in KB, DX:AX
+      const kb = Math.max(0, (mem.size - 0x100000) >> 10);
+      cpu.ax = kb & 0xffff; cpu.dx = (kb >>> 16) & 0xffff;
+      cpu.flags &= ~CF;
+      return;
+    }
     if (cpu.ah === 0x88) {                     // extended memory size, KB above 1 MiB
       // An XMS driver OWNS extended memory and hooks this vector to report none, so nobody else
       // claims it behind its back. Measured, not assumed: `tools/xms15.asm` under dosbox-x with XMS
       // installed answers KB=0000 CF=0 — so reporting our real 15 MiB here would be the wrong answer
       // for the configuration we actually boot.
-      cpu.ax = machine.xms ? 0 : Math.min(0xffff, (mem.size - 0x100000) >> 10);
+      // Report none only while OUR XMS driver is the one actually serving the guest — that is, while
+      // INT 2Fh still points at our stub. A booted kernel installs its own multiplex handler over the
+      // vector, which orphans our driver (docs/COMPAT.md); answering 0 there told the guest's real XMS
+      // driver there was no extended memory, and HimemX refused to install with "Extended memory is
+      // too small or not available" even after it had A20 open.
+      const oursLive = machine.xms && machine.getVector(0x2f).seg === 0xf000;
+      cpu.ax = oursLive ? 0 : Math.min(0xffff, (mem.size - 0x100000) >> 10);
       cpu.flags &= ~CF;
       return;
     }
@@ -629,14 +665,15 @@ export function installBIOS(machine, opts = {}) {
   // A20 gate — System Control Port A (0x92), the PS/2 "fast A20": bit 1 opens/closes the 1 MiB
   // address wrap. (Games that want HMA/extended addressing set it; most rely on the reset default
   // of A20 disabled, which memory.js already provides.)
-  machine.onPortWrite(0x92, (_p, _s, v) => {
-    const want = !!(v & 2);
-    if (want === machine.mem.a20) return;
-    machine.mem.setA20(want);
-    // The recompiler bakes the address mask as a literal into compiled blocks, so re-bake it and
-    // drop the cache — otherwise inlined accesses keep the old wrap.
+  // Every A20 path goes through here. The recompiler bakes the address mask as a literal into
+  // compiled blocks, so re-bake it and drop the cache — otherwise inlined accesses keep the old wrap.
+  const setA20 = (want) => {
+    if (!!want === machine.mem.a20) return;
+    machine.mem.setA20(!!want);
     if (machine.rec) { machine.rec.MM = machine.mem.mask; machine.rec.reset(); }
-  });
+  };
+  bios.setA20 = setA20;
+  machine.onPortWrite(0x92, (_p, _s, v) => setA20(v & 2));
   machine.onPortRead(0x92, () => (machine.mem.a20 ? 0x02 : 0x00));
   // Input Status #1 (0x3DA): a real time-based VGA beam instead of a per-read toggle, so a vsync
   // loop that measures the retrace (not just waits for an edge) sees a realistic period. The beam
@@ -744,12 +781,27 @@ export function installBIOS(machine, opts = {}) {
   // on that. Chrome Revenge ends each frame with `IN AL,60H / DAS / JC nextframe`: DAS sets CF only
   // for a value above 0x99, i.e. exactly "the last thing that happened was a key being RELEASED".
   // Reading back 0 made it exit after drawing one single frame.
-  const kb = { data: 0x9c, obf: false, scans: [] };   // scans: FIFO of pending make/break scancodes
+  const kb = { data: 0x9c, obf: false, scans: [], cmd: 0 };   // scans: FIFO of pending make/break scancodes
   machine.kb = kb;
   machine.onPortRead(0x60, () => { const d = kb.data; kb.obf = false; return d; });   // read scancode, clear OBF
   machine.onPortRead(0x64, () => (kb.obf ? 0x1d : 0x1c));     // status byte; bit0 = output-buffer-full
-  machine.onPortWrite(0x60, () => { kb.data = 0xfa; kb.obf = true; });   // keyboard command -> ACK
-  machine.onPortWrite(0x64, () => {});                        // controller command (ignored)
+  machine.onPortWrite(0x60, (_p, _s, v) => {                   // keyboard command -> ACK, or the
+    if (kb.cmd === 0xd1) { kb.cmd = 0; setA20(v & 2); return; } // output-port byte after a 0xD1
+    kb.data = 0xfa; kb.obf = true;
+  });
+  // 8042 controller commands. A20 through the keyboard controller is the OLDEST of the three ways to
+  // open the 1 MiB wrap and the first one an XMS driver tries: HimemX writes 0xD1 to 0x64 then the
+  // output-port byte to 0x60, whose bit 1 is A20. Ignoring 0x64 made that method silently inert, so
+  // HimemX gave up with "No Supported A20 method detected / Driver won't be installed" and no XMS
+  // existed at all under a booted kernel (docs/COMPAT.md). 0xDD/0xDF are the shorthand forms.
+  machine.onPortWrite(0x64, (_p, _s, v) => {
+    const c = v & 0xff;
+    if (c === 0xd1) { kb.cmd = 0xd1; return; }               // next byte on 0x60 is the output port
+    if (c === 0xd0) { kb.data = 0x02 | (machine.mem.a20 ? 0x02 : 0); kb.obf = true; return; }  // read it back
+    if (c === 0xdd) { setA20(false); return; }
+    if (c === 0xdf) { setA20(true); return; }
+    kb.cmd = 0;
+  });
 
   // ---- 8255 PPI port B (0x61) + PIT channel 2 (0x42) ----------------------
   // 0x61 was unhandled and is the most-touched port in the corpus after the video status register:
