@@ -969,3 +969,39 @@ reference, and the later scene is coherent browns and golds instead of magenta a
 > not change; the palette, which is all it changes, is gone by the time the hash is taken. The entry is
 > not wrong, it is **blind to palette**, and now that `tools/qemu-shot.mjs` can supply a reference frame
 > the honest fix is to pin mesha while it is on screen.
+
+### `intros/intoanew.com` — the frame is warped because the TIMER moves while it draws — 2026-09-05
+
+Sixty-four bytes, disassembled in full. After `int 10h` it builds its own greyscale ramp straight into
+the DAC (`out 0x3c9` three times per entry, starting from whatever AL the mode set returned), then
+ray-marches one byte per pixel:
+
+```asm
+0118  mov bl,cl
+...   mul di / imul bl / imul bl        ; the perspective
+012D  sub bl,[0x46c]                    ; ...masked by the BIOS TICK, per pixel
+0133  and al,bl
+0135  test al,0x18
+0137  loope 0x118                       ; march until bits 3 or 4 appear
+0139  or al,0xfc / sub al,cl / stosb    ; the pixel IS how far the march got
+```
+
+Against the QEMU reference — a straight corridor with sharp diagonal corners and a chequered texture —
+ours was a soft curved tunnel. Three measurements, in order:
+
+* the DAC ramp we build is **exactly right** (entries 0..31 climbing 0x20→0x3f, then white), so it is
+  not the palette;
+* our on-screen indices were 6..15 where the reference needs ≥32 for its white areas, so the march was
+  exiting about five times too early;
+* **freezing** `0040:006C` made the picture identical for tick values 0x00, 0x40, 0x80 and 0xc0 — and
+  moved 19.1 % of pixels into the white range. So the tick's *value* is irrelevant and its *movement*
+  is the whole effect.
+
+> One frame is ~1 M instructions here, and at `pitBase = 182584` that is about **five timer ticks**. The
+> intro reads `[0x46c]` per pixel, so the top and bottom of a single frame are drawn against different
+> tick values and the geometry shears. On the Pentium it was written for, a frame costs well under one
+> tick. At `MIRAGE_PITRELOAD=3651680` (20x) it renders the straight corridor, matching the reference.
+
+**This is the same root cause as mesha's missing opening scenes** (above): the machine is too slow
+relative to the timer it is pacing against. Two unrelated-looking visual defects, one cause, and both
+point at the §7 speed calibration rather than at any device or instruction.

@@ -10,12 +10,12 @@
     "fault": null
   },
   "demos/PLANAR.COM": {
-    "hash": "6d947c86e40d2f8dab451b0a654e131585384285",
+    "hash": "041bfbe6994b9404a01f7782df63cd5aeee2af71",
     "mode": 13,
     "fault": null
   },
   "demos/CGA.COM": {
-    "hash": "20429b36b0a44cf61a1d666c26ea436ec01f1fcd",
+    "hash": "21f6ee43b64268308028edb373f80d9e7104c5ed",
     "mode": 4,
     "fault": null
   },
@@ -65,7 +65,7 @@
     "fault": null
   },
   "intros/intoanew.com": {
-    "hash": "95e3ed5b308f926784bb2dd81da7f69dd3c156a5",
+    "hash": "36a89937049c59893ab5a336b67f1f1467f8698b",
     "mode": 19,
     "fault": null
   },
@@ -80,7 +80,7 @@
     "fault": null
   },
   "intros/kaneda.com": {
-    "hash": "2eee07257833044f45cbb905ec3a71965f2ff180",
+    "hash": "40d82fee4d317bccc18f9575e637488bdbc9d14e",
     "mode": 19,
     "fault": null
   },
@@ -120,7 +120,7 @@
     "fault": null
   },
   "intros/pitman.com": {
-    "hash": "6f4eafe9cb59ff22d9a6dfa4f08c548372b4eb4e",
+    "hash": "ca58cc93a906c5ceb3f84737a84992e8b5b6b968",
     "mode": 3,
     "fault": null
   },
@@ -190,7 +190,7 @@
     "fault": null
   },
   "intros/omniscent.com": {
-    "hash": "210981b7c0f239dfc04bdcdaf40c5fb038a3f9b2",
+    "hash": "c39a3ca81395f29d292943f35ae309f4b944684b",
     "mode": 19,
     "fault": null
   },
@@ -200,12 +200,12 @@
     "fault": null
   },
   "intros/starport.com": {
-    "hash": "8ef289b3dfc779430fb4c487be9267fe42fd692a",
+    "hash": "a46b3d88e72511cd4b02dee1e69a2107b1deccb0",
     "mode": 13,
     "fault": null
   },
   "demos/VESA.COM": {
-    "hash": "0652cc134e6a96c7177906c1d687e72d9c3d738a",
+    "hash": "5edf7b6ee090b0746f2f53a0e3cfac51be4e6ed9",
     "mode": 3,
     "fault": null
   },
