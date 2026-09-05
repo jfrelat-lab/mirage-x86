@@ -1030,3 +1030,59 @@ turns; it just never reaches the rest of the program. Six blocks against a hundr
 The loop body calls indirectly — `call dword [ebp-0x2c]`, twice — and `EBP` differs structurally
 between the branches (`0x100000`, the XMS extended-memory base, against `0` at the sampled instant).
 **That indirect target is where to look next**, not the interrupt path and not the mode switch.
+
+### §14j. Root cause — hardware interrupts were never dispatched through the IDT — FIXED 2026-09-05
+
+`[ebp-0x2c]`, which §14i pointed at, is **innocent**. Sampled while the loop is turning — and through
+**SS**, since EBP-relative addressing defaults to SS, which the first attempt got wrong — both branches
+read the same target:
+
+| | EBP | `[SS:EBP-0x2c]` | target |
+|---|---|---|---|
+| DPMI | `0x7c0000` | `0x41f` | lin `0x983f`: `53 51 52 8b 73 28 0b 71` |
+| XMS | `0x100000` | `0x41f` | lin `0x983f`: **identical bytes** |
+
+Only EBP differs, and that is just where the extender put the client's data (`0x100000` is the XMS base).
+
+**The experiment that settled it** was to cut timer delivery in the branch that *works*:
+
+| | distinct blocks | framebuffer over 10 ticks |
+|---|---|---|
+| DPMI, normal | 108 | changed at 3710/4000 probes |
+| **DPMI, timer cut** | **6** | **0** |
+| XMS only | **6** | **0** |
+
+Identical signature. All of mesha's rendering lives in its timer handler.
+
+**And its own source says how that handler is installed on the XMS branch** (`PMODE4K.ASM`):
+
+```asm
+xor AX,AX / mov DS,AX / mov SI,64      ; 64 = 0x40
+movsw / movsw
+mov [d SI-4], o Int_Timer + Sel_Code32*10000h
+movsw / movsw
+mov [d SI-4], 8E00h
+```
+
+It keeps the **reset IDTR** (base 0) and writes its gate straight to linear `0x40` — which is
+`base 0 + vector 8 * 8`. There is no `LIDT` to notice, which is why §14h concluded "no IDT at all".
+Verified in memory: `92 00 08 00 00 8e 00 00` — offset `0x92`, selector `0x08`, access **`0x8E`**, a
+present 32-bit interrupt gate; and offset `0x92` is the very handler the DPMI branch installs through
+`INT 31h AX=0205`.
+
+> **The defect was ours**: `tickTimer` never consulted the IDT. With PE set and no DPMI client it fell
+> through to `getVector(8)` — the **real-mode** vector table — and ran our own BIOS handler. So a
+> guest that switches to protected mode by itself, rather than through a DPMI host, never received the
+> timer at all.
+
+`_protInt` already decoded a gate at `idtr.base + n*8` (offset, selector, 32-bit gates, the target's
+DPL as the new CPL), so the fix is to route the tick there, guarded on the gate's **present** bit and
+the IDT limit so a protected-mode guest with no IDT keeps the previous behaviour. V86 is excluded for
+now and is a separate question.
+
+**Result: the two branches are now identical** — 214 ticks, terminates, mode 3, 9143 lit pixels each.
+mesha renders on the branch DOSBox takes, for the first time.
+
+Gates: golden 43/43, conformance 555764/555764, `test.js` 194/194, `test-dos-api` 268/268, `test-x86-uc`
+green. The DPMI path is untouched (`dpmiIrq` still claims the tick first), which is why mesha's own
+pinned fingerprint does not move.

@@ -514,6 +514,22 @@ export class Machine {
                                               // ISR (a `STI;HLT` before the guest installs its own
                                               // INT 8 — e.g. Moktar's GAME.TDT init — must resume)
     if (this.dpmiIrq(8)) return;              // a DPMI client's own PM handler comes first
+    // In protected mode a hardware interrupt is dispatched through the IDT, not the real-mode vector
+    // table. Without this a self-hosted protected-mode guest — one that switches by itself instead of
+    // going through a DPMI host — never receives the timer at all, and we ran our own BIOS handler
+    // instead. intros/mesha.com is the case: its extender (PMODE4K, source on scene.org) keeps the
+    // RESET IDTR and writes its gate straight to linear 0x40, which is idtr.base 0 + vector 8 * 8, so
+    // there is no LIDT to notice. Measured there: `92 00 08 00 00 8e 00 00` — offset 0x92, selector 8,
+    // access 0x8E, a present 32-bit interrupt gate, and offset 0x92 is the same handler the DPMI
+    // branch installs with INT 31h AX=0205. All of mesha's rendering lives in that handler, so
+    // without this it drew nothing at all (docs/TIMING.md §14j).
+    // Guarded on the gate's PRESENT bit: a guest that is in protected mode with no IDT of its own
+    // must keep the previous behaviour rather than jump through an empty descriptor.
+    const c = this.cpu;
+    if ((c.cr0 & 1) && !(c.flags & VM)) {
+      const g = (c.idtr.base + 8 * 8) >>> 0;
+      if (8 * 8 + 7 <= c.idtr.limit && (this.mem.r8(g + 5) & 0x80)) { this.protInt(8); return; }
+    }
     const v8 = this.getVector(8);
     if (v8.seg !== BIOS_SEG) { this.realInt(8, v8.seg, v8.off); return; }
     // No guest ISR: we are the BIOS timer handler. A real one ends with `mov al,20h; out 20h,al`,
