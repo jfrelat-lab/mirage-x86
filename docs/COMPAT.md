@@ -866,3 +866,26 @@ Three hypotheses tested and **refuted**, recorded so they are not re-tried:
   Correct on its own merits; no effect on the derail.
 
 Still unhandled during that boot: INT 15h x2.
+
+## intros/mesha.com — runs, renders, and the picture is WRONG — 2026-09-05
+
+After the IDT-dispatch fix ([TIMING.md](TIMING.md) §14j) mesha runs to completion on both branches
+(DPMI host present or XMS only), 214 ticks, exits to text mode, identical pixel counts. It animates
+and it terminates. **It does not look right.**
+
+Compared against the pouet screenshot (`content.pouet.net/files/screenshots/00000/00000954.gif`), which
+is smooth brown / cream / grey gradients, every frame sampled here is **blotchy and garish** — flat
+patches of saturated magenta, cyan, green and red where the reference has continuous shading. The
+geometry is plausible (a textured 3D object, consistent with the prod's "7 parts, 8 textures, 17000
+faces"); the shading is not.
+
+**It is not the palette.** mesha never writes the DAC — zero writes to ports 0x3C6-0x3C9 in either
+branch, measured — so it runs on the default mode-13h VGA palette, and ours is the authentic IBM one
+captured byte-for-byte (`bios.js`). The colours in the DAC are right; the **indices** the renderer
+computes are wrong. That is a shading/texture-lookup defect in the guest's own maths as we execute it,
+not a video-device one.
+
+Next step is a frame-to-frame reference, which now exists: `tools/qemu-shot.mjs` captures from outside
+the guest. It needs an XMS driver in the QEMU image to put that side on the same branch (neither
+`boot/MSDOS622.IMG` nor `boot/FREEDOS14.IMG` carries one; the FreeDOS image mounts read-write on macOS
+with `hdiutil attach -imagekey diskimage-class=CRawDiskImage`, so `FDCONFIG.SYS` is editable).
