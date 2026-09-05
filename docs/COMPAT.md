@@ -1035,3 +1035,48 @@ DOS), so the extender falls through to `UseXMS`, and that fails too.
 
 That is a sharper question than anything the HLE path could pose, and it is the payoff of booting a
 real kernel: the two DOS implementations disagree, and only one of them can be right.
+
+#### Why `INT 2Fh AX=1687` gets no answer under FreeDOS — and why XMS fails too
+
+Two separate causes, both ours, found by booting `boot/FDMESHA.IMG`.
+
+**1. Our DPMI host is in the wrong place in the INT 2Fh chain.** Measured at the moment mesha asks:
+the vector is `00d8:128a` — the FreeDOS kernel's multiplex handler — `AX` comes back `0x1687`
+unchanged, and our handler is reached by chaining **zero** times.
+
+`swInt()` is right to behave this way: it runs a JS handler only while the vector still points into
+`f000`, and hands anything else to the guest's own code. The mistake is *when* we hook. `installDPMI`
+takes INT 2Fh at BIOS-install time, i.e. **before** a kernel boots; the kernel then installs its own
+multiplex handler over the vector, and the DOS kernel is the BOTTOM of that chain — it has nothing to
+chain down to. A real DPMI host is a TSR that loads *after* DOS. Under our HLE DOS we own every vector
+so it works; under a real kernel we are orphaned. The same applies to `installXMS`, which hooks 2Fh in
+the same place.
+
+**2. HimemX cannot enable A20, so no XMS driver installs either.** From the boot console:
+
+```
+HimemX 3.34 [Sep 05 2015] ...
+HimemX: No Supported A20 method detected
+HimemX: Unable to switch A20 address line.
+HimemX: Driver won't be installed.
+```
+
+QEMU, on the same image, prints `Always on A20 method used`. HimemX tries every method and we answer
+none of them:
+
+| what it tries | what we do |
+|---|---|
+| `INT 15h AX=2403` (which A20 methods exist) | unimplemented |
+| `INT 15h AX=C003` | unimplemented |
+| `INT 15h AX=2402` (get A20 state) | unimplemented |
+| keyboard controller `0x64←0xd1`, `0x60←0xdf` | accepted, no observable effect |
+| fast A20 `0x92←0x02` | accepted, no observable effect |
+
+`mem.a20` is already `true` and not maskable here, so every "turn A20 off and see whether memory wraps"
+probe fails — and the "always on" method QEMU's HimemX selects needs `AX=2402`/`2403` to say so. The
+`unimplemented INT vectors: INT 15h ×3` line `run-boot.mjs` has been printing all along was naming this
+exactly.
+
+> So mesha's `InitError` exit under a real kernel is **two of our defects stacked**, not one: no DPMI
+> host reachable, and no XMS because A20 cannot be negotiated. Implementing INT 15h AX=2400-2403 is the
+> smaller and more general of the two — every XMS driver needs it.
