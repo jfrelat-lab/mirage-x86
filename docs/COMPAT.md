@@ -905,3 +905,31 @@ the right geometry with the wrong colour indices. The palette is not involved �
 DAC (zero writes to 0x3C6-0x3C9, measured) and ours is the authentic IBM default. Saturated CGA-range
 colours where the reference uses the 16-31 greyscale ramp points at the shading index being truncated
 or masked, which is a lead worth tracing in the guest's own arithmetic.
+
+### Why mesha's opening scenes never appeared — machine SPEED, not the renderer — 2026-09-05
+
+Measured, not inferred. At the DOSBox-calibrated speed (`pitBase = 182584`, which `machine.js` itself
+describes as "about a fast 286"):
+
+| | first lit frame | emulated time to get there |
+|---|---|---|
+| calibrated | tick 121 | **78.4 s**, and it opens already 3192 px lit, jumping straight to 100 % fill |
+| `MIRAGE_PITRELOAD=1825840` (10x) | tick 134 | **8.4 s**, opening at **26 px** and growing — 19 % at t160 |
+
+Same amount of *work* — the first frame lands at a similar slice count — for a tenth of the *emulated
+time*. And at 10x the opening actually plays: rendered at tick 170 it is the word **"MESHA"** in 3D
+letters, the scene the reference shows in its first seconds and that the calibrated machine never
+displays at all.
+
+> **The cause is that mesha schedules its scenes on its own 100 Hz timer, which keeps ticking through
+> the precompute.** That precompute costs ~80 emulated seconds on our machine, so by the time the
+> renderer produces anything the demo's own timeline has already run past its opening. Nothing is
+> skipped by a defect; the machine is too slow relative to the clock the demo paces itself by.
+
+This is a direct consequence of the speed calibration in [TIMING.md](TIMING.md) §7, and it is the first
+workload where that calibration visibly costs content. mesha is an Assembly 1998 4K intro and expects a
+Pentium. Whether the fix is a per-title speed, a faster default, or leaving it, is a judgement call —
+but "the early scenes are missing" is now a known quantity rather than a mystery.
+
+**The second defect is unaffected**: the shading is still blotchy against the reference's smooth
+gradients at every speed, so wrong colour indices remain a separate, open bug.
