@@ -951,3 +951,43 @@ nothing", and each found only by *looking at the captured screen*:
 > image mounts read-write on macOS with
 > `hdiutil attach -imagekey diskimage-class=CRawDiskImage`, so `FDCONFIG.SYS` is editable — that is the
 > route.
+
+### §14h. DPMI as an option, and mesha on the XMS branch — 2026-09-05
+
+**DPMI is now optional in the same shape as XMS and EMS.** `installBIOS` already read
+`opts.xms !== false` and `opts.ems !== false`; `installDPMI` was the one called unconditionally. It now
+takes `dpmi`, passed through `tools/harness.mjs`, with `MIRAGE_NODPMI=1` left as the global default for
+the tools that take no options. The knob no longer lives *inside* the INT 2Fh handler — a host that is
+not wanted is simply not installed, which is what the other two do.
+
+**mesha, all three configurations, 400 ticks:**
+
+| | ticks | returns to DOS | PE seen | final mode | max lit pixels |
+|---|---|---|---|---|---|
+| DPMI + XMS (default) | 214 | yes | yes | 0x3 | **9143** (tick 133) |
+| **XMS only** (`dpmi: false`) | 400 | **no** | yes | **0x13** | **0** |
+| neither | **1** | yes | **no** | 0x3 | 0 |
+
+The third row is a **positive control for the whole setup**: with neither service mesha quits at tick 1
+in text mode, which is exactly `InitError` in `PMODE4K.ASM` (`cmp AL,80h` fails → `int 10h` mode 3 →
+`AH=4Ch`) and exactly what QEMU showed with no HIMEM and no DPMI host. The harness is measuring what it
+claims to.
+
+> So on the **XMS branch — the one DOSBox takes** — MIRAGE enters protected mode, sets mode 13h, and
+> **never draws a single pixel** across 400 ticks. That is our defect, not the intro's.
+
+**And the diagnosis in §14d needs correcting.** I expected the fault to be hardware interrupts
+delivered through the real-mode IVT with PE set. Measured, the picture is different:
+
+* mesha loads a **GDT** — base `0xa875`, limit `0x18`, four descriptors;
+* it **never loads an IDT** — `idtr` stays at its reset value (base 0, limit 0x3FF);
+* MIRAGE delivers **49 410** INT 8 to the real-mode BIOS handler.
+
+A guest running in protected mode with the reset IDTR is not expecting to take interrupts there, which
+matches PMODE4K's own header: *"NO hardware interrupts, only timer interrupt available"*. The extender
+switches back to **real mode** to service them rather than handling them in PM. So the failure is in
+that **real↔protected switching**, not in interrupt dispatch, and the 49 410 real-mode deliveries may
+well be correct. `LGDT`/`LIDT` are implemented (`recompiler.js:1588`), so that is not it either.
+
+Gates on the option change: golden 43/43, conformance 555764/555764, `test.js` 194/194,
+`test-dos-api` 268/268, `dpmi-probe` clean.

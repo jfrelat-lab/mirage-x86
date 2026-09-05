@@ -782,8 +782,20 @@ export function installBIOS(machine, opts = {}) {
   if (opts.xms !== false) installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
   if (machine.xms) machine.xms.max = Math.min(machine.xms.max, VBE_FB_LIN);   // keep XMS out of the framebuffer
   if (opts.ems !== false) installEMS(machine);   // EMS — after XMS: shares its pool via xms.top
-  installDPMI(machine);  // DPMI host (INT 2Fh AX=1687h + f000:0200 mode-switch entry). AFTER XMS:
-                         // it chains that INT 2Fh hook and caps the XMS pool below its own tables.
+  // DPMI is optional in the same shape as XMS and EMS. `dpmi: false` (or MIRAGE_NODPMI=1, for the
+  // tools that take no options) leaves the guest with no host, which is what DOSBox-X does — it ships
+  // none, measured with a .COM that reports AX after INT 2Fh AX=1687: it comes back 1687 unchanged.
+  // A program that can use either then takes its OTHER branch, so comparing the two emulators without
+  // matching this compares two different programs. intros/mesha.com is the case: with a host it
+  // becomes a client and installs a protected-mode INT 8 handler; without one its extender falls back
+  // to XMS. See docs/TIMING.md §14d.
+  // The env test compares against '0' and '' as well as undefined: `!!process.env.X` is TRUE for the
+  // string "0", so the obvious spelling would make MIRAGE_NODPMI=0 mean "on".
+  const noDpmiEnv = typeof process !== 'undefined' && !!process.env &&
+    process.env.MIRAGE_NODPMI !== undefined && process.env.MIRAGE_NODPMI !== '0' && process.env.MIRAGE_NODPMI !== '';
+  if (opts.dpmi !== false && !noDpmiEnv) {
+    installDPMI(machine);  // DPMI host (INT 2Fh AX=1687h + f000:0200 mode-switch entry). AFTER XMS:
+  }                        // it chains that INT 2Fh hook and caps the XMS pool below its own tables.
 
   machine.bios = bios;
   return bios;
