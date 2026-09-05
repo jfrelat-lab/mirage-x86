@@ -46,15 +46,29 @@ if (dpmi) { if (!existsSync(dpmi)) { console.error(`no CWSDPMI at ${dpmi}`); pro
   const param = join(dirname(dpmi), 'CWSPARAM.EXE');
   if (existsSync(param)) copyFileSync(param, join(work, 'CWSPARAM.EXE')); }
 
-const qemu = spawn(QEMU, [
+// QEMU is bounded by a limit it CANNOT ignore, not only by the kill at the end of this script: if the
+// script is interrupted or throws, a plain spawn leaves QEMU reparented to init and spinning forever.
+// That is how a DOSBox orphan from this toolbox ran two days at 100% CPU and wrote 266 GB of `LOG:`
+// through a stderr redirect. The supervisor can die; the bound must not depend on it.
+//
+// `ulimit -t`, not `perl -e 'alarm N; exec ...'`. The alarm trick works on dosbox-x, which leaves
+// SIGALRM at its default, and does NOT work here: QEMU installs its own SIGALRM handler for its
+// timers and swallows it — measured, `alarm 5` and it still ran 21 s and produced a capture. A CPU
+// time limit survives exec, cannot be handled away, and ends in SIGKILL. It also targets exactly the
+// failure that happened: a process spinning at 100% CPU. An idle one is not the problem.
+const HARD_S = Number(process.env.QSHOT_TIMEOUT) || (Number(process.env.QSHOT_BOOT) || 10000) / 1000 + secs + 90;
+const qemu = spawn('/bin/sh', ['-c', `ulimit -t ${Math.ceil(HARD_S)}; exec "$@"`, 'sh', QEMU,
   '-m', process.env.QSHOT_MEM || '16', '-fda', floppy, '-boot', 'a',
   '-drive', `file=fat:rw:${work},format=raw,if=ide,index=0`,
   '-display', 'none', '-monitor', 'stdio', '-no-reboot',
 ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
+// Capped: the monitor is chatty on error and this string is only ever used to print the tail.
 let log = '';
-qemu.stdout.on('data', (b) => { log += b; });
-qemu.stderr.on('data', (b) => { log += b; });
+const LOG_CAP = 64 * 1024;
+const onOut = (b) => { log += b; if (log.length > LOG_CAP) log = log.slice(-LOG_CAP); };
+qemu.stdout.on('data', onOut);
+qemu.stderr.on('data', onOut);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mon = (cmd) => { qemu.stdin.write(cmd + '\n'); };

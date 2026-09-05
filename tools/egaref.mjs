@@ -43,8 +43,18 @@ writeFileSync(join(work, 'dbx.conf'),
 
 // DOSBox never exits on its own here — the grabber halts the guest after K ticks — so kill it from
 // outside once the files have appeared.
+//
+// The `alarm` is NOT redundant with the kill below. That kill runs in a CHILD shell: interrupt this
+// script, or let it die, and the backgrounded DOSBox is reparented to init and spins forever with
+// nobody left to stop it. One such orphan ran at 100% CPU for two days and filled 266 GB with `LOG:`
+// lines through a stderr redirect. A process that bounds ITSELF survives the loss of its parent;
+// a supervisor does not. Same reason stderr goes to /dev/null rather than to a file.
+// `ulimit -t` is a CPU-time limit: it survives exec, cannot be handled away, and ends in SIGKILL.
+// (`perl -e 'alarm N; exec ...'` would do for dosbox-x, which leaves SIGALRM at its default, but not
+// for every emulator — QEMU installs its own SIGALRM handler and swallows it. One rule for both.)
+const DBX_MAX_S = Number(process.env.EGAREF_TIMEOUT) || 960;   // > the 900 s poll below
 const child = execFileSync('/bin/sh', ['-c',
-  `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ${DOSBOX} -conf ${join(work, 'dbx.conf')} -nomenu -fastlaunch >/dev/null 2>&1 & ` +
+  `ulimit -t ${DBX_MAX_S}; SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ${DOSBOX} -conf ${join(work, 'dbx.conf')} -nomenu -fastlaunch >/dev/null 2>&1 & ` +
   `p=$!; for i in $(seq 1 900); do [ -s ${join(work, 'INFO.BIN')} ] && break; sleep 1; done; sleep 1; kill -9 $p 2>/dev/null; wait $p 2>/dev/null; true`],
   { encoding: 'utf8' });
 

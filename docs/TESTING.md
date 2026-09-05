@@ -456,3 +456,35 @@ from the same RAM, so the corruption was set up earlier — by a service, a devi
 3. For device/timing changes, confirm tier-2 == notier2 and re-bless golden only after visual
    verification.
 4. Browser sanity (reload, run a demo, check the console) for anything in the engine or `ui.js`.
+
+## Bounding an emulator subprocess — 2026-09-05
+
+An orphaned `dosbox-x` from this toolbox ran **two days at 100 % CPU** and wrote **266 GB** of `LOG:`
+lines into a stderr redirect, leaving 8 GB free on a 460 GB disk. `rm` alone would not have returned
+the space — the file descriptor was still open, so the process had to be killed first.
+
+Two rules for anything here that launches an emulator.
+
+**1. The bound must live in the child.** A supervisor that kills the job on a timer does not survive
+its own death: `tools/egaref.mjs` had a `kill -9` in a child shell, and interrupting the script
+reparents the backgrounded DOSBox to init with nobody left to stop it. That is the shape that produced
+the orphan.
+
+**2. Use `ulimit -t`, not `perl -e 'alarm N; exec …'`.** The alarm trick is used elsewhere in this repo
+and works on `dosbox-x`, which leaves SIGALRM at its default. It does **not** generalise: QEMU installs
+its own SIGALRM handler for its timers and swallows it — measured, `alarm 5` and it still ran 21 s and
+produced a capture, i.e. the guard was inert and I nearly shipped it as working. A CPU-time limit
+survives `exec`, cannot be handled away, ends in SIGKILL, and targets precisely the failure that
+happened: a process spinning at 100 % CPU. (An idle one is not the problem.)
+
+```js
+spawn('/bin/sh', ['-c', `ulimit -t ${seconds}; exec "$@"`, 'sh', QEMU, ...args])
+```
+
+**And test the guard by making it fire.** `QSHOT_TIMEOUT=5 node tools/qemu-shot.mjs intros/tube.com 6`
+must report `pas de capture` and leave no `qemu-system` process; the same run at the default timeout
+must produce a 640x400 capture. Without the first of those, "I added a timeout" is a claim, not a fact
+— which is exactly how the inert `alarm` version passed.
+
+Send emulator stderr to `/dev/null`, and cap any log you do keep in memory (`qemu-shot.mjs` keeps a
+64 KB tail).
