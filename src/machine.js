@@ -145,6 +145,8 @@ export class Machine {
     // still sees ticks. The browser (ui.js) sets this false and paces tickTimer to wall-clock at
     // 18.2 Hz instead, keeping real-time game speed.
     this.timerAuto = true;
+    this.chained = {};          // vector -> the handler we displaced, for reclaimVector()
+    this._chaining = false;
 
     this.cpu.swInt = (n) => this.swInt(n);
     this.cpu.softInt = (n, nextIp, faultIp) => this.softInt(n, nextIp, faultIp);
@@ -177,6 +179,25 @@ export class Machine {
 
   /** Register a JS service routine for INT n and point its vector at our stub. */
   hookInterrupt(n, fn) { this.intHandlers[n] = fn; this.setVector(n, BIOS_SEG, n); }
+
+  /** Take a vector back after a guest has installed its own handler over it, remembering theirs so
+   *  our handler can chain DOWN to it.
+   *
+   *  This is what a resident service does on real hardware and what we could not do: our XMS driver
+   *  and DPMI host hook INT 2Fh at BIOS-install time, i.e. BEFORE any kernel exists. A booted kernel
+   *  then installs its own multiplex handler over the vector and is the BOTTOM of that chain — it has
+   *  nothing to chain down to — so we were simply orphaned, and `INT 2Fh AX=1687` answered "no host"
+   *  under FreeDOS while working under our HLE DOS (docs/COMPAT.md). Reclaiming puts us back on top,
+   *  where a TSR loaded after DOS would be.
+   *
+   *  Safe against the obvious loop: whoever we displace chains to what THEY saved, which is our stub,
+   *  so re-entering is possible — `_chaining` stops the second hop. */
+  reclaimVector(n) {
+    const v = this.getVector(n);
+    if (v.seg === BIOS_SEG && v.off === n) return;      // still ours
+    this.chained[n] = { seg: v.seg, off: v.off };
+    this.setVector(n, BIOS_SEG, n);
+  }
 
   /** BIOS service reached by executing its entry (f000:n) — a guest that calls the ISR inline
    *  rather than via `INT n` (reads the vector, then far-JMP/CALLs it, having pushed an IRET
@@ -412,8 +433,19 @@ export class Machine {
     // EMS has its own segment (the name must sit at <vector segment>:000A) but is still ours.
     if (v.seg === BIOS_SEG || (v.seg === EMS_SEG && this.ems)) {
       const h = this.intHandlers[n];
-      if (h) h(this.cpu, this);          // JS handler; eip already points past the INT
-      else if (this.mem.u8[((BIOS_SEG << 4) + v.off) & this.mem.mask] !== 0xcf) {
+      if (h) {
+        const served = h(this.cpu, this);   // JS handler; eip already points past the INT
+        // A handler that did NOT serve this call hands it to whoever owned the vector before we
+        // reclaimed it, which is how a chain of resident services behaves. `_chaining` guards the
+        // loop: the displaced handler chains to what it saved, and that is our stub.
+        if (!served && this.chained[n] && !this._chaining) {
+          const c = this.chained[n];
+          this._chaining = true;
+          try { this.realInt(n, c.seg, c.off); } finally { this._chaining = false; }
+        }
+        return;
+      }
+      if (this.mem.u8[((BIOS_SEG << 4) + v.off) & this.mem.mask] !== 0xcf) {
         // The vector points into F000 but the byte there is NOT our IRET stub, so the guest has
         // replaced the ROM and owns this vector — test386.asm does exactly that, being a BIOS
         // replacement whose exception handlers live in F000. Assuming we own the segment made us
@@ -498,6 +530,9 @@ export class Machine {
   // ---- hardware interrupt injection ---------------------------------------
   /** Fire the 18.2 Hz timer: bump the BIOS tick and run the user timer ISR. */
   tickTimer() {
+    // Cheap enough at 18.2 Hz, and it is the only place that runs regularly through a whole boot:
+    // a kernel or a driver that takes INT 2Fh mid-boot is picked up within a tick.
+    if (this.xms || this.dpmi) this.reclaimVector(0x2f);
     if (!(this.cpu.flags & IF)) return;
     // Raise IRQ0 on the PIC and let it decide. This is where masking and in-service state start
     // mattering: a guest that has masked IRQ0 in the IMR no longer receives the tick (it used to,

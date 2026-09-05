@@ -625,6 +625,12 @@ export function installDPMI(machine) {
   // owns the vector (XMS answers 43xx there) rather than replacing it.
   const prev = machine.intHandlers[0x2f];
   machine.hookInterrupt(0x2f, (c, m) => {
+    // Stand aside once a guest handler sits below us, for the same reason xms.js does: a real BIOS
+    // offers no DPMI host either — one is a TSR the guest loads, and DOSBox ships none at all. This
+    // is not merely cosmetic. Offering DPMI on the boot path pushed intros/mesha.com onto its DPMI
+    // branch under FreeDOS, where it faults with #GP at 3c:9fc, instead of the XMS branch that
+    // renders (docs/COMPAT.md). On the HLE path nothing takes the vector, so we answer as before.
+    if (machine.chained && machine.chained[0x2f]) return false;
     if (c.ax === 0x1687) {
       c.ax = 0;                                  // 0 = host present
       c.reg[3] = (c.reg[3] & ~0xffff) | 1;       // BX bit 0: 32-bit programs supported
@@ -632,9 +638,9 @@ export function installDPMI(machine) {
       c.reg[2] = (c.reg[2] & ~0xffff) | 0x005a;  // DX = DPMI version 0.90
       c.reg[6] = c.reg[6] & ~0xffff;             // SI = paragraphs of host data needed: none
       c.setSeg(ES, DPMI_ENTRY_SEG); c.reg[7] = (c.reg[7] & ~0xffff) | DPMI_ENTRY_OFF;
-      return;
+      return true;
     }
-    if (prev) prev(c, m);
+    return prev ? prev(c, m) : false;
   });
 
   return dpmi;
