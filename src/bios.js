@@ -327,7 +327,7 @@ export function installBIOS(machine, opts = {}) {
         } else if (cpu.al === 0x03) {            // toggle blink vs bright-background (BL bit 0)
           bios.blink = (cpu.bx & 1) !== 0;
         } else if (cpu.al === 0x17) {            // GET block of DAC registers (mirror of AL=12h)
-          const start = cpu.bx & 0xffff, count = cpu.cx & 0xffff;
+          const start = cpu.bx & 0xff, count = cpu.cx & 0xffff;   // BL, not BX — see AL=12h below
           let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
           for (let i = 0; i < count; i++) {
             mem.w8(p++, bios.dac[(start + i) * 3] & 0x3f);
@@ -335,7 +335,14 @@ export function installBIOS(machine, opts = {}) {
             mem.w8(p++, bios.dac[(start + i) * 3 + 2] & 0x3f);
           }
         } else if (cpu.al === 0x12) {            // set block of DAC registers
-          const start = cpu.bx & 0xffff, count = cpu.cx & 0xffff;
+          // The starting register is **BL**, not BX. A real BIOS loads it into port 0x3C8, which is
+          // eight bits wide, so anything above 255 truncates — and callers rely on that. mesha enters
+          // this call with BX = 0x100 left over from its unpacker (`push si / pop bx`, si = 0x100 at
+          // .COM entry) and never sets it, because BL is already 0. Reading BX put `start` at 256,
+          // every write landed past the 768-byte DAC array and was silently dropped by the typed
+          // array, so its whole palette upload did nothing: the demo then rendered against the
+          // default VGA DAC. Right geometry, wrong colours everywhere (docs/COMPAT.md).
+          const start = cpu.bx & 0xff, count = cpu.cx & 0xffff;
           let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
           for (let i = 0; i < count; i++) {
             bios.dac[(start + i) * 3] = mem.r8(p++) & 0x3f;

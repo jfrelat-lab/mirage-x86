@@ -933,3 +933,39 @@ but "the early scenes are missing" is now a known quantity rather than a mystery
 
 **The second defect is unaffected**: the shading is still blotchy against the reference's smooth
 gradients at every speed, so wrong colour indices remain a separate, open bug.
+
+### The shading bug — INT 10h AH=10h AL=12h took BX where hardware takes BL — FIXED 2026-09-05
+
+mesha's colours were wrong because **its palette upload did nothing**. `INT 10h AH=10h AL=12h`
+(*set block of DAC registers*) read the starting register from **BX**. A real VGA BIOS loads it into
+port **0x3C8, which is eight bits wide**, so anything above 255 truncates — and callers rely on that.
+
+mesha reaches the call with **BX = 0x100**, left over from its unpacker (`push si / pop bx`, and
+`si = 0x100` at `.COM` entry), and never sets it, because **BL is already 0**. `MESHA.INC` has no
+`mov BX` anywhere before it:
+
+```asm
+mov AX,13h / int 10h        ; mode 13h
+mov AX,1012h / inc CH       ; CX = 256 entries
+int 10h                     ; ...starting at BL = 0
+```
+
+Reading BX made `start` 256, so every write landed past the 768-byte DAC array and was **silently
+dropped by the typed array**. The demo then rendered against the default VGA palette: right geometry,
+wrong colours everywhere. `AL=0x17` (the read-back mirror) had the same defect and is fixed with it.
+
+How it was found, since the symptom pointed elsewhere: the 32 KB `ColorMap` the rasterizer indexes with
+`ColorMap[shade*256 + texel]` came out with **one distinct value across all 32768 entries**. It is
+built by a nearest-colour search over `VGAPal` — which the demo *generates* rather than reads back, so
+the DAC was not obviously implicated — and the only `INT 10h AX=1012h` in the whole run left
+`bios.dac` untouched, which is what named the call.
+
+Result: "MESHA" now renders as smooth white 3D letters on the brown textured slab, matching the QEMU
+reference, and the later scene is coherent browns and golds instead of magenta and cyan patches.
+
+> **golden could not have caught this, and did not.** 43/43 before and after, mesha's fingerprint
+> byte-identical. Its entry is pinned at 400 ticks, and mesha *exits* at 214 — the sample is taken
+> after the demo has restored text mode, which resets the DAC. A000 holds indices, which this fix does
+> not change; the palette, which is all it changes, is gone by the time the hash is taken. The entry is
+> not wrong, it is **blind to palette**, and now that `tools/qemu-shot.mjs` can supply a reference frame
+> the honest fix is to pin mesha while it is on screen.
