@@ -433,8 +433,12 @@ export class Machine {
           this.intHandlers[n](cpu, this);
           return;
         }
-        // Unclaimed: return, as the real-mode dummy IRET would. EIP is already past the INT.
+        // Unclaimed by the host: reflect it to the REAL-MODE handler, which is what a DPMI host does
+        // and what returning here did not. Under our own DOS every vector has a JS handler so this
+        // path was never taken; under a booted kernel none do, and every DOS call a client made was
+        // silently swallowed (ROADMAP F9).
         cpu.eip = nextIp;
+        if (this.dpmi.reflectInt) { this.dpmi.reflectInt(n); return; }
         this.unhandledInts[n]++;
         return;
       }

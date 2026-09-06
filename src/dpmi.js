@@ -14,6 +14,8 @@ const STATE_STUB_OFF = 0x0210;                                   // the do-nothi
 const RAW_R2P_OFF = 0x0220, RAW_P2R_OFF = 0x0230;                // raw mode-switch routines (0306)
 const RM_RET_OFF = 0x0240;                                       // where a 0302 real-mode call returns
 const RM_STACK_TOP = 0x0500;                                     // host-provided real-mode stack (256 B below)
+const RMCS_SCRATCH = 0x0300;                                     // 50-byte call structure the host builds
+                                                                 // when it reflects a client's INT n
 const CB_BASE_OFF = 0x0600, CB_MAX = 16;                         // real-mode callback entries (0303)
 
 const LDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
@@ -532,14 +534,42 @@ export function installDPMI(machine) {
                  FLAGS: 0x20, ES: 0x22, DS: 0x24, FS: 0x26, GS: 0x28,
                  IP: 0x2a, CS: 0x2c, SP: 0x2e, SS: 0x30 };
 
-  const realCall = (rmcs, words, vec) => {
+  /** Reflect a protected-mode software interrupt the host does not serve down to the real-mode
+   *  handler. Required by the DPMI spec and, until now, missing: `machine.softInt` reflected a
+   *  client's INT to our JS services and, finding none, simply returned. Under our own DOS every
+   *  vector has a JS handler so nothing showed; under a BOOTED kernel none do, so every DOS call a
+   *  client made did nothing at all — intros/mesha.com rendered its whole show and then never
+   *  terminated, because its `INT 21h AH=4Ch` exit was swallowed (ROADMAP F9).
+   *
+   *  The mode switch is the one 0300 already performs; the difference is that a reflected interrupt
+   *  takes its inputs from the CLIENT's registers rather than a structure it passed, and hands the
+   *  results back the same way — hence `reflect`, which realCallReturn honours. */
+  const reflectInt = (n) => {
+    const rmcs = ((DPMI_ENTRY_SEG << 4) + RMCS_SCRATCH) >>> 0;
+    const w32 = (o, v) => mem.w32((rmcs + o) >>> 0, v >>> 0);
+    const w16 = (o, v) => mem.w16((rmcs + o) >>> 0, v & 0xffff);
+    w32(RMCS.EDI, cpu.reg[7]); w32(RMCS.ESI, cpu.reg[6]); w32(RMCS.EBP, cpu.reg[5]);
+    w32(RMCS.EBX, cpu.reg[3]); w32(RMCS.EDX, cpu.reg[2]); w32(RMCS.ECX, cpu.reg[1]);
+    w32(RMCS.EAX, cpu.reg[0]);
+    w16(RMCS.FLAGS, cpu.flags);
+    // Segment REGISTERS, not the client's selectors: in real mode these are paragraph numbers, and a
+    // selector put here would address nonsense. A client that wants a buffer seen by DOS passes a
+    // real-mode segment in the structure itself; we have none, so hand DOS the host's own.
+    w16(RMCS.ES, DPMI_ENTRY_SEG); w16(RMCS.DS, DPMI_ENTRY_SEG);
+    w16(RMCS.FS, 0); w16(RMCS.GS, 0);
+    w16(RMCS.SS, 0); w16(RMCS.SP, 0);            // 0:0 = host, provide a stack
+    realCall(rmcs, 0, n, true);
+  };
+  dpmi.reflectInt = reflectInt;
+
+  const realCall = (rmcs, words, vec, reflect) => {
     const r32 = (o) => mem.r32((rmcs + o) >>> 0) >>> 0, r16 = (o) => mem.r16((rmcs + o) >>> 0);
 
     // base/limit/csD/ssB are saved verbatim rather than re-resolved: the descriptors have not moved.
     dpmi.rmCalls.push({
       rmcs, reg: Array.from(cpu.reg), seg: Array.from(cpu.seg), base: Array.from(cpu.base),
       limit: Array.from(cpu.limit), eip: cpu.eip >>> 0, flags: cpu.flags, cr0: cpu.cr0,
-      csD: cpu.csD, ssB: cpu.ssB,
+      csD: cpu.csD, ssB: cpu.ssB, reflect: !!reflect,
     });
 
     // Read the parameter words before switching: they are addressed through the protected-mode SS.
@@ -605,6 +635,16 @@ export function installDPMI(machine) {
     cpu.reg.set(st.reg); cpu.seg.set(st.seg); cpu.base.set(st.base); cpu.limit.set(st.limit);
     cpu.csD = st.csD; cpu.ssB = st.ssB;
     cpu.eip = st.eip; cpu.flags = st.flags & ~1;         // CF=0: the call succeeded
+    if (st.reflect) {
+      // A reflected interrupt returns its answer in the CLIENT's registers, not in a structure the
+      // client will read — so carry the results back out, CF included, which is where DOS puts
+      // success or failure.
+      const r32 = (o) => mem.r32((st.rmcs + o) >>> 0) >>> 0, r16 = (o) => mem.r16((st.rmcs + o) >>> 0);
+      cpu.reg[7] = r32(RMCS.EDI); cpu.reg[6] = r32(RMCS.ESI); cpu.reg[5] = r32(RMCS.EBP);
+      cpu.reg[3] = r32(RMCS.EBX); cpu.reg[2] = r32(RMCS.EDX); cpu.reg[1] = r32(RMCS.ECX);
+      cpu.reg[0] = r32(RMCS.EAX);
+      cpu.flags = (cpu.flags & ~1) | (r16(RMCS.FLAGS) & 1);
+    }
   };
   cpu.dpmiRealCallReturn = realCallReturn;
 
