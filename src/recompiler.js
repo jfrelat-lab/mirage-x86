@@ -47,6 +47,7 @@ const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.
 // takes >300s for work tier-1 does in 8.5ms, a >30,000× cliff that made bench.js look hung.
 // Turn it back on by default once regions carry an instruction budget and the game bugs are fixed.
 const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
+const EMPTY_LINES = [];   // shared placeholder for a block whose source is not retained
 const T2_HOT = 64;         // promote a block to a region after this many executions
 const T2_MAXBLK = 24;      // cap region size in blocks
 const T2_MAXINS = 384;     // cap region size in instructions
@@ -133,6 +134,22 @@ export class Recompiler {
     this.recentIp = new Int32Array(16);
     this.recentI = 0;
     this.blockPages = [];          // page -> Array(8192) of block | undefined
+    // The code cache is bounded by the SOURCE IT HAS EMITTED, not by its block count. A block keeps
+    // a compiled Function and the text it was built from, and V8 charges roughly eight times the
+    // source for the pair — so the cost is proportional to bytes, not to blocks. That distinction
+    // is the whole point: a guest that derails into data compiles blocks that run to the MAXOPS cap
+    // with no branch in them, ~60 KB of source each and half a megabyte of host heap apiece. Capping
+    // the COUNT at 32,768 would still have allowed 16 GiB. Measured on healthy titles, the whole
+    // cache holds 4.6 MB of source for Doom and 0.9 MB for Wolf3D, so 32 MB is ample headroom.
+    //
+    // At the ceiling the cache is dropped whole, which is what real JITs do when a code cache fills.
+    // The cost is recompilation, and only for a guest already misbehaving.
+    // Retain the emitted source only where it is read: the tier-2 region compiler splices it, and
+    // tools/trace.js prints it. Both are off by default.
+    this.keepSource = TIER2 || !!(typeof process !== 'undefined' && process.env && process.env.MIRAGE_KEEP_SRC);
+    this.blockCount = 0;                  // live blocks, for reporting
+    this.codeBytes = 0;                   // emitted source currently held
+    this.codeCap = Number(typeof process !== 'undefined' && process.env && process.env.MIRAGE_CODE_CAP) || (16 << 20);
     this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
     // Per-page block-coverage bounds [lo, hi) — the min linStart / max linEnd of any block
     // touching a page. A write outside a page's bound can overlap no block, so invalidate()
@@ -147,7 +164,7 @@ export class Recompiler {
     this.pageBounds = [];
     this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
-    this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0 };
+    this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0, flushes: 0 };
     this.t2evict = new Map();      // region root lin -> SMC-eviction count (for the blacklist)
     this.t2blacklist = new Set();  // roots that self-modify too much -> stay tier-1
     this.mem.onCodeWrite = (addr, len) => this.invalidate(addr, len);
@@ -206,6 +223,8 @@ export class Recompiler {
     const pg = this.blockPages[lin >>> 12];
     if (pg !== undefined) { pg[lin & 0xfff] = undefined; pg[(lin & 0xfff) | 0x1000] = undefined; }   // both CS.D variants
     this.heat.delete(lin);
+    this.blockCount--;
+    this.codeBytes -= blk.bodyLen || 0;
     this.stats.invalidations++;
     for (let p = blk.linStart >>> 12; p <= (blk.linEnd - 1) >>> 12; p++) {
       const s = this.pageBlocks.get(p); if (s) s.delete(lin);
@@ -218,7 +237,8 @@ export class Recompiler {
     // wrap is what makes EXEPACK stubs' segment arithmetic work. Every paging transition calls
     // reset(), so this stays in sync.
     this.pagedMode = !!(this.cpu && this.cpu.pagingOn);
-    this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageBounds = []; this.t2evict.clear(); this.t2blacklist.clear(); }
+    this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageBounds = []; this.t2evict.clear(); this.t2blacklist.clear();
+    this.blockCount = 0; this.codeBytes = 0; }
 
   // ===================== tier-2 region compiler =====================
 
@@ -454,6 +474,14 @@ export class Recompiler {
   }
 
   _compile(lin, ip0) {
+    // At the ceiling, drop the cache and end the slice. `run` hoists blockPages into a local once
+    // per slice, so a flush mid-slice would leave it holding the old array — the same hazard the
+    // address mask has, and the same remedy.
+    if (this.codeBytes >= this.codeCap) {
+      this.reset();
+      this.stats.flushes++;
+      if (this.cpu) this.cpu.tbudget = 0;
+    }
     const blk = this.translate(lin, ip0);
     const pg = lin >>> 12;
     let page = this.blockPages[pg];
@@ -467,6 +495,8 @@ export class Recompiler {
       s.add(lin);
       this._bound(p, blk.linStart, blk.linEnd);
     }
+    this.blockCount++;
+    this.codeBytes += blk.bodyLen || 0;
     this.stats.compiles++;
     return blk;
   }
@@ -1228,7 +1258,15 @@ export class Recompiler {
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
-    return { fn, linStart, linEnd: mask(linStart - ip0 + ip), ip0, ipEnd: ip, count, body, term, bodyOut, usesFPU, canFault, hot: 0, kind: 0 };
+    // The emitted source is kept ONLY if something will read it: the region compiler splices
+    // bodyOut, and tools/trace.js prints body. Tier 2 is opt-in, so by default neither is, and
+    // holding both meant the cache retained every block's source TWICE — as a string and as the
+    // array of lines it was joined from. bodyLen survives either way, because the cache is bounded
+    // by emitted bytes.
+    const keep = rec.keepSource;
+    return { fn, linStart, linEnd: mask(linStart - ip0 + ip), ip0, ipEnd: ip, count,
+             body: keep ? body : '', bodyLen: body.length, term, bodyOut: keep ? bodyOut : EMPTY_LINES,
+             usesFPU, canFault, hot: 0, kind: 0 };
 
     // ===================== nested emit helpers =====================
 

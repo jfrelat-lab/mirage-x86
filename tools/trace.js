@@ -28,6 +28,8 @@ const watch = num('watch', null), dump = num('dump', null);
 const HITS = num('hits', 6), TICKS = num('ticks', 400), PER = num('per', 200000);
 
 const mc = new Machine({ memSize: 1 << 20 });
+// The recompiler drops each block's emitted source unless something will read it. This tool does.
+mc.rec.keepSource = true;
 installBIOS(mc); const dos = installDOS(mc, new VFS());
 const cpu = mc.cpu, rec = mc.rec, u8 = mc.mem.u8, MM = mc.mem.mask;
 let fault = null; mc.onError = (e) => { fault = e; };
