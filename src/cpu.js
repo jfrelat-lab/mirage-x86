@@ -486,7 +486,14 @@ export class CPU {
     } else {
       this.setSeg(CS, cs); this.eip = eip;
     }
-    this.flags = (fl & 0x27fd5) | 2;
+    // IOPL and IF are not the returning code's to write. Only CPL 0 may change IOPL, and IF only
+    // when CPL <= IOPL — the same rule POPF already followed. Writing the popped EFLAGS wholesale
+    // let a ring-3 IRET zero the IOPL a DPMI host had set to 3 for its client, after which the
+    // client's next CLI was a #GP: DOOM stopped there, inside DOS/4GW, drawing nothing.
+    let nf = (fl & 0x27fd5) | 2;
+    if (cpl !== 0) nf = (nf & ~IOPL) | (this.flags & IOPL);
+    if (cpl > ((this.flags >>> 12) & 3)) nf = (nf & ~IF) | (this.flags & IF);
+    this.flags = nf;
   }
 
   /**

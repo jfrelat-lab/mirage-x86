@@ -645,7 +645,7 @@ export function installDPMI(machine) {
     dpmi.rmCalls.push({
       rmcs, reg: Array.from(cpu.reg), seg: Array.from(cpu.seg), base: Array.from(cpu.base),
       limit: Array.from(cpu.limit), eip: cpu.eip >>> 0, flags: cpu.flags, cr0: cpu.cr0,
-      csD: cpu.csD, ssB: cpu.ssB, reflect: !!reflect,
+      csD: cpu.csD, ssB: cpu.ssB, cpl: cpu.cpl, reflect: !!reflect,
     });
 
     // Read the parameter words before switching: they are addressed through the protected-mode SS.
@@ -709,6 +709,12 @@ export function installDPMI(machine) {
     }
     cpu.setCR0(st.cr0);
     cpu.reg.set(st.reg); cpu.seg.set(st.seg); cpu.base.set(st.base); cpu.limit.set(st.limit);
+    // CPL travels with the rest of the cached segment state. Writing cpu.seg directly bypasses
+    // setSeg, which is what maintains it, and the excursion ran in real mode where CS's load left it
+    // at 0 — so the client came back to ring 3 with the CPU still believing it was at ring 0. The
+    // next far RET then read `(cs & 3) > cpl` as an OUTWARD return, popped two words that were not
+    // there, and loaded a garbage CS. That is where DOOM stopped.
+    cpu._cpl = st.cpl;
     cpu.csD = st.csD; cpu.ssB = st.ssB;
     cpu.eip = st.eip; cpu.flags = st.flags & ~1;         // CF=0: the call succeeded
     if (st.reflect) {
