@@ -21,7 +21,7 @@ const RMCS_SCRATCH = 0x0300;                                     // 50-byte call
                                                                  // when it reflects a client's INT n
 const CB_BASE_OFF = 0x0600, CB_MAX = 16;                         // real-mode callback entries (0303)
 
-const LDT_ENTRIES = 512;                    // 4 KiB of descriptors — far more than a client uses
+const LDT_ENTRIES = 2048;                   // 16 KiB of descriptors
 const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for the tables
 
 // Client descriptors live in the LDT, not the GDT: every real host does this, AX=0000 is specified
@@ -50,6 +50,7 @@ export function installDPMI(machine) {
     active: false,                 // has a client switched to protected mode?
     is32: false,
     nextSel: SEL_CLIENT,           // bump allocator over the LDT
+    freeSels: [],                  // offsets returned by 0001, reused before the bump advances
     unimplemented: new Map(),      // INT 31h AX values a client asked for and we refused
     segSels: new Map(),
     dosBlocks: new Map(),          // 0100 selector -> real-mode segment, for 0101/0102            // 0002: real-mode segment -> selector, never freed
@@ -64,7 +65,7 @@ export function installDPMI(machine) {
     memTop: 0,                     // DPMI heap: grows DOWN from the host tables (set below)
     blocks: new Map(),             // handle -> { base, size }
     log: null,                     // set by a probe to record real-mode call targets
-    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.segSels = new Map(); this.dosBlocks = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.freeSels = []; this.unimplemented = new Map(); this.segSels = new Map(); this.dosBlocks = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
   };
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
@@ -80,10 +81,25 @@ export function installDPMI(machine) {
     mem.w8(a + 7, (base >>> 24) & 0xff);
   };
 
+  /**
+   * Reserve `count` CONSECUTIVE descriptor slots, reusing a freed one when a single slot will do.
+   * Without reuse this was a pure bump allocator, and a client that allocates and frees descriptors
+   * in a loop — which DOS/4GW does, one per section as it walks the executable — simply ran the
+   * table out. 0000 then returned 8011 "descriptor unavailable", and DOS/4GW carried that error
+   * code forward as the function number of its next call.
+   * @returns the byte offset in the LDT, or -1 if the table is full.
+   */
+  const takeSel = (count) => {
+    if (count === 1 && dpmi.freeSels.length) return dpmi.freeSels.pop();
+    if (dpmi.nextSel + count * 8 > SEL_MAX) return -1;
+    const off = dpmi.nextSel; dpmi.nextSel += count * 8;
+    return off;
+  };
+
   /** A descriptor for one of the client's real-mode segments: same bytes, seen through a selector. */
   const allocClientSel = (seg, code) => {
-    if (dpmi.nextSel >= SEL_MAX) return 0;
-    const sel = dpmi.nextSel; dpmi.nextSel += 8;
+    const sel = takeSel(1);
+    if (sel < 0) return 0;
     // Ring 3, DPL 3, RPL 3 — what every real host hands a client, and what a client tests for.
     // DOS/4GW reads a selector's RPL to decide whether the descriptor is its own to edit: at RPL 0
     // it wrote through a GDT alias selector we do not have and #GP'd forever, drawing nothing.
@@ -245,15 +261,14 @@ export function installDPMI(machine) {
       case 0x0000: {
         const count = c.reg[1] & 0xffff;
         if (count === 0) return fail(ERR_INVALID_VALUE);
-        if (dpmi.nextSel + count * 8 > SEL_MAX) return fail(0x8011);   // descriptor unavailable
-        const base = dpmi.nextSel;
+        const base = takeSel(count);
+        if (base < 0) return fail(0x8011);                             // descriptor unavailable
         for (let i = 0; i < count; i++) {
           const off = base + i * 8;
           for (let b = 0; b < 8; b++) mem.w8((LDT_BASE + off + b) >>> 0, 0);
           mem.w8((LDT_BASE + off + 5) >>> 0, clientDPL(0x92));         // P=1, S=1, data, writable
           mem.w8((LDT_BASE + off + 6) >>> 0, dpmi.is32 ? 0x40 : 0);    // D/B follows the client
         }
-        dpmi.nextSel += count * 8;
         c.ax = base | TI | 3;
         return ok();
       }
@@ -370,11 +385,12 @@ export function installDPMI(machine) {
         return;
 
       // 0001 — Free LDT Descriptor. Marked not-present so a stale selector faults rather than
-      // addressing whatever was there; the slot is not reused.
+      // addressing whatever was there, and the slot goes back on the free list.
       case 0x0001: {
         const off = descOffset(c.reg[3] & 0xffff);
         if (off < 0) return fail(ERR_INVALID_SELECTOR);
         mem.w8((LDT_BASE + off + 5) >>> 0, 0);      // P=0
+        if (off >= SEL_CLIENT && !dpmi.freeSels.includes(off)) dpmi.freeSels.push(off);
         return ok();
       }
 
@@ -384,8 +400,9 @@ export function installDPMI(machine) {
       case 0x000a: {
         const off = descOffset(c.reg[3] & 0xffff);
         if (off < 0) return fail(ERR_INVALID_SELECTOR);
-        if (dpmi.nextSel >= SEL_MAX) return fail(0x8011);
-        const src = (LDT_BASE + off) >>> 0, sel = dpmi.nextSel; dpmi.nextSel += 8;
+        const sel = takeSel(1);
+        if (sel < 0) return fail(0x8011);
+        const src = (LDT_BASE + off) >>> 0;
         const dst = (LDT_BASE + sel) >>> 0;
         for (let i = 0; i < 8; i++) mem.w8((dst + i) >>> 0, mem.r8((src + i) >>> 0));
         mem.w8(dst + 5, clientDPL((mem.r8(src + 5) & ~0x08) | 0x02));   // code -> data, writable
@@ -652,6 +669,24 @@ export function installDPMI(machine) {
 
   const realCall = (rmcs, words, vec, reflect) => {
     const r32 = (o) => mem.r32((rmcs + o) >>> 0) >>> 0, r16 = (o) => mem.r16((rmcs + o) >>> 0);
+
+    // A client may reach a DPMI service by FAR-CALLING the protected-mode vector 0204 gave it, with
+    // FLAGS pushed first — the ordinary way to chain an interrupt handler — instead of executing
+    // INT 31h. The stub is an IRET byte, so biosCallback normally consumes that frame on the way
+    // back out; but 0300 and 0302 TRANSFER control and never return through it, and the context
+    // saved just below would then resume ON the stub. DOS/4GW re-ran the same call for ever,
+    // reading back into its own structure the result the previous one had written there: two DOS
+    // allocations succeeded, the third arrived carrying the second's return value as its function
+    // number, and the fourth carried the error code — AH=00, which is "terminate program".
+    // So consume the frame here, and save the caller's resume point instead.
+    if (machine._inBiosCallback === 0x31) {
+      const w32 = (cpu.cr0 & 1) && dpmi.is32;
+      const ip = w32 ? (cpu.pop32() >>> 0) : cpu.pop16();
+      const cs = (w32 ? cpu.pop32() : cpu.pop16()) & 0xffff;
+      const fl = w32 ? (cpu.pop32() >>> 0) : cpu.pop16();
+      cpu.setSeg(CS, cs); cpu.eip = ip >>> 0;
+      cpu.flags = w32 ? ((fl & 0x27fd5) | 2) : ((cpu.flags & ~0xffff) | ((fl & 0x7fd5) | 2));
+    }
 
     // base/limit/csD/ssB are saved verbatim rather than re-resolved: the descriptors have not moved.
     dpmi.rmCalls.push({
