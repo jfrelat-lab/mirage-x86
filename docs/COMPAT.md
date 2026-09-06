@@ -1119,3 +1119,37 @@ A20) → `01:00`, `AH=09` (allocate the 6336 KB it wants) → `01:00`, handle `0
 
 > So `boot/FDMESHA.IMG` — FreeDOS + HimemX 3.34 + mesha, the same image QEMU runs — now renders in
 > MIRAGE. Both sides finally execute the same kernel, the same XMS driver and the same binary.
+
+### WOLF3D — it DISPLAYS; why it then aborts — 2026-09-05
+
+**It renders.** `tools/shot.mjs` decoded Mode X as EGA bit-planes, and Wolf3D is a Mode X title, so
+its signon screen came out as vertical stripes and was recorded as "renders garbage". With the right
+arm (plane = x&3, offset = x>>2, each byte a whole 8-bit pixel) the screen is correct: AVAILABLE
+MEMORY, the MOUSE / JOYSTICK / ADLIB / SOUND BLASTER list, "One moment...". The emulator was right and
+the viewer was not.
+
+**It then exits at ~30 ticks**, code 3, writing Borland's runtime pair:
+
+```
+Abnormal program termination
+Null pointer assignment
+```
+
+Traced, in order, each step measured:
+
+* the signature at the relocated `DS:0000` (linear 0x41b10) starts correct — `00 00 00 00 'B' 'o' 'r' 'l'`
+  — and after ~2.61 M blocks byte 4 becomes `0xC2`;
+* the write comes from a block at `20e6:fe13` whose bytes are `25 25 22 22 21 24 ...` — a **data table**,
+  decoded as `and ah,[bx+di]` with `BX=4, DI=0`, i.e. `DS:0004`. The recompiler is decoding faithfully;
+  the guest is executing data;
+* it gets there from `20e6:034e`, `E8 E4 F8` = **`call 0xfc35`**, a near call of −1820 from IP 0x351,
+  which **wraps through zero** — so `CS:offset` is inconsistent with where the code actually is;
+* and the target is outside the program: WOLF3D.EXE's load image is 108 747 bytes at linear 0x8240,
+  ending **0x22b0b**, while `CS 0x20e6 + 0xfc35` = **0x30a95**. At load time those bytes are zero.
+
+> So the fault is upstream of the abort: CS holds a value that does not match the loaded image — the
+> code also runs with CS = 0x232d, whose base 0x232d0 is already past the image end. **The next step is
+> a trustworthy trace of where CS is set**, which the obvious one is not: hooking `setSeg` and printing
+> `cpu.eip` reports the instruction AFTER eip has moved, so it blamed `1fe6:08f8`, which disassembles
+> to `E9 0B FF` — a NEAR jump, which cannot load CS at all. Sixth instance this session of reading a
+> value at the wrong instant; the address has to come from the block's own start, not from eip.
