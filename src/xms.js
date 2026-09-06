@@ -51,7 +51,7 @@ export function installXMS(machine) {
     for (const b of xms.handles.values()) if (b.base > base && b.base < c) c = b.base;
     return c;
   };
-  const setA20 = (on) => { machine.mem.setA20(on); if (machine.rec) { machine.rec.MM = machine.mem.mask; machine.rec.reset(); } };
+  const setA20 = (on) => { machine.mem.setA20(on); if (machine.rec) machine.rec.setMask(machine.mem.mask); };
 
   // The XMS dispatch — cpu.ah selects the function. Called by the recompiler at the entry address.
   const dispatch = () => {

@@ -119,8 +119,7 @@ export function installDPMI(machine) {
     // A20 first: protected mode requires it, and until it is on every address masks to 1 MiB, so the
     // tables at 0xFF0000 alias onto 0xF0000 and overwrite the BIOS stubs.
     machine.mem.setA20(true);
-    machine.rec.MM = machine.mem.mask;
-    machine.rec.reset();
+    machine.rec.setMask(machine.mem.mask);
     buildTables();
 
     const retOff = cpu.pop16(), retSeg = cpu.pop16();     // still a real-mode stack at this point

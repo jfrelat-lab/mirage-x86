@@ -440,6 +440,19 @@ export class Recompiler {
     return n;
   }
 
+  /** Change the address mask (A20). `run` hoists MM into a local ONCE PER SLICE — it sits on the
+   *  dispatch path — so flipping it mid-slice left every remaining block of that slice compiled and
+   *  looked up at the OLD wrap. Up to 200,000 blocks in one go: DOS/4GW relocates itself to 13 MiB
+   *  right after enabling A20, and DOOM was decoding it from the 1 MiB alias, which is data. Same
+   *  hazard, and the same remedy, as onPagingChange: drop the cache AND end the slice.
+   */
+  setMask(mask) {
+    if (this.MM === mask) return;
+    this.MM = mask;
+    this.reset();
+    this.cpu.tbudget = 0;
+  }
+
   _compile(lin, ip0) {
     const blk = this.translate(lin, ip0);
     const pg = lin >>> 12;

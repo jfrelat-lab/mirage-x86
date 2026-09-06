@@ -670,7 +670,7 @@ export function installBIOS(machine, opts = {}) {
   const setA20 = (want) => {
     if (!!want === machine.mem.a20) return;
     machine.mem.setA20(!!want);
-    if (machine.rec) { machine.rec.MM = machine.mem.mask; machine.rec.reset(); }
+    if (machine.rec) machine.rec.setMask(machine.mem.mask);
   };
   bios.setA20 = setA20;
   machine.onPortWrite(0x92, (_p, _s, v) => setA20(v & 2));

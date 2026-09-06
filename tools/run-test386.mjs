@@ -34,7 +34,7 @@ const posts = [];
 mc.onPortWrite(POST_PORT, (_p, _s, v) => posts.push(v & 0xff));
 mc.onPortRead(POST_PORT, () => 0xff);
 // A20 — it will want the full address space on its way to protected mode.
-mc.onPortWrite(0x92, (_p, _s, v) => { mc.mem.setA20(!!(v & 2)); mc.rec.MM = mc.mem.mask; mc.rec.reset(); });
+mc.onPortWrite(0x92, (_p, _s, v) => { mc.mem.setA20(!!(v & 2)); mc.rec.setMask(mc.mem.mask); });
 mc.onPortRead(0x92, () => (mc.mem.a20 ? 0x02 : 0x00));
 const unhandled = new Map();
 const oR = cpu.ioRead, oW = cpu.ioWrite;
