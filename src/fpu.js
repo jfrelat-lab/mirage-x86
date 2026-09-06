@@ -39,6 +39,46 @@ export function installFPU(cpu) {
   const f64s = (a, v) => { a &= mask; dv.setFloat64(a, v, true); if (cp[a >>> 12] || cp[((a + 7) & mask) >>> 12]) cpu.mem._dirty(a, 8); };
   const i16 = (a) => dv.getInt16(a & mask, true);
   const i32 = (a) => dv.getInt32(a & mask, true);
+  // 64-bit integers and 80-bit extended reals. Both forms were missing entirely, so the instruction
+  // was a silent no-op: Borland's __ftol is `fistp qword`, so every float-to-long cast in a Borland
+  // program returned whatever was already in the caller's stack slot. Wolf3D got SetupScaling(925)
+  // instead of (360) that way and exhausted its heap building 462 scalers.
+  const i64 = (a) => Number(dv.getBigInt64(a & mask, true));
+  const INDEF64 = -(2n ** 63n);   // x87's "integer indefinite", stored when the value will not fit
+  const i64s = (a, v) => {
+    a &= mask;
+    const n = Number.isFinite(v) && Math.abs(v) < 9223372036854775808 ? BigInt(Math.trunc(v)) : INDEF64;
+    dv.setBigInt64(a, n, true);
+    if (cp[a >>> 12] || cp[((a + 7) & mask) >>> 12]) cpu.mem._dirty(a, 8);
+  };
+  /** 80-bit extended: an explicit 64-bit mantissa (no hidden bit) and a 15-bit exponent biased by
+   *  16383. This model's registers are float64, so a store rounds to 53 bits of mantissa and a load
+   *  back is exact; only a value that came from real 80-bit silicon loses its low bits. */
+  const f80l = (a) => {
+    a &= mask;
+    const m = dv.getBigUint64(a, true), se = dv.getUint16(a + 8, true);
+    const sign = se & 0x8000 ? -1 : 1, exp = se & 0x7fff;
+    if (exp === 0x7fff) return (m & 0x7fffffffffffffffn) === 0n ? sign * Infinity : NaN;
+    return sign * Number(m) * Math.pow(2, exp - 16383 - 63);
+  };
+  const f80s = (a, v) => {
+    a &= mask;
+    let se = 0, m = 0n;
+    if (Number.isNaN(v)) { se = 0x7fff; m = 0xc000000000000000n; }
+    else {
+      if (v < 0 || Object.is(v, -0)) { se = 0x8000; v = -v; }
+      if (v === Infinity) { se |= 0x7fff; m = 0x8000000000000000n; }
+      else if (v !== 0) {
+        let e = Math.floor(Math.log2(v)), f = v / Math.pow(2, e);
+        if (f >= 2) { e++; f /= 2; } else if (f < 1) { e--; f *= 2; }
+        m = BigInt(Math.round(f * 9223372036854775808));
+        if (m >= 1n << 64n) { m >>= 1n; e++; }
+        se |= (e + 16383) & 0x7fff;
+      }
+    }
+    dv.setBigUint64(a, m, true); dv.setUint16(a + 8, se, true);
+    if (cp[a >>> 12] || cp[((a + 9) & mask) >>> 12]) cpu.mem._dirty(a, 10);
+  };
 
   /** Round to integer under the control word's ROUNDING CONTROL (bits 10-11): 00 nearest-even,
    *  01 down, 10 up, 11 truncate toward zero. This was hardcoded to nearest, so a compiler that sets
@@ -217,11 +257,15 @@ export function installFPU(cpu) {
         if (reg === 0) push(i32(a));
         else if (reg === 2) cpu.mem.w32(a, toInt(ST(0)) >>> 0);
         else if (reg === 3) { cpu.mem.w32(a, toInt(ST(0)) >>> 0); pop(); }
+        else if (reg === 5) push(f80l(a));                  // fld m80
+        else if (reg === 7) { f80s(a, ST(0)); pop(); }      // fstp m80
         return;
       case 0xdf:                                            // i16 load/store
         if (reg === 0) push(i16(a));
         else if (reg === 2) cpu.mem.w16(a, toInt(ST(0)) & 0xffff);
         else if (reg === 3) { cpu.mem.w16(a, toInt(ST(0)) & 0xffff); pop(); }
+        else if (reg === 5) push(i64(a));                   // fild m64
+        else if (reg === 7) { i64s(a, toInt(ST(0))); pop(); } // fistp m64 — Borland's __ftol
         return;
     }
     // arithmetic with a memory source: D8=f32, DC=f64, DA=i32, DE=i16

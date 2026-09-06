@@ -78,4 +78,13 @@ export const X87_CASES = [
   c('fst then fstp keeps the value', LDPI, [0xd9, 0x57, 0x10], STPQ2),   // fst dword [bx+16]
   c('fnstsw after fucompp', FILD0, FILD4, [0xda, 0xe9], [0xdf, 0xe0]),
   c('fnstsw after fucom equal', FILD0, FILD0, [0xdd, 0xe1], [0xdf, 0xe0]),
+  // ---- the 64-bit integer and 80-bit extended memory forms ----
+  // Both were decoded and then IGNORED, so the instruction silently left memory untouched. Borland's
+  // __ftol is `fistp qword`, which made every float-to-long cast in a Borland program return the
+  // caller's stack garbage. Values here are exact in float64 so the extended form's extra mantissa
+  // bits, which this model does not have, cannot make the comparison fail for the wrong reason.
+  c('fistp m64 of pi', LDPI, [0xdf, 0x7f, 0x10]),                       // fistp qword [bx+16]
+  c('fild m64 round trip', LDPI, [0xdf, 0x7f, 0x10], [0xdf, 0x6f, 0x10], STPQ2),  // + fild qword [bx+16]
+  c('fstp m80 of 1.0', LD1, [0xdb, 0x7f, 0x10]),                        // fstp tword [bx+16]
+  c('fld m80 round trip', LD1, [0xdb, 0x7f, 0x10], [0xdb, 0x6f, 0x10], [0xdd, 0x5f, 0x20]),
 ];
