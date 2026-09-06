@@ -25,6 +25,11 @@ const KEYS = (keysArg || '').split(',').filter(Boolean).map((x) => parseInt(x, 1
 // the wrong one for a title that STOPS on "press any key": Hexen's shareware nag holds the guest at
 // tick 39, so a feed scheduled for tick 1100 never happens and the guard expires first.
 const FEED = feedArg !== undefined ? Number(feedArg) : (K >> 1);
+// MAKE scancode -> ASCII, for the BIOS/DOS half of a keypress. Only the keys a headless run needs
+// to send: enough to answer a prompt, not a keyboard layout.
+const MAKE_ASCII = { 0x01: 0x1b, 0x0e: 0x08, 0x0f: 0x09, 0x1c: 0x0d, 0x39: 0x20,
+  0x02: 0x31, 0x03: 0x32, 0x04: 0x33, 0x05: 0x34, 0x06: 0x35,
+  0x15: 0x79, 0x31: 0x6e, 0x1f: 0x73, 0x14: 0x74 };
 
 const dir = join(ROOT, 'games', sub);
 const vfs = new VFS();
@@ -44,7 +49,15 @@ let fed = false, guard = 0;
 // The guard is a hang stop, not a budget: a guest polling INT 16h burns iterations without advancing
 // a single tick, so it has to be far above the number of iterations a real run needs.
 while (ticks() < K && !fault && !dos.programDone && guard++ < 20000000) {
-  if (!fed && KEYS.length && ticks() >= FEED && mc.pushScancodes) { mc.pushScancodes(KEYS); fed = true; }
+  if (!fed && KEYS.length && ticks() >= FEED && mc.pushScancodes) {
+    mc.pushScancodes(KEYS);
+    // A real keypress feeds BOTH paths — src/keyboard.js pushes the scancode to the 8042 AND a
+    // (scan, ascii) pair onto machine.keyQueue. Feeding only the hardware path left every DOS
+    // console read unanswered: Hexen polls INT 21h AH=08 for its "press any key" nag and sat there
+    // for ever while the browser walked straight past it.
+    for (const s of KEYS) { const a = MAKE_ASCII[s]; if (a !== undefined) mc.keyQueue.push({ scan: s, ascii: a }); }
+    fed = true;
+  }
   // pushScancodes only QUEUES; pumpKeyboard is what stages a byte into the 8042 and raises IRQ1.
   // Without it the KEYS argument did nothing at all, and SCUMM — which reads the INT 9 path, not the
   // DOS buffer — sat on "Press ENTER to continue…" forever while the browser (ui.js, which does pump)
