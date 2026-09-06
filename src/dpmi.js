@@ -46,7 +46,8 @@ export function installDPMI(machine) {
     is32: false,
     nextSel: SEL_CLIENT,           // bump allocator over the LDT
     unimplemented: new Map(),      // INT 31h AX values a client asked for and we refused
-    segSels: new Map(),            // 0002: real-mode segment -> selector, never freed
+    segSels: new Map(),
+    dosBlocks: new Map(),          // 0100 selector -> real-mode segment, for 0101/0102            // 0002: real-mode segment -> selector, never freed
     // Protected-mode interrupt vectors the client installed with 0205. A null entry means "still
     // ours", and softInt reflects those to the JS service as before.
     pmVec: new Array(256).fill(null),
@@ -58,7 +59,7 @@ export function installDPMI(machine) {
     memTop: 0,                     // DPMI heap: grows DOWN from the host tables (set below)
     blocks: new Map(),             // handle -> { base, size }
     log: null,                     // set by a probe to record real-mode call targets
-    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.segSels = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.unimplemented = new Map(); this.segSels = new Map(); this.dosBlocks = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
   };
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
@@ -237,6 +238,59 @@ export function installDPMI(machine) {
           dpmi.segSels.set(seg, sel);
         }
         c.ax = sel;
+        return ok();
+      }
+
+      // 0100/0101/0102 — Allocate / Free / Resize DOS Memory Block. A host owns these because a
+      // protected-mode client cannot call INT 21h AH=48 itself and get a usable answer: it needs the
+      // real-mode SEGMENT to hand to DOS and a SELECTOR to address the block with, and only the host
+      // can mint the second. Refusing 0100 is what printed Quake's "Load error: no DOS memory" — its
+      // DJGPP stub allocates its transfer buffer this way before anything else happens.
+      //   0100 in: BX = paragraphs;  out: AX = real-mode segment, DX = selector
+      case 0x0100: {
+        const para = c.reg[3] & 0xffff;
+        const h = machine.intHandlers[0x21];
+        if (!h) return fail(0x8012);                       // no DOS below us to ask
+        const savedAx = c.reg[0], savedBx = c.reg[3], savedFlags = c.flags;
+        c.reg[0] = 0x4800; c.reg[3] = (savedBx & ~0xffff) | para;   // AH=48h, BX = paragraphs
+        h(c, machine);
+        const failed = (c.flags & 1) !== 0;
+        const seg = c.reg[0] & 0xffff, largest = c.reg[3] & 0xffff;
+        c.reg[0] = savedAx; c.reg[3] = savedBx; c.flags = savedFlags;
+        // On failure DOS reports the largest block available, and the DPMI spec passes it through in
+        // BX — a client that asked for too much retries with that number rather than giving up.
+        if (failed) { c.reg[3] = (savedBx & ~0xffff) | largest; return fail(0x8012); }
+        const sel = allocClientSel(seg, false);
+        if (!sel) return fail(0x8011);
+        c.ax = seg;
+        c.reg[2] = (c.reg[2] & ~0xffff) | sel;             // DX
+        dpmi.dosBlocks.set(sel, seg);
+        return ok();
+      }
+      case 0x0101: {                                       // in: DX = selector
+        const sel = c.reg[2] & 0xffff, seg = dpmi.dosBlocks.get(sel);
+        if (seg === undefined) return fail(ERR_INVALID_VALUE);
+        const h = machine.intHandlers[0x21];
+        if (h) {
+          const savedAx = c.reg[0], savedEs = c.seg[ES], savedFlags = c.flags;
+          c.reg[0] = 0x4900; c.setSeg(ES, seg);            // AH=49h, ES = the block
+          h(c, machine);
+          c.reg[0] = savedAx; c.setSeg(ES, savedEs); c.flags = savedFlags;
+        }
+        dpmi.dosBlocks.delete(sel);
+        return ok();
+      }
+      case 0x0102: {                                       // in: BX = new paragraphs, DX = selector
+        const sel = c.reg[2] & 0xffff, seg = dpmi.dosBlocks.get(sel);
+        if (seg === undefined) return fail(ERR_INVALID_VALUE);
+        const h = machine.intHandlers[0x21];
+        if (!h) return fail(0x8012);
+        const savedAx = c.reg[0], savedBx = c.reg[3], savedEs = c.seg[ES], savedFlags = c.flags;
+        c.reg[0] = 0x4a00; c.setSeg(ES, seg);              // AH=4Ah, ES = block, BX = paragraphs
+        h(c, machine);
+        const failed = (c.flags & 1) !== 0, largest = c.reg[3] & 0xffff;
+        c.reg[0] = savedAx; c.reg[3] = savedBx; c.setSeg(ES, savedEs); c.flags = savedFlags;
+        if (failed) { c.reg[3] = (savedBx & ~0xffff) | largest; return fail(0x8012); }
         return ok();
       }
 

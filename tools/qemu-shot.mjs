@@ -12,7 +12,7 @@
 // drive through QEMU's vvfat, so nothing has to be written into the floppy image. The command is typed
 // at the DOS prompt with monitor `sendkey`, for the same reason: no modification of anything.
 import { spawn } from 'child_process';
-import { mkdtempSync, copyFileSync, existsSync, rmSync, statSync } from 'fs';
+import { mkdtempSync, copyFileSync, cpSync, existsSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
@@ -31,7 +31,14 @@ const floppy = join(ROOT, 'boot', process.env.QSHOT_IMG || 'MSDOS622.IMG');
 if (!existsSync(floppy)) { console.error(`missing ${floppy}`); process.exit(2); }
 
 const work = mkdtempSync(join(tmpdir(), 'qshot-'));
-copyFileSync(prog, join(work, 'PROG.COM'));
+// `prog` may be a DIRECTORY: a game needs its data files beside it, and a single-file staging could
+// only ever capture a self-contained .COM. QSHOT_EXE names the program to run inside it.
+let runName = 'PROG.COM';
+if (statSync(prog).isDirectory()) {
+  if (!process.env.QSHOT_EXE) { console.error('a directory needs QSHOT_EXE=<PROGRAM.EXE>'); process.exit(2); }
+  cpSync(prog, work, { recursive: true });
+  runName = process.env.QSHOT_EXE;
+} else copyFileSync(prog, join(work, 'PROG.COM'));
 // QSHOT_DPMI=<path to CWSDPMI.EXE> installs a DPMI host before the program runs. The MS-DOS floppy
 // carries neither HIMEM.SYS nor a DPMI host, so an extender that needs one — mesha's PMODE4K wants
 // "XMS,DPMI (no RAW,VCPI)" — takes its InitError path and exits to the prompt in milliseconds.
@@ -108,7 +115,7 @@ const type = async (s) => {
     else { await type(step); await sleep(900); }
   }
   if (dpmi) { await type('cwsdpmi -p'); await sleep(2500); }   // -p = stay resident for the next program
-  await type('prog');
+  await type(runName.replace(/\.[^.]*$/, ''));
   await sleep(secs * 1000);
   mon(`screendump ${out}`);
   await sleep(1500);

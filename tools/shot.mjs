@@ -51,7 +51,20 @@ const mode = mc.mem.r8(0x449), vga = mc.vga, dac = mc.bios.dac;
 const rgb = new Uint8Array(320 * 200 * 3);
 const put = (i, r, g, b) => { rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b; };
 
-if (mc.mem.planar && vga) {
+if (vga && vga.modeX) {
+  // Mode X — unchained 256-colour. `mem.planar` is true here too, but the layout is NOT the EGA one:
+  // each plane byte is a whole 8-bit pixel, and pixel x lives in plane x&3 at offset x>>2. Decoding
+  // it as EGA bit-planes turns a real picture into vertical stripes, which is exactly what Wolf3D
+  // looked like until this arm existed — the emulator was right and the viewer was not.
+  const planes = vga.planes;
+  const stride = (vga.crtc[0x13] || 20) * 2;           // bytes per plane per row
+  const start = ((vga.crtc[0x0c] << 8) | vga.crtc[0x0d]) >>> 0;
+  for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) {
+    const off = (start + y * stride + (x >> 2)) & 0xffff;
+    const d = planes[(x & 3) * 0x10000 + off] & 0xff;
+    put(y * 320 + x, dac[d * 3] << 2, dac[d * 3 + 1] << 2, dac[d * 3 + 2] << 2);
+  }
+} else if (mc.mem.planar && vga) {
   // Four 64 KB planes, one bit each; the 4-bit index goes through the attribute palette, and that
   // entry is a DAC index. Stride comes from CRTC 0x13 in words, start address from 0x0C/0x0D.
   const planes = vga.planes;
