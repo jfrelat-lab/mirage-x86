@@ -21,7 +21,9 @@ const RMCS_SCRATCH = 0x0300;                                     // 50-byte call
                                                                  // when it reflects a client's INT n
 const CB_BASE_OFF = 0x0600, CB_MAX = 16;                         // real-mode callback entries (0303)
 
-const LDT_ENTRIES = 2048;                   // 16 KiB of descriptors
+const LDT_ENTRIES = 8192;                   // the architectural maximum: 64 KiB of descriptors,
+                                            // which is exactly the host area reserved below
+                                            // (a client asks for thousands at a time and works down)
 const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM for the tables
 
 // Client descriptors live in the LDT, not the GDT: every real host does this, AX=0000 is specified
@@ -184,6 +186,19 @@ export function installDPMI(machine) {
 
   const ERR_UNSUPPORTED = 0x8001, ERR_INVALID_SELECTOR = 0x8022, ERR_INVALID_VALUE = 0x8021;
 
+  /**
+   * Run the HLE DOS INT 21h handler with ES holding a REAL-MODE paragraph. It reads cpu.seg[ES] as
+   * a segment number, but we are in protected mode, where setSeg resolves a descriptor: handing it
+   * the paragraph made it a selector, and freeing a DOS block raised #GP(paragraph). Quake stopped
+   * there, on its own memory teardown. So write the raw register and put the cached descriptor back
+   * afterwards, without going through a load in either direction.
+   */
+  const withRealModeES = (seg, fn) => {
+    const sv = cpu.seg[ES], sb = cpu.base[ES], sl = cpu.limit[ES];
+    cpu.seg[ES] = seg & 0xffff;
+    try { return fn(); } finally { cpu.seg[ES] = sv; cpu.base[ES] = sb; cpu.limit[ES] = sl; }
+  };
+
   /** Byte offset of a selector's descriptor in the LDT, or -1 if it is not one of ours. */
   const descOffset = (sel) => {
     sel &= 0xffff;
@@ -321,10 +336,10 @@ export function installDPMI(machine) {
         if (seg === undefined) return fail(ERR_INVALID_VALUE);
         const h = machine.intHandlers[0x21];
         if (h) {
-          const savedAx = c.reg[0], savedEs = c.seg[ES], savedFlags = c.flags;
-          c.reg[0] = 0x4900; c.setSeg(ES, seg);            // AH=49h, ES = the block
-          h(c, machine);
-          c.reg[0] = savedAx; c.setSeg(ES, savedEs); c.flags = savedFlags;
+          const savedAx = c.reg[0], savedFlags = c.flags;
+          c.reg[0] = 0x4900;                               // AH=49h, ES = the block
+          withRealModeES(seg, () => h(c, machine));
+          c.reg[0] = savedAx; c.flags = savedFlags;
         }
         dpmi.dosBlocks.delete(sel);
         return ok();
@@ -334,11 +349,11 @@ export function installDPMI(machine) {
         if (seg === undefined) return fail(ERR_INVALID_VALUE);
         const h = machine.intHandlers[0x21];
         if (!h) return fail(0x8012);
-        const savedAx = c.reg[0], savedBx = c.reg[3], savedEs = c.seg[ES], savedFlags = c.flags;
-        c.reg[0] = 0x4a00; c.setSeg(ES, seg);              // AH=4Ah, ES = block, BX = paragraphs
-        h(c, machine);
+        const savedAx = c.reg[0], savedBx = c.reg[3], savedFlags = c.flags;
+        c.reg[0] = 0x4a00;                                 // AH=4Ah, ES = block, BX = paragraphs
+        withRealModeES(seg, () => h(c, machine));
         const failed = (c.flags & 1) !== 0, largest = c.reg[3] & 0xffff;
-        c.reg[0] = savedAx; c.reg[3] = savedBx; c.setSeg(ES, savedEs); c.flags = savedFlags;
+        c.reg[0] = savedAx; c.reg[3] = savedBx; c.flags = savedFlags;
         if (failed) { c.reg[3] = (savedBx & ~0xffff) | largest; return fail(0x8012); }
         return ok();
       }
@@ -445,11 +460,13 @@ export function installDPMI(machine) {
       //   in: BX:CX = size;  out: BX:CX = linear address, SI:DI = handle
       case 0x0501: {
         const size = ((((c.reg[3] & 0xffff) << 16) | (c.reg[1] & 0xffff)) >>> 0) || 1;
-        // Signed on purpose: `>>> 0` turned an over-large request into a huge positive address, so the
-        // "physical memory unavailable" test could never fire. Void 3 asks for a flat 16 MiB and was
-        // handed 0xFFDF0000 -- past the end of RAM -- with CF clear.
-        const base = dpmi.memTop - ((size + 0xfff) & ~0xfff);           // page-aligned, growing down
-        if (base < heapFloor()) return fail(0x8013);                    // physical memory unavailable
+        // Round in FLOATING POINT and bound on BOTH sides. `(size + 0xfff) & ~0xfff` is a signed
+        // int32: a request near 4 GiB rounds NEGATIVE, so the base came out ABOVE memTop and the
+        // "physical memory unavailable" test — which only looked at the floor — let it through.
+        // Quake was handed a base at 30 MiB on a 16 MiB machine, jumped into it, and executed
+        // whatever `mem.u8` returns past the end of RAM until the block cache exhausted the host.
+        const base = dpmi.memTop - Math.ceil(size / 4096) * 4096;       // page-aligned, growing down
+        if (!(base >= heapFloor() && base <= dpmi.memTop)) return fail(0x8013);
         dpmi.memTop = base;
         if (machine.xms) machine.xms.max = Math.min(machine.xms.max, base);
         dpmi.blocks.set(base, { base, size });
@@ -463,6 +480,45 @@ export function installDPMI(machine) {
       // 0502 — Free Memory Block. A bump allocator does not reclaim; report success anyway.
       case 0x0502:
         return ok();
+
+      // 0503 — Resize Memory Block. Shrinking, or growing inside the rounding slack, keeps the block
+      // where it is; anything else allocates a fresh one lower down and copies. The old block is not
+      // reclaimed, for the same reason 0502 does nothing.
+      //   in: BX:CX = new size, SI:DI = handle;  out: BX:CX = address, SI:DI = handle
+      case 0x0503: {
+        const size = ((((c.reg[3] & 0xffff) << 16) | (c.reg[1] & 0xffff)) >>> 0) || 1;
+        const handle = ((((c.reg[6] & 0xffff) << 16) | (c.reg[7] & 0xffff)) >>> 0);
+        const blk = dpmi.blocks.get(handle);
+        if (!blk) return fail(0x8023);                                  // invalid handle
+        let base = blk.base;
+        if (size > Math.ceil(blk.size / 4096) * 4096) {
+          base = dpmi.memTop - Math.ceil(size / 4096) * 4096;
+          if (!(base >= heapFloor() && base <= dpmi.memTop)) return fail(0x8013);
+          dpmi.memTop = base;
+          if (machine.xms) machine.xms.max = Math.min(machine.xms.max, base);
+          for (let i = 0; i < blk.size; i++) mem.w8((base + i) >>> 0, mem.r8((blk.base + i) >>> 0));
+          dpmi.blocks.delete(handle);
+        }
+        dpmi.blocks.set(base, { base, size });
+        c.reg[3] = (c.reg[3] & ~0xffff) | ((base >>> 16) & 0xffff);
+        c.reg[1] = (c.reg[1] & ~0xffff) | (base & 0xffff);
+        c.reg[6] = (c.reg[6] & ~0xffff) | ((base >>> 16) & 0xffff);
+        c.reg[7] = (c.reg[7] & ~0xffff) | (base & 0xffff);
+        return ok();
+      }
+
+      // 0900/0901/0902 — the client's VIRTUAL interrupt flag. A host that runs its client at ring 3
+      // with IOPL 3 has no separate virtual flag to keep: IF itself is the state, and CLI/STI reach
+      // it. So report IF and set it, which is what the client's own CLI/STI would have done.
+      //   out: AX = the PREVIOUS state, 0 = disabled, 1 = enabled
+      case 0x0900: case 0x0901: case 0x0902: {
+        const fn = c.ax;                       // read it before AX becomes the answer
+        const was = (c.flags & IF_FLAG) ? 1 : 0;
+        if (fn === 0x0900) c.flags &= ~IF_FLAG;
+        else if (fn === 0x0901) c.flags |= IF_FLAG;
+        c.ax = was;
+        return ok();
+      }
 
       // 0500 — Get Free Memory Information. The page counts must be self-consistent or a careful
       // client concludes there is no memory.
