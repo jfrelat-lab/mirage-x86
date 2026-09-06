@@ -518,6 +518,12 @@ export class Recompiler {
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
                body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
     }
+    if (linStart === 0xf0250 && mem.u8[linStart] === 0xcb) {
+      // Where a client's DPMI exception handler RETFs back to: restore the frame it leaves behind.
+      const fn = new Function('cpu', 'cpu.dpmiExcReturn();');
+      return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
+               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0 };
+    }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
       // Where a 0302 procedure's IRET lands: reaching it means the call is over.
       const fn = new Function('cpu', 'cpu.dpmiRealCallReturn();');

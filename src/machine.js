@@ -293,15 +293,7 @@ export class Machine {
     // genuine exception. Name it rather than dispatching through an empty table.
     if (this.dpmi && this.dpmi.active) {
       // A handler installed with 0203 gets the fault; only an unclaimed one is worth naming.
-      const ev = n < 32 ? this.dpmi.excVec[n] : null;
-      if (ev) {
-        const is32 = this.dpmi.is32;
-        cpu.pushW(cpu.flags, is32); cpu.pushW(cpu.seg[1], is32); cpu.pushW(cpu.eip >>> 0, is32);
-        if (err !== undefined) cpu.pushW(err, is32);
-        cpu.flags &= ~(IF | TF);
-        cpu.setSeg(1, ev.sel); cpu.eip = ev.off >>> 0;
-        return;
-      }
+      if (this.dpmiDeliverException && this.dpmiDeliverException(n, err)) return;
       const NAMES = { 0: '#DE', 1: '#DB', 3: '#BP', 4: '#OF', 5: '#BR', 6: '#UD', 7: '#NM', 8: '#DF',
         10: '#TS', 11: '#NP', 12: '#SS', 13: '#GP', 14: '#PF' };
       throw new Error(`mirage: ${NAMES[n] || 'exception ' + n} in DPMI client at ` +

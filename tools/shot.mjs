@@ -16,11 +16,15 @@ import { makeMachine } from './harness.mjs';
 import { walk } from './corpus.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const [sub, prog, ticksArg, outArg, tail, keysArg] = process.argv.slice(2);
+const [sub, prog, ticksArg, outArg, tail, keysArg, feedArg] = process.argv.slice(2);
 if (!sub || !prog) { console.error('usage: node tools/shot.mjs <subdir> <PROG.EXE> [frames] [out.png] [tail]'); process.exit(2); }
 const K = Number(ticksArg) || 60;
 const out = outArg || `/tmp/${sub}.png`;
 const KEYS = (keysArg || '').split(',').filter(Boolean).map((x) => parseInt(x, 16));
+// When to press them. Half-way through is the right guess for a title that runs an attract loop, and
+// the wrong one for a title that STOPS on "press any key": Hexen's shareware nag holds the guest at
+// tick 39, so a feed scheduled for tick 1100 never happens and the guard expires first.
+const FEED = feedArg !== undefined ? Number(feedArg) : (K >> 1);
 
 const dir = join(ROOT, 'games', sub);
 const vfs = new VFS();
@@ -37,8 +41,10 @@ dos.load(new Uint8Array(readFileSync(join(dir, prog))), tail ? ' ' + tail : '', 
 // and calling it drives the clock a second time.
 const ticks = () => (mc.mem.r16(0x46c) | (mc.mem.r16(0x46e) << 16)) >>> 0;
 let fed = false, guard = 0;
-while (ticks() < K && !fault && !dos.programDone && guard++ < 500000) {
-  if (!fed && KEYS.length && ticks() >= K >> 1 && mc.pushScancodes) { mc.pushScancodes(KEYS); fed = true; }
+// The guard is a hang stop, not a budget: a guest polling INT 16h burns iterations without advancing
+// a single tick, so it has to be far above the number of iterations a real run needs.
+while (ticks() < K && !fault && !dos.programDone && guard++ < 20000000) {
+  if (!fed && KEYS.length && ticks() >= FEED && mc.pushScancodes) { mc.pushScancodes(KEYS); fed = true; }
   // pushScancodes only QUEUES; pumpKeyboard is what stages a byte into the 8042 and raises IRQ1.
   // Without it the KEYS argument did nothing at all, and SCUMM — which reads the INT 9 path, not the
   // DOS buffer — sat on "Press ENTER to continue…" forever while the browser (ui.js, which does pump)

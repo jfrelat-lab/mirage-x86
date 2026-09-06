@@ -8,11 +8,14 @@
 import { CS, DS, ES, SS, FS, GS, TF } from './cpu.js';
 
 const TF_MASK = TF;   // a real-mode call must not inherit the client's single-step flag
+const IOPL_MASK = 3 << 12;
+const IF_FLAG = 1 << 9;
 
 export const DPMI_ENTRY_SEG = 0xf000, DPMI_ENTRY_OFF = 0x0200;   // far-callable mode-switch entry
 const STATE_STUB_OFF = 0x0210;                                   // the do-nothing state save/restore
 const RAW_R2P_OFF = 0x0220, RAW_P2R_OFF = 0x0230;                // raw mode-switch routines (0306)
 const RM_RET_OFF = 0x0240;                                       // where a 0302 real-mode call returns
+const EXC_RET_OFF = 0x0250;                                      // where a client's exception handler RETFs back
 const RM_STACK_TOP = 0x0500;                                     // host-provided real-mode stack (256 B below)
 const RMCS_SCRATCH = 0x0300;                                     // 50-byte call structure the host builds
                                                                  // when it reflects a client's INT n
@@ -139,6 +142,16 @@ export function installDPMI(machine) {
     cpu._cpl = 3;
     cpu.setSeg(DS, dsSel); cpu.setSeg(ES, esSel); cpu.setSeg(SS, ssSel);
     cpu.setSeg(CS, csSel); cpu.eip = retOff;
+    // The PSP's environment field (offset 2Ch) holds a real-mode PARAGRAPH, and a client in
+    // protected mode cannot load one. DOS/4GW reads it and puts it straight into ES with no
+    // conversion — `mov es,[psp]; mov bx,[es:2Ch]; mov es,bx` — so a host has to leave a SELECTOR
+    // there. Ours did not, and DOS/4GW reported "General Protection Fault at 00BF:36D2, code=00C0",
+    // 00C0 being our environment paragraph.
+    if (machine.dos && machine.dos.psp) {
+      const at = ((machine.dos.psp << 4) + 0x2c) >>> 0;
+      const envSeg = mem.r16(at);
+      if (envSeg && !dpmi.envPatched) { dpmi.envPatched = true; mem.w16(at, allocClientSel(envSeg, false)); }
+    }
     cpu.flags &= ~1;                                      // CF=0: the switch succeeded
     cpu.flags |= 0x3000;                                  // IOPL=3: a ring-3 client still owns the
                                                           // hardware, which is what DPMI promises it
@@ -727,6 +740,52 @@ export function installDPMI(machine) {
       cpu.flags = (cpu.flags & ~1) | (r16(RMCS.FLAGS) & 1);
     }
   };
+  /**
+   * Deliver an exception to the handler the client installed with 0203, building the frame the DPMI
+   * specification defines. This used to push a bare flags/CS/IP/error and jump: a shape no client
+   * can read. DOS/4GW installs handlers for all 17 exceptions before it loads the program, faults
+   * on purpose (it loads the PSP's environment field, a real-mode paragraph, as a selector), and
+   * then walked off into its own data because the stack under it was not the frame it expected.
+   *
+   * 16-bit client, from SP upwards: return CS:IP, error code, faulting CS:IP, flags, faulting SS:SP.
+   * 32-bit client: the same fields as dwords. The handler either RETFs to the return address — our
+   * EXC_RET stub, which restores whatever it left in the frame — or edits the frame first to resume
+   * somewhere else. That is the whole point of the frame: a client fixes the fault by rewriting it.
+   */
+  const deliverException = (n, err) => {
+    const ev = n < 32 ? dpmi.excVec[n] : null;
+    if (!ev) return false;
+    const is32 = dpmi.is32;
+    const oldSS = cpu.seg[SS], oldESP = cpu.reg[4] >>> 0, oldFlags = cpu.flags;
+    const oldCS = cpu.seg[CS], oldEIP = cpu.eip >>> 0;
+    const push = (v) => cpu.pushW(v, is32);
+    push(oldSS); push(is32 ? oldESP : (oldESP & 0xffff));
+    push(is32 ? (oldFlags >>> 0) : (oldFlags & 0xffff));
+    push(oldCS); push(is32 ? oldEIP : (oldEIP & 0xffff));
+    push(err === undefined ? 0 : err >>> 0);
+    push(SEL_HOST_CODE | TI); push(EXC_RET_OFF);
+    cpu.flags &= ~(IF_FLAG | TF);
+    cpu.setSeg(CS, ev.sel); cpu.eip = ev.off >>> 0;
+    return true;
+  };
+  machine.dpmiDeliverException = deliverException;
+
+  /** The far RETF target the frame above carries. Restores the context the handler left in it. */
+  const excReturn = () => {
+    const is32 = dpmi.is32;
+    const pop = () => (is32 ? cpu.pop32() >>> 0 : cpu.pop16());
+    pop();                                        // error code — the handler cannot change it
+    const eip = pop(), cs = pop() & 0xffff, fl = pop(), esp = pop(), ss = pop() & 0xffff;
+    cpu.setSeg(SS, ss);
+    cpu.reg[4] = is32 ? (esp >>> 0) : ((cpu.reg[4] & ~0xffff) | (esp & 0xffff));
+    cpu.setSeg(CS, cs); cpu.eip = eip >>> 0;
+    // IOPL is not the client's to write, here any more than through IRET.
+    const keep = cpu.flags & IOPL_MASK;
+    cpu.flags = (is32 ? (fl >>> 0) : ((cpu.flags & ~0xffff) | (fl & 0xffff)));
+    if (cpu.cpl !== 0) cpu.flags = (cpu.flags & ~IOPL_MASK) | keep;
+  };
+  cpu.dpmiExcReturn = excReturn;
+
   cpu.dpmiRealCallReturn = realCallReturn;
 
   dpmi.memTop = HOST_BASE;
@@ -740,6 +799,7 @@ export function installDPMI(machine) {
   mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_R2P_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(1)
   mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_P2R_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(0)
   mem.u8[(DPMI_ENTRY_SEG << 4) + RM_RET_OFF] = 0xcb;      // guarded: cpu.dpmiRealCallReturn()
+  mem.u8[(DPMI_ENTRY_SEG << 4) + EXC_RET_OFF] = 0xcb;     // guarded: cpu.dpmiExcReturn()
   for (let i = 0; i < CB_MAX; i++) mem.u8[(DPMI_ENTRY_SEG << 4) + CB_BASE_OFF + i] = 0xcb;
 
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
