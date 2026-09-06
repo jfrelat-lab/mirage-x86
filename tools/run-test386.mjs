@@ -41,6 +41,13 @@ const oR = cpu.ioRead, oW = cpu.ioWrite;
 cpu.ioRead = (p, s) => { if (!mc.portRead[p]) unhandled.set(p, (unhandled.get(p) || 0) + 1); return oR(p, s); };
 cpu.ioWrite = (p, s, v) => { if (!mc.portWrite[p]) unhandled.set(p, (unhandled.get(p) || 0) + 1); return oW(p, s, v); };
 
+// No timer interrupt. test386 IS the BIOS: it never programs the 8259 or the 8254, so a machine
+// running it has no reason to raise IRQ0 — and in protected mode the PIC's un-remapped IRQ0 lands
+// on vector 8, which is #DF. The harness was injecting one, and test386's stack section (POST 9)
+// does `sti` before a PUSHF to check that IF is captured: the invented interrupt arrived right
+// there and stopped the run four codes early. Set TEST386_IRQ=1 to put it back.
+if (!process.env.TEST386_IRQ) mc.tickTimer = () => {};
+
 cpu.reg.fill(0);
 cpu.setSeg(1, 0xf000); cpu.eip = 0xfff0;       // the reset vector
 cpu.setSeg(0, 0); cpu.setSeg(2, 0); cpu.setSeg(3, 0);
