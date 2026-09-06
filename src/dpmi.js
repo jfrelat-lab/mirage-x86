@@ -630,7 +630,12 @@ export function installDPMI(machine) {
     // is not merely cosmetic. Offering DPMI on the boot path pushed intros/mesha.com onto its DPMI
     // branch under FreeDOS, where it faults with #GP at 3c:9fc, instead of the XMS branch that
     // renders (docs/COMPAT.md). On the HLE path nothing takes the vector, so we answer as before.
-    if (machine.chained && machine.chained[0x2f]) return false;
+    // MIRAGE_DPMI_ALWAYS=1 keeps answering even under a booted kernel. Not for normal use — it puts a
+    // client on our host where a real machine would have none — but it is the only way to reproduce
+    // ROADMAP F8, the #GP our DPMI path takes on the boot path and not under the HLE DOS.
+    const ALWAYS = typeof process !== 'undefined' && !!process.env &&
+      process.env.MIRAGE_DPMI_ALWAYS !== undefined && process.env.MIRAGE_DPMI_ALWAYS !== '0' && process.env.MIRAGE_DPMI_ALWAYS !== '';
+    if (!ALWAYS && machine.chained && machine.chained[0x2f]) return false;
     if (c.ax === 0x1687) {
       c.ax = 0;                                  // 0 = host present
       c.reg[3] = (c.reg[3] & ~0xffff) | 1;       // BX bit 0: 32-bit programs supported
