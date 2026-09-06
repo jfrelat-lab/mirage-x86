@@ -16,6 +16,7 @@ import { join } from 'path';
 import { makeMachine } from '/Users/julienfrelat/Projects/mirage/tools/harness.mjs';
 import { VFS } from '/Users/julienfrelat/Projects/mirage/src/vfs.js';
 import { walk } from '/Users/julienfrelat/Projects/mirage/tools/corpus.mjs';
+import { bootSector } from '/Users/julienfrelat/Projects/mirage/src/boot.js';
 
 const h = (v, n = 4) => (v >>> 0).toString(16).padStart(n, '0');
 
@@ -32,24 +33,45 @@ function observe(mc) {
 const fmt = (o) => `PE=${o.pe} ${h(o.sel)}:${h(o.eip, 8)} lin=${h(o.lin, 6)}${o.pe ? '' : ' (=rm)'} ` +
   `octets=[${o.bytes.map((b) => h(b, 2)).join(' ')}]${o.zero ? '  <<< NULS' : ''}`;
 
-function run({ dir, exe, image, tail = '', budgetMs = 25000, ringSize = 30 }) {
-  const vfs = new VFS();
-  if (dir) for (const rel of walk(dir)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(dir, rel))));
-  vfs.chdir('\\');
-  const { mc, dos } = makeMachine({ vfs, memSize: 32 << 20 });
+function run({ dir, exe, image, boot, tail = '', budgetMs = 25000, ringSize = 30, warm }) {
+  let mc, dos = null;
+  if (boot) {
+    // Boot path: no DOS is installed, so there is no PSP and no termination convention. Reaching a
+    // derail here takes tens of millions of blocks, which single-stepping cannot do in any budget —
+    // hence `warm`, a predicate that runs at full speed until the interesting part starts.
+    ({ mc } = makeMachine({ dos: false, memSize: 32 << 20 }));
+    const bytes = new Uint8Array(readFileSync(boot));
+    mc.disk.attach(0x00, bytes);
+    bootSector(mc, bytes);
+  } else {
+    const vfs = new VFS();
+    if (dir) for (const rel of walk(dir)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(dir, rel))));
+    vfs.chdir('\\');
+    ({ mc, dos } = makeMachine({ vfs, memSize: 32 << 20 }));
+    dos.load(image || new Uint8Array(readFileSync(join(dir, exe))), tail, 'C:\\' + (exe || 'T.COM'));
+  }
   let fault = null; mc.onError = (e) => { fault = e; };
-  dos.load(image || new Uint8Array(readFileSync(join(dir, exe))), tail, 'C:\\' + (exe || 'T.COM'));
+  const t0 = Date.now();
+  let warmBlocks = 0;
+  if (typeof warm === 'number') {
+    // Run `warm` blocks at full speed, then single-step. A PREDICATE cannot work here: whatever it
+    // watches for, the coarse slice that satisfies it has already run past the derail — the DPMI
+    // client's whole life is shorter than one slice. So the caller measures the total first and asks
+    // to stop a little short of it, which is exact and costs one extra boot.
+    while (warmBlocks < warm && !fault && !(dos && dos.programDone) && Date.now() - t0 < budgetMs) {
+      warmBlocks += mc.runSlice(Math.min(20000, warm - warmBlocks));
+    }
+  }
   const ring = [];
   let hit = null, n = 0;
-  const t0 = Date.now();
-  while (n++ < 5_000_000 && !dos.programDone && !fault && Date.now() - t0 < budgetMs) {
+  while (n++ < 5_000_000 && !(dos && dos.programDone) && !fault && Date.now() - t0 < budgetMs * 2) {
     const o = observe(mc);
     if (o.zero) { hit = o; break; }
     ring.push(o);
     if (ring.length > ringSize) ring.shift();
     mc.runSlice(1);
   }
-  return { hit, ring, fault, dos, mc, n, done: dos.programDone };
+  return { hit, ring, fault, dos, mc, n, blocks: warmBlocks + n, done: dos ? dos.programDone : false };
 }
 
 // ---- SELF-TEST: a .COM that far-jumps into a zeroed segment. The detector MUST fire. ----
@@ -60,8 +82,23 @@ console.log('auto-test OK — le detecteur se declenche:', fmt(t.hit));
 console.log();
 
 // ---- the real target ----
-const target = process.argv[2] || 'HERETIC', exe = process.argv[3] || 'HERETIC.EXE';
-const r = run({ dir: join('/Users/julienfrelat/Projects/mirage/games', target), exe });
+//   node tools/derailcheck.mjs HERETIC HERETIC.EXE
+//   node tools/derailcheck.mjs --boot boot/FDMESHA.IMG        (steps once the guest enters protected mode)
+const argv = process.argv.slice(2);
+let r, target;
+if (argv[0] === '--boot') {
+  target = argv[1];
+  // Pass 1 counts how far the boot gets before it stops; pass 2 replays and starts stepping a little
+  // short of that, so the ring buffer holds the approach to the derail instead of the aftermath.
+  const BACK = Number(process.env.DERAIL_BACK) || 20000;
+  const probe1 = run({ boot: target, budgetMs: 60000, warm: 1e12 });
+  const total = probe1.blocks;
+  console.log(`passe 1: ${total.toLocaleString()} blocs avant l arret (${probe1.fault ? 'FAULT' : 'fin'}) — passe 2 depuis ${Math.max(0, total - BACK).toLocaleString()}`);
+  r = run({ boot: target, budgetMs: 60000, warm: Math.max(0, total - BACK) });
+} else {
+  target = argv[0] || 'HERETIC';
+  r = run({ dir: join('/Users/julienfrelat/Projects/mirage/games', target), exe: argv[1] || 'HERETIC.EXE' });
+}
 console.log(`${target}: ${r.done ? 'termine ' + r.dos.exitCode : (r.fault ? 'FAULT' : 'en cours')} apres ${r.n} blocs`);
 if (r.fault) console.log('  ' + r.fault.message.slice(0, 160));
 if (r.hit) {
