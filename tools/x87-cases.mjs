@@ -87,4 +87,5 @@ export const X87_CASES = [
   c('fild m64 round trip', LDPI, [0xdf, 0x7f, 0x10], [0xdf, 0x6f, 0x10], STPQ2),  // + fild qword [bx+16]
   c('fstp m80 of 1.0', LD1, [0xdb, 0x7f, 0x10]),                        // fstp tword [bx+16]
   c('fld m80 round trip', LD1, [0xdb, 0x7f, 0x10], [0xdb, 0x6f, 0x10], [0xdd, 0x5f, 0x20]),
+  c('ffreep st0 drops the top', LDPI, LD1, [0xdf, 0xc0], STPQ),   // undocumented DF C0
 ];

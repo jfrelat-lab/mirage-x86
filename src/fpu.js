@@ -80,6 +80,17 @@ export function installFPU(cpu) {
     if (cp[a >>> 12] || cp[((a + 9) & mask) >>> 12]) cpu.mem._dirty(a, 10);
   };
 
+  /** Census of x87 encodings this model does NOT implement. An unimplemented form is a SILENT
+   *  no-op here — it leaves memory and the stack untouched instead of faulting — so nothing marks
+   *  it as it goes past. FISTP m64 (Borland's __ftol) sat like that until a Wolf3D heap exhaustion
+   *  four layers downstream led back to it. tools/survey-gaps.mjs sweeps the corpus and reports
+   *  this alongside the unimplemented INT vectors, so the next such hole is found by measurement.
+   *  Keyed "d9/6 mem" for a memory form and "db/e4" for a register/no-operand one. */
+  const misses = cpu.fpuMisses = new Map();
+  const miss = (k) => misses.set(k, (misses.get(k) || 0) + 1);
+  const missMem = (op, reg) => miss(`${op.toString(16)}/${reg} mem`);
+  const missReg = (op, b) => miss(`${op.toString(16)}/${b.toString(16)}`);
+
   /** Round to integer under the control word's ROUNDING CONTROL (bits 10-11): 00 nearest-even,
    *  01 down, 10 up, 11 truncate toward zero. This was hardcoded to nearest, so a compiler that sets
    *  RC=truncate around a cast — which is what most of them do — got the wrong integer, and only for
@@ -246,12 +257,14 @@ export function installFPU(cpu) {
         else if (reg === 5) cpu.fldcw(cpu.mem.r16(a));      // fldcw
         else if (reg === 6) cpu.fnstenv(a);                 // fnstenv
         else if (reg === 7) cpu.mem.w16(a, cpu.fcw);        // fnstcw
+        else missMem(op, reg);
         return;
       case 0xdd:                                            // f64 load/store
         if (reg === 0) push(f64l(a));
         else if (reg === 2) f64s(a, ST(0));
         else if (reg === 3) { f64s(a, ST(0)); pop(); }
         else if (reg === 7) cpu.mem.w16(a, cpu.fpuStatus()); // fnstsw mem
+        else missMem(op, reg);                              // 4 frstor, 6 fnsave
         return;
       case 0xdb:                                            // i32 load/store
         if (reg === 0) push(i32(a));
@@ -259,6 +272,7 @@ export function installFPU(cpu) {
         else if (reg === 3) { cpu.mem.w32(a, toInt(ST(0)) >>> 0); pop(); }
         else if (reg === 5) push(f80l(a));                  // fld m80
         else if (reg === 7) { f80s(a, ST(0)); pop(); }      // fstp m80
+        else missMem(op, reg);
         return;
       case 0xdf:                                            // i16 load/store
         if (reg === 0) push(i16(a));
@@ -266,6 +280,7 @@ export function installFPU(cpu) {
         else if (reg === 3) { cpu.mem.w16(a, toInt(ST(0)) & 0xffff); pop(); }
         else if (reg === 5) push(i64(a));                   // fild m64
         else if (reg === 7) { i64s(a, toInt(ST(0))); pop(); } // fistp m64 — Borland's __ftol
+        else missMem(op, reg);                              // 4 fbld, 6 fbstp (packed BCD)
         return;
     }
     // arithmetic with a memory source: D8=f32, DC=f64, DA=i32, DE=i16
@@ -314,6 +329,7 @@ export function installFPU(cpu) {
           case 0xfe: setST(0, Math.sin(ST(0))); return;     // fsin
           case 0xff: setST(0, Math.cos(ST(0))); return;     // fcos
         }
+        if (b !== 0xd0) missReg(op, b);                     // d0 is FNOP; the rest are reserved
         return;
       case 0xd8: { const i = rm; const x = ST(0), y = ST(i); setST(0, arith(reg, x, y)); if (reg === 2 || reg === 3) setcc(x, y); if (reg === 3) pop(); return; }
       // DC/DE write ST(i): their reg-form sub/div are REVERSED vs D8 (the classic
@@ -332,17 +348,24 @@ export function installFPU(cpu) {
       case 0xda:
         if (b < 0xe0) return fcmov(b, false);                                // fcmovb/e/be/u
         if (b === 0xe9) { setcc(ST(0), ST(1)); pop(); return pop(); }        // fucompp
+        missReg(op, b);
         return;
       case 0xdb:
         if (b < 0xe0) return fcmov(b, true);                                 // fcmovnb/ne/nbe/nu
         if (b === 0xe3) { cpu.ftop = 0; cpu.fsw = 0; cpu.fcw = 0x037f; cpu.focc.fill(0); st.fill(0); return; }   // fninit
         if (b >= 0xe8 && b <= 0xef) return cmpi(ST(0), ST(b - 0xe8));        // fucomi st0,st(i)
         if (b >= 0xf0 && b <= 0xf7) return cmpi(ST(0), ST(b - 0xf0));        // fcomi  st0,st(i)
-        return;                                             // (feni/fdisi/fnclex: no-op)
+        if (b < 0xe0 || b > 0xe4) missReg(op, b);           // e0-e4 feni/fdisi/fnclex/fsetpm:genuine no-ops
+        return;
       case 0xdf:
+        // FFREEP ST(i): undocumented, but every x87 implementation has it and compilers emit it as
+        // the one-instruction "drop ST(0)". Found by the fpuMisses census — endless.com executes it
+        // 242k times, and as a no-op the stack never popped.
+        if (b < 0xc8) { cpu.ffree(rm); pop(); return; }                      // ffreep st(i)
         if (b === 0xe0) { cpu.ax = cpu.fpuStatus(); return; }                // fnstsw ax
         if (b >= 0xe8 && b <= 0xef) { cmpi(ST(0), ST(b - 0xe8)); return pop(); }   // fucomip
         if (b >= 0xf0 && b <= 0xf7) { cmpi(ST(0), ST(b - 0xf0)); return pop(); }   // fcomip
+        missReg(op, b);
         return;
     }
   };

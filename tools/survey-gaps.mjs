@@ -7,8 +7,14 @@
 //
 // Why: gaps have been picked by reading the code and guessing which ones matter. That is how we
 // spent effort on INT 21h 39h/3Ah/3Bh without knowing whether any game we have actually calls them.
-// The engine already counts unhandled INTs (`machine.unhandledInts`) and now unhandled INT 21h
-// functions (`dos.unhandledFn`); this just runs the corpus and adds them up. Measurement first.
+// The engine already counts unhandled INTs (`machine.unhandledInts`), unhandled INT 21h functions
+// (`dos.unhandledFn`) and unimplemented x87 encodings (`cpu.fpuMisses`); this just runs the corpus
+// and adds them up. Measurement first.
+//
+// The x87 column matters for a reason the other two do not share: an unimplemented INT usually
+// makes a program complain, while an unimplemented x87 form is a SILENT no-op that leaves memory
+// untouched. FISTP m64 — Borland's whole float-to-long path — hid behind a Wolf3D heap exhaustion
+// four layers downstream. Anything listed here is producing wrong numbers somewhere, quietly.
 //
 // A caveat worth keeping in mind while reading the output: a program only reaches the calls that
 // come after the point where it currently derails, so a title that dies early under-reports. The
@@ -48,6 +54,7 @@ function probe(gameDir, mountPrefix, prog) {
   return {
     ints: mc.unhandledIntReport() ? mc.unhandledIntReport().split(', ') : [],
     fns: dos.unhandledFnReport(),
+    x87: [...(mc.cpu.fpuMisses || new Map()).entries()],
     fault: fault ? fault.message : null,
     done: dos.programDone,
   };
@@ -56,6 +63,7 @@ function probe(gameDir, mountPrefix, prog) {
 const list = targets(filter);
 
 const intTotals = new Map(), fnTotals = new Map(), fnWho = new Map();
+const x87Totals = new Map(), x87Who = new Map();
 console.log(`surveying ${list.length} programs, ${FRAMES} frames each\n`);
 for (const t of list) {
   const r = probe(t.dir, t.mount, t.prog);
@@ -63,6 +71,7 @@ for (const t of list) {
   const bits = [];
   if (r.fns.length) bits.push('INT21 ' + r.fns.join(' '));
   if (r.ints.length) bits.push(r.ints.join(' '));
+  if (r.x87.length) bits.push('x87 ' + r.x87.map(([k, n]) => `${k} x${n}`).join(' '));
   if (r.fault) bits.push('FAULT ' + r.fault);
   console.log(`  ${t.label.padEnd(34)} ${bits.join('  |  ') || '—'}`);
   for (const s of r.fns) {
@@ -75,6 +84,11 @@ for (const t of list) {
     const [k, n] = s.split(' ×');
     intTotals.set(k, (intTotals.get(k) || 0) + Number(n));
   }
+  for (const [k, n] of r.x87) {
+    x87Totals.set(k, (x87Totals.get(k) || 0) + n);
+    if (!x87Who.has(k)) x87Who.set(k, new Set());
+    x87Who.get(k).add(t.label.split('/')[1]);
+  }
 }
 
 const rank = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]);
@@ -84,3 +98,6 @@ if (!fnTotals.size) console.log('  (none)');
 console.log('\n=== INT vectors asked for and not implemented ===');
 for (const [k, n] of rank(intTotals)) console.log(`  ${k}  ${String(n).padStart(8)} calls`);
 if (!intTotals.size) console.log('  (none)');
+console.log('\n=== x87 encodings executed and not implemented (each one a silent no-op) ===');
+for (const [k, n] of rank(x87Totals)) console.log(`  ${k.padEnd(10)}  ${String(n).padStart(8)} fois   ${[...(x87Who.get(k) || [])].slice(0, 6).join(', ')}`);
+if (!x87Totals.size) console.log('  (none)');
