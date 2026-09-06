@@ -24,8 +24,10 @@ const HOST_SIZE = 0x10000;                  // 64 KiB reserved at the top of RAM
 // Client descriptors live in the LDT, not the GDT: every real host does this, AX=0000 is specified
 // to return LDT selectors, and a client is entitled to assume both.
 const TI = 4;                                     // selector bit 2: 1 = LDT
-const SEL_CODE32 = 0x08 | TI, SEL_DATA32 = 0x10 | TI;   // flat 4 GiB, the pair a 32-bit client wants
-const SEL_HOST_CODE = 0x18;                       // host code, for far addresses we hand out
+const SEL_CODE32 = 0x08 | TI | 3, SEL_DATA32 = 0x10 | TI | 3;   // flat 4 GiB, the pair a 32-bit client wants
+// RPL 3 like everything else the client sees: it far-calls and IRETs through these, and a return
+// into a ring-0 selector from ring 3 is a #GP.
+const SEL_HOST_CODE = 0x18 | 3;                   // host code, for far addresses we hand out
 const SEL_CLIENT = 0x20;                          // first client segment (index, TI added on return)
 const SEL_MAX = LDT_ENTRIES * 8;
 
@@ -79,24 +81,27 @@ export function installDPMI(machine) {
   const allocClientSel = (seg, code) => {
     if (dpmi.nextSel >= SEL_MAX) return 0;
     const sel = dpmi.nextSel; dpmi.nextSel += 8;
-    // Ring 0 deliberately: a client runs privileged instructions constantly and MIRAGE does not
-    // enforce the boundary yet. Tightening it needs this DPL, the RPL below, and a TSS.
+    // Ring 3, DPL 3, RPL 3 — what every real host hands a client, and what a client tests for.
+    // DOS/4GW reads a selector's RPL to decide whether the descriptor is its own to edit: at RPL 0
+    // it wrote through a GDT alias selector we do not have and #GP'd forever, drawing nothing.
     // D/B = 0: these describe REAL-MODE segments, so 16-bit code and stack. A client that wants
     // 32-bit selectors allocates them itself.
-    setDesc(sel, (seg & 0xffff) << 4, 0xffff, code ? 0x9a : 0x92, 0x00);
-    return sel | TI;
+    setDesc(sel, (seg & 0xffff) << 4, 0xffff, code ? 0xfa : 0xf2, 0x00);
+    return sel | TI | 3;
   };
 
   /** Build the tables once, on the first mode switch. */
   const buildTables = () => {
     for (let i = 0; i < LDT_ENTRIES * 8; i++) mem.w8(LDT_BASE + i, 0);
-    setDesc(SEL_CODE32, 0, 0xffffffff, 0x9a, 0xc0);      // flat code, 32-bit
-    setDesc(SEL_DATA32, 0, 0xffffffff, 0x92, 0xc0);      // flat data, 32-bit
+    // DPL 3 throughout: the client runs at ring 3, as it does under every real host, so every
+    // selector it can load must be reachable from there.
+    setDesc(SEL_CODE32, 0, 0xffffffff, 0xfa, 0xc0);      // flat code, 32-bit
+    setDesc(SEL_DATA32, 0, 0xffffffff, 0xf2, 0xc0);      // flat data, 32-bit
     // Deliberately no IDT: softInt reflects software interrupts, so an IDT would only serve
     // exceptions — and an exception in a client is a defect to surface, not to dispatch.
     // A 16-bit code selector over the BIOS segment, for services that hand back a protected-mode
     // far address (0305): a real-mode segment value will not do.
-    setDesc(SEL_HOST_CODE, DPMI_ENTRY_SEG << 4, 0xffff, 0x9a, 0x00);
+    setDesc(SEL_HOST_CODE, DPMI_ENTRY_SEG << 4, 0xffff, 0xfa, 0x00);
     // Load LDTR directly rather than through LLDT: that would need a GDT entry describing the LDT,
     // and nothing here reads one. The GDT stays empty — a client never sees a GDT selector from us.
     cpu.ldtr.sel = 0; cpu.ldtr.base = LDT_BASE; cpu.ldtr.limit = LDT_LIMIT;
@@ -129,9 +134,16 @@ export function installDPMI(machine) {
 
     cpu.setCR0((cpu.cr0 | 1) >>> 0);                     // PE — from here selectors are indices
     machine.rec.reset();                                  // every cached block assumed real mode
+    // Enter ring 3 the way an IRET to a less-privileged level does: CPL first, then the selectors.
+    // Loading SS (RPL 3, DPL 3) while CPL still read 0 is a #GP on real silicon too — no sequence of
+    // plain MOVs can express this switch, which is why a host uses IRET or a gate.
+    cpu._cpl = 3;
     cpu.setSeg(DS, dsSel); cpu.setSeg(ES, esSel); cpu.setSeg(SS, ssSel);
     cpu.setSeg(CS, csSel); cpu.eip = retOff;
     cpu.flags &= ~1;                                      // CF=0: the switch succeeded
+    cpu.flags |= 0x3000;                                  // IOPL=3: a ring-3 client still owns the
+                                                          // hardware, which is what DPMI promises it
+
     dpmi.active = true; dpmi.is32 = is32;
   };
 
@@ -157,7 +169,9 @@ export function installDPMI(machine) {
   // ring-3 host hard-codes DPL 3: Void 3 builds a 32-bit code alias with access byte 0xFB and far
   // RETFs into it, which is #GP(sel) here because a non-conforming code segment must have DPL == CPL.
   // Normalising the field is what makes the descriptor mean the same thing on either kind of host.
-  const clientDPL = (access) => ((access & ~0x60) | ((cpu.cpl & 3) << 5)) & 0xff;
+  // A client cannot mint a descriptor more privileged than itself: the host forces DPL 3, which is
+  // also the client's own ring, so a selector it builds is one it can load.
+  const clientDPL = (access) => ((access & ~0x60) | 0x60) & 0xff;
 
   /** ES:(E)DI, the buffer both descriptor calls use. A 16-bit client passes DI, a 32-bit one EDI. */
   const bufAddr = () => (cpu.base[ES] + (dpmi.is32 ? (cpu.reg[7] >>> 0) : (cpu.reg[7] & 0xffff))) >>> 0;
@@ -208,7 +222,13 @@ export function installDPMI(machine) {
         return ok();
       }
 
-      // 0000 — Allocate LDT Descriptors. CX consecutive entries, zeroed; the client fills them in.
+      // 0000 — Allocate LDT Descriptors. CX consecutive entries.
+      //
+      // They come back as PRESENT expand-up read/write data segments with base and limit zero, at
+      // the client's privilege — not zeroed, which is what this did. A zeroed descriptor has P=0,
+      // so a client that fills in only base and limit (0007 + 0008, which the spec allows on its
+      // own) got a #GP the moment it loaded the selector. That is DOS/4GW: DOOM faulted on
+      // `mov ds,bx` forever, inside DOS/4GW's own exception handler, drawing nothing.
       //   in: CX = count;  out: AX = base selector
       case 0x0000: {
         const count = c.reg[1] & 0xffff;
@@ -218,9 +238,11 @@ export function installDPMI(machine) {
         for (let i = 0; i < count; i++) {
           const off = base + i * 8;
           for (let b = 0; b < 8; b++) mem.w8((LDT_BASE + off + b) >>> 0, 0);
+          mem.w8((LDT_BASE + off + 5) >>> 0, clientDPL(0x92));         // P=1, S=1, data, writable
+          mem.w8((LDT_BASE + off + 6) >>> 0, dpmi.is32 ? 0x40 : 0);    // D/B follows the client
         }
         dpmi.nextSel += count * 8;
-        c.ax = base | TI;
+        c.ax = base | TI | 3;
         return ok();
       }
 
@@ -354,8 +376,8 @@ export function installDPMI(machine) {
         const src = (LDT_BASE + off) >>> 0, sel = dpmi.nextSel; dpmi.nextSel += 8;
         const dst = (LDT_BASE + sel) >>> 0;
         for (let i = 0; i < 8; i++) mem.w8((dst + i) >>> 0, mem.r8((src + i) >>> 0));
-        mem.w8(dst + 5, (mem.r8(src + 5) & ~0x08) | 0x02);   // code -> data, writable
-        c.ax = sel | TI;
+        mem.w8(dst + 5, clientDPL((mem.r8(src + 5) & ~0x08) | 0x02));   // code -> data, writable
+        c.ax = sel | TI | 3;
         return ok();
       }
 
