@@ -406,6 +406,28 @@ export class Machine {
           cpu.setSeg(1, v.sel); cpu.eip = v.off >>> 0;
           return;
         }
+        // Set/Get Interrupt Vector belong to the HOST for a protected-mode client, whatever DOS is
+        // underneath: DS:(E)DX is a selector:offset and addresses the CLIENT's vector table, not the
+        // real-mode IVT. dos.js does this for our own DOS, which is why it worked there and only
+        // there — under a booted kernel INT 21h has no JS handler at all, so `AX=2508h` fell through
+        // to "unclaimed" below and was silently swallowed. mesha's PMODE4K installs its 32-bit timer
+        // ISR exactly that way, so its handler was never registered and nothing it draws ever ran
+        // (ROADMAP F8).
+        if (n === 0x21 && ((cpu.reg[0] >> 8) & 0xff) === 0x25) {
+          cpu.eip = nextIp;
+          this.dpmi.pmVec[cpu.reg[0] & 0xff] =
+            { sel: cpu.seg[3], off: this.dpmi.is32 ? (cpu.reg[2] >>> 0) : (cpu.reg[2] & 0xffff) };
+          return;
+        }
+        if (n === 0x21 && ((cpu.reg[0] >> 8) & 0xff) === 0x35) {
+          cpu.eip = nextIp;
+          const p = this.dpmi.pmVec[cpu.reg[0] & 0xff];
+          if (p) {
+            cpu.setSeg(0, p.sel);
+            if (this.dpmi.is32) cpu.reg[3] = p.off >>> 0; else cpu.reg[3] = (cpu.reg[3] & ~0xffff) | (p.off & 0xffff);
+            return;
+          }
+        }
         if (this.intHandlers[n]) {
           cpu.eip = nextIp;
           this.intHandlers[n](cpu, this);
@@ -549,6 +571,18 @@ export class Machine {
                                               // ISR (a `STI;HLT` before the guest installs its own
                                               // INT 8 — e.g. Moktar's GAME.TDT init — must resume)
     if (this.dpmiIrq(8)) return;              // a DPMI client's own PM handler comes first
+    // With a DPMI client running in protected mode and no PM handler for this vector, there is
+    // nothing left we can safely do: every path below loads CS from a REAL-MODE vector, and a
+    // real-mode segment loaded in protected mode is a SELECTOR. Under FreeDOS the kernel hooks
+    // INT 1Ch at segment 0x0070, so the tick reflected straight into `#GP(0x70)` — which read as a
+    // DPMI or descriptor bug for a long time and is neither (docs/COMPAT.md, ROADMAP F8). Reflecting
+    // to real mode properly means switching modes underneath the client, which the host cannot do
+    // mid-flight; a real host defers instead. Keep the BDA clock and the EOI, drop the reflection.
+    if ((this.cpu.cr0 & 1) && this.dpmi && this.dpmi.active) {
+      this.bumpBiosTick();
+      if (pic) pic.eoi(0);
+      return;
+    }
     // In protected mode a hardware interrupt is dispatched through the IDT, not the real-mode vector
     // table. Without this a self-hosted protected-mode guest — one that switches by itself instead of
     // going through a DPMI host — never receives the timer at all, and we ran our own BIOS handler
