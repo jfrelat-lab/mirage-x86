@@ -155,7 +155,7 @@ export function installDOS(machine, vfs) {
       writeMCB(progs[i].psp - 1, last ? 0x5a : 0x4d, progs[i].psp, progs[i].top - progs[i].psp);
     }
     if (hasFree) writeMCB(top, 0x5a, 0x0000, MEM_TOP - top - 1);            // free block: 'Z' (last), owner 0
-    mem.w16((DIB_SEG << 4) + DIB_OFF - 2, PSP_SEG - 1);                     // list-of-lists: word before it = first MCB (the program's, at PSP-1)
+    mem.w16((LOL_SEG << 4) + LOL_OFF - 2, PSP_SEG - 1);                     // list-of-lists: word before it = first MCB (the program's, at PSP-1)
     // PSP:0002 is "first paragraph past this program's block", and it was hard-wired to 0xA000 —
     // i.e. every program was told it owned all of conventional memory no matter how it had been
     // sized or how much it had already shrunk. A program that sizes its heap from this word (rather
@@ -169,11 +169,73 @@ export function installDOS(machine, vfs) {
   // first MCB segment — the standard way MCB-walkers find the chain head. We host it in unused
   // low memory just past the BIOS data area.
   const DIB_SEG = 0x0050, DIB_OFF = 0x0026;
+  // ...but the List of Lists itself lives where a real DOS puts it, measured rather than chosen:
+  // tools/sftprobe.asm asks DOS for it and follows the SFT pointer, and under DOSBox-X reports
+  //   LOL 0071:0026   SFT 0071:00CC   ("PRN" at offset 0x20 of an entry)
+  // — same offset we had, different segment. 0050:0026 sat in the low scratch area small intros use
+  // as a buffer: oktaeder reads 0x52A and derails on anything non-zero there, and it took exactly
+  // one four-byte SFT pointer to break it.
+  const LOL_SEG = 0x0071, LOL_OFF = 0x0026;
   // InDOS flag (AH=34h) and, one byte below it as DOS lays them out, the critical-error flag. Kept
   // in the same scratch paragraph as the list-of-lists, clear of the MCB-head word at DIB_OFF-2.
   const INDOS_OFF = 0x0021, CRITERR_OFF = 0x0020;
   mem.w8((DIB_SEG << 4) + INDOS_OFF, 0);
   mem.w8((DIB_SEG << 4) + CRITERR_OFF, 0);
+
+  // ---- System File Table --------------------------------------------------
+  // DOS keeps its open files in a chain of SFT blocks, and the List of Lists points at the first
+  // one (LoL+04h). A program does not have to go through INT 21h to learn about a handle: DJGPP's
+  // fstat() walks the PSP's job file table to turn a handle into an SFT index, then walks the SFT
+  // chain to that entry and reads the size and name straight out of it. With no SFT the walk found
+  // nothing, so `open` succeeded and `fstat` returned -1 — Quake stops on
+  // "Error: Error fstating c:/id1/pak0.pak" with no DOS call having reported an error at all.
+  //
+  // Entries are the DOS 4+ 59-byte layout, which is what our reported version (5.0) implies.
+  // The SFT sits in the same segment as the List of Lists, at the offset the probe reports. Sixteen
+  // entries is what fits below the environment block at 0x0C00; a real DOS chains several smaller
+  // blocks instead, and a chain of one is a chain.
+  const SFT_OFF = 0x00cc, SFT_ENTRIES = 16, SFT_ENTRY = 0x3b;
+  const SFT_BASE = (LOL_SEG << 4) + SFT_OFF;
+  const LOL = (LOL_SEG << 4) + LOL_OFF;
+  for (let i = 0; i < 0xd0; i++) mem.w8(LOL + i, 0);            // the LoL fields we do not fill
+  mem.w32(LOL + 0x04, ((LOL_SEG << 16) | SFT_OFF) >>> 0);       // first SFT block
+
+  /** FCB-style 8.3 name — eight characters, three, space padded, no dot. */
+  const fcbName = (path) => {
+    const leaf = String(path || '').split(/[\\/]/).pop() || '';
+    const dot = leaf.lastIndexOf('.');
+    const stem = (dot < 0 ? leaf : leaf.slice(0, dot)).slice(0, 8).toUpperCase();
+    const ext = (dot < 0 ? '' : leaf.slice(dot + 1)).slice(0, 3).toUpperCase();
+    return stem.padEnd(8, ' ') + ext.padEnd(3, ' ');
+  };
+
+  /** Rebuild the SFT and the current PSP's job file table from the live handle map. */
+  function syncSFT() {
+    mem.w32(SFT_BASE, 0xffffffff);                              // a single block, no next
+    mem.w16(SFT_BASE + 4, SFT_ENTRIES);
+    const psp = dos.psp << 4;
+    for (let i = 0; i < 20; i++) mem.w8(psp + 0x18 + i, 0xff);  // JFT: every slot closed
+    mem.w16(psp + 0x32, 20);                                    // its size, and where it lives —
+    mem.w32(psp + 0x34, ((dos.psp << 16) | 0x18) >>> 0);        // a program may follow this instead
+    for (let i = 0; i < SFT_ENTRIES; i++) {
+      const e = SFT_BASE + 6 + i * SFT_ENTRY;
+      for (let k = 0; k < SFT_ENTRY; k++) mem.w8(e + k, 0);
+      const h = vfs.handles.get(i);
+      if (!h) continue;
+      mem.w8(psp + 0x18 + i, i);                                // handle i -> entry i
+      const isDev = !h.node;
+      mem.w16(e + 0x00, 1);                                     // handles referring to this file
+      mem.w16(e + 0x02, h.write ? 2 : 0);                       // open mode
+      mem.w8(e + 0x04, isDev ? 0 : 0x20);                       // attribute: archive
+      mem.w16(e + 0x05, isDev ? 0x80d3 : 0);                    // device info; bit 7 = character device
+      mem.w32(e + 0x11, isDev ? 0 : (h.node.data.length >>> 0));  // size
+      mem.w32(e + 0x15, h.pos >>> 0);                           // current offset
+      const nm = fcbName(h.path);
+      for (let k = 0; k < 11; k++) mem.w8(e + 0x20 + k, nm.charCodeAt(k));
+      mem.w16(e + 0x31, dos.psp);                               // owning PSP
+    }
+  }
+  dos.syncSFT = syncSFT;
 
   /** Bytes of a DS:DX transfer that fit before the segment wraps. */
   const segCap = (count, off) => Math.min(count, 0x10000 - off);
@@ -551,7 +613,10 @@ export function installDOS(machine, vfs) {
         if (!dos.allocs.has(seg)) { err(9); break; }
         dos.allocs.delete(seg); recomputeTop(); ok(); break;
       }
-      case 0x52: { cpu.setSeg(ES, DIB_SEG); cpu.bx = DIB_OFF; break; }             // get list of lists (SysVars); [ES:BX-2] = first MCB
+      // The SFT is rebuilt HERE rather than kept in step on every file call: a program walks it
+      // immediately after asking for the List of Lists, and rebuilding 20 entries on every read
+      // would be paid by every program to serve the few that look.
+      case 0x52: { syncSFT(); cpu.setSeg(ES, LOL_SEG); cpu.bx = LOL_OFF; break; }  // get list of lists (SysVars); [ES:BX-2] = first MCB
       // The three below were picked from tools/survey-gaps.mjs, not from reading the code: they are
       // what the corpus actually calls and did not get.
       // Found by tools/dos-oracle.mjs, not by the corpus survey: no game we have calls these, but a
