@@ -65,21 +65,26 @@ Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/vie
 
 **Quake** (id, 1996) — 🟡 **loads and starts, then smashes its own stack formatting a float.** DOS/4GW is
 not involved: Quake is a DJGPP program and drives our DPMI host directly. It gets through descriptor
-allocation, its 1.25 MB heap, the real-mode calls it needs, and into its startup — and then dies in
-its float-to-string routine, for a reason that is not a bug but a boundary.
+allocation, its 1.25 MB heap, the real-mode calls it needs, and into its startup — the point where it
+would print `29.2 megabyte heap` — and dies in its float-to-string routine.
 
-That routine normalises a value by binary search over the exponent, dividing by a table of 80-bit
-constants: 10^2048, 10^1024, 10^512, 10^256… **This model holds the x87 stack as float64**, whose
-largest value is ~1.8e308, so the first three constants load as `Infinity` and the value being
-normalised — an extended denormal — loads as `0`. Every comparison then goes the same way, the search
-takes all 13 bits, and the routine is told to emit **8191 leading zeros**. It writes them with
-`mov byte [ebx],'0' / dec ebx` from a buffer above its own frame, walks straight down through the
-live stack, and returns into the padding it just wrote.
+That routine normalises the value by binary search over the exponent, dividing by a table of 80-bit
+constants: 10^2048, 10^1024, 10^512, 10^256… Every comparison goes the same way, the search takes all
+13 bits, and the routine is told to emit **8191 leading zeros**. It writes them with
+`mov byte [ebx],'0' / dec ebx` from a buffer above its own frame, walks straight down through the live
+stack, and returns into the padding it just wrote — which is the `30 30 30 30…` the derail detector
+reports.
 
-So this is not a defect to fix in the FPU; it is the float64 register model meeting a program that
-uses the full 80-bit exponent range (10^±4932). Closing it means extended-precision arithmetic, not
-a patch. Everything Quake does BEFORE that point now works, and five DPMI host defects were fixed
-getting there (see the git log for 2026-09-06).
+What is NOT the cause, though it looked like it: this model holds the x87 stack as float64, so the
+first three table constants load as `Infinity`. That is harmless on its own — a correct 29.2 compares
+LESS than infinity and the search exits on the first test. **DOSBox-X on this arm64 Mac runs Quake and
+prints that line correctly with an 8-byte `long double`**, which settles it: the float64 range is a
+real limitation of this model, but it is not what stops Quake.
+
+The actual defect is upstream. The value the loop reloads each iteration, an 80-bit temporary at
+`[ebp-0x0c]`, decodes as an extended DENORMAL — exponent field zero, mantissa `0x0000004000000000`,
+with the leading bit clear, which is not a shape `fstp tword` can produce from a normalised register.
+So something wrote that temporary wrongly before the loop ever ran. Not yet found.
 
 **Chrome Revenge** (Abaddon, 1K, Assembly 2020) — ✅ **renders**: a realtime SSE raytracer in VESA 640x480x32. It needed three things, and only the first was the one we expected. (1) VBE 2.0, for mode 0x112. (2) Sixteen XMM instructions through SSE4.1 (`src/sse.js`, ROADMAP F1). (3) Two defects that had nothing to do with either: `FCOMI`/`FUCOMI` were no-ops — the only x87 compares that write EFLAGS — so its ray/sphere test always missed and the screen stayed black; and port 0x60 read back as 0, where the 8042 retains the last scancode, so `IN AL,60H / DAS / JC` ended the intro after a single frame. Both also improved existing goldens (`qblove`, `symetrie`). Verified against the author's own bundled screenshots: same scene, different animation phase.
 
