@@ -764,11 +764,13 @@ export function installBIOS(machine, opts = {}) {
     machine.onPortRead(base, () => oplStatus);                            // OPL status
   }
 
-  // Game/joystick port 0x201: no joystick attached. Buttons (bits 4-7) read 1 = not pressed;
-  // axis one-shots (bits 0-3) read 0 = timed out. Returning the default 0xFF instead left the
-  // axis bits stuck high, so a game timing how long they stay high (Keen 4's joystick probe)
-  // spun forever. Writes (the axis trigger) are a no-op with no joystick.
-  machine.onPortRead(0x201, () => 0xf0);
+  // Game/joystick port 0x201: no joystick attached, so every line floats high — 0xFF, the same
+  // value DOSBox returns with joysticktype=none. Axis bits reading 0 (the old 0xF0) says "the
+  // one-shots fired and already timed out", which is a joystick that IS there: Quake's
+  // IN_ReadJoystick accepted it and parked in WaitJoyButton before Host_Init ever finished, so
+  // its command buffer never ran and no game frame was drawn. Writes (the axis trigger) are a
+  // no-op with no joystick.
+  machine.onPortRead(0x201, () => 0xff);
   machine.onPortWrite(0x201, () => {});
 
   // ---- 8042 keyboard controller (ports 0x60/0x64) + IRQ1 ------------------
