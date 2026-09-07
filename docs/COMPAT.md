@@ -63,30 +63,38 @@ Six notable sub-4K DOS intros pulled from scene.org (pouet API `download`, `/vie
 | **Pitman** (Tristar) | ✅ **fully playable** — title screen, menu and level 1. It is a TEXT-mode game, so a probe that only counts pixels in `A000` reports it as blank. |
 | **Omniscent** (Sanction '97), **Forever Reality** (7dUMP '23), **StarPort BBS 2** (Future Crew '93, EGA `0Dh`), **Another Soul Lost** (Traction '03) | ✅ render. |
 
-**Quake** (id, 1996) — 🟡 **starts, and stops on a DOS internal it needs.** It is a DJGPP program and
-drives our DPMI host directly; DOS/4GW is not involved. It now gets all the way to loading its data:
+**Quake** (id, 1996) — ✅ **plays**: `QUAKE.EXE -nocdaudio` runs demo1, textured world and full HUD,
+with no key sent. It is a DJGPP program and drives our DPMI host directly; DOS/4GW is not involved.
+Three defects stood between "starts" and "plays", and the last one was not where it looked.
 
-    Quake v1.06
-    Locked 1 Mb image
-    Locked 8 Mb data
-    malloc'd: 8896512
-    Error: Error fstating c:/id1/pak0.pak
+1. **A stale FPU address mask.** `src/fpu.js` captured `cpu.mem.mask` once at install time, while A20
+was still closed, so every x87 memory access was pinned to the first megabyte for the rest of the
+run. Quake's float formatter reloads an 80-bit temporary on its protected-mode stack at 0xBD9EC0: the
+load read 0xD9EC0 instead, normalised whatever sat in low memory, and emitted 8191 leading zeros down
+through its own stack. The mask is now read per access.
 
-`open` succeeds; `fstat` on the handle does not. DJGPP's fstat does not ask DOS for the size — it
-walks DOS's own **System File Table**: INT 21h AH=52h for the List of Lists, then the SFT chain, and
-the PSP's job file table to map a handle to an entry. Our HLE DOS answers AH=52h with an MCB chain
-and no SFT, so the walk finds nothing and fstat returns -1. That is the next piece: a live SFT whose
-entries track the open files' names, sizes and positions.
+2. **No System File Table.** DJGPP's `fstat` does not ask DOS for a size — it walks DOS's own SFT: INT
+21h AH=52h for the List of Lists, then the SFT chain, then the PSP's job file table to map a handle to
+an entry. We answered AH=52h with an MCB chain and no SFT, so `open` succeeded and `fstat` returned -1
+(`Error fstating c:/id1/pak0.pak`). `src/dos.js` now keeps a live SFT. Its address was **measured, not
+guessed**: `tools/sftprobe.asm` under DOSBox reports LoL at 0071:0026 with the SFT pointer at +04h, and
+FreeDOS reports 00D8:0026 — same offsets, different segment.
 
-What got it this far was NOT an FPU precision problem, though it looked like one for a while.
-`src/fpu.js` captured the address mask ONCE at install time, while A20 was still closed, so every x87
-memory access was pinned to the first megabyte for the rest of the run. Quake's float formatter
-reloads an 80-bit temporary on its protected-mode stack at 0xBD9EC0: the load read 0xD9EC0 and the
-store wrote there, so it normalised whatever sat in low memory, the exponent search took all 13 bits,
-and the routine emitted 8191 leading zeros down through its own stack. The float64 register model IS
-a real limitation of this engine — the first three constants in that routine's table load as
-Infinity — but it is not what stopped Quake: DOSBox-X on this arm64 Mac runs it and prints
-`29.2 megabyte heap` correctly with an 8-byte `long double`.
+3. **An empty game port that looked occupied.** Port 0x201 returned 0xF0 — buttons high, axis one-shots
+reading 0. That is not "no joystick", it is a joystick whose one-shots already timed out.
+`IN_ReadJoystick` accepted it, printed `JOYSTICK FOUND`, and parked in `WaitJoyButton` **before
+`Host_Init` finished**: quake.rc was never executed, the command buffer never ran, and no frame was
+ever drawn. The console still answered, because that modal runs its own key pump — which is why this
+read for a while as a stalled demo loop rather than a stalled boot. Diagnosed by typing `echo hello`
+at the console and getting the echo but no `hello`: `Cmd_Echo_f` has no guard, so silence placed the
+fault upstream of `Cbuf_Execute`. An unconnected port floats high; 0xFF fixes it.
+
+The float64 register model IS a real limitation of this engine — the first three constants in that
+formatter's table load as Infinity — but it never stopped Quake, and an earlier version of this file
+wrongly said it did. DOSBox-X on this arm64 Mac runs Quake with an 8-byte `long double`.
+
+`-nocdaudio` is not a workaround for an emulation defect: there is genuinely no CD drive here, and
+without it Quake stops on its own MSCDEX notice, which any keypress also clears.
 
 **Chrome Revenge** (Abaddon, 1K, Assembly 2020) — ✅ **renders**: a realtime SSE raytracer in VESA 640x480x32. It needed three things, and only the first was the one we expected. (1) VBE 2.0, for mode 0x112. (2) Sixteen XMM instructions through SSE4.1 (`src/sse.js`, ROADMAP F1). (3) Two defects that had nothing to do with either: `FCOMI`/`FUCOMI` were no-ops — the only x87 compares that write EFLAGS — so its ray/sphere test always missed and the screen stayed black; and port 0x60 read back as 0, where the 8042 retains the last scancode, so `IN AL,60H / DAS / JC` ended the intro after a single frame. Both also improved existing goldens (`qblove`, `symetrie`). Verified against the author's own bundled screenshots: same scene, different animation phase.
 
