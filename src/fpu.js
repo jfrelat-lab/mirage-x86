@@ -23,46 +23,55 @@ export function installFPU(cpu) {
   // a bitmask on `cpu`: the emitted blocks alias it as a local, and a read-modify-write of a property
   // on the CPU object cost 4% of `tube` where an indexed store costs nothing measurable.
   cpu.focc = new Uint8Array(8);   // 1 = this physical register holds a value
-  const dv = cpu.mem.dv, mask = cpu.mem.mask;
+  const dv = cpu.mem.dv;
+  // The address mask is read PER ACCESS, not captured once. It changes when A20 opens, and this
+  // module is installed while A20 is still closed — so a captured copy pinned every x87 memory
+  // access to the first megabyte for the rest of the run. Quake's float formatter reloads an 80-bit
+  // temporary on its protected-mode stack at 0xBD9EC0; the load read 0xD9EC0 and the store wrote
+  // there too, so the value it normalised was whatever sat in low memory (it decoded as zero), the
+  // exponent search took all 13 bits, and the routine emitted 8191 leading zeros down through its
+  // own stack. This is the fallback path — the recompiler inlines the hot forms and takes its mask
+  // from Recompiler.setMask — so a property read here costs nothing that matters.
+  const msk = () => cpu.mem.mask;
 
   const ST = (i) => st[(cpu.ftop + i) & 7];
   const setST = (i, v) => { st[(cpu.ftop + i) & 7] = v; };
   const push = (v) => { cpu.ftop = (cpu.ftop - 1) & 7; st[cpu.ftop] = v; cpu.focc[cpu.ftop] = 1; };
   const pop = () => { cpu.focc[cpu.ftop] = 0; cpu.ftop = (cpu.ftop + 1) & 7; };
 
-  const f32l = (a) => dv.getFloat32(a & mask, true);
-  const f64l = (a) => dv.getFloat64(a & mask, true);
+  const f32l = (a) => dv.getFloat32(a & msk(), true);
+  const f64l = (a) => dv.getFloat64(a & msk(), true);
   // Float stores must honour the SMC dirty check like the integer w8/w16/w32 do —
   // a program that FSTs into a page holding compiled code must invalidate those blocks.
   const cp = cpu.mem.codePage;
-  const f32s = (a, v) => { a &= mask; dv.setFloat32(a, v, true); if (cp[a >>> 12] || cp[((a + 3) & mask) >>> 12]) cpu.mem._dirty(a, 4); };
-  const f64s = (a, v) => { a &= mask; dv.setFloat64(a, v, true); if (cp[a >>> 12] || cp[((a + 7) & mask) >>> 12]) cpu.mem._dirty(a, 8); };
-  const i16 = (a) => dv.getInt16(a & mask, true);
-  const i32 = (a) => dv.getInt32(a & mask, true);
+  const f32s = (a, v) => { a &= msk(); dv.setFloat32(a, v, true); if (cp[a >>> 12] || cp[((a + 3) & msk()) >>> 12]) cpu.mem._dirty(a, 4); };
+  const f64s = (a, v) => { a &= msk(); dv.setFloat64(a, v, true); if (cp[a >>> 12] || cp[((a + 7) & msk()) >>> 12]) cpu.mem._dirty(a, 8); };
+  const i16 = (a) => dv.getInt16(a & msk(), true);
+  const i32 = (a) => dv.getInt32(a & msk(), true);
   // 64-bit integers and 80-bit extended reals. Both forms were missing entirely, so the instruction
   // was a silent no-op: Borland's __ftol is `fistp qword`, so every float-to-long cast in a Borland
   // program returned whatever was already in the caller's stack slot. Wolf3D got SetupScaling(925)
   // instead of (360) that way and exhausted its heap building 462 scalers.
-  const i64 = (a) => Number(dv.getBigInt64(a & mask, true));
+  const i64 = (a) => Number(dv.getBigInt64(a & msk(), true));
   const INDEF64 = -(2n ** 63n);   // x87's "integer indefinite", stored when the value will not fit
   const i64s = (a, v) => {
-    a &= mask;
+    a &= msk();
     const n = Number.isFinite(v) && Math.abs(v) < 9223372036854775808 ? BigInt(Math.trunc(v)) : INDEF64;
     dv.setBigInt64(a, n, true);
-    if (cp[a >>> 12] || cp[((a + 7) & mask) >>> 12]) cpu.mem._dirty(a, 8);
+    if (cp[a >>> 12] || cp[((a + 7) & msk()) >>> 12]) cpu.mem._dirty(a, 8);
   };
   /** 80-bit extended: an explicit 64-bit mantissa (no hidden bit) and a 15-bit exponent biased by
    *  16383. This model's registers are float64, so a store rounds to 53 bits of mantissa and a load
    *  back is exact; only a value that came from real 80-bit silicon loses its low bits. */
   const f80l = (a) => {
-    a &= mask;
+    a &= msk();
     const m = dv.getBigUint64(a, true), se = dv.getUint16(a + 8, true);
     const sign = se & 0x8000 ? -1 : 1, exp = se & 0x7fff;
     if (exp === 0x7fff) return (m & 0x7fffffffffffffffn) === 0n ? sign * Infinity : NaN;
     return sign * Number(m) * Math.pow(2, exp - 16383 - 63);
   };
   const f80s = (a, v) => {
-    a &= mask;
+    a &= msk();
     let se = 0, m = 0n;
     if (Number.isNaN(v)) { se = 0x7fff; m = 0xc000000000000000n; }
     else {
@@ -77,7 +86,7 @@ export function installFPU(cpu) {
       }
     }
     dv.setBigUint64(a, m, true); dv.setUint16(a + 8, se, true);
-    if (cp[a >>> 12] || cp[((a + 9) & mask) >>> 12]) cpu.mem._dirty(a, 10);
+    if (cp[a >>> 12] || cp[((a + 9) & msk()) >>> 12]) cpu.mem._dirty(a, 10);
   };
 
   /** Census of x87 encodings this model does NOT implement. An unimplemented form is a SILENT
