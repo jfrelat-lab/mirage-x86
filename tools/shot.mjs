@@ -45,11 +45,17 @@ dos.load(new Uint8Array(readFileSync(join(dir, prog))), tail ? ' ' + tail : '', 
 // against a 60-tick DOSBox capture says nothing. No tickTimer() either — the run loop owns the PIT,
 // and calling it drives the clock a second time.
 const ticks = () => (mc.mem.r16(0x46c) | (mc.mem.r16(0x46e) << 16)) >>> 0;
+// A guest that hooks INT 8 for its own pacing and does not chain to the BIOS leaves 0040:006C
+// frozen — the counter is software, kept by the BIOS handler, not by the PIT. Quake does exactly
+// that: it reaches mode 13h and draws while `ticks()` stays at 0, so a tick-bounded loop never
+// ends. SHOT_BLOCKS gives a second bound in BLOCKS for those.
+const BLOCK_BUDGET = Number(process.env.SHOT_BLOCKS) || 0;
+let blocks = 0;
 let fed = false, guard = 0;
 // The guard is a hang stop, not a budget: a guest polling INT 16h burns iterations without advancing
 // a single tick, so it has to be far above the number of iterations a real run needs.
 while (ticks() < K && !fault && !dos.programDone && guard++ < 20000000) {
-  if (!fed && KEYS.length && ticks() >= FEED && mc.pushScancodes) {
+  if (!fed && KEYS.length && (BLOCK_BUDGET ? blocks >= BLOCK_BUDGET >> 1 : ticks() >= FEED) && mc.pushScancodes) {
     mc.pushScancodes(KEYS);
     // A real keypress feeds BOTH paths — src/keyboard.js pushes the scancode to the 8042 AND a
     // (scan, ascii) pair onto machine.keyQueue. Feeding only the hardware path left every DOS
@@ -63,7 +69,8 @@ while (ticks() < K && !fault && !dos.programDone && guard++ < 20000000) {
   // DOS buffer — sat on "Press ENTER to continue…" forever while the browser (ui.js, which does pump)
   // went past it. That was half of the "browser and headless disagree" report.
   if (mc.pumpKeyboard) mc.pumpKeyboard();
-  mc.runSlice(20000);
+  blocks += mc.runSlice(20000);
+  if (BLOCK_BUDGET && blocks >= BLOCK_BUDGET) break;
 }
 
 const mode = mc.mem.r8(0x449), vga = mc.vga, dac = mc.bios.dac;

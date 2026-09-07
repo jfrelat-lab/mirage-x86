@@ -122,12 +122,29 @@ puts:   lodsb
         call    putc
         jmp     puts
 .done:  ret
+; Every character goes to stdout AND to COM1, so the same probe works under DOSBox (redirect the
+; file) and under QEMU booting a real FreeDOS (-serial file:...), where there is no host filesystem
+; to read a redirect back from. The LSR poll is bounded: a machine with no UART must not hang it.
 putc:   push    ax
+        push    cx
         push    dx
+        push    ax
         mov     dl, al
         mov     ah, 02h
         int     21h
+        pop     ax
+        push    ax
+        mov     cx, 4000
+        mov     dx, 3fdh
+.wait:  in      al, dx
+        test    al, 20h
+        jnz     .send
+        loop    .wait
+.send:  pop     ax
+        mov     dx, 3f8h
+        out     dx, al
         pop     dx
+        pop     cx
         pop     ax
         ret
 crlf:   mov     al, 13
