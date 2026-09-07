@@ -53,6 +53,7 @@ export function installDPMI(machine) {
     is32: false,
     nextSel: SEL_CLIENT,           // bump allocator over the LDT
     freeSels: [],                  // offsets returned by 0001, reused before the bump advances
+    virtualIF: true,               // the client's virtual interrupt flag (0900/0901/0902)
     unimplemented: new Map(),      // INT 31h AX values a client asked for and we refused
     segSels: new Map(),
     dosBlocks: new Map(),          // 0100 selector -> real-mode segment, for 0101/0102            // 0002: real-mode segment -> selector, never freed
@@ -67,7 +68,7 @@ export function installDPMI(machine) {
     memTop: 0,                     // DPMI heap: grows DOWN from the host tables (set below)
     blocks: new Map(),             // handle -> { base, size }
     log: null,                     // set by a probe to record real-mode call targets
-    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.freeSels = []; this.unimplemented = new Map(); this.segSels = new Map(); this.dosBlocks = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
+    reset() { this.active = false; this.is32 = false; this.nextSel = SEL_CLIENT; this.freeSels = []; this.virtualIF = true; this.unimplemented = new Map(); this.segSels = new Map(); this.dosBlocks = new Map(); this.pmVec = new Array(256).fill(null); this.excVec = new Array(32).fill(null); this.rmCalls = []; this.callbacks = []; },
   };
 
   /** Write one 8-byte descriptor. `access` is the P/DPL/S/type byte, `gran` the G/D/limit-high byte. */
@@ -507,15 +508,26 @@ export function installDPMI(machine) {
         return ok();
       }
 
-      // 0900/0901/0902 — the client's VIRTUAL interrupt flag. A host that runs its client at ring 3
-      // with IOPL 3 has no separate virtual flag to keep: IF itself is the state, and CLI/STI reach
-      // it. So report IF and set it, which is what the client's own CLI/STI would have done.
-      //   out: AX = the PREVIOUS state, 0 = disabled, 1 = enabled
+      // 0900/0901/0902 — the client's VIRTUAL interrupt flag. Virtual is the whole point: a host
+      // keeps this state per client and does NOT disable the machine's interrupts for it, so the
+      // hardware keeps being serviced while the client believes it is in a critical section.
+      //
+      // Mapping it onto the real IF, as this first did, latched the machine: Quake calls 0900
+      // thirty-four times and 0901 never — it re-enables by other means — so IF went to 0 on the
+      // 29th call and stayed there. Its own protected-mode INT 9 handler was installed and correct
+      // (pmVec[9] = 0047:009a0000) and never saw a scancode, because raiseKeyboardIRQ will not
+      // raise with IF clear. It sat on "Press a key" for ever.
+      //
+      // The client runs at IOPL 3, so its own CLI/STI reach the real IF and control delivery
+      // faithfully; this flag is tracked and reported, not enforced. A host that virtualises would
+      // also QUEUE interrupts taken while the client had them off and deliver them on the way back
+      // — we do not, and that is the part of the contract still missing here.
+      //   out: AL = the PREVIOUS state, 0 = disabled, 1 = enabled
       case 0x0900: case 0x0901: case 0x0902: {
         const fn = c.ax;                       // read it before AX becomes the answer
-        const was = (c.flags & IF_FLAG) ? 1 : 0;
-        if (fn === 0x0900) c.flags &= ~IF_FLAG;
-        else if (fn === 0x0901) c.flags |= IF_FLAG;
+        const was = dpmi.virtualIF ? 1 : 0;
+        if (fn === 0x0900) dpmi.virtualIF = false;
+        else if (fn === 0x0901) dpmi.virtualIF = true;
         c.ax = was;
         return ok();
       }

@@ -843,7 +843,12 @@ export function installBIOS(machine, opts = {}) {
   // port 0x60 + IRQ1. No guest ISR -> drop them; the BIOS INT 16h / keyQueue path serves those.
   machine.pumpKeyboard = () => {
     if (kb.obf || kb.scans.length === 0) return;
-    if (machine.getVector(9).seg === 0xf000) { kb.scans.length = 0; return; }   // no guest INT 9h ISR
+    // "No guest ISR" has to mean BOTH tables. A DPMI client installs its keyboard handler with
+    // INT 31h AX=0205, in the PROTECTED-mode vector — the real-mode IVT keeps the BIOS stub — so
+    // testing only the IVT threw away every scancode meant for it. Quake sat on "Press a key" with
+    // a correct handler at pmVec[9] that was never given one.
+    const pmVec9 = machine.dpmi && machine.dpmi.active && machine.dpmi.pmVec && machine.dpmi.pmVec[9];
+    if (!pmVec9 && machine.getVector(9).seg === 0xf000) { kb.scans.length = 0; return; }   // no guest INT 9h ISR
     kb.data = kb.scans.shift(); kb.obf = true;                 // stage the scancode into port 0x60
     machine.hwIrqPending = true;                               // fire IRQ1 as soon as the guest sets IF
   };
