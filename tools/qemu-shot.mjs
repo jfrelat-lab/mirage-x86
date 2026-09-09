@@ -33,10 +33,15 @@ if (!existsSync(floppy)) { console.error(`missing ${floppy}`); process.exit(2); 
 const work = mkdtempSync(join(tmpdir(), 'qshot-'));
 // `prog` may be a DIRECTORY: a game needs its data files beside it, and a single-file staging could
 // only ever capture a self-contained .COM. QSHOT_EXE names the program to run inside it.
-let runName = 'PROG.COM';
+let runName = 'PROG.COM', subdir = '';
 if (statSync(prog).isDirectory()) {
   if (!process.env.QSHOT_EXE) { console.error('a directory needs QSHOT_EXE=<PROGRAM.EXE>'); process.exit(2); }
-  cpSync(prog, work, { recursive: true });
+  // Into a SUBDIRECTORY, never the root. A FAT root directory holds a bounded number of entries, and
+  // vvfat refuses the whole drive when it overflows — "Too many entries in root directory", then
+  // "Could not read directory", and no capture at all. The Windows 3.0 tree is ~700 files, so this is
+  // not an edge case; a subdirectory costs one `cd` and has no limit.
+  cpSync(prog, join(work, 'PROG'), { recursive: true });
+  subdir = 'PROG';
   runName = process.env.QSHOT_EXE;
 } else copyFileSync(prog, join(work, 'PROG.COM'));
 // QSHOT_DPMI=<path to CWSDPMI.EXE> installs a DPMI host before the program runs. The MS-DOS floppy
@@ -106,6 +111,7 @@ const type = async (s) => {
   mon('sendkey ret'); await sleep(1200);
   await type('c:');                         // vvfat is the first hard disk
   await sleep(800);
+  if (subdir) { await type('cd ' + subdir); await sleep(800); }
   // QSHOT_PRE runs an arbitrary sequence at the prompt before the program: entries separated by ';',
   // where '<ret>' is a bare Enter (for answering an interactive tool's prompts) and '<wait>' pauses.
   // CWSDPMI needs it for a .COM that owns all of conventional memory — see the header note.

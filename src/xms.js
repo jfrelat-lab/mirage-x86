@@ -60,7 +60,10 @@ export function installXMS(machine) {
         cpu.ax = 0x0300; cpu.bx = 0x0301; cpu.dx = 0; break;
       case 0x03: case 0x05: setA20(true); ok(); break;         // global / local enable A20
       case 0x04: case 0x06: ok(); break;                       // global / local disable A20 (we keep it on; harmless)
-      case 0x07: cpu.ax = machine.mem.a20 ? 1 : 0; break;      // query A20 state
+      // Query A20 state. On the failure answer (A20 off) the spec still wants an error code in BL;
+      // leaving BL alone handed back whatever the PREVIOUS call had put there — Windows saw BL=91h
+      // from the HMA request just before it, which is not an A20 error at all.
+      case 0x07: if (machine.mem.a20) cpu.ax = 1; else { cpu.ax = 0; cpu.bx = (cpu.bx & ~0xff) | 0x00; } break;
       case 0x08: {                                             // query free extended memory (KB)
         const freeKb = Math.max(0, Math.min(0xffff, (xms.max - xms.top) >> 10));
         cpu.ax = freeKb; cpu.dx = freeKb; break;               // AX = largest block, DX = total (single pool)
@@ -123,7 +126,10 @@ export function installXMS(machine) {
         mem.move(xms.top, b.base, b.size);
         b.base = xms.top; b.size = want; recomputeTop(); ok(); break;
       }
-      case 0x01: case 0x02: err(0x91); break;                  // request / release HMA — we don't manage the HMA
+      // Request / release HMA. 90h ("HMA does not exist"), not 91h ("HMA already in use"): AH=00
+      // above reports DX=0, i.e. no HMA, and 91h contradicts that — it tells the caller the HMA is
+      // real and held by somebody else.
+      case 0x01: case 0x02: err(0x90); break;
       case 0x10: case 0x11: err(0x80); break;                  // UMB — not implemented
       default: err(0x80); break;                               // 80h: function not implemented
     }
