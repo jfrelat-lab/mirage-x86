@@ -4,6 +4,11 @@
         bits 16
         mov     ax, 0x1687
         int     0x2f
+        ; A host that IS present answers ES:DI = its mode-switch entry, so ES no longer addresses
+        ; this program. The stosb below would then write the digits into the HOST's segment and this
+        ; probe would report nothing in exactly the case it exists to detect — which is what it did.
+        push    cs
+        pop     es
         mov     cx, 4                   ; AX -> 4 hex digits at buf+3
         mov     di, buf + 3
 .d:     rol     ax, 4
