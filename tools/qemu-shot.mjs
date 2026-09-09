@@ -115,7 +115,23 @@ const type = async (s) => {
     else { await type(step); await sleep(900); }
   }
   if (dpmi) { await type('cwsdpmi -p'); await sleep(2500); }   // -p = stay resident for the next program
-  await type(runName.replace(/\.[^.]*$/, ''));
+  // QSHOT_ARGS is the program's command tail, and leaving it out changes which program you are
+  // looking at: Baby Jo's own BABYJO.BAT runs `BABY 2`, where the argument picks the language and
+  // skips the flag-select screen. Captured without it, QEMU sits on four flags for ever while
+  // MIRAGE — driven from the .BAT — is three screens further on, and the two are not comparable.
+  await type(runName.replace(/\.[^.]*$/, '') + (process.env.QSHOT_ARGS ? ' ' + process.env.QSHOT_ARGS : ''));
+  // QSHOT_POST is QSHOT_PRE's mirror, and a game needs it: Baby Jo opens on a language-select screen
+  // and stays there for ever, so a capture taken without a keystroke AFTER the program starts shows
+  // four flags and says nothing about the screen we came to compare. Same grammar as QSHOT_PRE, plus
+  // `<key:NAME>` for any qemu sendkey name (arrows, esc, function keys) that `type` cannot spell.
+  const post = (process.env.QSHOT_POST || '').split(';').filter(Boolean);
+  if (post.length) await sleep(Number(process.env.QSHOT_POSTDELAY) || 4000);
+  for (const step of post) {
+    if (step === '<ret>') { mon('sendkey ret'); await sleep(400); }
+    else if (step === '<wait>') { await sleep(2500); }
+    else if (step.startsWith('<key:')) { mon(`sendkey ${step.slice(5, -1)}`); await sleep(400); }
+    else { await type(step); await sleep(900); }
+  }
   await sleep(secs * 1000);
   mon(`screendump ${out}`);
   await sleep(1500);
