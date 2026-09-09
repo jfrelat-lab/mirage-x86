@@ -540,10 +540,30 @@ measurements bound the problem:
 | `xms: false` (with or without EMS) | *"Missing HIMEM.SYS; install HIMEM.SYS from your Windows Setup disks."* |
 
 So HIMEM is mandatory — enhanced mode will not start without XMS — and whichever memory driver is
-present, the **takeover** is what fails. The INT 2Fh trail ends `4300 / 4310 / 4310 / 1606`: it finds
-the XMS driver, asks twice for its entry point, and then broadcasts 1606h (Windows exiting). **It
-never calls that entry point** — no XMS call reaches our dispatch at all — so it is failing before
-the call, at the point where it wants the driver's real-mode CODE to map into each VM.
+present, the **takeover** is what fails. The INT 2Fh trail is
+`4300 / 4310 / 1600 / 1605 / 4300 / 4310 / 4310 / 1606`: it finds the XMS driver, asks for its entry
+point, broadcasts 1605h (Windows starting) and then 1606h (Windows exiting).
+
+⚠️ **Corrected 2026-09-09.** This paragraph used to say *"it never calls that entry point — no XMS
+call reaches our dispatch at all"*. That is **false**, and it pointed the investigation at the wrong
+place for two weeks. Measured with the committed runner `tools/win30.mjs`, **421 calls reach the XMS
+entry**: version (`AH=00`) twice, query free (`AH=08`), **allocate the whole pool** (`AH=09`, 13248
+KB), lock/unlock, a request for the HMA, a query of the A20 state, then **136 lock / move / unlock
+cycles**, and finally a clean `AH=05`/`AH=06`/`AH=0A` (enable A20, disable, free the handle) before
+Windows gives up. So the failure is in an ANSWER we give, not in reaching the driver. INT 67h is
+never called at all, even in the configuration whose diagnostic names the Expanded Memory driver.
+
+Two of those answers contradicted our own driver and are fixed (`2cd5825`) — **neither changes where
+Windows stops**: `AH=01` (request HMA) returned 91h "HMA already in use" while `AH=00` reports DX=0,
+"no HMA" (90h is the answer that matches), and `AH=07` (query A20) left BL untouched on its failure
+answer, so Windows read the 91h left there by the HMA request as an A20 error code.
+
+**Neither external oracle reproduces enhanced mode yet, so there is nothing to diff against.** Under
+QEMU with FreeDOS + HimemX 3.34 (a real driver, entry at `029D:0620` against our HLE `F000:0100`) the
+same tree fails *differently* — *"The conventional memory in your system is fragmented and Windows
+cannot run in 386 enhanced mode"* — which is that image's own DOS layout, not this defect. Making
+QEMU a reference here needs a cleaner boot image (MS-DOS + HIMEM.SYS from CONFIG.SYS); DOSBox-X,
+which runs Windows 3.x enhanced mode on its own HLE XMS, is the cheaper route and is untried.
 
 That is the crux: ours is a JS service behind a guarded `f000:100` stub, not 8086 code sitting in
 low memory, and V86MMGR's whole job is to virtualise a real driver. Making this work means either
