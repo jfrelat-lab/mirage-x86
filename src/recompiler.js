@@ -645,6 +645,7 @@ export class Recompiler {
     // ---- register operand source/sink as JS expressions ----
     const rR = (i, sz) => sz === 8 ? (i < 4 ? `(r[${i}]&0xff)` : `((r[${i - 4}]>>>8)&0xff)`)
       : sz === 16 ? `(r[${i}]&0xffff)` : `(r[${i}]>>>0)`;
+    let curIpStart = 0;
     const rW = (i, sz, v) => sz === 8
       ? (i < 4 ? `r[${i}]=(r[${i}]&~0xff)|((${v})&0xff);` : `r[${i - 4}]=(r[${i - 4}]&~0xff00)|(((${v})&0xff)<<8);`)
       : sz === 16 ? `r[${i}]=(r[${i}]&~0xffff)|((${v})&0xffff);` : `r[${i}]=(${v})>>>0;`;
@@ -717,7 +718,14 @@ export class Recompiler {
     // u8[] path even while planar. `m.planar` is false for text/mode-13h/demos → short-circuit.
     const { memRead, memW } = memEmitters(this.memStrategy, MM, NT);
     const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o), sz);
-    const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : memW(memAddr(o), sz, v);
+    // MIRAGE_SEGWP=1 emits the write-protection check: a store through a segment whose W bit is
+    // clear (or through a code segment) is #GP(0). `cpu.segRO` is precomputed at segment-load time,
+    // so this is one typed-array load and a predictable branch — not a call. Off by default until
+    // the bench says what it costs; test386's POST 0x12 is the section that needs it.
+    const SEGWP = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGWP;
+    const wrGuard = (seg) => SEGWP
+      ? `if(cpu.segRO[${seg}]){cpu.eip=${curIpStart};cpu.raise(13,0);return;}` : '';
+    const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : (wrGuard(o.seg) + memW(memAddr(o), sz, v));
 
     // ---- ALU emit (dst read expr, dst write fn|null, src expr, size) ----
     const alu = (op, dRead, dWrite, src, sz) => {
@@ -780,7 +788,7 @@ export class Recompiler {
     // ===================== main decode loop =====================
     while (!ended && count < maxOps) {
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
-      const ipStart = ip; ipLast = ip;    // instruction start ip — fault return address (#BR etc.)
+      const ipStart = ip; ipLast = ip; curIpStart = ip;    // instruction start ip — fault return address (#BR etc.)
       // A #PF is raised from INSIDE a memory access, so the run loop has to know which instruction
       // to restart — and only this store knows. It is emitted per instruction ONLY under the paged
       // strategy, which the machine selects exactly when paging is on, so nothing outside protected
@@ -1039,8 +1047,13 @@ export class Recompiler {
         // moffs is a bare displacement: 2 bytes normally, 4 after a 0x67 prefix (else the stream desyncs).
         case 0xa0: { const d = addr32 ? f32() : f16(); P(rW(0, 8, `m.r8(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
         case 0xa1: { const d = addr32 ? f32() : f16(); P(rW(0, sz, sz === 16 ? `m.r16(${lin(segOv >= 0 ? segOv : DS, d)})` : `m.r32(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
-        case 0xa2: { const d = addr32 ? f32() : f16(); P(`m.w8(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 8)});`); break; }
-        case 0xa3: { const d = addr32 ? f32() : f16(); P(sz === 16 ? `m.w16(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 16)});` : `m.w32(${lin(segOv >= 0 ? segOv : DS, d)},${rR(0, 32)});`); break; }
+        // MOV moffs,AL / MOV moffs,eAX write through a segment WITHOUT going near rmW, so they need
+        // the guard of their own. This is not a corner case: test386's POST 0x12 tests write
+        // protection with exactly `mov [0],eax`, which assembles to A3 — the moffs form.
+        case 0xa2: { const d = addr32 ? f32() : f16(); const sg = segOv >= 0 ? segOv : DS;
+          P(wrGuard(sg) + `m.w8(${lin(sg, d)},${rR(0, 8)});`); break; }
+        case 0xa3: { const d = addr32 ? f32() : f16(); const sg = segOv >= 0 ? segOv : DS;
+          P(wrGuard(sg) + (sz === 16 ? `m.w16(${lin(sg, d)},${rR(0, 16)});` : `m.w32(${lin(sg, d)},${rR(0, 32)});`)); break; }
 
         // ---- string ops ----
         case 0xa4: emitStr('movs', 8); break;

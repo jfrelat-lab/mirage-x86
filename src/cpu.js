@@ -41,7 +41,14 @@ export class CPU {
     // real mode. test386 POST 9 exists to catch exactly this confusion.
     this.ssB = 0;
     this.limit = new Uint32Array(6).fill(0xffff);   // cached segment limits (0xFFFF in real mode)
-    this.segAccess = new Uint8Array(6);             // cached access byte (P/DPL/S/type) — checks come later
+    this.segAccess = new Uint8Array(6);             // cached access byte (P/DPL/S/type)
+    // Writes through this segment must fault: a code segment (never writable) or a data segment
+    // whose W bit is clear. Precomputed at LOAD time so the emitted store tests one byte instead of
+    // decoding the access rights per access — the difference between free and the kind of per-access
+    // work that cost tube +6.3% / memories +12.2% when pagingOn was called that way. Real mode leaves
+    // it 0: there are no descriptors, and a segment loaded in real mode keeps read/write rights
+    // across a switch to protected mode, which is what makes unreal mode work.
+    this.segRO = new Uint8Array(6);
     // Descriptor table registers. Real mode never consults them; LGDT/LIDT load them and protected
     // mode resolves every selector through them.
     this.gdtr = { base: 0, limit: 0 };
@@ -117,6 +124,8 @@ export class CPU {
       this.seg[i] = sel;
       this.base[i] = sel << 4;
       this.limit[i] = 0xffff;
+      this.segRO[i] = 0;                         // 8086 segments are always writable
+
       if (i === CS) { this.csD = 0; this._cpl = (this.flags & VM) ? 3 : 0; }
       else if (i === SS) this.ssB = 0;
       return;
@@ -196,6 +205,7 @@ export class CPU {
     this.base[i] = (b0 | (b1 << 16) | (b2 << 24)) >>> 0;
     this.limit[i] = limit;
     this.segAccess[i] = access;
+    this.segRO[i] = (isCode || !(access & 2)) ? 1 : 0;
     // The same bit is called D on a code segment and B on a stack segment: 32-bit default operand
     // size for CS, 32-bit stack pointer for SS.
     if (i === CS) this.csD = (gran & 0x40) ? 1 : 0;
