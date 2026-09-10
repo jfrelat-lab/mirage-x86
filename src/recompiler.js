@@ -527,6 +527,13 @@ export class Recompiler {
     // The CPU generation, read once per block. Every use below is a compile-time constant folded
     // into the emitted JS, so a profile costs nothing at run time — see src/cpu-profile.js.
     const PROF = this.cpu.profile, SHIFT_MASK = PROF.shiftCountMask;
+    // MIRAGE_SEGIP=1 makes every segment load record the IP of the instruction doing it, so an
+    // exception can NAME the instruction that raised instead of the block it was in. Off by default:
+    // this is a store on a hot path, and the point is that the default emission is byte-identical.
+    // Diagnostic only — it does not touch cpu.eip, the exception frame, or control flow, unlike the
+    // setSegChecked attempt that cost golden 19/22 and drove test386 from POST 0x20 back to 0x09.
+    const SEGIP = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGIP
+      ? (ipStart) => `cpu._segIp=${ipStart};` : () => '';
     const FPREC24 = (this.cpu.fcw & 0x300) === 0;   // x87 precision control = single (see arithE)
     // Shared by LDS/LES/LSS/LFS/LGS: an offset at the effective address, then a 16-bit selector.
     // Its position depends on the operand size — +2 for a word offset, +4 for a dword.
@@ -821,7 +828,7 @@ export class Recompiler {
       switch (op) {
         // ---- segment push/pop ----
         case 0x06: P(sz === 16 ? `cpu.push16(cpu.seg[${ES}]);` : `cpu.push32(cpu.seg[${ES}]);`); break;
-        case 0x07: P(sz === 16 ? `cpu.setSeg(${ES},cpu.pop16());` : `cpu.setSeg(${ES},cpu.pop32()&0xffff);`); break;
+        case 0x07: P(SEGIP(ipStart) + (sz === 16 ? `cpu.setSeg(${ES},cpu.pop16());` : `cpu.setSeg(${ES},cpu.pop32()&0xffff);`)); break;
         // PUSH/POP of a segment register moves ONE STACK SLOT of the current operand size: 4 bytes
         // under a 32-bit operand size (0x66 in real mode, or a 32-bit code segment), 2 otherwise.
         // Only the low 16 bits are the selector; the rest is zero on push and discarded on pop.
@@ -829,9 +836,9 @@ export class Recompiler {
         // this: emitting push16 unconditionally moved the stack by 2 where it owed 4.
         case 0x0e: P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);` : `cpu.push32(cpu.seg[${CS}]);`); break;
         case 0x16: P(sz === 16 ? `cpu.push16(cpu.seg[${SS}]);` : `cpu.push32(cpu.seg[${SS}]);`); break;
-        case 0x17: P(sz === 16 ? `cpu.setSeg(${SS},cpu.pop16());` : `cpu.setSeg(${SS},cpu.pop32()&0xffff);`); break;
+        case 0x17: P(SEGIP(ipStart) + (sz === 16 ? `cpu.setSeg(${SS},cpu.pop16());` : `cpu.setSeg(${SS},cpu.pop32()&0xffff);`)); break;
         case 0x1e: P(sz === 16 ? `cpu.push16(cpu.seg[${DS}]);` : `cpu.push32(cpu.seg[${DS}]);`); break;
-        case 0x1f: P(sz === 16 ? `cpu.setSeg(${DS},cpu.pop16());` : `cpu.setSeg(${DS},cpu.pop32()&0xffff);`); break;
+        case 0x1f: P(SEGIP(ipStart) + (sz === 16 ? `cpu.setSeg(${DS},cpu.pop16());` : `cpu.setSeg(${DS},cpu.pop32()&0xffff);`)); break;
 
         // ---- BCD adjust ----
         case 0x27: cur.use |= lC | lA; P('cpu.daa();'); break;
@@ -1045,8 +1052,8 @@ export class Recompiler {
         // LDS/LES/LSS/LFS/LGS all load an offset followed by a 16-bit selector. Under 0x66 the offset
         // is a DWORD, so the selector sits at +4, not +2 — reading it at +2 loaded half the offset as
         // the segment. test386's POST-6 `o32 lss ebx,[es:di]` caught it; last of the T0.3 family.
-        case 0xc4: { const o = modrm(); P(loadPtr(o, ES, sz)); break; } // LES
-        case 0xc5: { const o = modrm(); P(loadPtr(o, DS, sz)); break; } // LDS
+        case 0xc4: { const o = modrm(); P(SEGIP(ipStart) + loadPtr(o, ES, sz)); break; } // LES
+        case 0xc5: { const o = modrm(); P(SEGIP(ipStart) + loadPtr(o, DS, sz)); break; } // LDS
         case 0xc6: { const o = modrm(); const i = f8(); P(rmW(o, 8, '' + i)); break; }
         case 0xc7: { const o = modrm(); const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(rmW(o, sz, '' + i)); break; }
         // ENTER size,level. The operand size decides the WIDTH of everything it touches: at 32 bits it

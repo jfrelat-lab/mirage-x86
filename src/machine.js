@@ -52,7 +52,14 @@ export class Machine {
     // TRANSLATION to do, and there now is.
     this.mem.cpu = this.cpu;
     // Faults that carry an error code (protected mode only) — #GP is the first we raise.
-    this.cpu.raise = (n, err) => { if (this.cpu.cr0 & 1) this.protInt(n, err); else this.swInt(n); };
+    // `faultIp` is forwarded, not dropped. Without it protInt has no way to know WHICH instruction
+    // raised: cpu.eip is written per BLOCK, so an exception could only ever name the block it was in.
+    // No caller passes it yet — this is plumbing, and each raise site is converted separately because
+    // protInt uses faultIp to set the saved EIP, which is a semantic change at every one of them.
+    this.cpu.raise = (n, err, faultIp) => {
+      this.lastFaultIp = faultIp;                       // diagnostics: undefined means "site not converted"
+      if (this.cpu.cr0 & 1) this.protInt(n, err, faultIp); else this.swInt(n);
+    };
     this.cpu.onPagingChange = () => {
       if (this.cpu.pagingOn) this.rec.memStrategy = { read: 'paged', write: 'paged' };
       this.mem.rebuildPageTables();
