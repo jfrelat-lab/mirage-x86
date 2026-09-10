@@ -64,6 +64,16 @@ console.log(`ran ${blocks.toLocaleString()} blocks, halted=${cpu.halted}, fault=
 console.log(`stopped at ${h(cpu.seg[1], 4)}:${h(cpu.eip >>> 0, 4)}`);
 console.log(`POST codes reached (${posts.length}): ${posts.map((p) => h(p)).join(' ') || '(none)'}`);
 if (posts.length) console.log(`last POST code: ${h(posts[posts.length - 1])}  <- the diagnostic`);
+// PASS/FAIL, stated rather than implied. test386 signals success by writing POST 0xFF at `postFF`
+// and only then halting; its DefaultExcHandler ends in cli/hlt too, at 0xFE88/0xFE89 followed by
+// `jmp error` at 0xFE8A. So `halted=true` alone says nothing — both outcomes halt, and reading a
+// halt as success is how "20 POST codes, halted, no fault" got quoted as a healthy run for months.
+const passed = posts.length > 0 && posts[posts.length - 1] === 0xff;
+const ip = cpu.eip >>> 0;
+const inErr = ip >= 0xfe7f && ip <= 0xfe8a;
+console.log(passed ? 'RESULT: PASS — reached POST 0xFF'
+  : `RESULT: FAIL — stopped at POST ${h(posts[posts.length - 1] ?? 0)}` +
+    `${inErr ? ', inside DefaultExcHandler (an exception it did not expect)' : ''}`);
 if (unhandled.size) {
   console.log('ports with no handler: ' +
     [...unhandled.entries()].sort((a, b) => b[1] - a[1]).map(([p, n]) => `${h(p, 3)}x${n}`).join(' '));
