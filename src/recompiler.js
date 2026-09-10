@@ -849,7 +849,15 @@ export class Recompiler {
         // this: emitting push16 unconditionally moved the stack by 2 where it owed 4.
         case 0x0e: P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);` : `cpu.push32(cpu.seg[${CS}]);`); break;
         case 0x16: P(sz === 16 ? `cpu.push16(cpu.seg[${SS}]);` : `cpu.push32(cpu.seg[${SS}]);`); break;
-        case 0x17: P(SEGIP(ipStart) + (sz === 16 ? `cpu.setSeg(${SS},cpu.pop16());` : `cpu.setSeg(${SS},cpu.pop32()&0xffff);`)); break;
+        case 0x17: {                                     // POP SS — same shape as POP ES above.
+          // Note what is NOT addressed here: POP SS also inhibits interrupts for the following
+          // instruction, so that MOV ESP can complete before an IRQ can land on a half-updated
+          // stack. That is unchanged by this conversion, which only makes a REFUSED load restartable.
+          const w = sz === 16 ? 2 : 4, t = NT();
+          P(`var ${t}=cpu.pop${sz === 16 ? '16' : '32'}()${sz === 16 ? '' : '&0xffff'};cpu.eip=${ipStart};` +
+            `if(cpu.setSeg(${SS},${t})===false){cpu.spAdd(${w});return;}`);
+          canFault = true; break;
+        }
         case 0x1e: P(sz === 16 ? `cpu.push16(cpu.seg[${DS}]);` : `cpu.push32(cpu.seg[${DS}]);`); break;
         case 0x1f: {                                     // POP DS — same shape as POP ES above
           const w = sz === 16 ? 2 : 4, t = NT();
