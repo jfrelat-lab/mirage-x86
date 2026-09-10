@@ -492,6 +492,10 @@ export class CPU {
       return;
     }
     const cpl = this.cpl;
+    // A faulting IRET consumes NOTHING. The frame is popped before the target can be refused, so
+    // without this the stack keeps whatever the pops took — three items, or five on an outward
+    // return — and the handler runs on a skewed stack.
+    const esp0 = this.reg[4];
     const eip = is32 ? (pop() >>> 0) : pop();
     const cs = pop() & 0xffff;
     const fl = pop();
@@ -499,14 +503,19 @@ export class CPU {
     // short of a task switch. The frame is nine dwords, not three: the four data segments ride in it
     // because a V86 task's segment registers are 8086 values that no descriptor can describe.
     if (is32 && cpl === 0 && (fl & VM)) return this.enterV86(eip, cs, fl);
+    // On a refused CS the returns below keep EIP where the emitter left it — at the IRET itself — and
+    // skip the EFLAGS write at the end of this function. Loading CS and THEN assigning eip/flags
+    // regardless is how a reported fault was overwritten by the very target that had been denied.
     if ((cs & 3) > cpl) {                        // outward transition: the frame carries the stack
       const esp = is32 ? (pop() >>> 0) : pop();
       const ss = pop() & 0xffff;
-      this.setSeg(CS, cs); this.eip = eip;
+      if (this.setSeg(CS, cs) === false) { this.reg[4] = esp0; return; }
+      this.eip = eip;
       this.setSeg(SS, ss); this.reg[4] = esp;    // SS first: it decides whether ESP is 16 or 32 bits
       this.nullInvalidDataSegs(cs & 3);
     } else {
-      this.setSeg(CS, cs); this.eip = eip;
+      if (this.setSeg(CS, cs) === false) { this.reg[4] = esp0; return; }
+      this.eip = eip;
     }
     // IOPL and IF are not the returning code's to write. Only CPL 0 may change IOPL, and IF only
     // when CPL <= IOPL — the same rule POPF already followed. Writing the popped EFLAGS wholesale
