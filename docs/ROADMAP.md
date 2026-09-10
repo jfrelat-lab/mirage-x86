@@ -300,6 +300,36 @@ All three fields now match dosbox-x exactly.
 | G7 | **Quake, pixel-for-pixel against DOSBox-X** (opened 2026-09-07, proposed by the PRISM session). Same binary, same data, same args — so what is measured is this emulator and nothing else. Stop on the **Nth call to `R_RenderView`** (N=200), not on a presented frame and not on a block budget: one call = one world frame, so the number of console screens drawn first stops mattering. Args `-nosound -nocdaudio +host_framerate 0.05 +con_notifytime 0`. ⚠️ **`+host_framerate` is not enough.** `host.c:643` calls `rand()` once per main-loop iteration, *before* `Host_FilterTime` decides whether the iteration simulates anything (id's comment: "keep the random time dependent"), so the PRNG advances per LOOP, and the loop count depends on host clock speed. PRISM measured its DOS build at 3061 loops when X11 was at 90 world frames — 289 of 64000 pixels differ at frame 200, every one of them placed by `rand()`. PRISM neutralises it by replacing `Sys_FloatTime`; we cannot replace a function but we are the hardware, so the equivalent is to step the BDA tick and the PIT counter by a **fixed 1/72 s per latch** instead of indexing them on real time — which also makes our own captures reproducible. Without this the diff is red with particles and says nothing. **The reference images are regenerated, not archived**: PRISM's `tools/gate-pixels.mjs --data=<dir with id1/> --frames=200 --png=<prefix>` reproduces its four platform layers deterministically, so ask for them when the comparison actually runs rather than pinning a file that may predate a renderer change. Note also that PRISM needs the same fixed-step clock to compare itself against DOSBox-X (its P3.6), so compare notes before either side builds it twice. | M | open |
 | G4 | ⚠️ **NO LONGER REPRODUCES (re-measured 2026-09-09)** — the head-14-px-right-of-the-body defect is absent from six MIRAGE samples (ticks 600 / 1200 / 2600 and block budgets 50 M / 150 M / 400 M), and a DOSBox capture at the same trigger shows the same coherent sprite. Something between 2026-08-19 and now fixed it; **which fix is not known**, so this is recorded as not-reproducing rather than as understood. Three hypotheses were tested and all three died: (a) the game port — the memory note said changing 0x201 "measurably changes Baby Jo", but captures under 0xFF and 0xF0 are **byte-identical PNGs**; (b) MIRAGE fabricating an input to leave the language-select screen — the BIOS keyboard buffer stays head=tail=0 throughout and the guest reads exactly four ports (0x3DA, 0x388, 0x201, 0x40), no keyboard at all, and DOSBox with NO keys reaches the same menu; (c) a beam miscalibration — measured 2.78 then 1.97 retraces per BIOS tick against 3.845 expected, and **both numbers were undersampling artifacts**: the retrace pulse is 0.45% of a frame, so a sampler taking ~59 samples per frame catches roughly a quarter of them. Computed exactly from the model (`vgaPeriod = pitBase / 3.845`), the ratio is 3.845. ⚠️ **Open, and it is a harness question, not a MIRAGE one**: under `tools/qemu-shot.mjs` the game sits on the language-select screen for 165 s of guest time (~3000 BIOS ticks) while MIRAGE and DOSBox both reach the menu by tick 2600, with or without the `BABY 2` language argument. Until that is explained, QEMU is not a usable reference for this title. | M | not reproducing; cause unknown |
 
+### Segment protection at ACCESS time — why test386 stops at POST 0x12 (named 2026-09-10)
+
+test386 does **not** pass. It signals success by writing POST **0xFF** at `postFF` and only then
+halting; we stop at `0x00d0:0xfe8a`, which is `jmp error` inside `DefaultExcHandler`. Both outcomes
+halt, which is why "20 POST codes, halted, no fault" was quoted as healthy for months —
+`tools/run-test386.mjs` now prints PASS/FAIL instead (`a572fd8`).
+
+**It is not an unexpected exception.** Measured: **zero** exceptions are raised while POST 0x12 is in
+force. `DefaultExcHandler` and `error` are the same address, and test386 jumps there itself when a
+check fails — so this is a failed assertion, not a fault we mishandled.
+
+The section is *"Verify other memory access faults"*, and its first test is:
+
+    ; #GP(0) If the destination operand is in a non-writable segment.
+    mov ax, RO_SEG_PROT      ; write protect DS
+    mov ds, ax
+    protModeFaultTest EX_GP, 0, mov [0],eax
+
+**We never raise it.** `cpu.segAccess[]` caches each segment's access byte with the comment "checks
+come later", and grepping the whole of `src/` shows it is **written once and read nowhere**. There is
+no segment-limit check in the emitted code either. So a write through a read-only data segment
+succeeds, and every access-time protection rule this section tests is absent.
+
+⚠️ **This is a hot-path change, so measure before and after.** A writability test on every emitted
+store, and a limit test on every access, is exactly the kind of per-access work that cost
+`tube +6.3% / memories +12.2%` when `pagingOn` was called per access (see the memory-dispatch row).
+The access byte is already cached, so the test is a compare on a value we hold — but it must be
+emitted, not called. Start with WRITES only: that is what POST 0x12's first test needs, and it is the
+smaller half.
+
 ## E · Tooling / infra
 
 | # | Task | Size | Notes |
