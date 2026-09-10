@@ -340,8 +340,19 @@ export class CPU {
    */
   farCall(sel, off, is32, faultIp) {
     const plain = () => {
+      // A far CALL that FAULTS pushes nothing and goes nowhere. Both halves of that were wrong here:
+      // CS:EIP were pushed BEFORE the load could be refused, leaving two words on the stack, and
+      // `this.eip = off` ran AFTERWARDS, overwriting the entry point the delivered fault had just
+      // set — so the exception was reported and then silently discarded. Rewind and keep the
+      // handler's EIP instead. In real mode setSeg cannot refuse, so this guard is inert there.
+      const esp0 = this.reg[4];
       this.pushW(this.seg[CS], is32); this.pushW(this.eip >>> 0, is32);
-      this.setSeg(CS, sel); this.eip = off >>> 0;
+      if (this.setSeg(CS, sel) === false) {
+        this.reg[4] = esp0;
+        if (faultIp !== undefined) this.eip = faultIp >>> 0;
+        return;
+      }
+      this.eip = off >>> 0;
     };
     if (!(this.cr0 & 1)) return plain();
     const d = this.readDesc(sel);
