@@ -1499,8 +1499,11 @@ export class Recompiler {
         case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
         // CALLF under 0x66 pushes CS and a 32-bit return offset, and reads a 48-bit far pointer.
         case 3: { const a = memAddr(o);
-          P(sz === 16 ? `cpu.push16(cpu.seg[${CS}]);cpu.push16(${SEQ()});var _o=m.r16(${a});cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}));cpu.eip=_o;`
-                      : `cpu.push32(cpu.seg[${CS}]);cpu.push32(${SEQ()});var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}));cpu.eip=_o>>>0;`);
+          // As JMPF below, plus the stack: CS and the return offset are pushed BEFORE the target can
+          // be refused, so a faulting far call left two words behind. ESP is rewound on refusal and
+          // EIP kept at this instruction — a far CALL that faults pushes nothing and goes nowhere.
+          P(sz === 16 ? `var _e=cpu.reg[4];cpu.push16(cpu.seg[${CS}]);cpu.push16(${SEQ()});var _o=m.r16(${a});cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}))===false){cpu.reg[4]=_e;return;}cpu.eip=_o;`
+                      : `var _e=cpu.reg[4];cpu.push32(cpu.seg[${CS}]);cpu.push32(${SEQ()});var _o=m.r32(${a})>>>0;cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}))===false){cpu.reg[4]=_e;return;}cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // JMP Ev
         // JMPF Ev — the far pointer's layout follows the operand size, as CALLF above: 16-bit is a
