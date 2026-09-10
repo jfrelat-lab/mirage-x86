@@ -851,7 +851,12 @@ export class Recompiler {
         case 0x16: P(sz === 16 ? `cpu.push16(cpu.seg[${SS}]);` : `cpu.push32(cpu.seg[${SS}]);`); break;
         case 0x17: P(SEGIP(ipStart) + (sz === 16 ? `cpu.setSeg(${SS},cpu.pop16());` : `cpu.setSeg(${SS},cpu.pop32()&0xffff);`)); break;
         case 0x1e: P(sz === 16 ? `cpu.push16(cpu.seg[${DS}]);` : `cpu.push32(cpu.seg[${DS}]);`); break;
-        case 0x1f: P(SEGIP(ipStart) + (sz === 16 ? `cpu.setSeg(${DS},cpu.pop16());` : `cpu.setSeg(${DS},cpu.pop32()&0xffff);`)); break;
+        case 0x1f: {                                     // POP DS — same shape as POP ES above
+          const w = sz === 16 ? 2 : 4, t = NT();
+          P(`var ${t}=cpu.pop${sz === 16 ? '16' : '32'}()${sz === 16 ? '' : '&0xffff'};cpu.eip=${ipStart};` +
+            `if(cpu.setSeg(${DS},${t})===false){cpu.spAdd(${w});return;}`);
+          canFault = true; break;
+        }
 
         // ---- BCD adjust ----
         case 0x27: cur.use |= lC | lA; P('cpu.daa();'); break;
