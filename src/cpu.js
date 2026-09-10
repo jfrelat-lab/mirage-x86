@@ -396,8 +396,14 @@ export class CPU {
     this.eip = gOff >>> 0;
   }
 
-  /** Far JMP. A gate is followed the same way, but nothing is pushed and no stack switch happens. */
-  farJmp(sel, off) {
+  /**
+   * Far JMP. A gate is followed the same way, but nothing is pushed and no stack switch happens.
+   *
+   * `faultIp` matters here for the same reason it does in farCall: without it a refused target
+   * reports the fault and then falls through to `this.eip = off`, which overwrites the entry point
+   * the delivery just set — the exception is raised and discarded in the same breath.
+   */
+  farJmp(sel, off, faultIp) {
     if (this.cr0 & 1) {
       const d = this.readDesc(sel);
       if (d && d.sys && (d.type === 0x04 || d.type === 0x0c)) {
@@ -412,12 +418,17 @@ export class CPU {
         const cpl = this.cpl;
         const conforming = (d.type & 0x0c) === 0x0c;
         if (conforming ? d.dpl > cpl : ((sel & 3) > cpl || d.dpl !== cpl)) {
+          if (faultIp !== undefined) this.eip = faultIp >>> 0;
           this.raise(13, sel & 0xfffc);
           return;
         }
       }
     }
-    this.setSeg(CS, sel); this.eip = off >>> 0;
+    if (this.setSeg(CS, sel) === false) {
+      if (faultIp !== undefined) this.eip = faultIp >>> 0;
+      return;
+    }
+    this.eip = off >>> 0;
   }
 
   /** Far RET. Like IRET, an outward return also restores the caller's SS:ESP. */
