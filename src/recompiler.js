@@ -828,7 +828,20 @@ export class Recompiler {
       switch (op) {
         // ---- segment push/pop ----
         case 0x06: P(sz === 16 ? `cpu.push16(cpu.seg[${ES}]);` : `cpu.push32(cpu.seg[${ES}]);`); break;
-        case 0x07: P(SEGIP(ipStart) + (sz === 16 ? `cpu.setSeg(${ES},cpu.pop16());` : `cpu.setSeg(${ES},cpu.pop32()&0xffff);`)); break;
+        case 0x07: {
+          // POP ES that FAULTS must look like it never happened. Two things follow, and MOV Sreg —
+          // the only segment load converted before this — needs neither, which is why its pattern
+          // cannot simply be copied:
+          //   1. `cpu.eip = ipStart` then RETURN, so the delivered frame points at this instruction.
+          //      Without the return, the block runs on and its own `cpu.eip = <next>` overwrites the
+          //      handler entry the fault just set, and the exception silently vanishes.
+          //   2. ESP is restored. The pop happens BEFORE setSeg can refuse, so a handler that IRETs
+          //      back here would pop a second time and skew the stack by one slot.
+          const w = sz === 16 ? 2 : 4, t = NT();
+          P(`var ${t}=cpu.pop${sz === 16 ? '16' : '32'}()${sz === 16 ? '' : '&0xffff'};cpu.eip=${ipStart};` +
+            `if(cpu.setSeg(${ES},${t})===false){cpu.spAdd(${w});return;}`);
+          canFault = true; break;
+        }
         // PUSH/POP of a segment register moves ONE STACK SLOT of the current operand size: 4 bytes
         // under a 32-bit operand size (0x66 in real mode, or a 32-bit code segment), 2 otherwise.
         // Only the low 16 bits are the selector; the rest is zero on push and discarded on pop.
