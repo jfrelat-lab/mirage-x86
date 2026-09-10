@@ -1221,7 +1221,7 @@ export class Recompiler {
         case 0xfc: P(`cpu.flags&=~${DF};`); break;                                      // CLD
         case 0xfd: P(`cpu.flags|=${DF};`); break;                                       // STD
         case 0xfe: { const o = modrm(); const a = NT(), rr = NT(); if (o.reg === 0) { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}+1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},8,false);`, lNOC); } else { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}-1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},8,false);`, lNOC); } break; }
-        case 0xff: emitGroup5(sz); break;
+        case 0xff: emitGroup5(sz, ipStart); break;
 
         case 0x0f: { decode0F(sz); break; }
 
@@ -1486,7 +1486,10 @@ export class Recompiler {
       }
     }
 
-    function emitGroup5(sz) {
+    // `ipStart` is threaded in rather than read from an enclosing scope: this is a separate
+    // function, and referencing an ipStart that is not in scope throws at BLOCK COMPILE time — which
+    // took test386 from 20 POST codes to 6 when LSS/LFS/LGS were converted that way.
+    function emitGroup5(sz, ipStart) {
       const o = modrm();
       switch (o.reg) {
         case 0: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}+1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break; }
@@ -1503,8 +1506,11 @@ export class Recompiler {
         // JMPF Ev — the far pointer's layout follows the operand size, as CALLF above: 16-bit is a
         // word offset with the selector at +2, 32-bit a dword offset with the selector at +4.
         case 5: { const a = memAddr(o);
-          P(sz === 16 ? `var _o=m.r16(${a});cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}));cpu.eip=_o;`
-                      : `var _o=m.r32(${a})>>>0;cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}));cpu.eip=_o>>>0;`);
+          // A refused selector must leave EIP at THIS instruction. Setting it first and returning on
+          // refusal is what keeps the delivered fault: the `cpu.eip=_o` below used to run even after
+          // setSeg had reported one, overwriting the handler's entry point.
+          P(sz === 16 ? `var _o=m.r16(${a});cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}))===false)return;cpu.eip=_o;`
+                      : `var _o=m.r32(${a})>>>0;cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}))===false)return;cpu.eip=_o>>>0;`);
           P('return;'); ended = true; break; } // JMPF
         case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }
