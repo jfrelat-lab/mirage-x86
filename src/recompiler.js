@@ -705,7 +705,38 @@ export class Recompiler {
       if (segOv >= 0) seg = segOv;
       return { isReg: false, reg, rm, seg, off };
     };
-    const memAddr = (o) => { if (o._t === undefined) { o._t = NT(); P(`var ${o._t}=${lin(o.seg, o.off)};`); } return o._t; };
+    // MIRAGE_SEGLIM=1 emits the segment LIMIT check, on reads as well as writes: test386's POST 0x12
+    // tests the read side FIRST (`mov eax,[0x9fffd]`), so a write-only check cannot get past it.
+    // The offset goes into a temp before being compared — `o.off` is an expression string, and
+    // evaluating it twice would repeat whatever side effects it carries.
+    // Expand-down segments invert the rule and are NOT handled here; they are rare enough that the
+    // corpus does not exercise them, and getting them wrong silently is worse than not checking.
+    const SEGLIM = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGLIM;
+    const LOCKUD = typeof process !== 'undefined' && process.env && process.env.MIRAGE_LOCKUD;
+    // ADD/OR/ADC/SBB/AND/SUB/XOR r/m,r; the 80/81/83 immediate group; XCHG; F6/F7 (NOT/NEG);
+    // FE/FF (INC/DEC); and 0F for BTS/BTR/BTC/CMPXCHG/XADD, which are let through wholesale.
+    const LOCKABLE = new Set([0x00, 0x01, 0x08, 0x09, 0x10, 0x11, 0x18, 0x19, 0x20, 0x21,
+      0x28, 0x29, 0x30, 0x31, 0x80, 0x81, 0x83, 0x86, 0x87, 0xf6, 0xf7, 0xfe, 0xff, 0x0f]);
+    // The ACCESS SIZE is part of the rule: the last byte touched must be within the limit, not the
+    // first. test386 reads a dword at offset 0x9FFFD of a segment whose limit is 0x9FFFF — the offset
+    // is inside and the access is not, and a check on the offset alone lets it through. That is
+    // exactly what a first version of this did, and it looked like the guard simply never fired.
+    // The moffs forms (A0-A3) address memory WITHOUT a modrm, so they never reach memAddr and need
+    // both guards spelled out. This caught me twice: the write guard on rmW alone left `mov [0],eax`
+    // (A3) unprotected, and then the limit guard on memAddr alone left `mov eax,[0x9fffd]` (A1)
+    // unprotected — each time the section under test was the one instruction the guard missed.
+    const limGuardOff = (seg, off, bytes) => SEGLIM
+      ? `if(${(off >>> 0) + bytes - 1}>cpu.limit[${seg}]&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
+        `cpu.eip=${curIpStart};cpu.raise(${seg === SS ? 12 : 13},0);return;}` : '';
+    const limGuard = (o, bytes) => {
+      if (!SEGLIM) return '';
+      const t = NT();
+      return `var ${t}=((${o.off})>>>0)+${bytes - 1};if(${t}>cpu.limit[${o.seg}]&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
+        `cpu.eip=${curIpStart};cpu.raise(${o.seg === SS ? 12 : 13},0);return;}`;
+    };
+    // `bytes` defaults to 1 when the caller does not say: under-checking is safe (it only misses a
+    // fault), over-checking would invent one.
+    const memAddr = (o, sz) => { if (o._t === undefined) { o._t = NT(); P(limGuard(o, sz ? (sz >> 3) : 1) + `var ${o._t}=${lin(o.seg, o.off)};`); } return o._t; };
     // Direct typed-array memory access: u8[]/dv reads and writes inline instead
     // of m.r8/w8 calls. Addresses from memAddr are already &MM-masked; composed lanes mask
     // a+1.. (they escape MM only at the very top of RAM, but that wraps and is reachable).
@@ -717,7 +748,7 @@ export class Recompiler {
     // range check keeps every other access (stack/data/code, all of mode-13h) on the fast
     // u8[] path even while planar. `m.planar` is false for text/mode-13h/demos → short-circuit.
     const { memRead, memW } = memEmitters(this.memStrategy, MM, NT);
-    const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o), sz);
+    const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o, sz), sz);
     // MIRAGE_SEGWP=1 emits the write-protection check: a store through a segment whose W bit is
     // clear (or through a code segment) is #GP(0). `cpu.segRO` is precomputed at segment-load time,
     // so this is one typed-array load and a predictable branch — not a call. Off by default until
@@ -725,7 +756,7 @@ export class Recompiler {
     const SEGWP = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGWP;
     const wrGuard = (seg) => SEGWP
       ? `if(cpu.segRO[${seg}]){cpu.eip=${curIpStart};cpu.raise(13,0);return;}` : '';
-    const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : (wrGuard(o.seg) + memW(memAddr(o), sz, v));
+    const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : (wrGuard(o.seg) + memW(memAddr(o, sz), sz, v));
 
     // ---- ALU emit (dst read expr, dst write fn|null, src expr, size) ----
     const alu = (op, dRead, dWrite, src, sz) => {
@@ -800,7 +831,7 @@ export class Recompiler {
       // real code — it is garbage the tier-2 region walker speculatively reached (a Jcc/JMP
       // successor that lands in data). Without this cap the loop would consume prefix bytes
       // forever (wrapping the 64K segment), since `count` only advances past the prefixes.
-      let op = f8(), pfx = 0;
+      let op = f8(), pfx = 0, lock = false;
       for (; pfx++ < 15;) {
         if (op === 0x66) { opsize = d ? 16 : 32; op = f8(); }        // operand-size: INVERTS the default
         else if (op === 0x67) { addr32 = !d; op = f8(); }           // address-size: inverts likewise
@@ -810,10 +841,20 @@ export class Recompiler {
         else if (op === 0x26) { segOv = ES; op = f8(); }
         else if (op === 0x64) { segOv = FS; op = f8(); }
         else if (op === 0x65) { segOv = GS; op = f8(); }
-        else if (op === 0xf0) { op = f8(); }                       // LOCK (ignored)
+        else if (op === 0xf0) { lock = true; op = f8(); }          // LOCK — validated below
         else if (op === 0xf2) { rep = 0xf2; op = f8(); }
         else if (op === 0xf3) { rep = 0xf3; op = f8(); }
         else break;
+      }
+      // LOCK is legal only on a read-modify-write to MEMORY, and only for a fixed set of opcodes;
+      // anywhere else it is #UD. test386's POST 0x12 ends on `lock mov [0],eax`, which is exactly the
+      // illegal case. The set below is deliberately GENEROUS — it ignores the reg-field refinements
+      // (CMP under 80/81/83 is not lockable) and does not require a memory destination, so it can
+      // only MISS a #UD, never invent one. An invented #UD would break real programs; a missed one
+      // leaves today's behaviour.
+      if (LOCKUD && lock && !LOCKABLE.has(op)) {
+        P(`cpu.eip=${ipStart};cpu.raise(6);return;`);
+        canFault = true; ended = true; break;
       }
       const sz = opsize;
       count++;
@@ -1045,15 +1086,17 @@ export class Recompiler {
 
         // ---- MOV AL/eAX <-> moffs ----
         // moffs is a bare displacement: 2 bytes normally, 4 after a 0x67 prefix (else the stream desyncs).
-        case 0xa0: { const d = addr32 ? f32() : f16(); P(rW(0, 8, `m.r8(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
-        case 0xa1: { const d = addr32 ? f32() : f16(); P(rW(0, sz, sz === 16 ? `m.r16(${lin(segOv >= 0 ? segOv : DS, d)})` : `m.r32(${lin(segOv >= 0 ? segOv : DS, d)})`)); break; }
+        case 0xa0: { const d = addr32 ? f32() : f16(); const sg = segOv >= 0 ? segOv : DS;
+          P(limGuardOff(sg, d, 1) + rW(0, 8, `m.r8(${lin(sg, d)})`)); break; }
+        case 0xa1: { const d = addr32 ? f32() : f16(); const sg = segOv >= 0 ? segOv : DS;
+          P(limGuardOff(sg, d, sz >> 3) + rW(0, sz, sz === 16 ? `m.r16(${lin(sg, d)})` : `m.r32(${lin(sg, d)})`)); break; }
         // MOV moffs,AL / MOV moffs,eAX write through a segment WITHOUT going near rmW, so they need
         // the guard of their own. This is not a corner case: test386's POST 0x12 tests write
         // protection with exactly `mov [0],eax`, which assembles to A3 — the moffs form.
         case 0xa2: { const d = addr32 ? f32() : f16(); const sg = segOv >= 0 ? segOv : DS;
-          P(wrGuard(sg) + `m.w8(${lin(sg, d)},${rR(0, 8)});`); break; }
+          P(limGuardOff(sg, d, 1) + wrGuard(sg) + `m.w8(${lin(sg, d)},${rR(0, 8)});`); break; }
         case 0xa3: { const d = addr32 ? f32() : f16(); const sg = segOv >= 0 ? segOv : DS;
-          P(wrGuard(sg) + (sz === 16 ? `m.w16(${lin(sg, d)},${rR(0, 16)});` : `m.w32(${lin(sg, d)},${rR(0, 32)});`)); break; }
+          P(limGuardOff(sg, d, sz >> 3) + wrGuard(sg) + (sz === 16 ? `m.w16(${lin(sg, d)},${rR(0, 16)});` : `m.w32(${lin(sg, d)},${rR(0, 32)});`)); break; }
 
         // ---- string ops ----
         case 0xa4: emitStr('movs', 8); break;
