@@ -330,6 +330,17 @@ encode lenient behaviour and need re-baselining" (not established — the paths 
 and "the guard never fires" (a logging artifact: the runs used to check it could not reach the
 instruction).
 
+**Narrowed with `tools/trace-diff.mjs` (new, 2026-09-11).** Blocks 1-14 are IDENTICAL in both
+configurations, registers included. The divergence happens INSIDE the block starting at `0814:0110`,
+entered with identical state — and that block is emitted identically under both flags (dumped with
+`tools/trace.js --dump`). It ends in `call bx` where BX's low byte is **read from memory**
+(`r[3] = byte at DS:BX+58`), so the call target is data-dependent, in a program that self-modifies.
+
+That last point is the trap: **a block dumped early is not the block that runs later.** Three readings
+here were taken from bodies compiled at tick 3 and were misleading for that reason. Dump the body at
+the moment of divergence (hook `rec.run`, count blocks) — and note that doing so with
+`MIRAGE_KEEP_SRC`/`MIRAGE_NOTIER2` changes block boundaries, so the numbering shifts.
+
 ⚠️ Note for whoever picks this up: PSP+0x0A..0x15 hold OUR values. On a real DOS those saved vectors
 point into COMMAND.COM and would not contain `F0 53` at all, so what the guest executes there is
 emulator-specific either way.
