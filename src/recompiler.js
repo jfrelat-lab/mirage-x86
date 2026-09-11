@@ -1147,7 +1147,11 @@ export class Recompiler {
         case 0xc8: {
           const szv = f16(), lvl = f8() & 0x1f; const ft = NT();
           if (sz === 32) {
-            P(`cpu.push32(r[5]>>>0);var ${ft}=cpu.stackPtr;`);                                 // push EBP; frameTemp = ESP
+            // FrameTemp is the FULL ESP, not the 16-bit stack pointer. On a 16-bit stack SP wraps
+            // while ESP's high half is untouched, and both the dword this pushes for a nested level
+            // and the final BP are taken from it — test386 compares the pushed slot against EBP
+            // afterwards, so a zero-extended SP puts 0x0000FFFC where 0x0001FFFC belongs.
+            P(`cpu.push32(r[5]>>>0);var ${ft}=r[4]>>>0;`);                                     // push EBP; frameTemp = ESP
             // The nested copies walk the frame pointer at the STACK's width and push at the OPERAND's,
             // the same pair LEAVE confuses: on a 16-bit stack BP steps and wraps in 16 bits, and the
             // read is at SS:BP. Using EBP there sent the read wherever its high half pointed, so every
