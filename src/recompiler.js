@@ -1157,7 +1157,11 @@ export class Recompiler {
               P(`cpu.push32(m.r32(${AM("sb[2]+(cpu.ssB?(r[5]>>>0):(r[5]&0xffff))")})>>>0);`);
             }
             if (lvl > 0) P(`cpu.push32(${ft});`);
-            P(`r[5]=${ft}>>>0;cpu.spAdd(-${szv});`);                                           // EBP = frameTemp; ESP -= size
+            // The DESTINATION width follows the STACK, not the operand size. Intel's ENTER, operand
+            // size 32 with StackSize 16, writes `BP <- FrameTemp` — sixteen bits, EBP's high half
+            // preserved. Writing all 32 zeroed it, which is what test386's POST 0x1A rejects: it
+            // builds EBP as 0x1fffe and expects the 0x10000 back after the ENTER.
+            P(`if(cpu.ssB){r[5]=${ft}>>>0;}else{r[5]=(r[5]&~0xffff)|(${ft}&0xffff);}cpu.spAdd(-${szv});`);
           } else {
             P(`cpu.push16(r[5]);var ${ft}=cpu.stackPtr;`);                                     // push BP; frameTemp = SP
             for (let i = 1; i < lvl; i++) P(`r[5]=(r[5]&~0xffff)|((r[5]-2)&0xffff);cpu.push16(m.r16(${AM("sb[2]+(r[5]&0xffff)")}));`);
