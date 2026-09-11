@@ -300,50 +300,35 @@ All three fields now match dosbox-x exactly.
 | G7 | **Quake, pixel-for-pixel against DOSBox-X** (opened 2026-09-07, proposed by the PRISM session). Same binary, same data, same args — so what is measured is this emulator and nothing else. Stop on the **Nth call to `R_RenderView`** (N=200), not on a presented frame and not on a block budget: one call = one world frame, so the number of console screens drawn first stops mattering. Args `-nosound -nocdaudio +host_framerate 0.05 +con_notifytime 0`. ⚠️ **`+host_framerate` is not enough.** `host.c:643` calls `rand()` once per main-loop iteration, *before* `Host_FilterTime` decides whether the iteration simulates anything (id's comment: "keep the random time dependent"), so the PRNG advances per LOOP, and the loop count depends on host clock speed. PRISM measured its DOS build at 3061 loops when X11 was at 90 world frames — 289 of 64000 pixels differ at frame 200, every one of them placed by `rand()`. PRISM neutralises it by replacing `Sys_FloatTime`; we cannot replace a function but we are the hardware, so the equivalent is to step the BDA tick and the PIT counter by a **fixed 1/72 s per latch** instead of indexing them on real time — which also makes our own captures reproducible. Without this the diff is red with particles and says nothing. **The reference images are regenerated, not archived**: PRISM's `tools/gate-pixels.mjs --data=<dir with id1/> --frames=200 --png=<prefix>` reproduces its four platform layers deterministically, so ask for them when the comparison actually runs rather than pinning a file that may predate a renderer change. Note also that PRISM needs the same fixed-step clock to compare itself against DOSBox-X (its P3.6), so compare notes before either side builds it twice. | M | open |
 | G4 | ⚠️ **NO LONGER REPRODUCES (re-measured 2026-09-09)** — the head-14-px-right-of-the-body defect is absent from six MIRAGE samples (ticks 600 / 1200 / 2600 and block budgets 50 M / 150 M / 400 M), and a DOSBox capture at the same trigger shows the same coherent sprite. Something between 2026-08-19 and now fixed it; **which fix is not known**, so this is recorded as not-reproducing rather than as understood. Three hypotheses were tested and all three died: (a) the game port — the memory note said changing 0x201 "measurably changes Baby Jo", but captures under 0xFF and 0xF0 are **byte-identical PNGs**; (b) MIRAGE fabricating an input to leave the language-select screen — the BIOS keyboard buffer stays head=tail=0 throughout and the guest reads exactly four ports (0x3DA, 0x388, 0x201, 0x40), no keyboard at all, and DOSBox with NO keys reaches the same menu; (c) a beam miscalibration — measured 2.78 then 1.97 retraces per BIOS tick against 3.845 expected, and **both numbers were undersampling artifacts**: the retrace pulse is 0.45% of a frame, so a sampler taking ~59 samples per frame catches roughly a quarter of them. Computed exactly from the model (`vgaPeriod = pitBase / 3.845`), the ratio is 3.845. ⚠️ **Open, and it is a harness question, not a MIRAGE one**: under `tools/qemu-shot.mjs` the game sits on the language-select screen for 165 s of guest time (~3000 BIOS ticks) while MIRAGE and DOSBox both reach the menu by tick 2600, with or without the `BABY 2` language argument. Until that is explained, QEMU is not a usable reference for this title. | M | not reproducing; cause unknown |
 
-### ⚠️ MIRAGE_LOCKUD costs two goldens, and the mechanism is NOT understood (2026-09-11)
+### ⚠️ MIRAGE_LOCKUD costs two goldens — EXPLAINED (2026-09-11)
 
-`LOCK` on a non-lockable opcode is #UD, and the check is architecturally right. Enabling it costs
-`intros/memories.com` and `intros/oktaeder.com`: both die on **INT 06h re-raised** instead of
-rendering. **Do not enable it until this is explained** — and do not assume re-baselining the two
-fingerprints is enough, because the divergence is not where it looks.
+`LOCK` on a non-lockable opcode is #UD, and the check is right. It costs `intros/memories.com` and
+`intros/oktaeder.com`, and the reason is now measured rather than guessed.
 
-What is established, by compile-time census (every block, not a sample — a first attempt sampled
-`cpu.eip` once per 2000 instructions and was far too coarse to support any of this):
+With true per-block tracing (`tools/trace-diff.mjs`), the first divergence is at block **26 252**, and
+the six blocks before it are IDENTICAL in both configurations:
 
-    flag OFF : 173 blocks compiled, NONE outside the program's 0x100..0x1ff
-    flag ON  : 172 blocks, plus one at 0x000d — inside the PSP
-    diff     : 0x12d and 0x17e are reached only with the flag OFF; 0x0d only with it ON
+    0814:f845 -> f9c5 -> fb45 -> fcc5 -> fe45 -> ffc5     steps of exactly 0x180
 
-The run is deterministic (173 twice). The guard is emitted at **exactly one** site, `0x0d/op 0x53` —
-`LOCK` on `PUSH`, and the bytes there are `f0 53 ff 00` repeating, which is our own dummy vector
-`F000:FF53` stored little-endian in the PSP's saved-vector fields. So the only emission difference is
-AT the address that is only reached when the flag is on, which is circular: the guard cannot be what
-sends the guest there.
+**Both configurations are already derailed there** — that is the classifier's "walking forward through
+memory" signature, and it happens with the flag OFF too. The block starting at `0xffc5` then decodes
+forward across the 64K wrap and into the PSP, where `f0 53` sits (`53 ff 00 f0` is our own dummy vector
+`F000:FF53` in the saved-vector fields). With LOCKUD that block is TRUNCATED at the #UD; without it the
+decode runs on. That single difference is what splits the two runs.
 
-The program does contain `F0` bytes, but all of them as ModRM/operand bytes (`88 f0` = `mov al,dh`,
-`bb f0 ff`, `28 f0`), and **no `f0 53` pair exists in its 256 bytes**. The decoder never treats an
-in-program `F0` as a prefix — the census would have named that site.
+So the check is not inventing a fault in valid code: it is truncating a block inside a derail that
+already exists. **The real defect is upstream — why memories.com executes at 0xf845 at all — and it is
+present today, with every flag off, while the golden fingerprint passes.**
 
-Three explanations were offered and all three were wrong, so they are recorded: "the #UD exposes a
-pre-existing derail" (false — with the flag off the guest never leaves its code), "the goldens merely
-encode lenient behaviour and need re-baselining" (not established — the paths diverge before any #UD),
-and "the guard never fires" (a logging artifact: the runs used to check it could not reach the
-instruction).
-
-**Narrowed with `tools/trace-diff.mjs` (new, 2026-09-11).** Blocks 1-14 are IDENTICAL in both
-configurations, registers included. The divergence happens INSIDE the block starting at `0814:0110`,
-entered with identical state — and that block is emitted identically under both flags (dumped with
-`tools/trace.js --dump`). It ends in `call bx` where BX's low byte is **read from memory**
-(`r[3] = byte at DS:BX+58`), so the call target is data-dependent, in a program that self-modifies.
-
-That last point is the trap: **a block dumped early is not the block that runs later.** Three readings
-here were taken from bodies compiled at tick 3 and were misleading for that reason. Dump the body at
-the moment of divergence (hook `rec.run`, count blocks) — and note that doing so with
-`MIRAGE_KEEP_SRC`/`MIRAGE_NOTIER2` changes block boundaries, so the numbering shifts.
-
-⚠️ Note for whoever picks this up: PSP+0x0A..0x15 hold OUR values. On a real DOS those saved vectors
-point into COMMAND.COM and would not contain `F0 53` at all, so what the guest executes there is
-emulator-specific either way.
+⚠️ Four measurement errors produced four wrong readings here; they are listed because each is a trap
+this codebase sets repeatedly:
+- `rec.run` is called once per **slice**, not per block — it loops over blocks internally. Hooking it
+  gave one sample per 2000 blocks and turned "block 26 252" into "block 14".
+- A block census filtered `ip < 0x100` to mean "outside the program", which never looked ABOVE the
+  program's 0x1ff — the derail is at 0xf845.
+- The guard census reports the **instruction** ipStart (0x0d), not the block's ip0 (0xffc5); reading it
+  as a block address made the argument circular.
+- A block dumped early is not the block that runs later: memories.com self-modifies.
 
 ### Segment protection at ACCESS time — why test386 stops at POST 0x12 (named 2026-09-10)
 

@@ -28,6 +28,10 @@ const hex = (v, n = 4) => (v >>> 0).toString(16).padStart(n, '0');
 
 const trace = [];
 const LIMIT = Number(process.env.TRACE_N) || 400000;
+// ⚠️ ONE BLOCK PER STEP, via runSlice(1). `rec.run` is called once per SLICE — it loops over blocks
+// internally — so hooking it records one entry per slice, not per block. A first version of this file
+// did exactly that, labelled the entries "blocks", and a divergence reported as "block 14" was really
+// "somewhere inside slice 14", up to 2000 blocks wide.
 const oldRun = rec.run.bind(rec);
 rec.run = (...a) => {
   if (trace.length < LIMIT) {
@@ -38,7 +42,7 @@ rec.run = (...a) => {
   }
   return oldRun(...a);
 };
-try { let n = 0; while (n++ < 200000 && !dos.programDone && trace.length < LIMIT) mc.runSlice(2000); }
+try { let n = 0; while (n++ < LIMIT && !dos.programDone && trace.length < LIMIT) mc.runSlice(1); }
 catch (e) { /* the flag-on run dies; the trace up to that point is what matters */ }
 writeFileSync(process.argv[3], trace.join('\n') + '\n');
 console.log(`${trace.length} blocs -> ${process.argv[3]}`);
