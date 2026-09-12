@@ -339,9 +339,17 @@ can capture, with no UART init needed. `tools/run-test386.mjs` already reads `PO
 environment, so MIRAGE runs the **same binary**.
 
     DOSBox-X  (BOOT -bios)   >= 2 codes   dies on "Exception 6 already in progress -> double fault"
+    v86       (tools/v86-test386.mjs)  9 codes   last 0x09   STUCK (nothing further in 75 s)
     QEMU      (-bios)          10 codes   last 0x20   (identical with -cpu 486)
     MIRAGE    defaults          20 codes   last 0x12
     MIRAGE    3 flags           28 codes   last 0x1a
+
+**v86 is the closest comparable** — JavaScript, a dynamic recompiler, real BIOS images — and it stops
+FIRST of the four. Its nine codes all arrive within 0.1 s and nothing follows for 75 s, so it is stuck
+rather than slow; the timestamps in the tool's output are there to make that distinction, because a
+bare list cannot separate "stopped" from "still going". ⚠️ Treat this as a floor too: v86 is normally
+run with SeaBIOS plus a VGA BIOS, and a bare CPU-tester ROM may want something that configuration
+provides. It is not committed — `npm i v86` where `V86_DIR` points, the same rule as boot/ and games/.
 
 ⚠️ **The DOSBox-X number is a FLOOR, not a count**: its log reports `Serial1: Errors: ... TX:2`, so it
 models UART timing and drops POST bytes when the transmitter is busy. QEMU accepts them all. Do not
