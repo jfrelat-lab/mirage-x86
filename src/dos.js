@@ -178,9 +178,31 @@ export function installDOS(machine, vfs) {
   const LOL_SEG = 0x0071, LOL_OFF = 0x0026;
   // InDOS flag (AH=34h) and, one byte below it as DOS lays them out, the critical-error flag. Kept
   // in the same scratch paragraph as the list-of-lists, clear of the MCB-head word at DIB_OFF-2.
-  const INDOS_OFF = 0x0021, CRITERR_OFF = 0x0020;
-  mem.w8((DIB_SEG << 4) + INDOS_OFF, 0);
-  mem.w8((DIB_SEG << 4) + CRITERR_OFF, 0);
+  //
+  // ⚠️ They live in the LIST-OF-LISTS segment, not in the BIOS data area, and that is not cosmetic.
+  // Windows 3.0 real mode interrogates INT 21h, INT 2Fh and the InDOS flag and then refuses with
+  // "Incorrect DOS version" — a misleading message: AH=30h is answered 5.00 and accepted. Measured
+  // against FreeDOS under QEMU (`tools/dosvec.asm`), which reaches the Program Manager on the same
+  // tree:
+  //     FreeDOS  INT21=00D8:129A  INT2F=029D:00D0  INDOS=00D8:0321
+  //     MIRAGE   INT21=F000:0021  INT2F=F000:002F  INDOS=0050:0021   (before this)
+  // A real DOS keeps all of it in ONE low-RAM kernel segment: its InDOS flag sits in the same
+  // segment as its INT 21h handler. Ours were three unrelated places, two of them in ROM.
+  const INDOS_OFF = 0x0510, CRITERR_OFF = 0x050f;
+  mem.w8((LOL_SEG << 4) + INDOS_OFF, 0);
+  mem.w8((LOL_SEG << 4) + CRITERR_OFF, 0);
+
+  // The INT 21h and INT 2Fh entry points, as a real DOS has them: in RAM, in the kernel segment.
+  // Each is a far JMP to the service stub that still does the work — the recompiler guards those on
+  // the LINEAR address, so jumping in from RAM lands on the same handler. Placed above the SFT,
+  // which ends near offset 0x482.
+  const K21_OFF = 0x0500, K2F_OFF = 0x0508;
+  const kstub = (off, vec) => {
+    const a = (LOL_SEG << 4) + off;
+    mem.w8(a, 0xea); mem.w16(a + 1, vec); mem.w16(a + 3, 0xf000);   // JMP FAR F000:vec
+  };
+  kstub(K21_OFF, 0x21);
+  kstub(K2F_OFF, 0x2f);
 
   // ---- System File Table --------------------------------------------------
   // DOS keeps its open files in a chain of SFT blocks, and the List of Lists points at the first
@@ -724,7 +746,7 @@ export function installDOS(machine, vfs) {
         // Keen1 reads it. A TSR uses the flag to know whether DOS is re-entrant right now; since our
         // INT 21h handlers are atomic JS, it is always 0 — but the pointer has to be real, because
         // the caller dereferences it.
-        cpu.setSeg(ES, DIB_SEG); cpu.bx = INDOS_OFF; ok(); break;
+        cpu.setSeg(ES, LOL_SEG); cpu.bx = INDOS_OFF; ok(); break;
       case 0x4a: {                                                   // resize memory block
         const seg = cpu.seg[ES], want = cpu.bx & 0xffff, maxPar = MEM_TOP - seg;
         if (want > maxPar) { err(8); cpu.bx = maxPar; break; }        // not enough memory; report the max
@@ -802,6 +824,24 @@ export function installDOS(machine, vfs) {
   function findNext() {
     if (dos.findIdx >= dos.findList.length) { err(18); return; }   // no more files
     fillDTA(dos.findList[dos.findIdx++]); ok();
+  }
+
+  // Repoint the vectors LAST: hookInterrupt() sets them to BIOS_SEG:n, and XMS and DPMI hook INT 2Fh
+  // after DOS does, so doing this any earlier would be undone by whichever installed next.
+  machine.dosKernelSeg = LOL_SEG;          // swInt must recognise this as ours — see machine.js
+  // ⚠️ OPT-IN. Pointing the vectors at the RAM trampolines is what makes Windows 3.0 real mode stop
+  // refusing — measured: with them in ROM it prints "Incorrect DOS version", with them in RAM it does
+  // not. But it also changes four bytes of the IVT, and two 256-byte intros read the vector table as
+  // data: `intros/oktaeder.com` then DERAILS (INT 05h re-raised, the decoder walking in 0x180 steps)
+  // and `intros/mesha.com` renders differently. Golden goes 43 -> 41. Isolated: moving the InDOS flag
+  // costs nothing, the four IVT bytes cost both.
+  //
+  // Left off by default because oktaeder's is a FAULT, not a fingerprint drift — that is a functional
+  // regression, not a re-baselining question. A real DOS does keep these in RAM (FreeDOS answers
+  // INT21=00D8:129A), so the flag is the correct behaviour and the default is the safe one.
+  if (process.env.MIRAGE_DOSKSEG) {
+    machine.setVector(0x21, LOL_SEG, K21_OFF);
+    machine.setVector(0x2f, LOL_SEG, K2F_OFF);
   }
 
   machine.dos = dos;

@@ -456,7 +456,12 @@ export class Machine {
     if (this.cpu.cr0 & 1) return this.protInt(n);
     const v = this.getVector(n);
     // EMS has its own segment (the name must sit at <vector segment>:000A) but is still ours.
-    if (v.seg === BIOS_SEG || (v.seg === EMS_SEG && this.ems)) {
+    // `dosKernelSeg` is ours too: a real DOS keeps its INT 21h/2Fh entry points in low RAM, not in
+    // the BIOS segment, and src/dos.js now does the same because Windows 3.0 real mode checks where
+    // they point. The trampolines there jump straight back to the F000 stubs, so the service is
+    // unchanged — but without this line the vector no longer looks like ours and every INT 21h took
+    // the "the guest owns this vector" path instead of the handler.
+    if (v.seg === BIOS_SEG || v.seg === this.dosKernelSeg || (v.seg === EMS_SEG && this.ems)) {
       const h = this.intHandlers[n];
       if (h) {
         const served = h(this.cpu, this);   // JS handler; eip already points past the INT
