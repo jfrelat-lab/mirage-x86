@@ -330,21 +330,30 @@ this codebase sets repeatedly:
   as a block address made the argument circular.
 - A block dumped early is not the block that runs later: memories.com self-modifies.
 
-### ⭐ QEMU does not pass test386 either (2026-09-12) — read this before chasing POST codes
+### ⭐ test386 measured on THREE engines, same binary (2026-09-12)
 
-    qemu-system-i386 -bios boot/test386.bin -display none -serial null -no-reboot -monitor stdio
-    (wait, then `info registers`)  ->  EIP=0000fe8a  HLT=1  CS=00d0
+The ROM emits POST codes to a port nothing could observe from outside. Rebuilt from source
+(`github.com/barotto/test386.asm`) with **`POST_PORT equ 0x3F8`** — the UART data register — so every
+POST code becomes a serial byte that both QEMU (`-serial file:`) and DOSBox-X (`serial1=file file:`)
+can capture, with no UART init needed. `tools/run-test386.mjs` already reads `POST_PORT` from the
+environment, so MIRAGE runs the **same binary**.
 
-**0xFE8A is the `error` path**, the same address MIRAGE halts at. So the reference emulator also ends
-in test386's error handler on this ROM, and "test386 must reach POST 0xFF" is not a goal QEMU meets
-here either. That does NOT make our stop correct — QEMU may fail at a LATER sub-test — but it does
-mean a POST code short of 0xFF is not by itself evidence of a MIRAGE defect.
+    DOSBox-X  (BOOT -bios)   >= 2 codes   dies on "Exception 6 already in progress -> double fault"
+    QEMU      (-bios)          10 codes   last 0x20   (identical with -cpu 486)
+    MIRAGE    defaults          20 codes   last 0x12
+    MIRAGE    3 flags           28 codes   last 0x1a
 
-⚠️ **To compare properly, QEMU's POST code is needed and this ROM cannot give it**: the build has
-`COM_PORT equ 0` (serial output disabled), and this QEMU build has no `-d ioport` channel, so the
-writes to port 0x190 are not observable. Rebuilding test386 with `COM_PORT equ 1` and capturing
-`-serial file:` is the way to get a comparable number — do that before treating any remaining POST
-stop as ours.
+⚠️ **The DOSBox-X number is a FLOOR, not a count**: its log reports `Serial1: Errors: ... TX:2`, so it
+models UART timing and drops POST bytes when the transmitter is busy. QEMU accepts them all. Do not
+quote DOSBox-X's figure as a comparison; quote only that it loads the ROM, runs it, and dies on a #UD
+cascade.
+
+**What this changes.** "POST 0xFF or it is our bug" was the wrong frame: the reference emulators do
+not reach it either on this ROM, and MIRAGE currently goes further than both. That is not a claim of
+superiority — test386 is strict and each engine fails it somewhere — but a POST code short of 0xFF is
+not by itself evidence of a MIRAGE defect. Compare against these numbers before assuming one is.
+
+
 
 ### POST 0x1A — ENTER fixed in ring 0; the ring-3 page-fault test is open (2026-09-12)
 
