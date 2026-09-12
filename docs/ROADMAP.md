@@ -330,6 +330,34 @@ this codebase sets repeatedly:
   as a block address made the argument circular.
 - A block dumped early is not the block that runs later: memories.com self-modifies.
 
+### POST 0x1A — ENTER fixed in ring 0; the ring-3 page-fault test is open (2026-09-12)
+
+Two real ENTER defects fell here, both general and both off-flag (`f881053`, `4652ff3`): the
+destination width follows the STACK, not the operand size (`BP <- FrameTemp` at operand-32 /
+stack-16, EBP's high half preserved), and `FrameTemp` is the FULL ESP, not the 16-bit stack
+pointer — on a 16-bit stack SP wraps while ESP's high half is untouched, and both the dword ENTER
+pushes per nesting level and the final BP are taken from it.
+
+With those, POST 0x1A's ring-0 checks pass and the section reaches its **ring-3 page-fault test**,
+where it now stops:
+
+    .pageFaultEIP:  enter 1,0        ; 0xBD95, CPL 3, stack page marked PTE_SUPER_W
+                    jmp error        ; reached only if the ENTER did NOT fault
+
+So the ENTER must raise `#PF(PF_PROT|PF_WRITE|PF_USER)` and does not. Measured at that point:
+`cpl=3`, `cr0=0x80000011`, `paged=true` — so the conditions the check needs are all present, and
+`Memory.walk` does implement U/S and R/W with the right error bits.
+
+⚠️ **Do not start from "the write path swallows the fault".** That was checked and the check was
+wrong twice over: `machine.js` arms `mem.pfRaise = true`, so `xlat`'s silent `-1` return does not
+apply to a running Machine; and the probe that "proved" a supervisor page does not fault wrote to
+linear 0x21000, a GUESSED address. The page the test marks is `0x1000|(TEST_BASE>>12)` = page
+0x1020, i.e. linear **0x1020000**. Redo that measurement on the right page before concluding
+anything.
+
+Method note for this section: 0xBD95 is NOT a block start — the ENTER sits inside the block that
+begins at 0xBD8A — so a per-block probe watching for that address never fires.
+
 ### Segment protection at ACCESS time — why test386 stops at POST 0x12 (named 2026-09-10)
 
 test386 does **not** pass. It signals success by writing POST **0xFF** at `postFF` and only then
