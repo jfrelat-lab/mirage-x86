@@ -19,11 +19,16 @@ export function installEMS(machine) {
 
   const ems = {
     frameSeg: FRAME_SEG,
-    handles: new Map(),          // handle -> { pages, base, name }
+    handles: new Map([[0, { pages: 0, base: 0, name: '' }]]),   // handle -> { pages, base, name }; 0 = system
     nextHandle: 1,
     mapped: new Array(FRAME_PAGES).fill(null),   // slot -> { handle, page } currently in the window
     saved: new Map(),                           // handle -> stack of saved `mapped` snapshots (AH=47/48)
-    reset() { this.handles = new Map(); this.nextHandle = 1; this.mapped = new Array(FRAME_PAGES).fill(null); this.saved = new Map(); },
+    // Handle 0 is the SYSTEM handle: a real EMM always owns it — the pages the manager itself has
+    // mapped — and it is valid even owning none. Registering it here rather than special-casing each
+    // service is what makes it valid EVERYWHERE, which is what the probe needs: Windows 3.0's KERNEL
+    // walks handle 0 through several calls in a row (4Ch, then 51h, …) and one "invalid handle"
+    // anywhere in that chain ends the probe.
+    reset() { this.handles = new Map([[0, { pages: 0, base: 0, name: '' }]]); this.nextHandle = 1; this.mapped = new Array(FRAME_PAGES).fill(null); this.saved = new Map(); },
   };
 
   // Pages come from the same pool as XMS, sharing its top as the bump: XMS and EMS grow up, DPMI
@@ -126,6 +131,37 @@ export function installEMS(machine) {
           if (!same) mapPage(slot, want ? want.handle : 0xffff, want ? want.page : 0xffff);
         }
         return ok();
+      }
+      // AH=4Eh — get/set page map, the EMS 4.0 way to snapshot the frame without a handle. Windows
+      // 3.0's KERNEL asks AL=03 (how big is the save array?) before it will use EMS at all; answering
+      // "function not supported" made it abandon the EMS path entirely and fall back to probing
+      // conventional memory and allocating ALL of it — three AH=48h calls where the reference makes
+      // one. Measured against dosbox-x, which answers 4E03 and is then asked EMS 5Bh.
+      case 0x4e: {
+        const BYTES = FRAME_PAGES * 4;                              // handle+page per frame slot
+        switch (c.al) {
+          case 0x00:                                                // get: write the map to ES:DI
+          case 0x02: {                                              // get AND set
+            const d = (c.base[ES] + (c.di & 0xffff)) & 0xfffff;
+            for (let slot = 0; slot < FRAME_PAGES; slot++) {
+              const m = ems.mapped[slot];
+              mem.w16(d + slot * 4, m ? m.handle : 0xffff);
+              mem.w16(d + slot * 4 + 2, m ? m.page : 0xffff);
+            }
+            if (c.al === 0x00) return ok();
+          }
+          // fall through: AL=02 also restores from DS:SI
+          case 0x01: {                                              // set: read the map from DS:SI
+            const sAddr = (c.base[DS] + (c.si & 0xffff)) & 0xfffff;
+            for (let slot = 0; slot < FRAME_PAGES; slot++) {
+              const h = mem.r16(sAddr + slot * 4), pg = mem.r16(sAddr + slot * 4 + 2);
+              mapPage(slot, h, pg);
+            }
+            return ok();
+          }
+          case 0x03: c.al = BYTES; return ok();                     // size of the save array
+          default: return err(0x8f);                                // invalid subfunction
+        }
       }
       case 0x4b: c.bx = ems.handles.size; return ok();              // handle count
       case 0x4c: {                                                  // pages owned by one handle
