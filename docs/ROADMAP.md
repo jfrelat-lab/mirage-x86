@@ -345,11 +345,29 @@ environment, so MIRAGE runs the **same binary**.
     MIRAGE    3 flags           28 codes   last 0x1a
 
 **v86 is the closest comparable** — JavaScript, a dynamic recompiler, real BIOS images — and it stops
-FIRST of the four. Its nine codes all arrive within 0.1 s and nothing follows for 75 s, so it is stuck
-rather than slow; the timestamps in the tool's output are there to make that distinction, because a
-bare list cannot separate "stopped" from "still going". ⚠️ Treat this as a floor too: v86 is normally
-run with SeaBIOS plus a VGA BIOS, and a bare CPU-tester ROM may want something that configuration
-provides. It is not committed — `npm i v86` where `V86_DIR` points, the same rule as boot/ and games/.
+FIRST of the four, at POST 0x09.
+
+**All four end in the SAME place: test386's own `error` handler.** Sampling v86's EIP shows it parked
+at `0xFFE8A` = `F000:FE8A`, where QEMU and MIRAGE also halt. So none of them is crashing or hanging —
+each one FAILS AN ASSERTION and jumps there. That distinction matters for the next question: a
+configuration problem (a missing VGA BIOS, wrong memory size) would show up as no POST codes at all,
+not as a clean arrival at `error`. **test386 replaces the BIOS; there is no BIOS to add.**
+
+⚠️ Checked, because it was a self-inflicted risk: moving POST_PORT to the UART data register does NOT
+change behaviour. v86 ends at the same EIP with the original 0x190 ROM and with the serial one, so the
+redirection reports the codes without perturbing the run. (DOSBox-X is the exception — it models the
+transmitter and drops bytes, which is why its count is a floor.)
+
+**No emulator available here passes test386.** The ones that plausibly do are the two it was written
+for: **IBMulator** (its author's) and **PCjs** (its ancestor). Bochs is used as an example reference in
+the README with an explicit "I cannot guarantee that Bochs is bug free"; it is not installed here.
+
+⭐ **So stop treating POST 0xFF as the target.** The README's own method works without it: execution is
+deterministic, so **dump the first 640 KB on two engines at the SAME POST code and diff them**. v86 and
+MIRAGE both reach 0x09; that is a common point where a byte-level comparison would localise a
+divergence exactly, which a POST count never can.
+
+v86 is not committed — `npm i v86` where `V86_DIR` points, the same rule as boot/ and games/.
 
 ⚠️ **The DOSBox-X number is a FLOOR, not a count**: its log reports `Serial1: Errors: ... TX:2`, so it
 models UART timing and drops POST bytes when the transmitter is busy. QEMU accepts them all. Do not
