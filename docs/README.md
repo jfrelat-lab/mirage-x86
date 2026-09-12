@@ -17,5 +17,11 @@ Architecture and internals reference. Start with **[ARCHITECTURE.md](ARCHITECTUR
 - **[ROADMAP.md](ROADMAP.md)** — a menu of candidate next tasks grouped by theme (correctness,
   compatibility features, content, performance, tooling) with effort/value, to choose what's next.
 
+One-off studies:
+
+- **[WIN16-SPIKE.md](WIN16-SPIKE.md)** — feasibility of running WIN16 (NE) apps directly,
+  Wine-style, instead of booting real Windows: the measured API surface (`tools/ne-inspect.mjs`),
+  what the engine already provides, and the go/no-go.
+
 These are written to survive between sessions — keep them in step with the code when you change
 the design (especially the run loop, the region compiler, the device model, or the gates).
