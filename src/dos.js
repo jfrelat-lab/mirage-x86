@@ -235,7 +235,16 @@ export function installDOS(machine, vfs) {
     return stem.padEnd(8, ' ') + ext.padEnd(3, ' ');
   };
 
-  /** Rebuild the SFT and the current PSP's job file table from the live handle map. */
+  /**
+   * Rebuild the SFT and the current PSP's job file table from the live handle map.
+   *
+   * Called after every service that CHANGES the handle map, not only from AH=52h. A program does not
+   * have to ask DOS about a handle: Windows 3.0's kernel opens CON five times and then reads the JFT
+   * directly to map those handles to SFT entries — DOSBox's INT 21h log shows that inspection as a
+   * pause with no calls at all. With the table only refreshed on AH=52h it read all zeros, did not
+   * find its handles, ran the whole five-open loop a SECOND time and gave up. The reference does five
+   * opens; we did ten.
+   */
   function syncSFT() {
     mem.w32(SFT_BASE, 0xffffffff);                              // a single block, no next
     mem.w16(SFT_BASE + 4, SFT_ENTRIES);
@@ -551,12 +560,12 @@ export function installDOS(machine, vfs) {
         break;
       }
       case 0x3b: vfs.chdir(asciiz(cpu.base[DS] + (cpu.dx & 0xffff))) ? ok() : err(3); break;   // chdir
-      case 0x3c: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: true, truncate: true }); fd < 0 ? err(3) : (cpu.ax = fd, ok()); break; }
-      case 0x3d: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: false }); fd < 0 ? err(2) : (cpu.ax = fd, ok()); break; }
+      case 0x3c: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: true, truncate: true }); fd < 0 ? err(3) : (cpu.ax = fd, ok()); syncSFT(); break; }
+      case 0x3d: { const fd = vfs.openFile(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), { create: false }); fd < 0 ? err(2) : (cpu.ax = fd, ok()); syncSFT(); break; }
       // Closing a standard stream (0-4) must succeed: we do not model the per-process handle table,
       // so there is nothing to free, but reporting "invalid handle" is wrong and FreeDOS's shell
       // does it five times during a boot (tools/dos-oracle.mjs).
-      case 0x3e: vfs.close(cpu.bx) ? ok() : err(6); break;   // close (0-4 are real entries: see VFS.openStdHandles)
+      case 0x3e: vfs.close(cpu.bx) ? ok() : err(6); syncSFT(); break;   // close (0-4 are real entries: see VFS.openStdHandles)
       // A transfer stops at the end of the buffer's SEGMENT: DOS never wraps DS:DX and never runs on
       // past 64 KB. Keen asks for a hard-coded 0FFFFh into a buffer at offset 4 and must get 65532.
       case 0x3f: {                                                   // read
