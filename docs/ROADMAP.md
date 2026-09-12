@@ -348,6 +348,17 @@ So the ENTER must raise `#PF(PF_PROT|PF_WRITE|PF_USER)` and does not. Measured a
 `cpl=3`, `cr0=0x80000011`, `paged=true` — so the conditions the check needs are all present, and
 `Memory.walk` does implement U/S and R/W with the right error bits.
 
+**Our page protection is NOT the gap — measured 2026-09-12 from the live tables at that point:**
+
+    page 20 (lin 00020000): pte=00020023 US=0 RW=1  -> PageFault at CPL 3   <- correctly refused
+    page 21 (lin 00021000): pte=00021067 US=1 RW=1  -> write OK
+    cpl=3   ss base=00020000   esp=00000fff
+
+The supervisor-only page faults exactly as it should. The ENTER simply never touches it: the test does
+`mov esp, 0x1004` with SS base 0x20000, so the pushed dword lands at linear **0x21000** — page 0x21,
+user-writable. **The open question is therefore why ESP or the stack base do not put the access in
+page 0x20**, not why a refused access fails to fault.
+
 ⚠️ **Do not start from "the write path swallows the fault".** That was checked and the check was
 wrong twice over: `machine.js` arms `mem.pfRaise = true`, so `xlat`'s silent `-1` return does not
 apply to a running Machine; and the probe that "proved" a supervisor page does not fault wrote to
