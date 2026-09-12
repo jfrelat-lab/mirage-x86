@@ -188,7 +188,11 @@ export function installDOS(machine, vfs) {
   //     MIRAGE   INT21=F000:0021  INT2F=F000:002F  INDOS=0050:0021   (before this)
   // A real DOS keeps all of it in ONE low-RAM kernel segment: its InDOS flag sits in the same
   // segment as its INT 21h handler. Ours were three unrelated places, two of them in ROM.
-  const INDOS_OFF = 0x0510, CRITERR_OFF = 0x050f;
+  // InDOS sits BELOW the entry points, as it does on a real kernel: FreeDOS answers InDOS 0x0321
+  // against an INT 21h handler at 0x129A. Having it above them is the one shape difference left
+  // against the reference, and a kernel that locates itself by walking down from the handler
+  // would not find it.
+  const INDOS_OFF = 0x0490, CRITERR_OFF = 0x048f;
   mem.w8((LOL_SEG << 4) + INDOS_OFF, 0);
   mem.w8((LOL_SEG << 4) + CRITERR_OFF, 0);
 
