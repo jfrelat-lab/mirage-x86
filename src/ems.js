@@ -163,6 +163,34 @@ export function installEMS(machine) {
           default: return err(0x8f);                                // invalid subfunction
         }
       }
+      // AH=58h — the mappable physical address array: which physical segments the manager can map a
+      // page into, and their page numbers. EMS 4.0 only. Windows 3.0's KERNEL asks AL=01 (how many?)
+      // as the step after 51h in its probe chain, and stops there if the answer is "unsupported".
+      // Ours is the plain four-page frame, so the array is the frame's own segments in order.
+      case 0x58: {
+        if (c.al === 0x01) { c.cx = FRAME_PAGES; return ok(); }     // entry count
+        if (c.al !== 0x00) return err(0x8f);
+        const d = (c.base[ES] + (c.di & 0xffff)) & 0xfffff;
+        for (let i = 0; i < FRAME_PAGES; i++) {
+          mem.w16(d + i * 4, FRAME_SEG + i * (PAGE_SIZE >> 4));     // physical segment
+          mem.w16(d + i * 4 + 2, i);                                // physical page number
+        }
+        c.cx = FRAME_PAGES;
+        return ok();
+      }
+      // AH=5Ah — allocate standard (AL=00) or raw (AL=01) pages. Same allocation as AH=43h with one
+      // difference that matters: EMS 4.0 lets this one take ZERO pages, where 43h calls that an
+      // error. Our pages are all the same size, so raw and standard are the same request.
+      case 0x5a: {
+        if (c.al > 1) return err(0x8f);
+        const n = c.bx & 0xffff;
+        const base = n ? takePool(n * PAGE_SIZE) : 0;
+        if (base < 0) return fail(0x88);
+        const handle = ems.nextHandle++;
+        ems.handles.set(handle, { pages: n, base, name: '' });
+        c.dx = handle;
+        return ok();
+      }
       case 0x4b: c.bx = ems.handles.size; return ok();              // handle count
       case 0x4c: {                                                  // pages owned by one handle
         const h = ems.handles.get(c.dx & 0xffff);
