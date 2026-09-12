@@ -330,6 +330,22 @@ this codebase sets repeatedly:
   as a block address made the argument circular.
 - A block dumped early is not the block that runs later: memories.com self-modifies.
 
+### ⭐ QEMU does not pass test386 either (2026-09-12) — read this before chasing POST codes
+
+    qemu-system-i386 -bios boot/test386.bin -display none -serial null -no-reboot -monitor stdio
+    (wait, then `info registers`)  ->  EIP=0000fe8a  HLT=1  CS=00d0
+
+**0xFE8A is the `error` path**, the same address MIRAGE halts at. So the reference emulator also ends
+in test386's error handler on this ROM, and "test386 must reach POST 0xFF" is not a goal QEMU meets
+here either. That does NOT make our stop correct — QEMU may fail at a LATER sub-test — but it does
+mean a POST code short of 0xFF is not by itself evidence of a MIRAGE defect.
+
+⚠️ **To compare properly, QEMU's POST code is needed and this ROM cannot give it**: the build has
+`COM_PORT equ 0` (serial output disabled), and this QEMU build has no `-d ioport` channel, so the
+writes to port 0x190 are not observable. Rebuilding test386 with `COM_PORT equ 1` and capturing
+`-serial file:` is the way to get a comparable number — do that before treating any remaining POST
+stop as ours.
+
 ### POST 0x1A — ENTER fixed in ring 0; the ring-3 page-fault test is open (2026-09-12)
 
 Two real ENTER defects fell here, both general and both off-flag (`f881053`, `4652ff3`): the
