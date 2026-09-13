@@ -4,6 +4,7 @@
 // JS shell render identically. File I/O is backed by the VFS.
 
 import { CF, ZF, CS, DS, ES, SS } from './cpu.js';
+import { DOS_MTIME } from './vfs.js';
 
 // Where a real DOS puts the first program, measured rather than chosen (ROADMAP G1). Two independent
 // oracles: dosbox-x's DOS gives a .COM `CS = DX = 0x0814` (tools/regs.asm, identical across memsize
@@ -786,7 +787,14 @@ export function installDOS(machine, vfs) {
       case 0x4e: findFirst(); break;
       case 0x4f: findNext(); break;
       case 0x56: vfs.rename(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), asciiz(cpu.base[ES] + (cpu.di & 0xffff))) ? ok() : err(2); break;
-      case 0x57: ok(); cpu.cx = 0; cpu.dx = 0; break;                // get/set file time (stub)
+      case 0x57: {                                                   // get/set file date & time
+        const hnd = vfs.handles.get(cpu.bx & 0xffff);
+        if (!hnd) { err(6); break; }
+        if (cpu.al === 1) { if (hnd.node) hnd.node.mtime = (((cpu.dx & 0xffff) << 16) | (cpu.cx & 0xffff)) >>> 0; ok(); break; }
+        // Character devices have no timestamp; DOS still answers without error.
+        const t = hnd.node ? hnd.node.mtime >>> 0 : DOS_MTIME;
+        cpu.cx = t & 0xffff; cpu.dx = (t >>> 16) & 0xffff; ok(); break;
+      }
       // Unsupported function. Reporting "invalid function" is at least an honest failure, but the
       // count is what makes the gap visible: `dos.unhandledFnReport()` over the whole games/ tree
       // says which functions are actually missing instead of us guessing from a reading of the code.

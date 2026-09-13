@@ -5,8 +5,12 @@
 const ATTR_RO = 0x01, ATTR_HIDDEN = 0x02, ATTR_SYS = 0x04, ATTR_VOL = 0x08,
       ATTR_DIR = 0x10, ATTR_ARCHIVE = 0x20;
 
-function dirNode(name) { return { type: 'dir', name, attr: ATTR_DIR, mtime: 0, children: new Map() }; }
-function fileNode(name, data) { return { type: 'file', name, attr: ATTR_ARCHIVE, mtime: 0, data: data || new Uint8Array(0) }; }
+// A packed DOS timestamp, (date << 16) | time: 1990-01-01 12:00:00. Fixed rather than taken from
+// the host so runs stay reproducible. It must not be 0 -- that decodes as month 0, day 0, which no
+// real DOS ever returns, and a guest that validates the date rejects every file it opens.
+export const DOS_MTIME = ((((1990 - 1980) << 9) | (1 << 5) | 1) << 16) | (12 << 11);
+function dirNode(name) { return { type: 'dir', name, attr: ATTR_DIR, mtime: DOS_MTIME, children: new Map() }; }
+function fileNode(name, data) { return { type: 'file', name, attr: ATTR_ARCHIVE, mtime: DOS_MTIME, data: data || new Uint8Array(0) }; }
 
 export class VFS {
   constructor() {
