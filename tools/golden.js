@@ -79,6 +79,9 @@ function fingerprint(relPath, opts = {}) {
   // Composed exactly like the browser (fonts, mouse, 16 MiB) — see harness.mjs for why that matters.
   const { mc, dos } = makeMachine({ dos: !opts.boot });
   let fault = null; mc.onError = (e) => { fault = e; };
+  // The engine reports a derail as soon as it sees one, but only this loop knows WHICH workload is
+  // running; an unattributed warning in a 43-program run is close to useless.
+  mc.onDerail = (msg) => console.warn(`${relPath}: ${msg}`);
   if (opts.boot) bootSector(mc, new Uint8Array(readFileSync(abs)));
   else dos.load(new Uint8Array(readFileSync(abs)), '', 'C:\\PROG');
   // Per-workload tick budget. A program that FINISHES inside the default budget leaves the screen

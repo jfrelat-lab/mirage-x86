@@ -76,7 +76,9 @@ function looksLikePackedData(mem, lin, back = 24, fwd = 40) {
   return ones >= 6 && (zero + ones) * 10 >= n * 3 ? { zero, ones, n } : null;
 }
 
-function allZero(mem, lin, n = 16) {
+/** A run of zero bytes at `lin`. Exported because the recompiler needs to recognise this WHILE it
+ *  happens, not only when reporting a fault: a guest walking through empty memory never faults. */
+export function allZero(mem, lin, n = 16) {
   for (let i = 0; i < n; i++) if (mem.u8[(lin + i) & (mem.size - 1)]) return false;
   return true;
 }

@@ -25,7 +25,7 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 import { resolveMemStrategy, memEmitters, memPrologue } from './mem-strategy.js';
-import { describeRegion, recentBlocks } from './derail.js';
+import { describeRegion, recentBlocks, allZero } from './derail.js';
 import { PageFault } from './memory.js';
 
 // Which memory-dispatch emission to use; see mem-strategy.js. Default reproduces the previous
@@ -51,6 +51,10 @@ const EMPTY_LINES = [];   // shared placeholder for a block whose source is not 
 const T2_HOT = 64;         // promote a block to a region after this many executions
 const T2_MAXBLK = 24;      // cap region size in blocks
 const T2_MAXINS = 384;     // cap region size in instructions
+// Opt-in: end the slice when the guest is found executing empty memory. Off by default because a
+// derail is a diagnosis, not necessarily a fatal error, and changing the run loop for every program
+// to serve a diagnostic would be the wrong trade.
+const DERAIL_STOP = !!(typeof process !== 'undefined' && process.env && process.env.MIRAGE_DERAIL_STOP);
 const T2_BLACKLIST = 3;    // stop re-forming a root after this many SMC evictions
 
 // Abstract flag-liveness bit set (NOT the EFLAGS register layout) for the dead-flag pass:
@@ -164,7 +168,8 @@ export class Recompiler {
     this.pageBounds = [];
     this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
-    this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0, flushes: 0 };
+    this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0, flushes: 0, derailBlocks: 0 };
+    this.derailReported = false;   // the message is worth saying once, not once per block
     this.t2evict = new Map();      // region root lin -> SMC-eviction count (for the blacklist)
     this.t2blacklist = new Set();  // roots that self-modify too much -> stay tier-1
     this.mem.onCodeWrite = (addr, len) => this.invalidate(addr, len);
@@ -388,6 +393,7 @@ export class Recompiler {
    *  must be honoured before the next block dispatches (same order as the old loop).
    *  step() stays for single-block callers (tests, conformance stepOne is separate). */
   run(machine, maxBlocks) {
+    this._machine = machine;                             // for _checkDerail's report channel
     const cpu = this.cpu, MM = this.MM, pages = this.blockPages, prof = this.profiling;
     const paged = this.pagedMode;
     // One shared block-execution budget: a tier-1 block costs 1, and a region decrements it
@@ -473,6 +479,43 @@ export class Recompiler {
     this.cpu.tbudget = 0;
   }
 
+  /**
+   * Say it the moment it happens: the guest is executing empty memory.
+   *
+   * src/derail.js could already NAME this ("in a run of zero bytes"), but it only ever ran while
+   * reporting a fault — and a guest walking through zeros never faults. It just gets slow, which
+   * reads as a hang: Windows 3.0's `win /r` crawled for 25 minutes at ~1400 blocks/s and looked
+   * blocked. It was not blocked. It was compiling 192-instruction blocks of `add [bx+si],al` into
+   * 63 KB of JavaScript each, exhausting the code cap every ~300 blocks and recompiling everything,
+   * 1.6 GB of emitted source in 40000 blocks.
+   *
+   * Reporting only, by default. Stopping the run would change behaviour for every program, and a
+   * derail is not always fatal — MIRAGE_DERAIL_STOP=1 ends the slice for tools that want it.
+   */
+  _checkDerail(lin, blk) {
+    if (!allZero(this.mem, lin)) return;                 // long, but real code: nothing to say
+    this.stats.derailBlocks++;
+    let msgForThrow = 'mirage: DERAILED — the guest is executing empty memory';
+    if (!this.derailReported) {
+      this.derailReported = true;
+      const cpu = this.cpu;
+      const where = `${(cpu.seg[CS] >>> 0).toString(16).padStart(4, '0')}:` +
+        `${(blk.ip0 >>> 0).toString(16)} (lineaire ${(lin >>> 0).toString(16)})`;
+      const trail = recentBlocks(this) || '(no trail)';
+      const msg = `mirage: DERAILED — ${where}: ${describeRegion(this.mem, lin, cpu)}. ` +
+        `A ${blk.count}-instruction block, ${blk.bodyLen || 0} bytes of emitted source. ` +
+        `How it got here: ${trail}`;
+      msgForThrow = msg;
+      if (this._machine && this._machine.onDerail) this._machine.onDerail(msg, { lin, blk, cpu });
+      else if (typeof console !== 'undefined') console.warn(msg);
+    }
+    // Opt-in stop. Ending the slice (cpu.tbudget = 0) is NOT enough — every runner loops on
+    // runSlice, so it just starts another one; the first version of this flag did nothing at all.
+    // Throwing routes the derail through the engine's existing failure channel instead, so `run`
+    // hands it to machine.onError and every tool that already stops on a fault stops on this.
+    if (DERAIL_STOP) throw new Error(msgForThrow);
+  }
+
   _compile(lin, ip0) {
     // At the ceiling, drop the cache and end the slice. `run` hoists blockPages into a local once
     // per slice, so a flush mid-slice would leave it holding the old array — the same hazard the
@@ -483,6 +526,10 @@ export class Recompiler {
       if (this.cpu) this.cpu.tbudget = 0;
     }
     const blk = this.translate(lin, ip0);
+    // A block this long was produced by bytes that never branch, and the commonest such byte is 0x00
+    // (`add [bx+si],al`). That is the shape of a guest walking through empty memory — see the check
+    // below, which costs nothing until a block is already abnormally long.
+    if (blk.count >= 64) this._checkDerail(lin, blk);
     const pg = lin >>> 12;
     let page = this.blockPages[pg];
     if (page === undefined) page = this.blockPages[pg] = new Array(8192);
