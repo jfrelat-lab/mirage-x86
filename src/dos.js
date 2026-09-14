@@ -40,6 +40,7 @@ export function installDOS(machine, vfs) {
     allocTop: PSP_SEG,
     allocs: new Map(),        // live AH=48 allocations: seg → paragraphs
     memFloor: MEM_TOP,        // bump base above the program's own block
+    blockBase: PSP_SEG,       // first paragraph of the running program's block (MCB at base-1)
     programDone: false,
     exitCode: 0,
     findList: [], findIdx: 0,
@@ -126,6 +127,7 @@ export function installDOS(machine, vfs) {
     dos.programDone = false; dos.exitCode = 0;
     dos.allocs = new Map();      // seg → paragraphs for live AH=48 blocks
     dos.memFloor = MEM_TOP;      // bump base above the program's own block (lowered when it shrinks)
+    dos.blockBase = PSP_SEG;     // the paragraph its MCB describes; differs from the PSP when loaded high
     if (machine.xms) machine.xms.reset();   // a fresh program gets a clean extended-memory pool
     buildEnv(progPath || 'C:\\PROGRAM');
     buildPSP(PSP_SEG, tail);
@@ -147,13 +149,15 @@ export function installDOS(machine, vfs) {
     // blocks was fine until EXEC, which left the child's block undescribed — and worse, put the
     // child's PSP ON the free block's MCB header, so the header read as the child's first opcode.
     // Windows 3.0's WIN386 walks the chain and refused with "conventional memory is fragmented".
-    const progs = dos.execStack.map((f) => ({ psp: f.psp, top: Math.min(f.allocTop | 0, MEM_TOP) }));
-    progs.push({ psp: dos.psp, top: Math.min(dos.allocTop | 0, MEM_TOP) });
+    // base, not psp: an e_maxalloc=0 program sits HIGH inside its block, and its MCB stays at the
+    // block's base. The reference finds no MCB in the paragraph below such a program's own PSP.
+    const progs = dos.execStack.map((f) => ({ base: f.blockBase | 0 || f.psp, psp: f.psp, top: Math.min(f.allocTop | 0, MEM_TOP) }));
+    progs.push({ base: dos.blockBase | 0 || dos.psp, psp: dos.psp, top: Math.min(dos.allocTop | 0, MEM_TOP) });
     const top = progs[progs.length - 1].top;
     const hasFree = top < MEM_TOP - 1;
     for (let i = 0; i < progs.length; i++) {
       const last = i === progs.length - 1 && !hasFree;
-      writeMCB(progs[i].psp - 1, last ? 0x5a : 0x4d, progs[i].psp, progs[i].top - progs[i].psp);
+      writeMCB(progs[i].base - 1, last ? 0x5a : 0x4d, progs[i].psp, progs[i].top - progs[i].base);
     }
     if (hasFree) writeMCB(top, 0x5a, 0x0000, MEM_TOP - top - 1);            // free block: 'Z' (last), owner 0
     mem.w16((LOL_SEG << 4) + LOL_OFF - 2, PSP_SEG - 1);                     // list-of-lists: word before it = first MCB (the program's, at PSP-1)
@@ -305,14 +309,33 @@ export function installDOS(machine, vfs) {
       mem.w16(a, (mem.r16(a) + addend) & 0xffff);
     }
   }
-  /** Size a program's memory block from its MZ header: DOS gives it PSP + image + up to maxalloc
-   *  paragraphs (at least minalloc), capped at available memory, and leaves the rest FREE. Most EXEs
-   *  set maxalloc=0xFFFF (grab everything), but some — Arctic Adventure — ask for a bounded block and
-   *  then AH=48-allocate from the free memory above, which fails if we hand them all of RAM. */
-  function sizeBlock(pspSeg, h) {
+  /** Where DOS puts a program and how big its block is, from its MZ header.
+   *
+   *  Normally it gets PSP + image + up to maxalloc paragraphs (at least minalloc), capped at
+   *  available memory, with the rest left FREE — most EXEs set maxalloc=0xFFFF (grab everything),
+   *  but some (Arctic Adventure) ask for a bounded block and then AH=48-allocate above it.
+   *
+   *  e_maxalloc = 0 is a DIFFERENT case, not a small block: DOS hands over the whole free region and
+   *  loads the image as HIGH as it fits inside it, leaving nothing free below. Measured against
+   *  dosbox-x with tools/mzalloc.asm, which carries an ordinary-MZ control that reads identically on
+   *  both engines, so the difference below is DOS's and not the probe's:
+   *
+   *    maxalloc=FFFF   PSP=0814  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000   (both agree)
+   *    maxalloc=0000   PSP=9F91  PSP0002=0000  MCB=- OWNER=0000 SIZE=0000  free=0000   (reference)
+   *
+   *  The block's MCB stays at its BASE while the PSP sits high inside it — which is why the reference
+   *  finds no MCB in the paragraph below its own PSP. Windows 3.0's KERNEL.EXE is exactly this case,
+   *  and its loader lays out its heap from where DOS put it.
+   *
+   *  Returns { base, psp, top }: the block runs base..top-1 with its MCB at base-1. */
+  function placeProgram(baseSeg, h) {
     const need = 0x10 + Math.ceil(h.code.length / 16);        // PSP + image, in paragraphs
+    if (h.maxalloc === 0) {
+      return { base: baseSeg, psp: Math.max(baseSeg, MEM_TOP - need), top: MEM_TOP };
+    }
     const want = need + Math.max(h.minalloc, h.maxalloc);
-    return Math.min(pspSeg + Math.max(want, need + h.minalloc), MEM_TOP);
+    const top = Math.min(baseSeg + Math.max(want, need + h.minalloc), MEM_TOP);
+    return { base: baseSeg, psp: baseSeg, top };
   }
   /** Entry register state for an MZ image loaded at `loadSeg` with PSP `psp`. */
   function exeEntry(psp, loadSeg, h) {
@@ -345,11 +368,16 @@ export function installDOS(machine, vfs) {
   dos.loadEXE = function (bytes, tail, progPath) {
     prep(tail, progPath);
     const h = parseMZ(bytes);
-    const pspSeg = PSP_SEG, loadSeg = pspSeg + 0x10;
+    const place = placeProgram(PSP_SEG, h);
+    const pspSeg = place.psp, loadSeg = pspSeg + 0x10;
+    // prep() built a PSP at PSP_SEG before the header was parsed; a high-loaded program needs it
+    // where DOS actually puts it.
+    if (pspSeg !== PSP_SEG) { buildPSP(pspSeg, tail); dos.psp = pspSeg; }
+    dos.blockBase = place.base;
     mem.blit(loadSeg << 4, h.code);
     applyRelocs(h.relocs, loadSeg, loadSeg);
     exeEntry(pspSeg, loadSeg, h);
-    dos.memFloor = sizeBlock(pspSeg, h);
+    dos.memFloor = place.top;
     // PSP:0002 = the top of the block the loader hands over. For a .COM that is the top of memory;
     // for an MZ it is bounded by e_maxalloc, and writing the top of memory there told a program that
     // sizes its heap from this word that it owned everything.
@@ -379,8 +407,14 @@ export function installDOS(machine, vfs) {
     // +1: the MCB header of the block being handed to the child lives in the paragraph BELOW its PSP,
     // exactly as the parent's does at PSP_SEG - 1. Putting the child's PSP on that paragraph
     // overwrote the header, and the chain then read as corrupt from there on.
-    const childPsp = dos.allocTop + 1;                    // first free paragraph (parent shrank via 4Ah)
-    if (childPsp + 0x11 >= MEM_TOP) return 8;             // no room for even a PSP+stack
+    const childBase = dos.allocTop + 1;                   // first free paragraph (parent shrank via 4Ah)
+    if (childBase + 0x11 >= MEM_TOP) return 8;            // no room for even a PSP+stack
+    // The header has to be parsed BEFORE the PSP is built: an e_maxalloc=0 child is loaded high
+    // inside its block, so where its PSP goes is a function of its own image size.
+    const childHdr = isMZ(bytes) ? parseMZ(bytes) : null;
+    const childPlace = childHdr ? placeProgram(childBase, childHdr)
+                                : { base: childBase, psp: childBase, top: MEM_TOP };
+    const childPsp = childPlace.psp;
     const envSeg = mem.r16(pbLin) || ENV_SEG;             // 0 in the param block = inherit parent's env
     setEnvProgramPath(envSeg, path.startsWith('C:') || path.startsWith('\\') ? path : 'C:\\' + path.replace(/^\\/, ''));
     const tOff = mem.r16(pbLin + 2), tSeg = mem.r16(pbLin + 4), tLin = (tSeg << 4) + tOff;
@@ -390,7 +424,7 @@ export function installDOS(machine, vfs) {
     dos.execStack.push({                                  // save the parent to resume on the child's exit
       reg: Array.from(cpu.reg), seg: Array.from(cpu.seg),
       eip: cpu.eip, flags: cpu.flags, psp: dos.psp, dta: dos.dta,
-      allocTop: dos.allocTop, allocs: dos.allocs, memFloor: dos.memFloor,
+      allocTop: dos.allocTop, allocs: dos.allocs, memFloor: dos.memFloor, blockBase: dos.blockBase,
     });
     dos.allocs = new Map(); dos.memFloor = MEM_TOP;        // the child gets a fresh heap
     machine.rec.reset();
@@ -399,14 +433,15 @@ export function installDOS(machine, vfs) {
     mem.w16((childPsp << 4) + 0x2c, envSeg);              // environment segment
     dos.psp = childPsp; dos.exitCode = 0;
 
+    dos.blockBase = childPlace.base;
     let childTop = MEM_TOP;                               // a .COM child owns the rest of memory
-    if (isMZ(bytes)) {                                    // MZ-EXE child
-      const h = parseMZ(bytes), loadSeg = childPsp + 0x10;
+    if (childHdr) {                                       // MZ-EXE child
+      const h = childHdr, loadSeg = childPsp + 0x10;
       mem.blit(loadSeg << 4, h.code);
       applyRelocs(h.relocs, loadSeg, loadSeg);
       exeEntry(childPsp, loadSeg, h);
       cpu.bx = childPsp;
-      childTop = sizeBlock(childPsp, h);            // size the child's block from its own header too
+      childTop = childPlace.top;                    // size the child's block from its own header too
       mem.w16((childPsp << 4) + 0x02, childTop);   // and its PSP:0002, once, as the loader does
     } else {                                              // .COM child (GAME.TDT is one: JMP entry, no MZ)
       mem.blit((childPsp << 4) + 0x100, bytes);
@@ -450,7 +485,7 @@ export function installDOS(machine, vfs) {
       for (const s of [ES, CS, SS, DS]) cpu.setSeg(s, ctx.seg[s]);
       cpu.eip = ctx.eip; cpu.flags = ctx.flags & ~CF;    // EXEC succeeded → CF clear for the parent
       dos.psp = ctx.psp; dos.dta = ctx.dta; dos.allocTop = ctx.allocTop;
-      dos.allocs = ctx.allocs; dos.memFloor = ctx.memFloor;
+      dos.allocs = ctx.allocs; dos.memFloor = ctx.memFloor; dos.blockBase = ctx.blockBase;
       syncMCB();                                          // the child's block goes back to the free pool
       cpu.halted = false;
     } else { dos.programDone = true; cpu.halted = true; }
