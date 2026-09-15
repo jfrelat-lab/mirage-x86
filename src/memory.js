@@ -43,7 +43,11 @@ export class Memory {
     // 1 MiB of flags for the full 4 GiB at 4 KiB granularity, which is cheap; rdOfs/wrOfs stay sized
     // to RAM, because those are a speed cache and a miss there just takes the (correct) helper.
     this.codePage = new Uint8Array(1 << 20);
-    this.onCodeWrite = null; // (page) => void, wired up by the recompiler
+    // (linAddr, len) => void — a LINEAR ADDRESS and a length, not a page index; see _dirty() below.
+    // Wired up by the recompiler for SMC invalidation, and chainable as a write watchpoint: mark a
+    // page with markCodePage() and every store into it arrives here. It fires on the WRITE, so it
+    // sees a store of 0 onto a word that was already 0 — which no poll-for-change can.
+    this.onCodeWrite = null;
     this.planar = false;     // true in EGA/VGA 16-colour modes → A000 writes go through vga.js
     this.vga = null;         // the VGA planar device (set by installVGA); used on A000 writes
     this.shadowReads = false;   // MIRAGE_MEM_READ=shadow: the A000 window mirrors what a planar read
