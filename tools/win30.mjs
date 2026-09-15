@@ -40,7 +40,13 @@ const SECS = Number(process.env.WIN30_SECS) || 180;
 //
 // This is the liveness test a screenshot cannot give: a window that is drawn and a window that is
 // still listening look identical in a still. Alt then F should drop the File menu.
-const KEYS = (process.env.WIN30_KEYS || '').split(',').map((x) => parseInt(x.trim(), 16)).filter((x) => !isNaN(x));
+// Groups separated by '/' are injected in turn, spread across the budget: a dialogue needs the menu
+// to have opened before the next key arrives, and a single burst just loses everything after the
+// first keystroke. "38,21,a1,b8 / 13,93 / 2e,ae,26,a6,18,98,2e,ae,25,a5 / 1c,9c" = Alt+F, R, CLOCK,
+// Enter.
+const KEYGROUPS = (process.env.WIN30_KEYS || '').split('/')
+  .map((g) => g.split(',').map((x) => parseInt(x.trim(), 16)).filter((x) => !isNaN(x)))
+  .filter((g) => g.length);
 
 const vfs = new VFS();
 for (const rel of walk(TREE)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(TREE, rel))));
@@ -103,19 +109,20 @@ dos.load(new Uint8Array(readFileSync(join(TREE, 'WIN.COM'))), args ? ' ' + args 
 
 let blocks = 0, guard = 0;
 const t0 = Date.now();
-let timedOut = false, keysSent = false;
+let timedOut = false, sentGroups = 0;
 while (blocks < BLOCKS && !fault && !dos.programDone && guard++ < 20_000_000) {
   if (Date.now() - t0 > SECS * 1000) { timedOut = true; break; }
-  if (KEYS.length && !keysSent && blocks > BLOCKS / 2) {
-    if (mc.pushScancodes) { mc.pushScancodes(KEYS); keysSent = true; }
-    else console.log('  (pas de pushScancodes sur cette Machine — touches non envoyees)');
+  if (sentGroups < KEYGROUPS.length && blocks > BLOCKS * (0.35 + 0.15 * sentGroups)) {
+    if (mc.pushScancodes) { mc.pushScancodes(KEYGROUPS[sentGroups]); sentGroups++; }
+    else { console.log('  (pas de pushScancodes sur cette Machine — touches non envoyees)'); sentGroups = KEYGROUPS.length; }
   }
   if (mc.pumpKeyboard) mc.pumpKeyboard();
   blocks += mc.runSlice(20000);
 }
 
 const mode = mc.mem.r8(0x449);
-if (KEYS.length) console.log(`  touches injectees: ${keysSent ? KEYS.map((k) => k.toString(16)).join(' ') : 'NON (budget trop court)'}`);
+if (KEYGROUPS.length) console.log(`  groupes de touches injectes: ${sentGroups}/${KEYGROUPS.length}` +
+  `${sentGroups < KEYGROUPS.length ? '  <-- budget trop court pour les derniers' : ''}`);
 console.log(`win ${args} — blocs=${blocks} en ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
   `${dos.programDone ? 'programme termine' : timedOut ? `ARRET SUR LE TEMPS (${SECS}s, WIN30_SECS pour changer)` : 'budget de blocs epuise'}` +
   `${fault ? `  FAUTE: ${fault.message || fault}` : ''}`);
