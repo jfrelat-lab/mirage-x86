@@ -112,8 +112,20 @@ systemIni = fillSection(systemIni, 'keyboard', KEYBOARD);
 writeFileSync(join(out, 'SYSTEM.INI'), Buffer.from(systemIni, 'latin1'));
 writeFileSync(join(out, 'WIN.INI'), Buffer.from(need('WIN.SRC')));
 
+// PROGMAN.INI has no template on the disks — SETUP composes it, so this tool has to as well.
+// Without it Program Manager opens C:\PROGMAN.INI, gets "file not found", and retries forever:
+// measured as a loop of open / 19h / three IOCTLs / 5700h / close with an hourglass on screen, which
+// reads as a hang and is not one. With it, the file is honoured — the window stops being maximised
+// and takes the geometry below, which is how one can tell it was actually read.
+//
+// [Groups] is deliberately EMPTY: the .GRP files are SETUP's own work and nothing here can invent
+// their contents. An empty Program Manager is then the correct picture, not a defect.
+writeFileSync(join(out, 'PROGMAN.INI'), Buffer.from(
+  '[Settings]\r\nWindow=68 48 570 330 1\r\ndisplay.drv=vga.drv\r\nOrder=\r\n\r\n[Groups]\r\n', 'latin1'));
+
 const sz = (n) => { const f = all.get(n); return f ? f.length : 0; };
 console.log(`\n  -> ${out}`);
 console.log(`     WIN.COM ${readFileSync(join(out, 'WIN.COM')).length} = WIN.CNF ${sz('WIN.CNF')} + VGALOGO.LGO ${sz('VGALOGO.LGO')} + VGALOGO.RLE ${sz('VGALOGO.RLE')}`);
 console.log(`     noyau : KERNEL.EXE ${sz('KERNEL.EXE')}  GDI.EXE ${sz('GDI.EXE')}  USER.EXE ${sz('USER.EXE')}  VGA.DRV ${sz('VGA.DRV')}`);
+console.log(`     ecrits par nous, comme SETUP : SYSTEM.INI, WIN.INI, PROGMAN.INI (groupes vides)`);
 console.log(`     ${all.size} fichiers au total`);
