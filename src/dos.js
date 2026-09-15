@@ -316,26 +316,38 @@ export function installDOS(machine, vfs) {
    *  but some (Arctic Adventure) ask for a bounded block and then AH=48-allocate above it.
    *
    *  e_maxalloc = 0 is a DIFFERENT case, not a small block: DOS hands over the whole free region and
-   *  loads the image as HIGH as it fits inside it, leaving nothing free below. Measured against
-   *  dosbox-x with tools/mzalloc.asm, which carries an ordinary-MZ control that reads identically on
-   *  both engines, so the difference below is DOS's and not the probe's:
+   *  loads the IMAGE as high as it fits inside it — but the PSP stays at the BASE of that block,
+   *  exactly where an ordinary program's would be. Measured against dosbox-x with tools/mzalloc.asm,
+   *  which carries an ordinary-MZ control that reads identically on both engines, so the difference
+   *  below is DOS's and not the probe's:
    *
-   *    maxalloc=FFFF   PSP=0814  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000   (both agree)
-   *    maxalloc=0000   PSP=9F91  PSP0002=0000  MCB=- OWNER=0000 SIZE=0000  free=0000   (reference)
+   *    maxalloc=FFFF   PSP=0814 CS=0824  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000
+   *    maxalloc=0000   PSP=0814 CS=9FA1  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000
+   *    maxalloc=0000, KERNEL-sized image (68 KB)
+   *                    PSP=0814 CS=8F21  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000
    *
-   *  The block's MCB stays at its BASE while the PSP sits high inside it — which is why the reference
-   *  finds no MCB in the paragraph below its own PSP. Windows 3.0's KERNEL.EXE is exactly this case,
-   *  and its loader lays out its heap from where DOS put it.
+   *  So only CS moves: same PSP, same block, same MCB, nothing free either way.
    *
-   *  Returns { base, psp, top }: the block runs base..top-1 with its MCB at base-1. */
+   *  ⚠️ The earlier reading of this measurement — "the PSP goes high too" — came from the probe
+   *  taking its PSP as CS - 0x10. Under "image loaded high" that points into the middle of the
+   *  block, and the zeros it found there (PSP0002=0000, MCB=-) were read as DOS's answer. The probe
+   *  takes the PSP from ES at entry now.
+   *
+   *  This is not a detail for Windows 3.0: KERNEL.EXE lays its global heap over PSP+0x10 .. PSP:0002
+   *  (seg 1, 0x9260). With the PSP low that is the whole 600 KB block with the image sitting high
+   *  inside it; with the PSP high it is just the image, ~67 KB, and the first GlobalAlloc fails.
+   *
+   *  Returns { base, psp, load, top }: the block runs base..top-1 with its MCB at base-1, and the
+   *  image goes at `load` — which is base+0x10 for everyone except the e_maxalloc=0 case. */
   function placeProgram(baseSeg, h) {
-    const need = 0x10 + Math.ceil(h.code.length / 16);        // PSP + image, in paragraphs
+    const img = Math.ceil(h.code.length / 16);                // the image alone, in paragraphs
+    const need = 0x10 + img;                                  // PSP + image
     if (h.maxalloc === 0) {
-      return { base: baseSeg, psp: Math.max(baseSeg, MEM_TOP - need), top: MEM_TOP };
+      return { base: baseSeg, psp: baseSeg, load: Math.max(baseSeg + 0x10, MEM_TOP - img), top: MEM_TOP };
     }
     const want = need + Math.max(h.minalloc, h.maxalloc);
     const top = Math.min(baseSeg + Math.max(want, need + h.minalloc), MEM_TOP);
-    return { base: baseSeg, psp: baseSeg, top };
+    return { base: baseSeg, psp: baseSeg, load: baseSeg + 0x10, top };
   }
   /** Entry register state for an MZ image loaded at `loadSeg` with PSP `psp`. */
   function exeEntry(psp, loadSeg, h) {
@@ -369,10 +381,7 @@ export function installDOS(machine, vfs) {
     prep(tail, progPath);
     const h = parseMZ(bytes);
     const place = placeProgram(PSP_SEG, h);
-    const pspSeg = place.psp, loadSeg = pspSeg + 0x10;
-    // prep() built a PSP at PSP_SEG before the header was parsed; a high-loaded program needs it
-    // where DOS actually puts it.
-    if (pspSeg !== PSP_SEG) { buildPSP(pspSeg, tail); dos.psp = pspSeg; }
+    const pspSeg = place.psp, loadSeg = place.load;
     dos.blockBase = place.base;
     mem.blit(loadSeg << 4, h.code);
     applyRelocs(h.relocs, loadSeg, loadSeg);
@@ -409,11 +418,12 @@ export function installDOS(machine, vfs) {
     // overwrote the header, and the chain then read as corrupt from there on.
     const childBase = dos.allocTop + 1;                   // first free paragraph (parent shrank via 4Ah)
     if (childBase + 0x11 >= MEM_TOP) return 8;            // no room for even a PSP+stack
-    // The header has to be parsed BEFORE the PSP is built: an e_maxalloc=0 child is loaded high
-    // inside its block, so where its PSP goes is a function of its own image size.
+    // The header has to be parsed BEFORE the child is placed: an e_maxalloc=0 child's IMAGE goes
+    // high inside its block, so where it lands is a function of its own size. Its PSP does not
+    // move — it sits at the block base like everyone else's.
     const childHdr = isMZ(bytes) ? parseMZ(bytes) : null;
     const childPlace = childHdr ? placeProgram(childBase, childHdr)
-                                : { base: childBase, psp: childBase, top: MEM_TOP };
+                                : { base: childBase, psp: childBase, load: childBase + 0x10, top: MEM_TOP };
     const childPsp = childPlace.psp;
     const envSeg = mem.r16(pbLin) || ENV_SEG;             // 0 in the param block = inherit parent's env
     setEnvProgramPath(envSeg, path.startsWith('C:') || path.startsWith('\\') ? path : 'C:\\' + path.replace(/^\\/, ''));
@@ -436,7 +446,7 @@ export function installDOS(machine, vfs) {
     dos.blockBase = childPlace.base;
     let childTop = MEM_TOP;                               // a .COM child owns the rest of memory
     if (childHdr) {                                       // MZ-EXE child
-      const h = childHdr, loadSeg = childPsp + 0x10;
+      const h = childHdr, loadSeg = childPlace.load;
       mem.blit(loadSeg << 4, h.code);
       applyRelocs(h.relocs, loadSeg, loadSeg);
       exeEntry(childPsp, loadSeg, h);

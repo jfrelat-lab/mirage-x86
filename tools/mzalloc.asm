@@ -57,14 +57,24 @@ BITS 16
 
 imgstart:
 start:
+                ; The PSP comes from DS/ES as DOS hands them over, NOT from CS - 0x10. Those two are
+                ; the same only when the image sits directly above its PSP; the whole question here
+                ; is whether e_maxalloc=0 breaks that, so assuming it makes the probe answer itself.
+                ; It did: the first version read CS - 0x10, which under "image loaded high" points
+                ; into the middle of the block, and the zeros it found there were read as fact.
+                mov     bx, es                  ; ES = PSP at entry
                 mov     ax, cs
-                mov     ds, ax                  ; CS = DS = the load segment; the PSP is 0x10 below
-                sub     ax, 0x10
-                mov     es, ax                  ; ES = PSP
+                mov     ds, ax                  ; DS = CS for this image's own strings
+                mov     es, bx                  ; ES = PSP
 
                 mov     dx, OFF(msg_psp)
                 call    puts
                 mov     ax, es
+                call    puthex
+
+                mov     dx, OFF(msg_cs)
+                call    puts
+                mov     ax, cs
                 call    puthex
 
                 mov     dx, OFF(msg_top)
@@ -146,6 +156,7 @@ puthex:         mov     cx, 4                   ; AX as four hex digits
                 ret
 
 msg_psp:        db 13, 10, 'PSP=', '$'
+msg_cs:         db ' CS=', '$'
 msg_top:        db ' PSP0002=', '$'
 msg_free:       db ' LARGEST-FREE-PARAS=', '$'
 msg_mcb:        db ' MCB=', '$'
@@ -155,6 +166,9 @@ msg_odd:        db '(48h SUCCEEDED, AX=)', '$'
 crlf:           db 13, 10, '$'
 
                 align 16
-                times 0x400 db 0                ; room for the stack: with minalloc=0 the block is
+%ifndef PAD
+  %define PAD 0x400                     ; -dPAD=0x10b00 builds a KERNEL.EXE-sized image, to check
+%endif                                  ; that "loaded high" does not depend on the image size
+                times PAD db 0          ; room for the stack: with minalloc=0 the block is
 stacktop:                                       ; only as big as the image, so the stack must be IN it
 imgend:

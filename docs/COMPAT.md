@@ -395,7 +395,7 @@ Disks and tree live under `boot/`, gitignored.
 
 | Mode | Where it gets |
 |---|---|
-| `win /r` (real) | ⭐ **First divergence found AND fixed with the DOSBox-X INT 21h oracle (2026-09-12).** The defect: `syncSFT()` rebuilds both the SFT and the PSP's job file table, but was called **only from AH=52h**. Windows 3.0's kernel does not ask DOS about its handles — it opens `CON` five times and then reads the **JFT directly** to map them to SFT entries, which DOSBox's log shows as a pause with no INT 21h traffic at all. Ours read all zeros, so the kernel did not find its handles, ran the whole five-open loop a SECOND time (handles 5-9 then 0x0A-0x0E) and gave up. `syncSFT()` now runs after every service that changes the handle map (3Ch/3Dh/3Eh).<br>`DOSBox  33 33 34 35 35 dc 30 3d 3d 3d 3d 3d 3e 3e 3e 3e 3e 52 30 48 3d 57 3e 19 47 …` (536 calls, Program Manager)<br>`MIRAGE  33 33 34 35 35 dc 30 3d 3d 3d 3d 3d 3e 3e 3e 3e 3e 52 30 48 48 48 3d 57 3e` <br>**Identical for 21 calls now, up from 12** — five opens and five closes, then the list of lists. Next divergence: three `AH=48h` allocations where the reference makes one — **verified against the log, which contains exactly ONE `ah=48` in the whole 536-call run**. Ours is the probe/allocate-all/probe shape: `BX=FFFF` -> largest 0x86FB, allocate all of it, ask again -> 0. ⚠️ **EMS is NOT the cause, now established rather than suspected**: the kernel's EMS probe chain (`40 4E03 46 4C 51 58 5A 45 5B`) is implemented up to the point DOSBox itself refuses (`5Bh`), so the two engines now give the probe the SAME outcome — and the three allocations remain. Also measured: our kernel never calls **INT 2Fh** during `/r`, so it never finds XMS; the DOSBox capture cannot confirm the other side because `-log-int21` logs only INT 21h, so a broader capture is needed before reading anything into that. ⚠️ **`MIRAGE_DOSKSEG` is a REGRESSION** — with it the stream is six calls, cut off after the first `35`; the *"Incorrect DOS version"* message vanished only because the kernel stopped reaching the point where it prints it. Keep it off. Ruled out and dead: the handle NUMBERS (we return 5-9 exactly as the reference must) and the InDOS/vector layout. |
+| `win /r` (real) | ⭐ **BOOTS to the Program Manager (2026-09-15).** Title bar, `File / Options / Window / Help` menu, client area, then Windows idles on INT 2Fh. The last blocker was **`e_maxalloc = 0` putting the PSP in the wrong place** — see below. Before that, two defects found with the DOSBox-X INT 21h oracle: `syncSFT()` was called only from AH=52h, so the kernel — which reads the PSP's job file table DIRECTLY rather than asking DOS — found no handles and ran its five-open loop twice; and EMS AH=4Eh/58h named `ES`/`DS` without importing them, a `ReferenceError` that only fires once a guest reaches the page-map calls. ⚠️ **Retracted:** *"three `AH=48h` allocations where the reference makes one"* was read as our defect and "fixed" by handing an `e_maxalloc=0` program all of memory. The three calls were KERNEL's grow loop working correctly; the single call in the reference is the same loop finding nothing free, because on real DOS there IS nothing free — the program already owns the whole block. |
 | `win` / `win /s` (standard) | opens `EMMXXXX0`, picks standard mode, EXECs `DOSX.EXE`, prints its own *"Cannot load Windows in standard mode; try running in real mode."* |
 | **`win /3` (386 enhanced)** | **BOOTS** since 2026-08-22 — WIN386 enters protected mode with paging (CR0 = 0x80000011) and draws the **Windows 3.0 startup logo** in mode 0x12 (640x480x16 planar): the Microsoft wordmark, "Windows / Version 3.0", the 1985-1990 copyright line. Six defects had to go, five of them general engine bugs found by diffing our INT 21h stream against a `dosbox-x -debug -log-int21` capture of the same tree. See the list below. |
 
@@ -435,6 +435,48 @@ bug every time. Only the last is Windows-specific.
    that block in place, overwriting the word and the path outright. WIN386 **reopens itself** through
    that path to load its VxDs, and was opening a zero-length filename.
 
+
+**How `win /r` got to the Program Manager — `e_maxalloc = 0` moves the IMAGE, not the PSP.**
+KERNEL.EXE lays its global heap over exactly `PSP + 0x10 .. [PSP:0002]` (segment 1, `0x9260`:
+`mov es,[0x18] / add ax,0x10 / mov cx,[es:2] / call GlobalInit`). Nothing else feeds that heap: the
+loop at seg 1 `0xB50C` asks DOS for whatever is free and adds it, and on real DOS the answer is
+"nothing", because the program already owns the whole block. So **where DOS puts the PSP decides how
+much memory Windows has**, and we put it in the wrong place.
+
+`placeProgram` read `e_maxalloc = 0` as "PSP high, at the top of memory". Measured against dosbox-x
+with `tools/mzalloc.asm`, only CS moves:
+
+    maxalloc=FFFF   PSP=0814 CS=0824  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000
+    maxalloc=0000   PSP=0814 CS=9FA1  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000
+    maxalloc=0000, KERNEL-sized image (68 KB)
+                    PSP=0814 CS=8F21  PSP0002=9FFF  MCB=Z OWNER=0814 SIZE=97EB  free=0000
+
+⚠️ **The probe was the thing that was wrong**, and its answer had been in this document as DOS's.
+`mzalloc.asm` took its PSP as `CS - 0x10`. Under "image loaded high" that points into the middle of
+the block, where memory is zero — so it reported `PSP=9F91 PSP0002=0000 MCB=- OWNER=0000 SIZE=0000`,
+and those zeros were written up as "DOS hands over the whole region and loads the image as high as it
+fits, leaving nothing free below". Half of that is true. The probe takes its PSP from ES at entry now.
+
+With the PSP high, KERNEL's heap was `0x8F4C..0x9FFE` — **its own image, 67 KB**, three arenas, all
+but one paragraph of it reserved at GlobalInit. The first `GlobalAlloc` (the module database, 1360
+bytes, from seg 1 `0xA549`) returned 0; the caller at `0xA54C` does `mov es,ax` **without checking**,
+wrote the database over the interrupt vector table, and the failure surfaced two returns later at seg
+1 `0x9315` (`or ax,ax / jz`) as a deliberate **`ExitKernel(1)`** — whose own first far call is an
+unapplied NE relocation, which is the `call far 0000:FFFF` at `905f:1822` that looked like a derail.
+With the PSP at the block base the same heap runs `0x0850..0x9FFE` and that allocation returns
+`0x0853`.
+
+Three readings were tested and dropped on the way, recorded so they are not repeated: the module
+database is not corrupted (KERNEL clears the `'M'` signature on purpose — `'M'` is FREE, absent is
+allocated); the allocator's split at seg 1 `0x24E8` is correct and simply never ran; and KERNEL never
+needed a *free* to make room — there is no first free in a healthy boot, the heap is born with the
+whole block free below the image.
+
+⚠️ **Open, measured, and left alone:** our load segment is 12 paragraphs higher than dosbox-x's
+(`8F3D` vs `8F21` on the 68 KB probe, `9FAD` vs `9FA1` on the small one). dosbox-x sizes the image as
+`e_cp * 512 - e_cparhdr * 16`, ignoring the partial last page that `e_cblp` describes; we honour
+`e_cblp`. Nothing observed depends on it — the heap's bounds come from the PSP and `PSP:0002`, not
+from where the image sits inside the block.
 
 
 **MS-DOS 6.22, re-tested 2026-08-22 after the SMC fix — unchanged, and now named exactly.** It

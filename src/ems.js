@@ -7,6 +7,10 @@
 //   * Mapping COPIES rather than remaps: MIRAGE has no real-mode remapping layer. Equivalent for any
 //     program that follows the spec, which forbids holding a pointer into the frame across a remap.
 
+// AH=4Eh and AH=58h address their arrays through ES:DI and DS:SI, and named the registers without
+// importing them — a ReferenceError that only fires when a guest gets as far as the page-map calls.
+import { DS, ES } from './cpu.js';
+
 export const EMS_SEG = 0xf100;              // the driver's own segment (see above)
 const EMS_ENTRY_OFF = 0x0020;               // where the vector points — clear of the name below
 const NAME_OFF = 0x000a;                    // "EMMXXXX0", 8 bytes, fixed by the spec
