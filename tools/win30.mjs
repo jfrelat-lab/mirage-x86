@@ -34,6 +34,13 @@ const out = process.argv[3] || join(ROOT, 'win30.png');
 // 117% CPU, on a workload that cannot terminate by itself. Hence both bounds.
 const BLOCKS = Number(process.argv[4]) || 30_000_000;
 const SECS = Number(process.env.WIN30_SECS) || 180;
+// WIN30_KEYS=38,21,a1,b8 — make/break scancodes pushed through the HARDWARE path once the guest has
+// settled. Windows installs its own INT 9h, so machine.keyQueue (the BIOS path) never reaches it;
+// only pushScancodes does. Injected halfway through the budget so the desktop is up first.
+//
+// This is the liveness test a screenshot cannot give: a window that is drawn and a window that is
+// still listening look identical in a still. Alt then F should drop the File menu.
+const KEYS = (process.env.WIN30_KEYS || '').split(',').map((x) => parseInt(x.trim(), 16)).filter((x) => !isNaN(x));
 
 const vfs = new VFS();
 for (const rel of walk(TREE)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(TREE, rel))));
@@ -96,14 +103,19 @@ dos.load(new Uint8Array(readFileSync(join(TREE, 'WIN.COM'))), args ? ' ' + args 
 
 let blocks = 0, guard = 0;
 const t0 = Date.now();
-let timedOut = false;
+let timedOut = false, keysSent = false;
 while (blocks < BLOCKS && !fault && !dos.programDone && guard++ < 20_000_000) {
   if (Date.now() - t0 > SECS * 1000) { timedOut = true; break; }
+  if (KEYS.length && !keysSent && blocks > BLOCKS / 2) {
+    if (mc.pushScancodes) { mc.pushScancodes(KEYS); keysSent = true; }
+    else console.log('  (pas de pushScancodes sur cette Machine — touches non envoyees)');
+  }
   if (mc.pumpKeyboard) mc.pumpKeyboard();
   blocks += mc.runSlice(20000);
 }
 
 const mode = mc.mem.r8(0x449);
+if (KEYS.length) console.log(`  touches injectees: ${keysSent ? KEYS.map((k) => k.toString(16)).join(' ') : 'NON (budget trop court)'}`);
 console.log(`win ${args} — blocs=${blocks} en ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
   `${dos.programDone ? 'programme termine' : timedOut ? `ARRET SUR LE TEMPS (${SECS}s, WIN30_SECS pour changer)` : 'budget de blocs epuise'}` +
   `${fault ? `  FAUTE: ${fault.message || fault}` : ''}`);
