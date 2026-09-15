@@ -1,6 +1,7 @@
 // win30.mjs — run the Windows 3.0 tree built by tools/win30-install.mjs, and report where it stops.
 //
-//   node tools/win30.mjs ["/3"] [out.png] [blocks]
+//   node tools/win30.mjs ["/3"] [out.png] [blocks]      defauts: 30 M blocs, 180 s
+//   WIN30_SECS=600 node tools/win30.mjs …                 pour lever le plafond de temps
 //   XMS=0 node tools/win30.mjs            — the memory-driver configurations (see docs/COMPAT.md)
 //
 // There was no committed runner for this, which is why "where win /3 stops" lived only in
@@ -24,7 +25,15 @@ if (!existsSync(TREE)) {
 }
 const args = process.argv[2] ?? '/3';
 const out = process.argv[3] || join(ROOT, 'win30.png');
-const BLOCKS = Number(process.argv[4]) || 400_000_000;
+// 30 M blocks, and a wall-clock cap on top. The measured scales are ~450 000 blocks to KERNEL's
+// EXEC and ~4 M to the Program Manager, so this leaves 7x headroom and still ends in under a minute.
+//
+// The old default was 400 M, which is unrelated to any of those numbers — and a block budget alone
+// does not bound TIME: in a derail the guest executes 192-instruction blocks of zeroes costing ~700us
+// each, so 400 M blocks is effectively forever. One such run was found still going after 9h21 at
+// 117% CPU, on a workload that cannot terminate by itself. Hence both bounds.
+const BLOCKS = Number(process.argv[4]) || 30_000_000;
+const SECS = Number(process.env.WIN30_SECS) || 180;
 
 const vfs = new VFS();
 for (const rel of walk(TREE)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(TREE, rel))));
@@ -86,13 +95,17 @@ mc.onError = (e) => { fault = e; };
 dos.load(new Uint8Array(readFileSync(join(TREE, 'WIN.COM'))), args ? ' ' + args : '', 'C:\\WIN.COM');
 
 let blocks = 0, guard = 0;
+const t0 = Date.now();
+let timedOut = false;
 while (blocks < BLOCKS && !fault && !dos.programDone && guard++ < 20_000_000) {
+  if (Date.now() - t0 > SECS * 1000) { timedOut = true; break; }
   if (mc.pumpKeyboard) mc.pumpKeyboard();
   blocks += mc.runSlice(20000);
 }
 
 const mode = mc.mem.r8(0x449);
-console.log(`win ${args} — blocs=${blocks} ${dos.programDone ? 'programme termine' : 'budget epuise'}` +
+console.log(`win ${args} — blocs=${blocks} en ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
+  `${dos.programDone ? 'programme termine' : timedOut ? `ARRET SUR LE TEMPS (${SECS}s, WIN30_SECS pour changer)` : 'budget de blocs epuise'}` +
   `${fault ? `  FAUTE: ${fault.message || fault}` : ''}`);
 console.log(`mode=0x${mode.toString(16)} CR0=0x${(mc.cpu.cr0 >>> 0).toString(16)} CR3=0x${(mc.cpu.cr3 >>> 0).toString(16)} ` +
   `TR=0x${(mc.cpu.tr || 0).toString(16)} exceptions=${exc}`);
