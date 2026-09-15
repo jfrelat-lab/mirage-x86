@@ -673,6 +673,12 @@ export function installDOS(machine, vfs) {
             if (cpu.bx > 4 && !vfs.handles.has(cpu.bx & 0xffff)) { err(6); break; }       // invalid handle
             ok(); break;
           case 0x08: cpu.ax = 1; ok(); break;                                            // removable? 1 = fixed
+          // Windows 3.0's Program Manager asks these two about the drive holding PROGMAN.INI before
+          // it will use the file, and loops — open, 19h, 4409h, 4408h, 440Eh, 5700h, close, again —
+          // as long as either answers "invalid function". Both are cheap and both have one right
+          // answer for a local, single-letter drive.
+          case 0x09: cpu.dx = 0; ok(); break;    // block device remote? DX bit 12 clear = local
+          case 0x0e: cpu.al = 0; ok(); break;    // logical drive map: 0 = this letter is the only one
           default: err(1); break;
         }
         break;
