@@ -17,7 +17,18 @@ export class VFS {
     this.root = dirNode('');
     this.base = [];                // the directory the guest sees as C:\ — see mountAt()
     this.cwd = [];                 // path components from the base, uppercased
-    this.handles = new Map();      // fd -> { node, pos, path, write }
+    // Une table SFT globale (le FICHIER ouvert) et une table JFT PAR PSP (les numeros que le
+    // programme manipule), comme DOS. Un numero de handle n'a de sens que dans le PSP courant, et
+    // fermer le 7 sous un PSP ne ferme pas le 7 d'un autre : seul le compteur de references du
+    // fichier descend.
+    //
+    // Avec une table unique, Windows 3.0 perdait VGAFIX.FON — KERNEL l'ouvre sous son PSP, une
+    // tache Win16 ferme son propre handle 7, le fichier disparaissait pour tout le monde et le
+    // numero repartait a KEYBOARD.DRV. KERNEL lisait alors sa police fixe dans le pilote clavier.
+    this.sft = new Map();          // id -> { node|device, pos, path, write, refs }
+    this.jfts = new Map();         // psp -> Map(fd -> id)
+    this.psp = 0;                  // PSP courant ; dos.js le tient a jour
+    this._nextSft = 0;
     this.extraDevices = new Set(); // names contributed by loaded drivers — see addDevice
     this.openStdHandles();
     this.label = 'MIRAGE';
@@ -178,9 +189,53 @@ export class VFS {
    */
   addDevice(name) { this.extraDevices.add(name.toUpperCase()); }
 
+  /** La JFT du PSP courant, creee vide si ce PSP est inconnu. */
+  _jft(psp = this.psp) { let t = this.jfts.get(psp); if (!t) { t = new Map(); this.jfts.set(psp, t); } return t; }
+
+  /** L'entree SFT derriere un numero de handle du PSP courant. */
+  entry(fd) { const id = this._jft().get(fd); return id === undefined ? undefined : this.sft.get(id); }
+
+  /** Devenir le PSP `psp`. Un PSP encore inconnu HERITE de la table courante, comme un enfant herite
+   *  de celle de son parent a l'EXEC — et comme une tache Win16, dont KERNEL fabrique le PSP en
+   *  copiant le sien, JFT comprise. Chaque fichier ainsi partage voit son compteur monter. */
+  setPsp(psp, inherit = true) {
+    psp &= 0xffff;
+    if (!this.jfts.has(psp)) {
+      const t = new Map();
+      if (inherit) for (const [fd, id] of this._jft()) { const e = this.sft.get(id); if (e) { e.refs++; t.set(fd, id); } }
+      this.jfts.set(psp, t);
+    }
+    this.psp = psp;
+  }
+
+  /** Poser une entree SFT neuve sur un numero du PSP courant. */
+  _setEntry(fd, e) {
+    const id = this._nextSft++;
+    e.refs = 1; this.sft.set(id, e); this._jft().set(fd, id);
+    return fd;
+  }
+
   /** The lowest free entry, as DOS allocates from its 20-slot handle table. A monotonic counter
-   *  instead handed out numbers past the end of that table once a program had opened enough files. */
-  _allocFd() { let fd = 0; while (this.handles.has(fd)) fd++; return fd; }
+   *  instead handed out numbers past the end of that table once a program had opened enough files.
+   *  Libre veut dire libre DANS LE PSP COURANT : deux taches peuvent tenir chacune leur handle 7. */
+  _allocFd() { const t = this._jft(); let fd = 0; while (t.has(fd)) fd++; return fd; }
+
+  /** Vue compatible `Map` sur la JFT du PSP courant : les appelants manipulent des numeros de
+   *  handle et recoivent des entrees SFT, sans avoir a connaitre l'indirection. */
+  get handles() {
+    const vfs = this;
+    return {
+      get: (fd) => vfs.entry(fd),
+      has: (fd) => vfs.entry(fd) !== undefined,
+      set: (fd, e) => vfs._setEntry(fd, e),
+      delete: (fd) => vfs.close(fd),
+      get size() { return vfs._jft().size; },
+      keys: () => vfs._jft().keys(),
+      *values() { for (const id of vfs._jft().values()) yield vfs.sft.get(id); },
+      *entries() { for (const [fd, id] of vfs._jft()) yield [fd, vfs.sft.get(id)]; },
+      *[Symbol.iterator]() { for (const [fd, id] of vfs._jft()) yield [fd, vfs.sft.get(id)]; },
+    };
+  }
 
   /** The five handles DOS opens for every program: 0-2 the console streams, 3 AUX, 4 PRN. They are
    *  real entries, not an implicit range, because a program may CLOSE them and reopen — Windows 3.0's
@@ -188,7 +243,7 @@ export class VFS {
    *  at 5 handed it 5,6,7,8,9 and it kept trying. */
   openStdHandles() {
     for (const [fd, device] of [[0, 'CON'], [1, 'CON'], [2, 'CON'], [3, 'AUX'], [4, 'PRN']]) {
-      this.handles.set(fd, { device, pos: 0, path: device });
+      this._setEntry(fd, { device, pos: 0, path: device });
     }
   }
 
@@ -198,7 +253,7 @@ export class VFS {
     const device = this.extraDevices.has(leaf) ? leaf : VFS.deviceOf(path);
     if (device) {
       const fd = this._allocFd();
-      this.handles.set(fd, { device, pos: 0, path });   // no node: reads and writes go to dos.js
+      this._setEntry(fd, { device, pos: 0, path });     // no node: reads and writes go to dos.js
       return fd;
     }
     const { parent, name, node } = this.resolve(path);
@@ -208,15 +263,24 @@ export class VFS {
       n = fileNode(name, new Uint8Array(0)); parent.children.set(name, n);
     } else if (opts.truncate) n.data = new Uint8Array(0);
     const fd = this._allocFd();
-    this.handles.set(fd, { node: n, pos: 0, path });
+    this._setEntry(fd, { node: n, pos: 0, path });
     return fd;
   }
   open(path, write) { return this.openFile(path, { create: !!write, truncate: !!write }); }
 
-  close(fd) { return this.handles.delete(fd); }
+  /** Fermer un numero du PSP courant. Le FICHIER ne disparait que lorsque plus aucune JFT ne le
+   *  designe — c'est tout l'interet de la separation, et ce qui manquait a Windows. */
+  close(fd) {
+    const t = this._jft(), id = t.get(fd);
+    if (id === undefined) return false;
+    t.delete(fd);
+    const e = this.sft.get(id);
+    if (e && --e.refs <= 0) this.sft.delete(id);
+    return true;
+  }
 
   read(fd, n) {
-    const h = this.handles.get(fd); if (!h) return null;
+    const h = this.entry(fd); if (!h) return null;
     if (h.device) return new Uint8Array(0);            // a device read at end-of-input; dos.js owns CON
     const end = Math.min(h.pos + n, h.node.data.length);
     const out = h.node.data.subarray(h.pos, end);
@@ -224,7 +288,7 @@ export class VFS {
   }
 
   writeBytes(fd, bytes) {
-    const h = this.handles.get(fd); if (!h) return 0;
+    const h = this.entry(fd); if (!h) return 0;
     if (h.device) return bytes.length;                 // consumed; dos.js echoes CON to the screen
     const need = h.pos + bytes.length;
     if (need > h.node.data.length) {
@@ -234,7 +298,7 @@ export class VFS {
   }
 
   seek(fd, pos, whence) {
-    const h = this.handles.get(fd); if (!h) return -1;
+    const h = this.entry(fd); if (!h) return -1;
     if (h.device) return 0;                            // a character device has no position
     const len = h.node.data.length;
     h.pos = whence === 1 ? h.pos + pos : whence === 2 ? len + pos : pos;
