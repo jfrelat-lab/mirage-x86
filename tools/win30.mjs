@@ -112,7 +112,11 @@ const t0 = Date.now();
 let timedOut = false, sentGroups = 0;
 while (blocks < BLOCKS && !fault && !dos.programDone && guard++ < 20_000_000) {
   if (Date.now() - t0 > SECS * 1000) { timedOut = true; break; }
-  if (sentGroups < KEYGROUPS.length && blocks > BLOCKS * (0.35 + 0.15 * sentGroups)) {
+  // Les groupes sont repartis entre 30 % et 85 % du budget, quel que soit leur NOMBRE : le pas fixe
+  // de 15 % sortait du budget des le sixieme groupe, donc une sequence longue perdait silencieusement
+  // sa fin. Les 15 % restants laissent l'invite reagir a la derniere touche avant la capture.
+  const at = BLOCKS * (0.30 + 0.55 * sentGroups / Math.max(1, KEYGROUPS.length - 1));
+  if (sentGroups < KEYGROUPS.length && blocks > at) {
     if (mc.pushScancodes) { mc.pushScancodes(KEYGROUPS[sentGroups]); sentGroups++; }
     else { console.log('  (pas de pushScancodes sur cette Machine — touches non envoyees)'); sentGroups = KEYGROUPS.length; }
   }
