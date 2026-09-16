@@ -128,4 +128,4 @@ for (let y = 0; y < H; y++) buf.copy(raw, y * (stride + 1) + 1, y * stride, y * 
 const crc32 = (b) => { let c = ~0 >>> 0; for (let i = 0; i < b.length; i++) { c ^= b[i]; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
 const chunk = (t, d) => { const body = Buffer.concat([Buffer.from(t), d]); const L = Buffer.alloc(4); L.writeUInt32BE(d.length); const C = Buffer.alloc(4); C.writeUInt32BE(crc32(body)); return Buffer.concat([L, body, C]); };
 writeFileSync(out, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level: 9 })), chunk('IEND', Buffer.alloc(0))]));
-console.log(`${sub}/${prog} @ ${ticks()} ticks — mode 0x${mode.toString(16)} ${mc.mem.planar ? '(planaire)' : ''} — ${fault ? 'FAUTE ' + fault.message : dos.programDone ? 'termine' : 'en cours'} -> ${out}`);
+console.log(`${sub}/${prog} @ ${ticks()} ticks — mode 0x${mode.toString(16)} ${mc.mem.planar ? '(planar)' : ''} — ${fault ? 'FAULT ' + fault.message : dos.programDone ? 'done' : 'running'} -> ${out}`);

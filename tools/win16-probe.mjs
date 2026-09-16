@@ -51,7 +51,7 @@ if (!modArg) {
 const file = join(TREE, /\./.test(modArg) ? modArg : modArg.toUpperCase() + '.EXE');
 if (!existsSync(file)) { console.error(`no ${file} — build the tree with tools/win30-install.mjs`); process.exit(2); }
 
-// ---- table d'entree NE : ordinal -> { seg, off }, et les noms des deux tables ----------------
+// ---- NE entry table: ordinal -> { seg, off }, and the names from both tables -----------------
 const nb = readFileSync(file);
 const u16 = (o) => nb[o] | (nb[o + 1] << 8);
 const u32 = (o) => (u16(o) | (u16(o + 2) << 16)) >>> 0;

@@ -31,21 +31,21 @@ for (const rel of walk(tree)) vfs.addFile('\\' + rel.split('/').join('\\'), new 
 vfs.chdir('\\');
 const { mc, dos } = makeMachine({ vfs });
 
-console.log(`charge ${dir}/${prog}${tail ? ' "' + tail.trim() + '"' : ''}, chauffe jusqu a ${warm} blocs`);
+console.log(`loaded ${dir}/${prog}${tail ? ' "' + tail.trim() + '"' : ''}, warm-up to ${warm} blocs`);
 dos.load(new Uint8Array(readFileSync(join(tree, prog))), tail, 'C:\\' + prog);
 const t0 = Date.now();
 let b = 0, g = 0;
 while (b < warm && !dos.programDone && !mc.cpu.halted && g++ < 2_000_000) b += mc.runSlice(500);
 const warmMs = Date.now() - t0;
-console.log(`  ${b} blocs en ${(warmMs / 1000).toFixed(1)}s  (c est ce cout que le rembobinage supprime)`);
+console.log(`  ${b} blocks in ${(warmMs / 1000).toFixed(1)}s  (this is the cost the rewind removes)`);
 // A warm-up that ends instantly has not run the workload: say where it stopped rather than let the
 // rest of the check pass on a program that exited or is waiting for input.
 console.log(`  etat: programDone=${dos.programDone} halted=${mc.cpu.halted} blocked=${mc.blocked}` +
   ` CS:IP=${mc.cpu.seg[1].toString(16)}:${(mc.cpu.eip & 0xffff).toString(16)}` +
-  `  (${(b / Math.max(warmMs, 1) * 1000 / 1000).toFixed(0)}k blocs/s)`);
+  `  (${(b / Math.max(warmMs, 1) * 1000 / 1000).toFixed(0)}k k blocks/s)`);
 if (warmMs < 2000 && warm > 100000) {
-  console.log('  ⚠️ la chauffe a ete instantanee pour un budget de blocs eleve : le compteur de blocs');
-  console.log('     et le travail reellement execute ne coincident pas. Verifier avant de conclure.');
+  console.log('  ⚠️ warm-up was instantaneous for a high block budget: the block counter');
+  console.log('     and the work actually executed do not match. Check with avant de conclure.');
 }
 
 const tc = Date.now();
@@ -60,18 +60,18 @@ console.log(`restauration: ${restoreMs} ms`);
 
 const v = verify(mc, K);
 console.log('');
-console.log(`controle positif  — la signature bouge sur ${K} blocs : ${v.moved ? 'OUI' : 'NON (le test ne prouve rien)'}`);
+console.log(`positive control  — the signature moves over ${K} blocks: ${v.moved ? 'YES' : 'NO (the test proves nothve rien)'}`);
 console.log(`capture exacte    — restaurer redonne l etat capture : ${v.restoredExact ? 'OUI' : 'NON'}`);
-console.log(`rejeu identique   — les memes ${K} blocs redonnent le meme etat : ${v.replayMatches ? 'OUI' : 'NON'}`);
+console.log(`identical replay  — the same ${K} blocks give the same state: ${v.replayMatches ? 'YES' : 'NO'}`);
 console.log(`  ${v.detail}`);
 console.log('');
 if (v.ok) {
   const saved = (warmMs / Math.max(restoreMs, 1));
-  console.log(`VERDICT: le rembobinage est fidele. Une sonde repart de ce point en ${restoreMs} ms`
-    + ` au lieu de ${(warmMs / 1000).toFixed(1)}s — ${saved.toFixed(0)}x.`);
+  console.log(`VERDICT: the rewind is faithful. A probe resumes from this point in ${restoreMs} ms`
+    + ` instead of ${(warmMs / 1000).toFixed(1)}s — ${saved.toFixed(0)}x.`);
 } else {
-  console.log('VERDICT: NON FIDELE — ne rien construire dessus.');
+  console.log('VERDICT: NOT FAITHFUL — build nothing on it.');
   console.log('  Une divergence ici veut dire qu un etat mutable a echappe a la capture :');
-  console.log('  typiquement une variable de fermeture, que le parcours generique ne peut pas voir.');
+  console.log('  typically a closure variable, which the generic walk cannot see.');
   process.exit(1);
 }

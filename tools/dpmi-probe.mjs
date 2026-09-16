@@ -78,17 +78,17 @@ mc.hookInterrupt(0x31, (c, m) => {
   if (ax === 0x0204 && (c.reg[3] & 0xff) === 0x21) {
     const lin = (c.base[1] + (c.eip >>> 0)) >>> 0;
     const dump = (n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(lin + i) & 0xffffff], 2)).join(' ');
-    dpmiLog.push(`  >> apres 0204 (BL=21), octets en ${h(c.seg[1])}:${h(c.eip >>> 0, 4)} ` +
+    dpmiLog.push(`  >> after 0204 (BL=21), bytes at ${h(c.seg[1])}:${h(c.eip >>> 0, 4)} ` +
       `(lineaire ${h(lin, 6)}): ${dump(24)}`);
   }
   if (dpmiLog.length < 40) {
     // 0300 and 0302 do NOT finish here — they switch to real mode and complete later at the
     // sentinel. What the registers hold on the way out is the real-mode state we just installed, not
-    // a result, and printing it as "sortie" made perfectly normal values look like garbage.
+    // a result, and printing it as "out" made perfectly normal values look like garbage.
     const deferred = ax === 0x0300 || ax === 0x0302;
-    dpmiLog.push(`  AX=${h(ax)} appele depuis ${from}\n` +
-      `     entree : ${fmtRegs(before)}\n` +
-      `     ${deferred ? 'etat reel installe (le service finit a la sentinelle)' : 'sortie'} : ${fmtRegs(snapRegs(c))}`);
+    dpmiLog.push(`  AX=${h(ax)} called from ${from}\n` +
+      `     in  : ${fmtRegs(before)}\n` +
+      `     ${deferred ? 'real state installed (the service ends at the sentinel)' : 'out'} : ${fmtRegs(snapRegs(c))}`);
   }
 });
 
@@ -120,11 +120,11 @@ mc.intHandlers[0x21] = (c, m) => {
     // and the relocation layout, and getting either wrong sends the whole reading astray.
     const cl = (c.seg[1] << 4) >>> 0;
     const dump = (from, n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(cl + from + i) & 0xfffff], 2)).join(' ');
-    execs.push(`  octets CS:${h((c.eip - 8) & 0xffff)} = ${dump((c.eip - 8) & 0xffff, 16)}`);
+    execs.push(`  bytes CS:${h((c.eip - 8) & 0xffff)} = ${dump((c.eip - 8) & 0xffff, 16)}`);
     execs.push(`  parent: PSP=${h(dos.psp)} allocTop=${h(dos.allocTop)} memFloor=${h(dos.memFloor)}  ` +
       `-> l enfant sera charge a ${h(dos.allocTop)}`);
-    execs.push(`  le parent lit DS=020e : ${Array.from({length:8},(_,i)=>h(mc.mem.u8[(0x020e<<4)+i],2)).join(' ')}`);
-    execs.push(`AL=${c.ax & 0xff} "${name}"  appele depuis ${h(c.seg[1])}:${h(c.eip, 8)} SS:SP=${h(c.seg[2])}:${h(c.reg[4] & 0xffff)}`);
+    execs.push(`  the parent reads DS=020e: ${Array.from({length:8},(_,i)=>h(mc.mem.u8[(0x020e<<4)+i],2)).join(' ')}`);
+    execs.push(`AL=${c.ax & 0xff} "${name}"  called from ${h(c.seg[1])}:${h(c.eip, 8)} SS:SP=${h(c.seg[2])}:${h(c.reg[4] & 0xffff)}`);
   }
   // The oracle gives the SEQUENCE; only our own returns say what each call answered. The divergence
   // is caused by one of the first calls replying differently, so record them in full.
@@ -137,7 +137,7 @@ mc.intHandlers[0x21] = (c, m) => {
   const before21 = snapRegs(c);
   const r21 = origInt21(c, m);
   if (log21.length < 20) {
-    log21.push(`  ${h(ah, 2)}  entree ${fmtRegs(before21)}\n      sortie ${fmtRegs(snapRegs(c))}`);
+    log21.push(`  ${h(ah, 2)}  in  ${fmtRegs(before21)}\n      out ${fmtRegs(snapRegs(c))}`);
   }
   return r21;
 };
@@ -228,12 +228,12 @@ mc.biosCallback = (n) => {
   if (!inFlight) return origBios(n);
   const sp = (cpu.seg[2] << 4) + (cpu.reg[4] & 0xffff);
   const w = (i) => h(mc.mem.r16((sp + i * 2) & 0xfffff));
-  const before = `INT ${h(n, 2)} entree ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
+  const before = `INT ${h(n, 2)} in  ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
     `ss:sp=${h(cpu.seg[2])}:${h(cpu.reg[4] & 0xffff)} pile=[${w(0)} ${w(1)} ${w(2)} ${w(3)}] ` +
     `bloque=${mc.blocked}`;
   const r = origBios(n);
   bcCount++;
-  if (bcLog.length < 6) bcLog.push(`${before}\n     sortie ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
+  if (bcLog.length < 6) bcLog.push(`${before}\n     out ${h(cpu.seg[1])}:${h(cpu.eip >>> 0, 4)} ` +
     `ss:sp=${h(cpu.seg[2])}:${h(cpu.reg[4] & 0xffff)} bloque=${mc.blocked} ` +
     `rmCalls=${mc.dpmi.rmCalls.length}`);
   return r;
@@ -258,19 +258,19 @@ for (; frames < FRAMES && !fault && !dos.programDone; frames++) {
 }
 
 console.log(`=== ${dir}/${prog} — ${frames} frames, ${(cpu.cycles / 1e6).toFixed(1)} Mcycles ===`);
-console.log(`arret: ${fault ? 'FAUTE ' + fault.message : dos.programDone ? 'programme termine' : 'toujours en cours'}`);
+console.log(`stop: ${fault ? 'FAULT ' + fault.message : dos.programDone ? 'program done' : 'still running'}`);
 console.log(`CS:EIP = ${h(cpu.seg[1])}:${h(cpu.eip, 8)}  CR0=${h(cpu.cr0, 8)} PE=${cpu.cr0 & 1}\n`);
 
 console.log('INT 2Fh (multiplex) demandes:');
-if (!seenOrder.length) console.log('  (aucun)');
+if (!seenOrder.length) console.log('  (none)');
 for (const ax of seenOrder) console.log(`  AX=${h(ax)}  x${mux.get(ax)}   ${MUX_NAMES[ax] || ''}`);
 
-console.log('\nINT 31h (services DPMI) demandes, dans l ordre:');
-if (!dpmiOrder.length) console.log('  (aucun — le client n a pas pris le chemin DPMI)');
+console.log('\nINT 31h (DPMI services) requested, in order:');
+if (!dpmiOrder.length) console.log('  (none — the client did not take the DPMI path)');
 for (const ax of dpmiOrder) console.log(`  AX=${h(ax)}  x${dpmiCalls.get(ax)}`);
 if (dpmiLog.length) {
   if (bcLog.length) {
-  console.log(`\nbiosCallback pendant un appel 0302 (${bcCount} entrees au total):`);
+  console.log(`\nbiosCallback during an 0302 call (${bcCount} entries in total):`);
   for (const l of bcLog.slice(0, 6)) console.log('  ' + l);
 }
 
@@ -286,7 +286,7 @@ if (beforeNull.length && mc.dpmi) {
 }
 
 if (beforeNull.length) {
-  console.log('\nderniers blocs AVANT que CS ne devienne nul:');
+  console.log('\nlast blocks BEFORE CS goes to zero:');
   console.log('  ' + beforeNull.join(' -> '));
 }
 
@@ -299,7 +299,7 @@ if (mc.dpmi && mc.dpmi.log && mc.dpmi.log.length) {
   for (const l of mc.dpmi.log.slice(0, 12)) console.log('  ' + l);
 }
 
-console.log('\nINT 31h — registres d entree et de sortie, dans l ordre:');
+console.log('\nINT 31h — in and out registers, in order:');
   for (const l of dpmiLog) console.log(l);
 }
 
@@ -316,8 +316,8 @@ const ints = mc.unhandledIntReport();
     }
     if (t.trim()) lines.push('  | ' + t.replace(/\s+$/, ''));
   }
-  console.log('\nsorties DOS (INT 21h AH=09h/40h):');
-console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(/[\r]/g, '')).join('\n') : '  (aucune)');
+  console.log('\nDOS output (INT 21h AH=09h/40h):');
+console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(/[\r]/g, '')).join('\n') : '  (none)');
 
 // Executing without faulting is not the same as RENDERING. The BIOS mode byte says which surface to
 // look at, and counting non-zero bytes distinguishes "cleared the screen" from "drew something".
@@ -327,31 +327,31 @@ console.log(out.length ? out.join('').split('\n').map((l) => '  | ' + l.replace(
   let nz = 0, distinct = new Set();
   for (let i = 0; i < 64000; i++) { const b = mc.mem.u8[lin + i]; if (b) nz++; if (distinct.size < 40) distinct.add(b); }
   if (process.env.SEQ21) {
-  console.log('\nINT 21h — les premiers appels, entree et sortie:');
+  console.log('\nINT 21h — the first calls, in and out:');
   for (const l of log21) console.log(l);
 }
 if (process.env.SEQ21) {
-  console.log('\nsequence INT 21h (ah:al), dans l ordre:');
+  console.log('\nINT 21h sequence (ah:al), in order:');
   console.log(seq21.join(' '));
 }
 
-console.log(`\nINT 10h (modes / VBE): ${[...vbe].map(([k, v]) => k + 'x' + v).join(' ') || '(aucun)'}`);
+console.log(`\nINT 10h (modes / VBE): ${[...vbe].map(([k, v]) => k + 'x' + v).join(' ') || '(none)'}`);
   console.log(`\nvideo: mode=0x${mode.toString(16)} surface=${lin.toString(16)} ` +
-    `octets non nuls=${nz}/64000 valeurs distinctes=${distinct.size}`);
+    `non-zero bytes=${nz}/64000 distinct values=${distinct.size}`);
 }
 
 console.log('\necran texte:');
   console.log(lines.length ? lines.join('\n') : '  (vide)');
 }
 
-console.log('\nEXEC (INT 21h AH=4Bh) tentes: ' + (execs.length ? execs.join(' | ') : '(aucun)'));
-console.log('\nvecteurs INT non implementes: ' + (ints || '(aucun)'));
+console.log('\nEXEC (INT 21h AH=4Bh) attempted: ' + (execs.length ? execs.join(' | ') : '(none)'));
+console.log('\nunimplemented INT vectors: ' + (ints || '(none)'));
 // The final loop's opcodes, read live. "It spins at X" is not a diagnosis; what it is WAITING ON is.
 {
   const cl = (cpu.seg[1] << 4) >>> 0, at = (cpu.eip >>> 0) & 0xffff;
   const from = Math.max(0, at - 16);
   const dump = (a, n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(cl + a + i) & 0xfffff], 2)).join(' ');
-  console.log(`\noctets autour de ${h(cpu.seg[1])}:${h(at, 4)} :`);
+  console.log(`\nbytes around ${h(cpu.seg[1])}:${h(at, 4)} :`);
   console.log(`  ${h(from, 4)}: ${dump(from, 16)}`);
   console.log(`  ${h(at, 4)}: ${dump(at, 16)}   <- ici`);
 }
@@ -366,10 +366,10 @@ console.log('\nvecteurs INT non implementes: ' + (ints || '(aucun)'));
   console.log(`  SI=${h(cpu.reg[6] & 0xffff, 4)}  BX=${h(cpu.reg[3] & 0xffff, 4)}  DF=${(cpu.flags >> 10) & 1}  DS=${h(cpu.seg[3], 4)}`);
 }
 
-console.log('\npremiers blocs APRES la bascule en mode protege:');
-console.log(pmTrace.length ? '  ' + pmTrace.join(' -> ') : '  (aucun)');
+console.log('\nfirst blocks AFTER the switch to protected mode:');
+console.log(pmTrace.length ? '  ' + pmTrace.join(' -> ') : '  (none)');
 
-console.log('\nderniers blocs executes (les plus anciens d abord):');
+console.log('\nlast blocks executed (oldest first):');
 {
   const start = Math.max(0, ri - 26);
   for (let i = start; i < ri; i++) {
@@ -378,4 +378,4 @@ console.log('\nderniers blocs executes (les plus anciens d abord):');
   }
 }
 
-console.log('fonctions INT 21h non implementees: ' + (dos.unhandledFnReport().join(' ') || '(aucune)'));
+console.log('unimplemented INT 21h functions: ' + (dos.unhandledFnReport().join(' ') || '(none)'));

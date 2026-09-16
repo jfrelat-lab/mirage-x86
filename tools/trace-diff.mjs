@@ -45,4 +45,4 @@ rec.run = (...a) => {
 try { let n = 0; while (n++ < LIMIT && !dos.programDone && trace.length < LIMIT) mc.runSlice(1); }
 catch (e) { /* the flag-on run dies; the trace up to that point is what matters */ }
 writeFileSync(process.argv[3], trace.join('\n') + '\n');
-console.log(`${trace.length} blocs -> ${process.argv[3]}`);
+console.log(`${trace.length} blocks -> ${process.argv[3]}`);

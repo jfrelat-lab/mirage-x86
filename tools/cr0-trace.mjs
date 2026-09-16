@@ -30,7 +30,7 @@ function run(label, opts) {
   dos.load(new Uint8Array(readFileSync('intros/mesha.com')), '', 'C:\\PROG');
   let t = 0;
   for (; t < 400 && !fault && !dos.programDone; t++) mc.runSlice(400000);
-  console.log(`\n=== ${label}: ${n} bascules PE, ${t} ticks, termine=${dos.programDone}, faute=${fault ? fault.message : '-'}`);
+  console.log(`\n=== ${label}: ${n} PE switches, ${t} ticks, done=${dos.programDone}, fault=${fault ? fault.message : '-'}`);
   for (const l of log) console.log('   ' + l);
   if (n > log.length) console.log(`   ... (${n - log.length} de plus)`);
   return { n, log };

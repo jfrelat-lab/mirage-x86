@@ -798,7 +798,7 @@ export function installDPMI(machine) {
       dpmi.log.push(`${vec === undefined ? '0302' : '0300 int ' + vec.toString(16)} rmcs=${rmcs.toString(16)} es:di=${cpu.seg[ES].toString(16)}:${(cpu.reg[7] & 0xffff).toString(16)} ` +
         `-> reel ${tgt.seg.toString(16)}:${tgt.off.toString(16)} ` +
         `ax=${(r32(RMCS.EAX) & 0xffff).toString(16)} ss:sp=${cpu.seg[SS].toString(16)}:${(cpu.reg[4] & 0xffff).toString(16)} ` +
-        `mots=${words}  lineaire=${lin.toString(16)} octets=[${bytes}] PE=${cpu.cr0 & 1}`);
+        `words=${words}  linear=${lin.toString(16)} bytes=[${bytes}] PE=${cpu.cr0 & 1}`);
     }
   };
 

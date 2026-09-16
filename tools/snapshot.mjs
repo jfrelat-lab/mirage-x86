@@ -191,7 +191,7 @@ export function verify(mc, blocks = 20000) {
     restoredExact: restored === before,                  // the capture round-trips
     replayMatches: again === after,                      // and the engine takes the same path again
     skipped: snap.skipped,
-    detail: `avant=${hex(before)} apres${blocks}=${hex(after)} restaure=${hex(restored)} rejoue=${hex(again)}`,
+    detail: `before=${hex(before)} after${blocks}=${hex(after)} restored=${hex(restored)} replayed=${hex(again)}`,
   };
 }
 

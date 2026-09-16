@@ -94,7 +94,7 @@ for (let i = 0; i < CASES.length; i++) {
     const g = runMirage(c);
     const ours = g.raised.includes(c.fault);
     if (oracleFaulted && ours) { pass++; faultChecked++; continue; }
-    fails.push(`${c.n}: oracle ${oracleFaulted ? 'a faute' : "n'a PAS faute"}, mirage ${ours ? 'a leve INT ' + c.fault : "n'a rien leve"}`);
+    fails.push(`${c.n}: oracle ${oracleFaulted ? 'faulted' : 'did NOT fault'}, mirage ${ours ? 'a leve INT ' + c.fault : "n'a rien leve"}`);
     continue;
   }
   if (w.error) { pass++; oracleSkips++; continue; }            // the oracle itself faulted — skip
@@ -130,9 +130,9 @@ for (let i = 0; i < CASES.length; i++) {
 }
 
 console.log(`\nmirage vs unicorn: ${pass} passed, ${fails.length} failed`);
-console.log(`  ${faultChecked} cas de faute verifies des DEUX cotes, ${oracleSkips} cas sautes (oracle en erreur)`);
+console.log(`  ${faultChecked} fault cases checked on BOTH sides, ${oracleSkips} cas sautes (oracle en erreur)`);
 const skipCount = CASES.filter((x) => x.skip).length;
-if (skipCount) console.log(`  ${skipCount} cas avec des octets declares non comparables (pointeur d'instruction FNSTENV)`);
+if (skipCount) console.log(`  ${skipCount} cases with bytes declared non-comparable (instruction pointer FNSTENV)`);
 if (tol.length) { console.log(`  ${tol.length} tolerees (float64 vs 80 bits):`); for (const t of tol) console.log('    ~ ' + t); }
 if (fails.length) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 console.log('all green ✓');

@@ -238,7 +238,7 @@ function runMirage(dir, prog, { wall = WALL, cycles = CYCLES } = {}) {
   }
   return {
     ev, servedDPMI,
-    stop: fault ? 'FAUTE ' + fault.message : dos.programDone ? 'programme termine' : 'toujours en cours',
+    stop: fault ? 'FAULT ' + fault.message : dos.programDone ? 'program done' : 'still running',
     mcycles: cpu.cycles / 1e6,
   };
 }
@@ -299,7 +299,7 @@ if (SWEEP) {
     const a = r.ref[ch], b = r.ev[ch], at = r.at[ch];
     console.log(`--- canal ${ch}: DOSBox ${a.length}, MIRAGE ${b.length} evenements`);
     if (!a.length && !b.length) { console.log('    (vide des deux cotes)\n'); continue; }
-    if (at < 0) { console.log(`    aucune divergence sur les ${Math.min(a.length, b.length)} evenements communs.\n`); continue; }
+    if (at < 0) { console.log(`    no divergence over the ${Math.min(a.length, b.length)} shared events.\n`); continue; }
     console.log(`    premiere divergence a #${at} :`);
     for (let i = Math.max(0, at - 6); i < Math.min(Math.max(a.length, b.length), at + 7); i++) {
       console.log(`  ${String(i).padStart(4)}  DOSBox ${(a[i] ?? '(fin)').padEnd(34)} MIRAGE ${b[i] ?? '(fin)'}${i === at ? ' <<<' : ''}`);

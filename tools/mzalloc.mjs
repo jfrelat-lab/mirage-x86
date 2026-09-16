@@ -44,5 +44,5 @@ for (const path of process.argv.slice(2)) {
   dos.load(bytes, '', 'C:\\' + name);
   let b = 0, g = 0;
   while (b < 20_000_000 && !dos.programDone && g++ < 200_000) b += mc.runSlice(2000);
-  console.log(`${name.padEnd(12)} ${out.replace(/[\r\n]+/g, ' ').trim() || '(aucune sortie)'}`);
+  console.log(`${name.padEnd(12)} ${out.replace(/[\r\n]+/g, ' ').trim() || '(no output)'}`);
 }

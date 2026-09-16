@@ -41,7 +41,7 @@ function report(why) {
   if (done) return; done = true;
   const hex = posts.map(([p, t]) => `0x${p.toString(16).padStart(2, '0')}@${(t / 1000).toFixed(1)}s`);
   console.log(`v86 — ${why}`);
-  console.log(`POST codes (${posts.length}): ${hex.join(' ') || '(aucun)'}`);
+  console.log(`POST codes (${posts.length}): ${hex.join(' ') || '(none)'}`);
   console.log(`dernier: ${hex.length ? hex[hex.length - 1] : '-'}`);
 if (posts.length) {
   const age = (Date.now() - t0 - posts[posts.length - 1][1]) / 1000;

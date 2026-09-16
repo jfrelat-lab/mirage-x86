@@ -1,7 +1,7 @@
 // win30.mjs — run the Windows 3.0 tree built by tools/win30-install.mjs, and report where it stops.
 //
-//   node tools/win30.mjs ["/3"] [out.png] [blocks]      defauts: 30 M blocs, 180 s
-//   WIN30_SECS=600 node tools/win30.mjs …                 pour lever le plafond de temps
+//   node tools/win30.mjs ["/3"] [out.png] [blocks]      defaults: 30 M blocks, 180 s
+//   WIN30_SECS=600 node tools/win30.mjs …                 to lift the time cap
 //   XMS=0 node tools/win30.mjs            — the memory-driver configurations (see docs/COMPAT.md)
 //
 // There was no committed runner for this, which is why "where win /3 stops" lived only in
@@ -126,10 +126,10 @@ while (blocks < BLOCKS && !fault && !dos.programDone && guard++ < 20_000_000) {
 
 const mode = mc.mem.r8(0x449);
 if (KEYGROUPS.length) console.log(`  groupes de touches injectes: ${sentGroups}/${KEYGROUPS.length}` +
-  `${sentGroups < KEYGROUPS.length ? '  <-- budget trop court pour les derniers' : ''}`);
-console.log(`win ${args} — blocs=${blocks} en ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
-  `${dos.programDone ? 'programme termine' : timedOut ? `ARRET SUR LE TEMPS (${SECS}s, WIN30_SECS pour changer)` : 'budget de blocs epuise'}` +
-  `${fault ? `  FAUTE: ${fault.message || fault}` : ''}`);
+  `${sentGroups < KEYGROUPS.length ? '  <-- budget too short for the last ones' : ''}`);
+console.log(`win ${args} — blocks=${blocks} in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
+  `${dos.programDone ? 'program done' : timedOut ? `STOPPED ON TIME (${SECS}s, WIN30_SECS to change)` : 'block budget exhausted'}` +
+  `${fault ? `  FAULT: ${fault.message || fault}` : ''}`);
 console.log(`mode=0x${mode.toString(16)} CR0=0x${(mc.cpu.cr0 >>> 0).toString(16)} CR3=0x${(mc.cpu.cr3 >>> 0).toString(16)} ` +
   `TR=0x${(mc.cpu.tr || 0).toString(16)} exceptions=${exc}`);
 if (trail.length) {
@@ -137,13 +137,13 @@ if (trail.length) {
   console.log(`INT 2Fh (${seen.length}) : ${seen.slice(-40).join(' ')}`);
 }
 if (ems.length) console.log(`INT 67h (${ems.length}) AH : ${ems.slice(-40).join(' ')}`);
-console.log(`appels a l'entree XMS : ${xmsCalls}`);
+console.log(`calls to the XMS entry: ${xmsCalls}`);
 if (xmsLog.length) {
   const fails = xmsLog.filter((e) => e.includes('ERR'));
   const uniq = [...new Set(xmsLog)];
   console.log(`  fonctions distinctes : ${uniq.slice(0, 40).join(' ')}`);
   console.log(`  echecs : ${fails.length}${fails.length ? ' — ' + [...new Set(fails)].join(' ') : ''}`);
-  console.log(`  20 derniers : ${xmsLog.slice(-20).join(' ')}`);
+  console.log(`  last 20: ${xmsLog.slice(-20).join(' ')}`);
   if (process.env.WIN30_XMSDUMP) { writeFileSync(process.env.WIN30_XMSDUMP, xmsLog.join('\n') + '\n'); }
 }
 if (con.trim()) console.log(`console :\n  ${con.trim().split('\n').join('\n  ')}`);

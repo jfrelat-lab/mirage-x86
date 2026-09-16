@@ -124,7 +124,7 @@ for (const c of CASES) {
     if (Array.isArray(real.st[k])) {
       const idx = [];
       for (let i = 0; i < real.st[k].length; i++) if (real.st[k][i] !== ours.st[k][i]) idx.push(i);
-      diffs.push(`${k}: ${idx.length} octets differents, 1er a [${idx[0]}] reelle ${hx(real.st[k][idx[0]] | 0, 2)} nous ${hx(ours.st[k][idx[0]] | 0, 2)}`);
+      diffs.push(`${k}: ${idx.length} bytes differ, first at [${idx[0]}] real ${hx(real.st[k][idx[0]] | 0, 2)} nous ${hx(ours.st[k][idx[0]] | 0, 2)}`);
     } else diffs.push(`${k}: reelle ${hx(real.st[k], 2)} nous ${hx(ours.st[k], 2)}`);
   }
   if (diffs.length) { console.log(`  ${c.name.padEnd(30)} DIFFERE  ${diffs.join('  |  ')}`); fail++; }

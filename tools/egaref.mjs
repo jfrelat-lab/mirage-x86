@@ -66,7 +66,7 @@ const info = new Uint8Array(readFileSync(need[2]));
 const mode = info[0], stride = (info[1] || 20) * 2, start = (info[2] << 8) | info[3];
 const attr = info.slice(4, 20);
 const PLANELEN = 8000;
-if (planes.length < PLANELEN * 4) { console.error(`EGA.BIN tronque: ${planes.length} octets`); process.exit(1); }
+if (planes.length < PLANELEN * 4) { console.error(`EGA.BIN truncated: ${planes.length} bytes`); process.exit(1); }
 
 writePNG(out, composePlanar(planes, PLANELEN, dac, attr, stride, start));
 

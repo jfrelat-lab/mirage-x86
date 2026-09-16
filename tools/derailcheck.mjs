@@ -31,7 +31,7 @@ function observe(mc) {
   return { pe, sel, eip, lin, rm, bytes, zero: bytes.every((b) => b === 0) };
 }
 const fmt = (o) => `PE=${o.pe} ${h(o.sel)}:${h(o.eip, 8)} lin=${h(o.lin, 6)}${o.pe ? '' : ' (=rm)'} ` +
-  `octets=[${o.bytes.map((b) => h(b, 2)).join(' ')}]${o.zero ? '  <<< NULS' : ''}`;
+  `bytes=[${o.bytes.map((b) => h(b, 2)).join(' ')}]${o.zero ? '  <<< ZEROES' : ''}`;
 
 function run({ dir, exe, image, boot, tail = '', budgetMs = 25000, ringSize = 30, warm }) {
   let mc, dos = null;
@@ -77,8 +77,8 @@ function run({ dir, exe, image, boot, tail = '', budgetMs = 25000, ringSize = 30
 // ---- SELF-TEST: a .COM that far-jumps into a zeroed segment. The detector MUST fire. ----
 const probe = new Uint8Array([0xea, 0x00, 0x00, 0x00, 0x40]);   // jmp far 4000:0000
 const t = run({ image: probe, exe: 'T.COM', budgetMs: 5000 });
-if (!t.hit) { console.log('AUTO-TEST ECHOUE: le detecteur ne se declenche pas sur un saut vers du vide — ne rien croire de ce qui suit.'); process.exit(1); }
-console.log('auto-test OK — le detecteur se declenche:', fmt(t.hit));
+if (!t.hit) { console.log('SELF-TEST FAILED: the detector does not fire on a jump into empty memory — believe nothing below.'); process.exit(1); }
+console.log('self-test OK — the detector fires:', fmt(t.hit));
 console.log();
 
 // ---- the real target ----
@@ -93,20 +93,20 @@ if (argv[0] === '--boot') {
   const BACK = Number(process.env.DERAIL_BACK) || 20000;
   const probe1 = run({ boot: target, budgetMs: 60000, warm: 1e12 });
   const total = probe1.blocks;
-  console.log(`passe 1: ${total.toLocaleString()} blocs avant l arret (${probe1.fault ? 'FAULT' : 'fin'}) — passe 2 depuis ${Math.max(0, total - BACK).toLocaleString()}`);
+  console.log(`pass 1: ${total.toLocaleString()} blocks before the stop (${probe1.fault ? 'FAULT' : 'end'}) — pass 2 depuis ${Math.max(0, total - BACK).toLocaleString()}`);
   r = run({ boot: target, budgetMs: 60000, warm: Math.max(0, total - BACK) });
 } else {
   target = argv[0] || 'HERETIC';
   r = run({ dir: join('/Users/julienfrelat/Projects/mirage/games', target), exe: argv[1] || 'HERETIC.EXE' });
 }
-console.log(`${target}: ${r.done ? 'termine ' + r.dos.exitCode : (r.fault ? 'FAULT' : 'en cours')} apres ${r.n} blocs`);
+console.log(`${target}: ${r.done ? 'done ' + r.dos.exitCode : (r.fault ? 'FAULT' : 'running')} after ${r.n} blocks`);
 if (r.fault) console.log('  ' + r.fault.message.slice(0, 160));
 if (r.hit) {
-  console.log('PREMIER BLOC SUR DES OCTETS NULS:', fmt(r.hit));
-  console.log('--- les 30 blocs precedents ---');
+  console.log('FIRST BLOCK ON ZERO BYTES:', fmt(r.hit));
+  console.log('--- the 30 preceding blocks ---');
   for (const o of r.ring) console.log('  ' + fmt(o));
 } else {
-  console.log('aucun bloc n execute d octets nuls — le derail n est PAS "executer du vide".');
-  console.log('--- les 30 derniers blocs ---');
+  console.log('no block executes zero bytes — the derail is NOT "running through empty memory".');
+  console.log('--- the last 30 blocks ---');
   for (const o of r.ring) console.log('  ' + fmt(o));
 }

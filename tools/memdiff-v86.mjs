@@ -96,6 +96,6 @@ console.log(`640 KB dump at POST 0x${hex(WANT)} — ${total} bytes differ of ${L
 if (interesting.length) {
   console.log('first differences OUTSIDE the environment regions:');
   for (const a of interesting) console.log(`  ${hex(a, 6)}: mirage=${hex(mir[a])} v86=${hex(v86[a])}`);
-} else console.log('AUCUN ecart hors IVT/BDA — les deux moteurs produisent la meme RAM.');
+} else console.log('NO difference outside IVT/BDA — both engines produce the same RAM.');
 writeFileSync('/tmp/memdiff-mirage.bin', mir); writeFileSync('/tmp/memdiff-v86.bin', v86);
 console.log('dumps: /tmp/memdiff-mirage.bin /tmp/memdiff-v86.bin');
