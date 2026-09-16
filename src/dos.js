@@ -577,7 +577,16 @@ export function installDOS(machine, vfs) {
           break;
         }
         machine.setVector(cpu.al, cpu.seg[DS], cpu.dx & 0xffff); break;
-      case 0x2a: { cpu.cx = 1990; cpu.dx = 0x0101; cpu.al = 1; break; } // get date (fixed)
+      case 0x2a: {                                                    // get date
+        // Same source as AH=2Ch below, for the same reason: a constant is a value no caller can ever
+        // see change. The epoch is 1990-01-01, a Monday, which is also what vfs.js stamps on files.
+        const days = ((mem.r32(0x46c) >>> 0) / 1573040) | 0;         // 1800B0h ticks per day
+        const d = new Date(Date.UTC(1990, 0, 1 + days));
+        cpu.cx = d.getUTCFullYear();
+        cpu.dx = ((d.getUTCMonth() + 1) << 8) | d.getUTCDate();
+        cpu.al = d.getUTCDay();                                       // 0 = Sunday
+        break;
+      }
       case 0x2c: {                                                    // get time
         // Derived from the BDA tick at 0040:006C, not from the host clock: the tick is advanced by
         // our own BIOS INT 8, so the time a guest reads is a function of the emulated run and stays
@@ -585,7 +594,10 @@ export function installDOS(machine, vfs) {
         //
         // A CONSTANT here is not a harmless approximation. Windows 3.0 launching an application
         // polls AH=2Ch 439664 times waiting for it to move; with a frozen clock it waits for ever.
-        const hs = Math.floor((mem.r32(0x46c) >>> 0) * 5493 / 1000) % 8640000;  // 18.2065 Hz -> 1/100 s
+        // Hundredths within the day, from the SAME tick-per-day constant AH=2Ah uses, so the two roll
+        // over on the same tick: scaling by 5493/1000 instead drifted, and the time returned to zero
+        // seven seconds before the date advanced. The remainder is taken first to stay under 2^53.
+        const hs = Math.floor(((mem.r32(0x46c) >>> 0) % 1573040) * 8640000 / 1573040);
         cpu.cx = (((hs / 360000) | 0) << 8) | (((hs / 6000) | 0) % 60);
         cpu.dx = ((((hs / 100) | 0) % 60) << 8) | (hs % 100);
         break;
