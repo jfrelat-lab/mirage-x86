@@ -583,7 +583,13 @@ export function installBIOS(machine, opts = {}) {
       // vector, which orphans our driver (docs/COMPAT.md); answering 0 there told the guest's real XMS
       // driver there was no extended memory, and HimemX refused to install with "Extended memory is
       // too small or not available" even after it had A20 open.
-      const oursLive = machine.xms && machine.getVector(0x2f).seg === 0xf000;
+      // ET notre DOS doit exister : sans lui (machine.dos absent, le cas d'un secteur d'amorçage),
+      // notre pilote XMS ne sert personne — il n'est atteignable que par nos propres services. Un
+      // noyau invité charge alors SON HIMEM, qui teste la memoire etendue AVANT d'installer un
+      // gestionnaire INT 2Fh : la garde ci-dessus le voyait encore a f000 et lui repondait « aucune
+      // memoire etendue ». FreeDOS declinait avec « Extended memory is too small or not available »
+      // la ou QEMU et v86, sur la MEME disquette, installent HIMEM et allouent la HMA.
+      const oursLive = machine.dos && machine.xms && machine.getVector(0x2f).seg === 0xf000;
       cpu.ax = oursLive ? 0 : Math.min(0xffff, (mem.size - 0x100000) >> 10);
       cpu.flags &= ~CF;
       return;

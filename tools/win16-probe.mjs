@@ -115,6 +115,14 @@ else for (const w of wanted) {
 }
 if (!traps.size) { console.error('rien a pieger'); process.exit(2); }
 
+// Garde 1 bis : imprimer ce qui est ARME avant de mesurer. Un « temoin AUCUN » ne distingue pas
+// « armee a une adresse valide qui n'a jamais tourne » (une mesure) de « jamais armee, resolution
+// echouee » (pas de mesure du tout) — meme classe que le « n sur N ». La ligne ci-dessous coute
+// une ligne et rend la difference lisible dans la sortie.
+if (!census) for (const [off, t] of traps)
+  console.log(`arme : ${t.name} (@${t.ord}) -> segment ${t.seg}${t.movable ? ' MOVABLE' : ''} offset ${h(off)}` +
+    `  signature fichier +3 : ${t.sig.map((x) => h(x, 2)).join(' ')}`);
+
 // ---- la machine --------------------------------------------------------------------------------
 const vfs = new VFS();
 for (const rel of walk(TREE)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(TREE, rel))));
