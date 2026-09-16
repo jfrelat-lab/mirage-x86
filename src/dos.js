@@ -578,7 +578,18 @@ export function installDOS(machine, vfs) {
         }
         machine.setVector(cpu.al, cpu.seg[DS], cpu.dx & 0xffff); break;
       case 0x2a: { cpu.cx = 1990; cpu.dx = 0x0101; cpu.al = 1; break; } // get date (fixed)
-      case 0x2c: { cpu.cx = 0; cpu.dx = 0; break; }                  // get time (fixed)
+      case 0x2c: {                                                    // get time
+        // Derived from the BDA tick at 0040:006C, not from the host clock: the tick is advanced by
+        // our own BIOS INT 8, so the time a guest reads is a function of the emulated run and stays
+        // reproducible for the golden fingerprints.
+        //
+        // A CONSTANT here is not a harmless approximation. Windows 3.0 launching an application
+        // polls AH=2Ch 439664 times waiting for it to move; with a frozen clock it waits for ever.
+        const hs = Math.floor((mem.r32(0x46c) >>> 0) * 5493 / 1000) % 8640000;  // 18.2065 Hz -> 1/100 s
+        cpu.cx = (((hs / 360000) | 0) << 8) | (((hs / 6000) | 0) % 60);
+        cpu.dx = ((((hs / 100) | 0) % 60) << 8) | (hs % 100);
+        break;
+      }
       case 0x2f: { cpu.setSeg(ES, (dos.dta >> 4) & 0xffff); cpu.bx = dos.dta & 0xf; break; } // get DTA
       case 0x30: cpu.ax = (dos.version[1] << 8) | dos.version[0]; cpu.bx = 0; cpu.cx = 0; break; // version
       case 0x33: cpu.dx = 0; break;                                  // ctrl-break state
