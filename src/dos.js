@@ -51,8 +51,8 @@ export function installDOS(machine, vfs) {
     onPrint: null,            // optional tap for headless capture
   };
 
-  // Les cinq handles standard sont ouverts par le constructeur du VFS, avant que le PSP du
-  // programme existe : on les fait suivre dans sa table.
+  // The five standard handles are opened by the VFS constructor, before the program's PSP exists:
+  // carry them into its table.
   vfs.setPsp(PSP_SEG);
 
   const bios = () => machine.bios;
@@ -445,7 +445,7 @@ export function installDOS(machine, vfs) {
     buildPSP(childPsp, tail);
     mem.w16((childPsp << 4) + 0x16, dos.psp);             // parent PSP link
     mem.w16((childPsp << 4) + 0x2c, envSeg);              // environment segment
-    dos.psp = childPsp; vfs.setPsp(childPsp); dos.exitCode = 0;   // l'enfant herite des handles ouverts
+    dos.psp = childPsp; vfs.setPsp(childPsp); dos.exitCode = 0;   // the child inherits open handles
 
     dos.blockBase = childPlace.base;
     let childTop = MEM_TOP;                               // a .COM child owns the rest of memory
@@ -598,9 +598,9 @@ export function installDOS(machine, vfs) {
         //
         // A CONSTANT here is not a harmless approximation. Windows 3.0 launching an application
         // polls AH=2Ch 439664 times waiting for it to move; with a frozen clock it waits for ever.
-        // Hundredths within the day, from the SAME tick-per-day constant AH=2Ah uses, so the two roll
-        // over on the same tick: scaling by 5493/1000 instead drifted, and the time returned to zero
-        // seven seconds before the date advanced. The remainder is taken first to stay under 2^53.
+        // Hundredths within the day, from the SAME ticks-per-day constant AH=2Ah uses, so the two
+        // roll over on the same tick: scaling by 5493/1000 instead drifted, and the time returned to
+        // zero seven seconds before the date advanced. The remainder is taken first to stay under 2^53.
         const hs = Math.floor(((mem.r32(0x46c) >>> 0) % 1573040) * 8640000 / 1573040);
         cpu.cx = (((hs / 360000) | 0) << 8) | (((hs / 6000) | 0) % 60);
         cpu.dx = ((((hs / 100) | 0) % 60) << 8) | (hs % 100);
@@ -770,9 +770,9 @@ export function installDOS(machine, vfs) {
       // 51h is the older twin of 62h, and 50h its setter. An extender moves the current PSP around
       // the client it loads, so it needs both halves: a getter alone loses the set silently.
       case 0x51: cpu.bx = dos.psp; ok(); break;
-      // Changer de PSP change de TABLE DE HANDLES : les numeros appartiennent au PSP courant.
-      // Windows 3.0 bascule constamment entre le sien et celui de la tache Win16 active, et c'est
-      // par ce chemin qu'une tache fermait le fichier de police de KERNEL.
+      // Switching PSP switches HANDLE TABLES: handle numbers belong to the current PSP. Windows 3.0
+      // flips constantly between its own and the running Win16 task's, and that is the path by which
+      // a task was closing KERNEL's font file.
       case 0x50: dos.psp = cpu.bx & 0xffff; vfs.setPsp(dos.psp); ok(); break;
       case 0x29: {                                                   // parse filename into an FCB — Ski or Die
         // DS:SI = text, ES:DI = FCB. Fill drive (0 = default, else 1-based), then the 8.3 name

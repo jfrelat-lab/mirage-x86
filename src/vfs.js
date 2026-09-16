@@ -17,17 +17,16 @@ export class VFS {
     this.root = dirNode('');
     this.base = [];                // the directory the guest sees as C:\ — see mountAt()
     this.cwd = [];                 // path components from the base, uppercased
-    // Une table SFT globale (le FICHIER ouvert) et une table JFT PAR PSP (les numeros que le
-    // programme manipule), comme DOS. Un numero de handle n'a de sens que dans le PSP courant, et
-    // fermer le 7 sous un PSP ne ferme pas le 7 d'un autre : seul le compteur de references du
-    // fichier descend.
+    // A global SFT (the open FILE) and a PER-PSP JFT (the numbers a program manipulates), as DOS
+    // has. A handle number only means anything inside the current PSP, and closing 7 under one PSP
+    // does not close 7 under another: only the file's reference count drops.
     //
-    // Avec une table unique, Windows 3.0 perdait VGAFIX.FON — KERNEL l'ouvre sous son PSP, une
-    // tache Win16 ferme son propre handle 7, le fichier disparaissait pour tout le monde et le
-    // numero repartait a KEYBOARD.DRV. KERNEL lisait alors sa police fixe dans le pilote clavier.
+    // With a single table, Windows 3.0 lost VGAFIX.FON — KERNEL opens it under its own PSP, a Win16
+    // task closes its own handle 7, the file vanished for everyone, and the number was handed to
+    // KEYBOARD.DRV. KERNEL then read its fixed font out of the keyboard driver.
     this.sft = new Map();          // id -> { node|device, pos, path, write, refs }
     this.jfts = new Map();         // psp -> Map(fd -> id)
-    this.psp = 0;                  // PSP courant ; dos.js le tient a jour
+    this.psp = 0;                  // current PSP; dos.js keeps it up to date
     this._nextSft = 0;
     this.extraDevices = new Set(); // names contributed by loaded drivers — see addDevice
     this.openStdHandles();
@@ -189,15 +188,15 @@ export class VFS {
    */
   addDevice(name) { this.extraDevices.add(name.toUpperCase()); }
 
-  /** La JFT du PSP courant, creee vide si ce PSP est inconnu. */
+  /** The current PSP's JFT, created empty if that PSP is unknown. */
   _jft(psp = this.psp) { let t = this.jfts.get(psp); if (!t) { t = new Map(); this.jfts.set(psp, t); } return t; }
 
-  /** L'entree SFT derriere un numero de handle du PSP courant. */
+  /** The SFT entry behind a handle number in the current PSP. */
   entry(fd) { const id = this._jft().get(fd); return id === undefined ? undefined : this.sft.get(id); }
 
-  /** Devenir le PSP `psp`. Un PSP encore inconnu HERITE de la table courante, comme un enfant herite
-   *  de celle de son parent a l'EXEC — et comme une tache Win16, dont KERNEL fabrique le PSP en
-   *  copiant le sien, JFT comprise. Chaque fichier ainsi partage voit son compteur monter. */
+  /** Become PSP `psp`. A PSP not seen before INHERITS the current table, the way a child inherits
+   *  its parent's at EXEC — and the way a Win16 task does, since KERNEL builds its PSP by copying
+   *  its own, JFT included. Every file thus shared has its reference count raised. */
   setPsp(psp, inherit = true) {
     psp &= 0xffff;
     if (!this.jfts.has(psp)) {
@@ -208,7 +207,7 @@ export class VFS {
     this.psp = psp;
   }
 
-  /** Poser une entree SFT neuve sur un numero du PSP courant. */
+  /** Put a fresh SFT entry on a handle number of the current PSP. */
   _setEntry(fd, e) {
     const id = this._nextSft++;
     e.refs = 1; this.sft.set(id, e); this._jft().set(fd, id);
@@ -217,11 +216,11 @@ export class VFS {
 
   /** The lowest free entry, as DOS allocates from its 20-slot handle table. A monotonic counter
    *  instead handed out numbers past the end of that table once a program had opened enough files.
-   *  Libre veut dire libre DANS LE PSP COURANT : deux taches peuvent tenir chacune leur handle 7. */
+   *  Free means free IN THE CURRENT PSP: two tasks can each hold their own handle 7. */
   _allocFd() { const t = this._jft(); let fd = 0; while (t.has(fd)) fd++; return fd; }
 
-  /** Vue compatible `Map` sur la JFT du PSP courant : les appelants manipulent des numeros de
-   *  handle et recoivent des entrees SFT, sans avoir a connaitre l'indirection. */
+  /** A `Map`-compatible view of the current PSP's JFT: callers pass handle numbers and get SFT
+   *  entries back, without having to know about the indirection. */
   get handles() {
     const vfs = this;
     return {
@@ -268,8 +267,8 @@ export class VFS {
   }
   open(path, write) { return this.openFile(path, { create: !!write, truncate: !!write }); }
 
-  /** Fermer un numero du PSP courant. Le FICHIER ne disparait que lorsque plus aucune JFT ne le
-   *  designe — c'est tout l'interet de la separation, et ce qui manquait a Windows. */
+  /** Close a handle number in the current PSP. The FILE only goes away once no JFT names it any
+   *  more — that is the whole point of the split, and what Windows was missing. */
   close(fd) {
     const t = this._jft(), id = t.get(fd);
     if (id === undefined) return false;
