@@ -70,8 +70,8 @@ function runV86() {
 const mir = runMirage();
 const v86 = await runV86();
 if (!mir || !v86) {
-  console.error(`pas de vidage: mirage=${mir ? 'ok' : 'ABSENT'} v86=${v86 ? 'ok' : 'ABSENT'} ` +
-    `(le code POST 0x${hex(WANT)} a-t-il ete atteint des deux cotes ?)`);
+  console.error(`no dump: mirage=${mir ? 'ok' : 'MISSING'} v86=${v86 ? 'ok' : 'MISSING'} ` +
+    `(was POST code 0x${hex(WANT)} reached on both sides?)`);
   process.exit(2);
 }
 
@@ -80,9 +80,9 @@ if (!mir || !v86) {
 // BIOS and leaves both at zero. Counting those in a single total buries whatever the CPU actually
 // disagrees about — which is the only part worth reading.
 const REGIONS = [
-  ['IVT  0000-03ff (environnement, pas le CPU)', 0x000, 0x400],
-  ['BDA  0400-04ff (environnement, pas le CPU)', 0x400, 0x500],
-  ['RAM  0500-9ffff (ce que test386 ecrit)', 0x500, LEN],
+  ['IVT  0000-03ff (environment, not the CPU)', 0x000, 0x400],
+  ['BDA  0400-04ff (environment, not the CPU)', 0x400, 0x500],
+  ['RAM  0500-9ffff (what test386 writes)', 0x500, LEN],
 ];
 let total = 0;
 const interesting = [];
@@ -90,9 +90,9 @@ for (const [name, lo, hi] of REGIONS) {
   let n = 0;
   for (let i = lo; i < hi; i++) if (mir[i] !== v86[i]) { n++; if (lo >= 0x500 && interesting.length < 24) interesting.push(i); }
   total += n;
-  console.log(`  ${name}: ${n} octets differents`);
+  console.log(`  ${name}: ${n} bytes differ`);
 }
-console.log(`vidage 640 KB au POST 0x${hex(WANT)} — ${total} octets differents sur ${LEN}`);
+console.log(`640 KB dump at POST 0x${hex(WANT)} — ${total} bytes differ of ${LEN}`);
 if (interesting.length) {
   console.log('premiers ecarts HORS environnement :');
   for (const a of interesting) console.log(`  ${hex(a, 6)}: mirage=${hex(mir[a])} v86=${hex(v86[a])}`);
