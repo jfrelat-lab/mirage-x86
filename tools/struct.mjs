@@ -48,13 +48,14 @@ const CATALOG = {
     title: "Entry in IO.SYS's BPB chain (MS-DOS 4), as walked by 0070:3ab4",
     source: 'RECONSTRUCTED by measurement, not documented. CONFIRMED by two independent emulators: '
       + 'v86 and QEMU return the same 16 fields at 0070:206c, all equal to the partition boot '
-      + 'sector BPB. MIRAGE diverges on the 7 fields that come from the disk. Treat this as a '
+      + 'sector BPB. MIRAGE now matches them: the 7 fields that come from the disk were empty for '
+      + 'as long as INT 13h AH=08h zeroed the caller\'s ES:DI (src/disk.js). Treat this as a '
       + 'hypothesis about the NAMES, not the values: two references agreeing does not prove the '
       + 'fields are named right.',
     fields: [
       [0x00, U16, 'nextOff', 'offset of the next entry (FFFF = end of chain)'],
       [0x02, U16, 'nextSeg', 'segment of the next entry'],
-      [0x04, U16, 'attributs', 'driver attributes'],
+      [0x04, U16, 'attributes', 'driver attributes'],
       [0x06, U16, 'bytesPerSector', 'start of the BPB proper'],
       [0x08, U8, 'sectorsPerCluster', ''],
       [0x09, U16, 'reservedSectors', ''],
@@ -67,7 +68,7 @@ const CATALOG = {
       [0x15, U16, 'heads', ''],
       [0x17, U32, 'hiddenSectors', ''],
       [0x1b, U32, 'totalSectors32', ''],
-      [0x22, U8, 'typeUnite', '5 = fixed disk, 7 = other (compared at 0070:3ac0 and 0070:3b0e)'],
+      [0x22, U8, 'unitType', '5 = fixed disk, 7 = other (compared at 0070:3ac0 and 0070:3b0e)'],
     ],
   },
   psp: {

@@ -9,6 +9,7 @@
 
 import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
+import { installDisk } from '../src/disk.js';
 import { installBIOS } from '../src/bios.js';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
@@ -353,6 +354,26 @@ function eq(name, got, want) {
   let steps = 0; while (!cpu.halted && steps++ < 50) mc.rec.step();
   eq('unhandled INT 13h sets CF (not a silent success)', cpu.flags & 1, 1);
   eq('unhandled INT 13h is counted', mc.unhandledInts[0x13], 1); }
+
+// ---- INT 13h AH=08h: ES:DI belongs to the CALLER on a fixed disk ------------------------------
+// MS-DOS 4's IO.SYS holds its drive-table pointer in DI across this call and stores the geometry
+// through it the instruction after (`mov [di+15h],dh`). Zeroing ES:DI for want of a table sent
+// those stores into the IVT and left the BPB at IO.SYS's template, so the divide at 0070:3aeb
+// divided by heads * sectorsPerTrack = 0. SeaBIOS under QEMU and under v86 both hand ES:DI back
+// untouched; only floppies get the diskette parameter table.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  installBIOS(mc); installDisk(mc);
+  mc.disk.attach(0x80, new Uint8Array(1024 * 1024), { cyl: 32, heads: 4, spt: 16, type: 3 });
+  mc.disk.attach(0x00, new Uint8Array(737280));
+  cpu.setSeg(ES, 0xbeef); cpu.di = 0x1234; cpu.ax = 0x0800; cpu.dx = 0x0080;
+  mc.intHandlers[0x13](cpu, mc);
+  eq('AH=08h on a fixed disk preserves ES', cpu.seg[ES], 0xbeef);
+  eq('AH=08h on a fixed disk preserves DI', cpu.di & 0xffff, 0x1234);
+  eq('AH=08h on a fixed disk reports heads-1 in DH', (cpu.dx >> 8) & 0xff, 3);
+  cpu.setSeg(ES, 0xbeef); cpu.di = 0x1234; cpu.ax = 0x0800; cpu.dx = 0x0000;
+  mc.intHandlers[0x13](cpu, mc);
+  eq('AH=08h on a floppy still returns the diskette parameter table', cpu.seg[ES], 0xf000);
+  eq('...at the offset INT 1Eh points to', cpu.di & 0xffff, 0xefc7); }
 
 // ---- CPU profiles: the generation differences a DOS program uses to DETECT the chip -----------
 // Until src/cpu-profile.js existed, MIRAGE was a hybrid nobody shipped — 8088 on some corners, 286

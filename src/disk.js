@@ -106,8 +106,15 @@ export function installDisk(machine) {
         // A real BIOS returns ES:DI = the diskette parameter table — the same 11 bytes INT 1Eh
         // points at — and a guest is entitled to read it. We used to answer 0000:0000, which is a
         // null pointer dressed as an answer: the caller has no way to know it is not a table.
+        //
+        // FIXED DISKS GET NEITHER: ES and DI are CALLER-SAVED here. Zeroing them is not a harmless
+        // "no table available" — MS-DOS 4's IO.SYS keeps its drive-table pointer in DI across the
+        // call and stores the geometry straight into it (`mov [di+15h],dh` / `mov [di+13h],cl` at
+        // 0070:37be). With DI zeroed, heads and sectors-per-track were written into the IVT instead
+        // and the BPB kept IO.SYS's template zeros, so the `mul`/`div cx` at 0070:3aeb divided by
+        // zero. Checked against two references on the same boot sector: SeaBIOS under QEMU and
+        // under v86 both return ES:DI exactly as passed in (BEEF:1234).
         if (drive < 0x80) { c.setSeg(ES, DPT_SEG); c.di = DPT_OFF; }
-        else { c.setSeg(ES, 0); c.di = 0; }                      // fixed disks use a different table
         ok(); return;
       }
       case 0x15: {                                              // get disk type
