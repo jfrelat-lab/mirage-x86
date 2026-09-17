@@ -375,6 +375,30 @@ function eq(name, got, want) {
   eq('AH=08h on a floppy still returns the diskette parameter table', cpu.seg[ES], 0xf000);
   eq('...at the offset INT 1Eh points to', cpu.di & 0xffff, 0xefc7); }
 
+// ---- INT 13h AH=15h: the sector count is a FIXED-DISK answer -----------------------------------
+// On a floppy a real BIOS reports the type in AH and leaves everything else to the caller. MS-DOS 4
+// keeps its drive-table loop variable in DL across the call, so returning the count there (0x0b40
+// for a 1.44M disk) made it build both floppy entries for drive 0x40. SeaBIOS answers
+// AX=0100 CX=5555 DX=0001 to a probe that arrives with CX=5555 and DL=1.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  installBIOS(mc); installDisk(mc);
+  mc.disk.attach(0x00, new Uint8Array(1474560));
+  mc.disk.attach(0x80, new Uint8Array(1024 * 1024), { cyl: 32, heads: 4, spt: 16, type: 3 });
+  cpu.ax = 0x1500; cpu.cx = 0x5555; cpu.dx = 0x0000;
+  mc.intHandlers[0x13](cpu, mc);
+  eq('AH=15h calls a floppy type 01', (cpu.ax >> 8) & 0xff, 0x01);
+  eq('AH=15h leaves CX alone on a floppy', cpu.cx & 0xffff, 0x5555);
+  eq('AH=15h leaves DX alone on a floppy', cpu.dx & 0xffff, 0x0000);
+  cpu.ax = 0x1500; cpu.cx = 0x5555; cpu.dx = 0x0080;
+  mc.intHandlers[0x13](cpu, mc);
+  eq('AH=15h calls a fixed disk type 03', (cpu.ax >> 8) & 0xff, 0x03);
+  eq('...and reports its sector count in CX:DX', ((cpu.cx & 0xffff) << 16) | (cpu.dx & 0xffff), 2048);
+  // BL is the IBM drive-type code, not a size class: a 1.44M drive is 04, not "anything big".
+  cpu.ax = 0x0800; cpu.dx = 0x0000; cpu.bx = 0xff00;
+  mc.intHandlers[0x13](cpu, mc);
+  eq('AH=08h reports a 1.44M floppy as drive type 04', cpu.bx & 0xff, 0x04);
+  eq('...with the geometry SeaBIOS gives for it', cpu.cx & 0xffff, 0x4f12); }
+
 // ---- CPU profiles: the generation differences a DOS program uses to DETECT the chip -----------
 // Until src/cpu-profile.js existed, MIRAGE was a hybrid nobody shipped — 8088 on some corners, 286
 // on others, 386 decoding throughout — so a detection routine could conclude something impossible.

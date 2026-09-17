@@ -14,15 +14,21 @@ import { CF, ES } from './cpu.js';
 
 // Standard floppy geometries, keyed by image size. A raw sector image carries no geometry of its
 // own, and CHS addressing is meaningless without one.
+// `type` is what INT 13h AH=08h returns in BL, and the codes are the IBM ones, not a size class:
+// 01 = 360K 5.25", 02 = 1.2M 5.25", 03 = 720K 3.5", 04 = 1.44M 3.5", 06 = 2.88M. Three rows used
+// to say 02 for everything 720K and up, which told a guest that a 1.44M drive was a 1.2M one:
+// MS-DOS 4's SYSINIT builds its drive table from this byte, and on the wrong code it fell back to
+// a 360K template (9 sectors, 1 head) for a 1.44M disk and then retried a bad read forever.
+// Checked against SeaBIOS, which answers BX=0004 CX=4F12 DX=0102 for a 1.44M floppy.
 const GEOMETRY = new Map([
   [ 163840, { cyl: 40, heads: 1, spt: 8,  type: 1 }],   // 160K
   [ 184320, { cyl: 40, heads: 1, spt: 9,  type: 1 }],   // 180K
   [ 327680, { cyl: 40, heads: 2, spt: 8,  type: 1 }],   // 320K
   [ 368640, { cyl: 40, heads: 2, spt: 9,  type: 1 }],   // 360K
-  [ 737280, { cyl: 80, heads: 2, spt: 9,  type: 2 }],   // 720K
+  [ 737280, { cyl: 80, heads: 2, spt: 9,  type: 3 }],   // 720K
   [1228800, { cyl: 80, heads: 2, spt: 15, type: 2 }],   // 1.2M
-  [1474560, { cyl: 80, heads: 2, spt: 18, type: 2 }],   // 1.44M
-  [2949120, { cyl: 80, heads: 2, spt: 36, type: 2 }],   // 2.88M
+  [1474560, { cyl: 80, heads: 2, spt: 18, type: 4 }],   // 1.44M
+  [2949120, { cyl: 80, heads: 2, spt: 36, type: 6 }],   // 2.88M
 ]);
 const SECTOR = 512;
 
@@ -118,9 +124,18 @@ export function installDisk(machine) {
         ok(); return;
       }
       case 0x15: {                                              // get disk type
-        const sectors = (d.data.length / SECTOR) | 0;
-        c.cx = (sectors >> 16) & 0xffff; c.dx = sectors & 0xffff;
-        c.ah = drive < 0x80 ? 0x01 : 0x03;                      // 01 = floppy, no change line; 03 = fixed disk
+        // CX:DX = the sector count is a FIXED-DISK answer only. On a floppy the call reports the
+        // type in AH and touches nothing else: SeaBIOS returns AX=0100 CX=5555 DX=0001 for a probe
+        // that went in with CX=5555 and DL=1, so both are the caller's. Returning the count anyway
+        // cost MS-DOS 4 its loop variable — its drive-table builder keeps the drive number in DL
+        // across this call (0070:34ab) and read back 0x40, the low byte of 2880 sectors, so both
+        // floppy entries were built for drive 0x40 with a 360K template and every later read
+        // retried forever on a drive that does not exist.
+        if (drive >= 0x80) {
+          const sectors = (d.data.length / SECTOR) | 0;
+          c.cx = (sectors >> 16) & 0xffff; c.dx = sectors & 0xffff;
+          c.ah = 0x03;                                          // 03 = fixed disk, sector count valid
+        } else c.ah = 0x01;                                     // 01 = floppy, no change-line support
         c.flags &= ~CF; disk.lastStatus = 0; return;
       }
       default:
