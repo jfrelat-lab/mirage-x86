@@ -399,6 +399,47 @@ function eq(name, got, want) {
   eq('AH=08h reports a 1.44M floppy as drive type 04', cpu.bx & 0xff, 0x04);
   eq('...with the geometry SeaBIOS gives for it', cpu.cx & 0xffff, 0x4f12); }
 
+// ---- MC146818 clock + CMOS ---------------------------------------------------------------------
+// The chip is the reference, not any one BIOS: four implementations (SeaBIOS under QEMU and under
+// v86, the Bochs BIOS, DOSBox-X) answer INT 1Ah by copying these registers out verbatim, and every
+// difference between them was a difference in what their CMOS held.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  installBIOS(mc);
+  const cmos = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
+  eq('CMOS register B is 24-hour BCD with no daylight saving', cmos(0x0b), 0x02);
+  eq('CMOS register D reports a valid clock (VRT)', cmos(0x0d) & 0x80, 0x80);
+  eq('CMOS register A has the divider on and UIP clear', cmos(0x0a), 0x26);
+  // There is no century register in the chip; the byte INT 1Ah returns in CH lives in CMOS RAM,
+  // at 32h on the AT and 37h on PS/2, and it has to match the year or the guest lands 100 years out.
+  eq('the AT century byte matches the epoch', cmos(0x32), 0x19);
+  eq('the PS/2 century byte holds the same', cmos(0x37), 0x19);
+  eq('the clock starts in year 90 (BCD)', cmos(0x09), 0x90);
+  eq('...in month 01', cmos(0x08), 0x01);
+  eq('...on day 01', cmos(0x07), 0x01);
+  eq('...which the chip knows was a Monday', cmos(0x06), 2);        // 1-7, Sunday = 1
+  // MS-DOS and PC DOS decide whether the machine HAS a clock by checking AH=02h for non-zero
+  // values, so a machine that powers up at midnight reads as having none — measured on MS-DOS 4,
+  // which then skips AH=04h and falls back to 01-01-1980.
+  cpu.ax = 0x0200; cpu.cx = 0x5555; cpu.dx = 0x5555; cpu.flags |= 1;
+  mc.intHandlers[0x1a](cpu, mc);
+  eq('AH=02h clears CF', cpu.flags & 1, 0);
+  eq('AH=02h returns a NON-ZERO time', (cpu.cx & 0xffff) !== 0, true);
+  eq('AH=02h returns BCD hours and minutes', cpu.cx & 0xffff, 0x0800);
+  eq('AH=02h reports no daylight saving in DL', cpu.dx & 0xff, 0x00);
+  cpu.ax = 0x0400; cpu.cx = 0x5555; cpu.dx = 0x5555; cpu.flags |= 1;
+  mc.intHandlers[0x1a](cpu, mc);
+  eq('AH=04h clears CF', cpu.flags & 1, 0);
+  eq('AH=04h returns century and year in BCD', cpu.cx & 0xffff, 0x1990);
+  eq('AH=04h returns month and day in BCD', cpu.dx & 0xffff, 0x0101);
+  cpu.ax = 0x2c00; mc.intHandlers[0x1a](cpu, mc);
+  eq('an unknown INT 1Ah function sets CF instead of passing silently', cpu.flags & 1, 1);
+  // Setting the date through AH=05h moves the chip.
+  cpu.ax = 0x0500; cpu.cx = 0x2013; cpu.dx = 0x0725;
+  mc.intHandlers[0x1a](cpu, mc);
+  cpu.ax = 0x0400; mc.intHandlers[0x1a](cpu, mc);
+  eq('AH=05h then AH=04h round-trips the year', cpu.cx & 0xffff, 0x2013);
+  eq('...and the month and day', cpu.dx & 0xffff, 0x0725); }
+
 // ---- CPU profiles: the generation differences a DOS program uses to DETECT the chip -----------
 // Until src/cpu-profile.js existed, MIRAGE was a hybrid nobody shipped — 8088 on some corners, 286
 // on others, 386 decoding throughout — so a detection routine could conclude something impossible.

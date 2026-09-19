@@ -9,6 +9,7 @@ import { installXMS } from './xms.js';
 import { installDPMI } from './dpmi.js';
 import { installEMS } from './ems.js';
 import { installDisk } from './disk.js';
+import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
 
 const VRAM = 0xb8000;          // text video memory
@@ -519,12 +520,7 @@ export function installBIOS(machine, opts = {}) {
   });
 
   // ---- INT 1Ah: timer ----
-  machine.hookInterrupt(0x1a, (cpu) => {
-    if (cpu.ah === 0x00) {
-      const t = mem.r32(BDA + 0x6c);
-      cpu.cx = (t >>> 16) & 0xffff; cpu.dx = t & 0xffff; cpu.al = 0;
-    }
-  });
+  // INT 1Ah is installed with the clock it reads — see src/rtc.js.
 
   // ---- INT 15h: system services ----
   // Only the subfunctions the corpus actually asks for (tools/survey-gaps.mjs): AH=86h — 16384 calls
@@ -863,6 +859,7 @@ export function installBIOS(machine, opts = {}) {
 
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
+  installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
   if (opts.xms !== false) installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
   if (machine.xms) machine.xms.max = Math.min(machine.xms.max, VBE_FB_LIN);   // keep XMS out of the framebuffer
