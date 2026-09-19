@@ -14,6 +14,7 @@ import { deflateSync } from 'zlib';
 import { VFS } from '../src/vfs.js';
 import { makeMachine } from './harness.mjs';
 import { walk } from './corpus.mjs';
+import { dac6to8 } from './frame.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const [sub, prog, ticksArg, outArg, tail, keysArg, feedArg] = process.argv.slice(2);
@@ -88,7 +89,7 @@ if (vga && vga.modeX) {
   for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) {
     const off = (start + y * stride + (x >> 2)) & 0xffff;
     const d = planes[(x & 3) * 0x10000 + off] & 0xff;
-    put(y * 320 + x, dac[d * 3] << 2, dac[d * 3 + 1] << 2, dac[d * 3 + 2] << 2);
+    put(y * 320 + x, dac6to8(dac[d * 3]), dac6to8(dac[d * 3 + 1]), dac6to8(dac[d * 3 + 2]));
   }
 } else if (mc.mem.planar && vga) {
   // Four 64 KB planes, one bit each; the 4-bit index goes through the attribute palette, and that
@@ -101,7 +102,7 @@ if (vga && vga.modeX) {
     let idx = 0;
     for (let p = 0; p < 4; p++) idx |= ((planes[p * 0x10000 + off] >> bit) & 1) << p;
     const d = (vga.palette ? vga.palette[idx] : idx) & 0x3f;
-    put(y * 320 + x, dac[d * 3] << 2, dac[d * 3 + 1] << 2, dac[d * 3 + 2] << 2);
+    put(y * 320 + x, dac6to8(dac[d * 3]), dac6to8(dac[d * 3 + 1]), dac6to8(dac[d * 3 + 2]));
   }
 } else if (mode === 4 || mode === 5 || mode === 6) {
   const CGA = [[0, 0, 0], [0, 170, 170], [170, 0, 170], [170, 170, 170]];
@@ -113,7 +114,7 @@ if (vga && vga.modeX) {
 } else {
   for (let i = 0; i < 64000; i++) {
     const d = mc.mem.u8[0xa0000 + i];
-    put(i, dac[d * 3] << 2, dac[d * 3 + 1] << 2, dac[d * 3 + 2] << 2);
+    put(i, dac6to8(dac[d * 3]), dac6to8(dac[d * 3 + 1]), dac6to8(dac[d * 3 + 2]));
   }
 }
 

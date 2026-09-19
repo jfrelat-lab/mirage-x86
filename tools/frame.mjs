@@ -8,6 +8,18 @@ import { writeFileSync } from 'fs';
 import { deflateSync } from 'zlib';
 
 /**
+ * A 6-bit DAC component as an 8-bit one, the way QEMU does it (hw/display/vga-helpers.h c6_to_8):
+ * shift left by two and replicate the LOW bit into the two new ones.
+ *
+ * A VGA DAC is analogue, so there is no "true" 8-bit value — only conventions, and they disagree:
+ * `v << 2` gives 252 for full scale, round(v * 255 / 63) (src/video.js, for display) gives 85 for
+ * 21, QEMU gives 87. These captures exist to be pixel-diffed against QEMU screendumps, so they use
+ * QEMU's rule. With `<< 2` a Windows 2.03 desktop differed from QEMU on 58,834 pixels that were all
+ * the same colours, and hid the 53 that were a real difference (the mouse cursor).
+ */
+export const dac6to8 = (v) => { v &= 0x3f; const b = v & 1; return (v << 2) | (b << 1) | b; };
+
+/**
  * @param {Uint8Array} planes four 64 KB planes, or four 8000-byte planes, laid end to end
  * @param {number} planeLen bytes per plane in `planes`
  * @param {Uint8Array} dac 768 six-bit entries
@@ -20,7 +32,7 @@ export function composePlanar(planes, planeLen, dac, attr, stride, start, W = 32
     let idx = 0;
     for (let p = 0; p < 4; p++) idx |= ((planes[p * planeLen + off] >> bit) & 1) << p;
     const d = (attr ? attr[idx] : idx) & 0x3f, o = (y * W + x) * 3;
-    rgb[o] = dac[d * 3] << 2; rgb[o + 1] = dac[d * 3 + 1] << 2; rgb[o + 2] = dac[d * 3 + 2] << 2;
+    rgb[o] = dac6to8(dac[d * 3]); rgb[o + 1] = dac6to8(dac[d * 3 + 1]); rgb[o + 2] = dac6to8(dac[d * 3 + 2]);
   }
   return rgb;
 }
@@ -29,7 +41,7 @@ export function composeLinear(fb, dac, W = 320, H = 200) {
   const rgb = new Uint8Array(W * H * 3);
   for (let i = 0; i < W * H; i++) {
     const d = fb[i], o = i * 3;
-    rgb[o] = dac[d * 3] << 2; rgb[o + 1] = dac[d * 3 + 1] << 2; rgb[o + 2] = dac[d * 3 + 2] << 2;
+    rgb[o] = dac6to8(dac[d * 3]); rgb[o + 1] = dac6to8(dac[d * 3 + 1]); rgb[o + 2] = dac6to8(dac[d * 3 + 2]);
   }
   return rgb;
 }

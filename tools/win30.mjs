@@ -15,6 +15,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { makeMachine } from './harness.mjs';
 import { walk } from './corpus.mjs';
+import { dac6to8 } from './frame.mjs';
 import { VFS } from '../src/vfs.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -160,12 +161,12 @@ if (vga && mc.mem.planar) {
     let idx = 0;
     for (let p = 0; p < 4; p++) idx |= ((planes[p * 0x10000 + off] >> bit) & 1) << p;
     const d = (vga.palette ? vga.palette[idx] : idx) & 0x3f, i = (y * W + x) * 3;
-    rgb[i] = dac[d * 3] << 2; rgb[i + 1] = dac[d * 3 + 1] << 2; rgb[i + 2] = dac[d * 3 + 2] << 2;
+    rgb[i] = dac6to8(dac[d * 3]); rgb[i + 1] = dac6to8(dac[d * 3 + 1]); rgb[i + 2] = dac6to8(dac[d * 3 + 2]);
   }
 } else {
   for (let i = 0; i < W * H && i < 64000; i++) {
     const d = mc.mem.u8[0xa0000 + i];
-    rgb[i * 3] = dac[d * 3] << 2; rgb[i * 3 + 1] = dac[d * 3 + 1] << 2; rgb[i * 3 + 2] = dac[d * 3 + 2] << 2;
+    rgb[i * 3] = dac6to8(dac[d * 3]); rgb[i * 3 + 1] = dac6to8(dac[d * 3 + 1]); rgb[i * 3 + 2] = dac6to8(dac[d * 3 + 2]);
   }
 }
 const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2;

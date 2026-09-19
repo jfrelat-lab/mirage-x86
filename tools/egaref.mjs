@@ -92,5 +92,5 @@ if (process.env.RUNS) {
   }
 }
 console.log(`${sub}/${prog} @ ${K} ticks — mode 0x${mode.toString(16)} stride=${stride} start=${start} -> ${out}`);
-console.log(`  palette attributs: ${Array.from(attr).map((x) => x.toString(16).padStart(2, '0')).join(' ')}`);
+console.log(`  attribute palette: ${Array.from(attr).map((x) => x.toString(16).padStart(2, '0')).join(' ')}`);
 rmSync(work, { recursive: true, force: true });
