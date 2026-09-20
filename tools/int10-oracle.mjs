@@ -130,5 +130,5 @@ for (const c of CASES) {
   if (diffs.length) { console.log(`  ${c.name.padEnd(30)} DIFFERE  ${diffs.join('  |  ')}`); fail++; }
   else { console.log(`  ${c.name.padEnd(30)} ok`); pass++; }
 }
-console.log(`\nINT 10h contre la vraie ROM: ${pass} identiques, ${fail} differents`);
+console.log(`\nINT 10h against the real ROM: ${pass} identical, ${fail} different`);
 process.exit(fail ? 1 : 0);

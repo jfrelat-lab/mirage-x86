@@ -531,6 +531,10 @@ function asciiz(mc, cpu, off, str) {
 { // end to end: masking IRQ0 stops the timer reaching a guest ISR
   const mc = new Machine({ memSize: 1 << 20 });
   installBIOS(mc);
+  // What these assert is whether the tick MOVES, so they read a delta. The tick no longer starts at
+  // zero: installRTC seeds it to 08:00, the way a real BIOS seeds it from the clock at POST, and
+  // asserting the absolute value silently turned this into a test of the epoch.
+  const tick0 = mc.mem.r32(0x46c) >>> 0;
   mc.setVector(8, 0x2000, 0x100);                               // pretend a guest hooked INT 8
   mc.cpu.setSeg(2, 0x4000); mc.cpu.sp = 0x200; mc.cpu.flags |= 0x200;
   const sp0 = mc.cpu.sp & 0xffff;
@@ -547,19 +551,20 @@ function asciiz(mc, cpu, off, str) {
   // interrupt"), and machine.tickTimer bumped the tick per PIT tick to match — so a game that
   // reprograms counter 0 ran the BDA clock at ITS rate (Monkey Island: 473 Hz) instead of 18.2 Hz.
   eq('...and the BDA tick does not advance either: it is the BIOS ISR that keeps it',
-     mc.mem.r32(0x46c), 0);
+     (mc.mem.r32(0x46c) >>> 0) - tick0, 0);
   // A guest ISR that never chains to f000:08 freezes the DOS clock — the period-correct behaviour,
   // and why games chain.
   mc.ioWrite(0x21, 1, 0x00);                                    // unmask
   mc.pic.eoi(0);
   mc.tickTimer();
-  eq('a guest ISR that does not chain leaves the BDA tick alone', mc.mem.r32(0x46c), 0);
+  eq('a guest ISR that does not chain leaves the BDA tick alone', (mc.mem.r32(0x46c) >>> 0) - tick0, 0);
   // With no guest ISR we ARE the BIOS handler, so the tick advances.
   const mc2 = new Machine({ memSize: 1 << 20 });
   installBIOS(mc2);
   mc2.cpu.setSeg(2, 0x4000); mc2.cpu.sp = 0x200; mc2.cpu.flags |= 0x200;
+  const t2 = mc2.mem.r32(0x46c) >>> 0;
   mc2.tickTimer();
-  eq('with no guest ISR the BIOS handler advances the tick', mc2.mem.r32(0x46c), 1);
+  eq('with no guest ISR the BIOS handler advances the tick', (mc2.mem.r32(0x46c) >>> 0) - t2, 1);
 }
 
 // ---------------------------------------------------------------- ports the corpus hammers

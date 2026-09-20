@@ -187,15 +187,28 @@ export class Machine {
   /** Register a JS service routine for INT n and point its vector at our stub. */
   hookInterrupt(n, fn) { this.intHandlers[n] = fn; this.setVector(n, BIOS_SEG, n); }
 
+  /** True when a guest handler sits on top of our service for INT n — the vector no longer points
+   *  at our stub (or at the HLE DOS trampolines, which are ours). Our XMS driver and DPMI host use it
+   *  to STAND ASIDE: a real BIOS offers neither, so once a booted kernel or a guest driver owns the
+   *  multiplex vector, the guest's own services are the ones that must answer. Reading the IVT at
+   *  call time gives that answer without touching the guest's chain. */
+  guestOwns(n) {
+    if (this.chained[n]) return true;                   // reclaimed under MIRAGE_DPMI_ALWAYS
+    const v = this.getVector(n);
+    return !(v.seg === BIOS_SEG || (this.dosKernelSeg && v.seg === this.dosKernelSeg));
+  }
+
   /** Take a vector back after a guest has installed its own handler over it, remembering theirs so
-   *  our handler can chain DOWN to it.
+   *  our handler can chain DOWN to it. ONLY under MIRAGE_DPMI_ALWAYS (see tickTimer).
    *
-   *  This is what a resident service does on real hardware and what we could not do: our XMS driver
-   *  and DPMI host hook INT 2Fh at BIOS-install time, i.e. BEFORE any kernel exists. A booted kernel
-   *  then installs its own multiplex handler over the vector and is the BOTTOM of that chain — it has
-   *  nothing to chain down to — so we were simply orphaned, and `INT 2Fh AX=1687` answered "no host"
-   *  under FreeDOS while working under our HLE DOS (docs/COMPAT.md). Reclaiming puts us back on top,
-   *  where a TSR loaded after DOS would be.
+   *  It used to run on every boot, from every timer tick, and it corrupted the guest's chain.
+   *  `chained` holds ONE displaced handler, but a boot stacks several: on win31.img SYSINIT, then the
+   *  MS-DOS kernel (0273:0071), then HIMEM (0aa5:0689) each hooked INT 2Fh, and each reclaim replaced
+   *  the remembered handler with the newest. HIMEM chains to what it saved, which was our stub, so the
+   *  kernel fell out of the chain entirely; its AX=4A02 (allocate HMA) was never answered, SYSINIT
+   *  took the caller's own ES:DI as the allocation and laid its disk buffers over the DPB chain, and
+   *  then looped for ever walking a chain whose link it had overwritten. A real BIOS never takes a
+   *  vector back, and with guestOwns() our services no longer need it to know when to stand aside.
    *
    *  Safe against the obvious loop: whoever we displace chains to what THEY saved, which is our stub,
    *  so re-entering is possible — `_chaining` stops the second hop. */
@@ -560,9 +573,8 @@ export class Machine {
   // ---- hardware interrupt injection ---------------------------------------
   /** Fire the 18.2 Hz timer: bump the BIOS tick and run the user timer ISR. */
   tickTimer() {
-    // Cheap enough at 18.2 Hz, and it is the only place that runs regularly through a whole boot:
-    // a kernel or a driver that takes INT 2Fh mid-boot is picked up within a tick.
-    if (this.xms || this.dpmi) this.reclaimVector(0x2f);
+    // Only to reproduce ROADMAP F8 (our DPMI host answering under a booted kernel): see reclaimVector.
+    if (this.reclaimMultiplex) this.reclaimVector(0x2f);
     if (!(this.cpu.flags & IF)) return;
     // Raise IRQ0 on the PIC and let it decide. This is where masking and in-service state start
     // mattering: a guest that has masked IRQ0 in the IMR no longer receives the tick (it used to,

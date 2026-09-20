@@ -143,13 +143,13 @@ export function installXMS(machine) {
   // Returning true means "served"; anything else is passed down the chain by machine.swInt to the
   // handler we displaced.
   //
-  // And we STAND ASIDE once there is a handler below us, because a real BIOS provides no XMS at all —
-  // the guest loads one. On the boot path FreeDOS loads HimemX, and answering 4300 ourselves made it
-  // report "XMS is already installed. Driver won't be installed." and step aside instead, so the
-  // guest ended up on our driver rather than its own. On the HLE path nothing ever takes the vector,
-  // `chained` stays empty, and we answer exactly as before.
+  // And we STAND ASIDE once a guest handler owns the vector, because a real BIOS provides no XMS at
+  // all — the guest loads one. On the boot path FreeDOS loads HimemX, and answering 4300 ourselves
+  // made it report "XMS is already installed. Driver won't be installed." and step aside instead, so
+  // the guest ended up on our driver rather than its own. On the HLE path nothing takes the vector
+  // before its XMS client has asked, and we answer exactly as before.
   machine.hookInterrupt(0x2f, (c) => {
-    if (machine.chained && machine.chained[0x2f]) return false;
+    if (machine.guestOwns(0x2f)) return false;
     if (c.ax === 0x4300) { c.ax = (c.ax & 0xff00) | 0x80; return true; }   // AL=80h: XMS installed
     if (c.ax === 0x4310) { c.setSeg(ES, XMS_ENTRY_SEG); c.bx = XMS_ENTRY_OFF; return true; }
     return false;

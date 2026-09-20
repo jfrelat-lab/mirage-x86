@@ -908,6 +908,8 @@ export function installDPMI(machine) {
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
   // owns the vector (XMS answers 43xx there) rather than replacing it.
   const prev = machine.intHandlers[0x2f];
+  machine.reclaimMultiplex = typeof process !== 'undefined' && !!process.env && !!process.env.MIRAGE_DPMI_ALWAYS &&
+    process.env.MIRAGE_DPMI_ALWAYS !== '0';
   machine.hookInterrupt(0x2f, (c, m) => {
     // Stand aside once a guest handler sits below us, for the same reason xms.js does: a real BIOS
     // offers no DPMI host either — one is a TSR the guest loads, and DOSBox ships none at all. This
@@ -919,7 +921,7 @@ export function installDPMI(machine) {
     // ROADMAP F8, the #GP our DPMI path takes on the boot path and not under the HLE DOS.
     const ALWAYS = typeof process !== 'undefined' && !!process.env &&
       process.env.MIRAGE_DPMI_ALWAYS !== undefined && process.env.MIRAGE_DPMI_ALWAYS !== '0' && process.env.MIRAGE_DPMI_ALWAYS !== '';
-    if (!ALWAYS && machine.chained && machine.chained[0x2f]) return false;
+    if (!ALWAYS && machine.guestOwns(0x2f)) return false;
     if (c.ax === 0x1687) {
       c.ax = 0;                                  // 0 = host present
       c.reg[3] = (c.reg[3] & ~0xffff) | 1;       // BX bit 0: 32-bit programs supported
