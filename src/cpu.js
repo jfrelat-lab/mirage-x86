@@ -277,16 +277,27 @@ export class CPU {
   loadTR(sel) {
     sel &= 0xffff; this.tr.sel = sel;
     const d = this.readDesc(sel);
-    if (!d) { this.tr.base = 0; this.tr.limit = 0; return; }
+    if (!d) { this.tr.base = 0; this.tr.limit = 0; this.tr.is386 = true; return; }
     let limit = (d.w0 | ((d.b6 & 0x0f) << 16)) >>> 0;
     if (d.b6 & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;
     this.tr.base = (d.w1 | (d.b4 << 16) | (d.b7 << 24)) >>> 0;
     this.tr.limit = limit;
+    // TYPE 1/3 is a 286 TSS, 9/B a 386 one, and the two lay their inner-ring stacks out differently.
+    this.tr.is386 = (d.type & 0x08) !== 0;
   }
 
-  /** The stack the TSS reserves for privilege level `pl` (32-bit TSS: ESP0 at +4, SS0 at +8, …). */
+  /** The stack the TSS reserves for privilege level `pl`.
+   *
+   *  A 386 TSS holds ESP0 at +4 and SS0 at +8, eight bytes per level. A **286 TSS** holds SP0 at +2
+   *  and SS0 at +4, FOUR bytes per level — and the difference is not academic: Windows 3.1 in
+   *  standard mode (`win -s`) builds a 286 TSS (descriptor type 01, limit 2Bh) and enters its ring-0
+   *  kernel through a 286 call gate. Reading it as a 386 TSS took SS0 from +8, which is past the end
+   *  of that TSS and reads zero, so the inward stack switch loaded a null SS and raised #GP(0) — and
+   *  Windows printed its own "Fault: 000D" panic into a buffer, then faulted again inside the panic
+   *  printer, for ever. The same TSS read correctly gives SP0 30A8h, SS0 0068h. */
   tssStack(pl) {
     const m = this.mem, b = this.tr.base >>> 0;
+    if (this.tr.is386 === false) return { esp: m.r16(b + 2 + pl * 4) & 0xffff, ss: m.r16(b + 4 + pl * 4) & 0xffff };
     return { esp: m.r32(b + 4 + pl * 8) >>> 0, ss: m.r16(b + 8 + pl * 8) & 0xffff };
   }
 

@@ -399,6 +399,33 @@ function eq(name, got, want) {
   eq('AH=08h reports a 1.44M floppy as drive type 04', cpu.bx & 0xff, 0x04);
   eq('...with the geometry SeaBIOS gives for it', cpu.cx & 0xffff, 0x4f12); }
 
+// ---- a 286 TSS lays its inner-ring stacks out differently from a 386 one ----------------------
+// Windows 3.1 in standard mode enters its ring-0 kernel through a 286 call gate, and the inward
+// stack switch reads SS0/SP0 out of a 286 TSS: SP0 at +2, SS0 at +4, four bytes per level. Read as
+// a 386 TSS (ESP0 at +4, SS0 at +8) the selector comes from past the end of a 2Ch-byte TSS, i.e.
+// zero, and the switch raises #GP(0).
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  const GDT = 0x8000, TSS286 = 0x9000, TSS386 = 0x9100;
+  cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
+  const desc = (i, base, limit, access) => {
+    const a = GDT + i * 8;
+    mc.mem.w16(a, limit & 0xffff); mc.mem.w16(a + 2, base & 0xffff);
+    mc.mem.w8(a + 4, (base >> 16) & 0xff); mc.mem.w8(a + 5, access);
+    mc.mem.w8(a + 6, (limit >> 16) & 0x0f); mc.mem.w8(a + 7, (base >> 24) & 0xff);
+  };
+  desc(1, TSS286, 0x2b, 0x81);                       // type 1: available 286 TSS
+  desc(2, TSS386, 0x67, 0x89);                       // type 9: available 386 TSS
+  mc.mem.w16(TSS286 + 2, 0x30a8); mc.mem.w16(TSS286 + 4, 0x0068);            // SP0, SS0
+  mc.mem.w32(TSS386 + 4, 0x00012340); mc.mem.w16(TSS386 + 8, 0x0010);        // ESP0, SS0
+  cpu.loadTR(0x08);
+  eq('a 286 TSS is recognised as one', cpu.tr.is386, false);
+  eq('...and SS0 comes from +4', cpu.tssStack(0).ss, 0x0068);
+  eq('...and SP0 from +2', cpu.tssStack(0).esp, 0x30a8);
+  cpu.loadTR(0x10);
+  eq('a 386 TSS is recognised as one', cpu.tr.is386, true);
+  eq('...and SS0 comes from +8', cpu.tssStack(0).ss, 0x0010);
+  eq('...and ESP0 from +4, 32 bits wide', cpu.tssStack(0).esp >>> 0, 0x00012340); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is
