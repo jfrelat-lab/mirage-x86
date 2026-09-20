@@ -399,6 +399,26 @@ function eq(name, got, want) {
   eq('AH=08h reports a 1.44M floppy as drive type 04', cpu.bx & 0xff, 0x04);
   eq('...with the geometry SeaBIOS gives for it', cpu.cx & 0xffff, 0x4f12); }
 
+// ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
+// Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
+// fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is
+// how a missing BIOS table read as a missing mouse. Both reference BIOSes answer the same shape:
+// length 8, model FCh (AT), submodel 0, revision 1.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  installBIOS(mc);
+  cpu.ax = 0xc000; cpu.flags |= 1;
+  mc.intHandlers[0x15](cpu, mc);
+  eq('AH=C0h clears CF', cpu.flags & 1, 0);
+  eq('AH=C0h returns AH=0', (cpu.ax >> 8) & 0xff, 0);
+  eq('AH=C0h points ES:BX at the table in the BIOS segment', cpu.seg[ES], 0xf000);
+  const t = (cpu.seg[ES] << 4) + (cpu.bx & 0xffff);
+  eq('the table is 8 bytes long', mc.mem.r16(t), 8);
+  eq('...for an AT-class machine', mc.mem.r8(t + 2), 0xfc);
+  // Each feature bit is only set if it is true HERE: a cascaded PIC and an RTC, nothing else. Both
+  // references also set bit 6 of feature byte 2 (INT 16h AH=09h), which our INT 16h does not have.
+  eq('feature byte 1 claims the second PIC and the RTC, and nothing else', mc.mem.r8(t + 5), 0x60);
+  eq('feature byte 2 claims nothing', mc.mem.r8(t + 6), 0x00); }
+
 // ---- MC146818 clock + CMOS ---------------------------------------------------------------------
 // The chip is the reference, not any one BIOS: four implementations (SeaBIOS under QEMU and under
 // v86, the Bochs BIOS, DOSBox-X) answer INT 1Ah by copying these registers out verbatim, and every

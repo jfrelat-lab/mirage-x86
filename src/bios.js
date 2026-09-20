@@ -3,7 +3,7 @@
 // 0040:0000 and the 80x25 text screen at B800:0000. The text routines are
 // exposed so the JS shell prints through the exact same path as guest code.
 
-import { ZF, CF } from './cpu.js';
+import { ZF, CF, ES } from './cpu.js';
 import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
 import { installDPMI } from './dpmi.js';
@@ -29,6 +29,30 @@ export function installBIOS(machine, opts = {}) {
   // Storage inside the BIOS segment for the two things a VbeInfoBlock points at. Well clear of the
   // per-vector stub table and of the DPMI/EMS entries above.
   const VBE_SEG = 0xf000, VBE_OEM_OFF = 0x0700, VBE_MODES_OFF = 0x0740;
+
+  // ---- the system configuration table (INT 15h AH=C0h) ---------------------------------------
+  // Windows 2.03 and Windows 1.01 ask for this before deciding what kind of machine they are on.
+  // Answering "unsupported" cost them their mouse cursor: with no table they fall through to the
+  // Microsoft serial-mouse probe on COM1/COM2, find nothing, and never draw a pointer at all —
+  // v86 draws one even with its mouse disabled, so this was never about having a mouse.
+  //
+  // Layout and the address are the ones SeaBIOS uses (QEMU and v86 both answer F000:E6F5 with
+  // `08 00 FC 00 01 74 40 00`); DOSBox-X's own BIOS answers FC93:0000 with `08 00 FC 00 01 70 40 00`.
+  // The two agree on everything but feature-byte-1 bit 2, and that is a property of the machine —
+  // SeaBIOS allocates an extended BIOS data area, DOSBox-X does not.
+  //
+  // So the bytes below are OURS, not a copy: model FCh is an AT, which is what MIRAGE presents (a
+  // slave PIC, an RTC, A20 through port 92h), and each feature bit is set only if it is true here.
+  //   bit 6 second interrupt controller  — src/pic.js has the cascaded pair
+  //   bit 5 real-time clock present      — src/rtc.js
+  //   bit 4 INT 15h/AH=4Fh on INT 09h    — we do not: clear
+  //   bit 3 INT 15h/AH=41h wait          — not implemented: clear
+  //   bit 2 extended BIOS area allocated — we allocate none: clear
+  // Feature byte 2 bit 6 says INT 16h AH=09h is available; our INT 16h has 00/01/02 (and the 1x
+  // extended forms) only, so it stays clear even though both references set it.
+  const CFG_TABLE_OFF = 0xe6f5;
+  const CFG_TABLE = [0x08, 0x00, 0xfc, 0x00, 0x01, 0x60, 0x00, 0x00];
+  for (const [i, b] of CFG_TABLE.entries()) mem.w8(((VBE_SEG << 4) + CFG_TABLE_OFF + i) >>> 0, b);
   // The VBE framebuffer is real RAM at the top of the machine's memory, reserved the same way the
   // DPMI host reserves its descriptor tables — a client is told this address as PhysBasePtr, maps it
   // with INT 31h 0800h and writes straight into it, so it has to be memory that exists and that no
@@ -529,6 +553,11 @@ export function installBIOS(machine, opts = {}) {
   // which is a very plausible reason revitro's animation sits at a different phase from DOSBox's.
   // Everything else still increments machine.unhandledInts[0x15] so the survey keeps seeing it.
   machine.hookInterrupt(0x15, (cpu) => {
+    if (cpu.ah === 0xc0) {                     // get the system configuration table
+      cpu.setSeg(ES, VBE_SEG); cpu.bx = CFG_TABLE_OFF;
+      cpu.ah = 0; cpu.flags &= ~CF;
+      return;
+    }
     if (cpu.ah === 0x86) {                     // wait CX:DX microseconds
       const us = (((cpu.cx & 0xffff) * 65536) + (cpu.dx & 0xffff));
       // cpu.cycles IS the PIT clock: pitBase cycles per 18.2 Hz tick, i.e. 1.193182 MHz at the
