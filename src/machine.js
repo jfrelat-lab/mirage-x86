@@ -38,6 +38,10 @@ export class Machine {
     this.mem.shadowReads = resolveMemStrategy().read === 'shadow';
     this.cpu.profile = resolveProfile(opts.cpu);
     this.cpu.shiftMask = this.cpu.profile.shiftCountMask;   // read by the shift/rotate helpers
+    // EFLAGS bit 21. Software detects CPUID by toggling it and reading it back, so it must be
+    // writable exactly when CPUID answers — a CPU that accepts the bit but has no CPUID, or the
+    // reverse, is a machine that cannot exist.
+    this.cpu.idFlagMask = this.cpu.profile.cpuid ? 0x200000 : 0;
     installFPU(this.cpu);                           // x87 coprocessor
     installSSE(this.cpu);                           // XMM register file + the SSE subset (src/sse.js)
     // FLDCW changing PRECISION CONTROL invalidates every translated FPU block: the rounding is folded

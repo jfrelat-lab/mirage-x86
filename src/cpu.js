@@ -71,6 +71,10 @@ export class CPU {
     this.swInt = (n) => { throw new Error('Unhandled INT ' + n.toString(16)); };
     // Overwritten by Machine from the CPU profile; 0x1f (286+) is the default so a bare CPU works.
     this.shiftMask = 0x1f;
+    this.idFlagMask = 0;             // EFLAGS.ID is writable only on a part that has CPUID
+    // The debug registers, as storage only: no breakpoint ever fires from them here. They exist
+    // because a value written to one has to read back — software probes the CPU that way.
+    this.dr = new Uint32Array(8);
     this.ioRead = () => 0xff;        // (port,size) => value
     this.ioWrite = () => {};         // (port,size,value) => void
 
@@ -271,6 +275,43 @@ export class CPU {
     let lim = (d.w0 | ((d.b6 & 0x0f) << 16)) >>> 0;
     if (d.b6 & 0x80) lim = (((lim << 12) >>> 0) | 0xfff) >>> 0;                 // G: the limit counts 4 KiB pages
     return lim >>> 0;
+  }
+
+  /**
+   * CPUID. Only reached when the profile has it (src/cpu-profile.js); elsewhere the opcode is #UD.
+   *
+   * THE FEATURE BITS ARE OURS, and each one is set only if MIRAGE implements the thing — the same
+   * rule as the BIOS configuration table and the CMOS. So: FPU, because src/fpu.js is a real x87;
+   * and TSC, because RDTSC (0F 31) answers from the cycle counter. Nothing else. In particular SSE
+   * is NOT claimed although src/sse.js exists: it implements the sixteen instructions one 1K intro
+   * uses, and a guest that read an SSE bit here would be entitled to the whole extension.
+   *
+   * The vendor string is not a copy of anyone's. Claiming GenuineIntel would route a guest down a
+   * path chosen for a chip we are not, and an unknown vendor is a truthful answer that software is
+   * built to handle — that is what the string is for.
+   *
+   * The family is 5: CPUID itself implies 486-or-later, and the TSC arrived with the Pentium. We do
+   * not have CMPXCHG8B, which a real Pentium does, so that bit stays clear rather than being
+   * implied by the family.
+   */
+  cpuid() {
+    const leaf = this.reg[0] >>> 0;
+    if (leaf === 0) {
+      this.reg[0] = 1;                                   // highest leaf we answer
+      // "MIRAGE  " padded to twelve bytes, in the EBX:EDX:ECX order CPUID uses.
+      this.reg[3] = 0x4152494d;                          // EBX "MIRA"
+      this.reg[2] = 0x20204547;                          // EDX = bytes 4-7, "GE  "
+      this.reg[1] = 0x20202020;                          // ECX "    "
+      return;
+    }
+    if (leaf === 1) {
+      this.reg[0] = 0x0500;                              // family 5, model 0, stepping 0
+      this.reg[3] = 0;                                   // EBX: no brand index, no CLFLUSH line
+      this.reg[1] = 0;                                   // ECX: none of the later extensions
+      this.reg[2] = (1 << 0) | (1 << 4);                 // EDX: FPU (bit 0), TSC (bit 4)
+      return;
+    }
+    this.reg[0] = this.reg[3] = this.reg[1] = this.reg[2] = 0;   // an unknown leaf answers zeros
   }
 
   /** LTR — the TSS descriptor lives in the GDT, like the LDT's. */

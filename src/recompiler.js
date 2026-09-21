@@ -731,6 +731,9 @@ export class Recompiler {
       if (disp) parts.push(`(${disp | 0})`);
       return { seg, off: `((${parts.length ? parts.join('+') : '0'})>>>0)` };
     };
+    // MOV to/from CRn and DRn ignore the MOD field entirely: the operand is always a register.
+    // Decoding those with modrm() would read a displacement that is not there.
+    const modrmReg = () => { const b = f8(); return { isReg: true, reg: (b >> 3) & 7, rm: b & 7 }; };
     const modrm = () => {
       const b = f8(), mod = b >> 6, reg = (b >> 3) & 7, rm = b & 7;
       if (mod === 3) return { isReg: true, reg, rm };
@@ -1124,7 +1127,7 @@ export class Recompiler {
           P(`if((cpu.flags&0x20000)&&((cpu.flags>>>12)&3)<3){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
           const t = NT(), c = NT(), i = NT(), f = NT();
           P(`var ${t}=${sz === 32 ? 'cpu.pop32()' : 'cpu.pop16()'};var ${c}=cpu.cpl,${i}=(cpu.flags>>>12)&3;`);
-          P(`var ${f}=(${t}&0x4fd5)|2|(cpu.flags&0x20000)|(${c}?(cpu.flags&0x3000):(${t}&0x3000));`);
+          P(`var ${f}=(${t}&(0x4fd5|cpu.idFlagMask))|2|(cpu.flags&0x20000)|(${c}?(cpu.flags&0x3000):(${t}&0x3000));`);
           P(`if(${c}>${i})${f}=(${f}&~${IF})|(cpu.flags&${IF});cpu.flags=${f};`);
           break;
         }
@@ -1783,7 +1786,10 @@ export class Recompiler {
         }
         case 0x01: {                                                                    // group 7: SGDT/SIDT/SMSW/LGDT/LIDT/LMSW/INVLPG
           const o = modrm();
-          if (o.reg === 4) { P(rmW(o, 16, `(cpu.cr0&0xffff)`)); return; }                // SMSW r/m16 → MSW
+          // SMSW. To MEMORY it is 16 bits, always. To a REGISTER with a 32-bit operand size it
+          // stores the whole of CR0 — kvm-unit-tests sets CR0 bit 30 and checks SMSW gives it back,
+          // and masking to 16 bits loses it.
+          if (o.reg === 4) { P(rmW(o, o.isReg ? sz : 16, o.isReg && sz === 32 ? `(cpu.cr0>>>0)` : `(cpu.cr0&0xffff)`)); return; }
           if (o.reg === 6) { const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.setCR0((cpu.cr0&~0xf)|(${s}&0xf));`); return; } // LMSW: low 4 bits, PE included
           // SGDT/SIDT store a 6-byte pseudo-descriptor: 16-bit limit then 32-bit base.
           if (o.reg === 0 || o.reg === 1) {
@@ -1815,8 +1821,14 @@ export class Recompiler {
           else P(`${rR(o.rm, 32)};`);
           return;
         }
-        case 0x21: { const o = modrm(); P(rW(o.rm, 32, '0')); return; }                 // MOV r32, DRn → 0 (no debug registers)
-        case 0x23: { const o = modrm(); P(`${rR(o.rm, 32)};`); return; }                // MOV DRn, r32 → no-op
+        // MOV to and from the debug registers. Two things the old pair got wrong, both caught by
+        // kvm-unit-tests' `mov dr with mod bits`: the MOD FIELD IS IGNORED — `0f 21 00` is
+        // MOV EAX, DR0 and not a memory operand, so decoding it as one consumed a displacement and
+        // desynchronised the stream — and a value written to a debug register has to be readable
+        // again. They are storage here and nothing more: no breakpoints are implemented, which is
+        // why DR6/DR7 keep only the bits a write can set.
+        case 0x21: { const o = modrmReg(); P(rW(o.rm, 32, `(cpu.dr[${o.reg}]>>>0)`)); return; }   // MOV r32, DRn
+        case 0x23: { const o = modrmReg(); P(`cpu.dr[${o.reg}]=${rR(o.rm, 32)};`); return; }      // MOV DRn, r32
         case 0x1f: modrm(); return;                                                     // multi-byte NOP
         case 0x31: P('cpu.reg[0]=(cpu.cycles>>>0);cpu.reg[2]=(Math.floor(cpu.cycles/4294967296))>>>0;'); return; // RDTSC → EDX:EAX
         case 0xa0: P(sz === 16 ? `cpu.push16(cpu.seg[${FS}]);` : `cpu.push32(cpu.seg[${FS}]);`); return;   // PUSH FS
@@ -1848,6 +1860,20 @@ export class Recompiler {
         case 0xbe: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 8)})<<24>>24)`)); return; } // MOVSX r,Eb
         case 0xbf: { const o = modrm(); P(rW(o.reg, sz, `((${rmR(o, 16)})<<16>>16)`)); return; } // MOVSX r,Ew
         case 0xc0: case 0xc1: { const o = modrm(); const size = op2 === 0xc0 ? 8 : sz; const d = NT(), s = NT(), rr = NT(); P(`var ${d}=${rmR(o, size)},${s}=${rR(o.reg, size)};var ${rr}=(${d}+${s})${M(size)};${rW(o.reg, size, d)}${rmW(o, size, rr)}cpu.setAdd(${d},${s},${rr},${size});`); return; } // XADD
+        // CPUID, but only on a part that has one (src/cpu-profile.js). This case sits here, right
+        // above `default`, so that a CPU without it FALLS THROUGH to the #UD path below — putting it
+        // anywhere else and breaking out of the switch would have made the opcode a silent no-op on
+        // a 386, which is worse than the "unimplemented opcode" it used to throw.
+        case 0xa2:
+          if (rec.cpu.profile && rec.cpu.profile.cpuid) { P('cpu.cpuid();'); return; }
+          // No CPUID on this part. #UD if the guest can take one; otherwise say WHY, because
+          // "unimplemented opcode" would read as a gap in MIRAGE and this is a deliberate absence.
+          if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {
+            P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;
+          }
+          throw new Error(`mirage: CPUID (0f a2) at linear 0x${mask(linStart - ip0 + ip - 2).toString(16)}` +
+            ` — the '${rec.cpu.profile.name}' profile has no CPUID, which is correct for it. Use` +
+            ` cpu: '586' for a part that has one, or give the guest an INT 6 handler.`);
         default:
           // Same as the one-byte default: `0f a6` is invalid on every CPU and Windows 3.0's loader
           // executes it on purpose, through its own INT 6 handler, to identify the processor.

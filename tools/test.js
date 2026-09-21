@@ -426,6 +426,48 @@ function eq(name, got, want) {
   eq('...and SS0 comes from +8', cpu.tssStack(0).ss, 0x0010);
   eq('...and ESP0 from +4, 32 bits wide', cpu.tssStack(0).esp >>> 0, 0x00012340); }
 
+// ---- CPUID, and the generation it belongs to ---------------------------------------------------
+// CPUID is 486-and-later, so it is a PROFILE feature: on the default 386 the opcode is not there and
+// EFLAGS.ID must not stick, which is how software detects it. kvm-unit-tests' realmode suite runs
+// CPUID unconditionally and was stopped dead by it (105 of 127 cases reached); with the '586'
+// profile it now matches QEMU and v86 at 127/127.
+{ const mc = new Machine({ memSize: 1 << 20, cpu: '586' }); const cpu = mc.cpu;
+  cpu.reg[0] = 0; cpu.cpuid();
+  eq('CPUID leaf 0 reports one further leaf', cpu.reg[0] >>> 0, 1);
+  // The vendor is ours, not a copy of anyone's: EBX:EDX:ECX spell it in that order.
+  const vendor = [cpu.reg[3], cpu.reg[2], cpu.reg[1]]
+    .map((r) => String.fromCharCode(r & 0xff, (r >> 8) & 0xff, (r >> 16) & 0xff, (r >>> 24) & 0xff)).join('');
+  eq('CPUID leaf 0 gives our own vendor string', vendor, 'MIRAGE      ');
+  cpu.reg[0] = 1; cpu.cpuid();
+  eq('CPUID leaf 1 reports family 5', (cpu.reg[0] >> 8) & 0xf, 5);
+  // Each feature bit is set only if MIRAGE implements the thing: an x87 (src/fpu.js) and RDTSC.
+  eq('CPUID claims the FPU', cpu.reg[2] & 1, 1);
+  eq('CPUID claims the TSC', (cpu.reg[2] >> 4) & 1, 1);
+  eq('CPUID claims no SSE, which we implement only in part', (cpu.reg[2] >> 25) & 1, 0);
+  eq('CPUID claims no CMPXCHG8B, which we do not have', (cpu.reg[2] >> 8) & 1, 0);
+  cpu.reg[0] = 7; cpu.cpuid();
+  eq('an unknown leaf answers zeros', (cpu.reg[0] | cpu.reg[1] | cpu.reg[2] | cpu.reg[3]) >>> 0, 0); }
+{ // The ID flag and CPUID are one feature: a CPU that accepts the bit but has no CPUID cannot exist.
+  eq('the 586 profile lets EFLAGS.ID be written', new Machine({ memSize: 1 << 20, cpu: '586' }).cpu.idFlagMask, 0x200000);
+  eq('the 386 profile does not', new Machine({ memSize: 1 << 20, cpu: '386' }).cpu.idFlagMask, 0); }
+{ // SMSW to a 32-bit REGISTER stores the whole of CR0; to memory it is 16 bits, always.
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  cpu.cr0 = 0x40000011;
+  // 66 0f 01 e0 = smswl %eax ; f4 = hlt
+  mc.mem.blit(0x100 * 16, Uint8Array.from([0x66, 0x0f, 0x01, 0xe0, 0xf4]));
+  let steps = 0; while (!cpu.halted && steps++ < 20) mc.rec.step();
+  eq('SMSW to a 32-bit register gives the whole of CR0', cpu.reg[0] >>> 0, 0x40000011); }
+{ // MOV to and from a debug register IGNORES the mod field, and the value must read back.
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  cpu.reg[3] = 0xaced;
+  // 0f 23 c3 = mov %ebx,%dr0 ; 0f 21 00 = mov %dr0,%eax with mod=00 ; f4 = hlt
+  mc.mem.blit(0x100 * 16, Uint8Array.from([0x0f, 0x23, 0xc3, 0x0f, 0x21, 0x00, 0xf4]));
+  let steps = 0; while (!cpu.halted && steps++ < 20) mc.rec.step();
+  eq('a debug register reads back what was written', cpu.reg[0] >>> 0, 0xaced);
+  eq('...and the mod bits consumed no displacement', cpu.eip >>> 0, 7); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is

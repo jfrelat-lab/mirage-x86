@@ -34,6 +34,7 @@ export const PROFILES = {
     // so the carry out of AL never reaches AH. Measured — making it AX-wide costs 366 of the 8088
     // vectors. The 386 does the opposite; see below.
     bcdAdjustsAX: false,
+    cpuid: false,              // CPUID is 486-and-later; the ID flag must not stick either
   },
   '286': {
     name: '286',
@@ -43,6 +44,7 @@ export const PROFILES = {
     // NOT measured on a 286 — no hardware vectors for it here. It follows the 386 because that is the
     // likelier of the two, and saying so is better than implying it was checked.
     bcdAdjustsAX: true,
+    cpuid: false,
   },
   // Today's default and what the corpus wants. Identical to 286 in the fields above; the difference
   // is the instruction set, which the decoder already provides unconditionally.
@@ -54,6 +56,20 @@ export const PROFILES = {
     // AAA/AAS adjust AX AS A WHOLE: the carry out of AL+6 reaches AH and the +1 rides on top of it.
     // With AX=1FFFh the 80386EX vectors give AH=21h where the split form gives 20h.
     bcdAdjustsAX: true,
+    cpuid: false,
+  },
+  // A 586-class part, which is the lowest generation that has CPUID. Identical to '386' in every
+  // semantic field above — the instruction set the decoder provides is the same — and the ONLY
+  // difference is that CPUID answers and the ID flag can be toggled, which is how software detects
+  // it. Not the default: a 1990-94 DOS corpus expects a 386, and a program that finds CPUID takes a
+  // different path. Select it with `new Machine({ cpu: '586' })` or MIRAGE_CPU=586.
+  '586': {
+    name: '586',
+    shiftCountMask: 0x1f,
+    pushSPOriginal: true,
+    pushfSetsReserved: false,
+    bcdAdjustsAX: true,
+    cpuid: true,
   },
 };
 

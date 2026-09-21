@@ -44,7 +44,9 @@ if (elf[0] !== 0x7f || elf[1] !== 0x45) { console.error(`${path} is not an ELF`)
 const dv = new DataView(elf.buffer, elf.byteOffset, elf.byteLength);
 const phoff = dv.getUint32(28, true), phentsize = dv.getUint16(42, true), phnum = dv.getUint16(44, true);
 
-const mc = new Machine({ memSize: 16 << 20 });
+// The suite executes CPUID unconditionally, so it needs a part that has one: the '586' profile.
+// MIRAGE_CPU overrides, which is how to check that a 386 answers #UD rather than crashing.
+const mc = new Machine({ memSize: 16 << 20, cpu: process.env.MIRAGE_CPU || '586' });
 installBIOS(mc);
 const cpu = mc.cpu;
 
@@ -97,7 +99,8 @@ cpu.reg[4] = stacktop >>> 0;
 cpu.flags = 2; cpu.halted = false;
 let fault = null; mc.onError = (e) => { fault = e; };
 
-console.log(`${path.split('/').pop()}: ${loaded} bytes loaded, entry realmode_entry ${entry.toString(16)}, stack ${stacktop.toString(16)}`);
+console.log(`${path.split('/').pop()}: ${loaded} bytes loaded, CPU profile ${cpu.profile.name}, ` +
+  `entry realmode_entry ${entry.toString(16)}, stack ${stacktop.toString(16)}`);
 let blocks = 0; const t0 = Date.now();
 while (!cpu.halted && !fault && exitCode === null && blocks < 2_000_000_000 && Date.now() - t0 < SECS * 1000) {
   blocks += mc.runSlice(20000);
