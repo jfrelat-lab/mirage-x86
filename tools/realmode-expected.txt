@@ -1,0 +1,127 @@
+null
+shld
+push/pop 1
+push/pop 2
+push/pop 3
+push/pop 4
+push/pop 5
+push/pop 6
+push/pop with high bits set in %esp
+pusha/popa 1
+pusha/popa 1
+mov 1
+mov 2
+mov 3
+mov 4
+mov 5
+cmp 1
+cmp 2
+cmp 3
+add 1
+add 2
+sub 1
+sub 2
+sub 3
+sub 4
+xor 1
+xor 2
+xor 3
+xor 4
+pio 1
+pio 2
+pio 3
+pio 4
+pio 5
+pio 6
+clc
+stc
+cli
+sti
+cld
+std
+jnz short 1
+jnz short 2
+jmp short 1
+jnz near 1
+jnz near 2
+jmp near 1
+call 1
+call near 1
+call near 2
+call far 1
+call far 2
+ret imm 1
+retf imm 1
+jmp far 1
+xchg 1
+xchg 2
+xchg 3
+xchg 4
+xchg 5
+xchg 6
+xchg 7
+xchg 8
+iret 1
+iret 2
+iret 3
+rflags.rf
+iret 4
+int 1
+sti inhibit
+imul 1
+imul 2
+imul 3
+imul 4
+imul 5
+imul 6
+mul 1
+mul 2
+mul 3
+div 1
+div 2
+div 3
+idiv 1
+idiv 2
+idiv 3
+LOOPcc short 1
+LOOPcc short 2
+LOOPcc short 3
+cbq 1
+cwde 1
+cwd 1
+cwd 2
+cdq 1
+cdq 2
+DAS
+lds
+les
+lfs
+lgs
+lss
+jcxz short 1
+jcxz short 2
+jcxz short 3
+jecxz short 1
+jecxz short 2
+cpuid
+ss relative addressing (1)
+ss relative addressing (2)
+sgdt
+sidt
+lahf
+sahf
+movsx
+movzx
+movsx ah
+movzx ah
+bswap
+aad
+aam
+xlat
+salc (1)
+salc (2)
+fninit
+mov dr with mod bits
+smsw
+nopl
+xadd
