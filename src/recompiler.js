@@ -98,11 +98,23 @@ const CPL_EXPR = `((cpu.flags&0x20000)?3:(cpu.seg[${CS}]&3))`;
  *
  * So: raise #UD when the guest has installed a handler, and keep throwing when it has not — an
  * unhandled #UD would otherwise re-raise forever and turn a precise diagnostic into "INT 06h looped".
- * Read from the IVT at translate time, which is free; the guest installing its handler later is not
- * a problem, because when it had none we threw and no block was cached.
+ * Read at translate time, which is free; the guest installing its handler later is not a problem,
+ * because when it had none we threw and no block was cached.
+ *
+ * WHICH TABLE depends on the mode, and reading the IVT while the guest is in protected mode meant
+ * the answer was always "no": Windows 3.1's DOSX installs a #UD gate through DPMI (INT 31h AX=0203)
+ * and then executes `0f ff` on purpose, and with the IVT still holding the BIOS we threw
+ * "unimplemented opcode 0x0f 0xff" at a fault the guest had just asked for.
  */
-function guestOwnsUD(mem) {
-  return mem.r16(6 * 4 + 2) !== 0xf000;
+function guestOwnsUD(mem, cpu) {
+  if (!cpu || !(cpu.cr0 & 1)) return mem.r16(6 * 4 + 2) !== 0xf000;
+  const idt = cpu.idtr;
+  if (6 * 8 + 7 > idt.limit) return false;                 // no entry for vector 6 at all
+  const a = ((idt.base >>> 0) + 6 * 8) >>> 0;
+  const access = mem.r8(a + 5);
+  if (!(access & 0x80)) return false;                      // P=0: the gate would fault on its own
+  const type = access & 0x1f;                              // task, or 286/386 interrupt or trap gate
+  return type === 0x05 || type === 0x06 || type === 0x07 || type === 0x0e || type === 0x0f;
 }
 
 function unimplemented(what, lin, mem, rec) {
@@ -1340,7 +1352,7 @@ export class Recompiler {
         case 0x0f: { decode0F(sz); break; }
 
         default:
-          if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {   // the guest asked for #UD; give it #UD
+          if (guestOwnsUD(mem, rec.cpu)) {   // the guest asked for #UD; give it #UD
             P(`cpu.eip=${ipStart};cpu.raise(6);`); P('return;'); ended = true; break;
           }
           throw new Error(unimplemented(op.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
@@ -1868,7 +1880,7 @@ export class Recompiler {
           if (rec.cpu.profile && rec.cpu.profile.cpuid) { P('cpu.cpuid();'); return; }
           // No CPUID on this part. #UD if the guest can take one; otherwise say WHY, because
           // "unimplemented opcode" would read as a gap in MIRAGE and this is a deliberate absence.
-          if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {
+          if (guestOwnsUD(mem, rec.cpu)) {
             P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;
           }
           throw new Error(`mirage: CPUID (0f a2) at linear 0x${mask(linStart - ip0 + ip - 2).toString(16)}` +
@@ -1877,7 +1889,7 @@ export class Recompiler {
         default:
           // Same as the one-byte default: `0f a6` is invalid on every CPU and Windows 3.0's loader
           // executes it on purpose, through its own INT 6 handler, to identify the processor.
-          if (!(rec.cpu.cr0 & 1) && guestOwnsUD(mem)) {
+          if (guestOwnsUD(mem, rec.cpu)) {
             P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;   // ip-2: the 0F
           }
           throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 2), mem, rec));

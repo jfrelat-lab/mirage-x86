@@ -495,6 +495,34 @@ function eq(name, got, want) {
   eq('LSL accepts a not-present descriptor too', cpu.lslLimit(0x20), 0x1234);
   eq('LSL refuses a selector past the table', cpu.lslLimit(0x38), -1); }
 
+// ---- #UD belongs to whoever holds the vector, in EITHER mode ------------------------------------
+// An invalid opcode is a service, and guests use it: Windows 3.1's DOS extender installs a handler
+// for vector 6 through DPMI and then executes `0f ff` on purpose. Ownership was read from the
+// real-mode IVT only, so in protected mode the answer was always "the guest has no handler" and
+// MIRAGE threw "unimplemented opcode 0x0f 0xff" at a fault the guest had just asked for.
+// The segment bases are set BEFORE PE goes on, which is what a guest does across the transition:
+// the descriptor caches keep the real-mode bases until something reloads them. It is the only way
+// to place code for the recompiler without also building a GDT, which is not what is under test.
+const udRun = (gated) => {
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  const IDT = 0xa000;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  cpu.cr0 |= 1; cpu.idtr = { base: IDT, limit: 0xff };
+  if (gated) mc.mem.w8(IDT + 6 * 8 + 5, 0x8e);        // present 386 interrupt gate for vector 6
+  mc.mem.blit(0x100 * 16, Uint8Array.from([0x0f, 0xff, 0xf4]));
+  let raised = null, caught = null;
+  mc.protInt = (n) => { raised = n; cpu.halted = true; };
+  try { let steps = 0; while (!cpu.halted && steps++ < 20) mc.rec.step(); }
+  catch (e) { caught = String(e.message || e); }
+  return { raised, caught };
+};
+{ eq('an invalid opcode in protected mode reaches the guest gate', udRun(true).raised, 6);
+  // ...and with NO gate the diagnostic must survive: an unhandled #UD would re-raise for ever.
+  const bare = udRun(false);
+  eq('with no gate for vector 6 nothing is delivered', bare.raised, null);
+  eq('...and it still says what it could not do',
+    !!(bare.caught && bare.caught.includes('0x0f 0xff')), true); }
+
 
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
