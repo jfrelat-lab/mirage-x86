@@ -1624,22 +1624,27 @@ export class Recompiler {
         // read at the prefixed size. `o32 call ebx` is test386's POST-5 %%rm32 case.
         case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
         // CALLF under 0x66 pushes CS and a 32-bit return offset, and reads a 48-bit far pointer.
-        case 3: { const a = memAddr(o);
-          // As JMPF below, plus the stack: CS and the return offset are pushed BEFORE the target can
-          // be refused, so a faulting far call left two words behind. ESP is rewound on refusal and
-          // EIP kept at this instruction — a far CALL that faults pushes nothing and goes nowhere.
-          P(sz === 16 ? `var _e=cpu.reg[4];cpu.push16(cpu.seg[${CS}]);cpu.push16(${SEQ()});var _o=m.r16(${a});cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}))===false){cpu.reg[4]=_e;return;}cpu.eip=_o;`
-                      : `var _e=cpu.reg[4];cpu.push32(cpu.seg[${CS}]);cpu.push32(${SEQ()});var _o=m.r32(${a})>>>0;cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}))===false){cpu.reg[4]=_e;return;}cpu.eip=_o>>>0;`);
+        // The INDIRECT far forms go through cpu.farCall/farJmp exactly as the direct ones at 0x9a
+        // and 0xea do. They used to load CS themselves, which meant a CALL GATE was not honoured
+        // here although it was there: a gate descriptor is a SYSTEM descriptor, so loading it as a
+        // segment is #GP(selector), and that is what Windows 3.1's DOS extender ran into —
+        // `call far [cs:1408]` through selector 00D3, a 286 call gate to 0070:1415, answered with
+        // "Standard Mode: Bad Fault in MS-DOS Extender. Fault: 000D ... EC=00D0". The gate support
+        // added for 0x9a/0xea simply never reached the FF /3 and FF /5 encodings. farCall also owns
+        // the stack discipline this used to open-code: a far CALL that faults pushes nothing and
+        // goes nowhere.
+        case 3: { const a = memAddr(o); const to = NT(), ts = NT();
+          P(sz === 16 ? `var ${to}=m.r16(${a}),${ts}=m.r16(${AM(`${a}+2`)});cpu.eip=${SEQ()};cpu.farCall(${ts},${to},0,${ipStart});`
+                      : `var ${to}=m.r32(${a})>>>0,${ts}=m.r16(${AM(`${a}+4`)});cpu.eip=${SEQ()};cpu.farCall(${ts},${to}>>>0,1,${ipStart});`);
           P('return;'); ended = true; break; } // CALLF
         case 4: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // JMP Ev
         // JMPF Ev — the far pointer's layout follows the operand size, as CALLF above: 16-bit is a
         // word offset with the selector at +2, 32-bit a dword offset with the selector at +4.
-        case 5: { const a = memAddr(o);
-          // A refused selector must leave EIP at THIS instruction. Setting it first and returning on
-          // refusal is what keeps the delivered fault: the `cpu.eip=_o` below used to run even after
-          // setSeg had reported one, overwriting the handler's entry point.
-          P(sz === 16 ? `var _o=m.r16(${a});cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+2`)}))===false)return;cpu.eip=_o;`
-                      : `var _o=m.r32(${a})>>>0;cpu.eip=${ipStart};if(cpu.setSeg(${CS},m.r16(${AM(`${a}+4`)}))===false)return;cpu.eip=_o>>>0;`);
+        case 5: { const a = memAddr(o); const to = NT(), ts = NT();
+          // farJmp keeps the rule this used to open-code: a refused selector leaves EIP at THIS
+          // instruction, so a delivered fault's entry point is not overwritten on the way out.
+          P(sz === 16 ? `var ${to}=m.r16(${a}),${ts}=m.r16(${AM(`${a}+2`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to},${ipStart});`
+                      : `var ${to}=m.r32(${a})>>>0,${ts}=m.r16(${AM(`${a}+4`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to}>>>0,${ipStart});`);
           P('return;'); ended = true; break; } // JMPF
         case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }

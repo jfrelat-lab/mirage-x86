@@ -495,6 +495,51 @@ function eq(name, got, want) {
   eq('LSL accepts a not-present descriptor too', cpu.lslLimit(0x20), 0x1234);
   eq('LSL refuses a selector past the table', cpu.lslLimit(0x38), -1); }
 
+// ---- a CALL GATE is honoured by the INDIRECT far forms too ------------------------------------
+// FF /3 and FF /5 loaded CS themselves instead of going through cpu.farCall/farJmp, so a call gate
+// was not followed there although the direct 9A/EA forms had followed one since test386. A gate is
+// a SYSTEM descriptor, so loading it as a segment is #GP(selector) — which is exactly what Windows
+// 3.1's DOS extender reported: `call far [cs:1408]` through selector 00D3, a 286 gate to 0070:1415,
+// answered with "Standard Mode: Bad Fault in MS-DOS Extender. Fault: 000D ... EC=00D0".
+//
+// The bases are set BEFORE PE goes on, as in the #UD test below: the descriptor caches keep them,
+// which places code for the recompiler without needing a GDT entry for CS itself.
+const gateRun = (op) => {                             // op: 3 = CALLF Ev, 5 = JMPF Ev
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  const GDT = 0x8000;
+  const desc = (i, base, limit, access) => {
+    const a = GDT + i * 8;
+    mem.w16(a, limit & 0xffff); mem.w16(a + 2, base & 0xffff);
+    mem.w8(a + 4, (base >> 16) & 0xff); mem.w8(a + 5, access);
+    mem.w8(a + 6, (limit >> 16) & 0x0f); mem.w8(a + 7, (base >> 24) & 0xff);
+  };
+  desc(1, 0x1000, 0xffff, 0x9a);                      // 08: the gate's target code segment
+  mem.w16(GDT + 3 * 8, 0x0100); mem.w16(GDT + 3 * 8 + 2, 0x0008);
+  mem.w8(GDT + 3 * 8 + 4, 0); mem.w8(GDT + 3 * 8 + 5, 0x84);   // 18: 286 call gate, P=1 DPL=0 type 4
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x100); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mem.blit(0x1000, Uint8Array.from([0xff, (op << 3) | 0x06, 0x20, 0x00]));              // ff /op [0020]
+  mem.w16(0x1020, 0x0000); mem.w16(0x1022, 0x0018);   // the far pointer: selector 0018, offset 0
+  // A MARKER at the gate's entry, not just a HLT: landing one byte early would also halt, and the
+  // test would pass. Only entry at exactly 0100 leaves AX = 1234.
+  mem.blit(0x1100, Uint8Array.from([0xb8, 0x34, 0x12, 0xf4]));                          // mov ax,1234 ; hlt
+  cpu.gdtr = { base: GDT, limit: 0x3f }; cpu.cr0 |= 1;
+  let raised = null;
+  mc.protInt = (n, e) => { raised = { n, e }; cpu.halted = true; };
+  let steps = 0; while (!cpu.halted && steps++ < 40) mc.rec.step();
+  return { cs: cpu.seg[CS], eip: cpu.eip >>> 0, ax: cpu.reg[0] & 0xffff, raised, sp: cpu.reg[4] & 0xffff, mem };
+};
+{ const call = gateRun(3);
+  eq('FF /3 through a call gate raises nothing', call.raised, null);
+  eq('...and lands in the gate\'s code segment', call.cs, 0x08);
+  eq('...at the gate\'s own offset, not the one in memory', call.ax, 0x1234);
+  eq('...having pushed the return offset', call.mem.r16(0x3000 + call.sp), 4);
+  eq('...and the return segment', call.mem.r16(0x3000 + call.sp + 2), 0x100);
+  const jmp = gateRun(5);
+  eq('FF /5 through a call gate raises nothing', jmp.raised, null);
+  eq('...and lands in the gate\'s code segment', jmp.cs, 0x08);
+  eq('...at the gate\'s own offset', jmp.ax, 0x1234);
+  eq('...pushing nothing', jmp.sp, 0x1000); }
+
 // ---- #UD belongs to whoever holds the vector, in EITHER mode ------------------------------------
 // An invalid opcode is a service, and guests use it: Windows 3.1's DOS extender installs a handler
 // for vector 6 through DPMI and then executes `0f ff` on purpose. Ownership was read from the
