@@ -6,8 +6,32 @@
 //   curl -o /tmp/v86ref/vgabios.bin https://raw.githubusercontent.com/copy/v86/master/bios/vgabios.bin
 //   V86_DIR=/tmp/v86ref node tools/diff-v86.mjs boot/WIN31HD.IMG 66,16,63 [seconds] [--io[=ranges]]
 //
-// TWO OBSERVABLES, same method. Without --io it compares the SECTORS the guests ask for. With --io
-// it compares their PORT ACCESSES, which is where to look once the disk has been excluded.
+// THREE OBSERVABLES, same method.
+//   (default)  the SECTORS the guests ask for
+//   --io       their PORT ACCESSES, once the disk has been excluded. CURRENTLY NON-FUNCTIONAL
+//              against v86 1.x as installed today: the WASM CPU does not dispatch through the JS
+//              `IO.port_read8/16/32` methods this hooks, so v86 records ZERO port actions while the
+//              IDE hook right beside it still works. Measured on the committed version too, so it
+//              is API drift and not a change here. The run says so rather than reporting a match —
+//              "one side recorded nothing ... and that is not a match" — but it is not a usable
+//              observable until the hook is moved to whatever the WASM build actually calls.
+//   --mem=LBA[:k[:lo-hi,...]]  their MEMORY, both stopped when the guest reads that sector the kth
+//              time. Extended memory by default; see MEM_RANGES below for why not low memory.
+//
+// --mem is how XMS gets compared. A symmetric trace of the XMS calls themselves is not reachable:
+// on our side the driver entry can be caught by hooking the CS load, but v86 runs its CPU in WASM
+// and offers no execution hook, so there is no way to see the far call on both sides. What IS
+// symmetric is the EFFECT — an XMS move is a memcpy — so the question becomes "did the move copy
+// the same bytes to the same place", i.e. a memory diff at an instant both engines can be stopped
+// at. THE SYNC POINT IS DEFINED BY CONTENT, not by an index: a port-access number is not the same
+// instant on both sides (each BIOS has its own prologue — 2686 port accesses of difference on this
+// image, so stopping both at "access 50000" compared two unrelated moments and reported 189 KB of
+// meaningless difference). A sector number is the guest's own event and needs no alignment.
+//
+// WHAT IDENTICAL SNAPSHOTS DO NOT PROVE, the same caveat as the other two observables: that the two
+// guests held the same bytes at ONE instant. Everything between two sync points is unobserved, and
+// a difference that is written and overwritten before the snapshot is invisible. Run it with
+// DIFFV86_MEMPOKE before believing a zero — see MEM_POKE below.
 //
 // WHY THE DISK, and not memory or registers. There is no instruction-level sync point between these
 // two engines: v86 is a WASM JIT with no per-block hook, and even a shared POST code only pins ONE
@@ -35,6 +59,11 @@ const img = process.argv[2] || join(ROOT, 'boot/WIN31HD.IMG');
 const geom = (process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : '66,16,63').split(',').map(Number);
 const args = process.argv.slice(2);
 const ioArg = args.find((a) => a.startsWith('--io'));
+const memArg = args.find((a) => a.startsWith('--mem='));
+const memParts = memArg ? memArg.split('=')[1].split(':') : null;
+const MEM_LBA = memParts ? Number(memParts[0]) : -1;            // the sector whose read stops both
+const MEM_NTH = memParts && memParts[1] ? Number(memParts[1]) : 1;
+const memRangeArg = memParts && memParts[2] ? memParts[2] : null;
 const IO_MODE = ioArg !== undefined;
 const SECS = Number(args.filter((a) => !a.startsWith('--'))[2] || 90);
 
@@ -65,6 +94,38 @@ const watched = (p) => (keepRetrace || !RETRACE.includes(p)) && (included
 const CAP = 4_000_000;
 const MEM_MB = Number(process.env.MEM || 64);
 const hex = (v, n = 4) => (v >>> 0).toString(16).padStart(n, '0');
+// WHAT --mem COMPARES BY DEFAULT: EXTENDED memory, everything above the first megabyte.
+//
+// Low memory is NOT comparable and the first version of this compared it anyway, reporting tens of
+// kilobytes of difference that meant nothing. The two machines are not the same machine down there:
+// SeaBIOS reports 639 KB of conventional memory and puts an EBDA at 9FC0, MIRAGE reports 640 KB and
+// has none, so the top of conventional memory, the BIOS data area and the vectors each BIOS owns
+// differ by construction, before the guest has decided anything.
+//
+// The TOP of RAM is not comparable either, for the same reason one storey up: SeaBIOS relocates
+// itself and its tables there, and MIRAGE has no equivalent, so those pages read as zeros against a
+// working structure. Measured on this image — 64 MB: 2411 bytes over 02ff7000..02ffffff; 32 MB:
+// 2413 bytes over 01fb7000..01fbffff. The offset from the top of RAM is NOT constant between the
+// two, so there is no boundary to compute; the addresses are v86's business, not a rule.
+//
+// What IS both comparable and interesting is the BOTTOM of extended memory: HIMEM hands out XMS
+// blocks from 1 MiB upwards, so that is where an XMS move lands — the thing this mode exists to
+// compare — and it is far below anything either BIOS touches. Hence the default of the first 15 MiB
+// above the line. Pass explicit ranges as the third field
+// (`--mem=LBA:k:100000-4000000,0-a0000`) to look anywhere else, as long as you know that a
+// difference there may belong to a BIOS rather than to the guest.
+const MEM_RANGES = memRangeArg
+  ? memRangeArg.split(',').map((r) => r.split('-').map((x) => parseInt(x, 16)))
+  : [[0x100000, 0x1000000]];
+// POSITIVE CONTROL FOR --mem. The other two controls are useless here, and the rule this file states
+// for ports says why: a control must perturb THE OBSERVABLE BEING COMPARED. DIFFV86_ALT perturbs the
+// sector stream (and worse: with a different image the sync sector may never be read, so the run
+// aborts instead of reporting a difference), DIFFV86_PERTURB perturbs a port read. So for memory:
+// flip every bit of one byte of MIRAGE's guest RAM at the sync instant, just before the snapshot.
+// The comparison must then report exactly one differing byte, in the page holding that address.
+// The byte is FLIPPED rather than set, because setting it to a value it already holds is a control
+// that silently does not fire — which is the failure mode this whole idea exists to prevent.
+const MEM_POKE = process.env.DIFFV86_MEMPOKE !== undefined ? parseInt(process.env.DIFFV86_MEMPOKE, 16) : -1;
 const bytes = new Uint8Array(readFileSync(img));
 // POSITIVE CONTROL. DIFFV86_ALT gives MIRAGE a different image from v86's, so the guests really do
 // behave differently and the comparison MUST report it. Without a control that fires, "identical"
@@ -90,6 +151,21 @@ async function runMirage() {
   const lbas = [];
   // Port accesses, in typed arrays: at four million events an object per access is not affordable.
   const io = { port: new Uint16Array(CAP), tag: new Uint8Array(CAP), val: new Uint32Array(CAP), n: 0 };
+  // The snapshot is taken INSIDE the port handler, so it is the state at that access and not at the
+  // end of whatever slice happened to contain it.
+  let snap = null, lbaSeen = 0;
+  const stopAt = () => {
+    if (snap) return;
+    if (MEM_POKE >= 0) {
+      const was = mc.mem.u8[MEM_POKE], now = (~was) & 0xff;
+      mc.mem.u8[MEM_POKE] = now;
+      const inside = MEM_RANGES.some(([lo, hi]) => MEM_POKE >= lo && MEM_POKE < hi);
+      console.log(`CONTROL: linear ${hex(MEM_POKE, 8)} in MIRAGE's guest memory ${hex(was, 2)} -> ${hex(now, 2)}` +
+        (inside ? ' — the comparison must report exactly 1 byte'
+                : ' *** OUTSIDE every compared range, so this control CANNOT fire ***'));
+    }
+    snap = MEM_RANGES.map(([lo, hi]) => mc.mem.u8.slice(lo, hi));
+  };
   if (IO_MODE) {
     const rd = mc.cpu.ioRead, wr = mc.cpu.ioWrite;
     let perturbSeen = 0;
@@ -120,6 +196,7 @@ async function runMirage() {
     if (ah === 0x02 && (dx & 0xff) >= 0x80 && !(c.flags & 1)) {
       const lba = (cyl * geom[1] + head) * geom[2] + sector - 1;
       for (let i = 0; i < al; i++) lbas.push(lba + i);
+      if (MEM_LBA >= 0 && lba <= MEM_LBA && MEM_LBA < lba + al && ++lbaSeen === MEM_NTH) stopAt();
     }
     return r;
   };
@@ -128,8 +205,8 @@ async function runMirage() {
   mc.onDerail = (d) => { if (!derail) derail = d; };
   bootSector(mc, altBytes, { drive: 0x80 });
   const t0 = Date.now();
-  while (!fault && !derail && Date.now() - t0 < SECS * 1000) { mc.runSlice(20000); mc.tickTimer(); }
-  return { lbas, io, stop: fault ? `fault: ${(fault.message || fault).slice(0, 120)}`
+  while (!fault && !derail && !snap && Date.now() - t0 < SECS * 1000) { mc.runSlice(20000); mc.tickTimer(); }
+  return { lbas, io, snap, stop: fault ? `fault: ${(fault.message || fault).slice(0, 120)}`
     : derail ? `derail: ${derail.slice(0, 120)}` : 'ran to the time limit' };
 }
 
@@ -148,6 +225,13 @@ function runV86() {
     });
     const lbas = [];
     const io = { port: new Uint16Array(CAP), tag: new Uint8Array(CAP), val: new Uint32Array(CAP), n: 0 };
+    let snap = null, lbaSeen = 0;
+    const grab = () => {
+      if (snap) return;
+      snap = MEM_RANGES.map(([lo, hi]) => new Uint8Array(emulator.read_memory(lo, hi - lo)));
+      clearInterval(iv); try { emulator.stop(); } catch (e) {}
+      resolve({ lbas, io, snap });
+    };
     // NOT the `ide-read-end` event: its payload is [0, byte length, sector count] — the first field
     // is always zero, so decoding it as a disk offset yields a stream of 0 1 2 3 that looks like
     // data and is not. The LBA lives in the interface's own registers, and v86 exposes get_lba().
@@ -163,7 +247,13 @@ function runV86() {
         if (typeof orig !== 'function') continue;
         proto[name] = function (...args) {
           const lba = this.get_lba(), n = this.get_count();
-          if (lba >= 0 && n > 0) for (let i = 0; i < n; i++) lbas.push(lba + i);
+          if (lba >= 0 && n > 0) {
+            for (let i = 0; i < n; i++) lbas.push(lba + i);
+            // The snapshot must be taken AFTER the transfer, so both sides see the sector landed.
+            if (MEM_LBA >= 0 && lba <= MEM_LBA && MEM_LBA < lba + n && ++lbaSeen === MEM_NTH) {
+              const r = orig.apply(this, args); grab(); return r;
+            }
+          }
           return orig.apply(this, args);
         };
       }
@@ -184,13 +274,69 @@ function runV86() {
       return true;
     };
     const iv = setInterval(() => { if (hook()) clearInterval(iv); }, 20);
-    setTimeout(() => { clearInterval(iv); try { emulator.stop(); } catch (e) {} resolve({ lbas, io }); }, SECS * 1000);
+    setTimeout(() => { if (snap) return; clearInterval(iv); try { emulator.stop(); } catch (e) {} resolve({ lbas, io, snap }); }, SECS * 1000);
   });
 }
 
 console.log(`${img.split('/').pop()}: MIRAGE geometry ${geom.join('/')}, ${MEM_MB} MB, ${SECS}s each side` +
   (IO_MODE ? `; comparing PORT ACCESSES${included ? ' on ' + ioArg.split('=')[1] : ' (default exclusions)'}` : '; comparing SECTORS'));
 const [a, b] = await Promise.all([runMirage(), runV86()]);
+
+// ---- --mem: the same instant on both sides, compared byte by byte -----------------------------
+if (MEM_LBA >= 0) {
+  if (!a.snap || !b.snap) {
+    console.log(`no snapshot: MIRAGE ${a.snap ? 'took one' : `stopped first (${a.stop})`}, ` +
+      `v86 ${b.snap ? 'took one' : `never read sector ${MEM_LBA} a ${MEM_NTH}${MEM_NTH === 1 ? 'st' : 'th'} time`}`);
+    process.exit(2);
+  }
+  console.log(`both stopped on read #${MEM_NTH} of sector ${MEM_LBA} — the guest's own event, so the same instant on both sides`);
+  let total = 0;
+  for (let r = 0; r < MEM_RANGES.length; r++) {
+    const [lo, hi] = MEM_RANGES[r], A = a.snap[r], B = b.snap[r];
+    // Per 4 KB page, so a difference is located rather than counted: a whole-range total says
+    // nothing about whether one structure moved or the whole map is shifted.
+    const pages = [];
+    let n = 0;
+    for (let p = 0; p < (hi - lo) >> 12; p++) {
+      let d = 0;
+      for (let k = 0; k < 4096; k++) if (A[(p << 12) + k] !== B[(p << 12) + k]) d++;
+      if (d) { n += d; if (pages.length < 12) pages.push(`${hex(lo + (p << 12), 8)} (${d})`); }
+    }
+    total += n;
+    console.log(`  ${hex(lo, 8)}..${hex(hi, 8)}: ${n} bytes differ` + (pages.length ? `, pages ${pages.join(' ')}` : ''));
+    // A count locates nothing. Print the first differing bytes WITH BOTH VALUES: that is what says
+    // whether a page is a structure one side owns and the other does not, or the same structure
+    // holding different data.
+    if (n && process.env.DIFFV86_MEMDUMP !== undefined) {
+      const shown = [];
+      for (let k = 0; k < hi - lo && shown.length < 24; k++) {
+        if (A[k] !== B[k]) shown.push(`${hex(lo + k, 8)} ${hex(A[k], 2)}/${hex(B[k], 2)}`);
+      }
+      console.log('    first differing bytes (MIRAGE/v86): ' + shown.join('  '));
+      // IS IT DIFFERENT DATA, OR THE SAME DATA AT A DIFFERENT ADDRESS? Slide one side against the
+      // other and report the best alignment. "17007 bytes differ" and "the same structure sits two
+      // bytes lower" are entirely different findings, and eyeballing a hex dump is how the second
+      // gets asserted without being measured.
+      let first = -1, last = -1;
+      for (let k = 0; k < hi - lo; k++) if (A[k] !== B[k]) { if (first < 0) first = k; last = k; }
+      let best = { d: 0, same: -1 };
+      for (let d = -64; d <= 64; d++) {
+        let same = 0, seen = 0;
+        for (let k = first; k <= last; k++) {
+          const j = k + d;
+          if (j < 0 || j >= hi - lo) continue;
+          seen++; if (A[k] === B[j]) same++;
+        }
+        if (seen && same / seen > (best.same < 0 ? 0 : best.same)) best = { d, same: same / seen };
+      }
+      console.log(`    best alignment: shifting v86 by ${best.d >= 0 ? '+' : ''}${best.d} bytes makes ` +
+        `${(best.same * 100).toFixed(1)}% of ${hex(lo + first, 8)}..${hex(lo + last, 8)} agree` +
+        (best.d === 0 ? ' — so it is different DATA, not a moved structure' : ''));
+    }
+  }
+  console.log(total ? `${total} bytes differ in total` : 'the snapshots are IDENTICAL');
+  process.exit(0);
+}
 
 // RUN-LENGTH FIRST, on ports. Without this the comparison is VACUOUS and says so by accident: the
 // port stream is dominated by spins — HIMEM toggling A20 around every XMS move reads port 92h tens
@@ -233,6 +379,7 @@ console.log(`v86   : ${stream.lenB} ${stream.name}`);
 if (process.env.DIFFV86_DEBUG) {
   console.log('MIRAGE first 12: ' + Array.from({ length: Math.min(12, stream.lenA) }, (_, i) => stream.fmtA(i)).join(' | '));
   console.log('v86    first 12: ' + Array.from({ length: Math.min(12, stream.lenB) }, (_, j) => stream.fmtB(j)).join(' | '));
+  console.log('MIRAGE last 12 : ' + Array.from({ length: Math.min(12, stream.lenA) }, (_, k) => stream.fmtA(stream.lenA - 12 + k)).join(' | '));
 }
 if (!stream.lenA || !stream.lenB) {
   console.log('one side recorded nothing — there is nothing to compare, and that is not a match');
