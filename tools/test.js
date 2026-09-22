@@ -540,6 +540,51 @@ const gateRun = (op) => {                             // op: 3 = CALLF Ev, 5 = J
   eq('...at the gate\'s own offset', jmp.ax, 0x1234);
   eq('...pushing nothing', jmp.sp, 0x1000); }
 
+// ---- a FAULTING far transfer is delivered as if the instruction never ran ----------------------
+// The fault is delivered INSIDE setSeg, synchronously, so by the time the load reports a refusal
+// CS:EIP and SS:ESP already belong to the handler. farCall/farJmp were written for a deferred
+// fault — push, load, then on refusal rewind ESP and set EIP — and that was wrong three times
+// over: the frame saved the RETURN address, the handler's entry EIP was overwritten with the
+// caller's offset, and ESP was rewound under the handler's frame. Windows 3.1 demand-loads its
+// code through exactly this #NP, and a handler that cannot restart the faulting CALL cannot load
+// anything: it ran from its own CS at the caller's IP until it hit #GP(07D0).
+//
+// Each case: a far transfer to a NOT-PRESENT code segment; the #NP handler is a 286 interrupt gate
+// whose entry leaves a marker. Checked: the handler ran from its OWN entry, the frame holds exactly
+// err / IP / CS / FLAGS with IP = the faulting instruction, and nothing else was pushed.
+const npRun = (code) => {
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  const GDT = 0x8000, IDT = 0xa000;
+  const desc = (i, base, limit, access) => {
+    const a = GDT + i * 8;
+    mem.w16(a, limit & 0xffff); mem.w16(a + 2, base & 0xffff);
+    mem.w8(a + 4, (base >> 16) & 0xff); mem.w8(a + 5, access);
+    mem.w8(a + 6, (limit >> 16) & 0x0f); mem.w8(a + 7, (base >> 24) & 0xff);
+  };
+  desc(1, 0x1000, 0xffff, 0x9a);                      // 08: the handler's code segment
+  desc(3, 0x5000, 0xffff, 0x1a);                      // 18: code, readable — NOT PRESENT
+  mem.w16(IDT + 11 * 8, 0x0200); mem.w16(IDT + 11 * 8 + 2, 0x0008);
+  mem.w8(IDT + 11 * 8 + 5, 0x86);                     // #NP -> 286 interrupt gate to 08:0200
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x100); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mem.blit(0x1000, Uint8Array.from(code));
+  mem.w16(0x1020, 0x0000); mem.w16(0x1022, 0x0018);   // an indirect form's far pointer
+  mem.blit(0x1200, Uint8Array.from([0xb8, 0x34, 0x12, 0xf4]));                          // mov ax,1234 ; hlt
+  cpu.gdtr = { base: GDT, limit: 0x3f }; cpu.idtr = { base: IDT, limit: 0xff }; cpu.cr0 |= 1;
+  let steps = 0; while (!cpu.halted && steps++ < 40) mc.rec.step();
+  const sp = cpu.reg[4] & 0xffff, w = (k) => mem.r16(0x3000 + sp + k * 2);
+  return { ax: cpu.reg[0] & 0xffff, sp, err: w(0), ip: w(1), cs: w(2) };
+};
+for (const [name, code] of [['9A call far ptr', [0x9a, 0x00, 0x00, 0x18, 0x00]],
+                            ['FF /3 call far [mem]', [0xff, 0x1e, 0x20, 0x00]],
+                            ['FF /5 jmp far [mem]', [0xff, 0x2e, 0x20, 0x00]]]) {
+  const r = npRun(code);
+  eq(`${name} to a not-present segment: the #NP handler runs from its own entry`, r.ax, 0x1234);
+  eq(`...its frame is err/IP/CS/FLAGS and nothing more`, r.sp, 0x1000 - 8);
+  eq(`...the error code names the selector`, r.err, 0x18);
+  eq(`...the saved IP is the FAULTING instruction, so the handler can restart it`, r.ip, 0);
+  eq(`...and the saved CS is the caller's`, r.cs, 0x100);
+}
+
 // ---- VERR / VERW answer a question, they do not always say yes -------------------------------
 // This was `cpu.flags |= ZF`: a stub that cannot fail, and therefore cannot be told apart from a
 // working implementation until a guest asks about a selector that is NOT accessible. Six of the

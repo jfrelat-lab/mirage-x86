@@ -433,18 +433,21 @@ export class CPU {
    */
   farCall(sel, off, is32, faultIp) {
     const plain = () => {
-      // A far CALL that FAULTS pushes nothing and goes nowhere. Both halves of that were wrong here:
-      // CS:EIP were pushed BEFORE the load could be refused, leaving two words on the stack, and
-      // `this.eip = off` ran AFTERWARDS, overwriting the entry point the delivered fault had just
-      // set — so the exception was reported and then silently discarded. Rewind and keep the
-      // handler's EIP instead. In real mode setSeg cannot refuse, so this guard is inert there.
-      const esp0 = this.reg[4];
-      this.pushW(this.seg[CS], is32); this.pushW(this.eip >>> 0, is32);
-      if (this.setSeg(CS, sel) === false) {
-        this.reg[4] = esp0;
-        if (faultIp !== undefined) this.eip = faultIp >>> 0;
-        return;
-      }
+      // A far CALL that FAULTS pushes nothing and goes nowhere — and the fault is DELIVERED INSIDE
+      // setSeg, synchronously: by the time it returns false, CS:EIP and SS:ESP already belong to the
+      // handler. So everything the fault frame must record has to be in place BEFORE the load, and
+      // nothing may be touched after a refusal. This used to be done the other way round — push,
+      // load, then on refusal rewind ESP and set EIP to the faulting instruction — which is right
+      // for a deferred fault and wrong three times over for this one: the frame saved the RETURN
+      // address instead of the faulting one, the handler's entry EIP was overwritten with the
+      // caller's offset, and ESP was "rewound" on the handler's stack. Windows 3.1 demand-loads
+      // its segments through exactly this fault (#NP on `call far [bx+48]` at 07ff:091e), and its
+      // handler ran from 0070:091e — its own CS, the caller's IP — until it hit #GP(07D0).
+      // In real mode setSeg cannot refuse, so the order changes nothing there.
+      const retCS = this.seg[CS], retIP = this.eip >>> 0;
+      if (faultIp !== undefined) this.eip = faultIp >>> 0;   // the frame names THIS instruction
+      if (this.setSeg(CS, sel) === false) return;           // delivered: the handler owns CS:EIP now
+      this.pushW(retCS, is32); this.pushW(retIP, is32);
       this.eip = off >>> 0;
     };
     if (!(this.cr0 & 1)) return plain();
@@ -517,10 +520,10 @@ export class CPU {
         }
       }
     }
-    if (this.setSeg(CS, sel) === false) {
-      if (faultIp !== undefined) this.eip = faultIp >>> 0;
-      return;
-    }
+    // As in farCall: a refusal is delivered inside setSeg, so the faulting EIP goes in first and
+    // nothing is written after — setting it afterwards overwrote the handler's entry point.
+    if (faultIp !== undefined) this.eip = faultIp >>> 0;
+    if (this.setSeg(CS, sel) === false) return;
     this.eip = off >>> 0;
   }
 
