@@ -234,8 +234,15 @@ export class CPU {
    * LAR / LSL — a descriptor's access rights or limit WITHOUT loading it. Both set ZF on success and
    * leave the destination untouched otherwise, so these return -1 for "not accessible".
    *
-   * Accessible: non-null, inside its table, present, and — except for CONFORMING code, readable from
-   * anywhere — DPL >= max(CPL, RPL). Only the 386 system types below are valid operands.
+   * Accessible: non-null, inside its table, of a valid type, and — except for CONFORMING code,
+   * readable from anywhere — DPL >= max(CPL, RPL).
+   *
+   * PRESENCE IS NOT ONE OF THE CONDITIONS, and that is the whole point of the instruction: LAR is
+   * how software asks about a segment that may have been discarded, and it hands back the access
+   * byte so the caller can test P for itself. Windows 3.1's KERNEL does precisely that, at
+   * 037f:0ede — `lar ax,[ss:bx+2]` / `jnz fail` / `test ah,0x80` — so refusing a not-present
+   * descriptor turned "discarded, go and load it" into "not a valid selector", and the segment was
+   * never loaded. See tools/larprobe.asm, whose six answers QEMU and v86 give identically.
    */
   _descVisible(sel) {
     sel &= 0xffff;
@@ -243,7 +250,7 @@ export class CPU {
     const tbl = (sel & 4) ? this.ldtr : this.gdtr;
     if ((sel & 0xfff8) + 7 > tbl.limit) return null;           // beyond the table
     const d = this.readDesc(sel);
-    if (!d || !d.present) return null;
+    if (!d) return null;
     if (d.sys) {
       // Valid system/gate types for LAR/LSL on a 386: LDT, TSS (avail/busy, 16 and 32 bit), and the
       // three gate kinds. Everything else (0, 8, 0xA, 0xD) is reserved and reads as inaccessible.

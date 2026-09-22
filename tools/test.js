@@ -468,6 +468,34 @@ function eq(name, got, want) {
   eq('a debug register reads back what was written', cpu.reg[0] >>> 0, 0xaced);
   eq('...and the mod bits consumed no displacement', cpu.eip >>> 0, 7); }
 
+// ---- LAR and LSL answer for a NOT-PRESENT descriptor -------------------------------------------
+// Presence is not one of LAR's conditions, and that is the point of the instruction: it is how
+// software asks about a segment that may have been discarded, and it hands back the access byte so
+// the caller can test P itself. Windows 3.1's KERNEL does exactly that — `lar ax,[ss:bx+2]` / `jnz
+// fail` / `test ah,0x80` at 037f:0ede — so refusing P=0 turned "discarded, go and load it" into
+// "not a valid selector", the segment was never loaded, and the far call into it ran through empty
+// memory. The six expected answers below are the ones QEMU and v86 both give to tools/larprobe.asm.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  const GDT = 0x8000;
+  cpu.gdtr = { base: GDT, limit: 0x27 };              // four descriptors: 0x28 is past the end
+  const desc = (i, base, limit, access) => {
+    const a = GDT + i * 8;
+    mc.mem.w16(a, limit & 0xffff); mc.mem.w16(a + 2, base & 0xffff);
+    mc.mem.w8(a + 4, (base >> 16) & 0xff); mc.mem.w8(a + 5, access);
+    mc.mem.w8(a + 6, (limit >> 16) & 0x0f); mc.mem.w8(a + 7, (base >> 24) & 0xff);
+  };
+  desc(1, 0, 0xffff, 0x9a);                           // present code
+  desc(3, 0, 0xffff, 0x1b);                           // code, readable — NOT PRESENT
+  desc(4, 0, 0x1234, 0x12);                           // data, writable — NOT PRESENT
+  cpu.cr0 |= 1;
+  eq('LAR accepts a not-present descriptor', cpu.larRights(0x18, 0), 0x1b00);
+  eq('LAR accepts a present one', cpu.larRights(0x08, 0), 0x9a00);
+  eq('LAR refuses the null selector', cpu.larRights(0x00, 0), -1);
+  eq('LAR refuses a selector past the table', cpu.larRights(0x38, 0), -1);
+  eq('LSL accepts a not-present descriptor too', cpu.lslLimit(0x20), 0x1234);
+  eq('LSL refuses a selector past the table', cpu.lslLimit(0x38), -1); }
+
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is
