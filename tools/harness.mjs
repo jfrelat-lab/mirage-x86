@@ -45,7 +45,13 @@ export function loadFonts(machine) {
  */
 export function makeMachine(opts = {}) {
   const mc = new Machine({ memSize: opts.memSize ?? (16 << 20) });
-  const bios = installBIOS(mc, { xms: opts.xms, ems: opts.ems, dpmi: opts.dpmi });
+  // A BARE machine — one a boot sector runs on — has no expanded memory manager. EMS is a DOS
+  // driver (EMM386.EXE, loaded by CONFIG.SYS), not part of the PC, and unlike XMS it cannot stand
+  // aside once the guest arrives: EMM386 checks the INT 67h vector BEFORE installing, finds ours,
+  // and refuses — "EMM386 not installed - other expanded memory manager detected" on v86's
+  // msdos622.img, where QEMU (which has no EMM) gets VCPI. Asking for `ems: true` still works.
+  const ems = opts.ems ?? (opts.dos === false ? false : undefined);
+  const bios = installBIOS(mc, { xms: opts.xms, ems, dpmi: opts.dpmi });
   loadFonts(mc);
   if (opts.mouse !== false) installMouse(mc);          // INT 33h — the browser always has it
   let dos = null, vfs = null;
