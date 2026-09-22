@@ -657,6 +657,43 @@ const udRun = (gated) => {
     !!(bare.caught && bare.caught.includes('0x0f 0xff')), true); }
 
 
+// ---- INT 15h AH=87h: copy extended memory ------------------------------------------------------
+// The AT BIOS block move. It answered "function not supported", and MS-DOS 6.22's HIMEM and EMM386
+// both call it while installing (v86's msdos622.img): EMM386 copies its protected-mode tables up to
+// 1.2 MB with it. ES:SI -> a six-descriptor GDT, source at +10h, destination at +18h, CX in WORDS,
+// base = the 24-bit field plus byte 7 on a 386.
+{ const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  installBIOS(mc);
+  const GDT = 0x3000, desc = (off, base) => {
+    mem.w16(GDT + off, 0xffff); mem.w16(GDT + off + 2, base & 0xffff);
+    mem.w8(GDT + off + 4, (base >>> 16) & 0xff); mem.w8(GDT + off + 5, 0x93);
+    mem.w8(GDT + off + 6, 0); mem.w8(GDT + off + 7, (base >>> 24) & 0xff);
+  };
+  for (let i = 0; i < 0x30; i++) mem.w8(GDT + i, 0);
+  desc(0x10, 0x180000); desc(0x18, 0x2000);            // ABOVE 1 MiB -> conventional memory
+  for (let i = 0; i < 16; i++) mem.u8[0x180000 + i] = 0xa0 + i;
+  for (let i = 0; i < 20; i++) mem.u8[0x2000 + i] = 0x55;
+  cpu.setSeg(ES, 0x300); cpu.si = 0; cpu.cx = 8; cpu.ax = 0x8700; cpu.flags |= 1;
+  mc.intHandlers[0x15](cpu, mc);
+  eq('AH=87h clears CF', cpu.flags & 1, 0);
+  eq('...and returns AH=00', (cpu.ax >> 8) & 0xff, 0);
+  eq('...having copied the first byte from above 1 MiB', mem.u8[0x2000], 0xa0);
+  eq('...and the last of the CX WORDS', mem.u8[0x200f], 0xaf);
+  eq('...and not one byte more', mem.u8[0x2010], 0x55);
+  // ...and the other way, with byte 7 of the base in use: 0x01180000 is past 16 MiB, so a copy that
+  // ignored it would land 16 MiB lower.
+  const big = new Machine({ memSize: 32 << 20 }); installBIOS(big);
+  const bm = big.mem, bc = big.cpu;
+  for (let i = 0; i < 0x30; i++) bm.w8(GDT + i, 0);
+  const d2 = (off, base) => { bm.w16(GDT + off, 0xffff); bm.w16(GDT + off + 2, base & 0xffff);
+    bm.w8(GDT + off + 4, (base >>> 16) & 0xff); bm.w8(GDT + off + 5, 0x93); bm.w8(GDT + off + 7, (base >>> 24) & 0xff); };
+  d2(0x10, 0x2000); d2(0x18, 0x01180000);
+  bm.u8[0x2000] = 0x77; bm.u8[0x2001] = 0x88;
+  bc.setSeg(ES, 0x300); bc.si = 0; bc.cx = 1; bc.ax = 0x8700;
+  big.intHandlers[0x15](bc, big);
+  eq('AH=87h honours byte 7 of the base (past 16 MiB)', bm.u8[0x01180000] | (bm.u8[0x01180001] << 8), 0x8877);
+  eq('...rather than landing 16 MiB lower', bm.u8[0x00180000], 0); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is

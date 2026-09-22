@@ -584,6 +584,28 @@ export function installBIOS(machine, opts = {}) {
       cpu.flags |= CF; cpu.ah = 0x86;
       return;
     }
+    // AH=87h — copy extended memory, the AT BIOS block move. ES:SI points at a six-descriptor GDT;
+    // the SOURCE descriptor is at +10h, the DESTINATION at +18h, and CX counts WORDS (RBIL #00499).
+    // The base is the 24-bit field plus, on a 386, byte 7. A real BIOS does the copy in protected
+    // mode with A20 forced open; the effect is a physical memmove, and mem.move is exactly that —
+    // absolute addresses, invalidating translated code it lands on, the path XMS AH=0Bh already uses.
+    // It answered "function not supported" until now, and it is not optional: MS-DOS 6.22's HIMEM
+    // and EMM386 both call it while sizing extended memory (v86's msdos622.img), where SeaBIOS
+    // copies and reports AH=00.
+    if (cpu.ah === 0x87) {
+      const g = (cpu.base[ES] + (cpu.si & 0xffff)) >>> 0;
+      const base = (d) => (mem.r16(g + d + 2) | (mem.r8(g + d + 4) << 16) | (mem.r8(g + d + 7) << 24)) >>> 0;
+      const src = base(0x10), dst = base(0x18), len = (cpu.cx & 0xffff) * 2;
+      if (src + len <= mem.size && dst + len <= mem.size) mem.move(dst, src, len);
+      else {
+        // Past the installed RAM a real bus reads FFh and drops the write; nothing faults.
+        const tmp = new Uint8Array(len);
+        for (let i = 0; i < len; i++) tmp[i] = src + i < mem.size ? mem.u8[src + i] : 0xff;
+        for (let i = 0; i < len && dst + i < mem.size; i++) mem.u8[dst + i] = tmp[i];
+      }
+      cpu.ah = 0; cpu.flags &= ~CF; cpu.flags |= 0x40;          // AH=00, CF clear, ZF set: copied
+      return;
+    }
     // AX=E801 and AH=8Ah are the two ways past AH=88h's 64 MiB ceiling, and an XMS driver asks for
     // them before it falls back. HimemX asks E801 first; leaving it unanswered made it size its pool
     // from AH=88h alone.
