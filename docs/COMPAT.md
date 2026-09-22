@@ -672,6 +672,40 @@ bytes**. A/B'd on that word alone. It is the more faithful number: this machine 
 INT 33h mouse, and dosbox-x announces both too — Wolf3D simply draws differently once it knows. The
 old figure appears in older notes; 88185 is current.
 
+## Windows 3.1, standard mode (v86's `win31.img`, 2026-09-22)
+
+`boot/WIN31HD.IMG` — hard disk 66/16/63, MS-DOS 5 + HIMEM + SMARTDRV, `win` in STANDARD mode, display
+driver SVGA256.DRV. ⭐ **Reaches the Program Manager at 1024x768x256 in 180 s, and the frame is
+identical to QEMU's: 0 of 786 432 pixels differ**, mouse cursor included.
+
+It took seven defects, all of them protected-mode CPU or BIOS behaviour that nothing else in the
+toolbox exercised. Each was found by catching the fault Windows' own DOS extender reported
+("Standard Mode: Bad Fault in MS-DOS Extender ... EC=… IP=… CS=…") rather than by reading KERNEL:
+
+| # | Defect | How Windows met it | Oracle |
+|---|---|---|---|
+| 1 | 286 TSS read as a 386 one (`d719226`) | inward stack switch through a 286 call gate loaded a null SS | 286 TSS layout |
+| 2 | **LAR/LSL refused a NOT-PRESENT descriptor** (`4dd31a0`) | KERNEL asks "is this segment loaded?" with `lar` + `test ah,80h`; "discarded" became "invalid", the segment was never loaded, and `call far 0387:0b7e` ran into zeros | `tools/larprobe.asm`, QEMU = v86 |
+| 3 | #UD ownership read from the real-mode IVT in protected mode (`f0e3581`) | DOSX installs a #UD handler via DPMI and then executes `0f ff` on purpose | IDT gate present |
+| 4 | FF /3 and FF /5 bypassed `farCall`/`farJmp`, so CALL GATES were ignored (`a305cf7`) | `call far [cs:1408]` through selector 00D3, a 286 gate → #GP(00D0) | 386 manual; unit test |
+| 5 | VERR/VERW were a stub that always said yes (`6042c3b`) | not on the path, found by the sweep below | `tools/pmprobe.asm`, QEMU = v86 |
+| 6 | **A faulting far transfer was delivered as if the fault were DEFERRED** (`dcc0b5a`) | Windows demand-loads code through #NP; the frame saved the return IP, the handler's EIP was overwritten, ESP rewound on the handler stack → the handler ran from 0070:091e | unit test on all three encodings |
+| 7 | VBE mode 105h missing (`93d9842`) | SVGA256.DRV sets 105h BY NUMBER, with no 4F00/4F01, and ignores the refusal | QEMU's 1024x768 frame |
+
+**Why nothing caught these earlier** — the gap is structural. `realmode.flat` is real mode by
+construction; the golden fingerprints are real-mode DOS; the Unicorn co-simulation builds no
+descriptor tables; and test386, which does test protection, stops at POST 0x12 before that
+section. `tools/larprobe.asm` and `tools/pmprobe.asm` start to close it: boot sectors that put a
+matrix of cases over COM1 and run unchanged under QEMU, v86 and MIRAGE. Two independent CPU
+implementations agreeing is the reference; pmprobe also refuted its own comment (VERR/VERW do NOT
+require P=1).
+
+**Capture caveat.** The BDA mode byte still reads 12h once a VBE mode is set; read `machine.vbe` and
+its framebuffer, not the planes, or the desktop looks like red-and-black stripes.
+
+**Excluded by `tools/diff-v86.mjs`**: the 1559 sectors read before the LAR derail were identical,
+in order, to v86's — the divergence was a decision, not the disk.
+
 ## Dune (Cryo) — SOLVED, 2026-08-25 (ROADMAP C3)
 
 **Dune's intro renders**, in its full `DUNEDEM ENG VGA ADL HIM 386` path — the Cryo logo, then the
