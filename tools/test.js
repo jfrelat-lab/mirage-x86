@@ -540,6 +540,49 @@ const gateRun = (op) => {                             // op: 3 = CALLF Ev, 5 = J
   eq('...at the gate\'s own offset', jmp.ax, 0x1234);
   eq('...pushing nothing', jmp.sp, 0x1000); }
 
+// ---- VERR / VERW answer a question, they do not always say yes -------------------------------
+// This was `cpu.flags |= ZF`: a stub that cannot fail, and therefore cannot be told apart from a
+// working implementation until a guest asks about a selector that is NOT accessible. Six of the
+// thirteen cases in tools/pmprobe.asm were wrong, and QEMU and v86 agree on all thirteen.
+//
+// The one that is not guessable: presence is NOT required. "May I read it" sounds as though the
+// segment would have to be in memory; both references say ZF=1 for a not-present data segment, and
+// the manual's pseudocode checks only the limit, the type and the privilege.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  const GDT = 0x8000;
+  cpu.gdtr = { base: GDT, limit: 0x37 };              // seven descriptors: 0x40 is past the end
+  const desc = (i, access, limit = 0xffff) => {
+    const a = GDT + i * 8;
+    mc.mem.w16(a, limit & 0xffff); mc.mem.w16(a + 2, 0);
+    mc.mem.w8(a + 4, 0); mc.mem.w8(a + 5, access); mc.mem.w8(a + 6, 0); mc.mem.w8(a + 7, 0);
+  };
+  desc(1, 0x9a); desc(2, 0x92); desc(3, 0x98); desc(4, 0x90); desc(5, 0x12); desc(6, 0x82);
+  // Bases first, PE after — the descriptor caches keep them, which places code for the recompiler
+  // without needing a GDT entry for CS itself. Setting them the other way round loads 0x100 as a
+  // selector, which is past this GDT and faults before the test begins.
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  cpu.cr0 |= 1;
+  const R = (s) => cpu.verifySeg(s, 0), W = (s) => cpu.verifySeg(s, 1);
+  eq('VERR: readable code is readable', R(0x08), true);
+  eq('VERW: code is NEVER writable', W(0x08), false);
+  eq('VERR: execute-only code is not readable', R(0x18), false);
+  eq('VERW: execute-only code is not writable', W(0x18), false);
+  eq('VERR: writable data is readable', R(0x10), true);
+  eq('VERW: writable data is writable', W(0x10), true);
+  eq('VERR: read-only data is still readable', R(0x20), true);
+  eq('VERW: read-only data is not writable', W(0x20), false);
+  eq('VERR: a NOT-PRESENT segment is readable — presence is not a condition', R(0x28), true);
+  eq('VERW: ...and writable, for the same reason', W(0x28), true);
+  eq('VERR: a system descriptor is refused, though LAR accepts one', R(0x30), false);
+  eq('VERR: the null selector is refused', R(0x00), false);
+  eq('VERR: a selector past the table is refused', R(0x40), false);
+  // ...and the recompiler must EMIT that, not a constant. 0f 00 e3 = verr bx ; f4 = hlt
+  cpu.flags |= 0x40;                                  // ZF set on the way in, so a no-op shows
+  cpu.reg[3] = 0x18;                                  // BX = the execute-only selector
+  mc.mem.blit(0x100 * 16, Uint8Array.from([0x0f, 0x00, 0xe3, 0xf4]));
+  let steps = 0; while (!cpu.halted && steps++ < 20) mc.rec.step();
+  eq('VERR through the recompiler CLEARS ZF when the answer is no', (cpu.flags >> 6) & 1, 0); }
+
 // ---- #UD belongs to whoever holds the vector, in EITHER mode ------------------------------------
 // An invalid opcode is a service, and guests use it: Windows 3.1's DOS extender installs a handler
 // for vector 6 through DPMI and then executes `0f ff` on purpose. Ownership was read from the

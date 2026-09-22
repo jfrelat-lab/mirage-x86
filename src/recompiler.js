@@ -1787,7 +1787,10 @@ export class Recompiler {
           if (o.reg === 0) { P(rmW(o, 16, 'cpu.ldtr.sel')); return; }                    // SLDT
           if (o.reg === 1) { P(rmW(o, 16, 'cpu.tr.sel')); return; }                       // STR
           if (o.reg === 2) { P(`cpu.loadLDT(${rmR(o, 16)});`); return; }                  // LLDT
-          if (o.reg === 4 || o.reg === 5) { if (!o.isReg) memAddr(o); P(`cpu.flags|=${ZF};`); return; } // VERR/VERW → report the selector as accessible (ZF=1)
+          // VERR/VERW. See cpu.verifySeg: this was `cpu.flags |= ZF`, a stub that always said yes.
+          if (o.reg === 4 || o.reg === 5) { const t = NT();
+            P(`var ${t}=cpu.verifySeg(${rmR(o, 16)},${o.reg === 5 ? 1 : 0});`);
+            P(`if(${t}){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};}`); return; }
           if (o.reg === 3) { P(`cpu.loadTR(${rmR(o, 16)});`); return; }                  // LTR
           if (!o.isReg) memAddr(o);
           return;

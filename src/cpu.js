@@ -274,6 +274,30 @@ export class CPU {
     return (is32 ? (e2 & 0x00ffff00) : (e2 & 0x0000ff00)) >>> 0;
   }
 
+  /**
+   * VERR / VERW — may this selector be READ, or WRITTEN, from here? ZF reports the answer; nothing
+   * else changes. Same visibility rules as LAR, plus: EVERY system descriptor is refused (LAR
+   * accepts an LDT or a TSS; "read this LDT" is not a question), and then the type bits decide —
+   * a code segment is readable only if its readable bit is set and is NEVER writable, a data
+   * segment is always readable and writable only if its writable bit is set.
+   *
+   * PRESENCE IS NOT REQUIRED, which is not what one would guess: "may I read it" sounds like it
+   * should need the segment to be in memory. QEMU and v86 both answer ZF=1 for a not-present data
+   * segment (tools/pmprobe.asm, cases `verr 28 np` and `verw 28 np`), and the 386 manual's
+   * pseudocode lists only the table limit, the type and the privilege. This comment said the
+   * opposite until the probe was run.
+   *
+   * This used to be `cpu.flags |= ZF` — a stub that could not fail, and therefore could not be
+   * distinguished from a working implementation until a guest asked about a selector that is not
+   * accessible. Six of the thirteen probe cases were wrong.
+   */
+  verifySeg(sel, write) {
+    const d = this._descVisible(sel);
+    if (!d || d.sys) return false;
+    const isCode = (d.type & 0x08) !== 0, rw = (d.type & 0x02) !== 0;
+    return write ? (!isCode && rw) : (!isCode || rw);
+  }
+
   /** Segment limit for LSL, granularity applied. -1 when inaccessible. A gate has no limit. */
   lslLimit(sel) {
     const d = this._descVisible(sel);
