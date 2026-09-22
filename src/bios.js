@@ -67,8 +67,12 @@ export function installBIOS(machine, opts = {}) {
   // which VBE explicitly allows and which is the only way to offer 320x240 — the standard set has no
   // such mode, yet it is exactly what Void 3 scans for (320x240 at 32 bpp, from its SRC/SHIVA.RM).
   // A client matches on the geometry in the ModeInfoBlock, not on the number, so the number is free.
+  // ...EXCEPT a client that does not look at all. Windows 3.1's SVGA256.DRV sets 105h (1024x768x8)
+  // by NUMBER, with no 4F00/4F01 first, and does not check the answer: when the mode was missing it
+  // took the refusal, kept painting through 4F05 bank switches that were refused too, and drew into
+  // a window that was never opened. So the standard numbers are a contract, and 105h is in it.
   const VBE_MODES = [
-    [0x101, 640, 480, 8], [0x103, 800, 600, 8], [0x10e, 320, 200, 16], [0x111, 640, 480, 16],
+    [0x101, 640, 480, 8], [0x103, 800, 600, 8], [0x105, 1024, 768, 8], [0x10e, 320, 200, 16], [0x111, 640, 480, 16],
     [0x112, 640, 480, 32], [0x140, 320, 200, 32], [0x141, 320, 240, 32], [0x142, 320, 240, 8],
   ];
   VBE_MODES.forEach(([n], i) => mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF + i * 2) >>> 0, n));
