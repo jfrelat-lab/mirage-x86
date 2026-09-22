@@ -325,7 +325,10 @@ export class Machine {
         (err !== undefined ? ` err=0x${(err >>> 0).toString(16)}` : ''));
     }
     const a = (cpu.idtr.base + n * 8) >>> 0;
-    const offLo = m.r16(a), sel = m.r16(a + 2), access = m.r8(a + 5), offHi = m.r16(a + 6);
+    let offLo, sel, access, offHi;
+    m.sup++;                        // an IDT read is an implicit supervisor access (see Memory.walk)
+    try { offLo = m.r16(a); sel = m.r16(a + 2); access = m.r8(a + 5); offHi = m.r16(a + 6); }
+    finally { m.sup--; }
     const type = access & 0x1f, is32 = (type & 0x08) !== 0;
     const off = is32 ? ((offLo | (offHi << 16)) >>> 0) : offLo;
 
@@ -458,7 +461,9 @@ export class Machine {
         this.unhandledInts[n]++;
         return;
       }
-      const dpl = (this.mem.r8((cpu.idtr.base + n * 8 + 5) >>> 0) >> 5) & 3;
+      let dpl;
+      this.mem.sup++;               // the IDT, read on the processor's behalf
+      try { dpl = (this.mem.r8((cpu.idtr.base + n * 8 + 5) >>> 0) >> 5) & 3; } finally { this.mem.sup--; }
       if (dpl < (cpu.seg[1] & 3)) { cpu.eip = faultIp; return this.protInt(13, (n << 3) | 2); }
     }
     cpu.eip = nextIp;

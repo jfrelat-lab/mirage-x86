@@ -23,6 +23,7 @@ export class Memory {
     this.size = size;
     this.paged = false;              // cached cpu.pagingOn — see syncPaging()
     this.pfRaise = false;            // Machine turns this on; see xlat()
+    this.sup = 0;                    // > 0 while the CPU makes an IMPLICIT supervisor access; see walk()
     // Real-mode addressing wraps at 1 MiB (the 8086's 20-bit bus / the AT's A20 gate disabled at
     // reset). Default to that wrap regardless of how much RAM is installed, so segment:offset
     // arithmetic near FFFF:xxxx behaves like real hardware — DOS EXEPACK stubs and lots of startup
@@ -125,7 +126,13 @@ export class Memory {
     // These faults report `present`, which is bit 0 of the error code: the page is there, the access
     // was refused. Without any of this a ring-3 program wrote through a read-only mapping and
     // test386's POST 0x11 never saw the fault it was waiting for.
-    const user = this.cpu.cpl === 3;
+    // IMPLICIT SUPERVISOR ACCESSES are exempt from the user check whatever the CPL: the processor
+    // reads the GDT, the LDT, the IDT and the TSS on its own behalf, and those live in supervisor
+    // pages in any real system. The CPU raises `sup` around each such read. Without it a ring-3
+    // interrupt could not read ESP0 out of the TSS — the page was judged at CPL 3 and refused — and
+    // delivering THAT #PF read the TSS again: a double fault at the same address, which is how the
+    // FreeDOS desktop on v86's xcom144.img took the host process down.
+    const user = this.cpu.cpl === 3 && this.sup === 0;
     const us = !!(pde & 4) && !!(pte & 4);
     if ((user && !us) || (write && !this.walkRW && (user || (this.cpu.cr0 & 0x10000) !== 0))) {
       this.walkProt = true; return -1;

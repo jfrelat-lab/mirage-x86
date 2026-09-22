@@ -781,6 +781,38 @@ const udRun = (gated) => {
   eq('readDesc reports no descriptor there rather than reading past', cpu.readDesc(0x40), null);
 }
 {
+  // Descriptor-table and TSS reads are IMPLICIT SUPERVISOR accesses: the processor makes them on its
+  // own behalf, so the page-level U/S check does not apply whatever the CPL. They were judged at the
+  // current CPL, so a ring-3 interrupt could not read ESP0 out of a TSS in a supervisor page — and
+  // delivering THAT #PF read the TSS again, a double fault at the same address. The FreeDOS desktop
+  // on v86's xcom144.img (HDPMI32) took the host process down that way, at TSS+4.
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  mem.w32(0x1000, 0x2007);                            // PDE[0]: present, writable, user
+  for (let p = 0; p < 16; p++) mem.w32(0x2000 + p * 4, ((p << 12) | 0x07) >>> 0);   // identity, user
+  mem.w32(0x2000 + 5 * 4, (5 << 12) | 0x03);          // ...except page 5 (0x5000): SUPERVISOR only
+  mem.w32(0x5004, 0x12345678); mem.w16(0x5008, 0x0010);           // a 386 TSS: ESP0, SS0
+  mem.w16(0x5108, 0xffff); mem.w16(0x510a, 0); mem.w8(0x510c, 0); mem.w8(0x510d, 0xf2);
+  mem.w8(0x510e, 0); mem.w8(0x510f, 0);                            // GDT[1] at 0x5108: data, DPL 3
+  cpu.setCR3(0x1000); cpu.setCR0(0x80000001);
+  cpu.tr.base = 0x5000; cpu.tr.limit = 0x67; cpu.tr.is386 = true;
+  cpu.gdtr = { base: 0x5100, limit: 0x0f };
+  cpu._cpl = 3;
+  const faults = (fn) => { try { fn(); return false; } catch (e) { return e && e.constructor.name === 'PageFault'; } };
+  eq('ring 3: an ORDINARY read of a supervisor page still faults', faults(() => mem.r8(0x5000)), true);
+  eq('...but the TSS read a ring switch makes does not', faults(() => cpu.tssStack(0)), false);
+  const safe = (fn) => { try { return fn(); } catch (e) { return 'faulted'; } };
+  eq('...and returns ESP0 from it', safe(() => cpu.tssStack(0).esp >>> 0), 0x12345678);
+  eq('...nor does a descriptor read', faults(() => cpu.readDesc(0x0b)), false);
+  eq('...which returns the descriptor', safe(() => cpu.readDesc(0x0b).access), 0xf2);
+  eq('...and the exemption does not outlive the access', faults(() => mem.r8(0x5000)), true);
+  eq('...nor survive an access that faulted inside it', (() => {
+    cpu.tr.base = 0x3ff000;                           // unmapped: the TSS read itself must #PF
+    const f = faults(() => cpu.tssStack(0)); cpu.tr.base = 0x5000;
+    return f && mem.sup === 0; })(), true);
+}
+{
   // #PF: a not-present page raises INT 14 with CR2 and the error code, instead of reading zero.
   const mc = new Machine({ memSize: 4 << 20 });
   const cpu = mc.cpu, mem = mc.mem;

@@ -164,8 +164,12 @@ export class CPU {
     if ((sel & 0xfff8) + 7 > tbl.limit) { this.raise(13, sel & 0xfffc); return false; }
     const a = (tbl.base + (sel & 0xfff8)) >>> 0;            // the index is already scaled by 8
     const m = this.mem;
-    const lo = m.r16(a), b0 = m.r16(a + 2);
-    const b1 = m.r8(a + 4), access = m.r8(a + 5), gran = m.r8(a + 6), b2 = m.r8(a + 7);
+    let lo, b0, b1, access, gran, b2;
+    // A descriptor read is an implicit SUPERVISOR access (see Memory.walk); it may still raise a
+    // genuine #PF if the table's page is absent, hence the finally.
+    m.sup++;
+    try { lo = m.r16(a); b0 = m.r16(a + 2); b1 = m.r8(a + 4); access = m.r8(a + 5); gran = m.r8(a + 6); b2 = m.r8(a + 7); }
+    finally { m.sup--; }
     // TYPE first, then presence — the order the manual checks them in.
     //   S=0 is a SYSTEM descriptor (LDT, TSS, gate): never loadable into a segment register.
     //   Into a data register, a code segment is only loadable if it is READABLE (bit 1).
@@ -223,11 +227,14 @@ export class CPU {
     const tbl = (sel & 4) ? this.ldtr : this.gdtr;
     if ((sel & 0xfff8) + 7 > tbl.limit) return null;        // past the table: no descriptor to read
     const a = (tbl.base + (sel & 0xfff8)) >>> 0, m = this.mem;
-    const access = m.r8(a + 5);
-    return {
-      w0: m.r16(a), w1: m.r16(a + 2), b4: m.r8(a + 4), access, b6: m.r8(a + 6), b7: m.r8(a + 7),
-      sys: (access & 0x10) === 0, type: access & 0x0f, dpl: (access >> 5) & 3, present: (access & 0x80) !== 0,
-    };
+    m.sup++;                                                  // implicit supervisor access, as in loadDescriptor
+    try {
+      const access = m.r8(a + 5);
+      return {
+        w0: m.r16(a), w1: m.r16(a + 2), b4: m.r8(a + 4), access, b6: m.r8(a + 6), b7: m.r8(a + 7),
+        sys: (access & 0x10) === 0, type: access & 0x0f, dpl: (access >> 5) & 3, present: (access & 0x80) !== 0,
+      };
+    } finally { m.sup--; }
   }
 
   /**
@@ -369,8 +376,11 @@ export class CPU {
    *  printer, for ever. The same TSS read correctly gives SP0 30A8h, SS0 0068h. */
   tssStack(pl) {
     const m = this.mem, b = this.tr.base >>> 0;
-    if (this.tr.is386 === false) return { esp: m.r16(b + 2 + pl * 4) & 0xffff, ss: m.r16(b + 4 + pl * 4) & 0xffff };
-    return { esp: m.r32(b + 4 + pl * 8) >>> 0, ss: m.r16(b + 8 + pl * 8) & 0xffff };
+    m.sup++;                        // the TSS is read on the processor's behalf: a supervisor access
+    try {
+      if (this.tr.is386 === false) return { esp: m.r16(b + 2 + pl * 4) & 0xffff, ss: m.r16(b + 4 + pl * 4) & 0xffff };
+      return { esp: m.r32(b + 4 + pl * 8) >>> 0, ss: m.r16(b + 8 + pl * 8) & 0xffff };
+    } finally { m.sup--; }
   }
 
   /**
@@ -391,13 +401,16 @@ export class CPU {
     if (!(this.flags & VM) && this.cpl <= this.iopl) return false;
     const b = this.tr.base >>> 0, lim = this.tr.limit >>> 0;
     if (lim < 0x67) return true;                          // not even a full 386 TSS
-    const mapBase = this.mem.r16(b + 0x66);
-    for (let i = 0; i < size; i++) {
-      const p = (port + i) & 0xffff, off = mapBase + (p >>> 3);
-      if (off > lim) return true;
-      if (this.mem.r8((b + off) >>> 0) & (1 << (p & 7))) return true;
-    }
-    return false;
+    this.mem.sup++;                 // the I/O bitmap is part of the TSS: a supervisor access
+    try {
+      const mapBase = this.mem.r16(b + 0x66);
+      for (let i = 0; i < size; i++) {
+        const p = (port + i) & 0xffff, off = mapBase + (p >>> 3);
+        if (off > lim) return true;
+        if (this.mem.r8((b + off) >>> 0) & (1 << (p & 7))) return true;
+      }
+      return false;
+    } finally { this.mem.sup--; }
   }
 
   pushW(v, is32) { if (is32) this.push32(v); else this.push16(v); }
@@ -652,8 +665,10 @@ export class CPU {
     if ((sel & 0xfffc) === 0) { this.ldtr.base = 0; this.ldtr.limit = 0; return; }
     const a = (this.gdtr.base + (sel & 0xfff8)) >>> 0;      // an LDT selector always indexes the GDT
     const m = this.mem;
-    const lo = m.r16(a), b0 = m.r16(a + 2);
-    const b1 = m.r8(a + 4), gran = m.r8(a + 6), b2 = m.r8(a + 7);
+    let lo, b0, b1, gran, b2;
+    m.sup++;                                                  // a GDT read: implicit supervisor access
+    try { lo = m.r16(a); b0 = m.r16(a + 2); b1 = m.r8(a + 4); gran = m.r8(a + 6); b2 = m.r8(a + 7); }
+    finally { m.sup--; }
     let limit = (lo | ((gran & 0x0f) << 16)) >>> 0;
     if (gran & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;
     this.ldtr.base = (b0 | (b1 << 16) | (b2 << 24)) >>> 0;
