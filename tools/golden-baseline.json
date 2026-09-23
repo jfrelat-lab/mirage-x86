@@ -90,9 +90,9 @@
     "fault": null
   },
   "intros/memories.com": {
-    "hash": "cc1673c9cb447ce6e26b8c84bc765f6d3c9d35f1",
+    "hash": "56c0bcd562069bacb2264cfaff158b6ae7b0bbd3",
     "mode": 19,
-    "fault": null
+    "fault": "mirage: unhandled exception INT 06h re-raised 100000x at the same address 0814:000d (linear 0x814d) — the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing will change. Recent block starts (oldest first, the last is this one): 0814:fcc5 -> 0814:fe45 -> 0814:ffc5 -> 0814:ffec -> 0814:fff5 -> 0814:d — 13 of those advance by exactly 0x180, so the decoder is walking forward through memory rather than branching: the derail is EARLIER than this address"
   },
   "intros/mirrors.com": {
     "hash": "6c2cb361ec3b59842413fd148822e0ce7d1f83a8",
@@ -105,9 +105,9 @@
     "fault": null
   },
   "intros/oktaeder.com": {
-    "hash": "00313cc187fe91da472f36191f4f8db9a713f60d",
+    "hash": "76558990479c5e54e3a1d48bb0867ff73e986372",
     "mode": 3,
-    "fault": null
+    "fault": "mirage: unhandled exception INT 06h re-raised 100000x at the same address 0018:0143 (linear 0x2c3) — the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing will change. INSIDE THE REAL-MODE IVT (vector 176) — the guest left its own code. Recent block starts (oldest first, the last is this one): 0814:100 -> 0814:128 -> 0814:138 -> 0018:140 -> 0018:143"
   },
   "intros/paleozoa.com": {
     "hash": "025ed7f62fc4632b9ce03930f553313c39a60106",

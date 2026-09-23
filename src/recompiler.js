@@ -775,7 +775,11 @@ export class Recompiler {
     // corpus does not exercise them, and getting them wrong silently is worse than not checking.
     // On by default with SEGWP, same measurement; MIRAGE_SEGLIM=0 turns it off.
     const SEGLIM = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGLIM === '0');
-    const LOCKUD = typeof process !== 'undefined' && process.env && process.env.MIRAGE_LOCKUD;
+    // LOCK on an instruction that cannot be locked is #UD. On by default since test386 passes with it
+    // (the whole suite, to POST 0xFF); MIRAGE_LOCKUD=0 turns it off. It moved exactly two golden
+    // fingerprints, intros/memories.com and intros/oktaeder.com, both of which stop on QEMU too —
+    // they were re-blessed on the user's decision, not because the new ending is known to be right.
+    const LOCKUD = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_LOCKUD === '0');
     // ADD/OR/ADC/SBB/AND/SUB/XOR r/m,r; the 80/81/83 immediate group; XCHG; F6/F7 (NOT/NEG);
     // FE/FF (INC/DEC); and 0F for BTS/BTR/BTC/CMPXCHG/XADD, which are let through wholesale.
     const LOCKABLE = new Set([0x00, 0x01, 0x08, 0x09, 0x10, 0x11, 0x18, 0x19, 0x20, 0x21,
