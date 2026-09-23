@@ -883,6 +883,27 @@ const udRun = (gated) => {
   eq('...and its ES', cpu.seg[ES], 0x0880);
   eq('...running where it was', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x01000001); }
 
+// ---- a guest INT 8 that CHAINS to the BIOS still gets INT 1Ch called -------------------------
+// The TSR idiom: hook INT 8, count, `jmp far [old8]`. tools/i8chain.asm under QEMU: 20 INT 8, 20
+// INT 1Ch, 20 ticks. MIRAGE's F000:0008, reached that way, advanced the tick and never called 1Ch.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  installBIOS(mc);
+  const old8 = mc.getVector(8);
+  mem.w16(0x710, old8.off); mem.w16(0x712, old8.seg);
+  mem.blit(0x600, Uint8Array.from([0x2e, 0xff, 0x06, 0x00, 0x07, 0x2e, 0xff, 0x2e, 0x10, 0x07]));  // inc cs:[700] ; jmp far cs:[710]
+  mem.blit(0x620, Uint8Array.from([0x2e, 0xff, 0x06, 0x02, 0x07, 0xcf]));                       // inc cs:[702] ; iret
+  mc.setVector(8, 0, 0x600); mc.setVector(0x1c, 0, 0x620);
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mem.blit(0x1000, Uint8Array.from([0xfb, 0xeb, 0xfe]));                                         // sti ; jmp $
+  mc.timerAuto = false; mc.runSlice(4);
+  const t0 = mem.r32(0x46c);
+  for (let k = 0; k < 3; k++) { mc.tickTimer(); mc.runSlice(300); }
+  eq('three ticks reach the guest INT 8', mem.r16(0x700), 3);
+  eq('...which chains to the BIOS, and the BIOS calls INT 1Ch each time', mem.r16(0x702), 3);
+  eq('...and advances the BIOS tick each time', (mem.r32(0x46c) - t0) >>> 0, 3);
+  eq('...and the program is back where it was', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x01000001);
+  eq('...with its stack balanced', cpu.sp, 0x1000); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is

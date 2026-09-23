@@ -250,6 +250,9 @@ export class Machine {
     // themselves, finishing later at their sentinel. Having pushed a real-mode call is the signal
     // that the handler owns CS:IP now, and consuming the frame here would overwrite it.
     if (this.dpmi && this.dpmi.rmCalls.length > depth0) return;
+    // A handler that handed control to BIOS code of its own (INT 8 -> the INT 1Ch routine in ROM)
+    // owns CS:IP now; that code's own IRET consumes the frame.
+    if (this.transferred) { this.transferred = false; return; }
 
     // Pop the frame at the width it was pushed at: 16-bit in real mode, but a client chaining into
     // these stubs left the 32-bit frame softInt pushed for it.

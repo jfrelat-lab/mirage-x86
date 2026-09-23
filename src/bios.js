@@ -3,7 +3,7 @@
 // 0040:0000 and the 80x25 text screen at B800:0000. The text routines are
 // exposed so the JS shell prints through the exact same path as guest code.
 
-import { ZF, CF, ES } from './cpu.js';
+import { ZF, CF, ES, CS } from './cpu.js';
 import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
 import { installDPMI } from './dpmi.js';
@@ -665,7 +665,19 @@ export function installBIOS(machine, opts = {}) {
   // rate: Monkey Island reprograms to 2521 (473 Hz, clamped to 291 Hz here), so every capture bounded
   // on the BIOS tick — tools/shot.mjs, and with it every DOSBox pixel comparison — stopped 16x too
   // early and photographed a screen the game had not drawn yet.
-  machine.hookInterrupt(0x08, () => { machine.bumpBiosTick(); if (machine.pic) machine.pic.eoi(0); });
+  // ...and when a guest hooked INT 8 and CHAINED here (`jmp far [old8]`, the TSR idiom), the BIOS
+  // must still call INT 1Ch, as it does for an IRQ that comes to it directly. It did not: measured
+  // with tools/i8chain.asm, QEMU calls INT 1Ch 20 times in 20 ticks, MIRAGE 0. So when a guest 1Ch
+  // hook exists and we were entered through the stub (the interrupt frame is on the stack), hand
+  // over to the ROM routine below — it saves the registers, calls INT 1Ch, and its IRET consumes
+  // the original frame.
+  machine.hookInterrupt(0x08, (cpu) => {
+    machine.bumpBiosTick(); if (machine.pic) machine.pic.eoi(0);
+    if (machine._inBiosCallback !== 0x08 || machine.int1cViaRom === undefined) return;
+    if (machine.getVector(0x1c).seg === 0xf000) return;              // no guest hook: nothing to call
+    cpu.setSeg(CS, 0xf000); cpu.eip = machine.int1cViaRom;
+    machine.transferred = true;                                       // biosCallback: do not IRET
+  });
 
   // ---- INT 09h: the BIOS keyboard handler ----
   // Same shape: an ISR that chains to the original INT 9 expects the BIOS to acknowledge IRQ1.
