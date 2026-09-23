@@ -657,6 +657,39 @@ const v86 = (iopl) => {
   mc.protInt(0x0b, 0);
   eq('an exception through an empty gate sets EXT', calls[1] && calls[1].join(','), '13,91'); }
 
+// ---- segment WRITE PROTECTION and segment LIMITS are enforced by default ------------------------
+// Both checks existed behind MIRAGE_SEGWP / MIRAGE_SEGLIM, "off until the bench says what it costs".
+// It said 0-5% on the real-mode workloads with golden unchanged, so they are on. test386's POST 0x12
+// tests exactly these two first: a store through a read-only data segment, and a dword read whose
+// LAST byte is past the limit although its offset is inside.
+const segRun = (code) => {
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  const GDT = 0x8000;
+  const desc = (i, base, limit, access) => {
+    const a = GDT + i * 8;
+    mem.w16(a, limit & 0xffff); mem.w16(a + 2, base & 0xffff);
+    mem.w8(a + 4, (base >> 16) & 0xff); mem.w8(a + 5, access);
+    mem.w8(a + 6, (limit >> 16) & 0x0f); mem.w8(a + 7, (base >> 24) & 0xff);
+  };
+  desc(2, 0x5000, 0xffff, 0x90);                      // 10: data, READ-ONLY
+  desc(3, 0x5000, 0x00ff, 0x92);                      // 18: data, writable, limit FFh
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  cpu.gdtr = { base: GDT, limit: 0x1f }; cpu.cr0 |= 1;
+  mem.blit(0x1000, Uint8Array.from(code));
+  let raised = null;
+  mc.protInt = (n, err) => { raised = [n, err]; cpu.halted = true; };
+  let steps = 0; while (!cpu.halted && steps++ < 40) mc.rec.step();
+  return raised && raised.join(',');
+};
+eq('a store through a READ-ONLY data segment is #GP(0)',
+  segRun([0xb8, 0x10, 0x00, 0x8e, 0xd8, 0xa3, 0x00, 0x00, 0xf4]), '13,0');   // mov ax,10 / mov ds,ax / mov [0],ax
+eq('...while a read through it is fine',
+  segRun([0xb8, 0x10, 0x00, 0x8e, 0xd8, 0xa1, 0x00, 0x00, 0xf4]), null);     // mov ax,[0]
+eq('a word read whose LAST byte is past the limit is #GP(0)',
+  segRun([0xb8, 0x18, 0x00, 0x8e, 0xd8, 0xa1, 0xff, 0x00, 0xf4]), '13,0');   // mov ax,[00FF], limit FF
+eq('...while one that ends ON the limit is fine',
+  segRun([0xb8, 0x18, 0x00, 0x8e, 0xd8, 0xa1, 0xfe, 0x00, 0xf4]), null);     // mov ax,[00FE]
+
 // ---- VERR / VERW answer a question, they do not always say yes -------------------------------
 // This was `cpu.flags |= ZF`: a stub that cannot fail, and therefore cannot be told apart from a
 // working implementation until a guest asks about a selector that is NOT accessible. Six of the

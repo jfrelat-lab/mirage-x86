@@ -48,6 +48,17 @@ cpu.ioWrite = (p, s, v) => { if (!mc.portWrite[p]) unhandled.set(p, (unhandled.g
 // there and stopped the run four codes early. Set TEST386_IRQ=1 to put it back.
 if (!process.env.TEST386_IRQ) mc.tickTimer = () => {};
 
+// DefaultExcHandler and `error` are the SAME address (0xFE7F, test386.asm line 1978-1979), so
+// stopping there says nothing about which it was. Record the exceptions delivered straight into it:
+// if none was, a check failed and jumped there; if one was, that vector is the unexpected fault.
+let unexpected = null;
+const deliver = mc.protInt.bind(mc);
+mc.protInt = (n, err, faultIp, soft) => {
+  const r = deliver(n, err, faultIp, soft);
+  if ((cpu.eip >>> 0) === 0xfe7f && !unexpected) unexpected = { n, err };
+  return r;
+};
+
 cpu.reg.fill(0);
 cpu.setSeg(1, 0xf000); cpu.eip = 0xfff0;       // the reset vector
 cpu.setSeg(0, 0); cpu.setSeg(2, 0); cpu.setSeg(3, 0);
@@ -73,7 +84,10 @@ const ip = cpu.eip >>> 0;
 const inErr = ip >= 0xfe7f && ip <= 0xfe8a;
 console.log(passed ? 'RESULT: PASS — reached POST 0xFF'
   : `RESULT: FAIL — stopped at POST ${h(posts[posts.length - 1] ?? 0)}` +
-    `${inErr ? ', inside DefaultExcHandler (an exception it did not expect)' : ''}`);
+    `${!inErr ? '' : unexpected
+      ? `, in DefaultExcHandler: an exception it did not expect, #${unexpected.n}` +
+        `${unexpected.err !== undefined ? ` err=${h(unexpected.err, 4)}` : ''}`
+      : ', at `error`: a check FAILED (no exception was delivered there)'}`);
 if (unhandled.size) {
   console.log('ports with no handler: ' +
     [...unhandled.entries()].sort((a, b) => b[1] - a[1]).map(([p, n]) => `${h(p, 3)}x${n}`).join(' '));

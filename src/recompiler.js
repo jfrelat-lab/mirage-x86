@@ -773,7 +773,8 @@ export class Recompiler {
     // evaluating it twice would repeat whatever side effects it carries.
     // Expand-down segments invert the rule and are NOT handled here; they are rare enough that the
     // corpus does not exercise them, and getting them wrong silently is worse than not checking.
-    const SEGLIM = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGLIM;
+    // On by default with SEGWP, same measurement; MIRAGE_SEGLIM=0 turns it off.
+    const SEGLIM = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGLIM === '0');
     const LOCKUD = typeof process !== 'undefined' && process.env && process.env.MIRAGE_LOCKUD;
     // ADD/OR/ADC/SBB/AND/SUB/XOR r/m,r; the 80/81/83 immediate group; XCHG; F6/F7 (NOT/NEG);
     // FE/FF (INC/DEC); and 0F for BTS/BTR/BTC/CMPXCHG/XADD, which are let through wholesale.
@@ -811,11 +812,12 @@ export class Recompiler {
     // u8[] path even while planar. `m.planar` is false for text/mode-13h/demos → short-circuit.
     const { memRead, memW } = memEmitters(this.memStrategy, MM, NT);
     const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o, sz), sz);
-    // MIRAGE_SEGWP=1 emits the write-protection check: a store through a segment whose W bit is
-    // clear (or through a code segment) is #GP(0). `cpu.segRO` is precomputed at segment-load time,
-    // so this is one typed-array load and a predictable branch — not a call. Off by default until
-    // the bench says what it costs; test386's POST 0x12 is the section that needs it.
-    const SEGWP = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGWP;
+    // The write-protection check: a store through a segment whose W bit is clear (or through a code
+    // segment) is #GP(0). `cpu.segRO` is precomputed at segment-load time, so this is one typed-array
+    // load and a predictable branch — not a call. ON BY DEFAULT since the bench said what it costs:
+    // three alternating passes of tools/bench.js, 0-5% per real-mode workload (2.6% mean), golden
+    // unchanged. MIRAGE_SEGWP=0 turns it off, for measuring exactly that again.
+    const SEGWP = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGWP === '0');
     const wrGuard = (seg) => SEGWP
       ? `if(cpu.segRO[${seg}]){cpu.eip=${curIpStart};cpu.raise(13,0);return;}` : '';
     const rmW = (o, sz, v) => o.isReg ? rW(o.rm, sz, v) : (wrGuard(o.seg) + memW(memAddr(o, sz), sz, v));
