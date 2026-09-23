@@ -1210,6 +1210,16 @@ export class Recompiler {
         // dispatcher ended up calling through a wild pointer.
         case 0xc8: {
           const szv = f16(), lvl = f8() & 0x1f; const ft = NT();
+          // THE FINAL STACK POINTER IS PROBED FIRST. The 386 faults on ENTER "whenever a write using
+          // the final value of the stack pointer (within the current stack segment) would" — even
+          // when that byte is never written: test386's POST 0x1A enters `enter 1,0` at ring 3 with
+          // ESP 1004h, the pushes land in a user page and the final ESP (0FFFh) in a supervisor one,
+          // and it must be #PF with nothing changed. Probing before any push keeps it restartable.
+          // Only under paging: without it there is no page to refuse the write.
+          {
+            const pushes = 1 + (lvl > 0 ? lvl : 0), total = pushes * (sz === 32 ? 4 : 2) + szv, fe = NT();
+            P(`if(m.paged){var ${fe}=cpu.ssB?(((r[4]>>>0)-${total})>>>0):((r[4]-${total})&0xffff);m.xlat((sb[2]+${fe})>>>0,true);}`);
+          }
           if (sz === 32) {
             // FrameTemp is the FULL ESP, not the 16-bit stack pointer. On a 16-bit stack SP wraps
             // while ESP's high half is untouched, and both the dword this pushes for a nested level

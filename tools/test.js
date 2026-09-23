@@ -995,6 +995,30 @@ const udRun = (gated) => {
     return f && mem.sup === 0; })(), true);
 }
 {
+  // ENTER probes the FINAL stack pointer before anything else: the 386 faults "whenever a write
+  // using the final value of the stack pointer would", even though that byte is never written.
+  // Here the push of BP lands at 4000h (user page) and the final SP is 3FFFh (supervisor page): at
+  // CPL 3 that is #PF with nothing changed. test386's POST 0x1A is this case exactly.
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0); cpu.sp = 0x4002; cpu.reg[5] = 0x1234;
+  mem.blit(0x1000, Uint8Array.from([0xc8, 0x01, 0x00, 0x00, 0xf4]));   // enter 1,0 ; hlt
+  mem.w32(0x10000, 0x11007);                          // PDE[0] -> table at 0x11000, user
+  for (let p = 0; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+  mem.w32(0x11000 + 3 * 4, (3 << 12) | 0x03);         // page 3: SUPERVISOR
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  cpu._cpl = 3;
+  let pf = null;
+  mc.protInt = (n, err) => { pf = [n, err]; cpu.halted = true; };
+  mc.runSlice(4);
+  eq('ENTER at CPL 3 whose FINAL SP is in a supervisor page: #PF', pf && pf[0], 14);
+  eq('...a write, from user mode, to a present page (err 7)', pf && pf[1], 7);
+  eq('...and nothing moved: SP', cpu.sp, 0x4002);
+  eq('...BP', cpu.reg[5] & 0xffff, 0x1234);
+  eq('...and the frame slot below the old SP is untouched', mem.r16(0x4000), 0);
+}
+{
   // #PF: a not-present page raises INT 14 with CR2 and the error code, instead of reading zero.
   const mc = new Machine({ memSize: 4 << 20 });
   const cpu = mc.cpu, mem = mc.mem;
