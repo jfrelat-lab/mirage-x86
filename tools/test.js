@@ -839,6 +839,30 @@ const udRun = (gated) => {
   eq('...and the mouse answers FA AA 00', [mc.ioRead(0x60, 1), mc.ioRead(0x60, 1), mc.ioRead(0x60, 1)].join(','), '250,170,0');
   eq('...after which the aux channel is empty', mc.ioRead(0x64, 1) & 0x20, 0); }
 
+// ---- INT 16h / INT 1Ah open an INTERRUPT WINDOW, as SeaBIOS's do -----------------------------
+// tools/ifprobe.asm under QEMU: with CLI before every call, 65 536 calls to INT 16h AH=01 let 2Ah
+// ticks through, and INT 1Ah AH=00 29h — while every call returns IF=0. SvarDOS's EDR-DOS kernel
+// (doof-1440.img) waits for "a key or N ticks" that way; here the clock never moved and it waited
+// for ever, where Doom now runs. Both timer regimes: cycle-driven (headless) and latched (browser).
+{ const run = (latched) => {
+    const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+    installBIOS(mc);
+    cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+    // cli ; mov ah,1 ; int 16h ; pushf ; hlt
+    mem.blit(0x1000, Uint8Array.from([0xfa, 0xb4, 0x01, 0xcd, 0x16, 0x9c, 0xf4]));
+    const t0 = mem.r32(0x46c);
+    if (latched) { mc.timerAuto = false; cpu.flags &= ~0x200; mc.tickTimer(); }   // a tick arrives with IF=0
+    else cpu.cycles = mc.nextTimerCycle + 1;                                       // a tick is due
+    let steps = 0; while (!cpu.halted && steps++ < 50) mc.rec.step();
+    return { ticks: (mem.r32(0x46c) - t0) >>> 0, ifBack: (mem.r16(0x3000 + cpu.sp) >> 9) & 1, latchedFirst: latched };
+  };
+  const a = run(false);
+  eq('a due tick gets in through INT 16h although the caller has IF=0', a.ticks, 1);
+  eq('...and the caller still gets IF=0 back', a.ifBack, 0);
+  const b = run(true);
+  eq('a tick that arrived while IF=0 is kept, not dropped, and gets in through INT 16h', b.ticks, 1);
+  eq('...still handing IF=0 back', b.ifBack, 0); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is

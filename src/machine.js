@@ -27,6 +27,9 @@ const DUMMY_INT_OFF = 0xff53;
 // mask with a ternary chain on every IN/OUT. Index 0 and 3 are never used.
 const IO_MASK = [0, 0xff, 0xffff, 0, 0xffffffff];
 
+// BIOS services that open an interrupt window on the reference BIOS (see Machine.biosIrqWindow).
+const IRQ_WINDOW_INTS = new Set([0x16, 0x1a]);
+
 export class Machine {
   constructor(opts = {}) {
     this.mem = new Memory(opts.memSize || 16 * 1024 * 1024);
@@ -293,6 +296,7 @@ export class Machine {
       cpu.setSeg(CS, cpu.pop16());
       cpu.flags = ((cpu.pop16() & 0x4fd5) | 2 | keep) >>> 0;
       cpu.halted = false;
+      if (IRQ_WINDOW_INTS.has(n)) this.biosIrqWindow();
       return;
     } else {
       cpu.eip = cpu.pop16();
@@ -301,6 +305,7 @@ export class Machine {
     }
     if (!isIRQ) cpu.flags = (cpu.flags & ~ARITH) | (result & ARITH);
     cpu.halted = false;
+    if (IRQ_WINDOW_INTS.has(n)) this.biosIrqWindow();
   }
 
   /**
@@ -539,7 +544,9 @@ export class Machine {
           const c = this.chained[n];
           this._chaining = true;
           try { this.realInt(n, c.seg, c.off); } finally { this._chaining = false; }
+          return;
         }
+        if (IRQ_WINDOW_INTS.has(n) && !this.blocked) this.biosIrqWindow();
         return;
       }
       if (this.mem.u8[((BIOS_SEG << 4) + v.off) & this.mem.mask] !== 0xcf) {
@@ -626,10 +633,14 @@ export class Machine {
 
   // ---- hardware interrupt injection ---------------------------------------
   /** Fire the 18.2 Hz timer: bump the BIOS tick and run the user timer ISR. */
-  tickTimer() {
+  tickTimer(force = false) {
     // Only to reproduce ROADMAP F8 (our DPMI host answering under a booted kernel): see reclaimVector.
     if (this.reclaimMultiplex) this.reclaimVector(0x2f);
-    if (!(this.cpu.flags & IF)) return;
+    // With IF clear the tick is not LOST: IRQ0 stays requested in the PIC until something lets it
+    // in. On a PC the thing that lets it in is often a BIOS service — see biosIrqWindow. `force`
+    // is that window.
+    if (!(this.cpu.flags & IF) && !force) { this.timerLatched = true; return; }
+    this.timerLatched = false;
     // Raise IRQ0 on the PIC and let it decide. This is where masking and in-service state start
     // mattering: a guest that has masked IRQ0 in the IMR no longer receives the tick (it used to,
     // regardless), and a tick cannot be delivered while the previous INT 8 is still in service.
@@ -691,11 +702,34 @@ export class Machine {
   /** Deliver PIT ticks that have come due (cpu.cycles crossed a reload boundary). Called from
    *  the run loop only when IF is set. A long IF-off gap is coalesced into a single tick so a
    *  guest that runs with interrupts disabled for a while doesn't get a burst on the next STI. */
-  serviceTimer() {
+  serviceTimer(force = false) {
     if (this.cpu.cycles - this.nextTimerCycle > 8 * this.pitReload) this.nextTimerCycle = this.cpu.cycles;
     this.nextTimerCycle += this.pitReload;
     this.cpu.deadline = this.nextTimerCycle;   // a running tier-2 region bails here to let the next tick fire
-    this.tickTimer();
+    this.tickTimer(force);
+  }
+
+  /**
+   * The INTERRUPT WINDOW a BIOS service opens. SeaBIOS runs INT 16h and INT 1Ah with interrupts
+   * enabled and hands the caller's IF back on return, so a caller that polls them with IF CLEAR
+   * still sees the clock move — measured with tools/ifprobe.asm under QEMU: 2Ah and 29h ticks across
+   * 65 536 calls each, CLI before every one, IF=0 in every return. SvarDOS's EDR-DOS kernel (v86's
+   * doof-1440.img) waits for "a key, or N ticks" exactly that way, and here waited for ever: our
+   * services are atomic JS, the tick only came in at a block boundary with IF set, and IF never was.
+   *
+   * Called once the service has completed: a due tick is delivered now, as though it had arrived
+   * inside the BIOS routine — its frame carries the caller's flags, so the ISR's IRET hands back
+   * IF=0 exactly as the BIOS's own IRET would have. Nothing happens if IF is already set: the run
+   * loop delivers as usual then.
+   */
+  biosIrqWindow() {
+    const cpu = this.cpu;
+    if (cpu.flags & IF) return;
+    if (this.timerAuto) {
+      if (cpu.cycles >= this.nextTimerCycle) this.serviceTimer(true);
+    } else if (this.timerLatched) {
+      this.tickTimer(true);
+    }
   }
 
   /** Set the PIT channel-0 reload (INT 8 period, in cpu.cycles) and reschedule the next tick.
