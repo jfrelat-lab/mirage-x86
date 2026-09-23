@@ -766,6 +766,46 @@ const udRun = (gated) => {
   eq('AH=87h honours byte 7 of the base (past 16 MiB)', bm.u8[0x01180000] | (bm.u8[0x01180001] << 8), 0x8877);
   eq('...rather than landing 16 MiB lower', bm.u8[0x00180000], 0); }
 
+// ---- a PS/2 mouse: INT 15h C2xx, the 8042 aux channel, IRQ12 and the INT 74h routine -----------
+// CuteMouse on v86's msdos622.img asked C205 and got "function not supported": "Error: device not
+// found" where QEMU installs it "at PS/2 port". Here: the BIOS interface, then a packet all the way
+// into a GUEST handler registered with C207, which records the four words the BIOS pushes.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  installBIOS(mc);
+  const call = (ax, bx, es) => { cpu.ax = ax; cpu.bx = bx; if (es !== undefined) cpu.setSeg(ES, es); cpu.flags &= ~1; mc.intHandlers[0x15](cpu, mc); return { ah: (cpu.ax >> 8) & 0xff, cf: cpu.flags & 1 }; };
+  eq('C200 enable with no handler installed: AH=05', call(0xc200, 0x0100).ah, 0x05);
+  eq('C205 initialise, 3-byte packets: success', call(0xc205, 0x0300).cf, 0);
+  eq('C201 reset: BL=AAh, BH=device 00', (call(0xc201, 0), cpu.bx & 0xffff), 0x00aa);
+  eq('C205 with packet size 0 is invalid input', call(0xc205, 0x0000).ah, 0x02);
+  call(0xc205, 0x0300);
+  // The guest handler at 0200:0000 stores status, X, Y, Z at CS:0300.. and counts its calls.
+  mem.blit(0x2000, Uint8Array.from([0x55, 0x89, 0xe5,
+    0x8b, 0x46, 0x0c, 0x2e, 0xa3, 0x00, 0x03,  0x8b, 0x46, 0x0a, 0x2e, 0xa3, 0x02, 0x03,
+    0x8b, 0x46, 0x08, 0x2e, 0xa3, 0x04, 0x03,  0x8b, 0x46, 0x06, 0x2e, 0xa3, 0x06, 0x03,
+    0x2e, 0xff, 0x06, 0x08, 0x03, 0x5d, 0xcb]));
+  eq('C207 installs the handler', call(0xc207, 0x0000, 0x0200).cf, 0);
+  eq('C200 enable: success once there is one', call(0xc200, 0x0100).cf, 0);
+  eq('INT 74h points at the BIOS routine', mc.getVector(0x74).seg * 16 + mc.getVector(0x74).off, 0xfe800);
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mem.blit(0x1000, Uint8Array.from([0xfb, 0xeb, 0xfe]));          // sti ; jmp $
+  mc.ps2.motion(10, 0); mc.runSlice(3000);
+  eq('a move reaches the guest handler', mem.r16(0x2308), 1);
+  eq('...status: bit 3 set, no sign', mem.r16(0x2300), 0x08);
+  eq('...X = +10', mem.r16(0x2302), 10);
+  eq('...Y = 0 and Z = 0', mem.r16(0x2304) | mem.r16(0x2306), 0);
+  mc.ps2.motion(-5, 10); mc.runSlice(3000);                      // left, and DOWN on the screen
+  eq('a second move is a second packet', mem.r16(0x2308), 2);
+  eq('...with both sign bits (PS/2 Y counts UP)', mem.r16(0x2300), 0x38);
+  eq('...X = -5 as a byte', mem.r16(0x2302), 0xfb);
+  eq('...Y = -10 as a byte', mem.r16(0x2304), 0xf6);
+  mc.ps2.button(0, true); mc.runSlice(3000);
+  eq('a button alone sends a packet too', mem.r16(0x2300) & 0x07, 1);
+  // The raw 8042 path a driver without the BIOS would use: D4h, then a device command on 60h.
+  mc.ioWrite(0x64, 1, 0xd4); mc.ioWrite(0x60, 1, 0xff);
+  eq('aux reset: status says OBF and AUX', mc.ioRead(0x64, 1) & 0x21, 0x21);
+  eq('...and the mouse answers FA AA 00', [mc.ioRead(0x60, 1), mc.ioRead(0x60, 1), mc.ioRead(0x60, 1)].join(','), '250,170,0');
+  eq('...after which the aux channel is empty', mc.ioRead(0x64, 1) & 0x20, 0); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is

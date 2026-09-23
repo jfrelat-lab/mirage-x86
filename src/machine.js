@@ -90,7 +90,9 @@ export class Machine {
     this.blocked = false;                          // set by a handler waiting on input
     this.vbe = null;                               // active VESA VBE mode, if any (see setVbeMode)
     this.keyQueue = [];                            // {ascii, scan} pushed by the UI
-    this.hwIrqPending = false;                      // a hardware IRQ (keyboard) waits for IF to be set
+    this.hwIrqPending = false;                      // a hardware IRQ (keyboard, mouse) waits for IF
+    this.kbIrqPending = false;                      // ...which of them: IRQ1
+    this.mouseIrqPending = false;                   // ...IRQ12, a PS/2 packet (src/ps2mouse.js)
     this.unhandledInts = new Uint32Array(256);      // per-vector count of INTs we don't implement
     this._inBiosCallback = -1;                     // vector currently running via the inline far-call path
 
@@ -779,10 +781,37 @@ export class Machine {
    *  block boundaries (guarded by the cheap `hwIrqPending` flag) so a guest that busy-waits for
    *  the keyboard IRQ with IF briefly set (QBasic's IDE, most games) actually receives it. */
   serviceHwInts() {
-    if (this.hwIrqPending && (this.cpu.flags & IF)) {
-      this.hwIrqPending = false;
-      this.raiseKeyboardIRQ();
+    if (!this.hwIrqPending || !(this.cpu.flags & IF)) return;
+    this.hwIrqPending = false;
+    // Two sources share the guard. Raising IRQ1 for a mouse packet delivered the keyboard ISR a
+    // stale scancode, so each is raised only for itself.
+    if (this.kbIrqPending) { this.kbIrqPending = false; this.raiseKeyboardIRQ(); }
+    if (this.mouseIrqPending && !this.raiseMouseIRQ()) this.hwIrqPending = true;   // retry: masked or busy
+  }
+
+  /** Raise IRQ12 for a PS/2 packet waiting on the 8042's aux channel. The same routing as a real
+   *  PC: through the IDT in protected mode — V86 included, where the monitor reflects it — and
+   *  through the IVT in real mode, where INT 74h is the BIOS routine in src/ps2mouse.js. Returns
+   *  false when the PIC will not take it yet; the packet stays pending. */
+  raiseMouseIRQ() {
+    const cpu = this.cpu, pic = this.pic;
+    if (!(cpu.flags & IF)) return false;
+    if (pic) {
+      pic.raise(12);
+      if (pic.pending() !== 12) return false;   // masked, or a higher-priority ISR is still open
+      pic.acknowledge();
     }
+    this.mouseIrqPending = false;
+    cpu.halted = false;
+    if (cpu.cr0 & 1) {
+      if (this.dpmiIrq(0x74)) return true;
+      if (this.dpmi && this.dpmi.active) { if (pic) pic.eoi(12); return true; }   // no PM handler: drop
+      this.protInt(0x74);
+      return true;
+    }
+    const v = this.getVector(0x74);
+    this.realInt(0x74, v.seg, v.off);
+    return true;
   }
 
   // ---- run loop -----------------------------------------------------------

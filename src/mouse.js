@@ -27,6 +27,7 @@ export function installMouse(machine) {
 
   // ---- host-facing input (browser events, or a headless test) ----
   machine.mouseMoveRel = (mdx, mdy) => {
+    if (machine.ps2) machine.ps2.motion(mdx, mdy);    // a guest's own driver reads the PS/2 port
     st.dx += mdx; st.dy += mdy;                       // raw motion accumulates until read
     st.x = clamp(st.x + mdx, st.minX, st.maxX);       // clamped position tracks separately
     st.y = clamp(st.y + mdy, st.minY, st.maxY);
@@ -34,6 +35,7 @@ export function installMouse(machine) {
   machine.mouseMoveTo = (px, py) => machine.mouseMoveRel(px - st.x, py - st.y);
   machine.mouseButton = (btn, down) => {
     if (btn < 0 || btn > 2) return;
+    if (machine.ps2) machine.ps2.button(btn, down);
     if (down) { st.buttons |= 1 << btn; const p = st.press[btn]; p.n++; p.x = st.x; p.y = st.y; }
     else { st.buttons &= ~(1 << btn); const r = st.release[btn]; r.n++; r.x = st.x; r.y = st.y; }
   };

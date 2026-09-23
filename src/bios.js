@@ -8,6 +8,7 @@ import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
 import { installDPMI } from './dpmi.js';
 import { installEMS } from './ems.js';
+import { installPS2Mouse } from './ps2mouse.js';
 import { installDisk } from './disk.js';
 import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
@@ -557,6 +558,7 @@ export function installBIOS(machine, opts = {}) {
   // which is a very plausible reason revitro's animation sits at a different phase from DOSBox's.
   // Everything else still increments machine.unhandledInts[0x15] so the survey keeps seeing it.
   machine.hookInterrupt(0x15, (cpu) => {
+    if (cpu.ah === 0xc2 && machine.ps2) return machine.ps2.int15(cpu);   // pointing device (src/ps2mouse.js)
     if (cpu.ah === 0xc0) {                     // get the system configuration table
       cpu.setSeg(ES, VBE_SEG); cpu.bx = CFG_TABLE_OFF;
       cpu.ah = 0; cpu.flags &= ~CF;
@@ -842,10 +844,17 @@ export function installBIOS(machine, opts = {}) {
   // Reading back 0 made it exit after drawing one single frame.
   const kb = { data: 0x9c, obf: false, scans: [], cmd: 0 };   // scans: FIFO of pending make/break scancodes
   machine.kb = kb;
-  machine.onPortRead(0x60, () => { const d = kb.data; kb.obf = false; return d; });   // read scancode, clear OBF
-  machine.onPortRead(0x64, () => (kb.obf ? 0x1d : 0x1c));     // status byte; bit0 = output-buffer-full
+  // The AUX channel (a PS/2 mouse, src/ps2mouse.js) shares port 0x60. A keyboard byte waiting takes
+  // precedence; otherwise an aux byte is served, and status bit 5 says which one is there.
+  const auxWaiting = () => !kb.obf && machine.ps2 && machine.ps2.pending();
+  machine.onPortRead(0x60, () => {
+    if (auxWaiting()) return machine.ps2.read();
+    const d = kb.data; kb.obf = false; return d;               // read scancode, clear OBF
+  });
+  machine.onPortRead(0x64, () => (kb.obf ? 0x1d : auxWaiting() ? 0x3d : 0x1c));   // bit0 OBF, bit5 aux
   machine.onPortWrite(0x60, (_p, _s, v) => {                   // keyboard command -> ACK, or the
     if (kb.cmd === 0xd1) { kb.cmd = 0; setA20(v & 2); return; } // output-port byte after a 0xD1
+    if (kb.cmd === 0xd4) { kb.cmd = 0; if (machine.ps2) machine.ps2.deviceCommand(v & 0xff); return; }   // to the mouse
     kb.data = 0xfa; kb.obf = true;
   });
   // 8042 controller commands. A20 through the keyboard controller is the OLDEST of the three ways to
@@ -859,7 +868,9 @@ export function installBIOS(machine, opts = {}) {
     if (c === 0xd0) { kb.data = 0x02 | (machine.mem.a20 ? 0x02 : 0); kb.obf = true; return; }  // read it back
     if (c === 0xdd) { setA20(false); return; }
     if (c === 0xdf) { setA20(true); return; }
-    kb.cmd = 0;
+    if (c === 0xd4) { kb.cmd = 0xd4; return; }               // next byte on 0x60 goes to the aux device
+    if (c === 0xa9) { kb.data = 0x00; kb.obf = true; kb.cmd = 0; return; }   // aux interface test: OK
+    kb.cmd = 0;                                               // A8h/A7h (aux on/off) need no state here
   });
 
   // ---- 8255 PPI port B (0x61) + PIT channel 2 (0x42) ----------------------
@@ -909,9 +920,11 @@ export function installBIOS(machine, opts = {}) {
     const pmVec9 = machine.dpmi && machine.dpmi.active && machine.dpmi.pmVec && machine.dpmi.pmVec[9];
     if (!pmVec9 && machine.getVector(9).seg === 0xf000) { kb.scans.length = 0; return; }   // no guest INT 9h ISR
     kb.data = kb.scans.shift(); kb.obf = true;                 // stage the scancode into port 0x60
+    machine.kbIrqPending = true;
     machine.hwIrqPending = true;                               // fire IRQ1 as soon as the guest sets IF
   };
 
+  installPS2Mouse(machine, 0xf000);   // PS/2 mouse on the 8042 aux port, INT 15h C2xx, INT 74h
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
   installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services
