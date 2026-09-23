@@ -691,8 +691,14 @@ export class Machine {
     // We ARE the BIOS INT 8 handler on this path, so do what it does — including the BDA tick, which
     // the guest-ISR path gets instead when it chains to f000:08 (see bios.js).
     this.bumpBiosTick();
+    // A guest INT 1Ch hook is called THROUGH the BIOS's own routine, which saves the interrupted
+    // program's registers around it (installBIOS puts it in ROM). Jumping straight into the hook
+    // let it return directly to the interrupted code with whatever it had clobbered — see bios.js.
     const v1c = this.getVector(0x1c);
-    if (v1c.seg !== BIOS_SEG) this.realInt(0x1c, v1c.seg, v1c.off);
+    if (v1c.seg !== BIOS_SEG) {
+      if (this.int1cViaRom !== undefined) this.realInt(8, BIOS_SEG, this.int1cViaRom);
+      else this.realInt(0x1c, v1c.seg, v1c.off);
+    }
     if (pic) pic.eoi(0);
   }
 

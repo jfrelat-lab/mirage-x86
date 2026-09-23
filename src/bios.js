@@ -925,6 +925,24 @@ export function installBIOS(machine, opts = {}) {
   };
 
   installPS2Mouse(machine, 0xf000);   // PS/2 mouse on the 8042 aux port, INT 15h C2xx, INT 74h
+
+  // ---- the BIOS timer's call to INT 1Ch, in ROM ----------------------------------------------------
+  // A BIOS INT 08h handler SAVES THE INTERRUPTED PROGRAM'S REGISTERS around its call to the user
+  // hook INT 1Ch, so a 1Ch handler that clobbers one without saving it is harmless. Measured with
+  // tools/i1cprobe.asm (a hook that zeroes AX..BP and ES, saving nothing): under QEMU/SeaBIOS all
+  // eight sentinels of the interrupted loop survive; here all eight were lost, because our INT 8
+  // jumped straight into the hook and its IRET went straight back to the interrupted code.
+  // "Exploring the IBM PC" is the case: its 1Ch handler begins with `xor dx,dx`, a BLOAD loop was
+  // running with its destination segment in DX, and the next 3,000 bytes went to 0000:0986 — over
+  // DOS's PRN device header, after which DOS looked for a device name in a loop that never ended.
+  // Individual PUSHes, not PUSHA: the routine must also run on the 8088 profile.
+  const INT1C_OFF = 0xe840;          // after the PS/2 routine at E800; free ROM, measured
+  const INT1C_ROM = [0x50, 0x53, 0x51, 0x52, 0x56, 0x57, 0x55, 0x1e, 0x06,   // push ax..bp, ds, es
+    0xcd, 0x1c,                                                                // int 1Ch
+    0x07, 0x1f, 0x5d, 0x5f, 0x5e, 0x5a, 0x59, 0x5b, 0x58,                      // pop es, ds, bp..ax
+    0xcf];                                                                     // iret
+  for (let i = 0; i < INT1C_ROM.length; i++) mem.u8[0xf0000 + INT1C_OFF + i] = INT1C_ROM[i];
+  machine.int1cViaRom = INT1C_OFF;
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
   installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services

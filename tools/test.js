@@ -863,6 +863,26 @@ const udRun = (gated) => {
   eq('a tick that arrived while IF=0 is kept, not dropped, and gets in through INT 16h', b.ticks, 1);
   eq('...still handing IF=0 back', b.ifBack, 0); }
 
+// ---- the BIOS timer protects the interrupted program from its INT 1Ch hook --------------------
+// tools/i1cprobe.asm: under QEMU a 1Ch hook that zeroes AX..BP and ES without saving them leaves the
+// interrupted loop's registers intact; here all eight were lost. "Exploring the IBM PC" stalled on
+// it: its hook starts with `xor dx,dx`, and a BLOAD loop kept its destination segment in DX.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  installBIOS(mc);
+  mem.blit(0x600, Uint8Array.from([0x31, 0xc0, 0x31, 0xd2, 0x31, 0xdb, 0x8e, 0xc0,     // xor ax,ax/dx,dx/bx,bx ; mov es,ax
+    0x2e, 0xff, 0x06, 0x00, 0x07, 0xcf]));                                          // inc word cs:[0700] ; iret
+  mc.setVector(0x1c, 0x0000, 0x0600);
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(ES, 0x0880);
+  mem.blit(0x1000, Uint8Array.from([0xfb, 0xeb, 0xfe]));                            // sti ; jmp $
+  cpu.reg[0] = 0x1111; cpu.reg[2] = 0x4444; cpu.reg[3] = 0x2222;
+  mc.runSlice(4); mc.timerAuto = false; mc.tickTimer(); mc.runSlice(200);
+  eq('the INT 1Ch hook ran once', mem.r16(0x700), 1);
+  eq('...and the interrupted program still has its AX', cpu.reg[0] & 0xffff, 0x1111);
+  eq('...its DX', cpu.reg[2] & 0xffff, 0x4444);
+  eq('...its BX', cpu.reg[3] & 0xffff, 0x2222);
+  eq('...and its ES', cpu.seg[ES], 0x0880);
+  eq('...running where it was', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x01000001); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is
