@@ -585,6 +585,78 @@ for (const [name, code] of [['9A call far ptr', [0x9a, 0x00, 0x00, 0x18, 0x00]],
   eq(`...and the saved CS is the caller's`, r.cs, 0x100);
 }
 
+// ---- VIRTUAL-8086 MODE: three things MS-DOS 6.22's EMM386 needs, in the order it hit them -------
+// Each is set up directly on the CPU (PE on, VM on, CPL 3), because what is under test is the
+// instruction's semantics in V86, not how the task got there.
+const v86 = (iopl) => {
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.cr0 |= 1; cpu.flags = (0x20000 | (iopl << 12) | 2) >>> 0;
+  cpu.setSeg(CS, 0x0f40); cpu.eip = 0x100; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  cpu.setSeg(DS, 0x0f40); cpu.setSeg(ES, 0x0f40);
+  const calls = [];
+  const orig = mc.protInt.bind(mc);
+  mc.protInt = (n, err, f, soft) => { calls.push([n, err === undefined ? -1 : err]); if (calls.length === 1) return orig(n, err, f, soft); };
+  return { mc, cpu, calls };
+};
+{ // (1) A far RET, CALL or JMP in V86 is an 8086 one: the selector is a paragraph. Judged by the
+  // protected-mode rules, CS 0F40 has RPL 0 below CPL 3 — "a return inward" — and raised #GP(0F40):
+  // EMM386 took that at a plain `retf` 155 000 times a second.
+  const { mc, cpu, calls } = v86(3);
+  cpu.push16(0x0f40); cpu.push16(0x1234);
+  cpu.farRet(false, 0);
+  eq('V86: RETF to CS=0F40 raises nothing', calls.length, 0);
+  eq('...and lands at 0F40:1234', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x0f401234);
+  eq('...with an 8086 base', cpu.base[CS] >>> 0, 0xf400);
+  eq('...still in V86', (cpu.flags >> 17) & 1, 1);
+  cpu.farJmp(0x0003, 0x0010);
+  eq('V86: far JMP to a paragraph with RPL 3 is plain too', (cpu.base[CS] >>> 0) + cpu.eip, 0x40);
+  cpu.farCall(0x0070, 0x0774, false, 0);
+  eq('V86: far CALL pushes 8086-style and raises nothing', calls.length, 0);
+  eq('...and lands in 0070', cpu.base[CS] >>> 0, 0x700); }
+{ // (2) The BIOS stub's IRET, reached from V86. At IOPL 3 it must keep VM; below IOPL 3 it must
+  // TRAP (IRET is IOPL-sensitive) with the service's answer already in the flags IMAGE.
+  const a = v86(3);
+  a.mc.intHandlers[0x61] = (c) => { c.flags |= 1; };             // a service that reports CF
+  a.cpu.push16(0x3202); a.cpu.push16(0x0f40); a.cpu.push16(0x0200);   // FLAGS, CS, IP
+  a.cpu.setSeg(CS, 0xf000); a.cpu.eip = 0x61;
+  a.mc.biosCallback(0x61);
+  eq('V86, IOPL 3: the stub IRET keeps VM', (a.cpu.flags >> 17) & 1, 1);
+  eq('...returns to the caller', (a.cpu.seg[CS] << 16 | a.cpu.eip) >>> 0, 0x0f400200);
+  eq('...and carries the service\'s CF back', a.cpu.flags & 1, 1);
+  eq('...and keeps IOPL', (a.cpu.flags >> 12) & 3, 3);
+  const b = v86(0);
+  b.mc.intHandlers[0x61] = (c) => { c.flags |= 1; };
+  b.cpu.push16(0x0202); b.cpu.push16(0x0f40); b.cpu.push16(0x0200);
+  const sp = b.cpu.sp;
+  b.cpu.setSeg(CS, 0xf000); b.cpu.eip = 0x61;
+  b.mc.biosCallback(0x61);
+  eq('V86, IOPL 0: the stub IRET traps to the monitor as #GP(0)', b.calls[0] && b.calls[0].join(','), '13,0');
+  eq('...with the service\'s CF written into the flags IMAGE', b.mc.mem.r16(0x3000 + sp + 4) & 1, 1); }
+{ // (3) The IDT gate is validated before it is used. EMM386 leaves IDT entries EMPTY on purpose:
+  // an INT n from V86 must reach its #GP handler with error code n*8+2 and be reflected. Read as a
+  // gate to selector 0, the empty IDT[12h] sent MIRAGE to 0003:0000 at CPL 3 with VM clear.
+  const { mc, cpu, calls } = v86(3);
+  const IDT = 0xa000;
+  cpu.idtr = { base: IDT, limit: 0x1ff };
+  mc.mem.w16(IDT + 0x10 * 8 + 2, 0x0048); mc.mem.w8(IDT + 0x10 * 8 + 5, 0x8e);   // INT 10h: DPL 0
+  mc.mem.w8(IDT + 0x21 * 8 + 5, 0x6e);                                           // INT 21h: DPL 3, NOT present
+  mc.softInt(0x12, 0x102, 0x100);
+  eq('INT 12h through an EMPTY gate: #GP(12h*8+2)', calls[0] && calls[0].join(','), '13,146');
+  calls.length = 0;
+  mc.softInt(0x10, 0x102, 0x100);
+  eq('INT 10h from V86 to a DPL-0 gate: #GP(10h*8+2), CPL 3 not seg[CS]&3', calls[0] && calls[0].join(','), '13,130');
+  calls.length = 0;
+  mc.softInt(0x21, 0x102, 0x100);
+  eq('INT 21h through a NOT-PRESENT gate: #NP(21h*8+2)', calls[1] && calls[1].join(','), '11,266');
+  calls.length = 0;
+  cpu.idtr = { base: IDT, limit: 0x7f };                                         // 16 entries
+  mc.softInt(0x40, 0x102, 0x100);
+  eq('INT 40h past the IDT limit: #GP(40h*8+2)', calls[0] && calls[0].join(','), '13,514');
+  // An EXCEPTION through an empty gate sets EXT: error code n*8+2+1.
+  calls.length = 0; cpu.idtr = { base: IDT, limit: 0x1ff };
+  mc.protInt(0x0b, 0);
+  eq('an exception through an empty gate sets EXT', calls[1] && calls[1].join(','), '13,91'); }
+
 // ---- VERR / VERW answer a question, they do not always say yes -------------------------------
 // This was `cpu.flags |= ZF`: a stub that cannot fail, and therefore cannot be told apart from a
 // working implementation until a guest asks about a selector that is NOT accessible. Six of the

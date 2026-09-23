@@ -270,6 +270,28 @@ export class Machine {
       cpu.eip = cpu.pop32() >>> 0;
       cpu.setSeg(CS, cpu.pop32() & 0xffff);
       cpu.flags = (cpu.pop32() & 0x27fd5) | 2;
+    } else if (cpu.flags & VM) {
+      // FROM A VIRTUAL-8086 TASK the stub's IRET is an IRET executed in V86, and two rules apply
+      // that the plain pop below ignores. It is IOPL-sensitive: below IOPL 3 it traps to the
+      // monitor, which emulates it — EMM386 runs its V86 task at IOPL 0 for exactly that. And at
+      // IOPL 3 it cannot touch VM or IOPL. The plain pop assigned a 16-bit FLAGS image to all of
+      // EFLAGS, which CLEARED VM: MS-DOS 6.22's EMM386 reflected an INT 13h to f000:0013, and on the
+      // way back the CPU fell out of V86 into "protected mode with CS=0070" and took #GP(0070).
+      const sp = cpu.reg[4] & 0xffff, flagsAt = (cpu.base[2] + ((sp + 4) & 0xffff)) >>> 0;
+      // The service's answer travels in the flags IMAGE, as a real ISR writes it (or `retf 2`s).
+      if (!isIRQ) this.mem.w16(flagsAt, (this.mem.r16(flagsAt) & ~ARITH) | (result & ARITH));
+      if (cpu.iopl < 3) {
+        cpu.setSeg(CS, BIOS_SEG); cpu.eip = n;          // AT the stub's IRET byte (0xCF)
+        cpu.raise(13, 0);                               // the monitor emulates it
+        cpu.halted = false;
+        return;
+      }
+      const keep = cpu.flags & (VM | 0x3000);      // VM and IOPL are not IRET's to change here
+      cpu.eip = cpu.pop16();
+      cpu.setSeg(CS, cpu.pop16());
+      cpu.flags = ((cpu.pop16() & 0x4fd5) | 2 | keep) >>> 0;
+      cpu.halted = false;
+      return;
     } else {
       cpu.eip = cpu.pop16();
       cpu.setSeg(CS, cpu.pop16());
@@ -296,7 +318,7 @@ export class Machine {
    * reports instead, which is more useful than a JS stack overflow (the first thing Windows 3.0's
    * enhanced mode produced here: #PF -> load SS from an un-LTR'd TSS -> #GP -> repeat).
    */
-  protInt(n, err, faultIp) {
+  protInt(n, err, faultIp, soft) {
     if ((this._excDepth = (this._excDepth || 0) + 1) > 3) {
       this._excDepth = 0;
       throw new Error(`mirage: exception ${n} raised while already delivering one, three deep — ` +
@@ -307,11 +329,11 @@ export class Machine {
     // While DELIVERING, a null CS/SS in a gate or an un-LTR'd TSS is not the guest's #GP to take:
     // raising there recurses instead of reporting, and the depth guard above is the diagnosis.
     const wasDelivering = this.cpu._delivering; this.cpu._delivering = true;
-    try { return this._protInt(n, err, faultIp); }
+    try { return this._protInt(n, err, faultIp, soft); }
     finally { this._excDepth--; this.cpu._delivering = wasDelivering; }
   }
 
-  _protInt(n, err, faultIp) {
+  _protInt(n, err, faultIp, soft) {
     const cpu = this.cpu, m = this.mem;
     // No IDT for a client (see dpmi.js): software interrupts are reflected, so reaching here means a
     // genuine exception. Name it rather than dispatching through an empty table.
@@ -324,12 +346,28 @@ export class Machine {
         `${cpu.seg[1].toString(16)}:${(cpu.eip >>> 0).toString(16)}` +
         (err !== undefined ? ` err=0x${(err >>> 0).toString(16)}` : ''));
     }
+    // THE GATE IS CHECKED BEFORE IT IS USED, in the manual's order: inside the IDT limit, then a gate
+    // type (task, 286/386 interrupt or trap), then present. The error code names the IDT entry —
+    // n*8 + 2 (the IDT bit) + EXT, EXT being 1 for an exception or an IRQ and 0 for an INT n.
+    //
+    // This is not defensive tidiness: a V86 MONITOR IS BUILT ON IT. MS-DOS 6.22's EMM386 leaves
+    // most of its IDT empty ON PURPOSE, so that an INT n from its V86 task arrives at its #GP
+    // handler with that error code and gets reflected to the real-mode vector. Reading the eight
+    // zero bytes of IDT[12h] as an interrupt gate to selector 0 sent MIRAGE to 0003:0000 at CPL 3
+    // with VM clear, and the monitor collapsed in a cascade of faults.
+    const ext = soft ? 0 : 1, gateErr = ((n << 3) | 2 | ext) >>> 0;
+    if (n * 8 + 7 > cpu.idtr.limit) { if (faultIp !== undefined) cpu.eip = faultIp >>> 0; return this.protInt(13, gateErr); }
     const a = (cpu.idtr.base + n * 8) >>> 0;
     let offLo, sel, access, offHi;
     m.sup++;                        // an IDT read is an implicit supervisor access (see Memory.walk)
     try { offLo = m.r16(a); sel = m.r16(a + 2); access = m.r8(a + 5); offHi = m.r16(a + 6); }
     finally { m.sup--; }
     const type = access & 0x1f, is32 = (type & 0x08) !== 0;
+    if (type !== 0x05 && type !== 0x06 && type !== 0x07 && type !== 0x0e && type !== 0x0f) {
+      if (faultIp !== undefined) cpu.eip = faultIp >>> 0;
+      return this.protInt(13, gateErr);
+    }
+    if (!(access & 0x80)) { if (faultIp !== undefined) cpu.eip = faultIp >>> 0; return this.protInt(11, gateErr); }
     const off = is32 ? ((offLo | (offHi << 16)) >>> 0) : offLo;
 
     // The new CPL is the TARGET code segment's DPL, not the gate's and not zero. Loading the gate's
@@ -461,13 +499,18 @@ export class Machine {
         this.unhandledInts[n]++;
         return;
       }
+      // Past the IDT limit there is no DPL to read: #GP(n*8+2) at once, as the manual orders it.
+      if (n * 8 + 7 > cpu.idtr.limit) { cpu.eip = faultIp; return this.protInt(13, (n << 3) | 2); }
       let dpl;
       this.mem.sup++;               // the IDT, read on the processor's behalf
       try { dpl = (this.mem.r8((cpu.idtr.base + n * 8 + 5) >>> 0) >> 5) & 3; } finally { this.mem.sup--; }
-      if (dpl < (cpu.seg[1] & 3)) { cpu.eip = faultIp; return this.protInt(13, (n << 3) | 2); }
+      // Against the CPL, not `seg[CS] & 3`: in V86 CS holds an 8086 paragraph whose low bits mean
+      // nothing, while CPL is 3 — so an INT n to a DPL-0 gate from a V86 task went straight in
+      // instead of trapping to the monitor. The same confusion was fixed for HLT/CLI/IN earlier.
+      if (dpl < cpu.cpl) { cpu.eip = faultIp; return this.protInt(13, (n << 3) | 2); }
     }
     cpu.eip = nextIp;
-    if (cpu.cr0 & 1) return this.protInt(n, undefined, faultIp);
+    if (cpu.cr0 & 1) return this.protInt(n, undefined, faultIp, true);
     return this.swInt(n);
   }
 

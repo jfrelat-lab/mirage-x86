@@ -463,7 +463,9 @@ export class CPU {
       this.pushW(retCS, is32); this.pushW(retIP, is32);
       this.eip = off >>> 0;
     };
-    if (!(this.cr0 & 1)) return plain();
+    // Real mode, AND virtual-8086 mode: in V86 a far transfer is an 8086 one — the popped or given
+    // selector is a paragraph, never an index into a table (see the comment on farRet).
+    if (!(this.cr0 & 1) || (this.flags & VM)) return plain();
     const d = this.readDesc(sel);
     // An ordinary code segment: same rule as farJmp. Only a CALL GATE (below) changes rings.
     if (d && !d.sys) {
@@ -513,7 +515,7 @@ export class CPU {
    * the delivery just set — the exception is raised and discarded in the same breath.
    */
   farJmp(sel, off, faultIp) {
-    if (this.cr0 & 1) {
+    if ((this.cr0 & 1) && !(this.flags & VM)) {           // V86 jumps as an 8086 does
       const d = this.readDesc(sel);
       if (d && d.sys && (d.type === 0x04 || d.type === 0x0c)) {
         const g32 = d.type === 0x0c;
@@ -550,7 +552,14 @@ export class CPU {
     // A far RET goes outward or stays put, never inward: the target's RPL must be >= CPL, and a
     // non-conforming segment's DPL must equal that RPL. The stack is rewound — a fault consumes
     // nothing.
-    if (this.cr0 & 1) {
+    // IN VIRTUAL-8086 MODE a far RET is an 8086 one: the popped CS is a paragraph, and none of the
+    // rules below apply — they would read it as a SELECTOR. CPL is 3 in V86 and every real-mode
+    // segment has RPL 0 in its low bits, so the popped value always looked like a return INWARD
+    // and raised #GP(selector). MS-DOS 6.22's EMM386 took that fault at a plain `retf` in V86
+    // (029b:0723, CS 0F40 on the stack), reflected it to the BIOS default handler, and came back
+    // to the same RETF — 155 000 times a second.
+    const pm = (this.cr0 & 1) && !(this.flags & VM);
+    if (pm) {
       const rpl = cs & 3;
       const d = this.readDesc(cs);
       const conforming = d && !d.sys && (d.type & 0x0c) === 0x0c;
@@ -561,7 +570,7 @@ export class CPU {
       }
     }
     if (popBytes) this.spAdd(popBytes);
-    if ((this.cr0 & 1) && (cs & 3) > cpl) {
+    if (pm && (cs & 3) > cpl) {
       const esp = is32 ? (pop() >>> 0) : pop();
       const ss = pop() & 0xffff;
       this.setSeg(CS, cs); this.eip = eip;
