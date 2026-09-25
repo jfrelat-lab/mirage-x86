@@ -86,24 +86,33 @@ export class Memory {
 
   rebuildPageTables() {
     this.syncPaging();
-    const n = this.rdOfs.length, pagesInRange = (this.mask + 1) >>> PAGE_BITS;
-    const cpu = this.cpu, paging = cpu && cpu.pagingOn;
-    for (let p = 0; p < n; p++) {
-      const device = this.planar && p >= 0xa0 && p < 0xb0;
-      if (device || p >= pagesInRange) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; continue; }
-      if (!paging) {
-        this.rdOfs[p] = 0;
-        this.wrOfs[p] = this.codePage[p] ? -1 : 0;
-        continue;
-      }
-      const phys = this.walk(p << PAGE_BITS);
-      if (phys < 0) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; continue; }   // not present → the helper faults
-      const bias = (phys - (p << PAGE_BITS)) | 0;
-      this.rdOfs[p] = bias;
-      // A code page must keep trapping writes, and so must a read-only one (the R/W bit lives in
-      // the walk; `walk` reports it via walkRW).
-      this.wrOfs[p] = (this.codePage[p] || !this.walkRW) ? -1 : bias;
+    const n = this.rdOfs.length, paging = !!(this.cpu && this.cpu.pagingOn);
+    for (let p = 0; p < n; p++) this._fillPage(p, paging);
+  }
+
+  /** One entry of both tables — rebuildPageTables' body, for INVLPG. A guest that rewrites a PTE and
+   *  invalidates that one page (KolibriOS frees and reallocates heap pages that way) must not keep
+   *  running on the old frame: the table used to be refreshed only on a CR3 load, so INVLPG, a
+   *  no-op, left the fast path reading and writing a page the kernel had already given away. */
+  refreshPage(p) {
+    if (p < this.rdOfs.length) this._fillPage(p, !!(this.cpu && this.cpu.pagingOn));
+  }
+
+  _fillPage(p, paging) {
+    const device = this.planar && p >= 0xa0 && p < 0xb0;
+    if (device || p >= ((this.mask + 1) >>> PAGE_BITS)) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; return; }
+    if (!paging) {
+      this.rdOfs[p] = 0;
+      this.wrOfs[p] = this.codePage[p] ? -1 : 0;
+      return;
     }
+    const phys = this.walk(p << PAGE_BITS);
+    if (phys < 0) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; return; }   // not present → the helper faults
+    const bias = (phys - (p << PAGE_BITS)) | 0;
+    this.rdOfs[p] = bias;
+    // A code page must keep trapping writes, and so must a read-only one (the R/W bit lives in
+    // the walk; `walk` reports it via walkRW).
+    this.wrOfs[p] = (this.codePage[p] || !this.walkRW) ? -1 : bias;
   }
 
   /** Translate a linear page to a physical address, or -1 if not present. Sets walkRW as a side

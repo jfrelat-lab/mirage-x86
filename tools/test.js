@@ -1238,6 +1238,52 @@ const udRun = (gated) => {
   eq('...leaving CX 0 and DI one past the end', [cpu.cx & 0xffff, (cpu.reg[7] & 0xffff).toString(16)].join(), '0,7004');
 }
 {
+  // PUSH and POP m that #PF commit ESP only once the store succeeded. Both moved ESP first, so the
+  // restart moved it again: KolibriOS's libini ran `pop [ebx]` into a fresh heap page and returned
+  // with EBX/ESI/EDI restored one slot off, and @ICON gave up reading icon.ini.
+  const pf = (code, setup) => {
+    const mc = new Machine({ memSize: 4 << 20 });
+    const cpu = mc.cpu, mem = mc.mem;
+    mem.setA20(true); mc.rec.MM = mem.mask;
+    cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0); cpu.setSeg(ES, 0); cpu.setSeg(SS, 0);
+    mem.blit(0x1000, Uint8Array.from(code));
+    mem.w32(0x10000, 0x11007);
+    for (let p = 0; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+    mem.w32(0x11000 + 7 * 4, 0);                                            // page 7 (0x7000): absent
+    setup(cpu, mem);
+    cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+    let n = 0;
+    mc.protInt = (v) => { if (v === 14) { n++; mem.dv.setUint32(0x11000 + 7 * 4, 0x7007, true); mem.rebuildPageTables(); } };
+    for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
+    return { cpu, mem, n };
+  };
+  { const { cpu, mem, n } = pf([0x68, 0x34, 0x12, 0xf4], (cpu) => { cpu.sp = 0x8000; });   // push 1234h ; hlt
+    eq('PUSH onto an absent stack page: one #PF, then one slot pushed', [n, (cpu.sp & 0xffff).toString(16), mem.u8[0x7ffe] | (mem.u8[0x7fff] << 8)].join(), '1,7ffe,4660'); }
+  { const { cpu, mem, n } = pf([0x8f, 0x07, 0xf4], (cpu, mem) => { cpu.sp = 0x3000; cpu.reg[3] = 0x7000; mem.u8[0x3000] = 0x78; mem.u8[0x3001] = 0x56; mem.u8[0x3002] = 0x34; mem.u8[0x3003] = 0x12; });   // pop [bx] ; hlt
+    eq('POP [mem] into an absent page: one #PF, then ESP up by one slot only', [n, (cpu.sp & 0xffff).toString(16), (mem.u8[0x7000] | (mem.u8[0x7001] << 8)).toString(16)].join(), '1,3002,5678'); }
+}
+{
+  // INVLPG after a PTE rewrite: the next access sees the NEW frame. The software TLB was refreshed
+  // only on a CR3 load and INVLPG was a no-op, so a kernel that remaps one page and invalidates it
+  // (KolibriOS, freeing and reallocating heap pages) kept running on the frame it had given away.
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0); cpu.setSeg(ES, 0x1100); cpu.setSeg(SS, 0); cpu.sp = 0x3000;
+  mem.blit(0x1000, Uint8Array.from([
+    0xa0, 0x00, 0x50,                                            // mov al,[5000h]
+    0x26, 0x66, 0xc7, 0x06, 0x14, 0x00, 0x07, 0x60, 0x00, 0x00,  // mov dword es:[0014h],6007h: page 5 -> frame 6
+    0x0f, 0x01, 0x3e, 0x00, 0x50,                                // invlpg [5000h]
+    0x8a, 0x26, 0x00, 0x50,                                      // mov ah,[5000h]
+    0xf4]));
+  mem.u8[0x5000] = 0xaa; mem.u8[0x6000] = 0xbb;
+  mem.w32(0x10000, 0x11007);
+  for (let p = 0; p < 32; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
+  eq('INVLPG after remapping a page: the read before sees the old frame, the read after the new', (cpu.ax & 0xffff).toString(16), 'bbaa');
+}
+{
   // #PF: a not-present page raises INT 14 with CR2 and the error code, instead of reading zero.
   const mc = new Machine({ memSize: 4 << 20 });
   const cpu = mc.cpu, mem = mc.mem;

@@ -730,9 +730,13 @@ export class CPU {
     return this.mem.paged ? (a >>> 0) : (a & this.mem.mask);
   }
 
+  // A push WRITES FIRST and moves the stack pointer after. Decrementing first left ESP moved when the
+  // write faulted, and the restarted push moved it again: under demand paging a push onto a fresh
+  // stack page shifted the frame by one slot. The 386 commits ESP only once the store has succeeded.
   push16(v) {
-    this.spAdd(-2);
-    this.mem.w16(this.stackLin, v & 0xffff);
+    const sp = this.ssB ? (this.reg[4] - 2) >>> 0 : (this.reg[4] - 2) & 0xffff, a = this.base[SS] + sp;
+    this.mem.w16(this.mem.paged ? (a >>> 0) : (a & this.mem.mask), v & 0xffff);
+    this.reg[4] = this.ssB ? sp : (this.reg[4] & ~0xffff) | sp;
   }
   pop16() {
     const v = this.mem.r16(this.stackLin);
@@ -740,8 +744,9 @@ export class CPU {
     return v;
   }
   push32(v) {
-    this.spAdd(-4);
-    this.mem.w32(this.stackLin, v >>> 0);
+    const sp = this.ssB ? (this.reg[4] - 4) >>> 0 : (this.reg[4] - 4) & 0xffff, a = this.base[SS] + sp;
+    this.mem.w32(this.mem.paged ? (a >>> 0) : (a & this.mem.mask), v >>> 0);
+    this.reg[4] = this.ssB ? sp : (this.reg[4] & ~0xffff) | sp;
   }
   pop32() {
     const v = this.mem.r32(this.stackLin);

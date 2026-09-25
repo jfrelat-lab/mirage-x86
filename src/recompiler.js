@@ -185,6 +185,14 @@ export class Recompiler {
     this.t2evict = new Map();      // region root lin -> SMC-eviction count (for the blacklist)
     this.t2blacklist = new Set();  // roots that self-modify too much -> stay tier-1
     this.mem.onCodeWrite = (addr, len) => this.invalidate(addr, len);
+    this.cpu.invlpg = (lin) => this.invlpg(lin);
+  }
+
+  /** INVLPG: refresh the page's software-TLB entry and evict the blocks translated from it. */
+  invlpg(lin) {
+    const p = (lin >>> 0) >>> 12;
+    this.mem.refreshPage(p);
+    if (this.mem.codePage[p]) this.invalidate(p << 12 >>> 0, 4096);
   }
 
   /** Self-modifying-code: invalidate only the cached blocks whose byte range the
@@ -1018,8 +1026,8 @@ export class Recompiler {
           P(sz === 32
             // The pushed eSP is the ORIGINAL one, at the OPERAND width — SS.B chooses where the
             // pushes go, never what the value is. test386 POST 9 asserts exactly this.
-            ? 'var _sp=cpu.reg[4]>>>0;cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);'
-            : 'var _sp=cpu.sp;cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);'); break;
+            ? `var _sp=cpu.reg[4]>>>0;${pfRestart ? 'try{' : ''}cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);${pfRestart ? '}catch(_e){r[4]=_sp;throw _e;}' : ''}`
+            : `var _sp=cpu.sp,_sv=r[4];${pfRestart ? 'try{' : ''}cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);${pfRestart ? '}catch(_e){r[4]=_sv;throw _e;}' : ''}`); break;   // PUSHA: 8 stores, one restart point
         // POPA / POPAD. "The pushed SP/ESP slot is discarded" is the effect, not the mechanism, and the
         // difference shows under a 32-bit operand on a 16-bit stack: the slot IS loaded into ESP, and
         // the stack-pointer adjustment then rewrites SP at the STACK's width, leaving the popped value's
@@ -1107,7 +1115,15 @@ export class Recompiler {
         // POP Ev moves one stack slot of the current operand size, like PUSH/POP sreg above.
         // POP Ev — same sequencing: the destination may be SP, and a memory destination based on ESP
         // has its address computed AFTER the increment.
-        case 0x8f: { const o = modrm(); const t0 = NT(); P(`var ${t0}=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()'};`); P(rmW(o, sz, t0)); break; }
+        // POP m: the address is computed with ESP already incremented (Intel), but if the STORE faults
+        // ESP must be as it was, or the restart pops a second value. KolibriOS's libini did
+        // `push [ebp+0Ch] / pop [ebx]` into a fresh heap page and returned with its saved registers
+        // shifted by one slot.
+        case 0x8f: { const o = modrm(); const t0 = NT();
+          const guard = pfRestart && !o.isReg, sv = guard ? NT() : null;
+          if (guard) P(`var ${sv}=r[4];`);
+          P(`var ${t0}=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()'};`);
+          P(guard ? `try{${rmW(o, sz, t0)}}catch(_e){r[4]=${sv};throw _e;}` : rmW(o, sz, t0)); break; }
 
         case 0x90: break;                                                               // NOP
         case 0x91: case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: case 0x97: {  // XCHG eAX,reg
@@ -1855,7 +1871,16 @@ export class Recompiler {
             P(`cpu.${t}.limit=m.r16(${a});cpu.${t}.base=(m.r32(${AM(`${a}+2`)})&${sz === 32 ? '0xffffffff' : '0xffffff'})>>>0;`);
             return;
           }
-          if (!o.isReg) memAddr(o);                                                      // INVLPG → no-op (no paging yet)
+          // INVLPG m: drop the software-TLB entry for that linear page and any blocks translated from
+          // it — the page may now be another frame, or absent. Privileged, like MOV CR3.
+          if (o.reg === 7 && !o.isReg) {
+            canFault = true;
+            const a = memAddr(o);
+            P(`if((cpu.cr0&1)&&${CPL_EXPR}){cpu.eip=${curIpStart};cpu.raise(13,0);return;}`);
+            P(`cpu.invlpg(${a});`);
+            return;
+          }
+          if (!o.isReg) memAddr(o);
           return;
         }
         case 0x20: { const o = modrm(); const src = o.reg === 0 ? '(cpu.cr0>>>0)' : o.reg === 2 ? '(cpu.cr2>>>0)' : o.reg === 3 ? '(cpu.cr3>>>0)' : '0';
