@@ -955,6 +955,29 @@ const udRun = (gated) => {
   eq('AH=13h draws in the colour BL gives', fg > 0, true);
   eq('...and with AL bit 0 clear the cursor stays where it was', mem.r16(0x450), 0x0203); }
 
+// ---- INT 10h in planar modes: mode 6Ah, glyphs into the planes, SeaBIOS's register side effect ----
+// v86's stillalive-os.img sets mode 6Ah (800x600x16) and prints with AH=0Eh; QEMU shows the lyrics,
+// we stayed in text mode. It then clears its lyrics panel with bare stores through A000, relying on
+// the teletype in between to have left the map mask at 0Fh (SeaBIOS's stdvga_planar4_plane(-1)).
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
+  mc.font = new Uint8Array(256 * 16).fill(0xff); mc.font8x8 = new Uint8Array(256 * 8).fill(0xff);
+  int10(0x006a);
+  eq('mode 6Ah is an 800x600 planar mode', [mc.vga.width, mc.vga.height, mem.planar, cpu.al].join(), '800,600,true,32');
+  eq('...100 text columns in the BDA, 100 bytes per scanline', [mem.r16(0x44a), mc.vga.rowBytes()].join(), '100,100');
+  const P = 0x10000, pl = mc.vga.planes;
+  mc.vga.mapMask = 0x02; mc.vga.gc[4] = 1;                   // what the program's own drawing leaves
+  mem.w8(0x450, 5); mem.w8(0x451, 0);
+  int10(0x0e41, 0x0006);                                     // 'A' in colour 6 (planes 1 and 2), no wrap
+  eq('AH=0Eh draws the glyph in the planes of the colour in BL', [pl[5], pl[P + 5], pl[2 * P + 5], pl[3 * P + 5]].join(), '0,255,255,0');
+  eq('...and leaves map mask 0Fh / read map 0, as SeaBIOS does', [mc.vga.mapMask, mc.vga.gc[4]].join(), '15,0');
+  mem.w8(0x450, 99); mem.w8(0x451, 36);                      // last cell of the 100x37 screen
+  int10(0x0e41, 0x0006);
+  const off = 35 * 16 * 100 + 99;                            // row 35: the wrap scrolled it up a row
+  eq('...scrolling the full 37-row screen up a text row', [mem.r8(0x450), mem.r8(0x451), pl[P + off], pl[P + off + 1600]].join(), '0,36,255,0');
+  int10(0x0600, 0x0000, 0x0000, 0x2463);
+  eq('AH=06h in a planar mode clears the pixels', pl[P + off] | pl[2 * P + off], 0); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is

@@ -142,6 +142,7 @@ export function installBIOS(machine, opts = {}) {
   // an inner region and expect the header/footer rows to stay put.
   function scrollWindow(up, lines, attr, top, left, bottom, right) {
     if (bios.mode === 0x13) return scrollWindow13(up, lines, attr, top, left, bottom, right);
+    if (bios.planar && machine.vga) return scrollWindowPlanar(up, lines, attr, top, left, bottom, right);
     top = Math.max(0, top); left = Math.max(0, left);
     bottom = Math.min(ROWS - 1, bottom); right = Math.min(COLS - 1, right);
     if (top > bottom || left > right) return;
@@ -231,8 +232,7 @@ export function installBIOS(machine, opts = {}) {
   // Mode 13h is 320×200 linear at A000, so an 8×8 cell gives 40×25. BIOS character output used to
   // treat only CGA 4/5/6 as graphics: in 13h it wrote character+attribute words into the B800 *text*
   // buffer, which mode 13h does not display — the program printed happily into a screen nobody was
-  // showing, with no error. (Planar EGA/VGA 0Dh–12h still take that wrong path; they need the plane
-  // pipeline, and no program we run prints through the BIOS in those modes yet.)
+  // showing, with no error. (Planar EGA/VGA modes have their own path below.)
   function drawGlyph13(ch, col, row, color) {
     // No font loaded → we cannot draw anything, and painting the cell background would *erase*
     // whatever the program had already put there. Leaving the framebuffer alone is the lesser wrong.
@@ -250,10 +250,76 @@ export function installBIOS(machine, opts = {}) {
     mem.u8.fill(0, A + (200 - 8) * 320, A + 200 * 320);
   }
 
+  // ---- planar EGA/VGA (0Dh-12h, 6Ah) character output --------------------------------------
+  // The BIOS draws the glyph into the four planes directly: colour bit p sets the glyph's pixels in
+  // plane p, background pixels are 0, and bit 7 of the colour XORs the glyph onto what is there
+  // (SeaBIOS gfx_write_char). Glyph height is the mode's character cell: 8 for the 200-line modes,
+  // 14 for 350, 16 for 480 and 600. v86's stillalive-os.img prints its lyrics this way in mode 6Ah.
+  function planarGeom() {
+    const m = bios.mode, W = m === 0x6a ? 800 : (m === 0x0d ? 320 : 640);
+    const H = m === 0x6a ? 600 : (m === 0x11 || m === 0x12) ? 480 : (m === 0x0f || m === 0x10) ? 350 : 200;
+    const ch = H === 200 ? 8 : H === 350 ? 14 : 16;
+    return { bpr: W >> 3, cols: W >> 3, rows: Math.floor(H / ch), ch };
+  }
+  function glyphRow(ch, gy, h) {
+    if (h === 8) return glyph8(ch, gy);
+    if (h === 14) { const f = machine.font8x14; if (f) return f[(ch & 0xff) * 14 + gy]; }
+    const f = machine.font; return f ? f[(ch & 0xff) * 16 + Math.min(15, h === 14 ? gy + (gy >> 3) : gy)] : 0;
+  }
+  // SeaBIOS reaches the planes through the sequencer, one plane at a time, and ends every planar
+  // operation with stdvga_planar4_plane(-1): map mask 0Fh, read map 0, the indexes left on those
+  // registers. Programs inherit that state. stillalive-os.img clears its lyrics panel by storing
+  // zeros through A000 WITHOUT setting the map mask; its own drawing had left the mask at one plane,
+  // and it relies on the cursor teletype in between to restore all four. Because we wrote the planes
+  // directly, only plane 0 was cleared and the next verse was printed over the previous one.
+  function planarDefault() {
+    const vga = machine.vga;
+    const readMap = vga.gc[4];
+    vga.mapMask = 0x0f; vga.gc[4] = 0; vga.seqIndex = 2; vga.gcIndex = 4;
+    if (readMap) vga.rebuildShadow();
+  }
+  function drawGlyphPlanar(ch, col, row, color) {
+    const vga = machine.vga; if (!vga || (!machine.font && !machine.font8x8)) return;
+    const g = planarGeom(); if (col >= g.cols || row >= g.rows) return;
+    const planes = vga.planes, xor = (color & 0x80) !== 0;
+    for (let gy = 0; gy < g.ch; gy++) {
+      const bits = glyphRow(ch, gy, g.ch), off = ((row * g.ch + gy) * g.bpr + col) & 0xffff;
+      for (let p = 0; p < 4; p++) {
+        const v = (color >> p) & 1 ? bits : 0, a = p * 0x10000 + off;
+        planes[a] = xor ? planes[a] ^ v : v;
+      }
+    }
+    planarDefault();
+  }
+  // Move whole character rows of the window inside each plane, filling vacated rows with BH.
+  function scrollWindowPlanar(up, lines, color, top, left, bottom, right) {
+    const vga = machine.vga; if (!vga) return;
+    const g = planarGeom();
+    planarDefault();
+    top = Math.max(0, top); left = Math.max(0, left);
+    bottom = Math.min(g.rows - 1, bottom); right = Math.min(g.cols - 1, right);
+    if (top > bottom || left > right) return;
+    const planes = vga.planes, w = right - left + 1, height = bottom - top + 1;
+    const base = (r, py) => (r * g.ch + py) * g.bpr + left;
+    const fillCell = (r) => { for (let p = 0; p < 4; p++) { const v = (color >> p) & 1 ? 0xff : 0;
+      for (let py = 0; py < g.ch; py++) { const a = p * 0x10000 + base(r, py); planes.fill(v, a, a + w); } } };
+    const copyCell = (d, s) => { for (let p = 0; p < 4; p++) for (let py = 0; py < g.ch; py++) {
+      const a = p * 0x10000 + base(s, py); planes.copyWithin(p * 0x10000 + base(d, py), a, a + w); } };
+    if (lines <= 0 || lines >= height) { for (let r = top; r <= bottom; r++) fillCell(r); return; }
+    if (up) {
+      for (let r = top; r <= bottom - lines; r++) copyCell(r, r + lines);
+      for (let r = bottom - lines + 1; r <= bottom; r++) fillCell(r);
+    } else {
+      for (let r = bottom; r >= top + lines; r--) copyCell(r, r - lines);
+      for (let r = top; r < top + lines; r++) fillCell(r);
+    }
+  }
+
   function teletype(ch, attr = bios.attr) {
     const cga = bios.mode === 4 || bios.mode === 5 || bios.mode === 6;
-    const m13 = bios.mode === 0x13, gfx = cga || m13;
-    const cols = m13 ? 40 : cga ? (bios.mode === 6 ? 80 : 40) : COLS;
+    const m13 = bios.mode === 0x13, pl = bios.planar && !!machine.vga;
+    const pg = pl ? planarGeom() : null, rows = pl ? pg.rows : ROWS;
+    const cols = m13 ? 40 : cga ? (bios.mode === 6 ? 80 : 40) : pl ? pg.cols : COLS;
     let col = getCol(), row = getRow();
     if (ch === 0x0d) col = 0;
     else if (ch === 0x0a) row++;
@@ -263,11 +329,17 @@ export function installBIOS(machine, opts = {}) {
     else {
       if (m13) drawGlyph13(ch, col, row, attr);
       else if (cga) drawGlyphCGA(ch, col, row, attr);
+      else if (pl) drawGlyphPlanar(ch, col, row, attr);
       else mem.w16(VRAM + (row * COLS + col) * 2, (ch & 0xff) | (attr << 8));
       col++;
     }
     if (col >= cols) { col = 0; row++; }
-    if (row >= ROWS) { if (m13) scrollGfx13(); else if (cga) scrollGfxCGA(); else scroll(attr); row = ROWS - 1; }
+    if (row >= rows) {
+      if (m13) scrollGfx13(); else if (cga) scrollGfxCGA();
+      else if (pl) scrollWindowPlanar(true, 1, 0, 0, 0, rows - 1, cols - 1);
+      else scroll(attr);
+      row = rows - 1;
+    }
     setCur(col, row);
   }
   bios.teletype = teletype;
@@ -289,7 +361,7 @@ export function installBIOS(machine, opts = {}) {
         // EGA/VGA 16-colour graphics modes are planar (A000 via the Sequencer/Graphics
         // Controller); the flag routes A000 writes through the plane logic (see vga.js).
         const planar = bios.mode === 0x0d || bios.mode === 0x0e || bios.mode === 0x0f ||
-                       bios.mode === 0x10 || bios.mode === 0x11 || bios.mode === 0x12;
+                       bios.mode === 0x10 || bios.mode === 0x11 || bios.mode === 0x12 || bios.mode === 0x6a;
         // A mode set reloads the DAC. In a planar EGA mode the DAC holds the 64 EGA colours and the
         // 16 attribute-controller palette registers get their EGA defaults; a pixel index then maps
         // index -> palette-register -> DAC. This reproduces the default 16 exactly, but lets a game
@@ -365,6 +437,7 @@ export function installBIOS(machine, opts = {}) {
         const c = cpu.al, at = cpu.bx & 0xff, n = cpu.cx & 0xffff, row = getRow(), col = getCol();
         if (bios.mode === 0x13) { for (let i = 0; i < n && col + i < 40; i++) drawGlyph13(c, col + i, row, at); }
         else if (bios.mode >= 4 && bios.mode <= 6) { for (let i = 0; i < n; i++) drawGlyphCGA(c, col + i, row, at); }
+        else if (bios.planar && machine.vga) { for (let i = 0; i < n; i++) drawGlyphPlanar(c, col + i, row, ah === 0x09 ? at : bios.attr); }
         else {
           const off = row * COLS + col;
           for (let i = 0; i < n; i++) {
@@ -385,7 +458,7 @@ export function installBIOS(machine, opts = {}) {
         break;
       }
       case 0x0e:                                 // teletype (BL = foreground colour in graphics modes)
-        teletype(cpu.al, ((bios.mode >= 4 && bios.mode <= 6) || bios.mode === 0x13) ? (cpu.bx & 0xff) : bios.attr);
+        teletype(cpu.al, ((bios.mode >= 4 && bios.mode <= 6) || bios.mode === 0x13 || bios.planar) ? (cpu.bx & 0xff) : bios.attr);
         break;
       case 0x0f: cpu.ax = ((mem.r16(BDA + 0x4a) & 0xff) << 8) | bios.mode;   // AH = columns, and mode 13h has 40
         cpu.bx = (mem.r16(BDA + 0x62) << 8) & 0xff00; break; // get mode
@@ -1107,6 +1180,7 @@ const MODE_INFO = {
   0x11: { al: 0x20, cols: 80, dac: 'ega64',  pal: PAL_MODE11 },
   0x12: { al: 0x20, cols: 80, dac: 'ega64',  pal: PAL_TEXT },
   0x13: { al: 0x20, cols: 40, dac: 'vga256', pal: PAL_VGA256 },
+  0x6a: { al: 0x20, cols: 100, dac: 'ega64', pal: PAL_TEXT },    // 800x600x16, the VESA 102h twin
 };
 
 /** Load the DAC table a mode set installs. Everything above entry 63 is zero except in mode 13h. */

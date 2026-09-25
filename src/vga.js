@@ -6,7 +6,7 @@
 // renderer. Mode 13h stays linear (handled directly in memory/video); text is unchanged.
 
 const PLANE = 0x10000;                              // 64 KiB per plane
-const DIMS = { 0x0d: [320, 200], 0x0e: [640, 200], 0x0f: [640, 350], 0x10: [640, 350], 0x11: [640, 480], 0x12: [640, 480] };
+const DIMS = { 0x0d: [320, 200], 0x0e: [640, 200], 0x0f: [640, 350], 0x10: [640, 350], 0x11: [640, 480], 0x12: [640, 480], 0x6a: [800, 600] };
 
 export function installVGA(machine) {
   const mem = machine.mem;
