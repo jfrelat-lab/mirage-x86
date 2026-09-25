@@ -1034,6 +1034,25 @@ const udRun = (gated) => {
   eq('feature byte 1 claims the second PIC and the RTC, and nothing else', mc.mem.r8(t + 5), 0x60);
   eq('feature byte 2 claims nothing', mc.mem.r8(t + 6), 0x00); }
 
+// ---- CMOS configuration bytes ------------------------------------------------------------------
+// PC-MOS/386 reads 10h (diskette types) before it has a boot sector; with the zeros we held it
+// assumed no drive and addressed every sector with a default geometry. tools/cmosdump.asm on QEMU
+// and DOSBox-X: 10h types, 14h equipment (drives, x87, bit 2), 15h/16h 640 KB, 17h/18h = 30h/31h
+// extended KB.
+{ const mc = new Machine({ memSize: 16 << 20 });
+  installBIOS(mc);
+  const cmos = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
+  mc.disk.attach(0x00, new Uint8Array(1474560));
+  eq('CMOS 10h: drive A is a 1.44 MB diskette, B absent', cmos(0x10), 0x40);
+  eq('CMOS 14h: one diskette drive, x87, bit 2, EGA/VGA', cmos(0x14), 0x07);
+  eq('CMOS 15h/16h: 640 KB base memory', cmos(0x15) | (cmos(0x16) << 8), 640);
+  eq('CMOS 17h/18h and 30h/31h: extended memory in KB', [cmos(0x17) | (cmos(0x18) << 8), cmos(0x30) | (cmos(0x31) << 8)].join(), '15360,15360');
+  eq('CMOS 12h: no hard disk', cmos(0x12), 0);
+  mc.disk.attach(0x80, new Uint8Array(512 * 63 * 16), { cyl: 1, heads: 16, spt: 63 });
+  eq('...and with one, type 15 in 12h pointing at user type 47 in 19h', [cmos(0x12), cmos(0x19)].join(), '240,47');
+  mc.portWrite[0x70](0x70, 1, 0x10); mc.portWrite[0x71](0x71, 1, 0x24);
+  eq('a guest\'s own write to a configuration byte reads back', cmos(0x10), 0x24); }
+
 // ---- MC146818 clock + CMOS ---------------------------------------------------------------------
 // The chip is the reference, not any one BIOS: four implementations (SeaBIOS under QEMU and under
 // v86, the Bochs BIOS, DOSBox-X) answer INT 1Ah by copying these registers out verbatim, and every

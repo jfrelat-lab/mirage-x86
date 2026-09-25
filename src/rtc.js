@@ -118,9 +118,43 @@ export function installRTC(machine) {
   machine.onPortWrite(0x70, (_p, _s, v) => { rtc.index = v & 0x3f; rtc.nmiDisabled = (v & 0x80) !== 0; });
   machine.onPortRead(0x70, () => 0xff);                    // the index port is write-only on a real chip
 
+  // The CONFIGURATION bytes a POST leaves in CMOS, computed from the machine as it is when they are
+  // read (drives are attached after the chip is installed). They were all zero: PC-MOS/386 reads 10h
+  // before it has a boot sector, found "no diskette drive", and addressed every sector with a default
+  // geometry — "Internal error ... opening $$SHELL.SYS". Measured with tools/cmosdump.asm: QEMU/SeaBIOS
+  // and DOSBox-X agree on the drive types, the equipment byte (bit 2 set on both) and the memory
+  // sizes. Neither computes the 2Eh/2Fh checksum, so neither do we. 12h/19h for a hard disk follow
+  // QEMU with an IDE disk (type 15 in 12h, "see 19h", user type 47 there). A guest's own write wins.
+  const written = new Set();
+  const FLOPPY_CMOS = { 1: 1, 2: 2, 3: 3, 4: 4, 6: 5 };        // AH=08h BL drive type -> CMOS type
+  const config = (i) => {
+    const drives = machine.disk ? machine.disk.drives : new Map();
+    const fd = (n) => { const d = drives.get(n); return d ? (FLOPPY_CMOS[d.geom.type] || 4) : 0; };
+    const ext = Math.max(0, (mem.size >>> 10) - 1024), ext16 = Math.min(ext, 0xffff);
+    const above16 = Math.max(0, (mem.size - 0x1000000) >>> 16);
+    switch (i) {
+      case 0x10: return (fd(0) << 4) | fd(1);
+      case 0x12: return drives.has(0x80) ? 0xf0 | (drives.has(0x81) ? 0x0f : 0) : 0;
+      case 0x19: return drives.has(0x80) ? 47 : 0;
+      case 0x1a: return drives.has(0x81) ? 47 : 0;
+      case 0x14: {
+        const nfd = (drives.has(0) ? 1 : 0) + (drives.has(1) ? 1 : 0);
+        return (nfd ? 0x01 | ((nfd - 1) << 6) : 0) | 0x02 | 0x04;   // drives, x87, bit 2; video 00 = EGA/VGA
+      }
+      case 0x15: return 640 & 0xff;
+      case 0x16: return 640 >> 8;
+      case 0x17: case 0x30: return ext16 & 0xff;
+      case 0x18: case 0x31: return ext16 >> 8;
+      case 0x34: return above16 & 0xff;
+      case 0x35: return (above16 >> 8) & 0xff;
+      default: return -1;
+    }
+  };
+
   machine.onPortRead(0x71, () => {
     const i = rtc.index;
     if (TIME_REGS.has(i)) return readTime(i);
+    if (!written.has(i)) { const v = config(i); if (v >= 0) return v; }
     if (i === REG_C) { const v = rtc.ram[REG_C]; rtc.ram[REG_C] = 0; return v; }   // cleared by reading
     return rtc.ram[i];
   });
@@ -130,7 +164,7 @@ export function installRTC(machine) {
     if (i === REG_C || i === REG_D) return;                // status registers are read-only
     if (i === REG_A) { rtc.ram[REG_A] = b & 0x7f; return; }   // UIP is read-only; see below
     const was = rtc.ram[i];
-    rtc.ram[i] = b;
+    rtc.ram[i] = b; written.add(i);
     if (i === REG_B && (was & B_SET) && !(b & B_SET)) commit();
   });
 
