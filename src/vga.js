@@ -205,6 +205,7 @@ export function installVGA(machine) {
   };
   machine.onPortWrite(0x3c4, (_p, s, v) => { vga.seqIndex = v & 0x1f; if (s === 2) seqData((v >> 8) & 0xff); });
   machine.onPortWrite(0x3c5, (_p, _s, v) => seqData(v & 0xff));
+  machine.onPortRead(0x3c4, () => vga.seqIndex);   // the index registers read back on a VGA
   machine.onPortRead(0x3c5, () => (vga.seqIndex === 2 ? vga.mapMask : vga.seqIndex === 4 ? vga.memMode : 0));
 
   const gcData = (v) => {
@@ -216,6 +217,7 @@ export function installVGA(machine) {
   };
   machine.onPortWrite(0x3ce, (_p, s, v) => { vga.gcIndex = v & 0x0f; if (s === 2) gcData((v >> 8) & 0xff); });
   machine.onPortWrite(0x3cf, (_p, _s, v) => gcData(v & 0xff));
+  machine.onPortRead(0x3ce, () => vga.gcIndex);
   machine.onPortRead(0x3cf, () => vga.gc[vga.gcIndex & 0x0f]);
 
   // Attribute Controller: 0x3C0 alternates index then data; the flip-flop is reset to

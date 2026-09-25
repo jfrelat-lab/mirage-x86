@@ -17,6 +17,13 @@
 ; Limitations: assumes the program leaves interrupts enabled, drives animation off the
 ; timer, and doesn't hook INT 8 itself or scribble over this resident block.
 
+%ifdef TEXT                          ; -DTEXT: a text-mode program — dump the 80x25 B800 page instead
+%define GSEG 0B800h
+%define GLEN 0FA0h
+%else
+%define GSEG 0A000h
+%define GLEN 0FA00h
+%endif
 %ifndef KTICKS
 %define KTICKS 24
 %endif
@@ -72,11 +79,11 @@ dump:
         mov     dx, fn_out
         int     21h
         mov     bx, ax
-        push    ds                   ; write 64000 bytes from A000:0
-        mov     ax, 0A000h
+        push    ds                   ; write 64000 bytes from A000:0 (4000 from B800:0 with TEXT)
+        mov     ax, GSEG
         mov     ds, ax
         xor     dx, dx
-        mov     cx, 0FA00h
+        mov     cx, GLEN
         mov     ah, 40h
         int     21h
         pop     ds

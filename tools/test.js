@@ -965,6 +965,12 @@ const udRun = (gated) => {
   int10(0x006a);
   eq('mode 6Ah is an 800x600 planar mode', [mc.vga.width, mc.vga.height, mem.planar, cpu.al].join(), '800,600,true,32');
   eq('...100 text columns in the BDA, 100 bytes per scanline', [mem.r16(0x44a), mc.vga.rowBytes()].join(), '100,100');
+  // rows-1 / character height: SeaBIOS and DOSBox-X agree on every mode (tools/int10gfx.asm T7, T9).
+  eq('...37 rows of 16-line cells in the BDA', [mem.r8(0x484), mem.r16(0x485)].join(), '36,16');
+  int10(0x0012); const g12 = [mem.r8(0x484), mem.r16(0x485)].join();
+  int10(0x0013); const g13 = [mem.r8(0x484), mem.r16(0x485)].join();
+  int10(0x006a);
+  eq('...mode 12h 30 rows of 16, mode 13h 25 rows of 8', `${g12} ${g13}`, '29,16 24,8');
   const P = 0x10000, pl = mc.vga.planes;
   mc.vga.mapMask = 0x02; mc.vga.gc[4] = 1;                   // what the program's own drawing leaves
   mem.w8(0x450, 5); mem.w8(0x451, 0);

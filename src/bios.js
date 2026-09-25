@@ -118,6 +118,7 @@ export function installBIOS(machine, opts = {}) {
   mem.w8(BDA + 0x49, 0x03);
   mem.w16(BDA + 0x4a, COLS);     // text columns
   mem.w8(BDA + 0x84, ROWS - 1);  // rows - 1
+  mem.w16(BDA + 0x85, 16);       // character height (points)
   mem.w16(BDA + 0x62, 0);        // active page
   // Video-BIOS ROM signature at C000:0 (0x55 0xAA + size/512). Games detect an EGA/VGA card by
   // scanning for this option-ROM signature; without it they print "requires an EGA or VGA Adapter".
@@ -371,6 +372,9 @@ export function installBIOS(machine, opts = {}) {
         if (mi) {
           loadModeDAC(bios.dac, mi.dac);
           mem.w16(BDA + 0x4a, mi.cols);          // text columns: mode 13h is 40, not 80
+          // Rows-1 and character height, as SeaBIOS and DOSBox-X both leave them (tools/int10gfx.asm
+          // T9): 25 rows everywhere but 12h/11h (30) and 6Ah (37); 8-line cells in the 200-line modes.
+          mem.w8(BDA + 0x84, mi.rows - 1); mem.w16(BDA + 0x85, mi.ch);
           cpu.al = mi.al;                        // AH=00 returns 0x20 for graphics, 0x30 for text
         } else if (planar && machine.vga) { egaPaletteDAC(bios.dac); machine.vga.palette.set(EGA_DEFAULT_PAL); }
         else defaultPalette(bios.dac);
@@ -1165,22 +1169,22 @@ const PAL_VGA256 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 // al: what AH=00 returns. Mode 6 really does answer 0x3f — a CGA-compatibility quirk, not a typo.
 const MODE_INFO = {
-  0x00: { al: 0x30, cols: 40, dac: 'ega64',  pal: PAL_TEXT },
-  0x01: { al: 0x30, cols: 40, dac: 'ega64',  pal: PAL_TEXT },
-  0x02: { al: 0x30, cols: 80, dac: 'ega64',  pal: PAL_TEXT },
-  0x03: { al: 0x30, cols: 80, dac: 'ega64',  pal: PAL_TEXT },
-  0x04: { al: 0x30, cols: 40, dac: 'cga',    pal: PAL_CGA4 },
-  0x05: { al: 0x30, cols: 40, dac: 'cga',    pal: PAL_CGA4 },
-  0x06: { al: 0x3f, cols: 80, dac: 'cga',    pal: PAL_CGA6 },
-  0x07: { al: 0x30, cols: 80, dac: 'mono',   pal: PAL_MONO7 },
-  0x0d: { al: 0x20, cols: 40, dac: 'cga',    pal: PAL_EGALO },
-  0x0e: { al: 0x20, cols: 80, dac: 'cga',    pal: PAL_EGALO },
-  0x0f: { al: 0x20, cols: 80, dac: 'mono',   pal: PAL_MONO0F },
-  0x10: { al: 0x20, cols: 80, dac: 'ega64',  pal: PAL_TEXT },
-  0x11: { al: 0x20, cols: 80, dac: 'ega64',  pal: PAL_MODE11 },
-  0x12: { al: 0x20, cols: 80, dac: 'ega64',  pal: PAL_TEXT },
-  0x13: { al: 0x20, cols: 40, dac: 'vga256', pal: PAL_VGA256 },
-  0x6a: { al: 0x20, cols: 100, dac: 'ega64', pal: PAL_TEXT },    // 800x600x16, the VESA 102h twin
+  0x00: { al: 0x30, cols: 40, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x01: { al: 0x30, cols: 40, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x02: { al: 0x30, cols: 80, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x03: { al: 0x30, cols: 80, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x04: { al: 0x30, cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA4 },
+  0x05: { al: 0x30, cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA4 },
+  0x06: { al: 0x3f, cols: 80, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA6 },
+  0x07: { al: 0x30, cols: 80, dac: 'mono',   rows: 25, ch: 16, pal: PAL_MONO7 },
+  0x0d: { al: 0x20, cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_EGALO },
+  0x0e: { al: 0x20, cols: 80, dac: 'cga',    rows: 25, ch: 8, pal: PAL_EGALO },
+  0x0f: { al: 0x20, cols: 80, dac: 'mono',   rows: 25, ch: 14, pal: PAL_MONO0F },
+  0x10: { al: 0x20, cols: 80, dac: 'ega64',  rows: 25, ch: 14, pal: PAL_TEXT },
+  0x11: { al: 0x20, cols: 80, dac: 'ega64',  rows: 30, ch: 16, pal: PAL_MODE11 },
+  0x12: { al: 0x20, cols: 80, dac: 'ega64',  rows: 30, ch: 16, pal: PAL_TEXT },
+  0x13: { al: 0x20, cols: 40, dac: 'vga256', rows: 25, ch: 8, pal: PAL_VGA256 },
+  0x6a: { al: 0x20, cols: 100, dac: 'ega64', rows: 37, ch: 16, pal: PAL_TEXT },    // 800x600x16, the VESA 102h twin
 };
 
 /** Load the DAC table a mode set installs. Everything above entry 63 is zero except in mode 13h. */
