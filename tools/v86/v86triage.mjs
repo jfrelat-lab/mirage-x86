@@ -2,7 +2,7 @@
 // end in, and what is on screen. Writes a PNG for graphics modes and the text screen for text modes,
 // so the QEMU comparison that follows has something to compare against.
 //
-//   node v86triage.mjs <image> [seconds]      (512-byte images are padded to a 1.44 MB floppy)
+//   node v86triage.mjs <image> [seconds]      (guest seconds; 512-byte images padded to a 1.44 MB floppy)
 import { readFileSync, writeFileSync } from 'fs';
 import { deflateSync } from 'zlib';
 import { fileURLToPath } from 'url';
@@ -38,9 +38,12 @@ if (bytes.length > 2949120) {                        // a hard disk: geometry fr
 let fault = null, derail = null;
 mc.onError = (e) => { fault = e; }; mc.onDerail = (d) => { if (!derail) derail = d; };
 bootSector(mc, bytes, { drive });
-const t0 = Date.now(); let halted = false;
-while (!fault && !derail && Date.now() - t0 < SECS * 1000) {
-  mc.runSlice(20000); mc.tickTimer();
+// SECS is GUEST time, in cycles: the run loop drives IRQ0 off cpu.cycles (timerAuto), so a tick is
+// pitBase cycles. Calling tickTimer() here as well used to add a second timer on top of it — the
+// guest saw time pass several times too fast and KolibriOS measured its CPU at 0001 MHz.
+const end = mc.cpu.cycles + SECS * 18.2065 * mc.pitBase, t0 = Date.now(); let halted = false;
+while (!fault && !derail && mc.cpu.cycles < end && Date.now() - t0 < 600e3) {
+  mc.runSlice(20000); if (mc.timerAuto === false) mc.tickTimer();
   if (mc.cpu.halted && !(mc.cpu.flags & 0x200)) { halted = true; break; }   // HLT with IF clear: over
 }
 const mode = mc.mem.u8[0x449];
@@ -59,7 +62,17 @@ const png = (W, H, rgb) => {
 };
 const dac = mc.bios.dac;
 const rgbOf = (d, rgb, i) => { rgb[i] = dac6to8(dac[d * 3]); rgb[i + 1] = dac6to8(dac[d * 3 + 1]); rgb[i + 2] = dac6to8(dac[d * 3 + 2]); };
-if (mode === 3 || mode === 2 || mode === 7 || mode === 1 || mode === 0) {
+if (mc.vbe && mc.vbe.bpp >= 15) {               // a VESA direct-colour mode: the BDA still says 3
+  const { width: W, height: H, bpp, pitch, base } = mc.vbe, rgb = new Uint8Array(W * H * 3); let nz = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const a = base + y * pitch, i = (y * W + x) * 3;
+    if (bpp >= 24) { const o = a + x * (bpp >> 3); rgb[i] = mc.mem.u8[o + 2]; rgb[i + 1] = mc.mem.u8[o + 1]; rgb[i + 2] = mc.mem.u8[o]; }
+    else { const v = mc.mem.u8[a + x * 2] | (mc.mem.u8[a + x * 2 + 1] << 8), g6 = bpp === 16;
+      rgb[i] = ((v >> (g6 ? 11 : 10)) & 31) << 3; rgb[i + 1] = g6 ? ((v >> 5) & 63) << 2 : ((v >> 5) & 31) << 3; rgb[i + 2] = (v & 31) << 3; }
+    if (rgb[i] | rgb[i + 1] | rgb[i + 2]) nz++;
+  }
+  png(W, H, rgb); screen = `    VBE ${W}x${H}x${bpp}, ${nz} non-black pixels -> ${pngOut}`;
+} else if (mode === 3 || mode === 2 || mode === 7 || mode === 1 || mode === 0) {
   const cols = mode <= 1 ? 40 : 80, base = mode === 7 ? 0xb0000 : 0xb8000;
   const lines = [];
   for (let y = 0; y < 25; y++) { let l = '';

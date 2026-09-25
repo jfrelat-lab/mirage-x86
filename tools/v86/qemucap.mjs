@@ -2,8 +2,15 @@
 // the BDA video mode byte, the text buffer, and a screendump. Nothing runs inside the guest.
 //
 //   node qemucap.mjs <image> [seconds]
+//
+// The video card is the vendor Cirrus CL-GD5446 BIOS (boot/roms/5446bv.vbi, ROADMAP H1) when it is
+// there — a lineage independent of SeaBIOS — and QEMU's std VGA with SeaVGABIOS otherwise or with
+// VGA=std.
 import { spawn } from 'child_process';
-import { readFileSync, existsSync, statSync, copyFileSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, statSync, writeFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+const ROM = fileURLToPath(new URL('../../boot/roms/5446bv.vbi', import.meta.url));
+const cirrus = process.env.VGA !== 'std' && existsSync(ROM);
 const img = process.argv[2], secs = Number(process.argv[3]) || 20;
 const name = img.split('/').pop().replace(/\.[^.]+$/, '');
 let size = statSync(img).size;
@@ -17,6 +24,7 @@ writeFileSync(copy, bytes);
 const hd = bytes.length > 2949120;
 const args = ['-m', '16', ...(hd ? ['-drive', `format=raw,file=${copy},if=ide,index=0`, '-boot', 'c']
   : ['-drive', `format=raw,file=${copy},if=floppy,index=0`, '-boot', 'a']),
+  ...(cirrus ? ['-vga', 'none', '-device', `cirrus-vga,romfile=${ROM}`] : []),
   '-display', 'none', '-monitor', 'stdio', '-no-reboot'];
 const q = spawn('/bin/sh', ['-c', `ulimit -t ${secs + 60}; exec "$@"`, 'sh', '/opt/homebrew/bin/qemu-system-i386', ...args],
   { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -29,7 +37,7 @@ q.stdin.write(`screendump ${ppm}\n`); await sleep(1500);
 q.stdin.write('quit\n'); await sleep(500); q.kill('SIGKILL');
 if (!existsSync(bda)) { console.log(`${name}: no capture — ${log.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n').filter((l) => /error|invalid|could not/i.test(l)).slice(-2).join(' / ').slice(0, 200)}`); process.exit(1); }
 const mode = readFileSync(bda)[0];
-let out = `${name.padEnd(20)} QEMU [mode ${mode.toString(16)}h]`;
+let out = `${name.padEnd(20)} QEMU${cirrus ? '+Cirrus' : ''} [mode ${mode.toString(16)}h]`;
 if ([0, 1, 2, 3, 7].includes(mode)) {
   const t = readFileSync(mem), cols = mode <= 1 ? 40 : 80, lines = [];
   for (let y = 0; y < 25; y++) { let l = '';
