@@ -193,7 +193,13 @@ export class Video {
     const u32 = this.u32;
     const hi = (color & 0x10) ? 8 : 0;                  // intensity → bright hues
     const set = (color & 0x20) ? [3, 5, 7] : [2, 4, 6]; // cyan/magenta/white  vs  green/red/brown
-    const lut = [pal[color & 0x0f], pal[set[0] + hi], pal[set[1] + hi], pal[set[2] + hi]];  // idx 0 = background
+    // On a VGA the four pixel values go through attribute registers 0-3 and the DAC, like every other
+    // mode — AH=0Bh and port 3D9h write those registers (bios.js cgaToAttr), and a program may set
+    // them or the DAC directly (GentleOS reads registers 0 and 3 with AX=1007h and reprograms the two
+    // DAC entries behind them). Without a VGA, the colour-select register picks the CGA hues.
+    const ac = this.machine.vga && this.machine.vga.palette;
+    const lut = ac ? [pal[ac[0] & 0x3f], pal[ac[1] & 0x3f], pal[ac[2] & 0x3f], pal[ac[3] & 0x3f]]
+      : [pal[color & 0x0f], pal[set[0] + hi], pal[set[1] + hi], pal[set[2] + hi]];  // idx 0 = background
     for (let y = 0; y < 200; y++) {
       const row = ((y & 1) ? 0x2000 : 0) + (y >> 1) * 80; let o = y * 320;
       for (let xb = 0; xb < 80; xb++) {

@@ -961,6 +961,31 @@ const udRun = (gated) => {
   eq('AH=13h draws in the colour BL gives', fg > 0, true);
   eq('...and with AL bit 0 clear the cursor stays where it was', mem.r16(0x450), 0x0203); }
 
+// ---- 320x200x4 coloured through the attribute registers and the DAC, as on a VGA ----------------
+// The renderer took the colours from the 3D9h value and DAC 8-15 — which the 'cga' DAC fills with the
+// DARK hues, so the BIOS's default palette (bright cyan/magenta/white) came out dark, and a program
+// that reprograms the registers or the DAC was not seen at all. GentleOS reads registers 0 and 3
+// with AX=1007h (unimplemented: BH stayed 0) and sets the two DAC entries behind them.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const video = new Video(mc, canvas);
+  const px = (v) => { mem.u8[0xb8000] = v << 6; video._palette(); video._renderCGA(4); return video.u32[0]; };
+  const dacRGB = (i) => video.pal[i];
+  int10(0x0004);
+  eq('mode 4: the four colours are attribute registers 0-3', Array.from(mc.vga.palette.slice(0, 4)).map((v) => v.toString(16)).join(), '0,13,15,17');
+  eq('...rendered through the DAC: pixel 3 is DAC 17h (bright white), not DAC 0Fh', px(3), dacRGB(0x17));
+  int10(0x0b00, 0x0001); int10(0x0b00, 0x0100);          // background blue, low intensity; palette 0
+  eq('AH=0Bh: background -> reg 0, intensity -> bit 4, palette 0 -> bit 0 of regs 1-3', Array.from(mc.vga.palette.slice(0, 4)).map((v) => v.toString(16)).join(), '1,2,4,6');
+  mc.ioWrite(0x3d9, 1, 0x3e);                            // background 14 (yellow), intensity, palette 1
+  eq('port 3D9h writes the same registers (bit 3 of the background moves to 10h)', Array.from(mc.vga.palette.slice(0, 4)).map((v) => v.toString(16)).join(), '16,13,15,17');
+  int10(0x1007, 0x0003);
+  eq('AX=1007h reads a palette register into BH', (cpu.bx >> 8) & 0xff, 0x17);
+  int10(0x1010, 0x0017, 0x2814, 0x1900);                 // DAC 17h := 19h,28h,14h
+  eq('...and the DAC entry behind it is what pixel 3 shows', px(3), dacRGB(0x17));
+  int10(0x1015, 0x0017);
+  eq('AX=1015h reads a DAC register back into DH CH CL', [(cpu.dx >> 8) & 0xff, cpu.cx].map((v) => v.toString(16)).join(), '19,2814'); }
+
 // ---- INT 10h in planar modes: mode 6Ah, glyphs into the planes, SeaBIOS's register side effect ----
 // v86's stillalive-os.img sets mode 6Ah (800x600x16) and prints with AH=0Eh; QEMU shows the lyrics,
 // we stayed in text mode. It then clears its lyrics panel with bare stores through A000, relying on

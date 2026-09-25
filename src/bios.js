@@ -97,6 +97,7 @@ export function installBIOS(machine, opts = {}) {
     onModeChange: null,        // (mode) => void, wired up by the video layer
     mode: 0x03,
     cga: { color: 0x30, mode: 0 },  // CGA color-select (0x3D9) / mode-control (0x3D8) registers
+    overscan: 0,                    // attribute-controller register 11h (border)
     blink: true,                    // attribute bit 7 = blink (default) vs bright background
     cursor: { start: 14, end: 15, hidden: false },   // scan lines, per INT 10h AH=01 / CRTC 0A-0B
   };
@@ -280,6 +281,19 @@ export function installBIOS(machine, opts = {}) {
     const vga = machine.vga;
     vga.mapMask = 0x0f; vga.seqIndex = 2; vga.gcIndex = gcIndex;
   }
+  // The CGA colour-select semantics, applied to a VGA's attribute registers the way SeaVGABIOS does:
+  // background (0-15) -> register 0 with bit 3 moved to 10h; intensity -> bit 4 of registers 1-3;
+  // palette -> bit 0 of registers 1-3. -1 leaves that part alone. With the 'cga' DAC this gives the
+  // colours the 3D9h register always gave, and the renderer can colour 320x200 through the same
+  // attribute -> DAC path as every other VGA mode, so a program that reprograms either one is seen.
+  function cgaToAttr(bg, intensity, palette) {
+    const pal = machine.vga && machine.vga.palette; if (!pal) return;
+    if (bg >= 0) pal[0] = ((bg & 0x08) << 1) | (bg & 0x07);
+    for (let i = 1; i < 4; i++) {
+      if (intensity >= 0) pal[i] = (pal[i] & ~0x10) | (intensity ? 0x10 : 0);
+      if (palette >= 0) pal[i] = (pal[i] & ~0x01) | (palette & 1);
+    }
+  }
   function drawGlyphPlanar(ch, col, row, color) {
     const vga = machine.vga; if (!vga || (!machine.font && !machine.font8x8)) return;
     const g = planarGeom(); if (col >= g.cols || row >= g.rows) return;
@@ -452,12 +466,20 @@ export function installBIOS(machine, opts = {}) {
         break;
       }
       case 0x0b: {                               // set CGA palette (BH=1) / background+border (BH=0)
-        const bh = (cpu.bx >> 8) & 0xff, bl = cpu.bx & 0xff;
+        // On a VGA these are attribute-controller writes, and the 320x200 modes are coloured through
+        // those registers and the DAC like every other mode (SeaVGABIOS stdvga_set_border_color /
+        // stdvga_set_palette): background -> register 0 with bit 3 moved to 10h, intensity -> bit 4
+        // of registers 1-3, palette select -> bit 0 of registers 1-3.
+        // Only in 320x200x4, where registers 0-3 ARE the four colours; elsewhere as before.
+        const bh = (cpu.bx >> 8) & 0xff, bl = cpu.bx & 0xff, cga4 = bios.mode === 4 || bios.mode === 5;
         if (bh === 0) {
           bios.cga.color = (bios.cga.color & 0x20) | (bl & 0x1f);                   // background/border
-          if (machine.vga) machine.vga.palette[0] = bl & 0x3f;   // a VGA puts it in attribute reg 0 too
+          if (cga4) cgaToAttr(bl & 0x0f, bl & 0x10, -1);
+          else if (machine.vga) machine.vga.palette[0] = bl & 0x3f;   // a VGA puts it in attribute reg 0 too
+        } else {
+          bios.cga.color = (bios.cga.color & ~0x20) | ((bl & 1) << 5);          // palette select
+          if (cga4) cgaToAttr(-1, -1, bl & 1);
         }
-        else bios.cga.color = (bios.cga.color & ~0x20) | ((bl & 1) << 5);          // palette select
         break;
       }
       case 0x0e:                                 // teletype (BL = foreground colour in graphics modes)
@@ -467,7 +489,27 @@ export function installBIOS(machine, opts = {}) {
         cpu.bx = (mem.r16(BDA + 0x62) << 8) & 0xff00; break; // get mode
       case 0x10:                                 // palette / DAC
         if (cpu.al === 0x00) {                   // set one attribute-controller palette register
-          if (machine.vga) machine.vga.palette[cpu.bx & 0x0f] = (cpu.bx >> 8) & 0x3f; // BL=reg, BH=value
+          if ((cpu.bx & 0xff) === 0x11) bios.overscan = (cpu.bx >> 8) & 0xff;
+          else if (machine.vga) machine.vga.palette[cpu.bx & 0x0f] = (cpu.bx >> 8) & 0x3f; // BL=reg, BH=value
+        } else if (cpu.al === 0x01) {            // set overscan (border) register
+          bios.overscan = (cpu.bx >> 8) & 0xff;
+        } else if (cpu.al === 0x07) {            // READ one palette register: BL=reg (11h = overscan) -> BH
+          // GentleOS reads registers 0 and 3 to find which DAC entries its background and ink go
+          // through, then reprograms those two with AX=1010h. Unanswered, BH stayed 0 for both and
+          // both colours went to DAC 0: a green background instead of black with green ink.
+          const reg = cpu.bx & 0xff;
+          const v = reg === 0x11 ? bios.overscan : (machine.vga && reg < 16 ? machine.vga.palette[reg] : 0);
+          cpu.bx = (cpu.bx & 0x00ff) | ((v & 0xff) << 8);
+        } else if (cpu.al === 0x08) {            // read overscan -> BH
+          cpu.bx = (cpu.bx & 0x00ff) | ((bios.overscan & 0xff) << 8);
+        } else if (cpu.al === 0x09) {            // read all 16 palette registers + overscan -> ES:DX
+          let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff);
+          for (let i = 0; i < 16; i++) mem.w8(p++, machine.vga ? machine.vga.palette[i] & 0x3f : i);
+          mem.w8(p, bios.overscan & 0xff);
+        } else if (cpu.al === 0x15) {            // read one DAC register: BL -> DH red, CH green, CL blue
+          const reg = cpu.bx & 0xff;
+          cpu.dx = (cpu.dx & 0x00ff) | ((bios.dac[reg * 3] & 0x3f) << 8);
+          cpu.cx = ((bios.dac[reg * 3 + 1] & 0x3f) << 8) | (bios.dac[reg * 3 + 2] & 0x3f);
         } else if (cpu.al === 0x02) {            // set all 16 palette registers + overscan (ES:DX -> 17 bytes)
           if (machine.vga) { let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); for (let i = 0; i < 16; i++) machine.vga.palette[i] = mem.r8(p++) & 0x3f; }
         } else if (cpu.al === 0x10) {            // set one DAC register
@@ -868,7 +910,7 @@ export function installBIOS(machine, opts = {}) {
   // CGA control (modes 4/5/6): 0x3D8 mode-control, 0x3D9 colour-select (bits0-3 background,
   // bit4 intensity, bit5 palette green-red-brown vs cyan-magenta-white). The renderer reads these.
   machine.onPortWrite(0x3d8, (_p, _s, v) => { bios.cga.mode = v & 0xff; });
-  machine.onPortWrite(0x3d9, (_p, _s, v) => { bios.cga.color = v & 0xff; });
+  machine.onPortWrite(0x3d9, (_p, _s, v) => { bios.cga.color = v & 0xff; if (bios.mode === 4 || bios.mode === 5) cgaToAttr(v & 0x0f, v & 0x10, (v >> 5) & 1); });
   machine.onPortRead(0x3d9, () => bios.cga.color);
   // A20 gate — System Control Port A (0x92), the PS/2 "fast A20": bit 1 opens/closes the 1 MiB
   // address wrap. (Games that want HMA/extended addressing set it; most rely on the reset default
