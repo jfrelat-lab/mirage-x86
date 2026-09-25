@@ -5,6 +5,41 @@ vitesse". This is a menu, not a plan — pick what's next. Effort: **S** ≤ hal
 one focused session, **L** = multi-session. Each notes what it unblocks. See [COMPAT.md](COMPAT.md)
 for current status and [ARCHITECTURE.md](ARCHITECTURE.md)/[RECOMPILER.md](RECOMPILER.md) for how.
 
+## H · v86 image catalogue & independent BIOS oracles — ⭐ CURRENT FRONT (updated 2026-09-25)
+
+Images live in `boot/v86/` (gitignored), fetched from `https://i.copy.sh/`. MIRAGE's disk is INT 13h
+only, so BIOS-disk systems are in reach; IDE/ATAPI/CD-only systems are not.
+
+**Oracle rule.** QEMU, v86 and `tools/vga-rom.mjs` all run SeaBIOS/SeaVGABIOS: ONE lineage, not three.
+DOSBox-X is the second (HLE BIOS). Where the lineages AGREE, that is the portable contract and MIRAGE
+follows it; where they DISAGREE it is a vendor choice, documented, and MIRAGE keeps SeaBIOS unless a
+program depends on the other. RBIL (delorie mirror; ctyme refuses connections) is the documentary
+check. `tools/int10gfx.asm` is the three-machine probe (boot sector on QEMU/MIRAGE, `-DCOM` on
+DOSBox-X, all on COM1): MIRAGE = QEMU byte for byte; DOSBox-X differs only on read-map-after-AH=0Eh
+and AL returned for mode 6Ah (`08fd1fb`).
+
+| # | Task | Effort | State / next step |
+|---|---|---|---|
+| H1 | **Third BIOS lineage: real Cirrus VGA ROM on QEMU** | S | User-approved: download the CL-GD5446 ROM from GitHub `86Box/roms` (`video/cirruslogic/`) into `boot/roms/` (never commit). QEMU's bundled `vgabios-cirrus.bin` is SeaVGABIOS — NOT a vendor ROM. Run `qemu -vga cirrus` with `romfile=`, check the Cirrus banner first (positive control), then int10gfx.asm: it arbitrates T5 (read map) and T7 (AL for 6Ah). |
+| H2 | **Boot images vs DOSBox-X** (pillman, invaders, bootdino, floppybird, hello-v86, bootlogo) | S | Ready, never run: `bootcom.asm` loads sector 1 via DOSBox-X's own INT 13h and jumps to 7C00 with the resident grabber underneath (`-DCGA` for bootlogo). Vs QEMU they already match up to animation timing (hello-v86 0 px, bootlogo 3 px). |
+| H3 | **xcom144: HDPMI32 client derails** at `00af:2b915` in zeros | M | XCOM486.EXE = DJGPP go32 stub + COFF **packed with UPX 3.91**; the code at the derail is what the decompressor should have produced. QEMU at 45 s: same CS 00AF base 111000 but limit `006bffff` (MIRAGE `0046ffff`). Next: dump the linear range under QEMU with paging ON (`memsave` gives nothing when a chunk is unmapped and meaningless in real mode — retry `stop` until CR0.PG and CS=00AF), same in MIRAGE, first differing byte → decompressor or loader defect. No x86 host available (arm64 Mac): KVM real-silicon oracle is out. |
+| H4 | **Catalogue lots 3/4**: ELKS (elks-hd32-fat.img), GentleOS/16, T3XFORTH, PC-MOS/386, KolibriOS | M | Not fetched yet. Triage with v86triage vs qemucap. |
+| H5 | AH=11h AL=24h row specifier (BL=03 → 43 rows?) | S | stillalive-os calls it; screen matches without it. Check what the references put in 0040:0084 after it. |
+| H6 | Font: SeaVGABIOS draws 'm'/'M' 8 px wide, our ROM font 7 | S | Only residual Still Alive difference vs QEMU. Which font is the IBM one? Decide per target, not a bug. |
+
+Done in this front: PS/2 mouse, EMM386 (V86 defects), DOOF, IBM tutorial (INT 1Ch register save),
+chained INT 8→1Ch, IRQ0/1 through the IDT in PM/V86, BIOS INT 9 clears OBF, three INT 10h graphics
+defects (`3d9f243`), mode 6Ah + planar BIOS text + SeaBIOS map-mask side effect (`33f072e`, Still
+Alive = QEMU up to the font; its mode 0 is the song's END, confirmed by QEMU at 330 s), BDA geometry +
+index readback (`08fd1fb`). pitman.com = DOSBox-X in all 2000 cells.
+
+**Tools not yet committed** (session scratchpads under `/private/tmp/claude-501/…/scratchpad/`, will be
+lost on reboot — move to `tools/v86/` with repo-relative paths): `v86triage.mjs` (MIRAGE: stop reason,
+mode, text/PNG incl. 800x600 planar), `qemucap.mjs` (QEMU: BDA mode, B800 via `pmemsave … "file"` —
+quoted filename — and screendump), `serialboot.mjs` (MIRAGE: COM1 output of a boot image),
+`textdiff.mjs` (text page of a .COM, DOSBox-X vs MIRAGE, via `grabber.asm -DTEXT`), `bootdiff.mjs` +
+`bootcom.asm` (H2), `qxmem.mjs` (H3), `fat12.py` (extract a file from a FAT12 floppy — no mtools here).
+
 ## A · Correctness & browser UX (small, high polish-per-hour)
 
 | # | Task | Effort | Why / unblocks |
