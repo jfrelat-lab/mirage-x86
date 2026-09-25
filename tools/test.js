@@ -963,7 +963,11 @@ const udRun = (gated) => {
   const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
   mc.font = new Uint8Array(256 * 16).fill(0xff); mc.font8x8 = new Uint8Array(256 * 8).fill(0xff);
   int10(0x006a);
-  eq('mode 6Ah is an 800x600 planar mode', [mc.vga.width, mc.vga.height, mem.planar, cpu.al].join(), '800,600,true,32');
+  eq('mode 6Ah is an 800x600 planar mode', [mc.vga.width, mc.vga.height, mem.planar].join(), '800,600,true');
+  // AL: the Cirrus CL-GD5446 ROM and DOSBox-X return it unchanged, SeaVGABIOS 20h/30h (int10gfx T10).
+  const als = [0x03, 0x06, 0x12, 0x13, 0x6a, 0x84].map((m) => { int10(m); return cpu.al.toString(16); }).join();
+  eq('...and AH=00h leaves the caller\'s AL alone, bit 7 included', als, '3,6,12,13,6a,84');
+  int10(0x006a);
   eq('...100 text columns in the BDA, 100 bytes per scanline', [mem.r16(0x44a), mc.vga.rowBytes()].join(), '100,100');
   // rows-1 / character height: SeaBIOS and DOSBox-X agree on every mode (tools/int10gfx.asm T7, T9).
   eq('...37 rows of 16-line cells in the BDA', [mem.r8(0x484), mem.r16(0x485)].join(), '36,16');
@@ -976,13 +980,16 @@ const udRun = (gated) => {
   mem.w8(0x450, 5); mem.w8(0x451, 0);
   int10(0x0e41, 0x0006);                                     // 'A' in colour 6 (planes 1 and 2), no wrap
   eq('AH=0Eh draws the glyph in the planes of the colour in BL', [pl[5], pl[P + 5], pl[2 * P + 5], pl[3 * P + 5]].join(), '0,255,255,0');
-  eq('...and leaves map mask 0Fh / read map 0, as SeaBIOS does', [mc.vga.mapMask, mc.vga.gc[4]].join(), '15,0');
+  // Map mask 0Fh on all three BIOSes; the read map stays the program's on Cirrus and DOSBox-X (int10gfx T5).
+  eq('...and leaves map mask 0Fh, the read map it found, GC index 01h', [mc.vga.mapMask, mc.vga.gc[4], mc.vga.gcIndex].join(), '15,1,1');
   mem.w8(0x450, 99); mem.w8(0x451, 36);                      // last cell of the 100x37 screen
   int10(0x0e41, 0x0006);
   const off = 35 * 16 * 100 + 99;                            // row 35: the wrap scrolled it up a row
   eq('...scrolling the full 37-row screen up a text row', [mem.r8(0x450), mem.r8(0x451), pl[P + off], pl[P + off + 1600]].join(), '0,36,255,0');
+  mc.vga.mapMask = 0x01; mc.vga.gc[4] = 2;
   int10(0x0600, 0x0000, 0x0000, 0x2463);
-  eq('AH=06h in a planar mode clears the pixels', pl[P + off] | pl[2 * P + off], 0); }
+  eq('AH=06h in a planar mode clears the pixels', pl[P + off] | pl[2 * P + off], 0);
+  eq('...leaving map mask 0Fh and the read map it found (int10gfx T8)', [mc.vga.mapMask, mc.vga.gc[4]].join(), '15,2'); }
 
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they

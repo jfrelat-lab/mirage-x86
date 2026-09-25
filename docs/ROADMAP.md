@@ -14,13 +14,19 @@ only, so BIOS-disk systems are in reach; IDE/ATAPI/CD-only systems are not.
 DOSBox-X is the second (HLE BIOS). Where the lineages AGREE, that is the portable contract and MIRAGE
 follows it; where they DISAGREE it is a vendor choice, documented, and MIRAGE keeps SeaBIOS unless a
 program depends on the other. RBIL (delorie mirror; ctyme refuses connections) is the documentary
-check. `tools/int10gfx.asm` is the three-machine probe (boot sector on QEMU/MIRAGE, `-DCOM` on
-DOSBox-X, all on COM1): MIRAGE = QEMU byte for byte; DOSBox-X differs only on read-map-after-AH=0Eh
-and AL returned for mode 6Ah (`08fd1fb`).
+check. The THIRD lineage is a vendor ROM: the Cirrus CL-GD5446 VGA BIOS 1.25 (Cirrus Logic + Quadtel)
+on QEMU (H1). `tools/int10gfx.asm` is the probe (boot sector on QEMU/MIRAGE/Cirrus, `-DCOM` on
+DOSBox-X, all on COM1; `tools/v86/i10all.sh` + `tools/v86/cirrusboot.mjs`). **Cirrus = DOSBox-X on
+every line** but the GC index after AH=06h (Cirrus 1Eh, an extended register; DOSBox-X 01h). So on
+the two points SeaBIOS and DOSBox-X disputed, both lineages independent of SeaBIOS agree against it,
+and MIRAGE now follows them: (T5/T8) the read map is left as the program set it — SeaBIOS resets it
+to 0; (T7/T10) AH=00h returns AL UNCHANGED for every mode, bit 7 included — SeaBIOS's 30h/3Fh/20h is
+the Phoenix/AMI convention (RBIL). GC index 01h after a glyph (both agree), 04h after a scroll (they
+disagree → SeaBIOS kept). MIRAGE = Cirrus except that one byte.
 
 | # | Task | Effort | State / next step |
 |---|---|---|---|
-| H1 | **Third BIOS lineage: real Cirrus VGA ROM on QEMU** | S | User-approved: download the CL-GD5446 ROM from GitHub `86Box/roms` (`video/cirruslogic/`) into `boot/roms/` (never commit). QEMU's bundled `vgabios-cirrus.bin` is SeaVGABIOS — NOT a vendor ROM. Run `qemu -vga cirrus` with `romfile=`, check the Cirrus banner first (positive control), then int10gfx.asm: it arbitrates T5 (read map) and T7 (AL for 6Ah). |
+| H1 | ✅ **DONE — third BIOS lineage: real Cirrus VGA ROM on QEMU** | — | `boot/roms/5446bv.vbi` from GitHub `86Box/roms` `video/cirruslogic/` (never committed; QEMU's own `vgabios-cirrus.bin` is SeaVGABIOS). `-device cirrus-vga,romfile=`: the ROM is at C0000 byte for byte, INT 10h → C000:3620, and the banner "CL-GD5436/46 PCI VGA BIOS Version 1.25" is on screen ~73 ms after power-on, before SeaBIOS's own mode 3 clears it (positive control). Arbitration above. Golden re-blessed for the four intros that read AX after `int 10h` (intoanew, kaneda, memories, omniscent): intoanew vs DOSBox-X at 60 ticks 17.7% → 73.2%. kaneda (palette entry 0 black in DOSBox-X, AL-coloured here: likely `shrd` with count > 16) and memories (`mov dl,45h` assumes DH=01, i.e. a PSP below 0200h as in DOSBox; ours is 0814h, so its INT 1Ch handler lands at 0845h) are broken either way — separate defects. The same ROM also initialises INSIDE MIRAGE via `tools/vga-rom.mjs`, mode 13h register-identical. |
 | H2 | **Boot images vs DOSBox-X** (pillman, invaders, bootdino, floppybird, hello-v86, bootlogo) | S | Ready, never run: `bootcom.asm` loads sector 1 via DOSBox-X's own INT 13h and jumps to 7C00 with the resident grabber underneath (`-DCGA` for bootlogo). Vs QEMU they already match up to animation timing (hello-v86 0 px, bootlogo 3 px). |
 | H3 | **xcom144: HDPMI32 client derails** at `00af:2b915` in zeros | M | XCOM486.EXE = DJGPP go32 stub + COFF **packed with UPX 3.91**; the code at the derail is what the decompressor should have produced. QEMU at 45 s: same CS 00AF base 111000 but limit `006bffff` (MIRAGE `0046ffff`). Next: dump the linear range under QEMU with paging ON (`memsave` gives nothing when a chunk is unmapped and meaningless in real mode — retry `stop` until CR0.PG and CS=00AF), same in MIRAGE, first differing byte → decompressor or loader defect. No x86 host available (arm64 Mac): KVM real-silicon oracle is out. |
 | H4 | **Catalogue lots 3/4**: ELKS (elks-hd32-fat.img), GentleOS/16, T3XFORTH, PC-MOS/386, KolibriOS | M | Not fetched yet. Triage with v86triage vs qemucap. |

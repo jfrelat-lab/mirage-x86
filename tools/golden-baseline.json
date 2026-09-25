@@ -65,7 +65,7 @@
     "fault": null
   },
   "intros/intoanew.com": {
-    "hash": "b28598f10fc60eabd30e6f873fa594d265827d28",
+    "hash": "38cf351d3b60544b913b34beb28b35c11272f5c9",
     "mode": 19,
     "fault": null
   },
@@ -80,7 +80,7 @@
     "fault": null
   },
   "intros/kaneda.com": {
-    "hash": "40d82fee4d317bccc18f9575e637488bdbc9d14e",
+    "hash": "2eee07257833044f45cbb905ec3a71965f2ff180",
     "mode": 19,
     "fault": null
   },
@@ -90,9 +90,9 @@
     "fault": null
   },
   "intros/memories.com": {
-    "hash": "56c0bcd562069bacb2264cfaff158b6ae7b0bbd3",
+    "hash": "cc1673c9cb447ce6e26b8c84bc765f6d3c9d35f1",
     "mode": 19,
-    "fault": "mirage: unhandled exception INT 06h re-raised 100000x at the same address 0814:000d (linear 0x814d) — the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing will change. Recent block starts (oldest first, the last is this one): 0814:fcc5 -> 0814:fe45 -> 0814:ffc5 -> 0814:ffec -> 0814:fff5 -> 0814:d — 13 of those advance by exactly 0x180, so the decoder is walking forward through memory rather than branching: the derail is EARLIER than this address"
+    "fault": null
   },
   "intros/mirrors.com": {
     "hash": "6c2cb361ec3b59842413fd148822e0ce7d1f83a8",
@@ -190,7 +190,7 @@
     "fault": null
   },
   "intros/omniscent.com": {
-    "hash": "c39a3ca81395f29d292943f35ae309f4b944684b",
+    "hash": "8e3bc7e0c2a100b18acbc0a5e14878898b5ad2c6",
     "mode": 19,
     "fault": null
   },

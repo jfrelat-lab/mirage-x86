@@ -267,17 +267,18 @@ export function installBIOS(machine, opts = {}) {
     if (h === 14) { const f = machine.font8x14; if (f) return f[(ch & 0xff) * 14 + gy]; }
     const f = machine.font; return f ? f[(ch & 0xff) * 16 + Math.min(15, h === 14 ? gy + (gy >> 3) : gy)] : 0;
   }
-  // SeaBIOS reaches the planes through the sequencer, one plane at a time, and ends every planar
-  // operation with stdvga_planar4_plane(-1): map mask 0Fh, read map 0, the indexes left on those
-  // registers. Programs inherit that state. stillalive-os.img clears its lyrics panel by storing
-  // zeros through A000 WITHOUT setting the map mask; its own drawing had left the mask at one plane,
-  // and it relies on the cursor teletype in between to restore all four. Because we wrote the planes
-  // directly, only plane 0 was cleared and the next verse was printed over the previous one.
-  function planarDefault() {
+  // A planar BIOS operation ends with map mask 0Fh and the sequencer index on it. Programs inherit
+  // that state. stillalive-os.img clears its lyrics panel by storing zeros through A000 WITHOUT
+  // setting the map mask; its own drawing had left the mask at one plane, and it relies on the
+  // cursor teletype in between to restore all four. Because we wrote the planes directly, only
+  // plane 0 was cleared and the next verse was printed over the previous one.
+  // The READ MAP is left as the program set it: SeaBIOS resets it to 0 (stdvga_planar4_plane(-1)),
+  // but the vendor Cirrus CL-GD5446 ROM and DOSBox-X both keep it (tools/int10gfx.asm T5, T8). The
+  // graphics controller index is 01h after a glyph on both of those; after a scroll they disagree
+  // (Cirrus 1Eh, an extended register; DOSBox-X 01h), so there it stays at SeaBIOS's 04h.
+  function planarDefault(gcIndex) {
     const vga = machine.vga;
-    const readMap = vga.gc[4];
-    vga.mapMask = 0x0f; vga.gc[4] = 0; vga.seqIndex = 2; vga.gcIndex = 4;
-    if (readMap) vga.rebuildShadow();
+    vga.mapMask = 0x0f; vga.seqIndex = 2; vga.gcIndex = gcIndex;
   }
   function drawGlyphPlanar(ch, col, row, color) {
     const vga = machine.vga; if (!vga || (!machine.font && !machine.font8x8)) return;
@@ -290,13 +291,13 @@ export function installBIOS(machine, opts = {}) {
         planes[a] = xor ? planes[a] ^ v : v;
       }
     }
-    planarDefault();
+    planarDefault(1);
   }
   // Move whole character rows of the window inside each plane, filling vacated rows with BH.
   function scrollWindowPlanar(up, lines, color, top, left, bottom, right) {
     const vga = machine.vga; if (!vga) return;
     const g = planarGeom();
-    planarDefault();
+    planarDefault(4);
     top = Math.max(0, top); left = Math.max(0, left);
     bottom = Math.min(g.rows - 1, bottom); right = Math.min(g.cols - 1, right);
     if (top > bottom || left > right) return;
@@ -353,8 +354,7 @@ export function installBIOS(machine, opts = {}) {
     switch (ah) {
       case 0x00: {                              // set video mode
         machine.vbe = null;                     // a plain BIOS mode set leaves any VBE mode
-        // Bit 7 of the CALLER's AL means "keep the screen". Read it now: AL is overwritten below
-        // with the mode set's return value (20h/30h), and testing it there never saw the request.
+        // Bit 7 of the CALLER's AL means "keep the screen".
         const keepScreen = (cpu.al & 0x80) !== 0;
         bios.mode = cpu.al & 0x7f;
         mem.w8(BDA + 0x49, bios.mode);
@@ -375,7 +375,6 @@ export function installBIOS(machine, opts = {}) {
           // Rows-1 and character height, as SeaBIOS and DOSBox-X both leave them (tools/int10gfx.asm
           // T9): 25 rows everywhere but 12h/11h (30) and 6Ah (37); 8-line cells in the 200-line modes.
           mem.w8(BDA + 0x84, mi.rows - 1); mem.w16(BDA + 0x85, mi.ch);
-          cpu.al = mi.al;                        // AH=00 returns 0x20 for graphics, 0x30 for text
         } else if (planar && machine.vga) { egaPaletteDAC(bios.dac); machine.vga.palette.set(EGA_DEFAULT_PAL); }
         else defaultPalette(bios.dac);
         mem.setPlanar(planar); bios.planar = planar;
@@ -1131,7 +1130,7 @@ function defaultPalette(dac) {
 }
 
 // What a real VGA BIOS establishes on a mode set, captured from SeaVGABIOS with
-// tools/int10-oracle.mjs: the AL it returns, the columns it publishes at BDA 0x44A, which DAC table
+// tools/int10-oracle.mjs: the columns it publishes at BDA 0x44A, which DAC table
 // it loads, and the attribute-controller palette. None of this was modelled — every mode kept
 // whatever DAC was already loaded and an identity attribute palette, which the oracle showed as 636
 // of 768 DAC bytes and 9 palette entries differing from the ROM after a mode 03h or 12h.
@@ -1167,24 +1166,26 @@ const PAL_MONO0F = [0x00, 0x08, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x08, 
 const PAL_MODE11 = [0x00, 0x3f, 0x00, 0x3f, 0x00, 0x3f, 0x00, 0x3f, 0x00, 0x3f, 0x00, 0x3f, 0x00, 0x3f, 0x00, 0x3f];
 const PAL_VGA256 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
-// al: what AH=00 returns. Mode 6 really does answer 0x3f — a CGA-compatibility quirk, not a typo.
+// No AL here: AH=00 leaves the caller's AL alone on the vendor Cirrus ROM and on DOSBox-X, for every
+// mode and with bit 7 too (tools/int10gfx.asm T10). The 30h/3Fh/20h that SeaVGABIOS returns is the
+// Phoenix/AMI convention (RBIL), so tools/int10-oracle.mjs against it reports AL on every mode set.
 const MODE_INFO = {
-  0x00: { al: 0x30, cols: 40, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
-  0x01: { al: 0x30, cols: 40, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
-  0x02: { al: 0x30, cols: 80, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
-  0x03: { al: 0x30, cols: 80, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
-  0x04: { al: 0x30, cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA4 },
-  0x05: { al: 0x30, cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA4 },
-  0x06: { al: 0x3f, cols: 80, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA6 },
-  0x07: { al: 0x30, cols: 80, dac: 'mono',   rows: 25, ch: 16, pal: PAL_MONO7 },
-  0x0d: { al: 0x20, cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_EGALO },
-  0x0e: { al: 0x20, cols: 80, dac: 'cga',    rows: 25, ch: 8, pal: PAL_EGALO },
-  0x0f: { al: 0x20, cols: 80, dac: 'mono',   rows: 25, ch: 14, pal: PAL_MONO0F },
-  0x10: { al: 0x20, cols: 80, dac: 'ega64',  rows: 25, ch: 14, pal: PAL_TEXT },
-  0x11: { al: 0x20, cols: 80, dac: 'ega64',  rows: 30, ch: 16, pal: PAL_MODE11 },
-  0x12: { al: 0x20, cols: 80, dac: 'ega64',  rows: 30, ch: 16, pal: PAL_TEXT },
-  0x13: { al: 0x20, cols: 40, dac: 'vga256', rows: 25, ch: 8, pal: PAL_VGA256 },
-  0x6a: { al: 0x20, cols: 100, dac: 'ega64', rows: 37, ch: 16, pal: PAL_TEXT },    // 800x600x16, the VESA 102h twin
+  0x00: { cols: 40, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x01: { cols: 40, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x02: { cols: 80, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x03: { cols: 80, dac: 'ega64',  rows: 25, ch: 16, pal: PAL_TEXT },
+  0x04: { cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA4 },
+  0x05: { cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA4 },
+  0x06: { cols: 80, dac: 'cga',    rows: 25, ch: 8, pal: PAL_CGA6 },
+  0x07: { cols: 80, dac: 'mono',   rows: 25, ch: 16, pal: PAL_MONO7 },
+  0x0d: { cols: 40, dac: 'cga',    rows: 25, ch: 8, pal: PAL_EGALO },
+  0x0e: { cols: 80, dac: 'cga',    rows: 25, ch: 8, pal: PAL_EGALO },
+  0x0f: { cols: 80, dac: 'mono',   rows: 25, ch: 14, pal: PAL_MONO0F },
+  0x10: { cols: 80, dac: 'ega64',  rows: 25, ch: 14, pal: PAL_TEXT },
+  0x11: { cols: 80, dac: 'ega64',  rows: 30, ch: 16, pal: PAL_MODE11 },
+  0x12: { cols: 80, dac: 'ega64',  rows: 30, ch: 16, pal: PAL_TEXT },
+  0x13: { cols: 40, dac: 'vga256', rows: 25, ch: 8, pal: PAL_VGA256 },
+  0x6a: { cols: 100, dac: 'ega64', rows: 37, ch: 16, pal: PAL_TEXT },    // 800x600x16, the VESA 102h twin
 };
 
 /** Load the DAC table a mode set installs. Everything above entry 63 is zero except in mode 13h. */

@@ -10,12 +10,24 @@
 ;   T3 AH=06h in mode 13h fills with BH (window DX=184Fh)                 A000:0000 013F 0A00 F9FF
 ;   T4 AH=13h AL=00 in 13h: colour BL, cursor NOT moved                   pixels==0Fh in cell 0, DX
 ;   T5 AH=0Eh in 12h, colour BL=06: seq index on entry, then map mask,
-;      read map, and the glyph byte of each plane                         idx mm rm p0 p1 p2 p3
+;      read map, the glyph byte of each plane, GC index on entry          idx mm rm p0 p1 p2 p3 gci
 ;   T6 AH=09h twice, BL=06h then 86h (XOR) — the glyph cancels            plane 1 at col 10, col 5
-;   T8 AH=06h in 12h, BH=03h                                              p0..p3 at 0, map mask
+;   T8 AH=06h in 12h, BH=03h                                              p0..p3 at 0, mm, rm, gci
 ;   T7 mode 6Ah: AL, BDA columns, rows-1, char height, AH=0Fh columns,
 ;      and the cursor after a teletype at the last column of the last row
 ;   T9 BDA 0484h (rows-1) and 0485h (character height) after each mode set: 0-7, 0D-13
+;   T10 the AL each AH=00h returns: 0-7, 0D-13, 6A, and 84 (bit 7 set)
+;
+; A FOURTH oracle, and the one that arbitrates: the vendor Cirrus CL-GD5446 VGA BIOS (86Box/roms
+; video/cirruslogic/5446bv.vbi, "CL-GD5436/46 PCI VGA BIOS Version 1.25", Cirrus Logic + Quadtel —
+; not SeaVGABIOS) on QEMU:  node tools/v86/cirrusboot.mjs /tmp/int10gfx.img
+; It prints exactly what DOSBox-X prints except the GC index after AH=06h (1Eh, a Cirrus extended
+; register; DOSBox-X 01h). So on the two points SeaBIOS and DOSBox-X disputed, the two lineages
+; independent of SeaBIOS agree against it, and MIRAGE follows them:
+;   - the read map is left as the program set it (T5, T8: 01), SeaBIOS resets it to 0;
+;   - AH=00h returns AL unchanged (T7, T10), SeaBIOS's 30h/3Fh/20h is the Phoenix/AMI convention.
+; MIRAGE now differs from QEMU/SeaBIOS on those lines by design, and matches Cirrus except T8's GC
+; index, where it keeps SeaBIOS's 04h because the other two disagree.
 bits 16
 %ifdef COM
 org 0x100
@@ -175,6 +187,9 @@ main:
     mov ax, 0x0e41
     mov bx, 0x0006
     int 0x10
+    mov dx, 0x3ce
+    in al, dx                       ; the graphics controller index the BIOS left
+    mov [gcIdx], al
     mov si, mT5
     call puts
     mov dx, 0x3c4
@@ -195,6 +210,8 @@ main:
     call hex8s
     mov di, 5 + 8 * 80              ; scanline 8 of the glyph at column 5
     call planes4
+    mov al, [gcIdx]
+    call hex8s
     call nl
 
     ; ---- T6: AH=09h, then the same glyph with bit 7 (XOR) ---------------------------------------
@@ -235,6 +252,15 @@ main:
     xor cx, cx
     mov dx, 0x1d4f
     int 0x10
+    mov dx, 0x3ce
+    in al, dx                       ; graphics controller index, then read map, as the BIOS left them
+    mov [gcIdx], al
+    mov al, 4
+    out dx, al
+    inc dx
+    in al, dx
+    and al, 3
+    mov [rdMap], al
     mov si, mT8
     call puts
     xor di, di
@@ -245,6 +271,10 @@ main:
     inc dx
     in al, dx
     and al, 0x0f
+    call hex8s
+    mov al, [rdMap]
+    call hex8s
+    mov al, [gcIdx]
     call hex8s
     call nl
 
@@ -320,6 +350,24 @@ main:
     inc si
     jmp .m9
 .m9e:
+    call nl
+
+    ; ---- T10: the AL each mode set returns ------------------------------------------------------
+    mov si, mT10
+    call puts
+    mov si, t10modes
+.m10:
+    mov al, [si]
+    cmp al, 0xff
+    je .m10e
+    push si
+    xor ah, ah
+    int 0x10
+    call hex8s
+    pop si
+    inc si
+    jmp .m10
+.m10e:
     call nl
 
     mov ax, 3
@@ -421,6 +469,8 @@ nib:
 
 strA:   db 'A'
 modeAL: db 0
+gcIdx:  db 0
+rdMap:  db 0
 colsAH: db 0
 mT1:    db 'T1 mode4 clear   ', 0
 mT2:    db 'T2 keep bit7     ', 0
@@ -432,6 +482,8 @@ mT8:    db 'T8 12h AH=06     ', 0
 mT7:    db 'T7 mode 6Ah      ', 0
 mT9:    db 'T9 rows-1/charh  ', 0
 t9modes: db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0xff
+mT10:   db 'T10 AL after set ', 0
+t10modes: db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x6a, 0x84, 0xff
 mNL:    db 13, 10, 0
 mDone:  db '--- DONE ---', 13, 10, 0
 %ifndef COM
