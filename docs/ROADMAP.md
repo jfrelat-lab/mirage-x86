@@ -33,12 +33,15 @@ defects (`3d9f243`), mode 6Ah + planar BIOS text + SeaBIOS map-mask side effect 
 Alive = QEMU up to the font; its mode 0 is the song's END, confirmed by QEMU at 330 s), BDA geometry +
 index readback (`08fd1fb`). pitman.com = DOSBox-X in all 2000 cells.
 
-**Tools not yet committed** (session scratchpads under `/private/tmp/claude-501/…/scratchpad/`, will be
-lost on reboot — move to `tools/v86/` with repo-relative paths): `v86triage.mjs` (MIRAGE: stop reason,
-mode, text/PNG incl. 800x600 planar), `qemucap.mjs` (QEMU: BDA mode, B800 via `pmemsave … "file"` —
-quoted filename — and screendump), `serialboot.mjs` (MIRAGE: COM1 output of a boot image),
-`textdiff.mjs` (text page of a .COM, DOSBox-X vs MIRAGE, via `grabber.asm -DTEXT`), `bootdiff.mjs` +
-`bootcom.asm` (H2), `qxmem.mjs` (H3), `fat12.py` (extract a file from a FAT12 floppy — no mtools here).
+**Front tools — `tools/v86/`** (repo-relative paths; images read from `boot/v86/`, scratch output in
+`/tmp`): `v86triage.mjs` (MIRAGE: stop reason, mode, text/PNG incl. 800x600 planar), `qemucap.mjs`
+(QEMU: BDA mode, B800 via `pmemsave … "file"` — quoted filename — and screendump), `serialboot.mjs`
+(MIRAGE: COM1 output of a boot image), `textdiff.mjs` (text page of a .COM, DOSBox-X vs MIRAGE, via
+`grabber.asm -DTEXT`), `bootdiff.mjs` + `bootcom.asm` (H2), `qxmem.mjs` (H3), `fat12.py` (list or
+extract a file from a FAT12 floppy — no mtools here), `i10all.sh` (int10gfx.asm on QEMU, DOSBox-X and
+MIRAGE). Re-checked after the move: i10all MIRAGE = QEMU byte for byte, textdiff pitman.com 0/2000.
+⚠️ `bootdiff.mjs` gets **no DOSBox-X capture** (0 bytes, hello-v86, same with the pre-move copy): the
+grabber never writes OUT.BIN once the boot program has taken over — that is where H2 starts.
 
 ## A · Correctness & browser UX (small, high polish-per-hour)
 
