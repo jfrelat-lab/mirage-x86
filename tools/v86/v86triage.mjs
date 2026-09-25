@@ -24,8 +24,14 @@ if (bytes.length > 2949120) {                        // a hard disk: geometry fr
   const lba = dv.getUint32(e + 8, true), n = dv.getUint32(e + 12, true);
   const sh = bytes[e + 1], ss = bytes[e + 2] & 63;
   const eh = bytes[e + 5], es = bytes[e + 6] & 63, ec = bytes[e + 7] | ((bytes[e + 6] & 0xc0) << 2);
-  const spt = sh ? (lba - (ss - 1)) / sh : 63;
-  const end = lba + n - 1, hd = ec ? Math.round(((end - (es - 1)) / spt - eh) / ec) : 16;
+  // A disk with NO partition table (elks-hd32-fat.img is one FAT volume from sector 0) has boot code
+  // where the entry would be: status 73h, and the solve below divided by zero into -Infinity. Take
+  // the geometry from its BPB then, and failing that QEMU's default of 16 heads x 63 sectors.
+  const bpbSpt = dv.getUint16(0x18, true), bpbHeads = dv.getUint16(0x1a, true);
+  const partOK = (bytes[e] === 0 || bytes[e] === 0x80) && bytes[e + 4] && n && lba + n <= bytes.length / 512;
+  const bpbOK = dv.getUint16(0x0b, true) === 512 && bpbSpt >= 1 && bpbSpt <= 63 && bpbHeads >= 1 && bpbHeads <= 255;
+  const spt = partOK ? (sh ? (lba - (ss - 1)) / sh : 63) : bpbOK ? bpbSpt : 63;
+  const end = lba + n - 1, hd = partOK ? (ec ? Math.round(((end - (es - 1)) / spt - eh) / ec) : 16) : bpbOK ? bpbHeads : 16;
   const cyl = Math.floor(bytes.length / (hd * spt * 512));
   mc.disk.attach(0x80, bytes, { cyl, heads: hd, spt, type: 3 });
   drive = 0x80; geo = `hd ${cyl}/${hd}/${spt}`;
