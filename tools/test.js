@@ -929,6 +929,32 @@ const udRun = (gated) => {
   eq('IRQ1 in V86 goes through the IDT (to the monitor)', irq(true, 9), 9);
   eq('IRQ0 in V86 goes through the IDT (to the monitor)', irq(true, 8), 8); }
 
+// ---- INT 10h in graphics modes: AH=00h clears CGA pixels, AH=06h fills mode 13h, AH=13h uses BL ----
+// Three defects found by pixel-comparing v86's boot-sector demos against QEMU: hello-v86.img went
+// from 63 115 differing pixels to 0, bootlogo.img from 6 000 to 3 (its blinking cursor).
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
+  for (let i = 0; i < 0x4000; i++) mem.u8[0xb8000 + i] = 0x77;
+  int10(0x0004);
+  eq('a mode 4 set clears the CGA pixels to ZERO (not text blanks)', mem.u8[0xb8000] | mem.u8[0xb8001] | mem.u8[0xbbfff], 0);
+  mem.u8[0xb8000] = 0x55;
+  int10(0x0084);
+  eq('...and AL bit 7 keeps them, read from the CALLER\'s AL', mem.u8[0xb8000], 0x55);
+  int10(0x0013);
+  int10(0x0600, 0x4f00, 0x0000, 0x184f);                     // clear the whole screen with colour 4Fh
+  eq('AH=06h in mode 13h fills the window with the colour in BH', mem.u8[0xa0000], 0x4f);
+  eq('...down to the last pixel of the 40x25 window', mem.u8[0xa0000 + 199 * 320 + 319], 0x4f);
+  // AH=13h, characters only (AL bit 1 clear): the attribute is BL. Cursor kept (AL bit 0 clear).
+  mc.font8x8 = new Uint8Array(256 * 8).fill(0xff);           // a bare Machine has no font loaded
+  mc.font = new Uint8Array(256 * 16).fill(0xff);
+  mem.blit(0x2000, Uint8Array.from([0x41]));
+  cpu.setSeg(ES, 0x200); cpu.bp = 0;
+  mem.w8(0x450, 3); mem.w8(0x451, 2);                        // cursor at col 3, row 2
+  int10(0x1300, 0x000f, 1, 0x0000);                          // one 'A' at 0,0 in colour 0Fh
+  let fg = 0; for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (mem.u8[0xa0000 + y * 320 + x] === 0x0f) fg++;
+  eq('AH=13h draws in the colour BL gives', fg > 0, true);
+  eq('...and with AL bit 0 clear the cursor stays where it was', mem.r16(0x450), 0x0203); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is

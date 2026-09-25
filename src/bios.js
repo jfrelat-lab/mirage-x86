@@ -141,6 +141,7 @@ export function installBIOS(machine, opts = {}) {
   // whole window. Honouring the window rectangle matters: menu programs (Apogee's CATALOG) scroll
   // an inner region and expect the header/footer rows to stay put.
   function scrollWindow(up, lines, attr, top, left, bottom, right) {
+    if (bios.mode === 0x13) return scrollWindow13(up, lines, attr, top, left, bottom, right);
     top = Math.max(0, top); left = Math.max(0, left);
     bottom = Math.min(ROWS - 1, bottom); right = Math.min(COLS - 1, right);
     if (top > bottom || left > right) return;
@@ -157,6 +158,30 @@ export function installBIOS(machine, opts = {}) {
       for (let r = top; r < top + lines; r++) blankRow(r);
     }
   }
+  // Mode 13h: the window is in CHARACTER CELLS of 8x8 pixels (40x25), the pixels live at A000
+  // (320 bytes a row), and the blank lines are filled with the COLOUR in BH — the text path above
+  // wrote attribute words into B800, which mode 13h does not display. Measured on v86's
+  // hello-v86.img, which clears the screen with AH=06h BH=4Fh: under QEMU the screen turns colour
+  // 4Fh, here it stayed black. The window is clamped to the mode's 40 columns, as SeaBIOS's is
+  // (the guest asks for column 79). CGA and planar modes scroll pixels too and are NOT handled here.
+  function scrollWindow13(up, lines, color, top, left, bottom, right) {
+    top = Math.max(0, top); left = Math.max(0, left);
+    bottom = Math.min(24, bottom); right = Math.min(39, right);
+    if (top > bottom || left > right) return;
+    const x0 = left * 8, w = (right - left + 1) * 8, height = bottom - top + 1;
+    const row = (cellRow, py) => 0xa0000 + (cellRow * 8 + py) * 320 + x0;
+    const fillCell = (r) => { for (let py = 0; py < 8; py++) { const a = row(r, py); for (let x = 0; x < w; x++) mem.w8(a + x, color & 0xff); } };
+    const copyCell = (dst, src) => { for (let py = 0; py < 8; py++) { const d = row(dst, py), sr = row(src, py); for (let x = 0; x < w; x++) mem.w8(d + x, mem.r8(sr + x)); } };
+    if (lines <= 0 || lines >= height) { for (let r = top; r <= bottom; r++) fillCell(r); return; }
+    if (up) {
+      for (let r = top; r <= bottom - lines; r++) copyCell(r, r + lines);
+      for (let r = bottom - lines + 1; r <= bottom; r++) fillCell(r);
+    } else {
+      for (let r = bottom; r >= top + lines; r--) copyCell(r, r - lines);
+      for (let r = top; r < top + lines; r++) fillCell(r);
+    }
+  }
+
   // teletype's line-wrap scroll: the whole screen up one row.
   function scroll(attr) { scrollWindow(true, 1, attr, 0, 0, ROWS - 1, COLS - 1); }
 
@@ -255,6 +280,9 @@ export function installBIOS(machine, opts = {}) {
     switch (ah) {
       case 0x00: {                              // set video mode
         machine.vbe = null;                     // a plain BIOS mode set leaves any VBE mode
+        // Bit 7 of the CALLER's AL means "keep the screen". Read it now: AL is overwritten below
+        // with the mode set's return value (20h/30h), and testing it there never saw the request.
+        const keepScreen = (cpu.al & 0x80) !== 0;
         bios.mode = cpu.al & 0x7f;
         mem.w8(BDA + 0x49, bios.mode);
         mem.w16(BDA + 0x63, bios.mode === 7 ? 0x03b4 : 0x03d4);  // CRTC base (mono mode 7 vs colour)
@@ -280,9 +308,13 @@ export function installBIOS(machine, opts = {}) {
         // are what a program inherits, and for every text and 16-colour mode register 6 is 0x14 —
         // brown rather than dark yellow — which is the one every EGA palette table is remembered for.
         if (mi && machine.vga) machine.vga.palette.set(mi.pal);
-        if (!(cpu.al & 0x80)) {                 // high bit set = keep screen
+        if (!keepScreen) {
           if (bios.mode === 0x13) for (let i = 0; i < 320 * 200; i++) mem.w8(0xa0000 + i, 0);
           else if (planar) { if (machine.vga) machine.vga.clear(); }
+          // CGA graphics: the 16 KB at B800 are PIXELS, cleared to zero. clearScreen() writes TEXT
+          // blanks (20h, 07h) there, which a 2-bpp mode shows as stripes — v86's bootlogo.img, whose
+          // top half was striped cyan where QEMU's is black.
+          else if (bios.mode >= 4 && bios.mode <= 6) { for (let i = 0; i < 0x4000; i++) mem.w8(VRAM + i, 0); setCur(0, 0); }
           else clearScreen(0x07);
         }
         if (bios.onModeChange) bios.onModeChange(bios.mode);
@@ -413,13 +445,19 @@ export function installBIOS(machine, opts = {}) {
         else cpu.ax = (cpu.ax & 0xff00) | 0x12;                              // ack other subfunctions (scan lines, palette, etc.)
         break;
       case 0x13: {                               // write string
-        const len = cpu.cx & 0xffff, withAttr = cpu.al & 2;
+        // AL bit 1: the string interleaves char/attribute pairs; CLEAR, it is characters only and
+        // the attribute is BL (RBIL) — not the current attribute, which is what this used: v86's
+        // hello-v86.img writes "copy.sh/v86" with BL=0Fh, white under QEMU, grey (7) here.
+        // AL bit 0: move the cursor past the string; CLEAR, the cursor stays where it was.
+        const len = cpu.cx & 0xffff, withAttr = cpu.al & 2, bl = cpu.bx & 0xff;
+        const row0 = getRow(), col0 = getCol();
         let p = (cpu.seg[0] << 4) + (cpu.bp & 0xffff); // ES:BP
         setCur(cpu.dx & 0xff, (cpu.dx >> 8) & 0xff);
         for (let i = 0; i < len; i++) {
-          const c = mem.r8(p++); const at = withAttr ? mem.r8(p++) : bios.attr;
+          const c = mem.r8(p++); const at = withAttr ? mem.r8(p++) : bl;
           teletype(c, at);
         }
+        if (!(cpu.al & 1)) setCur(col0, row0);
         break;
       }
       // Get display combination code. Only AL carries the answer (1Ah = the call exists) and AH comes
