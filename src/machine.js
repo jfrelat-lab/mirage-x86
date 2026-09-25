@@ -682,11 +682,11 @@ export class Machine {
     // without this it drew nothing at all (docs/TIMING.md §14j).
     // Guarded on the gate's PRESENT bit: a guest that is in protected mode with no IDT of its own
     // must keep the previous behaviour rather than jump through an empty descriptor.
+    // V86 INCLUDED: on a 386 every interrupt taken in virtual-8086 mode goes through the IDT, to the
+    // monitor, which reflects it into the V86 task if it chooses. Excluding VM here handed IRQ0
+    // straight to the real-mode vector behind EMM386's back.
     const c = this.cpu;
-    if ((c.cr0 & 1) && !(c.flags & VM)) {
-      const g = (c.idtr.base + 8 * 8) >>> 0;
-      if (8 * 8 + 7 <= c.idtr.limit && (this.mem.r8(g + 5) & 0x80)) { this.protInt(8); return; }
-    }
+    if ((c.cr0 & 1) && this.idtGatePresent(8)) { this.protInt(8); return; }
     const v8 = this.getVector(8);
     if (v8.seg !== BIOS_SEG) { this.realInt(8, v8.seg, v8.off); return; }
     // No guest ISR: we are the BIOS timer handler. A real one ends with `mov al,20h; out 20h,al`,
@@ -808,6 +808,14 @@ export class Machine {
       if (pic.pending() !== 1) return false;  // masked, or a higher-priority ISR is still open
     }
     if (this.dpmiIrq(9, pic)) return true;
+    // In protected mode — V86 included — through the IDT, like IRQ0 and IRQ12. There was no such
+    // path at all: IRQ1 always went to the real-mode vector, so under MS-DOS 6.22's EMM386 (V86)
+    // a staged scancode was never read — one key of eight got in, then port 0x60 stayed full.
+    if ((this.cpu.cr0 & 1) && !(this.dpmi && this.dpmi.active) && this.idtGatePresent(9)) {
+      if (pic) pic.acknowledge();
+      this.protInt(9);
+      return true;
+    }
     const v = this.getVector(9);
     if (v.seg === BIOS_SEG) {
       // No guest handler; the BIOS buffer path handles the scancode itself, so acknowledge and end
@@ -830,6 +838,17 @@ export class Machine {
     // stale scancode, so each is raised only for itself.
     if (this.kbIrqPending) { this.kbIrqPending = false; this.raiseKeyboardIRQ(); }
     if (this.mouseIrqPending && !this.raiseMouseIRQ()) this.hwIrqPending = true;   // retry: masked or busy
+  }
+
+  /** Is there a present gate for vector `n` in the IDT? Read as the processor does, as an implicit
+   *  supervisor access (Memory.walk) — the IDT sits in a supervisor page under any paging monitor. */
+  idtGatePresent(n) {
+    const c = this.cpu;
+    if (n * 8 + 7 > c.idtr.limit) return false;
+    this.mem.sup++;
+    try { return (this.mem.r8((c.idtr.base + n * 8 + 5) >>> 0) & 0x80) !== 0; }
+    catch (e) { return false; }
+    finally { this.mem.sup--; }
   }
 
   /** Raise IRQ12 for a PS/2 packet waiting on the 8042's aux channel. The same routing as a real

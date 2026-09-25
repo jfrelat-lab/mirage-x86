@@ -681,7 +681,13 @@ export function installBIOS(machine, opts = {}) {
 
   // ---- INT 09h: the BIOS keyboard handler ----
   // Same shape: an ISR that chains to the original INT 9 expects the BIOS to acknowledge IRQ1.
-  machine.hookInterrupt(0x09, () => { if (machine.pic) machine.pic.eoi(1); });
+  // ...and it READS PORT 0x60, as a BIOS INT 9 does: that read is what empties the 8042's output
+  // buffer. Ours only sent the EOI, so a booted DOS whose drivers chain INT 9 to the BIOS (MS-DOS
+  // 6.22 under EMM386: 0d50:082b -> ... -> f000:0009) left the first scancode in the port for ever,
+  // OBF never dropped, and pumpKeyboard staged nothing after it — the hardware keyboard path jammed
+  // on the first key. The scancode is NOT also queued for INT 16h here: src/keyboard.js already
+  // feeds that queue directly, and doing both would deliver every key twice.
+  machine.hookInterrupt(0x09, () => { kb.obf = false; if (machine.pic) machine.pic.eoi(1); });
 
   // ---- INT 17h (printer) / INT 14h (serial) ----
   // No ports are fitted — the equipment word at BDA 0x410 says so — but MS-DOS's IO.SYS installs its

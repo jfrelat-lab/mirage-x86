@@ -904,6 +904,31 @@ const udRun = (gated) => {
   eq('...and the program is back where it was', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x01000001);
   eq('...with its stack balanced', cpu.sp, 0x1000); }
 
+// ---- hardware IRQs in protected and V86 mode go through the IDT; the BIOS INT 9 reads port 60h ---
+// MS-DOS 6.22 under EMM386 (V86): typing VER got one key in, then nothing. Two defects. IRQ1 had no
+// protected-mode path at all (always the real-mode vector, behind the monitor's back), and IRQ0 was
+// kept out of the IDT in V86. And our BIOS INT 9, reached at the end of DOS's chain, sent the EOI
+// but never READ port 0x60 — so the 8042's output buffer stayed full and no second scancode could
+// be staged. With both fixed, `ver` answers "MS-DOS Version 6.22".
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  mc.kb.obf = true; mc.kb.data = 0x2f;
+  mc.intHandlers[9](mc.cpu, mc);
+  eq('the BIOS INT 9 empties the 8042 output buffer', mc.kb.obf, false); }
+{ const irq = (vm, n) => {
+    const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+    cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+    cpu.cr0 |= 1; if (vm) cpu.flags |= 0x20000; cpu.flags |= 0x200;
+    cpu.idtr = { base: 0xa000, limit: 0x7ff };
+    mem.w16(0xa000 + n * 8 + 2, 0x08); mem.w8(0xa000 + n * 8 + 5, 0x8e);   // a present gate
+    let got = null; mc.protInt = (v) => { got = v; };
+    if (n === 9) { mc.kb.data = 0x1e; mc.kb.obf = true; mc.raiseKeyboardIRQ(); }
+    else { mc.timerAuto = false; mc.tickTimer(); }
+    return got;
+  };
+  eq('IRQ1 in protected mode goes through the IDT', irq(false, 9), 9);
+  eq('IRQ1 in V86 goes through the IDT (to the monitor)', irq(true, 9), 9);
+  eq('IRQ0 in V86 goes through the IDT (to the monitor)', irq(true, 8), 8); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is
