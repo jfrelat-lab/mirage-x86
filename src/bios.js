@@ -722,6 +722,23 @@ export function installBIOS(machine, opts = {}) {
       cpu.ah = 0; cpu.flags &= ~CF; cpu.flags |= 0x40;          // AH=00, CF clear, ZF set: copied
       return;
     }
+    // AX=E820 — the system address map, one 20-byte range per call (RBIL #00581): EDX='SMAP', EBX
+    // the continuation (0 first, 0 back after the last), ES:DI the buffer. SeaBIOS answers it and we
+    // did not, so KolibriOS fell back to probing memory by writing a pattern every MiB — which never
+    // stops on a bus that aliases past the installed RAM. The VBE framebuffer is the card's memory,
+    // not the OS's: reported reserved, or a kernel that trusts the map allocates pages on its own
+    // screen. No EBDA is allocated (see the BDA setup), so conventional memory runs to A0000.
+    if ((cpu.reg[0] >>> 0) === 0xe820 && (cpu.reg[2] >>> 0) === 0x534d4150) {
+      const fb = machine.vbeFbBase >>> 0;
+      const map = [[0, 0xa0000, 1], [0xf0000, 0x10000, 2], [0x100000, fb - 0x100000, 1], [fb, mem.size - fb, 2]];
+      const i = cpu.reg[3] >>> 0;
+      if (i >= map.length || (cpu.reg[1] >>> 0) < 20) { cpu.flags |= CF; cpu.ah = 0x86; return; }
+      const d = (cpu.base[ES] + (cpu.di & 0xffff)) >>> 0, [b, len, type] = map[i];
+      mem.w32(d, b); mem.w32(d + 4, 0); mem.w32(d + 8, len); mem.w32(d + 12, 0); mem.w32(d + 16, type);
+      cpu.reg[0] = 0x534d4150; cpu.reg[1] = 20; cpu.reg[3] = i + 1 < map.length ? i + 1 : 0;
+      cpu.flags &= ~CF;
+      return;
+    }
     // AX=E801 and AH=8Ah are the two ways past AH=88h's 64 MiB ceiling, and an XMS driver asks for
     // them before it falls back. HimemX asks E801 first; leaving it unanswered made it size its pool
     // from AH=88h alone.

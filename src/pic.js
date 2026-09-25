@@ -67,6 +67,9 @@ export function installPIC(machine) {
       return s < 0 ? -1 : 8 + s;
     },
 
+    /** The vector the PIC puts on the bus for `irq`: its controller's ICW2 base plus the line. */
+    vector(irq) { return irq >= 8 ? slave.base + (irq - 8) : master.base + irq; },
+
     /** Take the pending interrupt: clear its request, mark it in service, return its vector. */
     acknowledge() {
       const irq = pic.pending();

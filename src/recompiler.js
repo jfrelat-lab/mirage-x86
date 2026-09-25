@@ -1677,14 +1677,22 @@ export class Recompiler {
       const ww = size === 8 ? 'w8' : size === 16 ? 'w16' : 'w32';
       P(`var _d=(cpu.flags&${DF})?-${step}:${step};`);
       const loop = (body, cond) => {
+        const wb = addr32 ? 'r[1]=_c>>>0;' : 'r[1]=(r[1]&~0xffff)|_c;';
         if (rep) {
           P(`var _c=${iR(1)};`);
+          // Under paging an iteration can #PF, and the instruction restarts from the fault. ESI/EDI
+          // are advanced in the registers as the loop goes, the count only in `_c`: without writing
+          // it back, the restart ran the FULL count again from the advanced position and overran
+          // the destination by everything already copied. KolibriOS's ramdisk read into @ICON's
+          // buffer did, faulted on the page after it, and the kernel killed the program.
+          if (pfRestart) P('try{');
           P('while(_c>0){');
           P(body);
           P('_c--;');
           if (cond) P(cond);
           P('}');
-          P(addr32 ? 'r[1]=_c>>>0;' : 'r[1]=(r[1]&~0xffff)|_c;');
+          if (pfRestart) P(`}catch(_e){${wb}throw _e;}`);
+          P(wb);
         } else { P(body); }
       };
       const SI = AM(`sb[${srcSeg}]+${iR(6)}`);
@@ -1813,6 +1821,12 @@ export class Recompiler {
         }
         // CLTS — clear CR0.TS. We do not model TS, so clearing it is exact.
         case 0x06: P('cpu.cr0&=~8;'); return;
+        // INVD / WBINVD (486+) — no cache is modelled, so there is nothing to write back or drop;
+        // privileged like HLT. KolibriOS's kernel runs WBINVD while it sets up memory.
+        case 0x08: case 0x09:
+          canFault = true;
+          P(`if((cpu.cr0&1)&&${CPL_EXPR}){cpu.eip=${curIpStart};cpu.raise(13,0);return;}`);
+          return;
         // LAR / LSL Gv,Ew. ZF reports accessibility; the helper returns -1 so this tests once.
         case 0x02: case 0x03: {
           const o = modrm(); const t = NT();

@@ -203,6 +203,12 @@ function eq(name, got, want) {
 { const { cpu } = run([0x66, 0xbb, 0x01, 0x00, 0x00, 0x00, 0x0f, 0xcb, 0xf4]);   // MOV EBX,1; BSWAP EBX (reg-index math)
   eq('bswap ebx', cpu.reg[3] >>> 0, 0x01000000); }
 
+// ---- INVD / WBINVD (0F 08 / 0F 09, 486+): no cache to flush, execution just goes on. ----------
+// KolibriOS's kernel (v86 kolibri.img) stopped on WBINVD as an unimplemented opcode.
+{ let got; try { const { cpu } = run([0x0f, 0x09, 0x0f, 0x08, 0xbb, 0x78, 0x56, 0xf4]); got = cpu.bx.toString(16); }
+  catch (e) { got = String(e.message).slice(0, 60); }
+  eq('WBINVD and INVD run through to the next instruction', got, '5678'); }
+
 // ---- Sound-hardware detection so games start (no audio, just the probe handshakes). ---
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   mc.ioWrite(0x226, 1, 1); mc.ioWrite(0x226, 1, 0);                 // SB DSP reset: 1 then 0
@@ -991,6 +997,23 @@ const udRun = (gated) => {
   eq('AH=06h in a planar mode clears the pixels', pl[P + off] | pl[2 * P + off], 0);
   eq('...leaving map mask 0Fh and the read map it found (int10gfx T8)', [mc.vga.mapMask, mc.vga.gc[4]].join(), '15,2'); }
 
+// ---- INT 15h AX=E820h: the system address map --------------------------------------------------
+// KolibriOS reads it and, finding nothing, probed memory itself and never finished. Walk it the way
+// a loader does: EBX=0, then whatever EBX comes back, until it is 0 again.
+{ const mc = new Machine({ memSize: 16 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  installBIOS(mc);
+  cpu.setSeg(ES, 0x0100); const ranges = []; let ebx = 0, n = 0;
+  do {
+    cpu.reg[0] = 0xe820; cpu.reg[2] = 0x534d4150; cpu.reg[1] = 20; cpu.reg[3] = ebx; cpu.di = 0; cpu.flags |= 1;
+    mc.intHandlers[0x15](cpu, mc);
+    if (cpu.flags & 1) { ranges.push('CF'); break; }
+    ranges.push(`${mem.r32(0x1000).toString(16)}+${mem.r32(0x1008).toString(16)}:${mem.r32(0x1010)}`);
+    ebx = cpu.reg[3] >>> 0;
+  } while (ebx && ++n < 10);
+  eq('AX=E820h returns SMAP in EAX', cpu.reg[0] >>> 0, 0x534d4150);
+  eq('...a map with the VBE framebuffer reserved at the top', ranges.join(' '),
+    `0+a0000:1 f0000+10000:2 100000+${(mc.vbeFbBase - 0x100000).toString(16)}:1 ${mc.vbeFbBase.toString(16)}+200000:2`); }
+
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is
@@ -1169,6 +1192,31 @@ const udRun = (gated) => {
   eq('...and nothing moved: SP', cpu.sp, 0x4002);
   eq('...BP', cpu.reg[5] & 0xffff, 0x1234);
   eq('...and the frame slot below the old SP is untouched', mem.r16(0x4000), 0);
+}
+{
+  // REP MOVS that #PFs part-way restarts WHERE IT STOPPED. The count lived in a local and was
+  // written back only after the loop, while ESI/EDI advanced in the registers: the restart ran the
+  // full count again from the advanced position and overran the destination. KolibriOS's kernel
+  // copied a file into @ICON's buffer that way, faulted on the page after it, and killed @ICON.
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0); cpu.setSeg(ES, 0); cpu.setSeg(SS, 0); cpu.sp = 0x3000;
+  mem.blit(0x1000, Uint8Array.from([0xb9, 0x08, 0x00, 0xf3, 0xa4, 0xf4]));   // mov cx,8 ; rep movsb ; hlt
+  cpu.reg[6] = 0x4ffc; cpu.reg[7] = 0x6ffc;
+  for (let i = 0; i < 8; i++) mem.u8[0x4ffc + i] = i + 1;
+  for (let i = 0; i < 8; i++) mem.u8[0x7000 + i] = 0xee;                    // what must survive past the end
+  mem.w32(0x10000, 0x11007);
+  for (let p = 0; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+  mem.w32(0x11000 + 7 * 4, 0);                                              // page 7 (0x7000): absent
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  let pfs = 0;
+  mc.protInt = (n) => { if (n === 14) { pfs++; mem.dv.setUint32(0x11000 + 7 * 4, 0x7007, true); mem.rebuildPageTables(); } };
+  for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
+  const dst = []; for (let i = 0; i < 12; i++) dst.push(mem.u8[0x6ffc + i].toString(16));
+  eq('REP MOVSB across a #PF: one fault, then the copy resumes', pfs, 1);
+  eq('...copying exactly CX bytes and nothing past them', dst.join(','), '1,2,3,4,5,6,7,8,ee,ee,ee,ee');
+  eq('...leaving CX 0 and DI one past the end', [cpu.cx & 0xffff, (cpu.reg[7] & 0xffff).toString(16)].join(), '0,7004');
 }
 {
   // #PF: a not-present page raises INT 14 with CR2 and the error code, instead of reading zero.

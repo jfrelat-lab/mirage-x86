@@ -685,8 +685,13 @@ export class Machine {
     // V86 INCLUDED: on a 386 every interrupt taken in virtual-8086 mode goes through the IDT, to the
     // monitor, which reflects it into the V86 task if it chooses. Excluding VM here handed IRQ0
     // straight to the real-mode vector behind EMM386's back.
-    const c = this.cpu;
-    if ((c.cr0 & 1) && this.idtGatePresent(8)) { this.protInt(8); return; }
+    // The VECTOR is the PIC's: ICW2 base + 0. It was a literal 8, which is IRQ0 only while the PIC
+    // keeps the BIOS programming. A protected-mode OS moves it off the exceptions — KolibriOS to 20h —
+    // and its IDT[8] is #DF: the first tick killed the running thread as a double fault and, never
+    // EOI'd, stopped the clock. Same for IRQ1 and IRQ12 below.
+    const c = this.cpu, vec = pic ? pic.vector(0) : 8;
+    if ((c.cr0 & 1) && this.idtGatePresent(vec)) { this.protInt(vec); return; }
+    if (vec !== 8) { const vr = this.getVector(vec); this.realInt(vec, vr.seg, vr.off); return; }
     const v8 = this.getVector(8);
     if (v8.seg !== BIOS_SEG) { this.realInt(8, v8.seg, v8.off); return; }
     // No guest ISR: we are the BIOS timer handler. A real one ends with `mov al,20h; out 20h,al`,
@@ -811,11 +816,13 @@ export class Machine {
     // In protected mode — V86 included — through the IDT, like IRQ0 and IRQ12. There was no such
     // path at all: IRQ1 always went to the real-mode vector, so under MS-DOS 6.22's EMM386 (V86)
     // a staged scancode was never read — one key of eight got in, then port 0x60 stayed full.
-    if ((this.cpu.cr0 & 1) && !(this.dpmi && this.dpmi.active) && this.idtGatePresent(9)) {
+    const vec = pic ? pic.vector(1) : 9;
+    if ((this.cpu.cr0 & 1) && !(this.dpmi && this.dpmi.active) && this.idtGatePresent(vec)) {
       if (pic) pic.acknowledge();
-      this.protInt(9);
+      this.protInt(vec);
       return true;
     }
+    if (vec !== 9) { const vr = this.getVector(vec); if (pic) pic.acknowledge(); this.realInt(vec, vr.seg, vr.off); return true; }
     const v = this.getVector(9);
     if (v.seg === BIOS_SEG) {
       // No guest handler; the BIOS buffer path handles the scancode itself, so acknowledge and end
@@ -868,11 +875,11 @@ export class Machine {
     if (cpu.cr0 & 1) {
       if (this.dpmiIrq(0x74)) return true;
       if (this.dpmi && this.dpmi.active) { if (pic) pic.eoi(12); return true; }   // no PM handler: drop
-      this.protInt(0x74);
+      this.protInt(pic ? pic.vector(12) : 0x74);
       return true;
     }
-    const v = this.getVector(0x74);
-    this.realInt(0x74, v.seg, v.off);
+    const vec = pic ? pic.vector(12) : 0x74, v = this.getVector(vec);
+    this.realInt(vec, v.seg, v.off);
     return true;
   }
 
