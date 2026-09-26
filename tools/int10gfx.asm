@@ -19,6 +19,7 @@
 ;   T10 the AL each AH=00h returns: 0-7, 0D-13, 6A, and 84 (bit 7 set)
 ;   T11 graphics fonts: AX=1124h BL=3 / 1123h BL=2 / 1122h DL=30 in 12h, 1124h BL=3 in 6Ah — BDA
 ;       rows-1/char height, then AX=1130h BH=0's CX (points) / DL (rows-1)
+;   T12 AX after AH=0Ch AL=0Fh (write pixel) in 13h and in 12h
 ;
 ; A FOURTH oracle, and the one that arbitrates: the vendor Cirrus CL-GD5446 VGA BIOS (86Box/roms
 ; video/cirruslogic/5446bv.vbi, "CL-GD5436/46 PCI VGA BIOS Version 1.25", Cirrus Logic + Quadtel —
@@ -425,6 +426,28 @@ main:
 .m11e:
     call nl
 
+    ; ---- T12: what AH=0Ch (write pixel) leaves in AX, in 13h and 12h -------------------------------
+    ; v86's hello-v86.img loads AH=0Ch once and calls INT 10h in a loop, trusting AH to survive.
+    mov si, mT12
+    call puts
+    mov ax, 0x13
+    int 0x10
+    mov ax, 0x0c0f
+    xor bx, bx
+    mov cx, 10
+    mov dx, 10
+    int 0x10
+    call hex16s
+    mov ax, 0x12
+    int 0x10
+    mov ax, 0x0c0f
+    xor bx, bx
+    mov cx, 10
+    mov dx, 10
+    int 0x10
+    call hex16s
+    call nl
+
     mov ax, 3
     int 0x10
     mov si, mDone
@@ -546,6 +569,7 @@ t11cases: dw 0x0012, 0x1124, 0x0003, 0x0000  ; 8x16, 43 rows
           dw 0x0012, 0x1122, 0x0000, 0x001e  ; 8x14, DL=30 rows
           dw 0x006a, 0x1124, 0x0003, 0x0000  ; mode 6Ah, 8x16, 43 rows (stillalive-os)
           dw 0xffff
+mT12:   db 'T12 AX after 0Ch ', 0
 mNL:    db 13, 10, 0
 mDone:  db '--- DONE ---', 13, 10, 0
 %ifndef COM
