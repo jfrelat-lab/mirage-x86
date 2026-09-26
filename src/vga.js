@@ -18,6 +18,7 @@ export function installVGA(machine) {
     seqIndex: 0, mapMask: 0x0f, memMode: 0x0e,       // Sequencer: reg 2 = plane write-enable, reg 4 = memory mode (bit3 = chain-4)
     gcIndex: 0, gc: new Uint8Array(9),               // Graphics Controller regs 0..8
     atcIndex: 0, atcFlip: 0, palette: new Uint8Array(16),  // Attribute Controller palette
+    atc: Uint8Array.from([0x0c, 0, 0x0f, 0x08, 0]),  // AC 10h-14h: mode control (bit 3 = blink), overscan, plane enable, panning, colour select
     crtcIndex: 0, crtc: new Uint8Array(0x19),        // CRTC: r13 offset (logical width), r0C/r0D start address
   };
   for (let i = 0; i < 16; i++) vga.palette[i] = i;   // identity → DAC 0-15 (the EGA colours)
@@ -242,7 +243,11 @@ export function installVGA(machine) {
   // "index" by a read of Input Status #1 (0x3DA) — bios.js does that reset.
   machine.onPortWrite(0x3c0, (_p, _s, v) => {
     if (vga.atcFlip === 0) { vga.atcIndex = v & 0x1f; vga.atcFlip = 1; }
-    else { if (vga.atcIndex < 16) vga.palette[vga.atcIndex] = v & 0x3f; vga.atcFlip = 0; }
+    else {
+      if (vga.atcIndex < 16) vga.palette[vga.atcIndex] = v & 0x3f;
+      else if (vga.atcIndex < 0x15) vga.atc[vga.atcIndex - 0x10] = v & 0xff;
+      vga.atcFlip = 0;
+    }
   });
 
   // CRTC (0x3D4 index / 0x3D5 data): the renderer needs r0C/r0D (display start address,
@@ -253,6 +258,17 @@ export function installVGA(machine) {
   machine.onPortRead(0x3d5, () => vga.crtc[vga.crtcIndex & 0x1f]);
   // Display geometry for the renderer (fall back to the mode's defaults before the game programs the CRTC).
   vga.startAddr = () => (vga.crtc[0x0c] << 8) | vga.crtc[0x0d];
+  // The displayed size as the CRTC defines it — for a machine whose mode sets come from a real ROM
+  // (vga.hw), which never calls setMode. Width: Horizontal Display End + 1 character clocks of 8
+  // dots (the 320-wide modes halve the dot clock and program 40). Height: Vertical Display End + 1
+  // scanlines with its two overflow bits, halved when CRTC 09h bit 7 doubles every line.
+  vga.crtcDims = () => {
+    const c = vga.crtc, ov = c[0x07];
+    const w = (c[0x01] + 1) * 8;
+    let h = (c[0x12] | (((ov >> 1) & 1) << 8) | (((ov >> 6) & 1) << 9)) + 1;
+    if (c[0x09] & 0x80) h >>= 1;
+    return { w, h };
+  };
   vga.rowBytes = () => (vga.crtc[0x13] ? vga.crtc[0x13] * 2 : (vga.width >> 3));
 
   machine.vga = vga; mem.vga = vga;

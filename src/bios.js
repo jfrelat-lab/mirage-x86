@@ -427,6 +427,9 @@ export function installBIOS(machine, opts = {}) {
         bios.cursor.hidden = (ch & 0x20) !== 0 || (ch & 0x1f) > (cl & 0x1f);
         bios.cursor.start = ch & 0x1f; bios.cursor.end = cl & 0x1f;
         if (machine.vga) { machine.vga.crtc[0x0a] = ch; machine.vga.crtc[0x0b] = cl; }
+        // The requested type lives in the BDA (0460h end, 0461h start, RBIL MEMORY.LST) — where a
+        // program reads it back and where the Cirrus ROM, run as INT 10h, puts it. We kept it only here.
+        mem.w8(BDA + 0x60, cl); mem.w8(BDA + 0x61, ch);
         break;
       }
       case 0x02: setCur(cpu.dx & 0xff, (cpu.dx >> 8) & 0xff); break; // set cursor pos

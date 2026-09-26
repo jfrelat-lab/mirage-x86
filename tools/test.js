@@ -1009,6 +1009,49 @@ const udRun = (gated) => {
   mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, 0x06); mc.ioWrite(0x3ce, 1, 6); mc.ioWrite(0x3cf, 1, 0x0e);
   eq('...and so does text mode (GC6 bit 0 clear, B800)', mc.mem.planar, false); }
 
+// ---- src/ must load in a browser: every process.env read is guarded -----------------------------
+// There is no `process` in a browser. rtc.js and dos.js read process.env bare, the page stopped on
+// "Loading…" for two weeks, and every other gate runs under Node, where it exists. A read counts as
+// guarded when `typeof process` is on its line or the line before (the statement's start).
+{ const { readdirSync, readFileSync } = await import('fs');
+  const dir = new URL('../src/', import.meta.url), bare = [];
+  for (const f of readdirSync(dir).filter((n) => n.endsWith('.js'))) {
+    const lines = readFileSync(new URL(f, dir), 'utf8').split('\n');
+    lines.forEach((l, i) => {
+      if (!l.includes('process.env') || /^\s*(\/\/|\*)/.test(l)) return;
+      if (!l.includes('typeof process') && !(i > 0 && lines[i - 1].includes('typeof process'))) bare.push(`${f}:${i + 1}`);
+    });
+  }
+  eq('every process.env read in src/ is guarded by typeof process', bare.join(' '), ''); }
+
+// ---- The renderer follows the card (H7) ---------------------------------------------------------
+// Text colours go attribute nibble -> AC palette -> DAC. They indexed the DAC directly: after
+// AX=0003h (DAC = the 64-colour EGA table) colour 6 was dark yellow, not brown, and 8-15 wrong.
+// With a real VGA ROM as INT 10h (vga.hw), rows/columns, blink, cursor and the planar size come from
+// the BDA and the registers, since no setMode or bios.cursor is maintained by it.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const video = new Video(mc, canvas); video.font = new Uint8Array(4096); mc.font = video.font;
+  for (let i = 0; i < 16; i++) video.font[0xdb * 16 + i] = 0xff;           // a full block, to see the ink
+  cpu.ax = 0x0003; mc.intHandlers[0x10](cpu, mc);
+  const cell = (ch, attr) => { mem.w16(0xb8000, ch | (attr << 8)); video.frame = 0; video.render(); return video.u32[0]; };
+  eq('text: background 6 is AC 6 = 14h -> DAC 14h (brown), not DAC 6', cell(0x20, 0x60), video.pal[0x14]);
+  eq('text: ink 8 is AC 8 = 38h -> DAC 38h (dark grey)', cell(0xdb, 0x08), video.pal[0x38]);
+  cpu.ax = 0x0100; cpu.cx = 0x0e10; mc.intHandlers[0x10](cpu, mc);
+  eq('AH=01h keeps the cursor type in the BDA (0460h end, 0461h start)', [mem.r8(0x460), mem.r8(0x461)].join(), '16,14');
+  // hw: 40 columns from the BDA, cursor from CRTC 0Eh/0Fh, shape from 0Ah/0Bh.
+  mc.vga.hw = true; mem.w16(0x44a, 40); mem.w8(0x484, 24);
+  mc.vga.crtc[0x0e] = 0; mc.vga.crtc[0x0f] = 41; mc.vga.crtc[0x0a] = 0x0e; mc.vga.crtc[0x0b] = 0x0f;
+  for (let i = 0; i < 80; i++) mem.w16(0xb8000 + i * 2, 0x0720);
+  video.frame = 16; video.render();
+  eq('hw text: the width comes from the BDA columns', video.imgW, 320);
+  eq('...and the cursor from CRTC 0Eh/0Fh: row 1, column 1, scanline 14', video.u32[(16 + 14) * 320 + 8], video.pal[7]);
+  // hw planar: 640x480 from the CRTC programming mode 12h (display end 4Fh, VDE 1DFh).
+  const c = mc.vga.crtc; c[0x01] = 0x4f; c[0x12] = 0xdf; c[0x07] = 0x3e; c[0x09] = 0x40;
+  eq('hw planar: size from the CRTC', JSON.stringify(mc.vga.crtcDims?.()), '{"w":640,"h":480}');
+  c[0x01] = 0x27; c[0x12] = 0x8f; c[0x07] = 0x1f; c[0x09] = 0xc0;          // mode 0Dh: 40 clocks, doubled 400 lines
+  eq('...320x200 when the CRTC doubles every line', JSON.stringify(mc.vga.crtcDims?.()), '{"w":320,"h":200}'); }
+
 // ---- INT 10h AX=1121h-1124h: graphics fonts set the BDA rows and height; AX=1130h reports them ---
 // They were no-ops, and AX=1130h answered the REQUESTED font's height. QEMU/SeaBIOS, DOSBox-X and
 // the vendor Cirrus ROM agree on every value below (tools/int10gfx.asm T11).

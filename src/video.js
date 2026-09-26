@@ -85,7 +85,10 @@ export class Video {
   // EGA/VGA 16-colour planar: assemble each pixel's 4-bit index from the four bit-planes,
   // map it through the attribute palette to a DAC entry, then to RGB.
   _renderPlanar() {
-    const vga = this.machine.vga, W = vga.width, H = vga.height;
+    const vga = this.machine.vga;
+    // With a real VGA ROM the size is the CRTC's (no setMode ran); otherwise the mode's table.
+    const hwd = vga.hw ? vga.crtcDims() : null;
+    const W = hwd && hwd.w >= 64 ? hwd.w : vga.width, H = hwd && hwd.h >= 64 ? hwd.h : vga.height;
     this._ensure(W, H);
     const u32 = this.u32, pal = this.pal, planes = vga.planes, palr = vga.palette;
     // Honour the CRTC display-start (page-flip / hardware scroll) and the offset register
@@ -107,18 +110,28 @@ export class Video {
   }
 
   _renderText() {
-    this._ensure(COLS * CW, ROWS * CH);
+    // A colour nibble goes through the attribute-controller palette, then the DAC, as on a VGA. It
+    // indexed the DAC directly, which is right only while the DAC's first 16 entries ARE the 16
+    // colours: after an INT 10h AX=0003h the DAC holds the 64-colour EGA table, and colour 6 came
+    // out dark yellow (DAC 6) instead of brown (AC 6 = 14h -> DAC 14h), 8-15 in the wrong hues.
+    const vga = this.machine.vga, hw = !!(vga && vga.hw), ac = vga ? vga.palette : null;
+    const ci = ac ? (n) => ac[n] & 0x3f : (n) => n;
+    // With a real ROM the card and the BDA are the truth: columns 044Ah, rows 0484h, blink AC 10h
+    // bit 3. Otherwise our own INT 10h's state, as before.
+    const cols = hw ? (this.mem.r16(0x44a) || COLS) : COLS, rows = hw ? ((this.mem.r8(0x484) + 1) || ROWS) : ROWS;
+    this._ensure(cols * CW, rows * CH);
     const mem = this.mem, font = this.font, u32 = this.u32, pal = this.pal, W = this.imgW;
     if (!font) return;
-    for (let row = 0; row < ROWS; row++) {
-      for (let col = 0; col < COLS; col++) {
-        const cell = mem.r16(VRAM_TEXT + (row * COLS + col) * 2);
+    const blinkMode = hw ? !!(vga.atc[0] & 0x08) : (this.machine.bios ? this.machine.bios.blink : true);
+    const base = VRAM_TEXT + (hw ? vga.startAddr() * 2 : 0);
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const cell = mem.r16(base + (row * cols + col) * 2);
         const ch = cell & 0xff, attr = cell >> 8;
-        const blinkMode = this.machine.bios ? this.machine.bios.blink : true;
-        const bg = pal[(attr >> 4) & (blinkMode ? 0x07 : 0x0f)];
+        const bg = pal[ci((attr >> 4) & (blinkMode ? 0x07 : 0x0f))];
         // while blinking and in the "off" phase the glyph is drawn in the background colour
         const hidden = blinkMode && (attr & 0x80) && !((this.frame >> 4) & 1);
-        const fg = hidden ? bg : pal[attr & 0x0f];
+        const fg = hidden ? bg : pal[ci(attr & 0x0f)];
         const gbase = ch * CH;
         for (let y = 0; y < CH; y++) {
           const bits = font[gbase + y];
@@ -127,12 +140,17 @@ export class Video {
         }
       }
     }
-    // blinking cursor (underline) at the BIOS cursor position
-    const cur = this.machine.bios && this.machine.bios.cursor;
+    // blinking cursor (underline) at the BIOS cursor position — or, with a real ROM, where the CRTC
+    // puts it: location 0Eh/0Fh, shape 0Ah (bit 5 = off) / 0Bh.
+    let cur = this.machine.bios && this.machine.bios.cursor, ccol = mem.r8(0x450), crow = mem.r8(0x451);
+    if (hw) {
+      const c = vga.crtc, loc = ((c[0x0e] << 8) | c[0x0f]) - vga.startAddr();
+      cur = { start: c[0x0a] & 0x1f, end: c[0x0b] & 0x1f, hidden: (c[0x0a] & 0x20) !== 0 || (c[0x0a] & 0x1f) > (c[0x0b] & 0x1f) };
+      ccol = loc % cols; crow = Math.floor(loc / cols);
+    }
     if (((this.frame >> 4) & 1) && !(cur && cur.hidden)) {
-      const ccol = mem.r8(0x450), crow = mem.r8(0x451);
-      if (crow < ROWS && ccol < COLS) {
-        const fg = pal[mem.r16(VRAM_TEXT + (crow * COLS + ccol) * 2) >> 8 & 0x0f] || pal[7];
+      if (crow >= 0 && crow < rows && ccol < cols) {
+        const fg = pal[ci(mem.r16(base + (crow * cols + ccol) * 2) >> 8 & 0x0f)] || pal[7];
         const y0 = cur ? Math.min(cur.start, CH - 1) : CH - 3, y1 = cur ? Math.min(cur.end, CH - 1) : CH - 1;
         for (let y = y0; y <= y1; y++) {
           let o = (crow * CH + y) * W + ccol * CW;
