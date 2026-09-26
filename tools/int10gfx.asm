@@ -17,6 +17,8 @@
 ;      and the cursor after a teletype at the last column of the last row
 ;   T9 BDA 0484h (rows-1) and 0485h (character height) after each mode set: 0-7, 0D-13
 ;   T10 the AL each AH=00h returns: 0-7, 0D-13, 6A, and 84 (bit 7 set)
+;   T11 graphics fonts: AX=1124h BL=3 / 1123h BL=2 / 1122h DL=30 in 12h, 1124h BL=3 in 6Ah — BDA
+;       rows-1/char height, then AX=1130h BH=0's CX (points) / DL (rows-1)
 ;
 ; A FOURTH oracle, and the one that arbitrates: the vendor Cirrus CL-GD5446 VGA BIOS (86Box/roms
 ; video/cirruslogic/5446bv.vbi, "CL-GD5436/46 PCI VGA BIOS Version 1.25", Cirrus Logic + Quadtel —
@@ -370,6 +372,59 @@ main:
 .m10e:
     call nl
 
+    ; ---- T11: graphics font functions AX=1122h/1123h/1124h and the rows they set ----------------
+    mov si, mT11
+    call puts
+    mov si, t11cases
+.m11:
+    lodsw                           ; mode
+    cmp ax, 0xffff
+    je .m11e
+    push si
+    xor ah, ah
+    int 0x10
+    pop si
+    lodsw                           ; AX of the font call
+    mov cx, ax
+    lodsw                           ; BX (BL = row specifier)
+    mov bx, ax
+    lodsw                           ; DX (DL = rows when BL=0)
+    mov dx, ax
+    push si
+    mov ax, cx
+    int 0x10
+    push ds
+    xor ax, ax
+    mov ds, ax
+    mov bl, [0x484]
+    mov cl, [0x485]
+    pop ds
+    mov al, bl
+    call hex8s
+    mov al, '/'
+    call putc
+    mov al, cl
+    call hex8
+    mov ax, 0x1130                  ; current font: CX = points, DL = rows - 1
+    xor bh, bh
+    push es
+    push bp
+    int 0x10
+    pop bp
+    pop es
+    mov al, ' '
+    call putc
+    mov al, cl
+    call hex8
+    mov al, '/'
+    call putc
+    mov al, dl
+    call hex8
+    pop si
+    jmp .m11
+.m11e:
+    call nl
+
     mov ax, 3
     int 0x10
     mov si, mDone
@@ -484,6 +539,13 @@ mT9:    db 'T9 rows-1/charh  ', 0
 t9modes: db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0xff
 mT10:   db 'T10 AL after set ', 0
 t10modes: db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x6a, 0x84, 0xff
+mT11:   db 'T11 font rows    ', 0
+;          mode     font AX  BX       DX
+t11cases: dw 0x0012, 0x1124, 0x0003, 0x0000  ; 8x16, 43 rows
+          dw 0x0012, 0x1123, 0x0002, 0x0000  ; 8x8, 25 rows
+          dw 0x0012, 0x1122, 0x0000, 0x001e  ; 8x14, DL=30 rows
+          dw 0x006a, 0x1124, 0x0003, 0x0000  ; mode 6Ah, 8x16, 43 rows (stillalive-os)
+          dw 0xffff
 mNL:    db 13, 10, 0
 mDone:  db '--- DONE ---', 13, 10, 0
 %ifndef COM

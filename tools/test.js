@@ -986,6 +986,28 @@ const udRun = (gated) => {
   int10(0x1015, 0x0017);
   eq('AX=1015h reads a DAC register back into DH CH CL', [(cpu.dx >> 8) & 0xff, cpu.cx].map((v) => v.toString(16)).join(), '19,2814'); }
 
+// ---- INT 10h AX=1121h-1124h: graphics fonts set the BDA rows and height; AX=1130h reports them ---
+// They were no-ops, and AX=1130h answered the REQUESTED font's height. QEMU/SeaBIOS, DOSBox-X and
+// the vendor Cirrus ROM agree on every value below (tools/int10gfx.asm T11).
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  mc.font = new Uint8Array(256 * 16).fill(0xff); mc.font8x8 = new Uint8Array(256 * 8).fill(0xff); mc.font8x14 = new Uint8Array(256 * 14).fill(0xff);
+  const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
+  const row = (mode, ax, bx, dx) => { int10(mode); int10(ax, bx, 0, dx);
+    const bda = [mem.r8(0x484), mem.r8(0x485)]; int10(0x1130, 0x0000); return [...bda, cpu.cx & 0xff, cpu.dx & 0xff].map((v) => v.toString(16)).join('/'); };
+  eq('12h + 1124h BL=3: 43 rows of 16', row(0x12, 0x1124, 3, 0), '2a/10/10/2a');
+  eq('12h + 1123h BL=2: 25 rows of 8', row(0x12, 0x1123, 2, 0), '18/8/8/18');
+  eq('12h + 1122h BL=0 DL=30: 30 rows of 14', row(0x12, 0x1122, 0, 30), '1d/e/e/1d');
+  eq('6Ah + 1124h BL=3 (stillalive-os)', row(0x6a, 0x1124, 3, 0), '2a/10/10/2a');
+  // 1121h: the program's own font at ES:BP, CX bytes a character; the glyph comes from it.
+  int10(0x0012); cpu.setSeg(ES, 0x0200); cpu.bp = 0; for (let i = 0; i < 256 * 8; i++) mem.u8[0x2000 + i] = 0;
+  mem.u8[0x2000 + 0x41 * 8 + 3] = 0x81;                               // 'A', scanline 3 only
+  int10(0x1121, 0x0002, 8, 0);
+  eq('1121h: user font height and INT 43h vector', [mem.r8(0x485), mc.getVector(0x43).seg.toString(16), mc.getVector(0x43).off].join(), '8,200,0');
+  mem.w8(0x450, 0); mem.w8(0x451, 0);
+  int10(0x0e41, 0x000f);
+  const P = 0x10000, pl = mc.vga.planes;
+  eq('...and teletype draws from it: scanline 3 of cell 0 is 81h, the rest empty', [pl[3 * 80], pl[2 * 80], pl[4 * 80]].join(), '129,0,0'); }
+
 // ---- INT 10h in planar modes: mode 6Ah, glyphs into the planes, SeaBIOS's register side effect ----
 // v86's stillalive-os.img sets mode 6Ah (800x600x16) and prints with AH=0Eh; QEMU shows the lyrics,
 // we stayed in text mode. It then clears its lyrics panel with bare stores through A000, relying on

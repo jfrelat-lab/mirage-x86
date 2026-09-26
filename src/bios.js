@@ -257,13 +257,25 @@ export function installBIOS(machine, opts = {}) {
   // plane p, background pixels are 0, and bit 7 of the colour XORs the glyph onto what is there
   // (SeaBIOS gfx_write_char). Glyph height is the mode's character cell: 8 for the 200-line modes,
   // 14 for 350, 16 for 480 and 600. v86's stillalive-os.img prints its lyrics this way in mode 6Ah.
+  // Character height and rows come from the BDA (0485h, 0484h), which the mode set fills and the
+  // graphics-font calls AX=1121h-1124h change — as the reference BIOSes do (tools/int10gfx.asm T11).
+  /** Copy a ROM font into the F000 ROM space (8x8 at 4000h, 8x14 at 5000h, 8x16 at 6000h), return its offset. */
+  function stageFont(pts) {
+    const src = pts === 14 ? machine.font8x14 : pts === 16 ? machine.font : machine.font8x8;
+    const off = 0x4000 + (pts === 14 ? 0x1000 : pts === 16 ? 0x2000 : 0);
+    if (src) for (let i = 0; i < src.length; i++) mem.w8((0xf000 << 4) + off + i, src[i]);
+    return off;
+  }
   function planarGeom() {
     const m = bios.mode, W = m === 0x6a ? 800 : (m === 0x0d ? 320 : 640);
     const H = m === 0x6a ? 600 : (m === 0x11 || m === 0x12) ? 480 : (m === 0x0f || m === 0x10) ? 350 : 200;
-    const ch = H === 200 ? 8 : H === 350 ? 14 : 16;
-    return { bpr: W >> 3, cols: W >> 3, rows: Math.floor(H / ch), ch };
+    const dflt = H === 200 ? 8 : H === 350 ? 14 : 16;
+    const bh = mem.r8(BDA + 0x85), ch = bios.gfxFont || bh === 8 || bh === 14 || bh === 16 ? bh : dflt;
+    const rows = (mem.r8(BDA + 0x84) + 1) || Math.floor(H / ch);
+    return { bpr: W >> 3, cols: W >> 3, rows, ch };
   }
   function glyphRow(ch, gy, h) {
+    if (bios.gfxFont) return mem.r8((bios.gfxFont + (ch & 0xff) * h + gy) >>> 0);   // AX=1121h: the program's own
     if (h === 8) return glyph8(ch, gy);
     if (h === 14) { const f = machine.font8x14; if (f) return f[(ch & 0xff) * 14 + gy]; }
     const f = machine.font; return f ? f[(ch & 0xff) * 16 + Math.min(15, h === 14 ? gy + (gy >> 3) : gy)] : 0;
@@ -371,6 +383,7 @@ export function installBIOS(machine, opts = {}) {
         // Bit 7 of the CALLER's AL means "keep the screen".
         const keepScreen = (cpu.al & 0x80) !== 0;
         bios.mode = cpu.al & 0x7f;
+        bios.gfxFont = 0;                       // a mode set goes back to the ROM font (AX=1121h undone)
         mem.w8(BDA + 0x49, bios.mode);
         mem.w16(BDA + 0x63, bios.mode === 7 ? 0x03b4 : 0x03d4);  // CRTC base (mono mode 7 vs colour)
         // EGA/VGA 16-colour graphics modes are planar (A000 via the Sequencer/Graphics
@@ -545,17 +558,32 @@ export function installBIOS(machine, opts = {}) {
         }
         break;
       case 0x11:                                 // character-generator / font routines (EGA/VGA only)
+        // Graphics-mode fonts (RBIL INT 10h/1120h-1124h). 1121h takes the program's font at ES:BP,
+        // CX bytes a character; 1122h/1123h/1124h the ROM 8x14/8x8/8x16. BL gives the rows: 1 = 14,
+        // 2 = 25, 3 = 43, 0 = DL. They were no-ops; QEMU/SeaBIOS, DOSBox-X and the vendor Cirrus ROM
+        // all agree on what they leave in the BDA (tools/int10gfx.asm T11). stillalive-os calls 1124h.
+        if (cpu.al >= 0x21 && cpu.al <= 0x24) {
+          const bl = cpu.bx & 0xff, rows = bl === 1 ? 14 : bl === 2 ? 25 : bl === 3 ? 43 : (cpu.dx & 0xff);
+          let h, seg = 0xf000, off;
+          if (cpu.al === 0x21) { h = cpu.cx & 0xff; seg = cpu.seg[0]; off = cpu.bp & 0xffff; bios.gfxFont = (cpu.base[0] + off) >>> 0; }
+          else { h = cpu.al === 0x22 ? 14 : cpu.al === 0x23 ? 8 : 16; off = stageFont(h); bios.gfxFont = 0; }
+          machine.setVector(0x43, seg, off);
+          mem.w8(BDA + 0x84, (rows - 1) & 0xff); mem.w16(BDA + 0x85, h);
+        } else if (cpu.al === 0x20) {            // INT 1Fh = ES:BP (upper half of the 8x8 CGA font)
+          machine.setVector(0x1f, cpu.seg[0], cpu.bp & 0xffff);
+        }
         if (cpu.al === 0x30) {                   // get font information — games probe this to detect EGA/VGA
           const bh = (cpu.bx >> 8) & 0xff;       // which font: 2/5=8×14, 6/7=8×16, else 8×8 (0/4 = 2nd half)
           let src, pts, half = 0;
           if (bh === 2 || bh === 5) { src = machine.font8x14; pts = 14; }
           else if (bh === 6 || bh === 7) { src = machine.font; pts = 16; }
           else { src = machine.font8x8; pts = 8; if (bh === 0 || bh === 4) half = 128 * 8; }
-          const seg = 0xf000, off = 0x4000 + (pts === 14 ? 0x1000 : pts === 16 ? 0x2000 : 0);
-          if (src) for (let i = 0; i < src.length; i++) mem.w8((seg << 4) + off + i, src[i]); // stage the font in the F000 ROM space
+          const seg = 0xf000, off = stageFont(pts);
           cpu.setSeg(0, seg); cpu.bp = (off + half) & 0xffff;   // ES:BP → font table
-          cpu.cx = pts;                                         // CX = bytes per character (points)
-          cpu.dx = (cpu.dx & 0xff00) | (ROWS - 1);              // DL = character rows − 1
+          // CX and DL describe the CURRENT screen font, not the one BH asked for: all three references
+          // answer the BDA's character height and rows-1 (T11) — CX was the requested font's height.
+          cpu.cx = mem.r16(BDA + 0x85) || pts;
+          cpu.dx = (cpu.dx & 0xff00) | (mem.r8(BDA + 0x84) || (ROWS - 1));
         }
         break;
       case 0x12:                                 // alternate select / EGA info
