@@ -39,24 +39,55 @@ export function installFPU(cpu) {
   const push = (v) => { cpu.ftop = (cpu.ftop - 1) & 7; st[cpu.ftop] = v; cpu.focc[cpu.ftop] = 1; };
   const pop = () => { cpu.focc[cpu.ftop] = 0; cpu.ftop = (cpu.ftop + 1) & 7; };
 
-  const f32l = (a) => dv.getFloat32(a & msk(), true);
-  const f64l = (a) => dv.getFloat64(a & msk(), true);
+  // UNDER PAGING an operand address is LINEAR. These helpers indexed the physical DataView with it,
+  // so every x87 load and store of a real, or of a 64-bit integer, went to the wrong place once a
+  // DPMI host turned paging on: xcom144's `fistp qword` (a loop bound) was never written where the
+  // program read it back, and it spun for ever on two stale stack addresses. Paged accesses now go
+  // through the page tables — xlat for an operand inside one page (one walk, the restartable #PF,
+  // A/D bits), byte by byte when it straddles two. Without paging nothing changes.
+  const pscratch = new DataView(new ArrayBuffer(16));
+  /** [view, offset] holding `len` bytes at linear `a`, read through paging. */
+  const prd = (a, len) => {
+    const mem = cpu.mem; a >>>= 0;
+    if ((a & 0xfff) + len <= 0x1000) return [dv, mem.xlat(a, false)];
+    for (let i = 0; i < len; i++) pscratch.setUint8(i, mem.r8((a + i) >>> 0));
+    return [pscratch, 0];
+  };
+  /** Store `len` bytes at linear `a` through paging: `fill(view, off)` writes them. */
+  const pwr = (a, len, fill) => {
+    const mem = cpu.mem; a >>>= 0;
+    if ((a & 0xfff) + len <= 0x1000) {
+      fill(dv, mem.xlat(a, true));
+      if (mem.codePage[a >>> 12]) mem._dirty(a, len);
+      return;
+    }
+    mem.xlat(a, true); mem.xlat((a + len - 1) >>> 0, true);   // both pages writable before any byte moves
+    fill(pscratch, 0);
+    for (let i = 0; i < len; i++) mem.w8((a + i) >>> 0, pscratch.getUint8(i));
+  };
+  const pl = (a, len, get) => { const [v, o] = prd(a, len); return get(v, o); };
+
+  const f32l = (a) => cpu.mem.paged ? pl(a, 4, (v, o) => v.getFloat32(o, true)) : dv.getFloat32(a & msk(), true);
+  const f64l = (a) => cpu.mem.paged ? pl(a, 8, (v, o) => v.getFloat64(o, true)) : dv.getFloat64(a & msk(), true);
   // Float stores must honour the SMC dirty check like the integer w8/w16/w32 do —
   // a program that FSTs into a page holding compiled code must invalidate those blocks.
   const cp = cpu.mem.codePage;
-  const f32s = (a, v) => { a &= msk(); dv.setFloat32(a, v, true); if (cp[a >>> 12] || cp[((a + 3) & msk()) >>> 12]) cpu.mem._dirty(a, 4); };
-  const f64s = (a, v) => { a &= msk(); dv.setFloat64(a, v, true); if (cp[a >>> 12] || cp[((a + 7) & msk()) >>> 12]) cpu.mem._dirty(a, 8); };
-  const i16 = (a) => dv.getInt16(a & msk(), true);
-  const i32 = (a) => dv.getInt32(a & msk(), true);
+  const f32s = (a, v) => { if (cpu.mem.paged) return pwr(a, 4, (w, o) => w.setFloat32(o, v, true));
+    a &= msk(); dv.setFloat32(a, v, true); if (cp[a >>> 12] || cp[((a + 3) & msk()) >>> 12]) cpu.mem._dirty(a, 4); };
+  const f64s = (a, v) => { if (cpu.mem.paged) return pwr(a, 8, (w, o) => w.setFloat64(o, v, true));
+    a &= msk(); dv.setFloat64(a, v, true); if (cp[a >>> 12] || cp[((a + 7) & msk()) >>> 12]) cpu.mem._dirty(a, 8); };
+  const i16 = (a) => cpu.mem.paged ? pl(a, 2, (v, o) => v.getInt16(o, true)) : dv.getInt16(a & msk(), true);
+  const i32 = (a) => cpu.mem.paged ? pl(a, 4, (v, o) => v.getInt32(o, true)) : dv.getInt32(a & msk(), true);
   // 64-bit integers and 80-bit extended reals. Both forms were missing entirely, so the instruction
   // was a silent no-op: Borland's __ftol is `fistp qword`, so every float-to-long cast in a Borland
   // program returned whatever was already in the caller's stack slot. Wolf3D got SetupScaling(925)
   // instead of (360) that way and exhausted its heap building 462 scalers.
-  const i64 = (a) => Number(dv.getBigInt64(a & msk(), true));
+  const i64 = (a) => Number(cpu.mem.paged ? pl(a, 8, (v, o) => v.getBigInt64(o, true)) : dv.getBigInt64(a & msk(), true));
   const INDEF64 = -(2n ** 63n);   // x87's "integer indefinite", stored when the value will not fit
   const i64s = (a, v) => {
-    a &= msk();
     const n = Number.isFinite(v) && Math.abs(v) < 9223372036854775808 ? BigInt(Math.trunc(v)) : INDEF64;
+    if (cpu.mem.paged) return pwr(a, 8, (w, o) => w.setBigInt64(o, n, true));
+    a &= msk();
     dv.setBigInt64(a, n, true);
     if (cp[a >>> 12] || cp[((a + 7) & msk()) >>> 12]) cpu.mem._dirty(a, 8);
   };
@@ -64,8 +95,9 @@ export function installFPU(cpu) {
    *  16383. This model's registers are float64, so a store rounds to 53 bits of mantissa and a load
    *  back is exact; only a value that came from real 80-bit silicon loses its low bits. */
   const f80l = (a) => {
-    a &= msk();
-    const m = dv.getBigUint64(a, true), se = dv.getUint16(a + 8, true);
+    let v80 = dv;
+    if (cpu.mem.paged) [v80, a] = prd(a, 10); else a &= msk();
+    const m = v80.getBigUint64(a, true), se = v80.getUint16(a + 8, true);
     const sign = se & 0x8000 ? -1 : 1, exp = se & 0x7fff;
     if (exp === 0x7fff) return (m & 0x7fffffffffffffffn) === 0n ? sign * Infinity : NaN;
     return sign * Number(m) * Math.pow(2, exp - 16383 - 63);
@@ -85,6 +117,7 @@ export function installFPU(cpu) {
         se |= (e + 16383) & 0x7fff;
       }
     }
+    if (cpu.mem.paged) return pwr(a, 10, (w, o) => { w.setBigUint64(o, m, true); w.setUint16(o + 8, se, true); });
     dv.setBigUint64(a, m, true); dv.setUint16(a + 8, se, true);
     if (cp[a >>> 12] || cp[((a + 9) & msk()) >>> 12]) cpu.mem._dirty(a, 10);
   };

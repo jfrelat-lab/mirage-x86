@@ -15,13 +15,31 @@
 // a fault that is about to be reported — never on the hot path.
 
 /**
+ * The byte at LINEAR address `a`, read the way the guest sees it — through its page tables when
+ * paging is on — and without the side effects of Memory.walk (which sets Accessed/Dirty: a diagnostic
+ * must not change the machine it reports on). An unmapped page reads as -1, which is neither zero
+ * nor printable. The detector used to index physical memory with the linear address, so under a
+ * DPMI host every block above the host's own mapping looked like "a run of zero bytes": xcom144's
+ * "derail" at 00AF:2B915 (linear 13C915h, frame FBF000h) was the real code, read from the wrong place.
+ */
+function peek(mem, a) {
+  a >>>= 0;
+  if (!mem.paged || !mem.cpu) return mem.u8[a & (mem.size - 1)];
+  const pde = mem.r32phys((((mem.cpu.cr3 & 0xfffff000) >>> 0) + ((a >>> 22) * 4)) >>> 0);
+  if (!(pde & 1)) return -1;
+  const pte = mem.r32phys((((pde & 0xfffff000) >>> 0) + (((a >>> 12) & 0x3ff) * 4)) >>> 0);
+  if (!(pte & 1)) return -1;
+  return mem.u8[(((pte & 0xfffff000) >>> 0) | (a & 0xfff)) & (mem.size - 1)];
+}
+
+/**
  * The printable run CONTAINING `lin` — scanning back as well as forward. A derail lands wherever the
  * jump pointed, which is generally inside the text, not at its start: Crystal Dream 2 stops three
  * words into "Exception fault.", oktaeder three bytes from the end of "C:\\oktaeder.com". Measuring
  * only forward — the first version — missed both.
  */
 function runAround(mem, lin, back = 40, fwd = 48) {
-  const at = (i) => mem.u8[(lin + i) & (mem.size - 1)];
+  const at = (i) => peek(mem, lin + i);
   const printable = (b) => b >= 0x20 && b < 0x7f;
   if (!printable(at(0))) return { start: lin, len: 0 };
   let s = 0; while (s > -back && printable(at(s - 1))) s--;
@@ -40,7 +58,7 @@ function looksLikeText(mem, lin) {
   if (len < 8) return false;
   let wordy = 0;
   for (let i = 0; i < len; i++) {
-    const b = mem.u8[(start + i) & (mem.size - 1)];
+    const b = peek(mem, start + i);
     if (b === 0x20 || (b | 32) >= 0x61 && (b | 32) <= 0x7a) wordy++;
   }
   return wordy * 5 >= len * 3;                       // 60% letters or spaces
@@ -50,7 +68,7 @@ function looksLikeText(mem, lin) {
 function textAt(mem, lin) {
   const { start, len } = runAround(mem, lin);
   let out = '';
-  for (let i = 0; i < len; i++) out += String.fromCharCode(mem.u8[(start + i) & (mem.size - 1)]);
+  for (let i = 0; i < len; i++) out += String.fromCharCode(peek(mem, start + i));
   return out;
 }
 
@@ -69,7 +87,7 @@ function textAt(mem, lin) {
 function looksLikePackedData(mem, lin, back = 24, fwd = 40) {
   let zero = 0, ones = 0, n = 0;
   for (let i = -back; i < fwd; i++) {
-    const b = mem.u8[(lin + i) & (mem.size - 1)];
+    const b = peek(mem, lin + i);
     n++;
     if (b === 0) zero++; else if (b === 0xff) ones++;
   }
@@ -79,7 +97,7 @@ function looksLikePackedData(mem, lin, back = 24, fwd = 40) {
 /** A run of zero bytes at `lin`. Exported because the recompiler needs to recognise this WHILE it
  *  happens, not only when reporting a fault: a guest walking through empty memory never faults. */
 export function allZero(mem, lin, n = 16) {
-  for (let i = 0; i < n; i++) if (mem.u8[(lin + i) & (mem.size - 1)]) return false;
+  for (let i = 0; i < n; i++) if (peek(mem, lin + i)) return false;
   return true;
 }
 

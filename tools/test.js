@@ -1309,6 +1309,44 @@ const udRun = (gated) => {
   eq('INVLPG after remapping a page: the read before sees the old frame, the read after the new', (cpu.ax & 0xffff).toString(16), 'bbaa');
 }
 {
+  // x87 memory operands go through the page tables. They indexed physical memory with the LINEAR
+  // address: under HDPMI32, xcom144's `fistp qword` (a loop bound) landed elsewhere and the program
+  // read back two stale stack addresses as a bound of ~2^54 iterations.
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0); cpu.setSeg(ES, 0); cpu.setSeg(SS, 0); cpu.sp = 0x3000;
+  mem.blit(0x1000, Uint8Array.from([0xd9, 0x06, 0x10, 0x50, 0xdf, 0x3e, 0x00, 0x50, 0xdd, 0x06, 0x20, 0x50, 0xdd, 0x1e, 0x28, 0x50, 0xf4]));
+  // fld dword [5010h] ; fistp qword [5000h] ; fld qword [5020h] ; fstp qword [5028h] ; hlt
+  mem.dv.setFloat32(0x9010, 1234.0, true); mem.dv.setFloat32(0x5010, 7.0, true);     // frame 9 real, frame 5 a decoy
+  mem.dv.setFloat64(0x9020, 2.5, true);
+  mem.w32(0x10000, 0x11007);
+  for (let p = 0; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+  mem.w32(0x11000 + 5 * 4, 0x9007);                                         // linear page 5 -> frame 9
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
+  eq('x87 under paging: FLD m32 / FISTP m64 use the mapped frame', [Number(mem.dv.getBigInt64(0x9000, true)), Number(mem.dv.getBigInt64(0x5000, true))].join(), '1234,0');
+  eq('...and FLD / FSTP m64 too', [mem.dv.getFloat64(0x9028, true), mem.dv.getFloat64(0x5028, true)].join(), '2.5,0');
+}
+{
+  // The VGA / VBE window is PHYSICAL A0000h, reached through whatever linear page maps it. Under paging
+  // the device routing was skipped and the TLB marked device pages by LINEAR number, so xcom144 under
+  // HDPMI32 (VBE 111h, banked) drew into the RAM behind A000 and its framebuffer stayed black.
+  const mc = new Machine({ memSize: 4 << 20 });
+  const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  cpu.ax = 0x4f02; cpu.bx = 0x0111; mc.intHandlers[0x10](cpu, mc);            // 640x480x16, banked
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0); cpu.setSeg(ES, 0); cpu.setSeg(SS, 0); cpu.sp = 0x3000;
+  mem.blit(0x1000, Uint8Array.from([0xc6, 0x06, 0x00, 0x50, 0x5a, 0x8a, 0x26, 0x00, 0x50, 0xf4]));   // mov byte [5000h],5Ah ; mov ah,[5000h] ; hlt
+  mem.w32(0x10000, 0x11007);
+  for (let p = 0; p < 256; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+  mem.w32(0x11000 + 5 * 4, 0xa0007);                                          // linear page 5 -> frame A0h
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
+  eq('paged write through a page mapped on A000: it reaches the VBE framebuffer, not the RAM behind', [mem.u8[mc.vbeFbBase], mem.u8[0xa0000]].join(), '90,0');
+  eq('...and reads back through the window', (cpu.ax >> 8) & 0xff, 0x5a);
+}
+{
   // #PF: a not-present page raises INT 14 with CR2 and the error code, instead of reading zero.
   const mc = new Machine({ memSize: 4 << 20 });
   const cpu = mc.cpu, mem = mc.mem;

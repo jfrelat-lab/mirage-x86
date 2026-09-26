@@ -1474,6 +1474,9 @@ export class Recompiler {
       const a = memAddr(o);
       const fb = () => P(`cpu.fpuMem(${op},${reg},${a});`);
       const smc = (len) => `if(cp[${a}>>>12]|cp[(${AM(`${a}+${len - 1}`)})>>>12])m._dirty(${a},${len});`;
+      // The inline forms index the physical DataView with the address; under paging it is LINEAR.
+      // cpu.fpuMem translates (src/fpu.js), so the paged strategy always takes it.
+      if (pfRestart) return fb();
       switch (op) {
         case 0xd9:                                                   // f32 load/store + control
           if (reg === 0) return fpush(`dv.getFloat32(${a},true)`);           // FLD m32

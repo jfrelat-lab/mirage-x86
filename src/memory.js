@@ -99,7 +99,7 @@ export class Memory {
   }
 
   _fillPage(p, paging) {
-    const device = this.planar && p >= 0xa0 && p < 0xb0;
+    const device = !paging && this.planar && p >= 0xa0 && p < 0xb0;
     if (device || p >= ((this.mask + 1) >>> PAGE_BITS)) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; return; }
     if (!paging) {
       this.rdOfs[p] = 0;
@@ -108,6 +108,9 @@ export class Memory {
     }
     const phys = this.walk(p << PAGE_BITS);
     if (phys < 0) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; return; }   // not present → the helper faults
+    // The device window is PHYSICAL A0000-AFFFF, wherever the guest maps it: the linear test above
+    // is only right without paging.
+    if (this.planar && phys >= 0xa0000 && phys < 0xb0000) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; return; }
     const bias = (phys - (p << PAGE_BITS)) | 0;
     this.rdOfs[p] = bias;
     // A code page must keep trapping writes, and so must a read-only one (the R/W bit lives in
@@ -176,7 +179,9 @@ export class Memory {
   setPlanar(on) {
     if (this.planar === !!on) return;
     this.planar = !!on;
-    for (let p = 0xa0; p < 0xb0; p++) { this.rdOfs[p] = this.planar ? -1 : 0; this.wrOfs[p] = this.planar || this.codePage[p] ? -1 : 0; }
+    // Under paging the window can sit behind any linear page: re-derive every entry from its frame.
+    if (this.paged) this.rebuildPageTables();
+    else for (let p = 0xa0; p < 0xb0; p++) { this.rdOfs[p] = this.planar ? -1 : 0; this.wrOfs[p] = this.planar || this.codePage[p] ? -1 : 0; }
     // Entering a planar mode makes the window's contents meaningful again — refill the shadow.
     if (this.shadowReads && this.planar && this.vga) this.vga.rebuildShadow();
   }
@@ -209,7 +214,10 @@ export class Memory {
   // everything else is a direct typed-array read. `planar` is false for text/mode-13h/demos
   // so the check is a single predicted branch on the common path.
   r8(a)  {
-    if (this.paged) { const t = this.xlat(a, false); return t < 0 ? 0 : this.u8[t]; }
+    // Under paging the translated address is what decides device or RAM. The planar/VBE window was
+    // only routed on the unpaged path, so a DPMI client (xcom144 under HDPMI32, VBE 111h banked)
+    // drew into the raw RAM behind A000 and the framebuffer stayed black.
+    if (this.paged) { const t = this.xlat(a, false); return t < 0 ? 0 : (this.planar && t >= 0xa0000 && t < 0xb0000) ? this.vga.readByte(t) : this.u8[t]; }
     a &= this.mask; return (this.planar && a >= 0xa0000 && a < 0xb0000) ? this.vga.readByte(a) : this.u8[a];
   }
   // Under paging these go byte at a time, because only r8/w8 translate — and a multi-byte access can
@@ -232,7 +240,10 @@ export class Memory {
     // which is exactly what an OS relocating code does.
     if (this.paged) {
       const t = this.xlat(a, true);
-      if (t >= 0) { this.u8[t] = v; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 1); }
+      if (t >= 0) {
+        if (this.planar && t >= 0xa0000 && t < 0xb0000) { this.vga.writeByte(t, v & 0xff); return; }
+        this.u8[t] = v; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 1);
+      }
       return;
     }
     a &= this.mask;
