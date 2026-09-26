@@ -79,7 +79,8 @@ if (mc.vbe && mc.vbe.bpp >= 15) {               // a VESA direct-colour mode: th
   }
   png(W, H, rgb); screen = `    VBE ${W}x${H}x${bpp}, ${nz} non-black pixels -> ${pngOut}`;
 } else if (mode === 3 || mode === 2 || mode === 7 || mode === 1 || mode === 0) {
-  const cols = mode <= 1 ? 40 : 80, base = mode === 7 ? 0xb0000 : 0xb8000;
+  // From the CRTC display start: Linux's vgacon scrolls by moving it, not by copying the text.
+  const cols = mode <= 1 ? 40 : 80, base = (mode === 7 ? 0xb0000 : 0xb8000) + (mc.vga ? (mc.vga.startAddr() * 2) & 0x7fff : 0);
   const lines = [];
   for (let y = 0; y < 25; y++) { let l = '';
     for (let x = 0; x < cols; x++) { const ch = mc.mem.u8[base + (y * cols + x) * 2]; l += ch >= 32 && ch < 127 ? String.fromCharCode(ch) : ch ? '.' : ' '; }

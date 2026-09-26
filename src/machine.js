@@ -96,6 +96,7 @@ export class Machine {
     this.hwIrqPending = false;                      // a hardware IRQ (keyboard, mouse) waits for IF
     this.kbIrqPending = false;                      // ...which of them: IRQ1
     this.mouseIrqPending = false;                   // ...IRQ12, a PS/2 packet (src/ps2mouse.js)
+    this.irqPendingMask = 0;                        // ...any other line raised by raiseIRQ (IDE: IRQ14)
     this.unhandledInts = new Uint32Array(256);      // per-vector count of INTs we don't implement
     this._inBiosCallback = -1;                     // vector currently running via the inline far-call path
 
@@ -845,6 +846,33 @@ export class Machine {
     // stale scancode, so each is raised only for itself.
     if (this.kbIrqPending) { this.kbIrqPending = false; this.raiseKeyboardIRQ(); }
     if (this.mouseIrqPending && !this.raiseMouseIRQ()) this.hwIrqPending = true;   // retry: masked or busy
+    if (this.irqPendingMask) {
+      for (let n = 0; n < 16; n++) {
+        if (!(this.irqPendingMask & (1 << n))) continue;
+        if (this.deliverIRQ(n)) this.irqPendingMask &= ~(1 << n); else this.hwIrqPending = true;
+      }
+    }
+  }
+
+  /** A device asserts IRQ `n` (IDE: 14). It is delivered at the next block boundary with IF set, at
+   *  the vector the PIC is programmed for, through the IDT in protected mode — the path IRQ12 takes.
+   *  `lowerIRQ` withdraws it before delivery (a level line a driver cleared by reading the status). */
+  raiseIRQ(n) { this.irqPendingMask |= 1 << n; this.hwIrqPending = true; }
+  lowerIRQ(n) { this.irqPendingMask &= ~(1 << n); if (this.pic) this.pic.lower(n); }
+  deliverIRQ(n) {
+    const cpu = this.cpu, pic = this.pic;
+    if (!(cpu.flags & IF)) return false;
+    if (pic) {
+      pic.raise(n);
+      if (pic.pending() !== n) return false;          // masked, or a higher-priority ISR is still open
+      pic.acknowledge();
+    }
+    cpu.halted = false;
+    const vec = pic ? pic.vector(n) : (n < 8 ? 8 + n : 0x70 + n - 8);
+    if (cpu.cr0 & 1) { this.protInt(vec); return true; }
+    const v = this.getVector(vec);
+    this.realInt(vec, v.seg, v.off);
+    return true;
   }
 
   /** Is there a present gate for vector `n` in the IDT? Read as the processor does, as an implicit

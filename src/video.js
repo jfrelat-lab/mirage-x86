@@ -116,14 +116,15 @@ export class Video {
     // out dark yellow (DAC 6) instead of brown (AC 6 = 14h -> DAC 14h), 8-15 in the wrong hues.
     const vga = this.machine.vga, hw = !!(vga && vga.hw), ac = vga ? vga.palette : null;
     const ci = ac ? (n) => ac[n] & 0x3f : (n) => n;
-    // With a real ROM the card and the BDA are the truth: columns 044Ah, rows 0484h, blink AC 10h
-    // bit 3. Otherwise our own INT 10h's state, as before.
-    const cols = hw ? (this.mem.r16(0x44a) || COLS) : COLS, rows = hw ? ((this.mem.r8(0x484) + 1) || ROWS) : ROWS;
+    // The card and the BDA are the truth, whoever programs them (our INT 10h keeps them, a real ROM
+    // does, Linux's vgacon writes the CRTC itself): columns 044Ah, rows 0484h, blink AC 10h bit 3,
+    // display start CRTC 0Ch/0Dh (hardware scrolling), cursor CRTC 0Ah/0Bh/0Eh/0Fh.
+    const cols = vga ? (this.mem.r16(0x44a) || COLS) : COLS, rows = vga ? ((this.mem.r8(0x484) + 1) || ROWS) : ROWS;
     this._ensure(cols * CW, rows * CH);
     const mem = this.mem, font = this.font, u32 = this.u32, pal = this.pal, W = this.imgW;
     if (!font) return;
-    const blinkMode = hw ? !!(vga.atc[0] & 0x08) : (this.machine.bios ? this.machine.bios.blink : true);
-    const base = VRAM_TEXT + (hw ? vga.startAddr() * 2 : 0);
+    const blinkMode = vga ? !!(vga.atc[0] & 0x08) : (this.machine.bios ? this.machine.bios.blink : true);
+    const base = VRAM_TEXT + (vga ? (vga.startAddr() * 2) & 0x7fff : 0);
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         const cell = mem.r16(base + (row * cols + col) * 2);
@@ -143,7 +144,7 @@ export class Video {
     // blinking cursor (underline) at the BIOS cursor position — or, with a real ROM, where the CRTC
     // puts it: location 0Eh/0Fh, shape 0Ah (bit 5 = off) / 0Bh.
     let cur = this.machine.bios && this.machine.bios.cursor, ccol = mem.r8(0x450), crow = mem.r8(0x451);
-    if (hw) {
+    if (vga) {
       const c = vga.crtc, loc = ((c[0x0e] << 8) | c[0x0f]) - vga.startAddr();
       cur = { start: c[0x0a] & 0x1f, end: c[0x0b] & 0x1f, hidden: (c[0x0a] & 0x20) !== 0 || (c[0x0a] & 0x1f) > (c[0x0b] & 0x1f) };
       ccol = loc % cols; crow = Math.floor(loc / cols);

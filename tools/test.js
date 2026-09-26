@@ -1166,6 +1166,46 @@ const udRun = (gated) => {
   mc.portWrite[0x70](0x70, 1, 0x10); mc.portWrite[0x71](0x71, 1, 0x24);
   eq('a guest\'s own write to a configuration byte reads back', cmos(0x10), 0x24); }
 
+// ---- The primary IDE channel (src/ide.js): what Linux 2.2 needs to mount /dev/hda1 ---------------
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const inb = (p) => (mc.portRead[p] ? mc.portRead[p](p, 1) & 0xff : 0xff), inw = (p) => (mc.portRead[p] ? mc.portRead[p](p, 2) & 0xffff : 0xffff), outb = (p, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, 1, v); };
+  eq('no hard disk: the IDE registers float at FFh, as before the device existed', [inb(0x1f7), inb(0x1f1), inb(0x3f6)].join(), '255,255,255');
+  const img = new Uint8Array(4 * 16 * 63 * 512); for (let i = 0; i < img.length; i++) img[i] = (i * 7 + (i >> 9)) & 0xff;
+  mc.disk.attach(0x80, img, { cyl: 4, heads: 16, spt: 63, type: 3 });
+  const fdpt = mc.getVector(0x41), t = ((fdpt.seg << 4) + fdpt.off) & 0xfffff;
+  eq('INT 41h points at a Fixed Disk Parameter Table: cylinders, heads, sectors', [mc.mem.r16(t), mc.mem.r8(t + 2), mc.mem.r8(t + 14)].join(), '4,16,63');
+  outb(0x1f6, 0xa0); outb(0x1f7, 0xec);                                        // IDENTIFY
+  eq('IDENTIFY: DRQ set and IRQ 14 raised', [inb(0x3f6) & 0x08, (mc.irqPendingMask >> 14) & 1].join(), '8,1');
+  const id = []; for (let i = 0; i < 256; i++) id.push(inw(0x1f0));
+  eq('...256 words: CHS 4/16/63, LBA capacity, "MIRAGE ATA DISK"', [id[1], id[3], id[6], id[60] | (id[61] << 16),
+    String.fromCharCode(...id.slice(27, 34).flatMap((w) => [w >> 8, w & 0xff]))].join(), `4,16,63,${4 * 16 * 63},MIRAGE ATA DIS`);
+  eq('...and DRQ drops once the buffer is read', inb(0x1f7) & 0x08, 0);
+  outb(0x1f2, 2); outb(0x1f3, 5); outb(0x1f4, 0); outb(0x1f5, 0); outb(0x1f6, 0xe0); outb(0x1f7, 0x20);   // READ 2 sectors at LBA 5
+  const rd = []; for (let k = 0; k < 512; k++) { const w = inw(0x1f0); rd.push(w & 0xff, w >> 8); }
+  eq('READ SECTORS (LBA): the image bytes, sector by sector', rd.every((b, i) => b === img[5 * 512 + i]), true);
+  outb(0x1f2, 1); outb(0x1f3, 9); outb(0x1f6, 0xe0); outb(0x1f7, 0x30);        // WRITE 1 sector at LBA 9
+  for (let k = 0; k < 256; k++) if (mc.portWrite[0x1f0]) mc.portWrite[0x1f0](0x1f0, 2, 0xa55a);
+  eq('WRITE SECTORS lands in the image', [img[9 * 512], img[9 * 512 + 1], img[9 * 512 + 511]].join(), '90,165,165');
+  outb(0x1f6, 0xb0); outb(0x1f7, 0xec);                                        // IDENTIFY to the absent slave
+  eq('the absent slave reads status 00h', inb(0x1f7), 0);
+  outb(0x1f6, 0xa0);
+  eq('...and the master keeps its own status (a slave probe cleared it: "drive not ready")', inb(0x1f7) & 0x40, 0x40); }
+
+// ---- The 8042 answers an OS's keyboard initialisation -------------------------------------------
+// Linux 2.2 self-tests the controller, resets the keyboard and waits for the ACK in its IRQ1 handler:
+// "keyboard: Timeout - AT keyboard not present?" when any of it was missing.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const inb = (p) => (mc.portRead[p] ? mc.portRead[p](p, 1) & 0xff : 0xff), outb = (p, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, 1, v); };
+  outb(0x64, 0xaa); const st = inb(0x60); outb(0x64, 0xab); const it = inb(0x60); outb(0x64, 0x20); const cb = inb(0x60);
+  eq('8042: self-test 55h, interface test 00h, command byte 45h', [st, it, cb].map((v) => v.toString(16)).join(), '55,0,45');
+  mc.kbIrqPending = false;
+  outb(0x60, 0xff);
+  eq('keyboard reset: ACK then AAh, and the ACK raises IRQ1 (command byte bit 0)', [inb(0x60), inb(0x60), mc.kbIrqPending].map(String).join(), '250,170,true');
+  outb(0x64, 0x60); outb(0x60, 0x44); outb(0x64, 0x20);
+  eq('...the command byte is writable (60h) and reads back', inb(0x60), 0x44);
+  mc.kbIrqPending = false; outb(0x60, 0xf4); inb(0x60);
+  eq('...and with its bit 0 clear a keyboard ACK raises nothing', mc.kbIrqPending, false); }
+
 // ---- The RTC is a chip: it reads the BDA tick physically, never through the guest's paging --------
 // Linux 2.2 (v86's bl3-5.img) reads the CMOS clock while low memory is unmapped; our chip read
 // 0040:006C with mem.r32, took a #PF at 0000046Ch inside `in al,71h`, and the kernel panicked.

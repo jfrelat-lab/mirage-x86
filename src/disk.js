@@ -35,6 +35,7 @@ const SECTOR = 512;
 // The diskette parameter table: 11 bytes the BIOS keeps, INT 1Eh points at, and INT 13h AH=08
 // hands back in ES:DI. Values are the standard 1.44M set a PC BIOS ships with.
 const DPT_SEG = 0xf000, DPT_OFF = 0xefc7;
+const FDPT_SEG = 0xf000, FDPT_OFF = 0x3f00;   // the two Fixed Disk Parameter Tables (INT 41h / 46h)
 const DPT = [0xaf, 0x02, 0x25, 0x02, 18, 0x1b, 0xff, 0x6c, 0xf6, 0x0f, 0x08];
 
 export function installDisk(machine) {
@@ -55,6 +56,17 @@ export function installDisk(machine) {
       const g = geom || GEOMETRY.get(data.length);
       if (!g) throw new Error(`no standard geometry for a ${data.length}-byte image — pass one explicitly`);
       disk.drives.set(drive & 0xff, { data, geom: g });
+      // A hard disk's parameters also live in the Fixed Disk Parameter Table that INT 41h (drive 80h)
+      // and INT 46h (81h) point at (RBIL #03196): cylinders, heads, precompensation, control, landing
+      // zone, sectors per track. Linux reads it in its setup code; without it, "hd0: C/H/S=207/0/0
+      // from BIOS ignored" (v86's bl3-5.img).
+      if ((drive & 0xff) === 0x80 || (drive & 0xff) === 0x81) {
+        const off = (drive & 0xff) === 0x80 ? FDPT_OFF : FDPT_OFF + 16, a = (FDPT_SEG << 4) + off;
+        const t = [g.cyl & 0xff, (g.cyl >> 8) & 0xff, g.heads, 0, 0, 0xff, 0xff, 0, g.heads > 8 ? 0x08 : 0, 0, 0, 0,
+          g.cyl & 0xff, (g.cyl >> 8) & 0xff, g.spt, 0];
+        t.forEach((b, i) => mem.w8(a + i, b));
+        machine.setVector((drive & 0xff) === 0x80 ? 0x41 : 0x46, FDPT_SEG, off);
+      }
       return g;
     },
     detach(drive) { disk.drives.delete(drive & 0xff); },

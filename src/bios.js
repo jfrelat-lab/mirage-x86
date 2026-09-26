@@ -10,6 +10,7 @@ import { installDPMI } from './dpmi.js';
 import { installEMS } from './ems.js';
 import { installPS2Mouse } from './ps2mouse.js';
 import { installDisk } from './disk.js';
+import { installIDE } from './ide.js';
 import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
 
@@ -134,7 +135,14 @@ export function installBIOS(machine, opts = {}) {
 
   // ---- cursor (page 0) at BDA 0x50 (col), 0x51 (row) ----
   const getCol = () => mem.r8(BDA + 0x50), getRow = () => mem.r8(BDA + 0x51);
-  const setCur = (col, row) => { mem.w8(BDA + 0x50, col & 0xff); mem.w8(BDA + 0x51, row & 0xff); };
+  // The cursor lives in the BDA for software and in CRTC 0Eh/0Fh for the display, as a real BIOS keeps
+  // them: the renderer reads the CRTC, so a program that moves the hardware cursor itself (Linux's
+  // vgacon) is shown where it put it, and ours where we put it.
+  const setCur = (col, row) => {
+    mem.w8(BDA + 0x50, col & 0xff); mem.w8(BDA + 0x51, row & 0xff);
+    const v = machine.vga;
+    if (v) { const loc = (v.startAddr() + (row & 0xff) * (mem.r16(BDA + 0x4a) || 80) + (col & 0xff)) & 0xffff; v.crtc[0x0e] = loc >> 8; v.crtc[0x0f] = loc & 0xff; }
+  };
   bios.getCursor = () => ({ col: getCol(), row: getRow() });
   bios.setCursor = (row, col) => setCur(col, row);
 
@@ -535,6 +543,7 @@ export function installBIOS(machine, opts = {}) {
           bios.dac[reg * 3 + 2] = cpu.cx & 0x3f;        // CL = blue
         } else if (cpu.al === 0x03) {            // toggle blink vs bright-background (BL bit 0)
           bios.blink = (cpu.bx & 1) !== 0;
+          if (machine.vga) machine.vga.atc[0] = (machine.vga.atc[0] & ~0x08) | (bios.blink ? 0x08 : 0);   // AC mode control bit 3
         } else if (cpu.al === 0x17) {            // GET block of DAC registers (mirror of AL=12h)
           const start = cpu.bx & 0xff, count = cpu.cx & 0xffff;   // BL, not BX — see AL=12h below
           let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
@@ -1064,20 +1073,42 @@ export function installBIOS(machine, opts = {}) {
   // on that. Chrome Revenge ends each frame with `IN AL,60H / DAS / JC nextframe`: DAS sets CF only
   // for a value above 0x99, i.e. exactly "the last thing that happened was a key being RELEASED".
   // Reading back 0 made it exit after drawing one single frame.
-  const kb = { data: 0x9c, obf: false, scans: [], cmd: 0 };   // scans: FIFO of pending make/break scancodes
+  const kb = { data: 0x9c, obf: false, scans: [], cmd: 0, resp: [], ccb: 0x45, devArg: 0 };   // scans: FIFO of pending make/break scancodes
+  // Answers the controller or the keyboard owes the host, more than one byte for some commands
+  // (keyboard reset: FAh then AAh). The first sits in the data port, the rest wait their turn.
+  // A byte the KEYBOARD sends raises IRQ1 when the command byte enables it (bit 0), exactly like a
+  // scancode: Linux 2.2's send_data() waits for the ACK in its interrupt handler, and without the
+  // interrupt it gave up with "keyboard: Timeout - AT keyboard not present?". Controller replies
+  // (self-tests, the command byte) are polled and raise nothing.
+  const kick = () => { if (kb.ccb & 0x01) { machine.kbIrqPending = true; machine.hwIrqPending = true; } };
+  const respond = (...bytes) => { for (const b of bytes) kb.resp.push(b & 0xff); if (!kb.obf) { kb.data = kb.resp.shift(); kb.obf = true; } };
+  const reply = (...bytes) => { respond(...bytes); kick(); };
   machine.kb = kb;
   // The AUX channel (a PS/2 mouse, src/ps2mouse.js) shares port 0x60. A keyboard byte waiting takes
   // precedence; otherwise an aux byte is served, and status bit 5 says which one is there.
   const auxWaiting = () => !kb.obf && machine.ps2 && machine.ps2.pending();
   machine.onPortRead(0x60, () => {
     if (auxWaiting()) return machine.ps2.read();
-    const d = kb.data; kb.obf = false; return d;               // read scancode, clear OBF
+    const d = kb.data; kb.obf = false;                         // read scancode, clear OBF
+    if (kb.resp.length) { kb.data = kb.resp.shift(); kb.obf = true; if (kb.kbdResp) kick(); }
+    return d;
   });
   machine.onPortRead(0x64, () => (kb.obf ? 0x1d : auxWaiting() ? 0x3d : 0x1c));   // bit0 OBF, bit5 aux
   machine.onPortWrite(0x60, (_p, _s, v) => {                   // keyboard command -> ACK, or the
     if (kb.cmd === 0xd1) { kb.cmd = 0; setA20(v & 2); return; } // output-port byte after a 0xD1
     if (kb.cmd === 0xd4) { kb.cmd = 0; if (machine.ps2) machine.ps2.deviceCommand(v & 0xff); return; }   // to the mouse
-    kb.data = 0xfa; kb.obf = true;
+    if (kb.cmd === 0x60) { kb.cmd = 0; kb.ccb = v & 0xff; return; }   // the controller's command byte
+    // A byte for the KEYBOARD. Most commands answer ACK (FAh); a few say more, and a few take an
+    // argument that is ACKed too (LEDs EDh, scancode set F0h, typematic F3h). Linux 2.2 resets the
+    // keyboard at boot and waits for FAh then AAh: "keyboard: Timeout - AT keyboard not present?"
+    const b = v & 0xff;
+    kb.kbdResp = true;
+    if (kb.devArg) { kb.devArg = 0; reply(0xfa); return; }
+    if (b === 0xff) { reply(0xfa, 0xaa); return; }              // reset: ACK, then self-test passed
+    if (b === 0xf2) { reply(0xfa, 0xab, 0x83); return; }        // identify: an MF2 keyboard
+    if (b === 0xee) { reply(0xee); return; }                    // echo
+    if (b === 0xed || b === 0xf0 || b === 0xf3) kb.devArg = b;
+    reply(0xfa);
   });
   // 8042 controller commands. A20 through the keyboard controller is the OLDEST of the three ways to
   // open the 1 MiB wrap and the first one an XMS driver tries: HimemX writes 0xD1 to 0x64 then the
@@ -1092,6 +1123,11 @@ export function installBIOS(machine, opts = {}) {
     if (c === 0xdf) { setA20(true); return; }
     if (c === 0xd4) { kb.cmd = 0xd4; return; }               // next byte on 0x60 goes to the aux device
     if (c === 0xa9) { kb.data = 0x00; kb.obf = true; kb.cmd = 0; return; }   // aux interface test: OK
+    // Self-tests and the command byte, as an OS's keyboard driver initialises the controller.
+    if (c === 0xaa) { kb.cmd = 0; kb.kbdResp = false; respond(0x55); return; }    // controller self-test: passed
+    if (c === 0xab) { kb.cmd = 0; kb.kbdResp = false; respond(0x00); return; }    // keyboard interface test: OK
+    if (c === 0x20) { kb.cmd = 0; kb.kbdResp = false; respond(kb.ccb); return; }  // read command byte
+    if (c === 0x60) { kb.cmd = 0x60; return; }                // next byte on 0x60 is the command byte
     kb.cmd = 0;                                               // A8h/A7h (aux on/off) need no state here
   });
 
@@ -1140,7 +1176,11 @@ export function installBIOS(machine, opts = {}) {
     // testing only the IVT threw away every scancode meant for it. Quake sat on "Press a key" with
     // a correct handler at pmVec[9] that was never given one.
     const pmVec9 = machine.dpmi && machine.dpmi.active && machine.dpmi.pmVec && machine.dpmi.pmVec[9];
-    if (!pmVec9 && machine.getVector(9).seg === 0xf000) { kb.scans.length = 0; return; }   // no guest INT 9h ISR
+    // A protected-mode OS of its own (Linux) takes IRQ1 through ITS IDT and never touches the real-mode
+    // vector, which still holds our stub: judging by the IVT alone dropped every key it was sent.
+    const cpu = machine.cpu, ownPM = (cpu.cr0 & 1) && !(machine.dpmi && machine.dpmi.active) &&
+      machine.idtGatePresent(machine.pic ? machine.pic.vector(1) : 9);
+    if (!pmVec9 && !ownPM && machine.getVector(9).seg === 0xf000) { kb.scans.length = 0; return; }   // no guest INT 9h ISR
     kb.data = kb.scans.shift(); kb.obf = true;                 // stage the scancode into port 0x60
     machine.kbIrqPending = true;
     machine.hwIrqPending = true;                               // fire IRQ1 as soon as the guest sets IF
@@ -1167,6 +1207,7 @@ export function installBIOS(machine, opts = {}) {
   machine.int1cViaRom = INT1C_OFF;
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
+  installIDE(machine);   // the primary ATA channel over the same images (ports 1F0h-1F7h/3F6h, IRQ 14)
   installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
   if (opts.xms !== false) installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
