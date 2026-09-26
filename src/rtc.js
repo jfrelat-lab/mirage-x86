@@ -71,9 +71,12 @@ export function installRTC(machine) {
   rtc.ram[REG_B] = 0x02;
   rtc.ram[REG_D] = 0x80;
 
-  /** The instant the chip currently reads, as a Date. */
+  /** The instant the chip currently reads, as a Date. The tick is read PHYSICALLY: this is the chip,
+   *  answering a port, not the CPU — through mem.r32 it went through the guest's page tables, and
+   *  Linux 2.2 (v86's bl3-5.img), which does not map low memory when it reads the CMOS clock, took a
+   *  page fault at 0000046Ch inside `in al,71h` and panicked. */
   rtc.now = () => new Date((rtc.host ? Date.now()
-    : RTC_EPOCH_MS + (mem.r32(0x46c) >>> 0) * (MS_PER_DAY / TICKS_PER_DAY)) + rtc.offsetMs);
+    : RTC_EPOCH_MS + (mem.r32phys(0x46c) >>> 0) * (MS_PER_DAY / TICKS_PER_DAY)) + rtc.offsetMs);
 
   /** One clock register, encoded the way register B says to. */
   const readTime = (reg) => {

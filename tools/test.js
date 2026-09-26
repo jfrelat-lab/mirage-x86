@@ -1166,6 +1166,18 @@ const udRun = (gated) => {
   mc.portWrite[0x70](0x70, 1, 0x10); mc.portWrite[0x71](0x71, 1, 0x24);
   eq('a guest\'s own write to a configuration byte reads back', cmos(0x10), 0x24); }
 
+// ---- The RTC is a chip: it reads the BDA tick physically, never through the guest's paging --------
+// Linux 2.2 (v86's bl3-5.img) reads the CMOS clock while low memory is unmapped; our chip read
+// 0040:006C with mem.r32, took a #PF at 0000046Ch inside `in al,71h`, and the kernel panicked.
+{ const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  mem.setA20(true);
+  mem.w32(0x10000, 0x11007);
+  for (let p = 1; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);   // page 0 NOT mapped
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  let v, err = null;
+  try { mc.portWrite[0x70](0x70, 1, 0x04); v = mc.portRead[0x71](0x71, 1) & 0xff; } catch (e) { err = e.constructor.name; }
+  eq('reading the RTC with page 0 unmapped does not fault, and gives the hour (08 BCD)', [err, v].join(), ',8'); }
+
 // ---- MC146818 clock + CMOS ---------------------------------------------------------------------
 // The chip is the reference, not any one BIOS: four implementations (SeaBIOS under QEMU and under
 // v86, the Bochs BIOS, DOSBox-X) answer INT 1Ah by copying these registers out verbatim, and every
