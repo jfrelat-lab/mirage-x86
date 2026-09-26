@@ -180,6 +180,16 @@ export function installRTC(machine) {
         c.cx = (t >>> 16) & 0xffff; c.dx = t & 0xffff; c.al = 0;
         c.flags &= ~1; return;
       }
+      case 0x01: {                                          // SET tick count: CX:DX, midnight flag cleared
+        // Unanswered until now; the FreeDOS kernel on v86's xcom144.img calls it at boot. The BIOS
+        // tick and the chip are separate clocks on a PC, but here the chip reads epoch + tick, so
+        // moving the tick moves offsetMs the other way: the RTC must not change when a program
+        // resets the BIOS count (SeaBIOS handle_1a01 touches only the BDA).
+        const was = mem.r32(0x46c) >>> 0, now = (((c.cx & 0xffff) << 16) | (c.dx & 0xffff)) >>> 0;
+        mem.w32(0x46c, now); mem.w8(0x470, 0);
+        rtc.offsetMs -= (now - was) * (MS_PER_DAY / TICKS_PER_DAY);
+        c.ah = 0; c.flags &= ~1; return;
+      }
       case 0x02:                                            // get RTC time (AT and up)
         c.cx = (readTime(HOUR) << 8) | readTime(MIN);
         c.dx = (readTime(SEC) << 8) | (rtc.ram[REG_B] & B_DSE);

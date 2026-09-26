@@ -1112,6 +1112,13 @@ const udRun = (gated) => {
   eq('AH=04h returns month and day in BCD', cpu.dx & 0xffff, 0x0101);
   cpu.ax = 0x2c00; mc.intHandlers[0x1a](cpu, mc);
   eq('an unknown INT 1Ah function sets CF instead of passing silently', cpu.flags & 1, 1);
+  // AH=01h sets the BIOS tick count (SeaBIOS handle_1a01): CX:DX into 0040:006C, the midnight flag
+  // cleared — and the chip untouched, although ours reads epoch + tick.
+  mc.mem.w8(0x470, 1);
+  cpu.ax = 0x0100; cpu.cx = 0x0001; cpu.dx = 0x2345; cpu.flags |= 1; mc.intHandlers[0x1a](cpu, mc);
+  eq('AH=01h sets the tick count from CX:DX and clears the midnight flag', [mc.mem.r32(0x46c).toString(16), mc.mem.r8(0x470), cpu.flags & 1, (cpu.ax >> 8) & 0xff].join(), '12345,0,0,0');
+  cpu.ax = 0x0200; mc.intHandlers[0x1a](cpu, mc);
+  eq('...and the RTC still reads 08:00', cpu.cx & 0xffff, 0x0800);
   // Setting the date through AH=05h moves the chip.
   cpu.ax = 0x0500; cpu.cx = 0x2013; cpu.dx = 0x0725;
   mc.intHandlers[0x1a](cpu, mc);
