@@ -941,7 +941,7 @@ export function installDOS(machine, vfs) {
   // Left off by default because oktaeder's is a FAULT, not a fingerprint drift — that is a functional
   // regression, not a re-baselining question. A real DOS does keep these in RAM (FreeDOS answers
   // INT21=00D8:129A), so the flag is the correct behaviour and the default is the safe one.
-  if (process.env.MIRAGE_DOSKSEG) {
+  if (typeof process !== 'undefined' && process.env && process.env.MIRAGE_DOSKSEG) {
     machine.setVector(0x21, LOL_SEG, K21_OFF);
     machine.setVector(0x2f, LOL_SEG, K2F_OFF);
   }

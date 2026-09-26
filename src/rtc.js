@@ -60,7 +60,7 @@ export function installRTC(machine) {
     index: 0,
     nmiDisabled: false,
     offsetMs: 0,                  // what a guest's "set the clock" moved us by
-    host: process.env.MIRAGE_RTC === 'host',
+    host: typeof process !== 'undefined' && !!process.env && process.env.MIRAGE_RTC === 'host',   // guarded: the browser has no process
     pending: new Map(),           // time registers written while SET is high
   };
   machine.rtc = rtc;
