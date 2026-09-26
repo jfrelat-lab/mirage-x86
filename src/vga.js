@@ -27,6 +27,22 @@ export function installVGA(machine) {
   // 16-colour planar mode OR Mode-X (mode 13h with chain-4 off) is active.
   const syncRouting = () => { mem.setPlanar(vga.planar || vga.modeX); };
 
+  // HARDWARE-DERIVED ROUTING, for a machine whose INT 10h is a real VGA BIOS ROM (src/vgarom.js).
+  // Our own INT 10h tells this device which mode it set (setMode); a ROM only writes registers, so
+  // the routing must come from them, as it does on the card: the A000 window is the four planes when
+  // the Graphics Controller is in graphics mode (GC6 bit 0), the Sequencer is not chaining four
+  // planes into one (SEQ4 bit 3), the CGA shift/interleave is off (GC5 bit 5) and memory is mapped
+  // at A000 (GC6 bits 2-3 = 0 or 1). Mode 13h (chained) and the CGA modes stay plain RAM.
+  vga.hw = false;
+  const hwRoute = () => {
+    if (!vga.hw) return;
+    const gfx = (vga.gc[6] & 1) !== 0, map = (vga.gc[6] >> 2) & 3;
+    const route = gfx && !(vga.memMode & 0x08) && !(vga.gc[5] & 0x20) && map <= 1;
+    vga.modeX = false;
+    if (route !== vga.planar) { vga.planar = route; syncRouting(); }
+  };
+  vga.hwRoute = hwRoute;
+
   // The register state a real VGA BIOS leaves behind after a mode set, captured by running an actual
   // SeaVGABIOS ROM inside MIRAGE (tools/vga-rom.mjs) — observed, not derived, in the same spirit as
   // the Unicorn and DOS-kernel references. We used to zero the CRTC and set only the offset, which is
@@ -199,6 +215,7 @@ export function installVGA(machine) {
     if (vga.seqIndex === 2) vga.mapMask = v & 0x0f;
     else if (vga.seqIndex === 4) {                    // memory mode: bit3 = chain-4. Clearing it in mode 13h = Mode-X (unchained)
       vga.memMode = v & 0xff;
+      if (vga.hw) { hwRoute(); return; }
       const mx = vga.mode === 0x13 && !(v & 0x08);
       if (mx !== vga.modeX) { vga.modeX = mx; mem.setPlanar(vga.planar || vga.modeX); }
     }
@@ -214,6 +231,7 @@ export function installVGA(machine) {
     // GC 4 (read map select) and GC 5 (read mode) change what every byte of the window reads back:
     // the only event that forces a full shadow rebuild. Measured at 0-1 times per run.
     if ((i === 4 || i === 5 || i === 2 || i === 7) && vga.gc[i] !== old) vga.rebuildShadow();
+    if ((i === 5 || i === 6) && vga.hw) hwRoute();
   };
   machine.onPortWrite(0x3ce, (_p, s, v) => { vga.gcIndex = v & 0x0f; if (s === 2) gcData((v >> 8) & 0xff); });
   machine.onPortWrite(0x3cf, (_p, _s, v) => gcData(v & 0xff));

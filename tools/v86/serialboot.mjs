@@ -8,6 +8,13 @@ const { bootSector } = await import(ROOT + '/src/boot.js');
 const bytes = new Uint8Array(readFileSync(process.argv[2]));
 const secs = Number(process.argv[3]) || 20;
 const { mc } = makeMachine({ dos: false });
+// VGAROM=<file>: run that VGA BIOS ROM as INT 10h (src/vgarom.js) — e.g. boot/roms/5446bv.vbi,
+// to compare tools/int10gfx.asm with the same ROM under QEMU (tools/v86/cirrusboot.mjs).
+if (process.env.VGAROM) {
+  const { installVgaRom } = await import(ROOT + '/src/vgarom.js');
+  const r = installVgaRom(mc, new Uint8Array(readFileSync(process.env.VGAROM)));
+  console.error(`VGA ROM ${process.env.VGAROM}: INT 10h -> ${r.vector.seg.toString(16)}:${r.vector.off.toString(16)}`);
+}
 mc.disk.attach(0x00, bytes);
 let out = '', done = false;
 mc.onPortRead(0x3fd, () => 0x60);

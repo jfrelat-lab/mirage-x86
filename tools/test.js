@@ -986,6 +986,29 @@ const udRun = (gated) => {
   int10(0x1015, 0x0017);
   eq('AX=1015h reads a DAC register back into DH CH CL', [(cpu.dx >> 8) & 0xff, cpu.cx].map((v) => v.toString(16)).join(), '19,2814'); }
 
+// ---- A real VGA BIOS ROM as INT 10h (src/vgarom.js), and register-derived window routing -------
+// A ROM only writes registers, so the A000 routing has to follow them as on the card: planar when
+// the GC is in graphics mode (GC6 bit 0) and the Sequencer does not chain (SEQ4 bit 3). With the
+// Cirrus CL-GD5446 ROM, tools/int10gfx.asm then prints the same lines as QEMU with that ROM, but for
+// the two Cirrus extensions (8-bit GR index, 800x600 clock).
+{ const { installVgaRom } = await import('../src/vgarom.js');
+  const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  // A 512-byte option ROM whose init points INT 10h at C000:0020 and returns: `xor ax,ax; mov ds,ax;
+  // mov word [40h],20h; mov word [42h],0C000h; retf`, and an IRET at 0020h.
+  const rom = new Uint8Array(512); rom.set([0x55, 0xaa, 1]);
+  rom.set([0x31, 0xc0, 0x8e, 0xd8, 0xc7, 0x06, 0x40, 0x00, 0x20, 0x00, 0xc7, 0x06, 0x42, 0x00, 0x00, 0xc0, 0xcb], 3);
+  rom[0x20] = 0xcf;
+  const r = installVgaRom(mc, rom);
+  eq('installVgaRom runs the init by a far call and the ROM takes INT 10h', `${r.vector.seg.toString(16)}:${r.vector.off.toString(16)}`, 'c000:20');
+  eq('...and switches the VGA to register-derived routing', mc.vga.hw, true);
+  mc.ioWrite(0x3ce, 1, 6); mc.ioWrite(0x3cf, 1, 0x05);                 // GC6: graphics, A000 64K
+  mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, 0x06);                 // SEQ4: chain-4 off
+  eq('graphics + no chain-4 routes A000 through the planes', mc.mem.planar, true);
+  mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, 0x0e);                 // chain-4 on: mode 13h's
+  eq('...chain-4 makes it plain RAM again', mc.mem.planar, false);
+  mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, 0x06); mc.ioWrite(0x3ce, 1, 6); mc.ioWrite(0x3cf, 1, 0x0e);
+  eq('...and so does text mode (GC6 bit 0 clear, B800)', mc.mem.planar, false); }
+
 // ---- INT 10h AX=1121h-1124h: graphics fonts set the BDA rows and height; AX=1130h reports them ---
 // They were no-ops, and AX=1130h answered the REQUESTED font's height. QEMU/SeaBIOS, DOSBox-X and
 // the vendor Cirrus ROM agree on every value below (tools/int10gfx.asm T11).
