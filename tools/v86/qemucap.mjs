@@ -22,7 +22,8 @@ const std = [163840, 184320, 327680, 368640, 737280, 1228800, 1474560];
 if (size <= 2949120 && !std.includes(size)) { const pad = Buffer.alloc(1474560); bytes.copy(pad); bytes = pad; }
 writeFileSync(copy, bytes);
 const hd = bytes.length > 2949120;
-const args = ['-m', '16', ...(hd ? ['-drive', `format=raw,file=${copy},if=ide,index=0`, '-boot', 'c']
+const args = ['-m', String(process.env.QMEM || 16),   // QMEM=<MiB>
+  ...(hd ? ['-drive', `format=raw,file=${copy},if=ide,index=0`, '-boot', 'c']
   : ['-drive', `format=raw,file=${copy},if=floppy,index=0`, '-boot', 'a']),
   ...(cirrus ? ['-vga', 'none', '-device', `cirrus-vga,romfile=${ROM}`] : []),
   '-display', 'none', '-monitor', 'stdio', '-no-reboot'];

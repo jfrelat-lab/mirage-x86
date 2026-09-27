@@ -72,6 +72,8 @@ export class CPU {
     // Overwritten by Machine from the CPU profile; 0x1f (286+) is the default so a bare CPU works.
     this.shiftMask = 0x1f;
     this.idFlagMask = 0;             // EFLAGS.ID is writable only on a part that has CPUID
+    this.acFlagMask = 0;             // EFLAGS.AC (486+); both set by Machine from the profile
+    this.hiFlags = 0;                // = idFlagMask | acFlagMask: what the 32-bit forms may write
     // The debug registers, as storage only: no breakpoint ever fires from them here. They exist
     // because a value written to one has to read back — software probes the CPU that way.
     this.dr = new Uint32Array(8);
@@ -336,14 +338,17 @@ export class CPU {
     const leaf = this.reg[0] >>> 0;
     if (leaf === 0) {
       this.reg[0] = 1;                                   // highest leaf we answer
-      // "MIRAGE  " padded to twelve bytes, in the EBX:EDX:ECX order CPUID uses.
-      this.reg[3] = 0x4152494d;                          // EBX "MIRA"
-      this.reg[2] = 0x20204547;                          // EDX = bytes 4-7, "GE  "
-      this.reg[1] = 0x20202020;                          // ECX "    "
+      // "MIRAGE  " padded to twelve bytes, in the EBX:EDX:ECX order CPUID uses — or the profile's
+      // vendor (the 'pentium' profile, for guests that classify by it).
+      const v = (this.profile && this.profile.vendor) || 'MIRAGE      ';
+      const w = (i) => (v.charCodeAt(i) | (v.charCodeAt(i + 1) << 8) | (v.charCodeAt(i + 2) << 16) | (v.charCodeAt(i + 3) << 24)) >>> 0;
+      this.reg[3] = w(0);                                // EBX bytes 0-3
+      this.reg[2] = w(4);                                // EDX bytes 4-7
+      this.reg[1] = w(8);                                // ECX bytes 8-11
       return;
     }
     if (leaf === 1) {
-      this.reg[0] = 0x0500;                              // family 5, model 0, stepping 0
+      this.reg[0] = (this.profile && this.profile.signature) || 0x0500;   // family 5, model 0 (or the profile's)
       this.reg[3] = 0;                                   // EBX: no brand index, no CLFLUSH line
       this.reg[1] = 0;                                   // ECX: none of the later extensions
       this.reg[2] = (1 << 0) | (1 << 4);                 // EDX: FPU (bit 0), TSC (bit 4)
@@ -596,7 +601,8 @@ export class CPU {
     if (!(this.cr0 & 1)) {                       // real mode — unchanged
       this.eip = is32 ? (pop() >>> 0) : pop();
       this.setSeg(CS, pop() & 0xffff);
-      this.flags = (pop() & 0x7fd5) | 2;
+      const f = pop();                           // AC/ID: from an IRETD's frame, kept by a 16-bit IRET
+      this.flags = ((f & 0x7fd5) | 2 | (is32 ? (f & this.hiFlags) : (this.flags & this.hiFlags))) >>> 0;
       return;
     }
     // Inside a V86 task, IRET is one of the IOPL-sensitive instructions: at IOPL < 3 it must trap to
@@ -606,7 +612,8 @@ export class CPU {
       const keep = this.flags & (VM | IOPL);
       this.eip = is32 ? (pop() >>> 0) : pop();
       this.setSeg(CS, pop() & 0xffff);
-      this.flags = ((pop() & 0x7fd5) | 2 | keep) >>> 0;
+      const f = pop();
+      this.flags = ((f & 0x7fd5) | 2 | keep | (is32 ? (f & this.hiFlags) : (this.flags & this.hiFlags))) >>> 0;
       return;
     }
     const cpl = this.cpl;
@@ -639,7 +646,7 @@ export class CPU {
     // when CPL <= IOPL — the same rule POPF already followed. Writing the popped EFLAGS wholesale
     // let a ring-3 IRET zero the IOPL a DPMI host had set to 3 for its client, after which the
     // client's next CLI was a #GP: DOOM stopped there, inside DOS/4GW, drawing nothing.
-    let nf = (fl & 0x27fd5) | 2;
+    let nf = ((fl & 0x27fd5) | 2 | (is32 ? (fl & this.hiFlags) : (this.flags & this.hiFlags))) >>> 0;
     if (cpl !== 0) nf = (nf & ~IOPL) | (this.flags & IOPL);
     if (cpl > ((this.flags >>> 12) & 3)) nf = (nf & ~IF) | (this.flags & IF);
     this.flags = nf;
@@ -655,7 +662,7 @@ export class CPU {
     const esp = this.pop32() >>> 0, ss = this.pop32() & 0xffff;
     const es = this.pop32() & 0xffff, ds = this.pop32() & 0xffff;
     const fs = this.pop32() & 0xffff, gs = this.pop32() & 0xffff;
-    this.flags = ((fl & 0x27fd5) | 2) >>> 0;              // VM is inside the mask
+    this.flags = ((fl & (0x27fd5 | this.hiFlags)) | 2) >>> 0;   // VM is inside the mask
     this.setSeg(CS, cs); this.eip = eip >>> 0;
     this.setSeg(SS, ss); this.reg[4] = esp;
     this.setSeg(ES, es); this.setSeg(DS, ds); this.setSeg(FS, fs); this.setSeg(GS, gs);

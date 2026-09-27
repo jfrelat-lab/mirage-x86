@@ -1151,7 +1151,7 @@ export class Recompiler {
           // flags word can hold more — an IRET frame or a POPFD supplies whatever the guest had —
           // so mask on the way out, which is what the 80386EX vectors show (0xFFFC0493 pushes as
           // 0x00000493).
-          P(sz === 32 ? 'cpu.push32(cpu.flags&0x3ffff);'
+          P(sz === 32 ? 'cpu.push32(cpu.flags&(0x3ffff|cpu.hiFlags));'   // + AC/ID on a 486+ profile
           : `cpu.push16((cpu.flags${PROF.pushfSetsReserved ? '|0xf000' : ''})&0xffff);`); break;
         // POPF / POPFD. Three fields it may NOT write, all of which the old one-line mask did: VM
         // (only IRETD from ring 0 sets that), IOPL (ring 0 only), and IF when CPL > IOPL. And in V86
@@ -1161,7 +1161,9 @@ export class Recompiler {
           P(`if((cpu.flags&0x20000)&&((cpu.flags>>>12)&3)<3){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
           const t = NT(), c = NT(), i = NT(), f = NT();
           P(`var ${t}=${sz === 32 ? 'cpu.pop32()' : 'cpu.pop16()'};var ${c}=cpu.cpl,${i}=(cpu.flags>>>12)&3;`);
-          P(`var ${f}=(${t}&(0x4fd5|cpu.idFlagMask))|2|(cpu.flags&0x20000)|(${c}?(cpu.flags&0x3000):(${t}&0x3000));`);
+          // AC and ID (cpu.hiFlags, 486+/CPUID profiles): written by POPFD, KEPT by a 16-bit POPF, which
+          // only owns the low word — it used to clear ID, so pushf/popf pairs in 16-bit code lost it.
+          P(`var ${f}=(${t}&0x4fd5)|2|(cpu.flags&0x20000)|${sz === 32 ? `(${t}&cpu.hiFlags)` : '(cpu.flags&cpu.hiFlags)'}|(${c}?(cpu.flags&0x3000):(${t}&0x3000));`);
           P(`if(${c}>${i})${f}=(${f}&~${IF})|(cpu.flags&${IF});cpu.flags=${f};`);
           break;
         }

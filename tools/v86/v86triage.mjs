@@ -14,7 +14,7 @@ const path = process.argv[2];
 const SECS = Number(process.argv[3]) || 20;
 const name = path.split('/').pop().replace(/\.[^.]+$/, '');
 let bytes = new Uint8Array(readFileSync(path));
-const { mc } = makeMachine({ dos: false });
+const { mc } = makeMachine({ dos: false, memSize: Number(process.env.MEM || 16) << 20 });   // MEM=<MiB>, a power of two
 let drive = 0x00, geo = '';
 if (bytes.length > 2949120) {                        // a hard disk: geometry from the partition table
   // Solve the geometry from the first partition's CHS/LBA pair — reading "end head + 1" and "end

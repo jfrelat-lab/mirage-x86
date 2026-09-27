@@ -71,11 +71,28 @@ export const PROFILES = {
     bcdAdjustsAX: true,
     cpuid: true,
   },
+  // '586' with an Intel identity, for guests that CLASSIFY by vendor. The default answers "MIRAGE  "
+  // on purpose (see cpu.cpuid), and most software copes; NetBSD does not: an unknown vendor falls to
+  // the NexGen row of its table, class 386, and its i386 kernel refuses to boot ("no appropriate CPU
+  // class available"). This says GenuineIntel, family 5 model 2 (a P54C) — the feature bits stay
+  // exactly ours (FPU, TSC). Select it with MIRAGE_CPU=pentium or `new Machine({ cpu: 'pentium' })`.
+  pentium: {
+    name: 'pentium',
+    shiftCountMask: 0x1f,
+    pushSPOriginal: true,
+    pushfSetsReserved: false,
+    bcdAdjustsAX: true,
+    cpuid: true,
+    vendor: 'GenuineIntel',
+    signature: 0x0520,
+  },
 };
 
 export const DEFAULT_PROFILE = '386';
 
 export function resolveProfile(p) {
+  // MIRAGE_CPU was documented above and read nowhere: every headless run that set it got the 386.
+  if (!p) p = (typeof process !== 'undefined' && process.env && process.env.MIRAGE_CPU) || null;
   if (!p) return PROFILES[DEFAULT_PROFILE];
   if (typeof p === 'object') return p;
   const found = PROFILES[String(p)];

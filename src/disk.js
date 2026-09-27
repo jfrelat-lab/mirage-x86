@@ -10,7 +10,7 @@
 // because the BIOS already read the whole program, but anything that loads more of itself — every
 // real bootloader, and therefore any DOS kernel — needs this.
 
-import { CF, ES } from './cpu.js';
+import { CF, ES, DS } from './cpu.js';
 
 // Standard floppy geometries, keyed by image size. A raw sector image carries no geometry of its
 // own, and CHS addressing is meaningless without one.
@@ -60,6 +60,9 @@ export function installDisk(machine) {
       // and INT 46h (81h) point at (RBIL #03196): cylinders, heads, precompensation, control, landing
       // zone, sectors per track. Linux reads it in its setup code; without it, "hd0: C/H/S=207/0/0
       // from BIOS ignored" (v86's bl3-5.img).
+      // BDA 0475h counts the hard disks, as the POST leaves it: NetBSD's bootstrap takes any BIOS drive
+      // at or above 80h + that count for a CD, and with our 0 it booted "cd0a:netbsd" off drive 80h.
+      if ((drive & 0xff) >= 0x80) mem.w8(0x475, [...disk.drives.keys()].filter((k) => k >= 0x80).length);
       if ((drive & 0xff) === 0x80 || (drive & 0xff) === 0x81) {
         const off = (drive & 0xff) === 0x80 ? FDPT_OFF : FDPT_OFF + 16, a = (FDPT_SEG << 4) + off;
         const t = [g.cyl & 0xff, (g.cyl >> 8) & 0xff, g.heads, 0, 0, 0xff, 0xff, 0, g.heads > 8 ? 0x08 : 0, 0, 0, 0,
@@ -149,6 +152,42 @@ export function installDisk(machine) {
           c.ah = 0x03;                                          // 03 = fixed disk, sector count valid
         } else c.ah = 0x01;                                     // 01 = floppy, no change-line support
         c.flags &= ~CF; disk.lastStatus = 0; return;
+      }
+      // ---- The EDD extensions (Phoenix / IBM "INT 13h Extensions", EDD 3.0), hard disks only ----
+      // Windows 95 OSR2/98 FAT32 boot sectors and NetBSD's bootstrap read by LBA through these; without
+      // them: "Disk I/O error" and "/boot load failed". Shapes follow SeaBIOS (disk.c).
+      case 0x41: {                                              // installation check
+        if (drive < 0x80 || (c.bx & 0xffff) !== 0x55aa) { fail(0x01); return; }
+        c.bx = 0xaa55; c.ah = 0x30;                              // EDD 3.0
+        c.cx = 0x0005;                                          // fixed-disk access (42h-44h,47h,48h) + EDD (48h)
+        c.flags &= ~CF; return;
+      }
+      case 0x42: case 0x43: case 0x44: case 0x47: {             // extended read / write / verify / seek
+        if (drive < 0x80) { fail(0x01); return; }
+        const pkt = ((c.seg[DS] << 4) + (c.si & 0xffff)) >>> 0;
+        const count = mem.r16(pkt + 2);
+        let buf = (((mem.r16(pkt + 6) << 4) + mem.r16(pkt + 4)) >>> 0);
+        if (mem.r8(pkt) >= 0x18 && mem.r32(pkt + 4) === 0xffffffff) buf = mem.r32(pkt + 0x10) >>> 0;   // flat 64-bit address
+        const lba = mem.r32(pkt + 8) + mem.r32(pkt + 12) * 0x100000000;
+        if (ah === 0x47) { if (lba * SECTOR >= d.data.length) { fail(0x04); return; } ok(); return; }
+        if (lba * SECTOR + count * SECTOR > d.data.length) { mem.w16(pkt + 2, 0); fail(0x04); return; }   // sector not found
+        const off = lba * SECTOR;
+        if (ah === 0x42) mem.blit(buf, d.data.subarray(off, off + count * SECTOR));
+        else if (ah === 0x43) for (let i = 0; i < count * SECTOR; i++) d.data[off + i] = mem.r8(buf + i);
+        ok(); return;                                           // the packet's count stays: all of it moved
+      }
+      case 0x48: {                                              // get drive parameters (result buffer at DS:SI)
+        if (drive < 0x80) { fail(0x01); return; }
+        const r = ((c.seg[DS] << 4) + (c.si & 0xffff)) >>> 0, size = mem.r16(r);
+        if (size < 0x1a) { fail(0x01); return; }
+        const total = Math.floor(d.data.length / SECTOR);
+        mem.w16(r, size >= 0x1e ? 0x1e : 0x1a);
+        mem.w16(r + 2, 0x0002);                                 // CHS information valid
+        mem.w32(r + 4, g.cyl); mem.w32(r + 8, g.heads); mem.w32(r + 12, g.spt);
+        mem.w32(r + 16, total >>> 0); mem.w32(r + 20, Math.floor(total / 0x100000000));
+        mem.w16(r + 24, SECTOR);
+        if (size >= 0x1e) mem.w32(r + 26, 0xffffffff);          // no EDD configuration parameters
+        ok(); return;
       }
       default:
         // Not implemented — and counted, so tools/survey-gaps.mjs keeps reporting INT 13h until the

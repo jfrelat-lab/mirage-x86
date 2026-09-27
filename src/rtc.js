@@ -140,6 +140,20 @@ export function installRTC(machine) {
       case 0x12: return drives.has(0x80) ? 0xf0 | (drives.has(0x81) ? 0x0f : 0) : 0;
       case 0x19: return drives.has(0x80) ? 47 : 0;
       case 0x1a: return drives.has(0x81) ? 47 : 0;
+      default: break;
+    }
+    // Type 47 is "user defined": its parameters follow, 1Bh-23h for the first disk and 24h-2Ch for the
+    // second — cylinders, heads, precompensation (FFFFh: none), control, landing zone, sectors — as
+    // QEMU lays them out (pc_cmos_init_hd). 386BSD reads its disk geometry here; with our zeros it
+    // took 0 heads, programmed the controller with head register FFh (DEVICE bit set: the slave),
+    // never read its label, and divided by zero in the pager.
+    if (i >= 0x1b && i <= 0x2c) {
+      const d = drives.get(i < 0x24 ? 0x80 : 0x81);
+      if (!d) return 0;
+      const g = d.geom, k = (i - 0x1b) % 9, cyl = Math.min(g.cyl, 0xffff);
+      return [cyl & 0xff, cyl >> 8, g.heads, 0xff, 0xff, 0xc0 | (g.heads > 8 ? 0x08 : 0), cyl & 0xff, cyl >> 8, g.spt][k];
+    }
+    switch (i) {
       case 0x14: {
         const nfd = (drives.has(0) ? 1 : 0) + (drives.has(1) ? 1 : 0);
         return (nfd ? 0x01 | ((nfd - 1) << 6) : 0) | 0x02 | 0x04;   // drives, x87, bit 2; video 00 = EGA/VGA

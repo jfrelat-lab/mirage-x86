@@ -45,6 +45,11 @@ export class Machine {
     // writable exactly when CPUID answers — a CPU that accepts the bit but has no CPUID, or the
     // reverse, is a machine that cannot exist.
     this.cpu.idFlagMask = this.cpu.profile.cpuid ? 0x200000 : 0;
+    // EFLAGS bit 18, AC, exists from the 486 on — every profile with CPUID is one. Software tells a 386
+    // from a 486 by toggling it: NetBSD and Linux 2.2 classed our 586 as a 386 (NetBSD then refused to
+    // boot, "no appropriate CPU class available"). `hiFlags` are the bits above 17 a guest may own.
+    this.cpu.acFlagMask = this.cpu.profile.cpuid ? 0x40000 : 0;
+    this.cpu.hiFlags = this.cpu.idFlagMask | this.cpu.acFlagMask;
     installFPU(this.cpu);                           // x87 coprocessor
     installSSE(this.cpu);                           // XMM register file + the SSE subset (src/sse.js)
     // FLDCW changing PRECISION CONTROL invalidates every translated FPU block: the rounding is folded
@@ -852,6 +857,28 @@ export class Machine {
         if (this.deliverIRQ(n)) this.irqPendingMask &= ~(1 << n); else this.hwIrqPending = true;
       }
     }
+    this.drainPIC();
+  }
+
+  /**
+   * A protected-mode OS of its own: whatever the 8259 has in its IRR and would present now, it gets —
+   * as the real chip does whenever INTR is serviced. Our devices raise their lines along their own
+   * paths and give up when the PIC says "not yet"; the IRR bit stayed and nobody delivered it later.
+   * A keyboard IRQ raised while IRQ0 was in service sat there above IRQ 14, which it then starved:
+   * 386BSD waited for its disk for ever, and its keyboard with it. DOS and DPMI keep their own paths.
+   */
+  drainPIC() {
+    const cpu = this.cpu, pic = this.pic;
+    if (!pic || !(cpu.flags & IF) || !(cpu.cr0 & 1) || (this.dpmi && this.dpmi.active)) return;
+    const irq = pic.pending();
+    if (irq < 0) return;
+    const vec = pic.acknowledge();
+    if (irq === 1) this.kbIrqPending = false;
+    if (irq === 12) this.mouseIrqPending = false;
+    this.irqPendingMask &= ~(1 << irq);
+    cpu.halted = false;
+    this.protInt(vec);
+    if (pic.pending() >= 0) this.hwIrqPending = true;          // more waiting: come back next boundary
   }
 
   /** A device asserts IRQ `n` (IDE: 14). It is delivered at the next block boundary with IF set, at
@@ -915,6 +942,10 @@ export class Machine {
   /** Execute up to `maxBlocks` basic blocks (or until HLT). Returns blocks run. */
   runSlice(maxBlocks = 100000) {
     this.blocked = false;
+    // A HLT is also woken by a DEVICE interrupt waiting for it. Retried only at block boundaries, a
+    // pending IRQ 14 was offered only while the timer's handler ran — with IRQ0 in service, so the
+    // PIC refused it — and the CPU halted again: 386BSD waited for its disk for ever after probing.
+    if (this.cpu.halted && (this.cpu.flags & IF)) { if (this.hwIrqPending) this.serviceHwInts(); else this.drainPIC(); }
     // A halted CPU (STI;HLT, waiting for the next interrupt) freezes cpu.cycles — but the PIT
     // keeps ticking on real hardware. Headless (timerAuto) drives INT 8 off cpu.cycles, so a HLT
     // would deadlock: advance to the next timer deadline and deliver the tick to wake it. (The

@@ -1191,6 +1191,61 @@ const udRun = (gated) => {
   outb(0x1f6, 0xa0);
   eq('...and the master keeps its own status (a slave probe cleared it: "drive not ready")', inb(0x1f7) & 0x40, 0x40); }
 
+// ---- INT 13h extensions (EDD), BDA 0475h, CMOS type-47 parameters ------------------------------
+// Windows 95/98 (FAT32 boot sector) and NetBSD's bootstrap read by LBA through AH=42h: "Disk I/O error",
+// "/boot load failed". NetBSD took drive 80h for a CD because BDA 0475h said 0 hard disks; 386BSD reads
+// the user-type geometry QEMU keeps in CMOS 1Bh-23h.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  const img = new Uint8Array(20 * 16 * 63 * 512); for (let i = 0; i < img.length; i++) img[i] = (i >> 9) & 0xff;
+  mc.disk.attach(0x80, img, { cyl: 20, heads: 16, spt: 63, type: 3 });
+  const i13 = (ax, extra) => { cpu.ax = ax; cpu.dx = 0x0080; extra(); mc.intHandlers[0x13](cpu, mc); };
+  i13(0x4100, () => { cpu.bx = 0x55aa; });
+  eq('AH=41h: EDD present, BX=AA55h, version 30h, fixed-disk access + EDD', [(cpu.bx & 0xffff).toString(16), (cpu.ax >> 8).toString(16), cpu.cx & 0xffff, cpu.flags & 1].join(), 'aa55,30,5,0');
+  // Disk address packet at 0000:0600: 16 bytes, 2 sectors, buffer 0000:2000, LBA 7.
+  mem.w8(0x600, 0x10); mem.w8(0x601, 0); mem.w16(0x602, 2); mem.w16(0x604, 0x2000); mem.w16(0x606, 0); mem.w32(0x608, 7); mem.w32(0x60c, 0);
+  i13(0x4200, () => { cpu.setSeg(DS, 0); cpu.si = 0x600; });
+  eq('AH=42h: extended read of LBA 7-8 into the buffer', [cpu.flags & 1, mem.u8[0x2000], mem.u8[0x2000 + 512], mem.u8[0x2000 + 1023]].join(), '0,7,8,8');
+  mem.w16(0x700, 0x1e);
+  i13(0x4800, () => { cpu.setSeg(DS, 0); cpu.si = 0x700; });
+  eq('AH=48h: CHS 20/16/63, total sectors, 512-byte sectors', [mem.r32(0x704), mem.r32(0x708), mem.r32(0x70c), mem.r32(0x710), mem.r16(0x718)].join(), `20,16,63,${20 * 16 * 63},512`);
+  eq('BDA 0475h counts the attached hard disks', mem.r8(0x475), 1);
+  const cmos = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
+  eq('CMOS 1Bh-23h: the type-47 parameters (cyl 20, heads 16, sectors 63)', [cmos(0x1b) | (cmos(0x1c) << 8), cmos(0x1d), cmos(0x23)].join(), '20,16,63'); }
+
+// ---- The CPU profile: MIRAGE_CPU, EFLAGS.AC on a 486+, the Intel-identity 'pentium' -------------
+// MIRAGE_CPU was documented and read nowhere; and AC (bit 18) could not be toggled, so NetBSD and Linux
+// classed our 586 as a 386 (NetBSD then panicked, "no appropriate CPU class available").
+{ const was = process.env.MIRAGE_CPU; process.env.MIRAGE_CPU = '586';
+  const viaEnv = new Machine({ memSize: 1 << 20 }).cpu.profile.name;
+  if (was === undefined) delete process.env.MIRAGE_CPU; else process.env.MIRAGE_CPU = was;
+  eq('MIRAGE_CPU selects the profile when none is passed', viaEnv, '586');
+  const toggle = (prof, code) => { const mc = new Machine({ memSize: 1 << 20, cpu: prof }); const cpu = mc.cpu;
+    cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x200); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+    mc.mem.blit(0x1000, Uint8Array.from(code)); let n = 0; while (!cpu.halted && n++ < 1000) mc.rec.step(); return cpu; };
+  // pushfd; pop eax; or eax,40000h; push eax; popfd; pushfd; pop eax; hlt
+  const acSeq = [0x66, 0x9c, 0x66, 0x58, 0x66, 0x0d, 0x00, 0x00, 0x04, 0x00, 0x66, 0x50, 0x66, 0x9d, 0x66, 0x9c, 0x66, 0x58, 0xf4];
+  eq('EFLAGS.AC toggles on the 586 profile (a 486+ has it)...', (toggle('586', acSeq).reg[0] >>> 18) & 1, 1);
+  eq('...and stays 0 on the 386', (toggle('386', acSeq).reg[0] >>> 18) & 1, 0);
+  // Set AC with popfd, then a 16-bit pushf/popf pair: the high word must survive.
+  const keep = toggle('586', [0x66, 0x68, 0x02, 0x00, 0x24, 0x00, 0x66, 0x9d, 0x9c, 0x9d, 0x66, 0x9c, 0x66, 0x58, 0xf4]);   // push 240002h; popfd; pushf; popf; pushfd; pop eax
+  eq('a 16-bit POPF keeps AC and ID (it owns only the low word)', ((keep.reg[0] >>> 0) & 0x240000).toString(16), '240000');
+  let pent;
+  try { const p = new Machine({ memSize: 1 << 20, cpu: 'pentium' }).cpu; p.reg[0] = 0; p.cpuid();
+    const vend = String.fromCharCode(...[p.reg[3], p.reg[2], p.reg[1]].flatMap((w) => [w & 0xff, (w >>> 8) & 0xff, (w >>> 16) & 0xff, w >>> 24]));
+    p.reg[0] = 1; p.cpuid(); pent = [vend, (p.reg[0] >>> 0).toString(16), p.reg[2]].join();
+  } catch (e) { pent = String(e.message).slice(0, 40); }
+  eq("the 'pentium' profile says GenuineIntel, family 5 model 2, features FPU+TSC only", pent, 'GenuineIntel,520,17'); }
+
+// ---- A HLT is woken by what the 8259 holds, for a protected-mode OS of its own ------------------
+// A device IRQ raised while IRQ0 was in service was left in the IRR and never delivered; a HLT then
+// waited for ever (386BSD after its disk probe).
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+  cpu.cr0 |= 1; cpu.flags |= 0x200; cpu.halted = true;
+  const got = []; mc.idtGatePresent = () => true; mc.protInt = (v) => { got.push(v); };
+  mc.pic.raise(1);                                                          // a keyboard request nobody took
+  mc.runSlice(1);
+  eq('a halted PM guest with IF set gets the IRQ its PIC holds, at the PIC vector', got.join(), String(mc.pic.vector(1))); }
+
 // ---- The 8042 answers an OS's keyboard initialisation -------------------------------------------
 // Linux 2.2 self-tests the controller, resets the keyboard and waits for the ACK in its IRQ1 handler:
 // "keyboard: Timeout - AT keyboard not present?" when any of it was missing.
