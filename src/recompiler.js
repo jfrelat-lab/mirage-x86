@@ -667,7 +667,7 @@ export class Recompiler {
     }
     const out = ['var t;'];
     const P = (s) => out.push(s);
-    let ip = ip0, ipLast = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false;
+    let ip = ip0, ipLast = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false, stiShadow = 0;
     const NT = () => '_' + (tmp++);
 
     // Terminator descriptor. Static, same-CS transfers (JMP rel / Jcc / LOOP / JCXZ) record
@@ -779,8 +779,7 @@ export class Recompiler {
     // tests the read side FIRST (`mov eax,[0x9fffd]`), so a write-only check cannot get past it.
     // The offset goes into a temp before being compared — `o.off` is an expression string, and
     // evaluating it twice would repeat whatever side effects it carries.
-    // Expand-down segments invert the rule and are NOT handled here; they are rare enough that the
-    // corpus does not exercise them, and getting them wrong silently is worse than not checking.
+    // Expand-down segments invert the rule: cpu.limLo is their lowest valid offset (see loadDescriptor).
     // On by default with SEGWP, same measurement; MIRAGE_SEGLIM=0 turns it off.
     const SEGLIM = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGLIM === '0');
     // LOCK on an instruction that cannot be locked is #UD. On by default since test386 passes with it
@@ -801,12 +800,12 @@ export class Recompiler {
     // (A3) unprotected, and then the limit guard on memAddr alone left `mov eax,[0x9fffd]` (A1)
     // unprotected — each time the section under test was the one instruction the guard missed.
     const limGuardOff = (seg, off, bytes) => SEGLIM
-      ? `if(${(off >>> 0) + bytes - 1}>cpu.limit[${seg}]&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
+      ? `if((${(off >>> 0) + bytes - 1}>cpu.limit[${seg}]||${off >>> 0}<cpu.limLo[${seg}])&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
         `cpu.eip=${curIpStart};cpu.raise(${seg === SS ? 12 : 13},0);return;}` : '';
     const limGuard = (o, bytes) => {
       if (!SEGLIM) return '';
       const t = NT();
-      return `var ${t}=((${o.off})>>>0)+${bytes - 1};if(${t}>cpu.limit[${o.seg}]&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
+      return `var ${t}=((${o.off})>>>0)+${bytes - 1};if((${t}>cpu.limit[${o.seg}]||${t}-${bytes - 1}<cpu.limLo[${o.seg}])&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
         `cpu.eip=${curIpStart};cpu.raise(${o.seg === SS ? 12 : 13},0);return;}`;
     };
     // `bytes` defaults to 1 when the caller does not say: under-checking is safe (it only misses a
@@ -1087,11 +1086,16 @@ export class Recompiler {
         // ARPL r/m16, r16 — adjust the destination's RPL up to the source's, setting ZF when it had
         // to. Protected mode only: a 386 in real mode raises #UD on 0x63, and a CPU-detection
         // routine probing for it must get that answer, so the mode test is emitted rather than
-        // assumed. (This is also the opcode games/TURBOPAS/TURBO.EXE faults on.)
+        // assumed. (This is also the opcode games/TURBOPAS/TURBO.EXE faults on.) VIRTUAL-8086 MODE
+        // does not recognise it either, and a V86 monitor is built on that: Windows 95's VMM plants
+        // `63 xx` as its V86 breakpoints and gets control back through the #UD. Executed as ARPL,
+        // the breakpoint VMM put under a simulated interrupt's return fell through, and the IRET it
+        // should have taken over popped a far-call frame as FLAGS — TF set, a single-step walk off
+        // into data, and "It's now safe to turn off your computer".
         case 0x63: {
           const o = modrm(), d = NT(), sr = NT();
           canFault = true;
-          P(`if(!(cpu.cr0&1)){cpu.eip=${ipStart};cpu.swInt(6);return;}`);
+          P(`if(!(cpu.cr0&1)||(cpu.flags&0x20000)){cpu.eip=${ipStart};cpu.swInt(6);return;}`);
           P(`var ${d}=${rmR(o, 16)},${sr}=${rR(o.reg, 16)};`);
           P(`if((${d}&3)<(${sr}&3)){cpu.flags|=${ZF};${rmW(o, 16, `((${d}&~3)|(${sr}&3))`)}}else cpu.flags&=~${ZF};`);
           break;
@@ -1377,7 +1381,7 @@ export class Recompiler {
         case 0xfb:                                                                      // STI
           canFault = true;
           P(`if((cpu.cr0&1)&&${CPL_EXPR}>((cpu.flags>>>12)&3)){cpu.eip=${ipStart};cpu.raise(13,0);return;}`);
-          P(`cpu.flags|=${IF};`); break;
+          P(`cpu.flags|=${IF};`); stiShadow = 2; break;
         case 0xfc: P(`cpu.flags&=~${DF};`); break;                                      // CLD
         case 0xfd: P(`cpu.flags|=${DF};`); break;                                       // STD
         case 0xfe: { const o = modrm(); const a = NT(), rr = NT(); if (o.reg === 0) { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}+1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},8,false);`, lNOC); } else { P(`var ${a}=${rmR(o, 8)};var ${rr}=(${a}-1)&0xff;${rmW(o, 8, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},8,false);`, lNOC); } break; }
@@ -1422,6 +1426,11 @@ export class Recompiler {
         if (inlineMark) P(`if(_smc){_smc=0;cpu.smcSelf=0;cpu.eip=${SEQ()};return;}`);
         else if (helperWrite) P(abort);
       }
+      // STI opens the interrupt window one instruction LATE — and closes nowhere: the block must end
+      // right there, because interrupts are taken only between blocks. Windows 95's VMM idles in
+      // `sti; nop; nop; cli; jmp`: compiled as one block, IF was never set at a boundary, the timer
+      // IRQ the scheduler was waiting for could never land, and the machine spun for ever.
+      if (stiShadow && --stiShadow === 0 && !ended) break;
     }
 
     if (!ended) P(`cpu.eip=${SEQ()};`);

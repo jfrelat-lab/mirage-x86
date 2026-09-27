@@ -195,9 +195,9 @@ export function installDPMI(machine) {
    * afterwards, without going through a load in either direction.
    */
   const withRealModeES = (seg, fn) => {
-    const sv = cpu.seg[ES], sb = cpu.base[ES], sl = cpu.limit[ES];
+    const sv = cpu.seg[ES], sb = cpu.base[ES], sl = cpu.limit[ES], sll = cpu.limLo[ES];
     cpu.seg[ES] = seg & 0xffff;
-    try { return fn(); } finally { cpu.seg[ES] = sv; cpu.base[ES] = sb; cpu.limit[ES] = sl; }
+    try { return fn(); } finally { cpu.seg[ES] = sv; cpu.base[ES] = sb; cpu.limit[ES] = sl; cpu.limLo[ES] = sll; }
   };
 
   /** Byte offset of a selector's descriptor in the LDT, or -1 if it is not one of ours. */

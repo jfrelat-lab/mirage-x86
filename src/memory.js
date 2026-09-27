@@ -282,6 +282,23 @@ export class Memory {
   // ---- bulk helpers --------------------------------------------------------
   /** Copy bytes in, marking SMC if they land on code pages. */
   blit(addr, bytes) {
+    // `addr` is what the GUEST named — linear. Under paging it goes through the page tables a page
+    // at a time, as w8 does: Windows 95's VMM maps a VM's V86 megabyte onto frames of its own, and
+    // an INT 13h read the real-mode mapper asked for at 081b:xxxx was written to physical 81bxx —
+    // someone else's page. VFAT then looked up VFD.VXD in a directory sector it never received, the
+    // open failed with "access denied", and the boot stopped at "VFBACKUP could not load VFD.VXD".
+    if (this.paged) {
+      for (let i = 0; i < bytes.length;) {
+        const a = (addr + i) >>> 0, n = Math.min(bytes.length - i, 0x1000 - (a & 0xfff));
+        const t = this.xlat(a, true);
+        if (t >= 0) {
+          this.u8.set(bytes.subarray(i, i + n), t);
+          if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, n);
+        }
+        i += n;
+      }
+      return;
+    }
     addr &= this.mask;
     this.u8.set(bytes, addr);
     const first = addr >>> PAGE_BITS, last = (addr + bytes.length - 1) >>> PAGE_BITS;

@@ -41,6 +41,7 @@ export class CPU {
     // real mode. test386 POST 9 exists to catch exactly this confusion.
     this.ssB = 0;
     this.limit = new Uint32Array(6).fill(0xffff);   // cached segment limits (0xFFFF in real mode)
+    this.limLo = new Uint32Array(6);                // lowest valid offset: limit+1 for expand-down, else 0
     this.segAccess = new Uint8Array(6);             // cached access byte (P/DPL/S/type)
     // Writes through this segment must fault: a code segment (never writable) or a data segment
     // whose W bit is clear. Precomputed at LOAD time so the emitted store tests one byte instead of
@@ -129,7 +130,7 @@ export class CPU {
     if (!(this.cr0 & 1) || (this.flags & VM)) {
       this.seg[i] = sel;
       this.base[i] = sel << 4;
-      this.limit[i] = 0xffff;
+      this.limit[i] = 0xffff; this.limLo[i] = 0;
       this.segRO[i] = 0;                         // 8086 segments are always writable
 
       if (i === CS) { this.csD = 0; this._cpl = (this.flags & VM) ? 3 : 0; }
@@ -154,7 +155,7 @@ export class CPU {
       // DOS4GW leaves through an IRET whose saved CS:IP reads back 0:0, and accepting that gave CS
       // base 0, so the guest ran from linear 0 for 20000 blocks instead of stopping where it broke.
       if ((i === CS || i === SS) && !this._delivering) { this.raise(13, 0); return false; }
-      this.base[i] = 0; this.limit[i] = 0;
+      this.base[i] = 0; this.limit[i] = 0; this.limLo[i] = 0;
       if (i === CS) this.csD = 0; else if (i === SS) this.ssB = 0;
       return;
     }
@@ -213,7 +214,15 @@ export class CPU {
     let limit = (lo | ((gran & 0x0f) << 16)) >>> 0;
     if (gran & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;   // G: the limit counts 4 KiB pages
     this.base[i] = (b0 | (b1 << 16) | (b2 << 24)) >>> 0;
-    this.limit[i] = limit;
+    this.limit[i] = limit; this.limLo[i] = 0;
+    // An EXPAND-DOWN data segment (type bit 2) is valid ABOVE its limit: limit+1 up to 4 GiB with
+    // B set, up to 64 KiB without. Windows 95's KRNL386 reaches KERNEL32 at BFF70000h through such a
+    // selector (limit FFFFh, B=1); checked as expand-up, `cmp dword [0BFF71000h],'KEXP'` was #GP(0),
+    // and Windows shut down right after "Initializing KERNEL".
+    if (!isCode && (access & 0x04)) {
+      if (limit === 0xffffffff) { this.limLo[i] = 1; this.limit[i] = 0; }   // limit 4G-1: no valid offset
+      else { this.limLo[i] = limit + 1; this.limit[i] = (gran & 0x40) ? 0xffffffff : 0xffff; }
+    }
     this.segAccess[i] = access;
     this.segRO[i] = (isCode || !(access & 2)) ? 1 : 0;
     // The same bit is called D on a code segment and B on a stack segment: 32-bit default operand
@@ -436,7 +445,7 @@ export class CPU {
       const d = this.readDesc(sel);
       if (!d) continue;
       const conformingCode = !d.sys && (d.type & 0x0c) === 0x0c;
-      if (!conformingCode && d.dpl < cpl) { this.seg[i] = 0; this.base[i] = 0; this.limit[i] = 0; }
+      if (!conformingCode && d.dpl < cpl) { this.seg[i] = 0; this.base[i] = 0; this.limit[i] = 0; this.limLo[i] = 0; }
     }
   }
 

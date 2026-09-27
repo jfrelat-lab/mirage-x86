@@ -1988,6 +1988,80 @@ const udRun = (gated) => {
   eq('while delivering, a null CS is accepted so the depth guard can report', raised.length, 0);
 }
 
+// ---- Windows 95 under a V86 monitor: five defects between VMM's first breakpoint and the desktop ----
+// v86's windows95-v3.img, safe mode, each checked against the BOOTLOG.TXT QEMU writes for the same
+// image (as an ISA PC). In the order they were hit.
+{ // (1) ARPL does not exist in virtual-8086 mode: #UD. VMM plants `63 xx` as its V86 breakpoints.
+  const { mc, cpu, calls } = v86(3);
+  mc.mem.blit(0xf500, Uint8Array.from([0x63, 0xc8, 0xf4]));          // arpl ax,cx ; hlt
+  cpu.reg[0] = 0x10; cpu.reg[1] = 0x13;
+  mc.rec.step();
+  eq('ARPL in V86 is #UD', calls[0] && calls[0][0], 6);
+  eq('...and did not adjust the RPL', cpu.reg[0] & 0xffff, 0x10); }
+{ // (2) STI's interrupt window: the block ends after the instruction that follows STI, so an IRQ
+  // waiting for it lands there. VMM idles in `sti; nop; nop; cli; jmp` — one block, IF never set
+  // at a boundary, and the timer the scheduler waited for never came.
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  mem.blit(0x600, Uint8Array.from([0x2e, 0xff, 0x06, 0x00, 0x07, 0xb0, 0x20, 0xe6, 0x20, 0xcf]));   // inc cs:[700] ; EOI ; iret
+  mc.setVector(8, 0, 0x600);
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.flags &= ~0x200;
+  mem.blit(0x1000, Uint8Array.from([0xfb, 0x90, 0x90, 0xfa, 0xeb, 0xfa]));    // sti ; nop ; nop ; cli ; jmp $-4
+  mc.timerAuto = true;
+  for (let k = 0; k < 40; k++) mc.runSlice(2000);
+  eq('an IRQ is taken in the window STI opens, even when CLI closes it two instructions later', mem.r16(0x700) > 0, true); }
+{ // (3) The BIOS INT 8 / INT 9 under a monitor that traps the PIC: the EOI must be an OUT the
+  // monitor sees. Windows 95's VPICD ends the VM's virtual IRQ0 only on a trapped EOI.
+  const trapRun = (n, deny) => {
+    const { mc, cpu } = v86(3); installBIOS(mc);
+    const TSS = 0x9000;
+    cpu.tr = { sel: 0x28, base: TSS, limit: 0x67 + 0x2000 / 8, is386: true };
+    mc.mem.w16(TSS + 0x66, 0x68);
+    if (deny) { mc.mem.w8(TSS + 0x68 + (0x20 >> 3), 0x01); mc.mem.w8(TSS + 0x68 + (0x60 >> 3), 0x01); }
+    cpu.push16(0x3202); cpu.push16(0x0f40); cpu.push16(0x0200);        // FLAGS, CS, IP
+    cpu.setSeg(CS, 0xf000); cpu.eip = n;
+    mc.biosCallback(n);
+    return { mc, cpu, at: (cpu.seg[CS] << 16 | cpu.eip) >>> 0 };
+  };
+  const a = trapRun(8, true);
+  eq('INT 8 with port 20h trapped: hands over to ROM code', a.at, (0xf000 << 16 | a.mc.eoi8Rom) >>> 0);
+  eq('...which is push ax / mov al,20h / out 20h,al / pop ax / iret',
+    [...a.mc.mem.u8.subarray(0xf0000 + a.mc.eoi8Rom, 0xf0000 + a.mc.eoi8Rom + 7)].join(), '80,176,32,230,32,88,207');
+  const e1c = 0xf0000 + a.mc.eoi8Then1cRom;
+  eq('...and the 1Ch variant jumps exactly to the ROM 1Ch caller',
+    (a.mc.eoi8Then1cRom + 9 + a.mc.mem.r16(e1c + 7)) & 0xffff, a.mc.int1cViaRom);
+  eq('INT 8 with the port allowed returns straight to the caller', trapRun(8, false).at, 0x0f400200);
+  const k = trapRun(9, true);
+  eq('INT 9 with ports 60h/20h trapped: hands over to ROM code', k.at, (0xf000 << 16 | k.mc.eoi9Rom) >>> 0); }
+{ // (4) mem.blit writes where the GUEST named, through its page tables. The real-mode mapper's
+  // INT 13h buffer at V86 081b:xxxx was mapped elsewhere; the sector went to physical 81bxx.
+  const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true);
+  mem.w32(0x10000, 0x11007);
+  for (let p = 0; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+  mem.w32(0x11000 + 5 * 4, (0x9000 | 0x07) >>> 0);                   // linear page 5 -> frame 9
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  mem.blit(0x5010, Uint8Array.from([0xaa, 0xbb]));
+  eq('blit under paging lands in the mapped frame', mem.u8[0x9010] << 8 | mem.u8[0x9011], 0xaabb);
+  eq('...and not at the linear address taken as physical', mem.u8[0x5010], 0); }
+{ // (5) An EXPAND-DOWN data segment is valid above its limit. KRNL386 reads KERNEL32 at BFF71000h
+  // through a selector with limit FFFFh, B=1, type 6; checked as expand-up it was #GP(0).
+  const run16 = (access, flags, off) => {
+    const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+    const GDT = 0x8000, a = GDT + 2 * 8;
+    mem.w16(a, 0xffff); mem.w8(a + 5, access); mem.w8(a + 6, flags);
+    cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+    cpu.gdtr = { base: GDT, limit: 0x1f }; cpu.cr0 |= 1;
+    // mov ax,10h / mov ds,ax / mov eax,[off] (addr32) / hlt
+    mem.blit(0x1000, Uint8Array.from([0xb8, 0x10, 0x00, 0x8e, 0xd8, 0x67, 0x66, 0xa1, off & 0xff, (off >> 8) & 0xff, (off >> 16) & 0xff, off >>> 24, 0xf4]));
+    let raised = null; mc.protInt = (n, err) => { raised = [n, err].join(); cpu.halted = true; };
+    let s = 0; while (!cpu.halted && s++ < 40) mc.rec.step();
+    return raised;
+  };
+  eq('expand-down, B=1: an offset above the limit is valid', run16(0x96, 0x40, 0x00050000), null);
+  eq('expand-down: an offset AT the limit is #GP(0)', run16(0x96, 0x40, 0x0000fff0), '13,0');
+  eq('expand-down, B=0: the top is FFFFh', run16(0x96, 0x00, 0x00050000), '13,0');
+  eq('expand-up with the same limit: above it is #GP(0)', run16(0x92, 0x40, 0x00050000), '13,0'); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

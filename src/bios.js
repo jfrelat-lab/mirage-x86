@@ -884,11 +884,21 @@ export function installBIOS(machine, opts = {}) {
   // hook exists and we were entered through the stub (the interrupt frame is on the stack), hand
   // over to the ROM routine below — it saves the registers, calls INT 1Ch, and its IRET consumes
   // the original frame.
+  // ...and UNDER A V86 MONITOR the EOI is an I/O instruction the monitor gets to see. Windows 95's
+  // VPICD virtualises the PIC for each VM: it traps port 20h through the TSS I/O bitmap, and only a
+  // trapped EOI ends the VM's VIRTUAL IRQ0. Acknowledging the real PIC from JS bypassed the trap, so
+  // the first tick VMM reflected into the system VM stayed in service for ever: no second tick ever
+  // reached the VM, 0040:006C froze, and the boot waited on it after the last VxD's Device_Init.
+  // When the port is trapped, the EOI (and the 1Ch call, if hooked) is ROM code the guest executes.
   machine.hookInterrupt(0x08, (cpu) => {
-    machine.bumpBiosTick(); if (machine.pic) machine.pic.eoi(0);
-    if (machine._inBiosCallback !== 0x08 || machine.int1cViaRom === undefined) return;
-    if (machine.getVector(0x1c).seg === 0xf000) return;              // no guest hook: nothing to call
-    cpu.setSeg(CS, 0xf000); cpu.eip = machine.int1cViaRom;
+    machine.bumpBiosTick();
+    const viaRom = machine._inBiosCallback === 0x08;
+    const trapped = viaRom && cpu.ioDenied(0x20, 1);
+    if (!trapped && machine.pic) machine.pic.eoi(0);
+    const hook = machine.int1cViaRom !== undefined && machine.getVector(0x1c).seg !== 0xf000;
+    if (!viaRom || (!trapped && !hook)) return;                       // nothing left for ROM code
+    cpu.setSeg(CS, 0xf000);
+    cpu.eip = trapped ? (hook ? machine.eoi8Then1cRom : machine.eoi8Rom) : machine.int1cViaRom;
     machine.transferred = true;                                       // biosCallback: do not IRET
   });
 
@@ -900,7 +910,15 @@ export function installBIOS(machine, opts = {}) {
   // OBF never dropped, and pumpKeyboard staged nothing after it — the hardware keyboard path jammed
   // on the first key. The scancode is NOT also queued for INT 16h here: src/keyboard.js already
   // feeds that queue directly, and doing both would deliver every key twice.
-  machine.hookInterrupt(0x09, () => { kb.obf = false; if (machine.pic) machine.pic.eoi(1); });
+  // Under a V86 monitor that traps ports 60h/20h (Windows 95's VKD and VPICD), the read and the EOI
+  // must be instructions the monitor sees — the INT 8 handler above explains why.
+  machine.hookInterrupt(0x09, (cpu) => {
+    if (machine._inBiosCallback === 0x09 && (cpu.ioDenied(0x60, 1) || cpu.ioDenied(0x20, 1))) {
+      cpu.setSeg(CS, 0xf000); cpu.eip = machine.eoi9Rom; machine.transferred = true;
+      return;
+    }
+    kb.obf = false; if (machine.pic) machine.pic.eoi(1);
+  });
 
   // ---- INT 17h (printer) / INT 14h (serial) ----
   // No ports are fitted — the equipment word at BDA 0x410 says so — but MS-DOS's IO.SYS installs its
@@ -1205,6 +1223,16 @@ export function installBIOS(machine, opts = {}) {
     0xcf];                                                                     // iret
   for (let i = 0; i < INT1C_ROM.length; i++) mem.u8[0xf0000 + INT1C_OFF + i] = INT1C_ROM[i];
   machine.int1cViaRom = INT1C_OFF;
+  // The BIOS IRQ endings as ROM code, for a guest running under a V86 monitor that traps the ports
+  // (see the INT 08h/09h handlers): `push ax / mov al,20h / out 20h,al / pop ax`, then IRET — or,
+  // for the timer with a 1Ch hook, a jump into the routine above.
+  const EOI8_OFF = INT1C_OFF + INT1C_ROM.length, EOI8_1C_OFF = EOI8_OFF + 7, EOI9_OFF = EOI8_1C_OFF + 9;
+  const EOI = [0x50, 0xb0, 0x20, 0xe6, 0x20, 0x58];
+  const rel = (INT1C_OFF - (EOI8_1C_OFF + 9)) & 0xffff;   // E9 rel16 counts from the next byte
+  const ROUTINES = [[EOI8_OFF, [...EOI, 0xcf]], [EOI8_1C_OFF, [...EOI, 0xe9, rel & 0xff, rel >> 8]],
+    [EOI9_OFF, [0x50, 0xe4, 0x60, 0xb0, 0x20, 0xe6, 0x20, 0x58, 0xcf]]];   // in al,60h empties the 8042
+  for (const [off, code] of ROUTINES) code.forEach((b, i) => { mem.u8[0xf0000 + off + i] = b; });
+  machine.eoi8Rom = EOI8_OFF; machine.eoi8Then1cRom = EOI8_1C_OFF; machine.eoi9Rom = EOI9_OFF;
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
   installIDE(machine);   // the primary ATA channel over the same images (ports 1F0h-1F7h/3F6h, IRQ 14)
