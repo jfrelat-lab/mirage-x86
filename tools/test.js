@@ -2078,6 +2078,31 @@ const udRun = (gated) => {
   eq('render() with linear page 0 unmapped does not fault', err, null);
   eq('...and draws the text cell (blue background behind a white glyph)', !!v.u32 && v.u32[0] !== v.u32[v.imgW * 20], true); }
 
+// ---- cursor shape and the PS/2 aux channel, from testing boot.html ---------------------------------
+{ // The mode set programs the CRTC cursor as SeaVGABIOS does (0607h scaled to the 16-line cell), and
+  // AH=01h scales a CGA-style shape. Nothing set 0Ah/0Bh: under MS-DOS the cursor sat on the TOP line.
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+  cpu.ax = 0x0003; mc.intHandlers[0x10](cpu, mc);
+  eq('mode 3 leaves the cursor an underline (CRTC 0Ah/0Bh = 0Eh/0Fh)', (mc.vga.crtc[0x0a] << 8) | mc.vga.crtc[0x0b], 0x0e0f);
+  cpu.ax = 0x0100; cpu.cx = 0x0007; mc.intHandlers[0x10](cpu, mc);
+  eq('AH=01h 0007h (a block) scales as SeaVGABIOS does, to 1..0Fh', (mc.vga.crtc[0x0a] << 8) | mc.vga.crtc[0x0b], 0x010f);
+  eq('...and the BDA keeps the value asked for', mc.mem.r16(0x460), 0x0007); }
+{ // One IRQ12 per aux BYTE while bytes remain, withdrawn once drained; button changes one per packet.
+  const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); installMouse(mc);
+  const p = mc.ps2; p.enabled = true; p.handler = { seg: 0, off: 0 };
+  mc.mouseMoveRel(3, 0);
+  eq('a packet raises IRQ12', mc.mouseIrqPending, true);
+  mc.mouseIrqPending = false;
+  p.read();
+  eq('...and bytes still waiting after one read raise it again (a driver reading one byte per IRQ)', mc.mouseIrqPending, true);
+  p.read(); p.read();
+  eq('...and a drained queue withdraws it', mc.mouseIrqPending, false);
+  mc.mouseButton(0, true); mc.mouseButton(0, false);        // a click while... nothing is in flight: press sent
+  const st1 = p.queue[0]; p.read(); p.read(); p.read();
+  const st2 = p.queue[0];
+  eq('a quick click: the press goes out', st1 & 1, 1);
+  eq('...and the release in the next packet', st2 !== undefined && (st2 & 1) === 0, true); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

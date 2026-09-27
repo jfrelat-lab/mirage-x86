@@ -39,6 +39,9 @@
     <label>RAM <select id="mem">
       <option>4</option><option>16</option><option selected>64</option><option>128</option><option>256</option>
     </select> MiB</label>
+    <label>Clock <select id="clock" title="real time: the timer follows the wall clock, games run at their speed · turbo: the timer follows the CPU, boots go faster">
+      <option value="realtime" selected>real time</option><option value="turbo">turbo</option>
+    </select></label>
     <button id="boot">Boot</button>
     <button id="pause" disabled>Pause</button>
     <span style="flex:1"></span>

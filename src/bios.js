@@ -144,6 +144,23 @@ export function installBIOS(machine, opts = {}) {
     if (v) { const loc = (v.startAddr() + (row & 0xff) * (mem.r16(BDA + 0x4a) || 80) + (col & 0xff)) & 0xffff; v.crtc[0x0e] = loc >> 8; v.crtc[0x0f] = loc & 0xff; }
   };
   bios.getCursor = () => ({ col: getCol(), row: getRow() });
+  // The cursor SHAPE, as SeaVGABIOS sets it (vgabios.c set_cursor_shape): the BDA keeps the type the
+  // caller asked for (0460h end, 0461h start), and the CRTC gets it scaled to the character height when
+  // it is a CGA-style value — 06h/07h on a 16-line cell is 0Eh/0Fh, an underline. Nothing programmed
+  // 0Ah/0Bh at a mode set, so under a booted DOS the cursor was a bar on the cell's TOP line.
+  const setCursorShape = (ch, cl) => {
+    mem.w8(BDA + 0x60, cl & 0xff); mem.w8(BDA + 0x61, ch & 0xff);
+    let start = ch & 0x3f, end = cl & 0x1f;
+    const cheight = mem.r8(BDA + 0x85) || 16;
+    if (cheight > 8 && end < 8 && start < 0x20) {
+      start = end !== start + 1 ? ((start + 1) * cheight / 8) - 1 : ((end + 1) * cheight / 8) - 2;
+      end = ((end + 1) * cheight / 8) - 1;
+    }
+    bios.cursor.hidden = (ch & 0x20) !== 0 || (start & 0x1f) > end;
+    bios.cursor.start = start & 0x1f; bios.cursor.end = end & 0x1f;
+    if (machine.vga) { machine.vga.crtc[0x0a] = (ch & 0x20) | (start & 0x1f); machine.vga.crtc[0x0b] = end & 0x1f; }
+  };
+  bios.setCursorShape = setCursorShape;
   bios.setCursor = (row, col) => setCur(col, row);
 
   // Scroll a text window [top..bottom]×[left..right] by `lines` rows, up (INT 10h AH=06) or
@@ -418,6 +435,7 @@ export function installBIOS(machine, opts = {}) {
         // are what a program inherits, and for every text and 16-colour mode register 6 is 0x14 —
         // brown rather than dark yellow — which is the one every EGA palette table is remembered for.
         if (mi && machine.vga) machine.vga.palette.set(mi.pal);
+        if (!planar && (bios.mode <= 3 || bios.mode === 7)) setCursorShape(0x06, 0x07);   // SeaVGABIOS: 0607h in text modes
         if (!keepScreen) {
           if (bios.mode === 0x13) for (let i = 0; i < 320 * 200; i++) mem.w8(0xa0000 + i, 0);
           else if (planar) { if (machine.vga) machine.vga.clear(); }
@@ -431,13 +449,9 @@ export function installBIOS(machine, opts = {}) {
         break;
       }
       case 0x01: {                               // set cursor shape; CH bit 5 hides it
-        const ch = (cpu.cx >> 8) & 0xff, cl = cpu.cx & 0xff;
-        bios.cursor.hidden = (ch & 0x20) !== 0 || (ch & 0x1f) > (cl & 0x1f);
-        bios.cursor.start = ch & 0x1f; bios.cursor.end = cl & 0x1f;
-        if (machine.vga) { machine.vga.crtc[0x0a] = ch; machine.vga.crtc[0x0b] = cl; }
         // The requested type lives in the BDA (0460h end, 0461h start, RBIL MEMORY.LST) — where a
-        // program reads it back and where the Cirrus ROM, run as INT 10h, puts it. We kept it only here.
-        mem.w8(BDA + 0x60, cl); mem.w8(BDA + 0x61, ch);
+        // program reads it back and where the Cirrus ROM, run as INT 10h, puts it.
+        setCursorShape((cpu.cx >> 8) & 0xff, cpu.cx & 0xff);
         break;
       }
       case 0x02: setCur(cpu.dx & 0xff, (cpu.dx >> 8) & 0xff); break; // set cursor pos
@@ -1234,6 +1248,7 @@ export function installBIOS(machine, opts = {}) {
   for (const [off, code] of ROUTINES) code.forEach((b, i) => { mem.u8[0xf0000 + off + i] = b; });
   machine.eoi8Rom = EOI8_OFF; machine.eoi8Then1cRom = EOI8_1C_OFF; machine.eoi9Rom = EOI9_OFF;
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
+  setCursorShape(0x06, 0x07);   // the power-on text mode's cursor, programmed into the CRTC it now has
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
   installIDE(machine);   // the primary ATA channel over the same images (ports 1F0h-1F7h/3F6h, IRQ 14)
   installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services

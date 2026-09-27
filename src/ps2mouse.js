@@ -16,11 +16,12 @@
 //     real x86 code in the BIOS segment, so it runs whatever mode the guest is in — including in V86
 //     under EMM386, where the IRQ goes through the monitor and is reflected to the IVT.
 //
-// ONE IRQ PER PACKET, NOT PER BYTE. Real hardware interrupts once per byte and the BIOS accumulates
-// the packet in the EBDA. MIRAGE has no EBDA (it reports 640 KB), so the device queues a whole
-// packet, raises IRQ12 once, and the handler reads its three bytes in a row. Invisible to a driver
-// that uses the BIOS interface, which is what DOS mouse drivers do; a guest that hooks IRQ12 itself
-// and reads ONE byte per interrupt is not served — named here rather than discovered later.
+// ONE IRQ PER BYTE, as the 8042 does: while aux bytes remain the output buffer is full again and IRQ12
+// is asserted again. Our INT 74h routine reads its three bytes in one interrupt (MIRAGE has no EBDA to
+// accumulate them in); when it has drained the queue the re-raised line is withdrawn, so it never sees
+// a spurious interrupt. A driver that hooks IRQ12 itself and reads ONE byte per interrupt — Windows
+// 3.1's MOUSE.DRV in enhanced mode — gets the next byte on the next interrupt. It got only the first
+// byte of each packet before, and the pointer never moved.
 
 const HANDLER_OFF = 0xe800;          // F000:E800 — the INT 74h routine (free ROM space, measured)
 const CALL_PTR = HANDLER_OFF + 18;   // the far-call immediate inside it, patched by C207
@@ -73,20 +74,28 @@ export function installPS2Mouse(machine, BIOS_SEG) {
   /** Read it (port 0x60). When a packet has been drained, the next motion may go out. */
   ps2.read = () => {
     const v = ps2.queue.length ? ps2.queue.shift() : 0;
-    if (!ps2.queue.length) ps2.flush();
+    if (ps2.queue.length) { machine.mouseIrqPending = true; machine.hwIrqPending = true; }   // OBF full again
+    else {
+      machine.mouseIrqPending = false; if (machine.pic) machine.pic.lower(12);               // drained
+      ps2.flush();
+    }
     return v;
   };
 
   /** Form the next packet from accumulated motion, if the device may report and none is in flight. */
   ps2.flush = () => {
     if (!ps2.enabled || !ps2.handler || ps2.queue.length || machine.mouseIrqPending) return;
-    if (!ps2.dx && !ps2.dy && ps2.buttons === ps2.sentButtons) return;
+    // Button changes go out one per packet, in order: a click whose press and release both arrive
+    // while a packet is still unread would otherwise be merged away — a drag survived, a click and a
+    // double-click did not (Windows 3).
+    const buttons = ps2.btnQueue.length ? ps2.btnQueue.shift() : ps2.buttons;
+    if (!ps2.dx && !ps2.dy && buttons === ps2.sentButtons) return;
     // PS/2 counts are 9-bit two's complement with Y UP; the host's dy is screen-down.
     const cx = Math.max(-255, Math.min(255, ps2.dx)), cy = Math.max(-255, Math.min(255, -ps2.dy));
     ps2.dx -= cx; ps2.dy += cy;
-    const status = 0x08 | (ps2.buttons & 7) | (cx < 0 ? 0x10 : 0) | (cy < 0 ? 0x20 : 0);
+    const status = 0x08 | (buttons & 7) | (cx < 0 ? 0x10 : 0) | (cy < 0 ? 0x20 : 0);
     ps2.queue.push(status, cx & 0xff, cy & 0xff);
-    ps2.sentButtons = ps2.buttons;
+    ps2.sentButtons = buttons;
     machine.mouseIrqPending = true;
     machine.hwIrqPending = true;          // the run loop's cheap guard for serviceHwInts
   };
@@ -94,14 +103,16 @@ export function installPS2Mouse(machine, BIOS_SEG) {
 
   /** Host input — called by src/mouse.js alongside its own INT 33h bookkeeping. */
   ps2.motion = (dx, dy) => { ps2.dx += dx; ps2.dy += dy; ps2.flush(); };
+  ps2.btnQueue = [];                    // button states not yet reported, oldest first
   ps2.button = (btn, down) => {
     if (down) ps2.buttons |= 1 << btn; else ps2.buttons &= ~(1 << btn);
+    if (ps2.btnQueue.length < 16) ps2.btnQueue.push(ps2.buttons);
     ps2.flush();
   };
 
   const reset = () => {
     ps2.enabled = false; ps2.rate = 100; ps2.resolution = 2; ps2.scaling = 1;
-    ps2.dx = 0; ps2.dy = 0; ps2.queue.length = 0; ps2.param = null;
+    ps2.dx = 0; ps2.dy = 0; ps2.queue.length = 0; ps2.param = null; ps2.btnQueue.length = 0;
   };
 
   /** A byte the guest sent to the DEVICE (8042 command D4h, then port 0x60). Replies are queued

@@ -6,8 +6,11 @@
 // URL parameters (so a boot can be bookmarked):
 //   ?img=boot/v86/bl3-5.img   image to boot (a served path)   ?cpu=386|486|586|pentium   ?mem=64 (MiB)
 //
-// Time is the guest's own: the PIT is driven off cpu.cycles (timerAuto), as headless, so a slow
-// host makes the guest slow, never wrong. The run loop spends a bounded slice of each frame.
+// Two clocks. REAL TIME (the default, as v86 and index.html do it): the PIT fires on the wall clock at
+// the rate the guest programmed, and the CPU runs as fast as the host allows in between, so a game
+// paced by the timer (Keen, Alley Cat) plays at its speed. TURBO: the PIT runs off cpu.cycles, as
+// the headless tools do, so a long boot is not held to real time — an idle HLT skips straight to the
+// next tick — but the guest's clock then races (Linux booting reads x100).
 
 import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
@@ -18,7 +21,8 @@ import { bootSector } from './boot.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), status = $('status'), pick = $('image'), fileIn = $('file');
-const cpuSel = $('cpu'), memSel = $('mem'), bootBtn = $('boot'), pauseBtn = $('pause');
+const cpuSel = $('cpu'), memSel = $('mem'), clockSel = $('clock'), bootBtn = $('boot'), pauseBtn = $('pause');
+const TICK_MS = 1000 / 18.2065;
 const FLOPPIES = [163840, 184320, 327680, 368640, 737280, 1228800, 1474560, 2949120];
 const FRAME_MS = 12;
 
@@ -69,7 +73,9 @@ async function boot(name, raw) {
   installBIOS(mc, { ems: false });          // a bare PC: no EMS (see tools/harness.mjs)
   installMouse(mc);
   await loadFonts(mc);
-  mc.timerAuto = true;                      // guest time = cpu.cycles, as headless
+  const turbo = clockSel.value === 'turbo';
+  mc.timerAuto = turbo;                     // turbo: guest time = cpu.cycles, as headless
+  if (!turbo) mc.wallClockMs = () => performance.now();   // anchors the 0x3DA retrace to real 70 Hz
   const video = new Video(mc, canvas);
   video.font = mc.font;
   const { bytes, drive } = attach(mc, raw);
@@ -79,7 +85,7 @@ async function boot(name, raw) {
   catch (e) { status.textContent = String(e.message || e); return; }
   const keyboard = new Keyboard(mc);
   keyboard.attach(window);
-  session = { mc, video, keyboard, raf: 0, paused: false, name, fault: () => fault, host0: performance.now() };
+  session = { mc, video, keyboard, raf: 0, paused: false, name, fault: () => fault, host0: performance.now(), turbo, lastTick: performance.now() };
   window.mirage = session;                  // for the console
   pauseBtn.disabled = false; pauseBtn.textContent = 'Pause';
   canvas.focus();
@@ -106,12 +112,23 @@ tick.port1.onmessage = (e) => {
   const mc = s.mc;
   if (!s.paused && !s.fault()) {
     const t0 = performance.now();
-    while (performance.now() - t0 < FRAME_MS && !s.fault()) {
+    let w = t0;
+    while (w - t0 < FRAME_MS && !s.fault()) {
+      if (!s.turbo) {
+        // At the guest's programmed rate (pitReload against pitBase, as ui.js), AT MOST ONE tick per
+        // pass so its ISR runs before the next fires; a backlog (a hidden tab) is dropped, not replayed.
+        const tickMs = Math.max(3, TICK_MS * (mc.pitReload / (mc.pitBase || 0x10000)));
+        if (w - s.lastTick > 250) s.lastTick = w;
+        if (w - s.lastTick >= tickMs) { mc.tickTimer(); s.lastTick += tickMs; }
+      }
       mc.pumpKeyboard();
       mc.runSlice(20000);
+      if (!s.turbo && mc.cpu.halted) break;   // HLT waits for the next tick: give the time back
+      w = performance.now();
     }
   }
   if (s.paused || s.fault()) setTimeout(() => tick.port2.postMessage(s.gen), 50);
+  else if (!s.turbo && mc.cpu.halted) setTimeout(() => tick.port2.postMessage(s.gen), 1);
   else tick.port2.postMessage(s.gen);
 };
 function loop() {
@@ -125,11 +142,13 @@ function loop() {
 const h = (v, n = 4) => (v >>> 0).toString(16).toUpperCase().padStart(n, '0');
 function showStatus(s) {
   const c = s.mc.cpu, sec = 18.2065 * s.mc.pitBase;
-  const guest = c.cycles / sec, host = (performance.now() - s.host0) / 1000;
+  const now = performance.now(), guest = c.cycles / sec, host = (now - s.host0) / 1000;
+  if (!s.rateT || now - s.rateT > 1000) { s.mips = s.rateT ? (c.cycles - s.rateC) / (now - s.rateT) / 1000 : 0; s.rateT = now; s.rateC = c.cycles; }
   const mode = (c.flags & 0x20000) ? 'V86' : (c.cr0 & 1) ? ((c.cr0 >>> 31) ? 'PM+paging' : 'PM') : 'real';
   const f = s.fault();
   status.textContent = `${s.name} · ${f ? 'FAULT: ' + String(f.message || f).slice(0, 160) : s.paused ? 'paused' : 'running'} · ` +
-    `guest ${guest.toFixed(1)} s (x${host > 0 ? (guest / host).toFixed(2) : '–'} real time) · ${mode} ${h(c.seg[1])}:${h(c.eip, (c.cr0 & 1) ? 8 : 4)} · ` +
+    (s.turbo ? `guest ${guest.toFixed(1)} s (x${host > 0 ? (guest / host).toFixed(2) : '–'} real time) · ` : `${host.toFixed(0)} s · `) +
+    `CPU ${s.mips.toFixed(1)} M instr/s · ${mode} ${h(c.seg[1])}:${h(c.eip, (c.cr0 & 1) ? 8 : 4)} · ` +
     `video mode ${h(s.mc.mem.u8[0x449], 2)}h`;          // physically: a paging OS may unmap page 0
 }
 
@@ -148,7 +167,7 @@ async function bootSelected() {
   if (!pick.value) { status.textContent = 'choose an image first'; return; }
   status.textContent = `fetching ${pick.value}…`;
   const url = new URL(location.href);
-  url.searchParams.set('img', pick.value); url.searchParams.set('cpu', cpuSel.value); url.searchParams.set('mem', memSel.value);
+  url.searchParams.set('img', pick.value); url.searchParams.set('cpu', cpuSel.value); url.searchParams.set('mem', memSel.value); url.searchParams.set('clock', clockSel.value);
   history.replaceState(null, '', url);
   const bytes = new Uint8Array(await (await fetch(pick.value)).arrayBuffer());
   return boot(pick.value.split('/').pop(), bytes);
@@ -162,9 +181,10 @@ pauseBtn.addEventListener('click', () => {
   if (!session) return;
   session.paused = !session.paused; pauseBtn.textContent = session.paused ? 'Resume' : 'Pause';
 });
-for (const el of [pick, cpuSel, memSel]) el.addEventListener('keydown', (e) => e.stopPropagation());
+for (const el of [pick, cpuSel, memSel, clockSel]) el.addEventListener('keydown', (e) => e.stopPropagation());
 
 const q = new URLSearchParams(location.search);
 if (q.get('cpu')) cpuSel.value = q.get('cpu');
 if (q.get('mem')) memSel.value = q.get('mem');
+if (q.get('clock')) clockSel.value = q.get('clock');
 listImages().then(() => { if (q.get('img')) { pick.value = q.get('img'); tryBoot(); } });
