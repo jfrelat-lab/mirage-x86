@@ -51,7 +51,9 @@ export class Video {
   render() {
     this.frame++;
     this._palette();
-    const mode = this.mem.r8(0x449);
+    // The card reads memory PHYSICALLY, and so must we: under a paging OS the guest's linear page 0
+    // may be unmapped (Linux), and the BDA and B8000 read through it threw a #PF out of render().
+    const mode = this.mem.u8[0x449];
     if (this.machine.vbe) this._renderVBE();
     else if (mode === 0x13) { if (this.machine.vga && this.machine.vga.modeX) this._renderModeX(); else this._renderGfx13(); }
     else if (this.mem.planar && this.machine.vga) this._renderPlanar();
@@ -119,7 +121,8 @@ export class Video {
     // The card and the BDA are the truth, whoever programs them (our INT 10h keeps them, a real ROM
     // does, Linux's vgacon writes the CRTC itself): columns 044Ah, rows 0484h, blink AC 10h bit 3,
     // display start CRTC 0Ch/0Dh (hardware scrolling), cursor CRTC 0Ah/0Bh/0Eh/0Fh.
-    const cols = vga ? (this.mem.r16(0x44a) || COLS) : COLS, rows = vga ? ((this.mem.r8(0x484) + 1) || ROWS) : ROWS;
+    const u8 = this.mem.u8, p16 = (a) => u8[a] | (u8[a + 1] << 8);
+    const cols = vga ? (p16(0x44a) || COLS) : COLS, rows = vga ? ((u8[0x484] + 1) || ROWS) : ROWS;
     this._ensure(cols * CW, rows * CH);
     const mem = this.mem, font = this.font, u32 = this.u32, pal = this.pal, W = this.imgW;
     if (!font) return;
@@ -127,7 +130,7 @@ export class Video {
     const base = VRAM_TEXT + (vga ? (vga.startAddr() * 2) & 0x7fff : 0);
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
-        const cell = mem.r16(base + (row * cols + col) * 2);
+        const cell = p16(base + (row * cols + col) * 2);
         const ch = cell & 0xff, attr = cell >> 8;
         const bg = pal[ci((attr >> 4) & (blinkMode ? 0x07 : 0x0f))];
         // while blinking and in the "off" phase the glyph is drawn in the background colour
@@ -143,7 +146,7 @@ export class Video {
     }
     // blinking cursor (underline) at the BIOS cursor position — or, with a real ROM, where the CRTC
     // puts it: location 0Eh/0Fh, shape 0Ah (bit 5 = off) / 0Bh.
-    let cur = this.machine.bios && this.machine.bios.cursor, ccol = mem.r8(0x450), crow = mem.r8(0x451);
+    let cur = this.machine.bios && this.machine.bios.cursor, ccol = u8[0x450], crow = u8[0x451];
     if (vga) {
       const c = vga.crtc, loc = ((c[0x0e] << 8) | c[0x0f]) - vga.startAddr();
       cur = { start: c[0x0a] & 0x1f, end: c[0x0b] & 0x1f, hidden: (c[0x0a] & 0x20) !== 0 || (c[0x0a] & 0x1f) > (c[0x0b] & 0x1f) };
@@ -151,7 +154,7 @@ export class Video {
     }
     if (((this.frame >> 4) & 1) && !(cur && cur.hidden)) {
       if (crow >= 0 && crow < rows && ccol < cols) {
-        const fg = pal[ci(mem.r16(base + (crow * cols + ccol) * 2) >> 8 & 0x0f)] || pal[7];
+        const fg = pal[ci(p16(base + (crow * cols + ccol) * 2) >> 8 & 0x0f)] || pal[7];
         const y0 = cur ? Math.min(cur.start, CH - 1) : CH - 3, y1 = cur ? Math.min(cur.end, CH - 1) : CH - 1;
         for (let y = y0; y <= y1; y++) {
           let o = (crow * CH + y) * W + ccol * CW;

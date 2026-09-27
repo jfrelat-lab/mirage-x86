@@ -1,0 +1,170 @@
+// bootpc.js — the bare-PC page (boot.html): boot a floppy or hard-disk IMAGE the way a BIOS does,
+// with no HLE DOS underneath. The DOS page (index.html + ui.js) runs programs on our DOS; this one
+// runs whole systems (Linux, the BSDs, MS-DOS, Windows 9x) off their own disks, like the headless
+// tools/v86/*.mjs do. Minimal on purpose: pick an image, a CPU profile and RAM, boot, watch.
+//
+// URL parameters (so a boot can be bookmarked):
+//   ?img=boot/v86/bl3-5.img   image to boot (a served path)   ?cpu=386|486|586|pentium   ?mem=64 (MiB)
+//
+// Time is the guest's own: the PIT is driven off cpu.cycles (timerAuto), as headless, so a slow
+// host makes the guest slow, never wrong. The run loop spends a bounded slice of each frame.
+
+import { Machine } from './machine.js';
+import { installBIOS } from './bios.js';
+import { installMouse } from './mouse.js';
+import { Video } from './video.js';
+import { Keyboard } from './keyboard.js';
+import { bootSector } from './boot.js';
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('screen'), status = $('status'), pick = $('image'), fileIn = $('file');
+const cpuSel = $('cpu'), memSel = $('mem'), bootBtn = $('boot'), pauseBtn = $('pause');
+const FLOPPIES = [163840, 184320, 327680, 368640, 737280, 1228800, 1474560, 2949120];
+const FRAME_MS = 12;
+
+let session = null;                    // { mc, video, keyboard, raf, paused, name, t0 }
+
+// ---- the image list: whatever the static server lists under boot/ and boot/v86/ --------------
+async function listImages() {
+  const out = [];
+  for (const dir of ['boot/', 'boot/v86/']) {
+    try {
+      const html = await (await fetch(dir)).text();
+      for (const m of html.matchAll(/href="([^"?#]+\.(?:img|ima|dsk|vfd))"/gi)) out.push(dir + decodeURIComponent(m[1]));
+    } catch { /* not served */ }
+  }
+  pick.innerHTML = '<option value="">— image served by tools/serve.py —</option>' +
+    out.map((p) => `<option value="${p}">${p}</option>`).join('');
+}
+
+// ---- disk geometry: a hard disk's comes from its partition table, like bootshot.mjs -------------
+function attach(mc, bytes) {
+  if (bytes.length <= 2949120) {
+    if (!FLOPPIES.includes(bytes.length)) { const p = new Uint8Array(1474560); p.set(bytes.subarray(0, 1474560)); bytes = p; }
+    mc.disk.attach(0, bytes);
+    return { bytes, drive: 0x00 };
+  }
+  const dv = new DataView(bytes.buffer, bytes.byteOffset), e = 0x1be;
+  const lba = dv.getUint32(e + 8, true), n = dv.getUint32(e + 12, true), sh = bytes[e + 1], ss = bytes[e + 2] & 63;
+  const eh = bytes[e + 5], es = bytes[e + 6] & 63, ec = bytes[e + 7] | ((bytes[e + 6] & 0xc0) << 2);
+  const ok = (bytes[e] === 0 || bytes[e] === 0x80) && bytes[e + 4] && n && ec;
+  const spt = ok && sh ? (lba - (ss - 1)) / sh : 63;
+  const heads = ok ? Math.round(((lba + n - 1 - (es - 1)) / spt - eh) / ec) : 16;
+  const g = Number.isInteger(spt) && spt > 0 && heads > 0 && heads <= 255 ? { spt, heads } : { spt: 63, heads: 16 };
+  mc.disk.attach(0x80, bytes, { cyl: Math.floor(bytes.length / (g.heads * g.spt * 512)), heads: g.heads, spt: g.spt, type: 3 });
+  return { bytes, drive: 0x80 };
+}
+
+async function loadFonts(mc) {
+  for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
+    try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }
+  }
+}
+
+// ---- boot ------------------------------------------------------------------------------------
+async function boot(name, raw) {
+  stop();
+  const memSize = Number(memSel.value) << 20;
+  const mc = new Machine({ memSize, cpu: cpuSel.value });
+  installBIOS(mc, { ems: false });          // a bare PC: no EMS (see tools/harness.mjs)
+  installMouse(mc);
+  await loadFonts(mc);
+  mc.timerAuto = true;                      // guest time = cpu.cycles, as headless
+  const video = new Video(mc, canvas);
+  video.font = mc.font;
+  const { bytes, drive } = attach(mc, raw);
+  let fault = null;
+  mc.onError = (e) => { fault = e; console.error(e); };
+  try { bootSector(mc, bytes, { drive }); }
+  catch (e) { status.textContent = String(e.message || e); return; }
+  const keyboard = new Keyboard(mc);
+  keyboard.attach(window);
+  session = { mc, video, keyboard, raf: 0, paused: false, name, fault: () => fault, host0: performance.now() };
+  window.mirage = session;                  // for the console
+  pauseBtn.disabled = false; pauseBtn.textContent = 'Pause';
+  canvas.focus();
+  loop();
+}
+
+function stop() {
+  if (!session) return;
+  cancelAnimationFrame(session.raf);
+  session.stopped = true;                   // ends its MessageChannel chain
+  session.keyboard.detach(window);
+  if (document.pointerLockElement) document.exitPointerLock();
+  session = null;
+}
+
+// The CPU does not run off requestAnimationFrame: a browser throttles that to ~1 Hz in a hidden or
+// background view, and the guest crawled at 0.3x real time there. It runs in FRAME_MS chunks chained
+// through a MessageChannel (a macrotask, so input events and painting get in between), and rAF only
+// draws what is there.
+const tick = new MessageChannel();
+let gen = 0;
+tick.port1.onmessage = (e) => {
+  const s = session; if (!s || s.stopped || e.data !== s.gen) return;   // a stopped session's chain ends here
+  const mc = s.mc;
+  if (!s.paused && !s.fault()) {
+    const t0 = performance.now();
+    while (performance.now() - t0 < FRAME_MS && !s.fault()) {
+      mc.pumpKeyboard();
+      mc.runSlice(20000);
+    }
+  }
+  if (s.paused || s.fault()) setTimeout(() => tick.port2.postMessage(s.gen), 50);
+  else tick.port2.postMessage(s.gen);
+};
+function loop() {
+  const s = session; if (!s) return;
+  if (!s.started) { s.started = true; s.gen = ++gen; tick.port2.postMessage(s.gen); }
+  s.raf = requestAnimationFrame(loop);
+  s.video.render();
+  showStatus(s);
+}
+
+const h = (v, n = 4) => (v >>> 0).toString(16).toUpperCase().padStart(n, '0');
+function showStatus(s) {
+  const c = s.mc.cpu, sec = 18.2065 * s.mc.pitBase;
+  const guest = c.cycles / sec, host = (performance.now() - s.host0) / 1000;
+  const mode = (c.flags & 0x20000) ? 'V86' : (c.cr0 & 1) ? ((c.cr0 >>> 31) ? 'PM+paging' : 'PM') : 'real';
+  const f = s.fault();
+  status.textContent = `${s.name} · ${f ? 'FAULT: ' + String(f.message || f).slice(0, 160) : s.paused ? 'paused' : 'running'} · ` +
+    `guest ${guest.toFixed(1)} s (x${host > 0 ? (guest / host).toFixed(2) : '–'} real time) · ${mode} ${h(c.seg[1])}:${h(c.eip, (c.cr0 & 1) ? 8 : 4)} · ` +
+    `video mode ${h(s.mc.mem.u8[0x449], 2)}h`;          // physically: a paging OS may unmap page 0
+}
+
+// ---- mouse: relative motion under pointer lock (a PS/2 or INT 33h guest both read it) -----------
+const btn = (b) => (b === 2 ? 1 : b === 1 ? 2 : 0);
+canvas.addEventListener('click', () => { if (session && !document.pointerLockElement && canvas.requestPointerLock) canvas.requestPointerLock(); });
+canvas.addEventListener('mousemove', (e) => { if (session && document.pointerLockElement === canvas) session.mc.mouseMoveRel(e.movementX | 0, e.movementY | 0); });
+canvas.addEventListener('mousedown', (e) => { if (session && document.pointerLockElement === canvas) session.mc.mouseButton(btn(e.button), true); });
+window.addEventListener('mouseup', (e) => { if (session && document.pointerLockElement === canvas) session.mc.mouseButton(btn(e.button), false); });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---- controls ----------------------------------------------------------------------------------
+async function bootSelected() {
+  const f = fileIn.files && fileIn.files[0];
+  if (f) { status.textContent = `reading ${f.name}…`; return boot(f.name, new Uint8Array(await f.arrayBuffer())); }
+  if (!pick.value) { status.textContent = 'choose an image first'; return; }
+  status.textContent = `fetching ${pick.value}…`;
+  const url = new URL(location.href);
+  url.searchParams.set('img', pick.value); url.searchParams.set('cpu', cpuSel.value); url.searchParams.set('mem', memSel.value);
+  history.replaceState(null, '', url);
+  const bytes = new Uint8Array(await (await fetch(pick.value)).arrayBuffer());
+  return boot(pick.value.split('/').pop(), bytes);
+}
+const tryBoot = () => bootSelected().catch((e) => { console.error(e); status.textContent = 'boot failed: ' + (e.message || e); });
+bootBtn.addEventListener('click', () => { bootBtn.blur(); tryBoot(); });
+pick.addEventListener('change', () => { fileIn.value = ''; });
+fileIn.addEventListener('change', () => { pick.value = ''; });
+pauseBtn.addEventListener('click', () => {
+  pauseBtn.blur();
+  if (!session) return;
+  session.paused = !session.paused; pauseBtn.textContent = session.paused ? 'Resume' : 'Pause';
+});
+for (const el of [pick, cpuSel, memSel]) el.addEventListener('keydown', (e) => e.stopPropagation());
+
+const q = new URLSearchParams(location.search);
+if (q.get('cpu')) cpuSel.value = q.get('cpu');
+if (q.get('mem')) memSel.value = q.get('mem');
+listImages().then(() => { if (q.get('img')) { pick.value = q.get('img'); tryBoot(); } });

@@ -4,8 +4,20 @@
     {
       "name": "mirage",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["tools/serve.py", "8761"],
+      "runtimeArgs": [
+        "tools/serve.py",
+        "8761"
+      ],
       "port": 8761
+    },
+    {
+      "name": "mirage-worktree",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "tools/serve.py",
+        "8762"
+      ],
+      "port": 8762
     }
   ]
 }

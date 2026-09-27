@@ -2062,6 +2062,22 @@ const udRun = (gated) => {
   eq('expand-down, B=0: the top is FFFFh', run16(0x96, 0x00, 0x00050000), '13,0');
   eq('expand-up with the same limit: above it is #GP(0)', run16(0x92, 0x40, 0x00050000), '13,0'); }
 
+// ---- the renderer is the card: it reads the BDA and text memory physically ------------------------
+// Linux unmaps linear page 0; video.js read 0040:0049 through the guest's paging, and every frame of
+// the browser's bare-PC page (boot.html) threw a #PF out of render().
+{ const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  mc.font = new Uint8Array(256 * 16).fill(0xff);
+  mem.u8[0xb8000] = 0x41; mem.u8[0xb8001] = 0x1f;
+  mem.setA20(true);
+  mem.w32(0x10000, 0x11007);
+  for (let p = 1; p < 256; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);   // page 0 NOT mapped
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const v = new Video(mc, canvas); v.font = mc.font;
+  let err = null; try { v.render(); } catch (e) { err = e.constructor.name; }
+  eq('render() with linear page 0 unmapped does not fault', err, null);
+  eq('...and draws the text cell (blue background behind a white glyph)', !!v.u32 && v.u32[0] !== v.u32[v.imgW * 20], true); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MIRAGE — bare PC</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #0a0e12; --panel: #0f1620; --ink: #9fb4c4; --accent: #00d0a0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+         display: flex; flex-direction: column; height: 100vh; }
+  #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 14px;
+         background: var(--panel); border-bottom: 1px solid #1c2a36; }
+  #bar .logo { color: var(--accent); font-weight: 700; letter-spacing: 1px; }
+  #bar a { color: #5c7080; }
+  select, button, input { background: #0a0e12; color: var(--ink); border: 1px solid #2a3a48;
+         border-radius: 4px; font: inherit; padding: 3px 6px; }
+  #image { max-width: 38ch; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 12px; }
+  #screen { height: 100%; max-width: 100%; aspect-ratio: 4 / 3; background: #000;
+            image-rendering: pixelated; outline: none; }
+  #status { padding: 6px 14px; background: var(--panel); border-top: 1px solid #1c2a36;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #help { padding: 0 14px 8px; background: var(--panel); color: #5c7080; }
+</style>
+</head>
+<body>
+  <header id="bar">
+    <span class="logo">▚ MIRAGE · bare PC</span>
+    <select id="image"><option>loading…</option></select>
+    <span>or</span><input id="file" type="file" accept=".img,.ima,.dsk,.vfd,.bin">
+    <label>CPU <select id="cpu">
+      <option value="8088">8088</option><option value="286">286</option><option value="386">386</option>
+      <option value="586" selected>586</option><option value="pentium">pentium</option>
+    </select></label>
+    <label>RAM <select id="mem">
+      <option>4</option><option>16</option><option selected>64</option><option>128</option><option>256</option>
+    </select> MiB</label>
+    <button id="boot">Boot</button>
+    <button id="pause" disabled>Pause</button>
+    <span style="flex:1"></span>
+    <a href="index.html">DOS page →</a>
+  </header>
+  <main id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas></main>
+  <div id="status">choose an image and Boot</div>
+  <div id="help">The keyboard goes to the guest. Click the screen to capture the mouse (Esc releases it).
+    The image lives in memory only: nothing is written back to disk.</div>
+  <script type="module" src="src/bootpc.js"></script>
+</body>
+</html>
