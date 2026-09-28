@@ -2139,6 +2139,31 @@ const udRun = (gated) => {
   eq('INT 10h follows the BDA mode: teletype goes to the text buffer', mem.u8[0xb8000], 0x41);
   eq('...and draws nothing in A000', mem.u8.slice(0xa0000, 0xa0000 + 320 * 16).reduce((s, x) => s + x, 0), a0); }
 
+// ---- a RETF that faults on CS: the stack as before, and nothing after the exception ---------------
+// Win16 loads a discarded code segment when a RETF to it raises #NP. MIRAGE delivered the #NP with the
+// return address already popped, then assigned EIP anyway — Windows 95's VMM handler ran from
+// 0028:<return offset>, took a #GP, and the Win16 kernel never came back: an empty desktop.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+  const GDT = 0x8000;
+  const desc = (i, base, limit, access, flags) => { const a = GDT + i * 8;
+    mem.w16(a, limit & 0xffff); mem.w16(a + 2, base & 0xffff); mem.w8(a + 4, (base >> 16) & 0xff);
+    mem.w8(a + 5, access); mem.w8(a + 6, flags | ((limit >> 16) & 0x0f)); mem.w8(a + 7, (base >> 24) & 0xff); };
+  desc(1, 0x1000, 0xffff, 0x9a, 0);          // 08: code, present
+  desc(2, 0x3000, 0xffff, 0x92, 0);          // 10: data/stack
+  desc(3, 0x5000, 0xffff, 0x1a, 0);          // 18: code, NOT present
+  cpu.gdtr = { base: GDT, limit: 0x1f }; cpu.cr0 |= 1;
+  cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.sp = 0x1000;
+  cpu.push16(0x18); cpu.push16(0x1234);      // return to 0018:1234
+  mem.blit(0x1000, Uint8Array.from([0xcb, 0xf4]));   // retf / hlt
+  cpu.eip = 0;
+  let got = null;
+  mc.protInt = (n, err) => { got = { n, err, sp: cpu.sp, eip: cpu.eip }; cpu.halted = true; };
+  mc.rec.step();
+  eq('RETF to a not-present code segment is #NP(selector)', got && `${got.n},${got.err}`, '11,24');
+  eq('...delivered with the stack as it was before the RETF', got && got.sp, 0x0ffc);
+  eq('...and at the RETF itself', got && got.eip, 0);
+  eq('...and nothing overwrites EIP after the exception', cpu.eip, 0); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

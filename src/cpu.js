@@ -584,15 +584,26 @@ export class CPU {
       }
     }
     if (popBytes) this.spAdd(popBytes);
+    // Loading CS can FAULT — #NP is how Win16 loads a discarded code segment on demand, and a RETF to
+    // one is routine. setSeg delivers the exception itself and returns false. The fault must see the
+    // stack as it was before the RETF (so the handler can restart it), and nothing may run after it:
+    // assigning EIP anyway sent Windows 95's VMM #NP handler to 0028:<return offset> instead of its
+    // entry, a #GP there, and the Win16 kernel never resumed — the desktop stayed empty.
     if (pm && (cs & 3) > cpl) {
       const esp = is32 ? (pop() >>> 0) : pop();
       const ss = pop() & 0xffff;
-      this.setSeg(CS, cs); this.eip = eip;
+      const after = this.reg[4];
+      this.reg[4] = esp0;
+      if (this.setSeg(CS, cs) === false) return;
+      this.reg[4] = after; this.eip = eip;
       this.setSeg(SS, ss); this.reg[4] = esp;
       if (popBytes) this.spAdd(popBytes);
       this.nullInvalidDataSegs(cs & 3);
     } else {
-      this.setSeg(CS, cs); this.eip = eip;
+      const after = this.reg[4];
+      this.reg[4] = esp0;
+      if (this.setSeg(CS, cs) === false) return;
+      this.reg[4] = after; this.eip = eip;
     }
   }
 
