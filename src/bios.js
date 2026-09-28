@@ -700,6 +700,20 @@ export function installBIOS(machine, opts = {}) {
           case 0x03:                                            // get mode
             cpu.bx = machine.vbe ? (machine.vbe.number | (machine.vbe.linear ? 0x4000 : 0)) : 0;
             cpu.ax = 0x004f; break;
+          // 4F09h: load/read the primary palette, CX entries from DX, at ES:DI in the VBE format —
+          // four bytes per entry, BLUE, green, red, padding, at the DAC's 6 bits. BL=00h set, 80h set
+          // during retrace (the same here), 01h get; the secondary palette (02h/03h) does not exist.
+          // Missing, it failed with 014Fh where SeaVGABIOS answers — the tools/vbeprobe.asm diff.
+          case 0x09: {
+            const bl = cpu.bx & 0xff, n = cpu.cx & 0xffff, first = cpu.dx & 0xffff;
+            if ((bl !== 0x00 && bl !== 0x80 && bl !== 0x01) || first + n > 256) { cpu.ax = 0x014f; break; }
+            for (let i = 0; i < n; i++) {
+              const e = es + i * 4, d = (first + i) * 3;
+              if (bl === 0x01) { mem.w8(e, bios.dac[d + 2]); mem.w8(e + 1, bios.dac[d + 1]); mem.w8(e + 2, bios.dac[d]); mem.w8(e + 3, 0); }
+              else { bios.dac[d] = mem.r8(e + 2) & 0x3f; bios.dac[d + 1] = mem.r8(e + 1) & 0x3f; bios.dac[d + 2] = mem.r8(e) & 0x3f; }
+            }
+            cpu.ax = 0x004f; break;
+          }
           default: cpu.ax = 0x014f;                             // AH=01 failed, AL=4F supported
         }
         break;
@@ -1053,10 +1067,7 @@ export function installBIOS(machine, opts = {}) {
   machine.onPortRead(0x3ba, status1);
   // Small registers that were unregistered and therefore read 0xFF. A program that saves and
   // restores VGA state read 0xFF into every one of them and wrote the garbage back.
-  machine.onPortRead(0x3c1, () => {              // Attribute Controller data read
-    const v = machine.vga; if (!v) return 0;
-    return v.atcIndex < 16 ? v.palette[v.atcIndex] : (v.atc ? v.atc[v.atcIndex & 0x1f] : 0);
-  });
+  // (The Attribute Controller's reads, 3C0h and 3C1h, live with its writes in vga.js.)
   machine.onPortRead(0x3cc, () => machine.miscOutput === undefined ? 0x67 : machine.miscOutput);
   machine.onPortWrite(0x3c2, (_p, _s, v) => { machine.miscOutput = v & 0xff; });
   machine.onPortRead(0x3c7, () => 0);            // DAC state: 0 = last access was a write

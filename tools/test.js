@@ -2164,6 +2164,22 @@ const udRun = (gated) => {
   eq('...and at the RETF itself', got && got.eip, 0);
   eq('...and nothing overwrites EIP after the exception', cpu.eip, 0); }
 
+// ---- VBE 4F09h and the Attribute Controller's read-back: what tools/vbeprobe.asm saw under QEMU ------
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; const bios = installBIOS(mc);
+  cpu.setSeg(ES, 0x0800); cpu.di = 0;
+  mem.w8(0x8000, 0x21); mem.w8(0x8001, 0x22); mem.w8(0x8002, 0x23);          // entry: blue, green, red
+  cpu.ax = 0x4f09; cpu.bx = 0x0000; cpu.cx = 1; cpu.dx = 5; mc.intHandlers[0x10](cpu, mc);
+  eq('4F09h BL=00h loads the DAC from ES:DI, blue first', `${cpu.ax & 0xffff},${bios.dac[15]},${bios.dac[16]},${bios.dac[17]}`, `${0x4f},35,34,33`);
+  cpu.di = 0x10; cpu.ax = 0x4f09; cpu.bx = 0x0001; cpu.cx = 1; cpu.dx = 5; mc.intHandlers[0x10](cpu, mc);
+  eq('...and BL=01h reads it back in the same order', [0, 1, 2, 3].map((i) => mem.u8[0x8010 + i]).join(), '33,34,35,0');
+  mc.portRead[0x3da](0x3da, 1);                                                  // reset the flip-flop
+  mc.portWrite[0x3c0](0x3c0, 1, 0x32);                                           // PAS + index 12h
+  const rd = (p) => (mc.portRead[p] ? mc.portRead[p](p, 1) & 0xff : -1);
+  eq('3C0h reads back the Attribute Controller address register, PAS included', rd(0x3c0), 0x32);
+  mc.portWrite[0x3c0](0x3c0, 1, 0x0f);                                           // data: plane enable
+  mc.portRead[0x3da](0x3da, 1); mc.portWrite[0x3c0](0x3c0, 1, 0x32);
+  eq('...and 3C1h the register it selects', rd(0x3c1), 0x0f); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

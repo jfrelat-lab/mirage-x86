@@ -242,13 +242,20 @@ export function installVGA(machine) {
   // Attribute Controller: 0x3C0 alternates index then data; the flip-flop is reset to
   // "index" by a read of Input Status #1 (0x3DA) — bios.js does that reset.
   machine.onPortWrite(0x3c0, (_p, _s, v) => {
-    if (vga.atcFlip === 0) { vga.atcIndex = v & 0x1f; vga.atcFlip = 1; }
+    if (vga.atcFlip === 0) { vga.atcIndex = v & 0x1f; vga.atcPas = v & 0x20; vga.atcFlip = 1; }
     else {
       if (vga.atcIndex < 16) vga.palette[vga.atcIndex] = v & 0x3f;
       else if (vga.atcIndex < 0x15) vga.atc[vga.atcIndex - 0x10] = v & 0xff;
       vga.atcFlip = 0;
     }
   });
+  // The Attribute Controller READS BACK: 3C0h gives the address register — index and PAS (bit 5,
+  // "palette address source") — and 3C1h the register it selects. Both read FFh here, an empty bus.
+  // Windows 95's VDD saves the address register (`in al,3C0h`) and writes it back with PAS set before
+  // it loads the palette; with FFh it took another path and never wrote the DAC, so every colour of
+  // the desktop came from the VGA default palette (red title bars, an olive background).
+  machine.onPortRead(0x3c0, () => (vga.atcIndex & 0x1f) | (vga.atcPas || 0));
+  machine.onPortRead(0x3c1, () => (vga.atcIndex < 16 ? vga.palette[vga.atcIndex] : vga.atcIndex < 0x15 ? vga.atc[vga.atcIndex - 0x10] : 0));
 
   // CRTC (0x3D4 index / 0x3D5 data): the renderer needs r0C/r0D (display start address,
   // for page-flip / hardware scroll) and r13 (offset = logical scanline width in words).
