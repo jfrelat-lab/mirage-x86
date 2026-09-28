@@ -2118,6 +2118,27 @@ const udRun = (gated) => {
   s = 0; while (!c2.halted && s++ < 20) mc2.rec.step();
   eq('...while LMSW can still set it', c2.cr0 & 1, 1); }
 
+// ---- the Windows 9x logo: 320x400 unchained, with 03h in the BDA ------------------------------------
+// IO.SYS sets mode 13h, turns chain-4 and double scan off (Sequencer 04h = 02h, CRTC 09h = 40h), and
+// writes 03h to 0040:0049. The renderer dispatched on that byte, and INT 10h kept drawing DOS's output
+// as mode 13h glyphs over the logo.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
+  const v = mc.vga;
+  v.memMode = 0x06; v.modeX = true; v.crtc[0x09] = 0x40;                   // unchained, no double scan
+  v.crtc[0x12] = 0x8f; v.crtc[0x07] = 0x1f; v.crtc[0x13] = 0x28;          // 400 lines, 80 bytes per row
+  v.planes[3 * 0x10000 + 80 * 399] = 0x0f;                                 // plane 3, last row, x=3
+  mem.u8[0x449] = 0x03;
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const vid = new Video(mc, canvas); vid.font = new Uint8Array(4096);
+  vid.render();
+  eq('a 256-colour card is drawn as such whatever the BDA says: 320x400', `${vid.imgW}x${vid.imgH}`, '320x400');
+  eq('...from the planes, row 399 included', vid.u32 && vid.u32[399 * 320 + 3] === vid.pal[0x0f], true);
+  const a0 = mem.u8.slice(0xa0000, 0xa0000 + 320 * 16).reduce((s, x) => s + x, 0);
+  cpu.ax = 0x0e41; cpu.bx = 0x000f; mc.intHandlers[0x10](cpu, mc);
+  eq('INT 10h follows the BDA mode: teletype goes to the text buffer', mem.u8[0xb8000], 0x41);
+  eq('...and draws nothing in A000', mem.u8.slice(0xa0000, 0xa0000 + 320 * 16).reduce((s, x) => s + x, 0), a0); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

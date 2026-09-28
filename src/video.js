@@ -55,7 +55,13 @@ export class Video {
     // may be unmapped (Linux), and the BDA and B8000 read through it threw a #PF out of render().
     const mode = this.mem.u8[0x449];
     if (this.machine.vbe) this._renderVBE();
-    else if (mode === 0x13) { if (this.machine.vga && this.machine.vga.modeX) this._renderModeX(); else this._renderGfx13(); }
+    // 256 colours is a state of the CARD (GC 05h bit 6 + GC 06h bit 0), whatever the BDA says: Windows
+    // 9x's IO.SYS draws its logo in 320x400 unchained and then writes 03h into 0040:0049, so the byte
+    // this used to dispatch on sent the logo through the text renderer's neighbours as stripes.
+    else if (mode === 0x13 || this._card256()) {
+      const v = this.machine.vga;
+      if (v && (v.modeX || (this._card256() && !(v.memMode & 0x08)))) this._renderModeX(); else this._renderGfx13();
+    }
     else if (this.mem.planar && this.machine.vga) this._renderPlanar();
     else if (mode === 4 || mode === 5 || mode === 6) this._renderCGA(mode);
     else this._renderText();
@@ -183,8 +189,24 @@ export class Video {
   // Mode-X (unchained 256-colour): pixel (x,y) lives in plane (x&3) at plane-offset
   // start + y*stride + (x>>2). Each plane byte is a full 8-bit palette index. Wolf3D
   // ("Mode Y", 320×200) and Pinball Fantasies draw this way.
+  _card256() {
+    const v = this.machine.vga;
+    return !!(v && (v.gc[5] & 0x40) && (v.gc[6] & 0x01));
+  }
+
+  /** Scanlines a 256-colour unchained mode shows, from the CRTC as the card counts them: the vertical
+   *  display end, over (max scan line + 1), halved again by double scan. 200 for Mode X, 400 for the
+   *  "Mode Y" Windows 9x paints its logo in (CRTC 09h = 40h). Falls back when the CRTC is unset. */
+  _modeXHeight(vga) {
+    const c = vga.crtc, ov = c[0x07];
+    const vde = (c[0x12] | (((ov >> 1) & 1) << 8) | (((ov >> 6) & 1) << 9)) + 1;
+    let h = Math.floor(vde / ((c[0x09] & 0x1f) + 1));
+    if (c[0x09] & 0x80) h >>= 1;
+    return h >= 100 && h <= 480 ? h : (vga.height || 200);
+  }
+
   _renderModeX() {
-    const vga = this.machine.vga, W = 320, H = vga.height || 200;
+    const vga = this.machine.vga, W = 320, H = this._modeXHeight(vga);
     this._ensure(W, H);
     const u32 = this.u32, pal = this.pal, planes = vga.planes, PLANE = 0x10000;
     const stride = vga.crtc[0x13] ? vga.crtc[0x13] * 2 : (W >> 2);   // plane-offset addresses per scanline (320px → 80)

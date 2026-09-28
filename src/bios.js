@@ -25,6 +25,8 @@ const COLS = 80, ROWS = 25;
  *   ("This program can not run with an XMS driver!!!"), which on real hardware meant not loading
  *   HIMEM.SYS. DPMI still installs, since it manages its own memory.
  */
+const PLANAR_MODES = new Set([0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x6a]);   // EGA/VGA 16-colour planar modes
+
 export function installBIOS(machine, opts = {}) {
   const mem = machine.mem, cpu = machine.cpu;
 
@@ -402,6 +404,14 @@ export function installBIOS(machine, opts = {}) {
   // ---- INT 10h: video ----
   machine.hookInterrupt(0x10, (cpu) => {
     const ah = cpu.ah;
+    // The current mode is the BDA's byte, as SeaVGABIOS reads it on every call — not a copy kept here.
+    // Windows 9x's IO.SYS paints its logo in 256 colours and then writes 03h to 0040:0049 so that DOS
+    // output goes to the (hidden) text buffer; we kept drawing it as mode 13h glyphs over the logo.
+    // Only the BIOS's notion follows; the card, programmed by the guest, is left exactly as it is.
+    const bdaMode = mem.u8[BDA + 0x49];
+    if (ah !== 0x00 && !machine.vbe && bdaMode !== bios.mode && (bdaMode <= 7 || MODE_INFO[bdaMode] || PLANAR_MODES.has(bdaMode))) {
+      bios.mode = bdaMode; bios.planar = PLANAR_MODES.has(bdaMode) && !!machine.vga;
+    }
     switch (ah) {
       case 0x00: {                              // set video mode
         machine.vbe = null;                     // a plain BIOS mode set leaves any VBE mode
@@ -413,8 +423,7 @@ export function installBIOS(machine, opts = {}) {
         mem.w16(BDA + 0x63, bios.mode === 7 ? 0x03b4 : 0x03d4);  // CRTC base (mono mode 7 vs colour)
         // EGA/VGA 16-colour graphics modes are planar (A000 via the Sequencer/Graphics
         // Controller); the flag routes A000 writes through the plane logic (see vga.js).
-        const planar = bios.mode === 0x0d || bios.mode === 0x0e || bios.mode === 0x0f ||
-                       bios.mode === 0x10 || bios.mode === 0x11 || bios.mode === 0x12 || bios.mode === 0x6a;
+        const planar = PLANAR_MODES.has(bios.mode);
         // A mode set reloads the DAC. In a planar EGA mode the DAC holds the 64 EGA colours and the
         // 16 attribute-controller palette registers get their EGA defaults; a pixel index then maps
         // index -> palette-register -> DAC. This reproduces the default 16 exactly, but lets a game
