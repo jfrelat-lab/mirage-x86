@@ -2180,6 +2180,25 @@ const udRun = (gated) => {
   mc.portRead[0x3da](0x3da, 1); mc.portWrite[0x3c0](0x3c0, 1, 0x32);
   eq('...and 3C1h the register it selects', rd(0x3c1), 0x0f); }
 
+// ---- a mode set under a monitor that traps the VGA ports is replayed as OUTs it can see -------------
+// Windows 95's VDD builds its copy of the card from trapped writes; ours came from JS, its copy kept
+// CRTC 09h = 0 after mode 3, and it trapped the DAC for ever (the default palette on the desktop).
+{ const trapped = (deny) => {
+    const { mc, cpu } = v86(3); installBIOS(mc);
+    const TSS = 0x9000;
+    cpu.tr = { sel: 0x28, base: TSS, limit: 0x67 + 0x2000 / 8, is386: true };
+    mc.mem.w16(TSS + 0x66, 0x68);
+    if (deny) mc.mem.w8(TSS + 0x68 + (0x3d4 >> 3), 1 << (0x3d4 & 7));
+    cpu.push16(0x3202); cpu.push16(0x0f40); cpu.push16(0x0200);
+    cpu.setSeg(CS, 0xf000); cpu.eip = 0x10; cpu.ax = 0x0003;
+    mc.biosCallback(0x10);
+    return { mc, at: (cpu.seg[CS] << 16 | cpu.eip) >>> 0 };
+  };
+  const a = trapped(true), t = 0xf0000 + (a.mc.modeOutTable || 0);
+  eq('INT 10h mode 3 with 3D4h trapped hands over to the ROM register load', a.at, (0xf000 << 16 | (a.mc.modeOutRom || 0)) >>> 0);
+  eq('...whose table carries the mode\'s CRTC 09h (16-line characters)', a.mc.mem.u8[t + 1 + 5 + 9], 0x4f);
+  eq('...and without a trap the mode set returns straight to the caller', trapped(false).at, 0x0f400200); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

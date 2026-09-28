@@ -455,6 +455,24 @@ export function installBIOS(machine, opts = {}) {
           else clearScreen(0x07);
         }
         if (bios.onModeChange) bios.onModeChange(bios.mode);
+        // UNDER A V86 MONITOR THAT TRAPS THE VGA PORTS the register load must be OUT instructions it
+        // can see. Windows 95's VDD keeps a virtual copy of the card built from the writes it traps;
+        // our mode set wrote vga.crtc from JS, so the VDD's copy kept CRTC 09h = 0 after INT 10h mode 3,
+        // its Device_Init check read that as "not a text mode", never set its VGA-is-sane flag, and it
+        // trapped the system VM's DAC for ever — every colour of the desktop came from the default
+        // palette. The state above is applied as before; the ROM routine then replays it as a VGA
+        // BIOS does (misc, sequencer, CRTC, graphics controller, attribute controller).
+        if (machine._inBiosCallback === 0x10 && machine.vga && cpu.ioDenied(0x3d4, 1)) {
+          const m = bios.mode, v = machine.vga, text = m <= 3 || m === 7, t = machine.modeOutTable;
+          const MISC = { 0x07: 0xa6, 0x13: 0x63, 0x12: 0xe3, 0x11: 0xe3, 0x10: 0xa3, 0x0d: 0x63, 0x0e: 0x63, 0x04: 0x63, 0x05: 0x63, 0x06: 0x63 };
+          const seq = text ? [3, 0, 3, 0, 2] : m === 0x13 ? [3, 1, 0x0f, 0, 0x0e] : planar ? [3, m === 0x0d ? 9 : 1, 0x0f, 0, 6]
+            : m === 6 ? [3, 1, 1, 0, 6] : [3, 9, 3, 0, 2];
+          const atc = [...v.palette, text ? (m === 7 ? 0x0e : 0x0c) : m === 0x13 ? 0x41 : 0x01, 0, 0x0f, text ? 0x08 : 0, 0];
+          const bytesOut = [MISC[m] ?? 0x67, ...seq, ...v.crtc.slice(0, 25), ...v.gc.slice(0, 9), ...atc];
+          bytesOut.forEach((x, i) => { mem.u8[0xf0000 + t + i] = x & 0xff; });
+          cpu.setSeg(CS, 0xf000); cpu.eip = machine.modeOutRom;
+          machine.transferred = true;                                   // biosCallback: the routine IRETs
+        }
         break;
       }
       case 0x01: {                               // set cursor shape; CH bit 5 hides it
@@ -1267,6 +1285,19 @@ export function installBIOS(machine, opts = {}) {
     [EOI9_OFF, [0x50, 0xe4, 0x60, 0xb0, 0x20, 0xe6, 0x20, 0x58, 0xcf]]];   // in al,60h empties the 8042
   for (const [off, code] of ROUTINES) code.forEach((b, i) => { mem.u8[0xf0000 + off + i] = b; });
   machine.eoi8Rom = EOI8_OFF; machine.eoi8Then1cRom = EOI8_1C_OFF; machine.eoi9Rom = EOI9_OFF;
+  // The register load of a mode set as OUTs (see INT 10h AH=00h), for a monitor that traps the ports.
+  // Source in the commit that added it: push ax/bx/dx/si/ds, DS=CS, SI=table; out 3C2h; sequencer
+  // 00-04, CRTC 11h unprotected then 00-18h, GC 00-08h as index/data pairs; in 3DAh; ATC 00-14h;
+  // out 3C0h,20h; pop; iret. The table follows at MODEOUT_TBL: misc, seq[5], crtc[25], gc[9], atc[21].
+  const MODEOUT_OFF = 0xe880, MODEOUT_TBL = 0xe900;
+  const MODEOUT = [0x50, 0x53, 0x52, 0x56, 0x1e, 0x0e, 0x1f, 0xbe, MODEOUT_TBL & 0xff, MODEOUT_TBL >> 8, 0xba, 0xc2, 0x03, 0xac, 0xee,
+    0xba, 0xc4, 0x03, 0x31, 0xdb, 0x88, 0xd8, 0xee, 0x42, 0x8a, 0x00, 0xee, 0x4a, 0x43, 0x83, 0xfb, 0x05, 0x72, 0xf2, 0x83, 0xc6, 0x05,
+    0xba, 0xd4, 0x03, 0xb0, 0x11, 0xee, 0x42, 0x30, 0xc0, 0xee, 0x4a, 0x31, 0xdb, 0x88, 0xd8, 0xee, 0x42, 0x8a, 0x00, 0xee, 0x4a, 0x43,
+    0x83, 0xfb, 0x19, 0x72, 0xf2, 0x83, 0xc6, 0x19, 0xba, 0xce, 0x03, 0x31, 0xdb, 0x88, 0xd8, 0xee, 0x42, 0x8a, 0x00, 0xee, 0x4a, 0x43,
+    0x83, 0xfb, 0x09, 0x72, 0xf2, 0x83, 0xc6, 0x09, 0xba, 0xda, 0x03, 0xec, 0xba, 0xc0, 0x03, 0x31, 0xdb, 0x88, 0xd8, 0xee, 0x8a, 0x00,
+    0xee, 0x43, 0x83, 0xfb, 0x15, 0x72, 0xf4, 0xb0, 0x20, 0xee, 0x1f, 0x5e, 0x5a, 0x5b, 0x58, 0xcf];
+  MODEOUT.forEach((b, i) => { mem.u8[0xf0000 + MODEOUT_OFF + i] = b; });
+  machine.modeOutRom = MODEOUT_OFF; machine.modeOutTable = MODEOUT_TBL;
   installVGA(machine);   // EGA/VGA planar device (Sequencer/Graphics-Controller ports + planes)
   setCursorShape(0x06, 0x07);   // the power-on text mode's cursor, programmed into the CRTC it now has
   installDisk(machine);  // INT 13h over attachable sector images (no drives attached by default)
