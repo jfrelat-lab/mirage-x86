@@ -1870,7 +1870,11 @@ export class Recompiler {
           // stores the whole of CR0 — kvm-unit-tests sets CR0 bit 30 and checks SMSW gives it back,
           // and masking to 16 bits loses it.
           if (o.reg === 4) { P(rmW(o, o.isReg ? sz : 16, o.isReg && sz === 32 ? `(cpu.cr0>>>0)` : `(cpu.cr0&0xffff)`)); return; }
-          if (o.reg === 6) { const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.setCR0((cpu.cr0&~0xf)|(${s}&0xf));`); return; } // LMSW: low 4 bits, PE included
+          // LMSW loads MP/EM/TS and can SET PE, but never CLEAR it (Intel SDM: only MOV CR0 returns to
+          // real mode). DOOM's DOS/4GW, under EMM386, runs `smsw cx / ... / and ax,cx / lmsw ax` with PE
+          // clear in AX; applying it dropped the CPU into "real mode with paging on" and every block after
+          // derailed, while QEMU stayed in protected mode and DOOM started.
+          if (o.reg === 6) { const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.setCR0((cpu.cr0&~0xf)|(${s}&0xf)|(cpu.cr0&1));`); return; }
           // SGDT/SIDT store a 6-byte pseudo-descriptor: 16-bit limit then 32-bit base.
           if (o.reg === 0 || o.reg === 1) {
             const a = memAddr(o), t = o.reg === 0 ? 'gdtr' : 'idtr';

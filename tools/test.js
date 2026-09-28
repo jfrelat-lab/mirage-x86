@@ -2103,6 +2103,21 @@ const udRun = (gated) => {
   eq('a quick click: the press goes out', st1 & 1, 1);
   eq('...and the release in the next packet', st2 !== undefined && (st2 & 1) === 0, true); }
 
+// ---- LMSW can set PE, never clear it --------------------------------------------------------------
+// DOOM's DOS/4GW under EMM386 does `smsw cx / ... / and ax,cx / lmsw ax` with PE clear in AX. Applied,
+// it left "real mode with paging on" and the next blocks derailed; QEMU stays in protected mode.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+  mc.mem.blit(0x1000, Uint8Array.from([0x31, 0xc0, 0x0f, 0x01, 0xf0, 0xf4]));      // xor ax,ax / lmsw ax / hlt
+  cpu.setCR0(cpu.cr0 | 1);                                                       // PE on, CS not reloaded
+  let s = 0; while (!cpu.halted && s++ < 20) mc.rec.step();
+  eq('LMSW with PE clear leaves the CPU in protected mode', cpu.cr0 & 1, 1);
+  const mc2 = new Machine({ memSize: 1 << 20 }); const c2 = mc2.cpu;
+  c2.setSeg(CS, 0x100); c2.eip = 0; c2.setSeg(SS, 0x300); c2.sp = 0x1000;
+  mc2.mem.blit(0x1000, Uint8Array.from([0xb8, 0x01, 0x00, 0x0f, 0x01, 0xf0, 0xf4]));   // mov ax,1 / lmsw ax / hlt
+  s = 0; while (!c2.halted && s++ < 20) mc2.rec.step();
+  eq('...while LMSW can still set it', c2.cr0 & 1, 1); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');
