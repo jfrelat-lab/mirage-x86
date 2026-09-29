@@ -110,6 +110,10 @@ export function installRTC(machine) {
   // The century byte is RAM, so it has to be seeded from the epoch rather than nailed to 20h:
   // seeding the constant while the year said 90 made MS-DOS 4 come up in 2090.
   rtc.ram[CENTURY_AT] = rtc.ram[CENTURY_PS2] = bcd((rtc.now().getUTCFullYear() / 100) | 0);
+  /** Run on the host's clock from now on (the bare-PC page, in real time), and re-seed the century as
+   *  the POST would have: it is RAM, seeded above from the epoch, and switching the clock alone left
+   *  19h there — INT 1Ah AH=04h answered 1926 and MS-DOS fell back to its 1980 default. */
+  rtc.useHostClock = () => { rtc.host = true; rtc.offsetMs = 0; rtc.ram[CENTURY_AT] = rtc.ram[CENTURY_PS2] = bcd((rtc.now().getUTCFullYear() / 100) | 0); };
 
   // A real BIOS seeds the BDA tick from the RTC during POST, which is why a booted DOS shows a time
   // of day and not the time since power-on. Seeding it is also what gives every service ONE source:

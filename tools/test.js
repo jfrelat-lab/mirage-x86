@@ -2199,6 +2199,15 @@ const udRun = (gated) => {
   eq('...whose table carries the mode\'s CRTC 09h (16-line characters)', a.mc.mem.u8[t + 1 + 5 + 9], 0x4f);
   eq('...and without a trap the mode set returns straight to the caller', trapped(false).at, 0x0f400200); }
 
+// ---- the host clock, switched on after the chip is installed, re-seeds the century ----------------
+// boot.html in real time: switching rtc.host alone left 19h at CMOS 32h (the 1990 epoch's century),
+// INT 1Ah AH=04h answered 1926 and MS-DOS 6.22 fell back to 01-04-1980.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+  if (mc.rtc.useHostClock) mc.rtc.useHostClock(); else mc.rtc.host = true;
+  cpu.ax = 0x0400; mc.intHandlers[0x1a](cpu, mc);
+  const y = new Date().getUTCFullYear(), bcd = (n) => ((n / 10 | 0) << 4) | (n % 10);
+  eq('on the host clock, INT 1Ah AH=04h gives the host\'s century and year', cpu.cx & 0xffff, (bcd(y / 100 | 0) << 8) | bcd(y % 100)); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

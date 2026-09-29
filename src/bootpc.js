@@ -76,6 +76,9 @@ async function boot(name, raw) {
   const turbo = clockSel.value === 'turbo';
   mc.timerAuto = turbo;                     // turbo: guest time = cpu.cycles, as headless
   if (!turbo) mc.wallClockMs = () => performance.now();   // anchors the 0x3DA retrace to real 70 Hz
+  // In real time the CMOS clock is the host's, as on a real PC: Windows 95 otherwise came up on
+  // 1 January 1990 (the engine's fixed epoch, kept for reproducible runs — src/rtc.js).
+  if (!turbo && mc.rtc) mc.rtc.useHostClock();
   const video = new Video(mc, canvas);
   video.font = mc.font;
   const { bytes, drive } = attach(mc, raw);
