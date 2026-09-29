@@ -136,7 +136,13 @@ export function installRTC(machine) {
   const FLOPPY_CMOS = { 1: 1, 2: 2, 3: 3, 4: 4, 6: 5 };        // AH=08h BL drive type -> CMOS type
   const config = (i) => {
     const drives = machine.disk ? machine.disk.drives : new Map();
-    const fd = (n) => { const d = drives.get(n); return d ? (FLOPPY_CMOS[d.geom.type] || 4) : 0; };
+    // Drive A is FITTED even with no diskette in it, as on QEMU (a 1.44 MB drive by default) and
+    // DOSBox-X, and as our own equipment word at BDA 0410h has always said (bit 0 set, one drive).
+    // An installed Windows 98 loads HSFLOP.PDR for the controller its setup saw; with 10h = 0 it
+    // sized its DMA buffer at 0 pages, took the error path through a null request pointer, stored
+    // 001Dh over the segment of IVT[1Ah], and the next INT 1Ah reflected to V86 ran the IVT:
+    // "Windows protection error". QEMU with `-global isa-fdc.fdtypeA=none` stops on the logo too.
+    const fd = (n) => { const d = drives.get(n); return d ? (FLOPPY_CMOS[d.geom.type] || 4) : n === 0 ? 4 : 0; };
     const ext = Math.max(0, (mem.size >>> 10) - 1024), ext16 = Math.min(ext, 0xffff);
     const above16 = Math.max(0, (mem.size - 0x1000000) >>> 16);
     switch (i) {
@@ -159,7 +165,7 @@ export function installRTC(machine) {
     }
     switch (i) {
       case 0x14: {
-        const nfd = (drives.has(0) ? 1 : 0) + (drives.has(1) ? 1 : 0);
+        const nfd = 1 + (drives.has(1) ? 1 : 0);                   // drive A always (see fd above)
         return (nfd ? 0x01 | ((nfd - 1) << 6) : 0) | 0x02 | 0x04;   // drives, x87, bit 2; video 00 = EGA/VGA
       }
       case 0x15: return 640 & 0xff;

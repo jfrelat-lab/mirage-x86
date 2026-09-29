@@ -80,8 +80,14 @@ export function installDisk(machine) {
   const countDrives = (drive) => {
     let n = 0;
     for (const k of disk.drives.keys()) if ((k & 0x80) === (drive & 0x80)) n++;
-    return n;
+    return n + (drive < 0x80 && !disk.drives.has(0) ? 1 : 0);   // drive A is fitted even when empty
   };
+  // Drive A with no diskette in it. CMOS 10h and the equipment word say it is fitted (src/rtc.js:
+  // Windows 98's HSFLOP.PDR needs it), so the BIOS still describes the DRIVE — AH=00h resets,
+  // AH=08h gives the 1.44 MB geometry and the parameter table, AH=15h "diskette, no change line" —
+  // and whatever needs the medium times out (80h), as SeaBIOS answers for an empty drive.
+  const EMPTY_A = { geom: { cyl: 80, heads: 2, spt: 18, type: 4 }, data: new Uint8Array(0) };
+  const DRIVE_ONLY = (ah) => ah === 0x00 || ah === 0x08 || ah === 0x15;
   const ok = () => { disk.lastStatus = 0; cpu.ah = 0; cpu.flags &= ~CF; };
   const fail = (code) => { disk.lastStatus = code; cpu.ah = code; cpu.flags |= CF; };
 
@@ -93,8 +99,8 @@ export function installDisk(machine) {
 
   machine.hookInterrupt(0x13, (c) => {
     const drive = c.dx & 0xff;
-    const d = disk.drives.get(drive);
     const ah = c.ah;
+    const d = disk.drives.get(drive) || (drive === 0 && DRIVE_ONLY(ah) ? EMPTY_A : undefined);
 
     // AH=01 answers about the *previous* call, so it must work even with no media.
     if (ah === 0x01) { c.ah = disk.lastStatus; c.flags &= ~CF; return; }

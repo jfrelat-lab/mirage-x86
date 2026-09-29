@@ -405,6 +405,24 @@ function eq(name, got, want) {
   eq('AH=08h reports a 1.44M floppy as drive type 04', cpu.bx & 0xff, 0x04);
   eq('...with the geometry SeaBIOS gives for it', cpu.cx & 0xffff, 0x4f12); }
 
+// ---- INT 13h: drive A is fitted even with no diskette in it -------------------------------------
+// Windows 98's HSFLOP.PDR sized its DMA buffer from the drive it was told about; with no drive A it
+// took an error path that overwrote IVT[1Ah] ("Windows protection error"). QEMU with its drive A
+// removed stops on the logo too. The BIOS describes an empty drive like SeaBIOS: the drive answers,
+// the missing medium times out.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  installBIOS(mc); installDisk(mc);
+  mc.disk.attach(0x80, new Uint8Array(1024 * 1024), { cyl: 32, heads: 4, spt: 16, type: 3 });
+  cpu.ax = 0x0800; cpu.dx = 0x0000; cpu.bx = 0; mc.intHandlers[0x13](cpu, mc);
+  eq('empty drive A: AH=08h succeeds with the 1.44 MB drive (BL=04, CX=4F12, DX=0101)',
+    [cpu.flags & 1, cpu.bx & 0xff, (cpu.cx & 0xffff).toString(16), (cpu.dx & 0xffff).toString(16)].join(), '0,4,4f12,101');
+  cpu.ax = 0x1500; cpu.dx = 0x0000; mc.intHandlers[0x13](cpu, mc);
+  eq('...AH=15h calls it a diskette drive', [cpu.flags & 1, (cpu.ax >> 8) & 0xff].join(), '0,1');
+  cpu.ax = 0x0201; cpu.cx = 0x0001; cpu.dx = 0x0000; cpu.bx = 0; mc.intHandlers[0x13](cpu, mc);
+  eq('...and a read times out, for want of a diskette', [cpu.flags & 1, (cpu.ax >> 8) & 0xff].join(), '1,128');
+  cpu.ax = 0x0800; cpu.dx = 0x0001; mc.intHandlers[0x13](cpu, mc);
+  eq('...while drive B stays absent', [cpu.flags & 1, (cpu.ax >> 8) & 0xff].join(), '1,128'); }
+
 // ---- a 286 TSS lays its inner-ring stacks out differently from a 386 one ----------------------
 // Windows 3.1 in standard mode enters its ring-0 kernel through a 286 call gate, and the inward
 // stack switch reads SS0/SP0 out of a 286 TSS: SP0 at +2, SS0 at +4, four bytes per level. Read as
@@ -1155,6 +1173,9 @@ const udRun = (gated) => {
 { const mc = new Machine({ memSize: 16 << 20 });
   installBIOS(mc);
   const cmos = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
+  // Drive A is fitted with no diskette in it (QEMU's default, DOSBox-X, our equipment word): with
+  // 10h = 0 Windows 98's HSFLOP.PDR overwrote IVT[1Ah] and the boot ended in a protection error.
+  eq('CMOS 10h/14h with no diskette: an empty 1.44 MB drive A, as the equipment word says', [cmos(0x10), cmos(0x14)].join(), '64,7');
   mc.disk.attach(0x00, new Uint8Array(1474560));
   eq('CMOS 10h: drive A is a 1.44 MB diskette, B absent', cmos(0x10), 0x40);
   eq('CMOS 14h: one diskette drive, x87, bit 2, EGA/VGA', cmos(0x14), 0x07);
