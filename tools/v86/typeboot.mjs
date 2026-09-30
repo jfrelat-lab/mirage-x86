@@ -15,7 +15,10 @@ const { mc } = makeMachine({ dos: false, memSize: Number(process.env.MEM || 16) 
 const dv = new DataView(bytes.buffer), e = 0x1be;
 const lba = dv.getUint32(e + 8, true), n = dv.getUint32(e + 12, true), sh = bytes[e + 1], ss = bytes[e + 2] & 63;
 const eh = bytes[e + 5], es = bytes[e + 6] & 63, ec = bytes[e + 7] | ((bytes[e + 6] & 0xc0) << 2);
-const spt = sh ? (lba - (ss - 1)) / sh : 63, hd = ec ? Math.round(((lba + n - 1 - (es - 1)) / spt - eh) / ec) : 16;
+// Only a plausible partition entry says anything about geometry (as in bootshot.mjs): 386BSD's disk
+// has none, and the garbage it holds there gave a geometry under which its pager divided by zero.
+const ok = (bytes[e] === 0 || bytes[e] === 0x80) && bytes[e + 4] && n && ec;
+const spt = ok && sh ? (lba - (ss - 1)) / sh : 63, hd = ok ? Math.round(((lba + n - 1 - (es - 1)) / spt - eh) / ec) : 16;
 mc.disk.attach(0x80, bytes, { cyl: Math.floor(bytes.length / (hd * spt * 512)), heads: hd, spt, type: 3 });
 let fault = null; mc.onError = (x) => { fault = x; };
 bootSector(mc, bytes, { drive: 0x80 });

@@ -1307,7 +1307,7 @@ export class Recompiler {
         // so the two agree without needing to know which gate delivered us.
         // IRET is IOPL-sensitive in V86 and can raise #GP, and a fault must save the address OF the
         // IRET. Every other path overwrites EIP from the popped frame, so setting it first is free.
-        case 0xcf: canFault = true; P(`cpu.eip=${ipStart};cpu.iret(${sz === 32 ? 1 : 0});`); P('return;'); ended = true; break;
+        case 0xcf: canFault = true; P(`cpu.eip=${ipStart};cpu.iret(${sz === 32 ? 1 : 0},${SEQ()});`); P('return;'); ended = true; break;
 
         case 0xd4: cur.use |= lALL; canFault = true; P(`cpu.eip=${ipStart};if(cpu.aam(${f8()}))return;`); break; // AAM (#DE on base 0 — abort the block)
         case 0xd5: P(`cpu.aad(${f8()});`); break; // AAD
@@ -1362,7 +1362,7 @@ export class Recompiler {
         case 0xe9: { const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16)); endJmp('' + ipAdd(ip, rel)); break; } // JMP rel
         // EIP is set to the instruction's own address first: #GP on the target is a fault, and on
         // success farJmp overwrites it anyway.
-        case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.eip=${ipStart};cpu.farJmp(${s},${o >>> 0});`); P('return;'); ended = true; break; } // JMPF ptr
+        case 0xea: { const o = sz === 16 ? f16() : (f16() | (f16() << 16)); const s = f16(); P(`cpu.eip=${ipStart};cpu.farJmp(${s},${o >>> 0},undefined,${SEQ()});`); P('return;'); ended = true; break; } // JMPF ptr
         case 0xeb: { const rel = fs8(); endJmp('' + ipAdd(ip, rel)); break; }    // JMP rel8
 
         case 0xf4:                                                                      // HLT
@@ -1689,8 +1689,8 @@ export class Recompiler {
         case 5: { const a = memAddr(o); const to = NT(), ts = NT();
           // farJmp keeps the rule this used to open-code: a refused selector leaves EIP at THIS
           // instruction, so a delivered fault's entry point is not overwritten on the way out.
-          P(sz === 16 ? `var ${to}=m.r16(${a}),${ts}=m.r16(${AM(`${a}+2`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to},${ipStart});`
-                      : `var ${to}=m.r32(${a})>>>0,${ts}=m.r16(${AM(`${a}+4`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to}>>>0,${ipStart});`);
+          P(sz === 16 ? `var ${to}=m.r16(${a}),${ts}=m.r16(${AM(`${a}+2`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to},${ipStart},${SEQ()});`
+                      : `var ${to}=m.r32(${a})>>>0,${ts}=m.r16(${AM(`${a}+4`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to}>>>0,${ipStart},${SEQ()});`);
           P('return;'); ended = true; break; } // JMPF
         case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }

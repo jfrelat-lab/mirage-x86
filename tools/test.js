@@ -450,6 +450,56 @@ function eq(name, got, want) {
   eq('...and SS0 comes from +8', cpu.tssStack(0).ss, 0x0010);
   eq('...and ESP0 from +4, 32 bits wide', cpu.tssStack(0).esp >>> 0, 0x00012340); }
 
+// ---- hardware task switch: JMP / CALL to a 32-bit TSS, IRET with NT back -----------------------
+// 386BSD 1.0 switches processes with `ljmp *0xc0(%ecx)` onto a TSS selector; MIRAGE raised #GP(48h)
+// there ("trap 9 code 48, panic: trap"). Intel SDM vol. 3 "Task Switching": the outgoing registers
+// go into the current TSS, busy bits move, a CALL links back and sets NT, and IRET follows the link.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000, TA = 0x9000, TB = 0x9100;
+  cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
+  const desc = (i, base, limit, access, gran = 0) => {
+    const a = GDT + i * 8;
+    m.w16(a, limit & 0xffff); m.w16(a + 2, base & 0xffff); m.w8(a + 4, (base >> 16) & 0xff); m.w8(a + 5, access);
+    m.w8(a + 6, ((limit >> 16) & 0x0f) | gran); m.w8(a + 7, (base >> 24) & 0xff);
+  };
+  desc(1, 0, 0xfffff, 0x9a, 0xc0); desc(2, 0, 0xfffff, 0x92, 0xc0);          // flat code 08h, data 10h
+  desc(3, TA, 0x67, 0x8b);                                                    // 18h: busy 386 TSS (current)
+  desc(4, TB, 0x67, 0x89);                                                    // 20h: available 386 TSS
+  m.w32(TB + 0x20, 0x4000); m.w32(TB + 0x24, 0x0002); m.w32(TB + 0x28, 0x11111111);  // EIP, EFLAGS, EAX
+  m.w32(TB + 0x38, 0x7000);                                                   // ESP
+  for (const o of [0x48, 0x50, 0x54, 0x58, 0x5c]) m.w16(TB + o, 0x10); m.w16(TB + 0x4c, 0x08);
+  cpu.cr0 = 1; cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.setSeg(DS, 0x10); cpu.loadTR(0x18);
+  cpu.reg[0] = 0xaaaaaaaa; cpu.eip = 0x1000;
+  const busy = (sel) => (m.r8(GDT + sel + 5) >> 1) & 1;
+  try {
+  cpu.farJmp(0x20, 0, 0x1000, 0x1007);
+  eq('JMP to a TSS: the new task runs (EIP, EAX, TR)', [cpu.eip.toString(16), (cpu.reg[0] >>> 0).toString(16), cpu.tr.sel.toString(16)].join(), '4000,11111111,20');
+  eq('...the old task saved EIP after the JMP and its EAX', [m.r32(TA + 0x20).toString(16), (m.r32(TA + 0x28) >>> 0).toString(16)].join(), '1007,aaaaaaaa');
+  eq('...busy bits: old freed, new claimed; CR0.TS set', [busy(0x18), busy(0x20), (cpu.cr0 >> 3) & 1].join(), '0,1,1');
+  cpu.eip = 0x4010;
+  cpu.farCall(0x18, 0, 1, 0x4009);
+  eq('CALL to a TSS: link = caller, NT set, both busy', [m.r16(TA).toString(16), (cpu.flags >> 14) & 1, busy(0x18), busy(0x20)].join(), '20,1,1,1');
+  eq('...and it resumes the saved task at its saved EIP', cpu.eip.toString(16), '1007');
+  cpu.iret(1, 0x1008);
+  eq('IRET with NT: back in the caller at its return address, callee freed', [cpu.tr.sel.toString(16), cpu.eip.toString(16), busy(0x18)].join(), '20,4010,0');
+  eq('...and the image it left has NT clear', (m.r32(TA + 0x24) >> 14) & 1, 0);
+  } catch (e) { eq('a far JMP to a TSS switches tasks instead of faulting', String(e.message || e).slice(0, 60), 'no exception'); } }
+
+// ---- an interrupt gate clears NT for the handler (and the pushed EFLAGS keeps it) ---------------
+// Once IRET honoured NT, Windows 98 died: its ring-3 code POPFs NT on, the gate left it set, and the
+// VMM's IRET at c00015e1 followed the NULL back link. The SDM clears TF, VM, RF and NT on delivery.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000, IDT = 0x8800;
+  cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff; cpu.idtr.base = IDT; cpu.idtr.limit = 0x7ff;
+  const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
+  desc(1, 0x9a); desc(2, 0x92);
+  const g = IDT + 0x40 * 8; m.w16(g, 0x5000); m.w16(g + 2, 0x08); m.w8(g + 4, 0); m.w8(g + 5, 0x8e); m.w16(g + 6, 0);   // 32-bit interrupt gate
+  cpu.cr0 = 1; cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.reg[4] = 0x7000; cpu.eip = 0x1000;
+  cpu.flags = 0x4202;                                                         // NT | IF
+  try { mc.protInt(0x40, undefined, undefined, true); } catch (e) { /* reported below */ }
+  eq('interrupt gate: the handler runs with NT clear, the pushed EFLAGS has it',
+    [cpu.eip.toString(16), (cpu.flags >> 14) & 1, (m.r32(0x7000 - 4) >> 14) & 1].join(), '5000,0,1'); }
+
 // ---- CPUID, and the generation it belongs to ---------------------------------------------------
 // CPUID is 486-and-later, so it is a PROFILE feature: on the default 386 the opcode is not there and
 // EFLAGS.ID must not stick, which is how software detects it. kvm-unit-tests' realmode suite runs

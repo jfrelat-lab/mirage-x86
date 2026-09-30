@@ -379,6 +379,68 @@ export class CPU {
     this.tr.is386 = (d.type & 0x08) !== 0;
   }
 
+  /**
+   * A hardware TASK SWITCH to the 32-bit TSS `sel` (Intel SDM vol. 3, "Task Switching"), for a far
+   * JMP or CALL to a TSS descriptor or a task gate, and for IRET with NT set (`kind` = 'jmp' |
+   * 'call' | 'iret'). `nextIp` is the EIP the outgoing task resumes at. 386BSD 1.0 switches
+   * processes this way — `ljmp *0xc0(%ecx)` onto a TSS selector in cpu_switch — and this used to be
+   * a #GP(48h): "trap 9 code 48, panic: trap" right after the device probes.
+   *
+   * Order: validate; save the outgoing registers into the CURRENT TSS; busy bits (JMP/IRET free the
+   * old task, JMP/CALL claim the new one); for CALL the new TSS's link names the old one and NT is
+   * set; then TR, CR3, LDTR, EFLAGS, the general registers and the segments are loaded, CS last
+   * among the checks' inputs, and CR0.TS is set. 286 TSSes are not handled (no guest has needed one).
+   */
+  taskSwitch(sel, kind, nextIp, faultIp) {
+    sel &= 0xffff;
+    const m = this.mem, fail = (n, e) => { if (faultIp !== undefined) this.eip = faultIp >>> 0; this.raise(n, e); };
+    if (sel & 4) return fail(13, sel & 0xfffc);                    // a TSS lives in the GDT
+    const d = this.readDesc(sel);
+    if (!d || !d.sys || (d.type & 0x0d) !== 0x09) return fail(13, sel & 0xfffc);   // 9 or B: a 386 TSS
+    const busy = (d.type & 0x02) !== 0;
+    if (kind === 'iret' ? !busy : busy) return fail(13, sel & 0xfffc);
+    if (!d.present) return fail(11, sel & 0xfffc);
+    let limit = (d.w0 | ((d.b6 & 0x0f) << 16)) >>> 0;
+    if (d.b6 & 0x80) limit = (((limit << 12) >>> 0) | 0xfff) >>> 0;
+    if (limit < 0x67) return fail(10, sel & 0xfffc);
+    const nb = (d.w1 | (d.b4 << 16) | (d.b7 << 24)) >>> 0;
+    const setBusy = (s, on) => { const a = (this.gdtr.base + (s & 0xfff8) + 5) >>> 0; const v = m.r8(a); m.w8(a, on ? v | 0x02 : v & ~0x02); };
+    m.sup++;
+    try {
+      // 1. The outgoing task's state, into its own TSS. IRET clears NT in the image it leaves.
+      const ob = this.tr.base >>> 0, oldSel = this.tr.sel & 0xffff;
+      let of = this.flags >>> 0;
+      if (kind === 'iret') of &= ~NT;
+      m.w32(ob + 0x20, this.csD ? nextIp >>> 0 : nextIp & 0xffff); m.w32(ob + 0x24, of);
+      for (let r = 0; r < 8; r++) m.w32(ob + 0x28 + r * 4, this.reg[r] >>> 0);
+      for (let i = 0; i < 6; i++) m.w16(ob + 0x48 + i * 4, this.seg[i]);   // ES CS SS DS FS GS: our order too
+      // 2. Busy bits and the back link.
+      if (kind !== 'call') setBusy(oldSel, false);
+      if (kind !== 'iret') setBusy(sel, true);
+      if (kind === 'call') m.w16(nb + 0x00, oldSel);
+      // 3. The incoming task.
+      const cr3 = m.r32(nb + 0x1c) >>> 0, eip = m.r32(nb + 0x20) >>> 0;
+      let nf = m.r32(nb + 0x24) >>> 0;
+      const regs = []; for (let r = 0; r < 8; r++) regs.push(m.r32(nb + 0x28 + r * 4) >>> 0);
+      const segs = []; for (let i = 0; i < 6; i++) segs.push(m.r16(nb + 0x48 + i * 4) & 0xffff);
+      const ldt = m.r16(nb + 0x60) & 0xffff;
+      if (kind === 'call') nf |= NT;
+      this.loadTR(sel);
+      if (this.pagingOn && (cr3 >>> 0) !== (this.cr3 >>> 0)) this.setCR3(cr3); else this.cr3 = cr3;
+      this.loadLDT(ldt);
+      this.flags = ((nf & (0x3f7fd5 | this.hiFlags)) | 2) >>> 0;
+      for (let r = 0; r < 8; r++) this.reg[r] = regs[r];
+      this.cr0 = (this.cr0 | 0x08) >>> 0;                          // TS: the FPU state belongs to the old task
+      // CPL comes from the new CS before any other segment is checked against it; a V86 task's
+      // selectors are paragraphs, which setSeg handles once VM is in EFLAGS.
+      this._cpl = (this.flags & VM) ? 3 : (segs[CS] & 3);
+      if (this.setSeg(CS, segs[CS]) === false) return;
+      this.eip = eip;
+      this.setSeg(SS, segs[SS]);
+      for (const i of [ES, DS, FS, GS]) this.setSeg(i, segs[i]);
+    } finally { m.sup--; }
+  }
+
   /** The stack the TSS reserves for privilege level `pl`.
    *
    *  A 386 TSS holds ESP0 at +4 and SS0 at +8, eight bytes per level. A **286 TSS** holds SP0 at +2
@@ -492,7 +554,10 @@ export class CPU {
       }
     }
     if (!d || !d.sys) return plain();
-    if (d.type !== 0x04 && d.type !== 0x0c) return plain();  // not a call gate (task gate etc.): later
+    // A TSS or a task gate: a task switch, whose outgoing EIP is the return address already in EIP.
+    if (d.type === 0x09 || d.type === 0x0b) return this.taskSwitch(sel, 'call', this.eip, faultIp);
+    if (d.type === 0x05) return this.taskSwitch(d.w1, 'call', this.eip, faultIp);
+    if (d.type !== 0x04 && d.type !== 0x0c) return plain();  // not a call gate
     const g32 = d.type === 0x0c;
     const gSel = d.w1 & 0xffff;
     const gOff = g32 ? ((d.w0 | ((d.b6 | (d.b7 << 8)) << 16)) >>> 0) : d.w0;
@@ -528,9 +593,11 @@ export class CPU {
    * reports the fault and then falls through to `this.eip = off`, which overwrites the entry point
    * the delivery just set — the exception is raised and discarded in the same breath.
    */
-  farJmp(sel, off, faultIp) {
+  farJmp(sel, off, faultIp, nextIp) {
     if ((this.cr0 & 1) && !(this.flags & VM)) {           // V86 jumps as an 8086 does
       const d = this.readDesc(sel);
+      if (d && d.sys && (d.type === 0x09 || d.type === 0x0b)) return this.taskSwitch(sel, 'jmp', nextIp ?? this.eip, faultIp);
+      if (d && d.sys && d.type === 0x05) return this.taskSwitch(d.w1, 'jmp', nextIp ?? this.eip, faultIp);   // task gate
       if (d && d.sys && (d.type === 0x04 || d.type === 0x0c)) {
         const g32 = d.type === 0x0c;
         this.setSeg(CS, d.w1 & 0xffff);
@@ -616,7 +683,7 @@ export class CPU {
    *
    * The width comes from the operand size, so iretd pops dwords.
    */
-  iret(is32) {
+  iret(is32, nextIp) {
     const pop = is32 ? () => this.pop32() : () => this.pop16();
     if (!(this.cr0 & 1)) {                       // real mode — unchanged
       this.eip = is32 ? (pop() >>> 0) : pop();
@@ -635,6 +702,12 @@ export class CPU {
       const f = pop();
       this.flags = ((f & 0x7fd5) | 2 | keep | (is32 ? (f & this.hiFlags) : (this.flags & this.hiFlags))) >>> 0;
       return;
+    }
+    // NT set: this IRET returns to the task named by the current TSS's back link, not to a frame.
+    if (this.flags & NT) {
+      this.mem.sup++;
+      let link; try { link = this.mem.r16(this.tr.base >>> 0) & 0xffff; } finally { this.mem.sup--; }
+      return this.taskSwitch(link, 'iret', nextIp ?? this.eip + 1, this.eip);
     }
     const cpl = this.cpl;
     // A faulting IRET consumes NOTHING. The frame is popped before the target can be refused, so

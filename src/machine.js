@@ -9,7 +9,7 @@
 
 import { Memory } from './memory.js';
 import { describeRegion, recentBlocks } from './derail.js';
-import { CPU, CS, CF, IF, TF, VM} from './cpu.js';
+import { CPU, CS, CF, IF, TF, NT, RF, VM } from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
 import { installSSE } from './sse.js';
@@ -440,7 +440,10 @@ export class Machine {
     cpu.pushW(cpu.eip >>> 0, is32);
     if (err !== undefined) cpu.pushW(err, is32);
     if ((type & 1) === 0) cpu.flags &= ~IF;          // interrupt gate masks; trap gate does not
-    cpu.flags &= ~TF;
+    // TF, NT and RF are cleared for the handler (VM already is, above), the pushed image keeps them.
+    // NT mattered once IRET honoured it: Windows 98's ring-3 code POPFs NT on, and its VMM's IRET at
+    // c00015e1 then took the NULL back link of a task it was never called from.
+    cpu.flags &= ~(TF | NT | RF);
     cpu.setSeg(1, (sel & 0xfffc) | newCpl);          // CS's RPL carries the new CPL
     cpu.eip = off;
     cpu.halted = false;
