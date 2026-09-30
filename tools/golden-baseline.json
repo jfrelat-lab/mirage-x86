@@ -213,5 +213,10 @@
     "hash": "70934d5507e17955e203984faa6289fdf4622c8f",
     "mode": 3,
     "fault": null
+  },
+  "boot/test386.bin": {
+    "hash": "c9951d6bbea7ddfd5449cca570eab400f9ba083e",
+    "mode": 255,
+    "fault": null
   }
 }

@@ -28,6 +28,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { makeMachine } from './harness.mjs';
 import { bootSector } from '../src/boot.js';
+import { runTest386 } from './test386-run.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -71,11 +72,27 @@ const WORKLOADS = [
   // Boot-sector workloads run through the INT 19h handoff with no DOS installed at all. Pinning one
   // here is what keeps that second entry point from silently rotting: nothing else exercises it.
   ['boot/BOOTCHESS.IMG', { boot: true }],
+  // test386.asm as the machine's BIOS ROM (tools/run-test386.mjs): the fingerprint is its whole POST
+  // sequence, where it stopped and any fault — so a CPU regression that only test386 sees fails this
+  // gate instead of waiting for someone to run the oracle by hand. It must reach POST 0xFF.
+  ['boot/test386.bin', { test386: true }],
 ];
+
+function test386Fingerprint(abs) {
+  const { cpu, posts, fault } = runTest386(new Uint8Array(readFileSync(abs)));
+  const h = createHash('sha1');
+  h.update(Buffer.from(posts));
+  h.update(`${cpu.seg[1]}:${cpu.eip >>> 0}:${cpu.halted ? 1 : 0}`);
+  if (fault) h.update(String(fault.message));
+  const last = posts.length ? posts[posts.length - 1] : 0;
+  // `mode` carries the last POST code, so a mismatch line says where it now stops (0xff = PASS).
+  return { hash: h.digest('hex'), mode: last, fault: fault ? fault.message : null };
+}
 
 function fingerprint(relPath, opts = {}) {
   const abs = join(ROOT, relPath);
   if (!existsSync(abs)) return null;
+  if (opts.test386) return test386Fingerprint(abs);
   // Composed exactly like the browser (fonts, mouse, 16 MiB) — see harness.mjs for why that matters.
   const { mc, dos } = makeMachine({ dos: !opts.boot });
   let fault = null; mc.onError = (e) => { fault = e; };

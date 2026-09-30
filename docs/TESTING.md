@@ -28,6 +28,11 @@ the POST port (0x190 by default). The last code before it stops is the diagnosti
 
     node tools/run-test386.mjs boot/test386.bin
 
+It is also a **golden entry** (`boot/test386.bin` in `tools/golden.js`, shared runner `tools/test386-run.mjs`):
+the fingerprint is the whole POST sequence, the stop address and any fault, bounded by blocks rather than
+wall clock, so a CPU regression only test386 sees fails `golden.js check` (it must reach POST 0xFF;
+`MIRAGE_SEGLIM=0` makes it stop at 0x12 and mismatch).
+
 It earned its place in the first ten minutes by finding two real defects the per-instruction
 harnesses structurally could not:
 
