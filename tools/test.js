@@ -500,6 +500,23 @@ function eq(name, got, want) {
   eq('interrupt gate: the handler runs with NT clear, the pushed EFLAGS has it',
     [cpu.eip.toString(16), (cpu.flags >> 14) & 1, (m.r32(0x7000 - 4) >> 14) & 1].join(), '5000,0,1'); }
 
+// ---- a far CALL/JMP to a code segment keeps CPL: CS's RPL becomes the CPL -----------------------
+// QNX 4 calls a CONFORMING DPL-0 segment (00E0h) from ring 1; we loaded CS=00E0h as given and ran it
+// in ring 0, so its RETF was taken for an outward return and popped an SS:ESP that was never pushed.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000; cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
+  const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
+  desc(1, 0xba);                                   // 08h: ring-1 code
+  desc(2, 0xb2);                                   // 10h: ring-1 data (stack)
+  desc(3, 0x9e);                                   // 18h: CONFORMING code, DPL 0
+  cpu.cr0 = 1; cpu._cpl = 1; cpu.setSeg(CS, 0x09); cpu.setSeg(SS, 0x11); cpu.reg[4] = 0x7000; cpu.eip = 0x1005;
+  try { cpu.farCall(0x18, 0x2000, 1, 0x1000); } catch (e) { /* reported below */ }
+  eq('far CALL to a conforming DPL-0 segment from ring 1: CS = 0019h, still ring 1',
+    [cpu.seg[CS].toString(16), cpu.cpl, cpu.eip.toString(16)].join(), '19,1,2000');
+  cpu.eip = 0x2010;
+  try { cpu.farJmp(0x08, 0x3000, 0x2010, 0x2017); } catch (e) { /* reported below */ }
+  eq('...and a far JMP back to ring-1 code by an RPL-0 selector loads 0009h', [cpu.seg[CS].toString(16), cpu.cpl].join(), '9,1'); }
+
 // ---- CPUID, and the generation it belongs to ---------------------------------------------------
 // CPUID is 486-and-later, so it is a PROFILE feature: on the default 386 the opcode is not there and
 // EFLAGS.ID must not stick, which is how software detects it. kvm-unit-tests' realmode suite runs

@@ -552,6 +552,11 @@ export class CPU {
         if (faultIp !== undefined) this.eip = faultIp >>> 0;
         return this.raise(13, sel & 0xfffc);
       }
+      // A far CALL to a code segment never changes CPL: CS's RPL becomes the CPL. A CONFORMING DPL-0
+      // segment called from ring 1 runs at ring 1 — QNX 4 does exactly that (`call far [esp]` onto
+      // 00E0h from 10A1h) — and loading the selector as given put us in ring 0, so its RETF looked
+      // like an outward return, popped an SS:ESP that was never pushed, and the kernel stack was gone.
+      sel = (sel & 0xfffc) | cpl;
     }
     if (!d || !d.sys) return plain();
     // A TSS or a task gate: a task switch, whose outgoing EIP is the return address already in EIP.
@@ -614,6 +619,7 @@ export class CPU {
           this.raise(13, sel & 0xfffc);
           return;
         }
+        sel = (sel & 0xfffc) | cpl;                        // CPL unchanged, as for a far CALL
       }
     }
     // As in farCall: a refusal is delivered inside setSeg, so the faulting EIP goes in first and
