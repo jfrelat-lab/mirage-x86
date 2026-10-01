@@ -12,6 +12,7 @@ import { installPS2Mouse } from './ps2mouse.js';
 import { installDisk } from './disk.js';
 import { installIDE } from './ide.js';
 import { installPCI } from './pci.js';
+import { installUART } from './uart.js';
 import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
 
@@ -1325,6 +1326,10 @@ export function installBIOS(machine, opts = {}) {
   // `pci: true`, or MIRAGE_PCI=1 in the tools — so the ISA machine every existing image boots on stays.
   const pciEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PCI === '1';
   if (opts.pci ?? pciEnv) installPCI(machine);   // after installRTC: it wraps INT 1Ah for AH=B1h
+  // A 16550A on COM1 (src/uart.js), optional for the same reason: the equipment word has always said
+  // "no serial ports", and DOS programs that probe them rely on it. `serial: true` or MIRAGE_SERIAL=1.
+  const serialEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SERIAL === '1';
+  if (opts.serial ?? serialEnv) installUART(machine);
   if (opts.xms !== false) installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
   if (machine.xms) machine.xms.max = Math.min(machine.xms.max, VBE_FB_LIN);   // keep XMS out of the framebuffer
   if (opts.ems !== false) installEMS(machine);   // EMS — after XMS: shares its pool via xms.top

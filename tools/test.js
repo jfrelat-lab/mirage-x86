@@ -548,6 +548,23 @@ function eq(name, got, want) {
   cpu.ax = 0x4f02; cpu.bx = 0x0003; mc.intHandlers[0x10](cpu, mc);
   eq('4F02h BX=0003h: succeeds (004Fh) and the BIOS is in mode 3', [(cpu.ax & 0xffff).toString(16), mc.mem.u8[0x449]].join(), '4f,3'); }
 
+// ---- the 16550A on COM1 (src/uart.js): what tools/uartprobe.asm reads on QEMU ---------------------
+// QEMU's 16550A answers 60 01 C1 5A F0 F0 61 A5 C2 C1 B0 B0 to the probe's twelve reads.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc, { serial: true });
+  const inb = (p) => (mc.portRead[p] ? mc.portRead[p](p, 1) & 0xff : 0xff), outb = (p, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, 1, v); };
+  const r = [];
+  r.push(inb(0x3fd), inb(0x3fa)); outb(0x3fa, 0x07); r.push(inb(0x3fa));
+  outb(0x3ff, 0x5a); r.push(inb(0x3ff));
+  outb(0x3fc, 0x1f); r.push(inb(0x3fe), inb(0x3fe));
+  outb(0x3f8, 0xa5); r.push(inb(0x3fd), inb(0x3f8));
+  outb(0x3f9, 0x02); r.push(inb(0x3fa), inb(0x3fa)); outb(0x3f9, 0);
+  outb(0x3fc, 0x03); r.push(inb(0x3fe), inb(0x3fe));
+  eq('COM1 answers the probe as QEMU\'s 16550A does', r.map((v) => v.toString(16).padStart(2, '0')).join(' '), '60 01 c1 5a f0 f0 61 a5 c2 c1 b0 b0');
+  outb(0x3fc, 0x08); outb(0x3f9, 0x01); mc.irqPendingMask = 0;
+  if (mc.serial) mc.serial.receive('A');
+  eq('...a received byte with IER bit 0 and OUT2 raises IRQ 4', [(mc.irqPendingMask >> 4) & 1, inb(0x3f8)].join(), '1,65');
+  eq('...and the BDA names COM1 at 3F8h, one port in the equipment word', [mc.mem.r16(0x400).toString(16), (mc.mem.r16(0x410) >> 9) & 7].join(), '3f8,1'); }
+
 // ---- the RTC's periodic interrupt: register A's rate, register B's PIE, IRQ 8 ----------------------
 // Windows NT 3.51's HAL calibrates its stall loop on it (A = 2Dh: 8 Hz, B = 42h: PIE) with every
 // other IRQ masked; without it the HAL counted for ever at hal.dll+8390.

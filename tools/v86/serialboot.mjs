@@ -17,8 +17,13 @@ if (process.env.VGAROM) {
 }
 mc.disk.attach(0x00, bytes);
 let out = '', done = false;
-mc.onPortRead(0x3fd, () => 0x60);
-mc.onPortWrite(0x3f8, (_p, _s, v) => { out += String.fromCharCode(v & 0xff); });
+// With a UART (MIRAGE_SERIAL=1, src/uart.js) the guest talks to the real device and we listen on its
+// transmit side; without one, COM1 is faked here: THR captured, LSR always "empty".
+if (mc.serial) mc.serial.onTx = (b) => { out += String.fromCharCode(b); };
+else {
+  mc.onPortRead(0x3fd, () => 0x60);
+  mc.onPortWrite(0x3f8, (_p, _s, v) => { out += String.fromCharCode(v & 0xff); });
+}
 mc.onPortWrite(0xf4, () => { done = true; });
 bootSector(mc, bytes, { drive: 0 });
 // Guest seconds: the run loop drives IRQ0 off cpu.cycles, one tick per pitBase cycles.
