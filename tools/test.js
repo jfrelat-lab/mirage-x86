@@ -517,6 +517,42 @@ function eq(name, got, want) {
   try { cpu.farJmp(0x08, 0x3000, 0x2010, 0x2017); } catch (e) { /* reported below */ }
   eq('...and a far JMP back to ring-1 code by an RPL-0 selector loads 0009h', [cpu.seg[CS].toString(16), cpu.cpl].join(), '9,1'); }
 
+// ---- the PCI bus (src/pci.js), read through mechanism #1 as tools/pcidump.asm reads QEMU -M pc ---
+// Off by default — QEMU's -M isapc — and identical to QEMU's i440FX/PIIX3 when asked for: Windows
+// NT 3.51 and 9legacy only boot under -M pc.
+{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
+  const out = (p, sz, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, sz, v); }, inp = (p, sz) => (mc.portRead[p] ? mc.portRead[p](p, sz) >>> 0 : 0xffffffff);
+  const cfg = (dev, fn, reg) => { out(0xcf8, 4, (0x80000000 | (dev << 11) | (fn << 8) | reg) >>> 0); return inp(0xcfc, 4); };
+  eq('PCI 00.0 / 01.0 / 01.1 / 02.0: i440FX, PIIX3, PIIX3 IDE, display — as QEMU -M pc', [cfg(0, 0, 0), cfg(1, 0, 0), cfg(1, 1, 0), cfg(2, 0, 0)].map((v) => v.toString(16)).join(), '12378086,70008086,70108086,11111234');
+  eq('...an empty slot reads all ones', cfg(3, 0, 0), 0xffffffff);
+  eq('...the IDE function: legacy mode with bus mastering (class 010180h), BAR4 at C000h', [(cfg(1, 1, 8) >>> 8).toString(16), cfg(1, 1, 0x20).toString(16)].join(), '10180,c001');
+  out(0xcf8, 4, 0x80000920); out(0xcfc, 4, 0xffffffff);
+  eq('...sizing BAR4 by writing all ones reads back a 16-byte I/O window', cfg(1, 1, 0x20).toString(16), 'fffffff1');
+  eq('...ELCR 0C00h and SeaBIOS\'s PIRQ routing (A,B -> 10, C,D -> 11)', [inp(0x4d1, 1) & 0xff, cfg(1, 0, 0x60).toString(16)].join(), '12,b0b0a0a');
+  cpu.ax = 0xb101; cpu.reg[2] = 0; mc.intHandlers[0x1a](cpu, mc);
+  eq('INT 1Ah B101h: present, mechanism #1, version 2.10, "PCI "', [cpu.flags & 1, cpu.ax & 0xffff, cpu.bx & 0xffff, (cpu.reg[2] >>> 0).toString(16)].join(), '0,1,528,20494350');
+  cpu.ax = 0xb102; cpu.cx = 0x7010; cpu.dx = 0x8086; cpu.si = 0; mc.intHandlers[0x1a](cpu, mc);
+  eq('INT 1Ah B102h finds the IDE function at bus 0, device 1 function 1', [cpu.flags & 1, cpu.bx & 0xffff].join(), '0,9');
+  const pir = String.fromCharCode(...mc.mem.u8.subarray(0xfd000, 0xfd004));
+  eq('...and the $PIR table is in the BIOS area, checksummed', [pir, mc.mem.u8.subarray(0xfd000, 0xfd080).reduce((a, b) => (a + b) & 0xff, 0)].join(), '$PIR,0');
+  const isa = new Machine({ memSize: 16 << 20 }); installBIOS(isa);
+  eq('without the option there is no bus: CF8h is not decoded', isa.portRead[0xcfc] ? 'decoded' : 'none', 'none'); }
+
+// ---- the RTC's periodic interrupt: register A's rate, register B's PIE, IRQ 8 ----------------------
+// Windows NT 3.51's HAL calibrates its stall loop on it (A = 2Dh: 8 Hz, B = 42h: PIE) with every
+// other IRQ masked; without it the HAL counted for ever at hal.dll+8390.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+  const w = (r, v) => { mc.portWrite[0x70](0x70, 1, r); mc.portWrite[0x71](0x71, 1, v); };
+  const r = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
+  w(0x0a, 0x2d); w(0x0b, 0x42);
+  mc.irqPendingMask = 0;
+  const period = 18.2065 * mc.pitBase / 8;
+  cpu.cycles += period * 0.5; mc.rtcPoll && mc.rtcPoll();
+  const early = (mc.irqPendingMask >> 8) & 1;
+  cpu.cycles += period * 0.6; mc.rtcPoll && mc.rtcPoll();
+  eq('8 Hz with PIE: no IRQ 8 before an eighth of a second, one after', [early, (mc.irqPendingMask >> 8) & 1].join(), '0,1');
+  eq('...register C says PF and IRQF, and reading it clears them', [r(0x0c).toString(16), r(0x0c)].join(), 'c0,0'); }
+
 // ---- CPUID, and the generation it belongs to ---------------------------------------------------
 // CPUID is 486-and-later, so it is a PROFILE feature: on the default 386 the opcode is not there and
 // EFLAGS.ID must not stick, which is how software detects it. kvm-unit-tests' realmode suite runs
@@ -1209,8 +1245,11 @@ const udRun = (gated) => {
     ebx = cpu.reg[3] >>> 0;
   } while (ebx && ++n < 10);
   eq('AX=E820h returns SMAP in EAX', cpu.reg[0] >>> 0, 0x534d4150);
-  eq('...a map with the VBE framebuffer reserved at the top', ranges.join(' '),
-    `0+a0000:1 f0000+10000:2 100000+${(mc.vbeFbBase - 0x100000).toString(16)}:1 ${mc.vbeFbBase.toString(16)}+200000:2`); }
+  eq('...a map with the VBE framebuffer reserved near the top, the RAM above it usable', ranges.join(' '),
+    `0+a0000:1 f0000+10000:2 100000+${(mc.vbeFbBase - 0x100000).toString(16)}:1 ${mc.vbeFbBase.toString(16)}+200000:2 e00000+200000:1`);
+  // 4 MiB-aligned like a real aperture: KolibriOS maps it with a 4 MiB page once CPUID says PSE, and
+  // at 14 MiB (unaligned) it drew 2 MiB below the screen.
+  eq('...and the framebuffer starts on a 4 MiB boundary', (mc.vbeFbBase & 0x3fffff).toString(16), '0'); }
 
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
@@ -1322,7 +1361,19 @@ const udRun = (gated) => {
     const vend = String.fromCharCode(...[p.reg[3], p.reg[2], p.reg[1]].flatMap((w) => [w & 0xff, (w >>> 8) & 0xff, (w >>> 16) & 0xff, w >>> 24]));
     p.reg[0] = 1; p.cpuid(); pent = [vend, (p.reg[0] >>> 0).toString(16), p.reg[2]].join();
   } catch (e) { pent = String(e.message).slice(0, 40); }
-  eq("the 'pentium' profile says GenuineIntel, family 5 model 2, features FPU+TSC only", pent, 'GenuineIntel,520,17'); }
+  eq("the 'pentium' profile says GenuineIntel, family 5 model 2, features FPU+PSE+TSC only", pent, 'GenuineIntel,520,25'); }
+
+// ---- CR4.PSE: a page-directory entry with PS set maps 4 MiB ---------------------------------------
+// 9legacy's loader maps its kernel with 4 MiB pages when CPUID says PSE, and panics at "vmap:
+// va=0x81000000" without them — QEMU `-cpu pentium,-pse` panics the same way. Before CR4 existed
+// here, MOV CR4 was ignored and every PDE was read as a page-table pointer.
+{ const mc = new Machine({ memSize: 32 << 20, cpu: '586' }); const cpu = mc.cpu, m = mc.mem;
+  const DIR = 0x10000;
+  m.w32(DIR + (0x81000000 >>> 22) * 4, 0x01000000 | 0x83);                   // 4 MiB page at 16 MiB: P, R/W, PS
+  cpu.setCR3(DIR); cpu.setCR4(0x10); cpu.setCR0(0x80000001);
+  eq('PSE: linear 81234567h -> physical 01234567h through one PDE', (m.walk(0x81234567) >>> 0).toString(16), '1234000');
+  eq('...the PDE takes the accessed bit', (m.r32phys(DIR + 0x204 * 4) >> 5) & 1, 1);
+  eq('...and MOV from CR4 would read PSE back', cpu.cr4, 0x10); }
 
 // ---- A HLT is woken by what the 8259 holds, for a protected-mode OS of its own ------------------
 // A device IRQ raised while IRQ0 was in service was left in the IRR and never delivered; a HLT then

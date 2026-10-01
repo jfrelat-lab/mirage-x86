@@ -185,14 +185,43 @@ export function installRTC(machine) {
     if (i === REG_C) { const v = rtc.ram[REG_C]; rtc.ram[REG_C] = 0; return v; }   // cleared by reading
     return rtc.ram[i];
   });
+  // THE PERIODIC INTERRUPT. Register A's low nibble picks a rate from the 32.768 kHz time base —
+  // 32768 >> (rate - 1) Hz, with rates 1 and 2 giving 256 and 128 Hz — and each period sets PF and,
+  // when register B's PIE is on, IRQF and IRQ 8. Reading register C acknowledges both (below). It was
+  // not implemented: Windows NT 3.51's HAL calibrates KeStallExecutionProcessor on it — it masks
+  // every IRQ but 8, writes A = 2Dh (8 Hz) and B = 42h (PIE), and counts — so it counted for ever at
+  // hal.dll+8390. Time is the PIT's: cpu.cycles at the machine's calibrated rate.
+  const B_PIE = 0x40, C_IRQF = 0x80, C_PF = 0x40;
+  rtc.nextPeriodic = Infinity;
+  const periodCycles = () => {
+    const rate = rtc.ram[REG_A] & 0x0f;
+    if (!rate || (rtc.ram[REG_A] & 0x70) !== 0x20) return 0;   // no rate, or the divider is not running
+    const hz = rate === 1 ? 256 : rate === 2 ? 128 : 32768 >> (rate - 1);
+    return (18.2065 * (machine.pitBase || 0x10000)) / hz;
+  };
+  const schedule = () => {
+    const p = periodCycles();
+    rtc.nextPeriodic = (p && (rtc.ram[REG_B] & B_PIE)) ? machine.cpu.cycles + p : Infinity;
+  };
+  // Called once per run slice (machine.runSlice). A slice is ~15 guest ms, so fast rates deliver at
+  // most one interrupt per slice — PF says "at least one period elapsed", which is all a guest learns.
+  machine.rtcPoll = () => {
+    if (machine.cpu.cycles < rtc.nextPeriodic) return;
+    rtc.ram[REG_C] |= C_PF | C_IRQF;
+    machine.raiseIRQ(8);
+    const p = periodCycles();
+    rtc.nextPeriodic = p ? Math.max(rtc.nextPeriodic + p, machine.cpu.cycles + p / 4) : Infinity;
+  };
+
   machine.onPortWrite(0x71, (_p, _s, v) => {
     const i = rtc.index, b = v & 0xff;
     if (TIME_REGS.has(i)) { rtc.pending.set(i, b); if (!(rtc.ram[REG_B] & B_SET)) commit(); return; }
     if (i === REG_C || i === REG_D) return;                // status registers are read-only
-    if (i === REG_A) { rtc.ram[REG_A] = b & 0x7f; return; }   // UIP is read-only; see below
+    if (i === REG_A) { rtc.ram[REG_A] = b & 0x7f; schedule(); return; }   // UIP is read-only; see below
     const was = rtc.ram[i];
     rtc.ram[i] = b; written.add(i);
     if (i === REG_B && (was & B_SET) && !(b & B_SET)) commit();
+    if (i === REG_B && ((was ^ b) & B_PIE)) schedule();
   });
 
   // UIP is left CLEAR for ever. The datasheet has it rise for about 2 ms before each update, and a

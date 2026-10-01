@@ -958,6 +958,7 @@ export class Machine {
       if (this.cpu.cycles < this.nextTimerCycle) this.cpu.cycles = this.nextTimerCycle;
       this.serviceTimer();                       // fires INT 8; tickTimer clears cpu.halted
     }
+    if (this.rtcPoll) this.rtcPoll();          // the RTC's periodic interrupt (src/rtc.js)
     return this.rec.run(this, maxBlocks);
   }
 

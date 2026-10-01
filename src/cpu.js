@@ -57,6 +57,7 @@ export class CPU {
     this.ldtr = { sel: 0, base: 0, limit: 0 };
     this.tr = { sel: 0, base: 0, limit: 0 };        // task register — the TSS holds the inner-ring stacks
     this.cr3 = 0;                    // page-directory physical base (bits 31:12)
+    this.cr4 = 0;                    // only PSE (bit 4) is implemented: 4 MiB pages — see setCR4
     this.cr2 = 0;                    // faulting linear address, set on #PF
     this.cr0 = 0x00000010;           // machine status word: PE=0 (real mode), ET=1 (387 present).
     // Set when a write lands inside the block that is CURRENTLY EXECUTING. A block is compiled from
@@ -331,7 +332,8 @@ export class CPU {
    *
    * THE FEATURE BITS ARE OURS, and each one is set only if MIRAGE implements the thing — the same
    * rule as the BIOS configuration table and the CMOS. So: FPU, because src/fpu.js is a real x87;
-   * and TSC, because RDTSC (0F 31) answers from the cycle counter. Nothing else. In particular SSE
+   * TSC, because RDTSC (0F 31) answers from the cycle counter; and PSE, because CR4.PSE and 4 MiB
+   * page-directory entries are followed by Memory.walk. Nothing else. In particular SSE
    * is NOT claimed although src/sse.js exists: it implements the sixteen instructions one 1K intro
    * uses, and a guest that read an SSE bit here would be entitled to the whole extension.
    *
@@ -360,7 +362,7 @@ export class CPU {
       this.reg[0] = (this.profile && this.profile.signature) || 0x0500;   // family 5, model 0 (or the profile's)
       this.reg[3] = 0;                                   // EBX: no brand index, no CLFLUSH line
       this.reg[1] = 0;                                   // ECX: none of the later extensions
-      this.reg[2] = (1 << 0) | (1 << 4);                 // EDX: FPU (bit 0), TSC (bit 4)
+      this.reg[2] = (1 << 0) | (1 << 3) | (1 << 4);      // EDX: FPU (bit 0), PSE (bit 3: CR4 + 4 MiB pages), TSC (bit 4)
       return;
     }
     this.reg[0] = this.reg[3] = this.reg[1] = this.reg[2] = 0;   // an unknown leaf answers zeros
@@ -804,6 +806,15 @@ export class CPU {
     const was = this.pagingOn;
     this.cr0 = v >>> 0;
     if (this.pagingOn !== was) this.onPagingChange && this.onPagingChange();
+  }
+
+  /** CR4. Of its bits only PSE (bit 4) means anything here — 4 MiB pages, which Memory.walk follows
+   *  — and only PSE is kept; the others read back as 0, as on a CPU without those features.
+   *  Plan 9 (9legacy) maps its kernel with 4 MiB pages when CPUID says PSE, and without them its
+   *  loader panics at "vmap: va=0x81000000" — QEMU with `-cpu pentium,-pse` panics identically. */
+  setCR4(v) {
+    const was = this.cr4; this.cr4 = (v & 0x10) >>> 0;
+    if (was !== this.cr4 && this.pagingOn) this.onPagingChange && this.onPagingChange();
   }
 
   /** CR3 reload: the whole software TLB is stale. */

@@ -41,6 +41,6 @@ for (let t = STEP; t <= SECS && !fault; t += STEP) {
   for (let i = 0; i < W * H; i++) { const p = v.u32[i]; rgb[i * 3] = p & 0xff; rgb[i * 3 + 1] = (p >> 8) & 0xff; rgb[i * 3 + 2] = (p >> 16) & 0xff; if (p & 0xffffff) nz++; }
   const file = `${outdir}/${name}-${String(t).padStart(5, '0')}.png`;
   writePNG(file, rgb, W, H, 1);
-  console.log(`${t}s (${((Date.now() - t0) / 1000) | 0}s host) mode ${h(mc.mem.r8(0x449), 2)}h ${W}x${H} ${nz} lit px  CR0=${h(c.cr0)} ${h(c.seg[1], 4)}:${h(c.eip)} VM=${(c.flags >> 17) & 1} IF=${(c.flags >> 9) & 1}${c.halted ? ' HLT' : ''} -> ${file}`);
+  console.log(`${t}s (${((Date.now() - t0) / 1000) | 0}s host) mode ${h(mc.mem.u8[0x449], 2)}h ${W}x${H} ${nz} lit px  CR0=${h(c.cr0)} ${h(c.seg[1], 4)}:${h(c.eip)} VM=${(c.flags >> 17) & 1} IF=${(c.flags >> 9) & 1}${c.halted ? ' HLT' : ''} -> ${file}`);
 }
 if (fault) console.log('FAULT', String(fault.message).slice(0, 200));

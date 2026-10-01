@@ -126,6 +126,17 @@ export class Memory {
     const pdeA = (dir + ((lin >>> 22) * 4)) >>> 0;
     const pde = this.r32phys(pdeA);
     if (!(pde & 1)) { this.walkRW = false; this.walkProt = false; return -1; }
+    // A 4 MiB page: CR4.PSE set and PS (bit 7) in the directory entry. The PDE is the leaf — its
+    // bits 31:22 are the frame, its U/S and R/W the whole protection, and it takes A and D.
+    if ((cpu.cr4 & 0x10) && (pde & 0x80)) {
+      this.walkRW = !!(pde & 2);
+      const user = cpu.cpl === 3 && this.sup === 0;
+      if ((user && !(pde & 4)) || (write && !this.walkRW && (user || (cpu.cr0 & 0x10000) !== 0))) { this.walkProt = true; return -1; }
+      this.walkProt = false;
+      const need = write ? 0x60 : 0x20;
+      if ((pde & need) !== need) this.dv.setUint32(pdeA & (this.size - 1), (pde | need) >>> 0, true);
+      return ((pde & 0xffc00000) | (lin & 0x003ff000)) >>> 0;
+    }
     const pt = (pde & 0xfffff000) >>> 0;
     const pteA = (pt + (((lin >>> 12) & 0x3ff) * 4)) >>> 0;
     const pte = this.r32phys(pteA);

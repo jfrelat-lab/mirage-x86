@@ -11,6 +11,7 @@ import { installEMS } from './ems.js';
 import { installPS2Mouse } from './ps2mouse.js';
 import { installDisk } from './disk.js';
 import { installIDE } from './ide.js';
+import { installPCI } from './pci.js';
 import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
 
@@ -62,7 +63,11 @@ export function installBIOS(machine, opts = {}) {
   // with INT 31h 0800h and writes straight into it, so it has to be memory that exists and that no
   // allocator will hand out. 2 MiB covers the largest advertised mode (640x480x32 = 1.2 MiB).
   const VBE_FB_BYTES = 2 * 1024 * 1024;
-  const VBE_FB_LIN = (mem.size - VBE_FB_BYTES) >>> 0;
+  // ALIGNED TO 4 MiB, as a real card's aperture always is (QEMU's is FD000000h): a kernel that has
+  // PSE maps the framebuffer with 4 MiB pages, whose frame is the address rounded down to 4 MiB.
+  // KolibriOS does, and with the framebuffer at size-2 MiB (62 MiB of 64) it drew 2 MiB below the
+  // picture — a black screen — once CPUID said PSE. The RAM above it stays usable (E820 says so).
+  const VBE_FB_LIN = ((mem.size - VBE_FB_BYTES) & ~0x3fffff) >>> 0;
   machine.vbeFbBase = VBE_FB_LIN;
   for (let i = 0; i < 0x60; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, 0);
   const oem = 'MIRAGE VGA';
@@ -867,7 +872,9 @@ export function installBIOS(machine, opts = {}) {
     // screen. No EBDA is allocated (see the BDA setup), so conventional memory runs to A0000.
     if ((cpu.reg[0] >>> 0) === 0xe820 && (cpu.reg[2] >>> 0) === 0x534d4150) {
       const fb = machine.vbeFbBase >>> 0;
-      const map = [[0, 0xa0000, 1], [0xf0000, 0x10000, 2], [0x100000, fb - 0x100000, 1], [fb, mem.size - fb, 2]];
+      const fbEnd = Math.min(mem.size, fb + 2 * 1024 * 1024);
+      const map = [[0, 0xa0000, 1], [0xf0000, 0x10000, 2], [0x100000, fb - 0x100000, 1], [fb, fbEnd - fb, 2]];
+      if (fbEnd < mem.size) map.push([fbEnd, mem.size - fbEnd, 1]);           // RAM above the aligned framebuffer
       const i = cpu.reg[3] >>> 0;
       if (i >= map.length || (cpu.reg[1] >>> 0) < 20) { cpu.flags |= CF; cpu.ah = 0x86; return; }
       const d = (cpu.base[ES] + (cpu.di & 0xffff)) >>> 0, [b, len, type] = map[i];
@@ -1304,6 +1311,10 @@ export function installBIOS(machine, opts = {}) {
   installIDE(machine);   // the primary ATA channel over the same images (ports 1F0h-1F7h/3F6h, IRQ 14)
   installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
+  // A PCI bus (src/pci.js) is the difference between QEMU's -M pc and -M isapc: off unless asked for —
+  // `pci: true`, or MIRAGE_PCI=1 in the tools — so the ISA machine every existing image boots on stays.
+  const pciEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PCI === '1';
+  if (opts.pci ?? pciEnv) installPCI(machine);   // after installRTC: it wraps INT 1Ah for AH=B1h
   if (opts.xms !== false) installXMS(machine);   // XMS driver (extended memory above 1 MiB via INT 2Fh + f000:0100 entry)
   if (machine.xms) machine.xms.max = Math.min(machine.xms.max, VBE_FB_LIN);   // keep XMS out of the framebuffer
   if (opts.ems !== false) installEMS(machine);   // EMS — after XMS: shares its pool via xms.top

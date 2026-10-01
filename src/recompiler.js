@@ -1901,7 +1901,7 @@ export class Recompiler {
           if (!o.isReg) memAddr(o);
           return;
         }
-        case 0x20: { const o = modrm(); const src = o.reg === 0 ? '(cpu.cr0>>>0)' : o.reg === 2 ? '(cpu.cr2>>>0)' : o.reg === 3 ? '(cpu.cr3>>>0)' : '0';
+        case 0x20: { const o = modrm(); const src = o.reg === 0 ? '(cpu.cr0>>>0)' : o.reg === 2 ? '(cpu.cr2>>>0)' : o.reg === 3 ? '(cpu.cr3>>>0)' : o.reg === 4 ? '(cpu.cr4>>>0)' : '0';
           P(rW(o.rm, 32, src)); return; }                                               // MOV r32, CRn
         // MOV CRn, r32. CR0 bit 0 (PE) now really switches how selectors resolve, so this ends the
         // block: the very next instruction is normally the far jump that reloads CS, and the code
@@ -1911,6 +1911,8 @@ export class Recompiler {
           if (o.reg === 0) { P(`cpu.setCR0(${rR(o.rm, 32)});cpu.eip=${SEQ()};`); P('return;'); ended = true; }
           else if (o.reg === 3) { P(`cpu.setCR3(${rR(o.rm, 32)});cpu.eip=${SEQ()};`); P('return;'); ended = true; }
           else if (o.reg === 2) P(`cpu.cr2=${rR(o.rm, 32)}>>>0;`);
+          // CR4 ends the block like CR0/CR3: turning PSE on or off changes every later translation.
+          else if (o.reg === 4) { P(`cpu.setCR4(${rR(o.rm, 32)});cpu.eip=${SEQ()};`); P('return;'); ended = true; }
           else P(`${rR(o.rm, 32)};`);
           return;
         }
