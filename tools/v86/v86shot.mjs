@@ -28,7 +28,11 @@ const keys = (process.env.KEYS || '').split(',').filter(Boolean).map((x) => { co
 const vga = () => e.v86.cpu.devices.vga;
 function shot(file) {
   const v = vga(); const [w0, h0, bpp] = size;
-  if (!bpp) return null;                       // text mode: nothing to render here
+  if (!bpp) {                                  // text mode: print the screen (char in plane 0)
+    const cols = w0 || 80, rows = h0 || 25, start = ((v.crtc[0x0c] << 8) | v.crtc[0x0d]) >>> 0; let t = '';
+    for (let y = 0; y < rows; y++) { let l = ''; for (let x = 0; x < cols; x++) { const ch = v.plane0[(start + y * cols + x) & 0xffff]; l += ch >= 32 && ch < 127 ? String.fromCharCode(ch) : ' '; } t += l.trimEnd() + '\n'; }
+    console.log(t.replace(/\n+$/, '')); return null;
+  }
   const w = w0, h = h0, rgb = new Uint8Array(w * h * 3); let lit = 0;
   const put = (i, c) => { rgb[i * 3] = (c >> 16) & 255; rgb[i * 3 + 1] = (c >> 8) & 255; rgb[i * 3 + 2] = c & 255; if (c & 0xffffff) lit++; };
   if (bpp === 4 || (bpp === 8 && w === 320 && !v.svga_enabled)) {

@@ -57,7 +57,7 @@ const run = (secs, until) => {
   return false;
 };
 const t0 = Date.now();
-console.log(`waiting for "${waitFor}": ${run(600, waitFor) ? 'seen' : 'NOT seen'} at ${(c.cycles / sec).toFixed(0)} s guest, ${((Date.now() - t0) / 1000) | 0} s host`);
+console.log(`waiting for "${waitFor}": ${run(Number(process.env.WAIT || 600), waitFor) ? 'seen' : 'NOT seen'} at ${(c.cycles / sec).toFixed(0)} s guest, ${((Date.now() - t0) / 1000) | 0} s host`);
 for (const line of lines) {
   mc.pushScancodes(scancodes(line + '\n'));
   // ...and the BIOS path, as src/keyboard.js feeds both: a program reading INT 16h (a boot loader in
