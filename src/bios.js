@@ -709,6 +709,16 @@ export function installBIOS(machine, opts = {}) {
             cpu.ax = 0x004f; break;
           }
           case 0x02: {                                          // set mode (BX; bit 14 = linear)
+            // A STANDARD VGA mode number (below 100h) is a VBE mode too (VBE 2.0 §4.5): set it as
+            // AH=00h would, BX bit 15 ("don't clear") becoming AL bit 7, and answer 004Fh — as
+            // SeaVGABIOS does. Windows NT 3.51's video miniport resets the display with 4F02h BX=0003h
+            // through VideoPortInt10; failing it (014Fh) left NT idling in text mode after its banner.
+            if ((cpu.bx & 0x1ff) < 0x100) {
+              const bx = cpu.bx & 0xffff;
+              cpu.ax = (bx & 0x7f) | ((bx & 0x8000) ? 0x80 : 0);
+              machine.intHandlers[0x10](cpu, machine);
+              cpu.ax = 0x004f; break;
+            }
             const m = findMode(cpu.bx);
             if (!m) { cpu.ax = 0x014f; break; }
             machine.setVbeMode(m, !!(cpu.bx & 0x4000));

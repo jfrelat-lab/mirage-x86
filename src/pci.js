@@ -156,6 +156,13 @@ export function installPCI(machine) {
 
   // ---- the $PIR table, in ROM ----
   PIR.forEach((b, i) => { mem.u8[0xf0000 + PIR_OFF + i] = b; });
+  // ---- "PCI " somewhere in the F000 segment ----
+  // Windows NT 3.51's NTDETECT.COM looks for the four bytes "PCI " in F000:0000-FFFC (a byte-wise
+  // scan downwards from FFFCh, at 5406h in the file) BEFORE it dares INT 1Ah B101h; without them it
+  // records no PCI adapter, the HAL builds no PCI bus handler (it wants a MultifunctionAdapter whose
+  // Identifier is "PCI"), atapi.sys never sees the controller, and the kernel stops with
+  // INACCESSIBLE_BOOT_DEVICE. SeaBIOS happens to carry the string; our ROM carries it on purpose.
+  [...'PCI '].forEach((ch, i) => { mem.u8[0xf0000 + PIR_OFF + 0x80 + i] = ch.charCodeAt(0); });
 
   // ---- PCI BIOS, real mode (INT 1Ah AH=B1h; PCI BIOS Specification 2.1) ----
   // No BIOS32 service directory: a protected-mode caller finds none and uses mechanism #1 itself.

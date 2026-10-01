@@ -535,8 +535,18 @@ function eq(name, got, want) {
   eq('INT 1Ah B102h finds the IDE function at bus 0, device 1 function 1', [cpu.flags & 1, cpu.bx & 0xffff].join(), '0,9');
   const pir = String.fromCharCode(...mc.mem.u8.subarray(0xfd000, 0xfd004));
   eq('...and the $PIR table is in the BIOS area, checksummed', [pir, mc.mem.u8.subarray(0xfd000, 0xfd080).reduce((a, b) => (a + b) & 0xff, 0)].join(), '$PIR,0');
+  const rom = Buffer.from(mc.mem.u8.subarray(0xf0000, 0x100000)).toString('latin1');
+  eq('...and the F000 segment carries "PCI ", which NT 3.51\'s NTDETECT scans for before calling B101h', rom.includes('PCI '), true);
   const isa = new Machine({ memSize: 16 << 20 }); installBIOS(isa);
   eq('without the option there is no bus: CF8h is not decoded', isa.portRead[0xcfc] ? 'decoded' : 'none', 'none'); }
+
+// ---- VBE 4F02h with a standard VGA mode number --------------------------------------------------
+// VBE 2.0 §4.5 lets 4F02h set modes below 100h, and SeaVGABIOS does; Windows NT 3.51's video
+// miniport resets the screen with 4F02h BX=0003h and got 014Fh here.
+{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+  cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
+  cpu.ax = 0x4f02; cpu.bx = 0x0003; mc.intHandlers[0x10](cpu, mc);
+  eq('4F02h BX=0003h: succeeds (004Fh) and the BIOS is in mode 3', [(cpu.ax & 0xffff).toString(16), mc.mem.u8[0x449]].join(), '4f,3'); }
 
 // ---- the RTC's periodic interrupt: register A's rate, register B's PIE, IRQ 8 ----------------------
 // Windows NT 3.51's HAL calibrates its stall loop on it (A = 2Dh: 8 Hz, B = 42h: PIE) with every
