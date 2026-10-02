@@ -51,6 +51,7 @@ const screen = () => {
 const run = (secs, until) => {
   const end = c.cycles + secs * sec;
   while (!fault && c.cycles < end) {
+    if (c.halted && !(c.flags & 0x200)) { fault = { message: 'dead: HLT with IF=0 — the guest stopped itself' }; break; }   // never wakes
     mc.runSlice(20000); mc.pumpKeyboard();
     if (until && screen().join('\n').includes(until)) return true;
   }

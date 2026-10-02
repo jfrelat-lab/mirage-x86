@@ -35,7 +35,10 @@ const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, 
 const v = new Video(mc, canvas); v.font = mc.font;
 const c = mc.cpu, sec = 18.2065 * mc.pitBase, t0 = Date.now(), h = (x, n = 8) => (x >>> 0).toString(16).padStart(n, '0');
 for (let t = STEP; t <= SECS && !fault; t += STEP) {
-  const end = t * sec; while (!fault && c.cycles < end) mc.runSlice(20000);
+  // HLT with IF clear never wakes (a kernel's halt after a crash): guest time stops for good, and
+  // waiting for the next STEP would spin for ever on the host. Say so and stop.
+  const end = t * sec; while (!fault && c.cycles < end && !(c.halted && !(c.flags & 0x200))) mc.runSlice(20000);
+  if (c.halted && !(c.flags & 0x200)) fault = { message: `dead: HLT with IF=0 at ${(c.seg[1] >>> 0).toString(16)}:${(c.eip >>> 0).toString(16)} — the guest stopped itself` };
   v.frame = 16; v.render();
   const W = v.imgW, H = v.imgH, rgb = new Uint8Array(W * H * 3); let nz = 0;
   for (let i = 0; i < W * H; i++) { const p = v.u32[i]; rgb[i * 3] = p & 0xff; rgb[i * 3 + 1] = (p >> 8) & 0xff; rgb[i * 3 + 2] = (p >> 16) & 0xff; if (p & 0xffffff) nz++; }

@@ -1224,8 +1224,11 @@ export class Recompiler {
         // LDS/LES/LSS/LFS/LGS all load an offset followed by a 16-bit selector. Under 0x66 the offset
         // is a DWORD, so the selector sits at +4, not +2 — reading it at +2 loaded half the offset as
         // the segment. test386's POST-6 `o32 lss ebx,[es:di]` caught it; last of the T0.3 family.
-        case 0xc4: { const o = modrm(); P(SEGIP(ipStart) + loadPtr(o, ES, sz)); break; } // LES
-        case 0xc5: { const o = modrm(); P(SEGIP(ipStart) + loadPtr(o, DS, sz)); break; } // LDS
+        // A REGISTER operand (mod=11) is not a far pointer: #UD. Windows NT ends every BIOS call it
+        // makes in V86 with exactly that — `C4 C4 FE`, its "BOP", after the INT — and recognises it in
+        // its #UD handler; we loaded ES from nowhere and ran on, into whatever the page held.
+        case 0xc4: { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, ES, sz)); break; } // LES
+        case 0xc5: { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, DS, sz)); break; } // LDS
         case 0xc6: { const o = modrm(); const i = f8(); P(rmW(o, 8, '' + i)); break; }
         case 0xc7: { const o = modrm(); const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(rmW(o, sz, '' + i)); break; }
         // ENTER size,level. The operand size decides the WIDTH of everything it touches: at 32 bits it
@@ -1939,9 +1942,11 @@ export class Recompiler {
         // Treating the immediate as absolute sent `bt word [bx],0AFh` to bit 175 (byte +21) instead
         // of bit 15 of the addressed word.
         case 0xba: { const o = modrm(); const imm = f8() & (sz - 1); bt(o, ['bt', 'bt', 'bt', 'bt', 'bt', 'bts', 'btr', 'btc'][o.reg], '' + imm); return; }
-        case 0xb2: { const o = modrm(); P(loadPtr(o, SS, sz)); return; } // LSS
-        case 0xb4: { const o = modrm(); P(loadPtr(o, FS, sz)); return; } // LFS
-        case 0xb5: { const o = modrm(); P(loadPtr(o, GS, sz)); return; } // LGS
+        case 0xb2: case 0xb4: case 0xb5: {                               // LSS / LFS / LGS
+          const o = modrm();
+          if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; return; }   // mod=11: #UD, as LES/LDS
+          P(loadPtr(o, op2 === 0xb2 ? SS : op2 === 0xb4 ? FS : GS, sz)); return;
+        }
         case 0xbc: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}&-${s}))`)}}`); return; } // BSF
         case 0xbd: { const o = modrm(); const s = NT(); P(`var ${s}=${rmR(o, sz)}${M(sz)};`); P(`if(${s}===0){cpu.flags|=${ZF};}else{cpu.flags&=~${ZF};${rW(o.reg, sz, `(31-Math.clz32(${s}))`)}}`); return; } // BSR
         case 0xa4: { const o = modrm(); const c = f8(); P(rmW(o, sz, `cpu.shld(${rmR(o, sz)},${rR(o.reg, sz)},${c & 31},${sz})`)); return; } // SHLD imm

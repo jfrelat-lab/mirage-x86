@@ -2164,6 +2164,12 @@ const udRun = (gated) => {
   mc.rec.step();
   eq('ARPL in V86 is #UD', calls[0] && calls[0][0], 6);
   eq('...and did not adjust the RPL', cpu.reg[0] & 0xffff, 0x10); }
+{ // (1b) LES/LDS with a REGISTER operand is #UD — Windows NT's "BOP" (C4 C4 FE) ends every BIOS
+  // call it makes in V86 and is recognised in its #UD handler; we loaded ES and ran on into the page.
+  const { mc, cpu, calls } = v86(3);
+  mc.mem.blit(0xf500, Uint8Array.from([0xc4, 0xc4, 0xfe, 0xf4]));    // BOP FE ; hlt
+  mc.rec.step();
+  eq('C4 C4 (LES, register form) in V86 is #UD', calls[0] && calls[0][0], 6); }
 { // (2) STI's interrupt window: the block ends after the instruction that follows STI, so an IRQ
   // waiting for it lands there. VMM idles in `sti; nop; nop; cli; jmp` — one block, IF never set
   // at a boundary, and the timer the scheduler waited for never came.
