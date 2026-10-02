@@ -65,6 +65,16 @@ export class Memory {
     // plain — so the SMC check leaves the fast path instead of sitting beside the device test.
     this.rdOfs = new Int32Array(size >> PAGE_BITS);
     this.wrOfs = new Int32Array(size >> PAGE_BITS);
+    // Under paging the table is filled ON DEMAND (ROADMAP D8 step 2): a CR3 load marks every entry
+    // stale and sends it to the helper, whose first access to a page fills it. Walking every page of
+    // RAM on each load — 16384 walks for 64 MiB — was most of the 12% `walk` took in Windows 98's
+    // boot, which reloads CR3 thousands of times a minute and touches a few hundred pages in between.
+    // `stale` is kept apart from the -1 entries, so a page that IS -1 (device, absent, code for
+    // writes) is not walked again on every access. MIRAGE_NOLAZYTLB=1 restores the eager rebuild.
+    this.tlbStale = new Uint8Array(size >> PAGE_BITS);
+    this.tlbTag = new Int32Array(4096); this.tlbFrm = new Int32Array(4096); this.tlbFlg = new Uint8Array(4096);   // see xlat
+    this.xtlb = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_NOXTLB === '1');
+    this.lazyTlb = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_NOLAZYTLB === '1');
     this.rebuildPageTables();
   }
 
@@ -86,8 +96,17 @@ export class Memory {
 
   rebuildPageTables() {
     this.syncPaging();
+    if (this.tlbTag) this.tlbTag.fill(0);
     const n = this.rdOfs.length, paging = !!(this.cpu && this.cpu.pagingOn);
+    if (paging && this.lazyTlb) { this.rdOfs.fill(-1); this.wrOfs.fill(-1); this.tlbStale.fill(1); return; }
     for (let p = 0; p < n; p++) this._fillPage(p, paging);
+  }
+
+  /** First helper access to a stale page under paging: fill its entry as the eager rebuild did —
+   *  from the supervisor's point of view, the CPL a CR3 load runs at — so protection is unchanged. */
+  _lazyFill(p) {
+    this.sup++;
+    try { this._fillPage(p, true); } finally { this.sup--; }
   }
 
   /** One entry of both tables — rebuildPageTables' body, for INVLPG. A guest that rewrites a PTE and
@@ -95,10 +114,12 @@ export class Memory {
    *  running on the old frame: the table used to be refreshed only on a CR3 load, so INVLPG, a
    *  no-op, left the fast path reading and writing a page the kernel had already given away. */
   refreshPage(p) {
+    if (this.tlbTag[p & 4095] === p + 1) this.tlbTag[p & 4095] = 0;   // the xlat TLB covers every page
     if (p < this.rdOfs.length) this._fillPage(p, !!(this.cpu && this.cpu.pagingOn));
   }
 
   _fillPage(p, paging) {
+    this.tlbStale[p] = 0;
     const device = !paging && this.planar && p >= 0xa0 && p < 0xb0;
     if (device || p >= ((this.mask + 1) >>> PAGE_BITS)) { this.rdOfs[p] = -1; this.wrOfs[p] = -1; return; }
     if (!paging) {
@@ -132,7 +153,7 @@ export class Memory {
       this.walkRW = !!(pde & 2);
       const user = cpu.cpl === 3 && this.sup === 0;
       if ((user && !(pde & 4)) || (write && !this.walkRW && (user || (cpu.cr0 & 0x10000) !== 0))) { this.walkProt = true; return -1; }
-      this.walkProt = false;
+      this.walkProt = false; this.walkUS = !!(pde & 4); this.walkD = !!write || !!(pde & 0x40);
       const need = write ? 0x60 : 0x20;
       if ((pde & need) !== need) this.dv.setUint32(pdeA & (this.size - 1), (pde | need) >>> 0, true);
       return ((pde & 0xffc00000) | (lin & 0x003ff000)) >>> 0;
@@ -160,7 +181,7 @@ export class Memory {
     if ((user && !us) || (write && !this.walkRW && (user || (this.cpu.cr0 & 0x10000) !== 0))) {
       this.walkProt = true; return -1;
     }
-    this.walkProt = false;
+    this.walkProt = false; this.walkUS = us; this.walkD = !!write || !!(pte & 0x40);
     // ACCESSED on both levels, DIRTY on the leaf when the access writes — and only now, AFTER the
     // protection checks: an access that FAULTS sets neither. test386's page-fault handler asserts
     // exactly that, reading the PDE and PTE from inside the fault and requiring A and D clear.
@@ -208,6 +229,18 @@ export class Memory {
    */
   xlat(a, write) {
     if (!this.paged) return a & this.mask;
+    // A small direct-mapped TLB in front of the walk (ROADMAP D8 step 3). The fast tables above only
+    // cover linear pages below the installed RAM size, so every access an NT or 9x kernel makes at
+    // 80000000h/C0000000h came here and walked the page tables — for each BYTE, since r32 was four
+    // r8. An entry keeps the frame and the rights the walk found: R/W, U/S, and whether the leaf is
+    // already dirty — a write to a clean page takes the walk once, which sets D as the CPU would.
+    // Cleared with the fast tables (CR3, CR4, A20, paging) and per page by INVLPG.
+    const p = a >>> PAGE_BITS, i = p & 4095;
+    if (this.tlbTag[i] === p + 1) {
+      const f = this.tlbFlg[i], user = this.cpu.cpl === 3 && this.sup === 0;
+      if ((!user || (f & 2)) && (!write || ((f & 4) && ((f & 1) || (!user && !(this.cpu.cr0 & 0x10000))))))
+        return (this.tlbFrm[i] | (a & 0xfff)) & (this.size - 1);
+    }
     const phys = this.walk(a, write);
     if (phys < 0) {
       this.pfCount = (this.pfCount || 0) + 1; this.lastPF = a >>> 0;
@@ -217,6 +250,7 @@ export class Memory {
       if (this.pfRaise) { const f = new PageFault(a, write, this.walkProt); if (this.pfTrace) f.stack = new Error().stack; throw f; }
       return -1;                                   // no run loop to catch it: the old silent zero
     }
+    if (this.xtlb) { this.tlbTag[i] = p + 1; this.tlbFrm[i] = phys; this.tlbFlg[i] = (this.walkRW ? 1 : 0) | (this.walkUS ? 2 : 0) | (this.walkD ? 4 : 0); }
     return (phys | (a & 0xfff)) & (this.size - 1);
   }
 
@@ -228,7 +262,7 @@ export class Memory {
     // Under paging the translated address is what decides device or RAM. The planar/VBE window was
     // only routed on the unpaged path, so a DPMI client (xcom144 under HDPMI32, VBE 111h banked)
     // drew into the raw RAM behind A000 and the framebuffer stayed black.
-    if (this.paged) { const t = this.xlat(a, false); return t < 0 ? 0 : (this.planar && t >= 0xa0000 && t < 0xb0000) ? this.vga.readByte(t) : this.u8[t]; }
+    if (this.paged) { if (this.tlbStale[a >>> PAGE_BITS]) this._lazyFill(a >>> PAGE_BITS); const t = this.xlat(a, false); return t < 0 ? 0 : (this.planar && t >= 0xa0000 && t < 0xb0000) ? this.vga.readByte(t) : this.u8[t]; }
     a &= this.mask; return (this.planar && a >= 0xa0000 && a < 0xb0000) ? this.vga.readByte(a) : this.u8[a];
   }
   // Under paging these go byte at a time, because only r8/w8 translate — and a multi-byte access can
@@ -236,10 +270,17 @@ export class Memory {
   // tidiness point: `a &= this.mask` treats a LINEAR address as physical, so every descriptor load
   // read half-translated (loadDescriptor mixes r16 and r8). Windows 3.0's WIN386 puts its GDT at
   // linear 0x8010011c, and we read the descriptor from physical 0x0010011c.
-  r16(a) { if (this.paged) return this.r8(a) | (this.r8(a + 1) << 8);
+  // Within one page they now translate ONCE (ROADMAP D8 step 3): the four r8 of an r32 were four
+  // walks. A straddling access, a fault (-1) and the device window keep the byte-wise path.
+  _px(a, write) {
+    if (this.tlbStale[a >>> PAGE_BITS]) this._lazyFill(a >>> PAGE_BITS);
+    const t = this.xlat(a, write);
+    return (t < 0 || (this.planar && t >= 0xa0000 && t < 0xb0000)) ? -1 : t;
+  }
+  r16(a) { if (this.paged) { if ((a & 0xfff) !== 0xfff) { const t = this._px(a, false); if (t >= 0) return this.u8[t] | (this.u8[t + 1] << 8); } return this.r8(a) | (this.r8(a + 1) << 8); }
     a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return this.r8(a) | (this.r8((a + 1) & this.mask) << 8);
     return this.u8[a] | (this.u8[(a + 1) & this.mask] << 8); }
-  r32(a) { if (this.paged) return (this.r8(a) | (this.r8(a + 1) << 8) | (this.r8(a + 2) << 16) | (this.r8(a + 3) << 24)) >>> 0;
+  r32(a) { if (this.paged) { if ((a & 0xfff) <= 0xffc) { const t = this._px(a, false); if (t >= 0) return (this.u8[t] | (this.u8[t + 1] << 8) | (this.u8[t + 2] << 16) | (this.u8[t + 3] << 24)) >>> 0; } return (this.r8(a) | (this.r8(a + 1) << 8) | (this.r8(a + 2) << 16) | (this.r8(a + 3) << 24)) >>> 0; }
     a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return (this.r8(a) | (this.r8((a + 1) & this.mask) << 8) | (this.r8((a + 2) & this.mask) << 16) | (this.r8((a + 3) & this.mask) << 24)) >>> 0;
     return (this.u8[a] | (this.u8[(a + 1) & this.mask] << 8) | (this.u8[(a + 2) & this.mask] << 16) | (this.u8[(a + 3) & this.mask] << 24)) >>> 0; }
 
@@ -250,6 +291,7 @@ export class Memory {
     // and reported the wrong one — every self-modifying write under paging missed its invalidation,
     // which is exactly what an OS relocating code does.
     if (this.paged) {
+      if (this.tlbStale[a >>> PAGE_BITS]) this._lazyFill(a >>> PAGE_BITS);
       const t = this.xlat(a, true);
       if (t >= 0) {
         if (this.planar && t >= 0xa0000 && t < 0xb0000) { this.vga.writeByte(t, v & 0xff); return; }
@@ -263,7 +305,10 @@ export class Memory {
     if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 1);
   }
   w16(a, v) {
-    if (this.paged) { this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff); return; }
+    if (this.paged) {
+      if ((a & 0xfff) !== 0xfff) { const t = this._px(a, true); if (t >= 0) { this.u8[t] = v; this.u8[t + 1] = v >> 8; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 2); return; } }
+      this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff); return;
+    }
     a &= this.mask;
     if (this.planar && a >= 0xa0000 && a < 0xb0000) { this.w8(a, v & 0xff); this.w8((a + 1) & this.mask, (v >> 8) & 0xff); return; }
     this.u8[a] = v; this.u8[(a + 1) & this.mask] = v >> 8;
@@ -271,6 +316,7 @@ export class Memory {
   }
   w32(a, v) {
     if (this.paged) {
+      if ((a & 0xfff) <= 0xffc) { const t = this._px(a, true); if (t >= 0) { this.u8[t] = v; this.u8[t + 1] = v >> 8; this.u8[t + 2] = v >> 16; this.u8[t + 3] = v >>> 24; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 4); return; } }
       this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff);
       this.w8(a + 2, (v >> 16) & 0xff); this.w8(a + 3, (v >>> 24) & 0xff); return;
     }

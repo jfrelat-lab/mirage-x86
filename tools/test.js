@@ -605,6 +605,28 @@ function eq(name, got, want) {
   eq('...and a remapped code page runs the new bytes', go(), 2);
   } catch (e) { eq('D8 test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
 
+// ---- D8 step 3: the xlat TLB keeps protection, dirty bits and INVLPG exact -------------------------
+// The NT/9x kernels live above the installed RAM, where every byte used to take a full page walk;
+// a small TLB now sits in front of the walk. It must not widen any right the walk would refuse.
+{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  m.setA20(true); mc.rec.setMask(m.mask);
+  const DIR = 0x10000, PT0 = 0x11000, PTH = 0x12000, F1 = 0x300000, F2 = 0x301000;
+  for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 3);
+  m.w32(DIR, PT0 | 3); m.w32(DIR + (0x80000000 >>> 22) * 4, PTH | 7);        // PDE: user-accessible
+  m.w32(PTH, F1 | 3);                                                         // PTE: supervisor, R/W
+  m.u8[F1 + 0x10] = 0x5a; m.u8[F2 + 0x10] = 0xa5;
+  cpu.setCR3(DIR); cpu.setCR0(0x80000001);
+  cpu._cpl = 0;
+  const sup = m.xlat(0x80000010, false);
+  cpu._cpl = 3;
+  let user; try { user = m.xlat(0x80000010, false); } catch (e) { user = e.constructor.name === 'PageFault' ? 'PF' : String(e); }
+  eq('xlat TLB: a supervisor read is cached, a user read of the same page is still refused', [sup === F1 + 0x10, user].join(), 'true,PF');
+  cpu._cpl = 0;
+  const pte0 = m.r32phys(PTH); m.xlat(0x80000020, true);
+  eq('...the first write after a cached read sets D in the PTE', [(pte0 >> 6) & 1, (m.r32phys(PTH) >> 6) & 1].join(), '0,1');
+  m.w32(PTH, F2 | 3); cpu.invlpg(0x80000000);
+  eq('...and INVLPG on a page above RAM drops the entry: the remap is seen', m.r8(0x80000010), 0xa5); }
+
 // ---- CPUID, and the generation it belongs to ---------------------------------------------------
 // CPUID is 486-and-later, so it is a PROFILE feature: on the default 386 the opcode is not there and
 // EFLAGS.ID must not stick, which is how software detects it. kvm-unit-tests' realmode suite runs
