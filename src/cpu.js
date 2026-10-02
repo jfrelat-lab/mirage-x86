@@ -818,7 +818,12 @@ export class CPU {
   }
 
   /** CR3 reload: the whole software TLB is stale. */
-  setCR3(v) { this.cr3 = v >>> 0; this.onPagingChange && this.onPagingChange(); }
+  setCR3(v) {
+    this.cr3 = v >>> 0;
+    // Under paging a CR3 load is a TLB flush, not a paging transition: onCR3 (machine.js) refreshes
+    // the software TLB and lets the translated blocks survive (ROADMAP D8). Anything else is.
+    if (this.pagingOn && this.onCR3) this.onCR3(); else this.onPagingChange && this.onPagingChange();
+  }
 
   /** Paging enabled? Only meaningful with PE set — PG without PE is illegal. */
   get pagingOn() { return ((this.cr0 >>> 31) & 1) !== 0 && (this.cr0 & 1) !== 0; }

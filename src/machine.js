@@ -72,6 +72,19 @@ export class Machine {
       this.lastFaultIp = faultIp;                       // diagnostics: undefined means "site not converted"
       if (this.cpu.cr0 & 1) this.protInt(n, err, faultIp); else this.swInt(n);
     };
+    // A CR3 LOAD under paging (ROADMAP D8). Windows 9x reloads CR3 with the SAME value thousands of
+    // times a minute to flush its TLB, and OpenBSD switches it per process; dropping every translated
+    // block each time cost Windows ME 35% of its host time in translate() and 14% in GC, with only
+    // 12% left for guest code. A load is a TLB flush, so: refresh the software TLB, and start a new
+    // EPOCH — a block from an older epoch is revalidated on its next dispatch (are the frames it was
+    // built from still the ones mapped there?) and recompiled only if not. MIRAGE_NOD8=1 restores
+    // the old full reset, for A/B measurement.
+    const NOD8 = typeof process !== 'undefined' && process.env && process.env.MIRAGE_NOD8 === '1';
+    this.cpu.onCR3 = () => {
+      if (NOD8) { this.cpu.onPagingChange(); return; }
+      this.mem.rebuildPageTables();
+      this.rec.epoch++;
+    };
     this.cpu.onPagingChange = () => {
       if (this.cpu.pagingOn) this.rec.memStrategy = { read: 'paged', write: 'paged' };
       this.mem.rebuildPageTables();

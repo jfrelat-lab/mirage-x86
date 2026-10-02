@@ -580,6 +580,31 @@ function eq(name, got, want) {
   eq('8 Hz with PIE: no IRQ 8 before an eighth of a second, one after', [early, (mc.irqPendingMask >> 8) & 1].join(), '0,1');
   eq('...register C says PF and IRQF, and reading it clears them', [r(0x0c).toString(16), r(0x0c)].join(), 'c0,0'); }
 
+// ---- D8: a CR3 load keeps the translated blocks, and a remapped page is still caught -----------
+// Windows 9x reloads CR3 with the same value thousands of times a minute; dropping every block each
+// time cost Windows ME 35% of its host time in translate(). Blocks now survive the load and are
+// revalidated against the frames they were translated from.
+{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000, DIR = 0x10000, PT0 = 0x11000, PT1 = 0x12000, A = 0x200000, B = 0x201000;
+  m.setA20(true); mc.rec.setMask(m.mask);                                    // the frames are above 1 MiB
+  cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
+  const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
+  desc(1, 0x9a); desc(2, 0x92);
+  for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 3);           // 0-4 MiB identity
+  m.w32(DIR, PT0 | 3); m.w32(DIR + 4, PT1 | 3); m.w32(PT1, A | 3);            // linear 400000h -> A
+  m.blit(A, Uint8Array.from([0xb8, 1, 0, 0, 0, 0xeb, 0xfe]));                 // mov eax,1 ; jmp $
+  m.blit(B, Uint8Array.from([0xb8, 2, 0, 0, 0, 0xeb, 0xfe]));                 // mov eax,2 ; jmp $
+  cpu.setCR3(DIR); cpu.setCR0(0x80000001); cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.reg[4] = 0x9000;
+  const go = () => { cpu.eip = 0x400000; cpu.halted = false; cpu.reg[0] = 0; mc.runSlice(50); return cpu.reg[0]; };
+  try {
+  const first = go(), c1 = mc.rec.stats.compiles;
+  cpu.setCR3(DIR);                                                            // same value: a TLB flush
+  const again = go(), c2 = mc.rec.stats.compiles;
+  eq('D8: a CR3 reload with the mapping unchanged recompiles nothing', [first, again, c2 - c1].join(), '1,1,0');
+  m.w32(PT1, B | 3); cpu.setCR3(DIR);                                         // remap the code page
+  eq('...and a remapped code page runs the new bytes', go(), 2);
+  } catch (e) { eq('D8 test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
+
 // ---- CPUID, and the generation it belongs to ---------------------------------------------------
 // CPUID is 486-and-later, so it is a PROFILE feature: on the default 386 the opcode is not there and
 // EFLAGS.ID must not stick, which is how software detects it. kvm-unit-tests' realmode suite runs
