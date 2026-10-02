@@ -191,6 +191,27 @@ is explicit (download, IndexedDB), never implied.
 Recommended order: J1-J3 (cheap, the infrastructure exists), J5 (the universal exchange for period
 systems), J7 then J8 (the use that makes most sense for MIRAGE: LAN play without a server). J13 last.
 
+## K · MIRAGE outside the browser — Node.js front ends (opened 2026-10-03)
+
+The engine is plain JavaScript and already runs headless in Node (tools/, golden, bootshot). These
+are ways to make that a product, least to most ambitious. Common rules: the browser stays the main
+front end; nothing here may add a native dependency to the core (src/); host filesystem access is
+confined to what the user names (the current directory by default), no network by default.
+
+| # | Front end | What it needs | Uses | Objections / limits |
+|---|---|---|---|---|
+| K1 | **Serial console in the terminal** — COM1 on stdin/stdout, like `qemu -nographic` | the 16550A (src/uart.js, opt-in) + a raw-mode stdin pump; kernels told `console=ttyS0` | Linux, the BSDs, Plan 9, QNX usable in a terminal | only systems with a serial console; their boot loaders still print on VGA |
+| K2 | **User-space DOS** — `mirage prog.exe [args]`, a host directory mounted as C: | the HLE DOS + src/vfs.js over the host directory, stdout/stdin as CON | period CLI tools on a Mac (Turbo C, Borland Pascal, MASM, assemblers), in CI too; trying a DOS program with no disk image | 8.3 names and case folding, CR/LF, text vs binary; confine to the mounted directory |
+| K3 | **VGA text mode as ANSI** — B800h rendered with 256/true colour and CP437 → Unicode, keyboard from stdin | a text renderer driven by the CRTC (start, cursor) + key mapping to scancodes and INT 16h | Norton Commander, EDIT, the Turbo Pascal IDE, BIOS screens, FreeDOS in a terminal | terminals send no key releases and mangle Alt/F-keys/combinations: games reading the 8042 suffer; needs >= 80x25 and resize handling |
+| K4 | **Recording** — PNG sequence to GIF/video | bootshot's renderer + an encoder (pure-JS GIF, or ffmpeg when present) | documentation, visual regression beyond golden's hashes, sharing a boot | ffmpeg is an external tool, optional only |
+| K5 | **Graphics in the terminal** — kitty, iTerm2 (macOS) or sixel inline images | the same renderer, frames sent as images at a capped rate | a Windows/BeOS desktop in a terminal, no native dependency | refresh rate; protocol support varies by terminal; mouse input is limited |
+| K6 | **User-space Linux i386** — ELF loaded flat, `int 0x80` answered from Node (H12, MIRAGE-LINUX) | an ELF loader + the syscalls a static musl binary needs (~10 for hello, ~50 for BusyBox/Lua) | running i386 Linux binaries on any host Node runs on | the syscall surface grows with every program; signals, ttys, mmap semantics |
+| K7 | **User-space Win32 console** — PE loaded, kernel32/msvcrt answered from Node (the MIRAGE-WIN32 HLE branch) | a PE loader + the console API subset | Windows console tools of the 9x/NT era | a large API surface; GUI programs are another order of magnitude |
+| K8 | **A native window with sound** — SDL2 through an npm binding (e.g. `@kmamal/sdl`) | a front end package outside src/, keyboard/mouse/audio mapping | a stand-alone desktop emulator | native modules (arm64 builds) break "pure JavaScript, nothing to install"; a second UI to maintain; Electron would only be another browser |
+
+Recommended order: K1 (the UART exists), K2 (almost everything exists), K3, then K4/K5. K6-K8 when
+H12 / MIRAGE-WIN32 are ready.
+
 ## A · Correctness & browser UX (small, high polish-per-hour)
 
 | # | Task | Effort | Why / unblocks |
