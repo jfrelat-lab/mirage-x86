@@ -163,6 +163,34 @@ version to build (HLE where a guest only needs answers, a device model where it 
 | ACPI (PIIX4 PM, tables) | QEMU pc/q35 | ✗ | NT 4/2000 HALs, modern Linux |
 | USB (UHCI/OHCI/EHCI) | QEMU, 86Box | ✗ | late |
 
+## J · Exchanges with the host — files, clipboard, network (opened 2026-10-02)
+
+What a user can move in and out of the emulated machine, least to most ambitious. MIRAGE's edge over
+QEMU/v86: its DOS is HLE, so it already owns the filesystem programs see (src/vfs.js). Rules that
+apply to all rows: only what the user hands over is ever exposed (the browser forbids the rest
+anyway); nothing that is not deterministic goes near golden or the cycle measurements; persistence
+is explicit (download, IndexedDB), never implied.
+
+| # | Use | Mode | What it needs | Objections / limits |
+|---|---|---|---|---|
+| J1 | **Drag-and-drop files into C:** | HLE DOS | src/vfs.js already serves C:; H11's signature switch decides what a dropped file is | 8.3 names under DOS/Win 3.x: a long-name mapping that cannot collide |
+| J2 | **Download what a program produced** (saves, documents, builds) | HLE DOS | list the VFS's changed files, offer them | in-tab only unless saved: persistence must be explicit |
+| J3 | **Paste text as keystrokes** | any | inject through INT 16h and the 8042 (scancodes), as typeboot.mjs does | layouts, characters with no key, speed (a guest can drop keys if flooded) |
+| J4 | **Copy text out of a text screen** | any, text modes | read B800h (start address from the CRTC), select a region | no generic answer in graphics modes |
+| J5 | **A virtual floppy built from dropped files** | bare PC | write a FAT12 image on the fly, insert it as A: | 1.44 MB; systems that drive the controller themselves need the 82077 (I7) |
+| J6 | **Read/write the hard-disk image from the page** | bare PC, machine paused | tools fatget/fatls (FAT16/32, read) made a page feature, plus writing | writing while the guest runs corrupts its cache: paused only |
+| J7 | **NE2000 ISA with no cable** | bare PC | the DP8390 register file, link down (I5) | fidelity only: ends "NE2000 not working" (Windows 9x), lets QNX/NetBSD find a NIC |
+| J8 | **A virtual cable between two MIRAGE machines in one browser** | bare PC + HLE (IPX/NetBIOS) | J7 + a frame bus (BroadcastChannel / shared object) | LAN games of the era (DOOM, Duke 3D, Warcraft II, C&C, Quake), Windows file sharing; no server, no security exposure; keep it out of deterministic runs |
+| J9 | **A CD-ROM image built from dropped files** | bare PC | ISO 9660 writer + ATAPI on a secondary channel (I7) | beyond 1.44 MB; ATAPI is its own milestone |
+| J10 | **The same cable between distant players** | bare PC | WebRTC data channels (peer to peer), or a small WebSocket relay | latency/loss make it non-deterministic; a relay must be hosted |
+| J11 | **Shared clipboard with a guest GUI** (Windows 9x first) | bare PC | a guest-side helper (16/32-bit) talking to MIRAGE through a reserved I/O port, like VirtualBox guest additions | intrusive, one per OS; nothing generic in graphics modes |
+| J12 | **A shared folder served by MIRAGE** (SMB for Windows, NFS/9P for Unix and Plan 9) | bare PC | J7 + an in-page protocol server | a protocol implementation each; only after J8 |
+| J13 | **Internet access from the guest** | bare PC | a user-space TCP/IP stack in the page (QEMU's slirp model) or a server-side relay (v86's model) | period browsers cannot speak today's HTTPS; a public relay is an abuse vector (destinations, auth, rate limits); cost of hosting — only if a real need appears |
+| J14 | **Network oracles** (what a system puts on the wire: ARP, DHCP, NetBIOS announcements, vs QEMU) | tooling | J7 + a capture of both sides | a conformance terrain like the probes, once J7 exists |
+
+Recommended order: J1-J3 (cheap, the infrastructure exists), J5 (the universal exchange for period
+systems), J7 then J8 (the use that makes most sense for MIRAGE: LAN play without a server). J13 last.
+
 ## A · Correctness & browser UX (small, high polish-per-hour)
 
 | # | Task | Effort | Why / unblocks |
