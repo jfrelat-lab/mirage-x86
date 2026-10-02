@@ -114,6 +114,12 @@ export function installPCI(machine) {
   };
   ide.bars.push({ off: 0x20, size: 16, io: true, onMove: mapBM });
   mapBM(BUS_MASTER_BASE);
+  // The PIIX raises its bus-master STATUS bit 2 ("interrupt") whenever the channel's INTRQ is
+  // asserted — for a PIO command too — and a PCI IDE driver may poll it instead of trusting the PIC.
+  // BeOS 5's does: IDENTIFY, then write 04h to clear it and wait for it; with the bit never set it
+  // timed out on the only disk and panicked "boot device not found" (v86 sets it, tools: v86ide).
+  const raise = machine.raiseIRQ.bind(machine);
+  machine.raiseIRQ = (n) => { if (n === 14) bm[2] |= 0x04; else if (n === 15) bm[10] |= 0x04; raise(n); };
 
   // 02.0 the display, with QEMU's identity (1234:1111, class 0300h) so a guest that looks for a VGA
   // on the bus finds one — 9legacy otherwise says "no vga; serial console only", and MIRAGE has no

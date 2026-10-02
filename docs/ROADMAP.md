@@ -58,6 +58,111 @@ MIRAGE). Re-checked after the move: i10all MIRAGE = QEMU byte for byte, textdiff
 ⚠️ `bootdiff.mjs` gets **no DOSBox-X capture** (0 bytes, hello-v86, same with the pre-move copy): the
 grabber never writes OUT.BIN once the boot program has taken over — that is where H2 starts.
 
+## I · Hardware catalogue — oracle configurations and MIRAGE's own (opened 2026-10-02)
+
+Why: the v86 catalogue images were installed on v86's hardware, so their drivers expect v86's
+devices (BeOS 5 boots to its desktop on v86, panics in input_server on QEMU -M pc, stops at its
+splash on -M isapc). Official media installed on a DOCUMENTED machine give images whose oracle is
+that machine. QEMU 11.1.1 here offers (`-machine/-cpu/-nic/-device help`): machines `isapc`,
+`pc` (i440FX+PIIX3, versions 5.2-11.1), `q35` (ICH9, PCIe, AHCI), `microvm`; CPUs 486 to Skylake
+(Pentium/II/III, Athlon, Conroe, Penryn...) with per-feature +/- (`-cpu pentium,-pse`); NICs
+ne2k_isa, ne2k_pci, rtl8139, pcnet, e1000/e1000e, eepro100 (i8255x), tulip, vmxnet3, virtio; video
+std VGA (Bochs DISPI, ISA or PCI), Cirrus GD5446 (ISA or PCI), ATI Rage 128, VMware SVGA,
+virtio-gpu; sound sb16, adlib, gus, cs4231a, ES1370, AC97, HDA; storage isa-ide, piix3/piix4-ide,
+ich9-ahci, SCSI (LSI 53C8xx, AM53C974), NVMe, virtio; BIOS SeaBIOS (128/256 KiB), qboot, any
+-bios/romfile (the real Cirrus ROM, H1). Bochs: the same palette with its own legacy BIOS (not
+installed here). **86Box/PCem: real motherboards with their chipsets and their VENDOR BIOSes (AMI,
+Award, Phoenix, dumped from the chips — `86Box/roms`, where our Cirrus ROM came from) and period
+cards** — the third independent BIOS lineage beside SeaBIOS (QEMU/v86/Bochs) and DOSBox-X's HLE,
+and the closest to real hardware. Oracle rule (H) unchanged: change MIRAGE only when independent
+lineages agree.
+
+In each table: least to most ambitious. **MIRAGE** = what exists today; **next** = MIRAGE's own
+version to build (HLE where a guest only needs answers, a device model where it drives registers).
+
+**I1 · Machine / chipset**
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| ISA PC (8259, 8254, 8042, CMOS, no PCI) | QEMU isapc, 86Box ISA boards | ✅ the default machine | — |
+| i440FX + PIIX3 (PCI, $PIR, ELCR, PCI BIOS B1xxh) | QEMU pc, Bochs, v86 | ✅ opt-in `MIRAGE_PCI=1`: 00.0/01.0/01.1/02.0 byte-identical to QEMU | PIIX4 PM 01.3 (ACPI/SMBus ports), BIOS32 `_32_` directory, a boot.html switch |
+| Period PCI boards (430FX/430HX/430TX, VIA) with vendor BIOS | 86Box | ✗ | only if a guest needs a chipset quirk |
+| ICH9 / q35 (PCIe, AHCI) | QEMU q35 | ✗ | after 64-bit (H14-3) |
+
+**I2 · CPU**
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| 8088, 286, 386 | SingleStepTests, test386 (golden), QEMU 486- | ✅ profiles | — |
+| 486 (CPUID-less and CPUID 486) | QEMU 486, 86Box | ⚠️ no own profile (the CPU list offers 386/586) | a '486' profile: AC, BSWAP, CMPXCHG, INVD/WBINVD, CPUID family 4 |
+| Pentium (FPU, TSC, PSE, CPUID) | QEMU pentium | ✅ '586' / 'pentium' (PSE since 2026-10-01) | CMPXCHG8B, then advertise it (H14-1) |
+| Pentium MMX | QEMU pentium (+mmx) | ✗ | MMX (src/sse.js has a subset) |
+| Pentium Pro / II / III (CMOV, PAE, PGE, FXSR, SSE) | QEMU pentium2/3 | ⚠️ CMOV implemented, not advertised | CMOV + CX8 for i686 Linux / Windows 2000-XP; PAE for SerenityOS; SSE fully before advertising |
+| Athlon / Core 2 / x86-64 | QEMU | ✗ | H14-3 |
+
+**I3 · BIOS**
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| HLE BIOS (INT 10h/13h/15h/16h/1Ah answers, BDA, CMOS) | SeaBIOS, DOSBox-X | ✅ ours, SeaBIOS-shaped where lineages agree | keep closing probe diffs (cmosdump, romprobe, vbeprobe, pcidump, uartprobe) |
+| Real VGA option ROM (Cirrus 5446) executed as INT 10h | QEMU + romfile | ✅ src/vgarom.js (H7) | the Cirrus extensions it probes (CR27 ID, SR6 unlock) |
+| SeaBIOS itself run as the system BIOS | QEMU, v86 | ✗ | a ROM-run mode next to HLE: needs the PIIX/i440FX POST surface, DMA, FDC |
+| Vendor BIOS (AMI/Award/Phoenix) | 86Box | ✗ | after the above: chipset registers (shadow RAM, cache, PnP) |
+| UEFI (OVMF) | QEMU | ✗ | out of scope before 64-bit |
+
+**I4 · Video**
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| VGA: text, planar 16-colour, 13h, Mode X | QEMU VGA, DOSBox-X, Cirrus ROM | ✅ src/vga.js, video.js | — |
+| VBE through the BIOS (4F00-4F09, LFB) | SeaVGABIOS | ✅ HLE, modes up to 640x480x32 in a 2 MiB window (4 MiB-aligned) | 800x600 and 1024x768 at 8/16/32 bpp (BeOS asked 4F01h for 101h-142h; v86 runs it at 800x600x16) |
+| Bochs DISPI (1CEh/1CFh) + PCI 1234:1111 with LFB BAR | QEMU std VGA, v86, Bochs | ⚠️ the PCI identity only (02.0), no DISPI | DISPI registers driving the same framebuffer as VBE — NT 3.51 under QEMU sets 1024x768x8 through it |
+| Cirrus GD5446 SVGA (banking, BitBLT, hw cursor) | QEMU cirrus-vga, 86Box | ⚠️ the ROM runs, the chip is plain VGA | the extension registers, for Windows 9x/NT Cirrus drivers |
+| S3 Trio / ATI / VMware SVGA / virtio-gpu | 86Box (S3), QEMU (others) | ✗ | only for a guest that needs one |
+
+**I5 · Network** (none today)
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| NE2000 ISA (300h, IRQ 9/10) | QEMU isapc default, 86Box, Bochs | ✗ | first: the DP8390 register file + a loopback "no cable" — ends the "NE2000 not working" dialogs (Win95/98 installed with it) and lets QNX/NetBSD find a NIC |
+| NE2000 PCI / RTL8139 / PCnet | QEMU, v86 (ne2k PCI) | ✗ | the same core behind a PCI function |
+| e1000 / eepro100 / virtio-net | QEMU | ✗ | later |
+| Real traffic (host bridge: WebSocket relay / a user-space TCP stack) | v86 (relay), QEMU (slirp) | ✗ | the most ambitious: needs a network back end in the browser |
+
+**I6 · Sound**
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| PC speaker (8255 + PIT channel 2) | everyone | ✅ | — |
+| Detection stubs: Sound Blaster DSP reset/version, OPL timer probe | DOSBox-X | ✅ answers only (games find a card) | — |
+| OPL2/OPL3 FM synthesis (AdLib) | DOSBox-X, QEMU adlib, 86Box | ✗ | a real OPL core to WebAudio |
+| Sound Blaster 16 DSP (8-/16-bit PCM over DMA, IRQ 5/7) | DOSBox-X, QEMU sb16 | ✗ | needs the 8237 (I7) first |
+| GUS, ES1370, AC97, HDA | QEMU, 86Box | ✗ | after SB16, on demand |
+
+**I7 · Storage**
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| INT 13h on attached images (CHS + EDD) | SeaBIOS, DOSBox-X | ✅ HLE | — |
+| Primary IDE, PIO (ATA-4 subset) | QEMU, v86 | ✅ src/ide.js | READ/WRITE DMA once the bus master moves data |
+| Empty drive A for the BIOS (CMOS 10h, AH=08h) | QEMU default | ✅ (Windows 98) | — |
+| Floppy controller 82077 (isa-fdc, DMA 2, IRQ 6) | QEMU, 86Box | ✗ | for OSes that drive A: themselves (NT's floppy driver, Linux, the BSDs) — needs the 8237 |
+| Secondary IDE + ATAPI CD-ROM | QEMU, v86 | ✗ | opens every CD-only system (Minix, DSL, most ISOs) |
+| PIIX bus-master DMA (PRD tables) | QEMU pc, v86 | ⚠️ registers + the INTERRUPT bit (BeOS 5 finds its disk with it) | the PRD engine |
+| AHCI / SCSI / NVMe / virtio-blk | QEMU | ✗ | virtio-blk with H14-2; the rest on demand |
+
+**I8 · Buses and system devices**
+
+| Configuration | Oracles | MIRAGE | Next |
+|---|---|---|---|
+| 8259 pair, 8254 PIT, RTC/CMOS (+ periodic IRQ 8), 8042 + PS/2 mouse | QEMU, DOSBox-X | ✅ | RTC update-ended/alarm interrupts, CMOS checksum (OpenBSD: "nvram: invalid checksum") |
+| 16550A COM1 | QEMU | ✅ opt-in `MIRAGE_SERIAL=1`, probe-identical to QEMU | COM2-4, a host side (console in the browser) |
+| 8237 DMA controller | QEMU, DOSBox-X | ✗ | prerequisite for SB16 and the FDC |
+| LPT (parallel) | QEMU, DOSBox-X | ✗ | status register stub so probes resolve |
+| Local APIC / IOAPIC | QEMU pc | ✗ | for SMP-aware or APIC-only kernels |
+| ACPI (PIIX4 PM, tables) | QEMU pc/q35 | ✗ | NT 4/2000 HALs, modern Linux |
+| USB (UHCI/OHCI/EHCI) | QEMU, 86Box | ✗ | late |
+
 ## A · Correctness & browser UX (small, high polish-per-hour)
 
 | # | Task | Effort | Why / unblocks |

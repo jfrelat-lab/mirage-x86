@@ -538,7 +538,12 @@ function eq(name, got, want) {
   const rom = Buffer.from(mc.mem.u8.subarray(0xf0000, 0x100000)).toString('latin1');
   eq('...and the F000 segment carries "PCI ", which NT 3.51\'s NTDETECT scans for before calling B101h', rom.includes('PCI '), true);
   const isa = new Machine({ memSize: 16 << 20 }); installBIOS(isa);
-  eq('without the option there is no bus: CF8h is not decoded', isa.portRead[0xcfc] ? 'decoded' : 'none', 'none'); }
+  eq('without the option there is no bus: CF8h is not decoded', isa.portRead[0xcfc] ? 'decoded' : 'none', 'none');
+  // The PIIX sets bus-master status bit 2 when its channel's INTRQ rises, PIO included; BeOS 5's PCI
+  // IDE driver waits on that bit after IDENTIFY and panicked "boot device not found" without it.
+  out(0xcf8, 4, 0x80000920); out(0xcfc, 4, 0xc001);                          // BAR4 back at C000h after the sizing above
+  out(0xc002, 1, 0x04); mc.raiseIRQ(14);
+  eq('...an IDE interrupt sets the bus-master INTERRUPT bit, which writing 1 clears', [inp(0xc002, 1) & 4, (out(0xc002, 1, 0x04), inp(0xc002, 1) & 4)].join(), '4,0'); }
 
 // ---- VBE 4F02h with a standard VGA mode number --------------------------------------------------
 // VBE 2.0 §4.5 lets 4F02h set modes below 100h, and SeaVGABIOS does; Windows NT 3.51's video
