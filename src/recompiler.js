@@ -165,7 +165,12 @@ export class Recompiler {
     this.keepSource = TIER2 || !!(typeof process !== 'undefined' && process.env && process.env.MIRAGE_KEEP_SRC);
     this.blockCount = 0;                  // live blocks, for reporting
     this.codeBytes = 0;                   // emitted source currently held
-    this.codeCap = Number(typeof process !== 'undefined' && process.env && process.env.MIRAGE_CODE_CAP) || (16 << 20);
+    // 16 MiB without paging (DOS: Doom holds 4.6 MB); 64 MiB under paging, set by reset() — a paged
+    // OS keeps far more live code: Windows 98 held 38 MB at 100 guest seconds, and at 16 MiB it
+    // flushed the whole cache 26 times there, 75% of its compiles re-translating identical bytes
+    // (525k compiles -> 214k, 58 -> 53 s host, heap 983 -> 607 MB: the flushes left garbage).
+    this.codeCapEnv = Number(typeof process !== 'undefined' && process.env && process.env.MIRAGE_CODE_CAP) || 0;
+    this.codeCap = this.codeCapEnv || (16 << 20);
     this.pageBlocks = new Map();   // page -> Set(lin) — for SMC invalidation sweeps
     // Per-page block-coverage bounds [lo, hi) — the min linStart / max linEnd of any block
     // touching a page. A write outside a page's bound can overlap no block, so invalidate()
@@ -307,6 +312,7 @@ export class Recompiler {
     // wrap is what makes EXEPACK stubs' segment arithmetic work. Every paging transition calls
     // reset(), so this stays in sync.
     this.pagedMode = !!(this.cpu && this.cpu.pagingOn);
+    if (!this.codeCapEnv) this.codeCap = this.pagedMode ? (64 << 20) : (16 << 20);
     this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageBounds = []; this.pageCov = []; this.t2evict.clear(); this.t2blacklist.clear();
     this.blockCount = 0; this.codeBytes = 0; }
 
