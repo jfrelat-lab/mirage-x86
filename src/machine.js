@@ -162,13 +162,24 @@ export class Machine {
         reload = (v << 8) | this._pitLo; this._pitHiNext = false;
       }
       this.setPitReload(reload === 0 ? 0x10000 : reload);       // 0 == 65536
+      this._pitTicks = reload === 0 ? 0x10000 : reload; this._pitLoad = this.cpu.cycles;
     });
     // Reading counter 0 (0x40) returns the LIVE countdown value. Games poll it for fine timing /
     // delays / entropy — Alley Cat's gameplay loop spins on it — so a constant reply freezes them.
-    // The counter counts down from the reload once per PIT period; derive it from cpu.cycles and
-    // return LSB then MSB per the current access mode (BIOS default is LSB-then-MSB).
+    // It counts in PIT ticks (1.193 MHz: pitBase cycles per 65536 of them) from the moment the
+    // reload was written, as an 8254 does: BeOS calibrates its TSC by writing FFFFh and reading the
+    // count back, and with a phase that ignored the write it read 2A09h, believed the CPU ran at a
+    // fraction of its speed, and spent two minutes in a delay meant to last a second. Before any
+    // write the BIOS's 65536 runs from cycle 0. MIRAGE_PITOLD=1 restores the cycle-unit count.
+    this._pitTicks = 0x10000; this._pitLoad = 0;
+    const pitOld = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PITOLD === '1';
     this.onPortRead(0x40, () => {
-      const count = (this.pitReload - (this.cpu.cycles % this.pitReload)) & 0xffff;
+      let count;
+      if (pitOld) count = (this.pitReload - (this.cpu.cycles % this.pitReload)) & 0xffff;
+      else {
+        const el = Math.floor((this.cpu.cycles - this._pitLoad) * 65536 / this.pitBase);
+        count = (this._pitTicks - (el % this._pitTicks)) & 0xffff;
+      }
       if (this._pitAccess === 1) return count & 0xff;
       if (this._pitAccess === 2) return (count >> 8) & 0xff;
       const b = this._pitReadHi ? (count >> 8) & 0xff : count & 0xff;

@@ -553,6 +553,20 @@ function eq(name, got, want) {
   cpu.ax = 0x4f02; cpu.bx = 0x0003; mc.intHandlers[0x10](cpu, mc);
   eq('4F02h BX=0003h: succeeds (004Fh) and the BIOS is in mode 3', [(cpu.ax & 0xffff).toString(16), mc.mem.u8[0x449]].join(), '4f,3'); }
 
+// ---- PIT counter 0 read back: 1.193 MHz ticks from the reload write, as an 8254 -----------------
+// BeOS 5 calibrates its TSC by loading FFFFh and reading the count: the old count ran in cycles with
+// a phase that ignored the write, and BeOS spent two minutes in a one-second delay.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+  const read = () => { mc.ioWrite(0x43, 1, 0x00); const lo = mc.ioRead(0x40, 1); return lo | (mc.ioRead(0x40, 1) << 8); };
+  cpu.cycles = 1234567;
+  mc.ioWrite(0x43, 1, 0x34); mc.ioWrite(0x40, 1, 0xff); mc.ioWrite(0x40, 1, 0xff);
+  const at0 = read();
+  cpu.cycles += Math.ceil(mc.pitBase * 1000 / 65536);
+  eq('PIT: FFFFh just loaded reads FFFFh, and 1000 ticks of cycles later FFFFh-1000', [at0.toString(16), (0xffff - read()).toString()].join(), 'ffff,1000');
+  mc.ioWrite(0x43, 1, 0x30); mc.ioWrite(0x40, 1, 0x00); mc.ioWrite(0x40, 1, 0x10);
+  cpu.cycles += Math.ceil(mc.pitBase * 0x100 / 65536);
+  eq('...and a new reload restarts the count from it', read().toString(16), 'f00'); }
+
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.
 { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
