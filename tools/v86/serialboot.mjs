@@ -1,5 +1,5 @@
 // Boot an image under MIRAGE and print what the guest writes to COM1 (3F8h), until port F4h.
-//   node serialboot.mjs <image> [seconds]
+//   node serialboot.mjs <image> [seconds]        CDROM=<iso> puts a disc in the ATAPI drive
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
@@ -16,6 +16,7 @@ if (process.env.VGAROM) {
   console.error(`VGA ROM ${process.env.VGAROM}: INT 10h -> ${r.vector.seg.toString(16)}:${r.vector.off.toString(16)}`);
 }
 mc.disk.attach(0x00, bytes);
+if (process.env.CDROM) mc.disk.attachCD(new Uint8Array(readFileSync(process.env.CDROM)));
 let out = '', done = false;
 // With a UART (MIRAGE_SERIAL=1, src/uart.js) the guest talks to the real device and we listen on its
 // transmit side; without one, COM1 is faked here: THR captured, LSR always "empty".

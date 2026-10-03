@@ -73,6 +73,15 @@ export function installDisk(machine) {
       return g;
     },
     detach(drive) { disk.drives.delete(drive & 0xff); },
+    // The CD-ROM drive, the secondary master of src/ide.js: `cd` is null when no drive is fitted,
+    // { data: null } when the drive is empty. A disc put in a running machine (changed) is reported
+    // to the next command as UNIT ATTENTION, as a real drive does; one there at power-on is not.
+    cd: null,
+    fitCD() { if (!disk.cd) disk.cd = { data: null, changed: false, locked: false }; return disk.cd; },
+    attachCD(data, { changed = false } = {}) {
+      if (data && data.length % 2048) throw new Error(`a CD image is whole 2048-byte sectors, not ${data.length} bytes`);
+      const d = disk.fitCD(); d.data = data; d.changed = changed; return d;
+    },
   };
   machine.disk = disk;
 

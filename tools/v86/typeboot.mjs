@@ -20,6 +20,7 @@ const eh = bytes[e + 5], es = bytes[e + 6] & 63, ec = bytes[e + 7] | ((bytes[e +
 const ok = (bytes[e] === 0 || bytes[e] === 0x80) && bytes[e + 4] && n && ec;
 const spt = ok && sh ? (lba - (ss - 1)) / sh : 63, hd = ok ? Math.round(((lba + n - 1 - (es - 1)) / spt - eh) / ec) : 16;
 mc.disk.attach(0x80, bytes, { cyl: Math.floor(bytes.length / (hd * spt * 512)), heads: hd, spt, type: 3 });
+if (process.env.CDROM) mc.disk.attachCD(new Uint8Array(readFileSync(process.env.CDROM)));   // CDROM=<iso>: a disc in the ATAPI drive
 let fault = null; mc.onError = (x) => { fault = x; };
 bootSector(mc, bytes, { drive: 0x80 });
 const c = mc.cpu, sec = 18.2065 * mc.pitBase;

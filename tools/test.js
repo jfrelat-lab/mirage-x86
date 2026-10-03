@@ -567,6 +567,42 @@ function eq(name, got, want) {
   cpu.cycles += Math.ceil(mc.pitBase * 0x100 / 65536);
   eq('...and a new reload restarts the count from it', read().toString(16), 'f00'); }
 
+// ---- the ATAPI CD-ROM, secondary master (src/ide.js): what tools/atapiprobe.asm reads on QEMU -cdrom ----
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  eq('ATAPI: no drive fitted, the secondary channel floats', mc.ioRead(0x177, 1), 0xff);
+  const iso = new Uint8Array(20 * 2048); iso.set([1, 0x43, 0x44, 0x30, 0x30, 0x31, 1], 16 * 2048);
+  mc.disk.attachCD(iso);
+  const out = (p, v) => mc.ioWrite(p, 1, v), inp = (p) => mc.ioRead(p, 1);
+  const tf = () => [0x172, 0x173, 0x174, 0x175, 0x177, 0x171].map((p) => inp(p).toString(16)).join(' ');
+  out(0x376, 0x02); out(0x176, 0xa0); out(0x177, 0xec);
+  eq('...IDENTIFY DEVICE is aborted, leaving the 14h/EBh signature', tf(), '1 1 14 eb 41 4');
+  out(0x177, 0xa1); const w0 = mc.ioRead(0x170, 2); for (let i = 1; i < 256; i++) mc.ioRead(0x170, 2);
+  eq('...IDENTIFY PACKET DEVICE: an ATAPI CD-ROM, removable', w0.toString(16), '85c0');
+  // One PACKET command: returns [reason after A0h, DRQ block sizes, status, error, reason, data].
+  const packet = (cdb, limit = 0x800) => {
+    out(0x174, limit & 0xff); out(0x175, limit >> 8); out(0x171, 0); out(0x177, 0xa0);
+    const r0 = inp(0x172); const c = [...cdb, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0].slice(0, 12);
+    for (let i = 0; i < 12; i += 2) mc.ioWrite(0x170, 2, c[i] | (c[i + 1] << 8));
+    const blocks = [], data = [];
+    for (let k = 0; k < 64 && (inp(0x177) & 0x08); k++) { const n = inp(0x174) | (inp(0x175) << 8); blocks.push(n.toString(16)); for (let i = 0; i < n; i += 2) { const v = mc.ioRead(0x170, 2); data.push(v & 0xff, v >> 8); } }
+    return { s: [r0, blocks.join('/'), inp(0x177).toString(16), inp(0x171).toString(16), inp(0x172)].join(' '), data };
+  };
+  eq('...TEST UNIT READY with a disc: reason 01h for the command, then 03h, status 50h', packet([0]).s, '1  50 0 3');
+  const inq = packet([0x12, 0, 0, 0, 36]);
+  eq('...INQUIRY: 36 bytes, peripheral type 05h, removable', [inq.s, inq.data[0], inq.data[1]].join(), '1 24 50 0 3,5,128');
+  const cap = packet([0x25]);
+  eq('...READ CAPACITY: last LBA 19, 2048-byte blocks', [cap.data[3], cap.data[6]].join(), '19,8');
+  const rd = packet([0x28, 0, 0, 0, 0, 16, 0, 0, 2], 0x200);
+  eq('...READ (10) of 2 sectors under a 512-byte limit: 8 blocks, the volume descriptor first', [rd.s, String.fromCharCode(...rd.data.slice(1, 6))].join(), '1 200/200/200/200/200/200/200/200 50 0 3,CD001');
+  eq('...an invalid opcode: CHECK CONDITION, ILLEGAL REQUEST in the error register', packet([0xff]).s, '1  41 50 3');
+  const sn = packet([0x03, 0, 0, 0, 18]);
+  eq('...and REQUEST SENSE says why: 05h / 20h', [sn.data[0].toString(16), sn.data[2], sn.data[12].toString(16)].join(), 'f0,5,20');
+  eq('...READ past the end: ILLEGAL REQUEST', packet([0x28, 0, 0, 0, 0, 20, 0, 0, 1]).s, '1  41 50 3');
+  mc.disk.attachCD(null);
+  eq('...with the drive empty, TEST UNIT READY is NOT READY', packet([0]).s, '1  41 20 3');
+  mc.disk.attachCD(iso, { changed: true });
+  eq('...and a disc put in is UNIT ATTENTION once, then ready', [packet([0]).s, packet([0]).s].join(), '1  41 60 3,1  50 0 3'); }
+
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.
 { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;

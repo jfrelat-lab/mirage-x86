@@ -1339,6 +1339,8 @@ export function installBIOS(machine, opts = {}) {
   // The display at 02.0 is QEMU's 1234:1111, and drivers that find it program it through its DISPI
   // ports (src/dispi.js) rather than the VBE BIOS: they come with the PCI bus.
   if (opts.pci ?? pciEnv) installDISPI(machine);
+  // QEMU's -M pc and v86 both fit an (empty) ATAPI CD-ROM drive as the secondary master.
+  if (opts.pci ?? pciEnv) machine.disk.fitCD();
   // A 16550A on COM1 (src/uart.js), optional for the same reason: the equipment word has always said
   // "no serial ports", and DOS programs that probe them rely on it. `serial: true` or MIRAGE_SERIAL=1.
   const serialEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SERIAL === '1';
