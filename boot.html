@@ -25,6 +25,9 @@
   #status { padding: 6px 14px; background: var(--panel); border-top: 1px solid #1c2a36;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #help { padding: 0 14px 8px; background: var(--panel); color: #5c7080; }
+  #serial { display: none; background: var(--panel); border-top: 1px solid #1c2a36; padding: 6px 14px; }
+  #serial pre { margin: 0 0 6px; height: 9em; overflow: auto; white-space: pre-wrap; color: #cfe3d8; background: #05080b; padding: 6px; }
+  #serial input { width: 100%; }
 </style>
 </head>
 <body>
@@ -42,6 +45,8 @@
     <label>Clock <select id="clock" title="real time: the timer follows the wall clock, games run at their speed · turbo: the timer follows the CPU, boots go faster">
       <option value="realtime" selected>real time</option><option value="turbo">turbo</option>
     </select></label>
+    <label title="a PCI bus as QEMU -M pc presents it (i440FX, PIIX3 IDE, display): Windows NT, 9legacy and BeOS need it; off = QEMU -M isapc"><input id="pci" type="checkbox"> PCI</label>
+    <label title="a 16550A serial port on COM1, with a console below the screen: Linux, the BSDs and Plan 9 can use it as their console"><input id="com1" type="checkbox"> COM1</label>
     <button id="boot">Boot</button>
     <button id="pause" disabled>Pause</button>
     <span style="flex:1"></span>
@@ -49,6 +54,7 @@
   </header>
   <main id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas></main>
   <div id="status">choose an image and Boot</div>
+  <div id="serial"><pre id="serialOut"></pre><input id="serialIn" placeholder="COM1 — type a line, Enter sends it (with CR)"></div>
   <div id="help">The keyboard goes to the guest. Click the screen to capture the mouse (Esc releases it).
     The image lives in memory only: nothing is written back to disk.</div>
   <script type="module" src="src/bootpc.js"></script>

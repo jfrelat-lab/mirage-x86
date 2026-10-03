@@ -4,7 +4,8 @@
 // tools/v86/*.mjs do. Minimal on purpose: pick an image, a CPU profile and RAM, boot, watch.
 //
 // URL parameters (so a boot can be bookmarked):
-//   ?img=boot/v86/bl3-5.img   image to boot (a served path)   ?cpu=386|486|586|pentium   ?mem=64 (MiB)
+//   ?img=boot/v86/bl3-5.img   image to boot (a served path)   ?cpu=386|586|pentium   ?mem=64 (MiB)
+//   ?clock=realtime|turbo   ?pci=1 (QEMU -M pc's bus)   ?com1=1 (a 16550A and a console under the screen)
 //
 // Two clocks. REAL TIME (the default, as v86 and index.html do it): the PIT fires on the wall clock at
 // the rate the guest programmed, and the CPU runs as fast as the host allows in between, so a game
@@ -22,6 +23,7 @@ import { bootSector } from './boot.js';
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), status = $('status'), pick = $('image'), fileIn = $('file');
 const cpuSel = $('cpu'), memSel = $('mem'), clockSel = $('clock'), bootBtn = $('boot'), pauseBtn = $('pause');
+const pciBox = $('pci'), comBox = $('com1'), serialPane = $('serial'), serialOut = $('serialOut'), serialIn = $('serialIn');
 const TICK_MS = 1000 / 18.2065;
 const FLOPPIES = [163840, 184320, 327680, 368640, 737280, 1228800, 1474560, 2949120];
 const FRAME_MS = 12;
@@ -70,7 +72,21 @@ async function boot(name, raw) {
   stop();
   const memSize = Number(memSel.value) << 20;
   const mc = new Machine({ memSize, cpu: cpuSel.value });
-  installBIOS(mc, { ems: false });          // a bare PC: no EMS (see tools/harness.mjs)
+  // A bare PC: no EMS (see tools/harness.mjs). PCI = QEMU's -M pc rather than -M isapc; COM1 = a
+  // 16550A whose transmit side fills the console under the screen (src/pci.js, src/uart.js).
+  installBIOS(mc, { ems: false, pci: pciBox.checked, serial: comBox.checked });
+  serialOut.textContent = '';
+  serialPane.style.display = mc.serial ? 'block' : 'none';
+  if (mc.serial) {
+    let pending = '';
+    mc.serial.onTx = (b) => { if (b !== 0x0d) pending += String.fromCharCode(b); };
+    // Flushed from the drawing loop, not per byte: a kernel's console prints thousands of characters.
+    mc.serialFlush = () => {
+      if (!pending) return;
+      serialOut.textContent = (serialOut.textContent + pending).slice(-20000); pending = '';
+      serialOut.scrollTop = serialOut.scrollHeight;
+    };
+  }
   installMouse(mc);
   await loadFonts(mc);
   const turbo = clockSel.value === 'turbo';
@@ -139,6 +155,7 @@ function loop() {
   if (!s.started) { s.started = true; s.gen = ++gen; tick.port2.postMessage(s.gen); }
   s.raf = requestAnimationFrame(loop);
   s.video.render();
+  if (s.mc.serialFlush) s.mc.serialFlush();
   showStatus(s);
 }
 
@@ -171,6 +188,7 @@ async function bootSelected() {
   status.textContent = `fetching ${pick.value}…`;
   const url = new URL(location.href);
   url.searchParams.set('img', pick.value); url.searchParams.set('cpu', cpuSel.value); url.searchParams.set('mem', memSel.value); url.searchParams.set('clock', clockSel.value);
+  url.searchParams.set('pci', pciBox.checked ? '1' : '0'); url.searchParams.set('com1', comBox.checked ? '1' : '0');
   history.replaceState(null, '', url);
   const bytes = new Uint8Array(await (await fetch(pick.value)).arrayBuffer());
   return boot(pick.value.split('/').pop(), bytes);
@@ -184,10 +202,16 @@ pauseBtn.addEventListener('click', () => {
   if (!session) return;
   session.paused = !session.paused; pauseBtn.textContent = session.paused ? 'Resume' : 'Pause';
 });
-for (const el of [pick, cpuSel, memSel, clockSel]) el.addEventListener('keydown', (e) => e.stopPropagation());
+for (const el of [pick, cpuSel, memSel, clockSel, pciBox, comBox, serialIn]) el.addEventListener('keydown', (e) => e.stopPropagation());
+serialIn.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !session || !session.mc.serial) return;
+  session.mc.serial.receive(serialIn.value + '\r'); serialIn.value = '';
+});
 
 const q = new URLSearchParams(location.search);
 if (q.get('cpu')) cpuSel.value = q.get('cpu');
 if (q.get('mem')) memSel.value = q.get('mem');
 if (q.get('clock')) clockSel.value = q.get('clock');
+if (q.get('pci')) pciBox.checked = q.get('pci') === '1';
+if (q.get('com1')) comBox.checked = q.get('com1') === '1';
 listImages().then(() => { if (q.get('img')) { pick.value = q.get('img'); tryBoot(); } });
