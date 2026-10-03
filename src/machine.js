@@ -805,7 +805,7 @@ export class Machine {
   vbeWindow(bank) {
     if (!this.vbe) return;
     this.vbe.bank = bank >>> 0;
-    const src = (this.vbe.base + this.vbe.bank * 0x10000) >>> 0;
+    const src = ((this.vbe.fbBase ?? this.vbe.base) + this.vbe.bank * 0x10000) >>> 0;   // DISPI: the window ignores the display offset
     this.vbe.windowSrc = src;
   }
 

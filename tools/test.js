@@ -553,6 +553,25 @@ function eq(name, got, want) {
   cpu.ax = 0x4f02; cpu.bx = 0x0003; mc.intHandlers[0x10](cpu, mc);
   eq('4F02h BX=0003h: succeeds (004Fh) and the BIOS is in mode 3', [(cpu.ax & 0xffff).toString(16), mc.mem.u8[0x449]].join(), '4f,3'); }
 
+// ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
+// Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.
+{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
+  const wr = (i, v) => { mc.ioWrite(0x1ce, 2, i); mc.ioWrite(0x1cf, 2, v); };
+  const dump = () => Array.from({ length: 11 }, (_, i) => (mc.ioWrite(0x1ce, 2, i), mc.ioRead(0x1cf, 2).toString(16))).join(' ');
+  eq('DISPI at power-on: ID B0C5h, everything else 0, 4 MiB of video memory', dump(), 'b0c5 0 0 0 0 0 0 0 0 0 40');
+  wr(4, 2);
+  eq('...GETCAPS reads QEMU\'s maxima', dump(), 'b0c5 3e80 2ee0 20 2 0 0 0 0 0 40');
+  wr(4, 0); cpu.ax = 0x4f02; cpu.bx = 0x4117; mc.intHandlers[0x10](cpu, mc);
+  eq('...a mode the VBE BIOS set reads back as SeaVGABIOS leaves it', dump(), 'b0c5 400 300 10 41 0 400 800 0 0 40');
+  wr(4, 0); wr(3, 8); wr(1, 0x400); wr(2, 0x300); wr(5, 0); mc.mem.u8[mc.vbeFbBase] = 0x55; wr(4, 0x41);
+  eq('...NT 3.51\'s sequence sets 1024x768x8 over the LFB, cleared', [dump(), mc.vbe && [mc.vbe.width, mc.vbe.height, mc.vbe.bpp, mc.vbe.pitch].join('x'), mc.mem.u8[mc.vbeFbBase]].join(), 'b0c5 400 300 8 41 0 400 1000 0 0 40,1024x768x8x1024,0');
+  wr(6, 1280); wr(8, 8); wr(9, 4);
+  eq('...a virtual width and a display offset move the scanned-out base', [dump(), mc.vbe.pitch, mc.vbe.base - mc.vbeFbBase].join(), 'b0c5 400 300 8 41 0 500 ccc 8 4 40,1280,5128');
+  wr(4, 0);
+  eq('...and disabling leaves the mode, keeping the registers', [dump(), mc.vbe].join(), 'b0c5 400 300 8 0 0 500 ccc 8 4 40,');
+  const isa = new Machine({ memSize: 16 << 20 }); installBIOS(isa);
+  eq('without PCI the ports are not decoded', isa.ioRead(0x1cf, 2), 0xffff); }
+
 // ---- the 16550A on COM1 (src/uart.js): what tools/uartprobe.asm reads on QEMU ---------------------
 // QEMU's 16550A answers 60 01 C1 5A F0 F0 61 A5 C2 C1 B0 B0 to the probe's twelve reads.
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc, { serial: true });
