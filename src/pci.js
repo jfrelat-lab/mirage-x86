@@ -124,12 +124,12 @@ export function installPCI(machine) {
   // 02.0 the display, with QEMU's identity (1234:1111, class 0300h) so a guest that looks for a VGA
   // on the bus finds one — 9legacy otherwise says "no vga; serial console only", and MIRAGE has no
   // UART to answer it on. BAR0 is the VBE framebuffer installBIOS reserved at the top of RAM (QEMU's
-  // is at FD000000h); 2 MiB, prefetchable, and 2 MiB-aligned by construction. QEMU's BAR2 (the Bochs
+  // is at FD000000h); its size (4 MiB from 16 MiB of RAM, else 2 MiB), prefetchable, size-aligned. QEMU's BAR2 (the Bochs
   // DISPI registers) has nothing behind it here and stays unimplemented.
-  const fb = (machine.vbeFbBase >>> 0) || 0;
+  const fb = (machine.vbeFbBase >>> 0) || 0, fbBytes = machine.vbeFbBytes || (2 << 20);
   const vga = new Fn(0x10, [0x11111234, 0x00000103, 0x03000002, 0x00000000, (fb | 0x08) >>> 0, 0, 0, 0, 0, 0, 0, 0x11001af4, 0, 0, 0, 0],
-    { 0x10: 0x00, 0x11: 0x00, 0x12: 0xe0, 0x13: 0xff });
-  vga.bars.push({ off: 0x10, size: 2 << 20, io: false });
+    { 0x10: 0x00, 0x11: 0x00, 0x12: (0xff << Math.log2(fbBytes >>> 16)) & 0xff, 0x13: 0xff });   // the bits above the BAR's size
+  vga.bars.push({ off: 0x10, size: fbBytes, io: false });
   new DataView(vga.cfg.buffer).setUint32(0x10, (fb | 0x08) >>> 0, true);
 
   const fns = [host, isa, ide, vga];

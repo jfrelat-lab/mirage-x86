@@ -1325,7 +1325,7 @@ const udRun = (gated) => {
   } while (ebx && ++n < 10);
   eq('AX=E820h returns SMAP in EAX', cpu.reg[0] >>> 0, 0x534d4150);
   eq('...a map with the VBE framebuffer reserved near the top, the RAM above it usable', ranges.join(' '),
-    `0+a0000:1 f0000+10000:2 100000+${(mc.vbeFbBase - 0x100000).toString(16)}:1 ${mc.vbeFbBase.toString(16)}+200000:2 e00000+200000:1`);
+    `0+a0000:1 f0000+10000:2 100000+${(mc.vbeFbBase - 0x100000).toString(16)}:1 ${mc.vbeFbBase.toString(16)}+400000:2`);
   // 4 MiB-aligned like a real aperture: KolibriOS maps it with a 4 MiB page once CPUID says PSE, and
   // at 14 MiB (unaligned) it drew 2 MiB below the screen.
   eq('...and the framebuffer starts on a 4 MiB boundary', (mc.vbeFbBase & 0x3fffff).toString(16), '0'); }

@@ -63,13 +63,17 @@ export function installBIOS(machine, opts = {}) {
   // DPMI host reserves its descriptor tables — a client is told this address as PhysBasePtr, maps it
   // with INT 31h 0800h and writes straight into it, so it has to be memory that exists and that no
   // allocator will hand out. 2 MiB covers the largest advertised mode (640x480x32 = 1.2 MiB).
-  const VBE_FB_BYTES = 2 * 1024 * 1024;
+  // 4 MiB from 16 MiB of RAM up: 1024x768x32 needs 3 MiB (SeaVGABIOS lists it as 144h). Smaller
+  // machines keep 2 MiB, right under the top, unaligned — aligning 4 MiB-2 MiB down to a 4 MiB
+  // boundary would have put a 4 MiB machine's framebuffer at address 0.
+  const VBE_FB_BYTES = mem.size >= (16 << 20) ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
   // ALIGNED TO 4 MiB, as a real card's aperture always is (QEMU's is FD000000h): a kernel that has
   // PSE maps the framebuffer with 4 MiB pages, whose frame is the address rounded down to 4 MiB.
   // KolibriOS does, and with the framebuffer at size-2 MiB (62 MiB of 64) it drew 2 MiB below the
   // picture — a black screen — once CPUID said PSE. The RAM above it stays usable (E820 says so).
-  const VBE_FB_LIN = ((mem.size - VBE_FB_BYTES) & ~0x3fffff) >>> 0;
+  const VBE_FB_LIN = mem.size >= (16 << 20) ? ((mem.size - VBE_FB_BYTES) & ~0x3fffff) >>> 0 : (mem.size - VBE_FB_BYTES) >>> 0;
   machine.vbeFbBase = VBE_FB_LIN;
+  machine.vbeFbBytes = VBE_FB_BYTES;
   for (let i = 0; i < 0x60; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, 0);
   const oem = 'MIRAGE VGA';
   for (let i = 0; i < oem.length; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, oem.charCodeAt(i));
@@ -84,6 +88,11 @@ export function installBIOS(machine, opts = {}) {
   const VBE_MODES = [
     [0x101, 640, 480, 8], [0x103, 800, 600, 8], [0x105, 1024, 768, 8], [0x10e, 320, 200, 16], [0x111, 640, 480, 16],
     [0x112, 640, 480, 32], [0x140, 320, 200, 32], [0x141, 320, 240, 32], [0x142, 320, 240, 8],
+    // 800x600 and 1024x768 at 16 and 32 bpp, numbered as SeaVGABIOS numbers them (tools/vbemodes.asm
+    // under QEMU -vga std): 114h/117h are the VBE 1.2 standard 16-bit modes, 143h/144h its OEM 32-bit
+    // ones. BeOS 5 asks 4F01h for every listed mode and runs at 800x600x16 on v86; we listed no
+    // 16-bit mode above 640x480. Appended, so the existing numbers keep their places in the list.
+    [0x114, 800, 600, 16], [0x117, 1024, 768, 16], [0x143, 800, 600, 32], [0x144, 1024, 768, 32],
   ];
   VBE_MODES.forEach(([n], i) => mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF + i * 2) >>> 0, n));
   mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF + VBE_MODES.length * 2) >>> 0, 0xffff);   // terminator
@@ -883,7 +892,7 @@ export function installBIOS(machine, opts = {}) {
     // screen. No EBDA is allocated (see the BDA setup), so conventional memory runs to A0000.
     if ((cpu.reg[0] >>> 0) === 0xe820 && (cpu.reg[2] >>> 0) === 0x534d4150) {
       const fb = machine.vbeFbBase >>> 0;
-      const fbEnd = Math.min(mem.size, fb + 2 * 1024 * 1024);
+      const fbEnd = Math.min(mem.size, fb + (machine.vbeFbBytes || 2 * 1024 * 1024));
       const map = [[0, 0xa0000, 1], [0xf0000, 0x10000, 2], [0x100000, fb - 0x100000, 1], [fb, fbEnd - fb, 2]];
       if (fbEnd < mem.size) map.push([fbEnd, mem.size - fbEnd, 1]);           // RAM above the aligned framebuffer
       const i = cpu.reg[3] >>> 0;

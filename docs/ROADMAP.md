@@ -115,7 +115,7 @@ version to build (HLE where a guest only needs answers, a device model where it 
 | Configuration | Oracles | MIRAGE | Next |
 |---|---|---|---|
 | VGA: text, planar 16-colour, 13h, Mode X | QEMU VGA, DOSBox-X, Cirrus ROM | ✅ src/vga.js, video.js | — |
-| VBE through the BIOS (4F00-4F09, LFB) | SeaVGABIOS | ✅ HLE, modes up to 640x480x32 in a 2 MiB window (4 MiB-aligned) | 800x600 and 1024x768 at 8/16/32 bpp (BeOS asked 4F01h for 101h-142h; v86 runs it at 800x600x16) |
+| VBE through the BIOS (4F00-4F09, LFB) | SeaVGABIOS | ✅ HLE; since 2026-10-03 also 800x600 and 1024x768 at 16/32 bpp (114h, 117h, 143h, 144h, SeaVGABIOS's numbers — `tools/vbemodes.asm`) in a 4 MiB window from 16 MiB of RAM. BeOS 5 now sets 4114h like on v86; KolibriOS now picks 1024x768 like QEMU | 15/24-bit modes (110h/113h/116h, 112h/115h/118h at 24 bpp as SeaVGABIOS) if a guest wants them |
 | Bochs DISPI (1CEh/1CFh) + PCI 1234:1111 with LFB BAR | QEMU std VGA, v86, Bochs | ⚠️ the PCI identity only (02.0), no DISPI | DISPI registers driving the same framebuffer as VBE — NT 3.51 under QEMU sets 1024x768x8 through it |
 | Cirrus GD5446 SVGA (banking, BitBLT, hw cursor) | QEMU cirrus-vga, 86Box | ⚠️ the ROM runs, the chip is plain VGA | the extension registers, for Windows 9x/NT Cirrus drivers |
 | S3 Trio / ATI / VMware SVGA / virtio-gpu | 86Box (S3), QEMU (others) | ✗ | only for a guest that needs one |
