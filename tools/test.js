@@ -11,6 +11,7 @@ import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
 import { installDisk } from '../src/disk.js';
 import { installBIOS } from '../src/bios.js';
+import { bootCD } from '../src/boot.js';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
@@ -602,6 +603,33 @@ function eq(name, got, want) {
   eq('...with the drive empty, TEST UNIT READY is NOT READY', packet([0]).s, '1  41 20 3');
   mc.disk.attachCD(iso, { changed: true });
   eq('...and a disc put in is UNIT ATTENTION once, then ready', [packet([0]).s, packet([0]).s].join(), '1  41 60 3,1  50 0 3'); }
+
+// ---- El Torito: booting a CD (src/boot.js bootCD) and INT 13h on drive E0h, as tools/cdboot.asm
+// reads SeaBIOS under QEMU -cdrom -boot d.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, mem = mc.mem;
+  const iso = new Uint8Array(30 * 2048), dv = new DataView(iso.buffer);
+  iso.set([1, 0x43, 0x44, 0x30, 0x30, 0x31, 1], 16 * 2048);                       // primary volume descriptor
+  iso.set([0, 0x43, 0x44, 0x30, 0x30, 0x31, 1, ...[...'EL TORITO SPECIFICATION'].map((ch) => ch.charCodeAt(0))], 17 * 2048);
+  dv.setUint32(17 * 2048 + 0x47, 20, true);                                         // the catalog at sector 20
+  const cat = 20 * 2048; iso[cat] = 1; iso[cat + 30] = 0x55; iso[cat + 31] = 0xaa;
+  let sum = 0; for (let i = 0; i < 32; i += 2) sum = (sum + dv.getUint16(cat + i, true)) & 0xffff;
+  dv.setUint16(cat + 28, (0x10000 - sum) & 0xffff, true);                          // validation checksum
+  iso[cat + 32] = 0x88; dv.setUint16(cat + 38, 4, true); dv.setUint32(cat + 40, 25, true);
+  iso.set([0xeb, 0xfe, 0x5a, 0xa5], 25 * 2048);
+  bootCD(mc, iso);
+  eq('El Torito: no emulation, entered at 0000:7C00 with DL = E0h', [cpu.seg[1], cpu.eip.toString(16), (cpu.dx & 0xff).toString(16), mem.r16(0x7c02).toString(16)].join(), '0,7c00,e0,a55a');
+  const int13 = () => mc.intHandlers[0x13](cpu, mc);
+  cpu.ax = 0x4100; cpu.bx = 0x55aa; cpu.dx = 0xe0; int13();
+  eq('...INT 13h 41h on E0h: EDD 3.0, CX = 0007h', [(cpu.ax >> 8).toString(16), (cpu.bx & 0xffff).toString(16), cpu.cx & 0xffff, cpu.flags & 1].join(), '30,aa55,7,0');
+  mem.w8(0x600, 0x10); mem.w16(0x602, 1); mem.w16(0x604, 0x1000); mem.w16(0x606, 0); mem.w32(0x608, 16); mem.w32(0x60c, 0);
+  cpu.ax = 0x4200; cpu.dx = 0xe0; cpu.setSeg(3, 0); cpu.si = 0x600; int13();
+  eq('...42h reads 2048-byte sectors: the volume descriptor', [cpu.flags & 1, mem.r8(0x1001), mem.r8(0x1005)].join(), '0,67,49');
+  mem.w32(0x608, 0x100000); cpu.ax = 0x4200; int13();
+  eq('...and past the end: CF, AH = 0Ch', [cpu.flags & 1, (cpu.ax >> 8).toString(16)].join(), '1,c');
+  cpu.ax = 0x4b01; cpu.si = 0x700; int13();
+  eq('...4B01h: the specification packet (13h bytes, no emulation, E0h, controller 1, sector 25, 07C0h, 4)', [...mem.u8.subarray(0x700, 0x710)].map((b) => b.toString(16)).join(' '), '13 0 e0 1 19 0 0 0 0 0 0 0 c0 7 4 0');
+  cpu.ax = 0x4300; cpu.si = 0x600; int13();
+  eq('...43h: write protected', [cpu.flags & 1, cpu.ax >> 8].join(), '1,3'); }
 
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.

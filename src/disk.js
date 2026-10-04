@@ -106,9 +106,57 @@ export function installDisk(machine) {
     return ((cyl * g.heads + head) * g.spt + (sector - 1)) * SECTOR;
   };
 
+  // ---- The CD-ROM as BIOS drive E0h (El Torito "no emulation", SeaBIOS's number) ---------------
+  // Reached by LBA only, in 2048-byte sectors: EDD 41h/42h/44h/47h/48h, 43h refused (write protected),
+  // and 4Bh, which hands back the specification packet the boot was made from (src/boot.js bootCD).
+  const CD_SECTOR = 2048;
+  const cdInt13 = (c, ah) => {
+    const d = disk.cd;
+    switch (ah) {
+      case 0x00: case 0x0d: ok(); return;
+      case 0x41:
+        if ((c.bx & 0xffff) !== 0x55aa) { fail(0x01); return; }
+        c.bx = 0xaa55; c.ah = 0x30; c.cx = 0x0007;               // fixed-disk access, locking/ejecting, EDD
+        c.flags &= ~CF; return;
+      case 0x42: case 0x44: case 0x47: {
+        const pkt = ((c.seg[DS] << 4) + (c.si & 0xffff)) >>> 0;
+        const count = mem.r16(pkt + 2);
+        let buf = (((mem.r16(pkt + 6) << 4) + mem.r16(pkt + 4)) >>> 0);
+        if (mem.r8(pkt) >= 0x18 && mem.r32(pkt + 4) === 0xffffffff) buf = mem.r32(pkt + 0x10) >>> 0;
+        const lba = mem.r32(pkt + 8) + mem.r32(pkt + 12) * 0x100000000;
+        if (!d.data) { fail(0xaa); return; }                     // drive not ready
+        if ((lba + (ah === 0x47 ? 1 : count)) * CD_SECTOR > d.data.length) { mem.w16(pkt + 2, 0); fail(0x0c); return; }   // as SeaBIOS
+        if (ah === 0x42) mem.blit(buf, d.data.subarray(lba * CD_SECTOR, (lba + count) * CD_SECTOR));
+        ok(); return;
+      }
+      case 0x43: fail(0x03); return;                            // write protected
+      case 0x48: {
+        const r = ((c.seg[DS] << 4) + (c.si & 0xffff)) >>> 0, size = mem.r16(r);
+        if (size < 0x1a) { fail(0x01); return; }
+        mem.w16(r, 0x1a);
+        mem.w16(r + 2, 0x0074);                                 // removable, change line, lockable
+        mem.w32(r + 4, 0xffffffff); mem.w32(r + 8, 0xffffffff); mem.w32(r + 12, 0xffffffff);
+        mem.w32(r + 16, 0xffffffff); mem.w32(r + 20, 0xffffffff);   // size unknown, as SeaBIOS says of a CD
+        mem.w16(r + 24, CD_SECTOR);
+        ok(); return;
+      }
+      case 0x4b: {                                              // AL=00 terminate emulation, 01 status:
+        const b = disk.cdBoot;                                  // both return the specification packet
+        if ((c.al & 0xff) > 1 || !b) { fail(0x01); return; }
+        const r = ((c.seg[DS] << 4) + (c.si & 0xffff)) >>> 0;
+        for (let i = 0; i < 0x13; i++) mem.w8(r + i, 0);
+        mem.w8(r, 0x13); mem.w8(r + 1, b.media); mem.w8(r + 2, b.drive); mem.w8(r + 3, 1);   // controller 1: the secondary channel
+        mem.w32(r + 4, b.rba); mem.w16(r + 12, b.segment); mem.w16(r + 14, b.count);
+        ok(); return;
+      }
+      default: machine.unhandledInts[0x13]++; fail(0x01);
+    }
+  };
+
   machine.hookInterrupt(0x13, (c) => {
     const drive = c.dx & 0xff;
     const ah = c.ah;
+    if (drive === 0xe0 && disk.cd && ah !== 0x01) { cdInt13(c, ah); return; }
     const d = disk.drives.get(drive) || (drive === 0 && DRIVE_ONLY(ah) ? EMPTY_A : undefined);
 
     // AH=01 answers about the *previous* call, so it must work even with no media.

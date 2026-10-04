@@ -53,3 +53,57 @@ export function bootSector(machine, bytes, opts = {}) {
   cpu.halted = false;
   return { drive, linear: BOOT_LIN };
 }
+
+/**
+ * Boot an ISO 9660 image the El Torito way (El Torito 1.0, as SeaBIOS's cdrom_boot does it).
+ * The Boot Record Volume Descriptor at sector 17 points at the boot catalog; its validation entry
+ * must checksum to 0 and end in 55 AA, and the initial entry (88h = bootable) gives the emulation,
+ * the load segment, the count of 512-byte sectors and the image's first CD sector.
+ *   - no emulation: the count is read to load-segment:0 (07C0h when 0) and entered as 0000:segment*16,
+ *     DL = E0h;
+ *   - floppy emulation (1.2/1.44/2.88 MB): the image becomes drive A: and boots as a diskette;
+ *   - hard-disk emulation: the image becomes drive 80h (an existing 80h moves to 81h).
+ * The disc stays in the ATAPI drive (machine.disk.attachCD), where protected-mode drivers find it.
+ */
+export function bootCD(machine, iso) {
+  const disk = machine.disk;
+  disk.attachCD(iso);
+  const S = 2048, brvd = iso.subarray(17 * S, 18 * S);
+  const id = String.fromCharCode(...brvd.subarray(1, 6)), sys = String.fromCharCode(...brvd.subarray(7, 30));
+  if (brvd[0] !== 0 || id !== 'CD001' || sys !== 'EL TORITO SPECIFICATION') throw new Error('no El Torito boot record at sector 17 — not a bootable CD');
+  const dv = new DataView(iso.buffer, iso.byteOffset, iso.byteLength);
+  const cat = dv.getUint32(17 * S + 0x47, true) * S;
+  let sum = 0; for (let i = 0; i < 32; i += 2) sum = (sum + dv.getUint16(cat + i, true)) & 0xffff;
+  if (iso[cat] !== 1 || iso[cat + 30] !== 0x55 || iso[cat + 31] !== 0xaa || sum) throw new Error('El Torito boot catalog: bad validation entry');
+  const e = cat + 32;
+  if (iso[e] !== 0x88) throw new Error('El Torito boot catalog: the initial entry is not bootable');
+  const media = iso[e + 1] & 0x0f, segment = dv.getUint16(e + 2, true) || 0x07c0;
+  const count = dv.getUint16(e + 6, true), rba = dv.getUint32(e + 8, true);
+  if (media === 0) {
+    const bytes = iso.subarray(rba * S, rba * S + Math.max(1, count) * SECTOR);
+    disk.cdBoot = { media, drive: 0xe0, rba, segment, count };
+    if (machine.bios && machine.bios.setA20) machine.bios.setA20(true);
+    const cpu = machine.cpu;
+    machine.mem.blit(segment << 4, bytes);
+    cpu.reg.fill(0);
+    cpu.setSeg(CS, 0); cpu.eip = segment << 4;   // 0000:7C00 for 07C0h, as SeaBIOS enters it
+    cpu.setSeg(DS, 0); cpu.setSeg(ES, 0); cpu.setSeg(SS, 0); cpu.sp = BOOT_LIN;
+    cpu.dx = 0xe0;
+    cpu.flags = 0x0202; cpu.halted = false;
+    return { drive: 0xe0, media, linear: segment << 4 };
+  }
+  const size = [0, 1228800, 1474560, 2949120][media];
+  const image = iso.slice(rba * S, rba * S + (size || iso.length - rba * S));
+  if (media <= 3) {
+    disk.attach(0x00, image);
+    disk.cdBoot = { media, drive: 0x00, rba, segment, count };
+    return bootSector(machine, image, { drive: 0x00 });
+  }
+  // Hard-disk emulation: geometry from the image's first partition, as bootshot.mjs derives it.
+  const old = disk.drives.get(0x80);
+  if (old) disk.attach(0x81, old.data, old.geom);
+  const pe = 0x1be, eh = image[pe + 5], es = image[pe + 6] & 63;
+  disk.attach(0x80, image, { cyl: Math.max(1, Math.floor(image.length / ((eh + 1) * (es || 63) * SECTOR))), heads: eh + 1, spt: es || 63, type: 3 });
+  disk.cdBoot = { media, drive: 0x80, rba, segment, count };
+  return bootSector(machine, image, { drive: 0x80 });
+}
