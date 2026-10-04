@@ -4,11 +4,12 @@
 //
 //   MEM=64 MIRAGE_CPU=586 STEP=300 node bootshot.mjs <image> <seconds> <outdir>
 // ENTER=5 presses Enter at guest second 5 (BeOS's partition menu waits for it).
+// An .iso image boots El Torito (src/boot.js bootCD); CDROM=<iso> puts a disc in the drive beside a disk.
 import { readFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
 const { makeMachine } = await import(ROOT + '/tools/harness.mjs');
-const { bootSector } = await import(ROOT + '/src/boot.js');
+const { bootSector, bootCD } = await import(ROOT + '/src/boot.js');
 const { Video } = await import(ROOT + '/src/video.js');
 const { writePNG } = await import(ROOT + '/tools/frame.mjs');
 const [img, secsS, outdir = '/tmp/bootshot'] = process.argv.slice(2);
@@ -18,7 +19,9 @@ const name = img.split('/').pop().replace(/\.[^.]+$/, '');
 let bytes = new Uint8Array(readFileSync(img));
 const { mc } = makeMachine({ dos: false, memSize: Number(process.env.MEM || 16) << 20 });
 let drive = 0;
-if (bytes.length > 2949120) {                      // hard disk: geometry from the partition table
+const isISO = /\.iso$/i.test(img);
+if (process.env.CDROM) mc.disk.attachCD(new Uint8Array(readFileSync(process.env.CDROM)));
+if (isISO) { /* bootCD attaches it */ } else if (bytes.length > 2949120) {                      // hard disk: geometry from the partition table
   const dv = new DataView(bytes.buffer), e = 0x1be;
   const lba = dv.getUint32(e + 8, true), n = dv.getUint32(e + 12, true), sh = bytes[e + 1], ss = bytes[e + 2] & 63;
   const eh = bytes[e + 5], es = bytes[e + 6] & 63, ec = bytes[e + 7] | ((bytes[e + 6] & 0xc0) << 2);
@@ -31,7 +34,7 @@ if (bytes.length > 2949120) {                      // hard disk: geometry from t
   mc.disk.attach(0, bytes);
 }
 let fault = null; mc.onError = (x) => { fault = x; };
-bootSector(mc, bytes, { drive });
+if (isISO) bootCD(mc, bytes); else bootSector(mc, bytes, { drive });
 const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
 const v = new Video(mc, canvas); v.font = mc.font;
 const c = mc.cpu, sec = 18.2065 * mc.pitBase, t0 = Date.now(), h = (x, n = 8) => (x >>> 0).toString(16).padStart(n, '0');
