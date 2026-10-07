@@ -4,8 +4,9 @@
 //
 //   MEM=64 MIRAGE_CPU=586 STEP=300 node bootshot.mjs <image> <seconds> <outdir>
 // ENTER=5 presses Enter at guest second 5 (BeOS's partition menu waits for it).
+// With MIRAGE_SERIAL=1, what the guest sends to COM1 is written to <outdir>/serial.txt (ReactOS's debug log).
 // An .iso image boots El Torito (src/boot.js bootCD); CDROM=<iso> puts a disc in the drive beside a disk.
-import { readFileSync, mkdirSync } from 'fs';
+import { readFileSync, mkdirSync, writeFileSync, appendFileSync, openSync, readSync, fstatSync, closeSync } from 'fs';
 import { fileURLToPath } from 'url';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
 const { makeMachine } = await import(ROOT + '/tools/harness.mjs');
@@ -16,7 +17,11 @@ const [img, secsS, outdir = '/tmp/bootshot'] = process.argv.slice(2);
 mkdirSync(outdir, { recursive: true });
 const SECS = Number(secsS) || 600, STEP = Number(process.env.STEP || 300);
 const name = img.split('/').pop().replace(/\.[^.]+$/, '');
-let bytes = new Uint8Array(readFileSync(img));
+// readFileSync stops at 2 GiB (Windows 2000's image is exactly that): read in 64 MiB pieces.
+const readBig = (file) => { const fd = openSync(file, 'r'), size = fstatSync(fd).size, out = new Uint8Array(size);
+  for (let at = 0; at < size;) at += readSync(fd, out, at, Math.min(64 << 20, size - at), at);
+  closeSync(fd); return out; };
+let bytes = readBig(img);
 const { mc } = makeMachine({ dos: false, memSize: Number(process.env.MEM || 16) << 20 });
 let drive = 0;
 const isISO = /\.iso$/i.test(img);
@@ -33,6 +38,7 @@ if (isISO) { /* bootCD attaches it */ } else if (bytes.length > 2949120) {      
   if (bytes.length < 1474560) { const p = new Uint8Array(1474560); p.set(bytes); bytes = p; }
   mc.disk.attach(0, bytes);
 }
+if (mc.serial) { const f = `${outdir}/serial.txt`; writeFileSync(f, ''); let line = ''; mc.serial.onTx = (b) => { line += String.fromCharCode(b); if (b === 10 || line.length > 200) { appendFileSync(f, line); line = ''; } }; }
 let fault = null; mc.onError = (x) => { fault = x; };
 if (isISO) bootCD(mc, bytes); else bootSector(mc, bytes, { drive });
 const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
