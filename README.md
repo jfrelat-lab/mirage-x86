@@ -108,4 +108,4 @@ nothing is taken on trust, every behaviour is compared with an independent imple
 
 ## License
 
-To be decided before publication — see `LICENSE`.
+[MIT](LICENSE). The licence covers MIRAGE itself, not the software you run on it.

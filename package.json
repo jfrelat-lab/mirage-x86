@@ -29,5 +29,7 @@
     "jit",
     "pc",
     "retrocomputing"
-  ]
+  ],
+  "license": "MIT",
+  "author": "Julien Frelat"
 }
