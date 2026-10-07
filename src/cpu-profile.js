@@ -86,6 +86,32 @@ export const PROFILES = {
     vendor: 'GenuineIntel',
     signature: 0x0520,
   },
+  // A P6-class part: '586' plus what a Pentium Pro adds and MIRAGE implements — CMOVcc, FCMOVcc and
+  // FCOMI, RDMSR/WRMSR, CPUID leaf 2 — which CPUID then reports (CMOV, MSR), family 6. This is the
+  // generation Windows 2000/XP, ReactOS, Haiku and i686 Linux are built for (docs/ROADMAP.md H14-1).
+  // No MMX: the Pentium Pro has none. MIRAGE_CPU=686 or `new Machine({ cpu: '686' })`.
+  '686': {
+    name: '686',
+    shiftCountMask: 0x1f,
+    pushSPOriginal: true,
+    pushfSetsReserved: false,
+    bcdAdjustsAX: true,
+    cpuid: true,
+    p6: true,
+    signature: 0x0619,
+  },
+  // '686' with an Intel identity: GenuineIntel, family 6 model 1 stepping 9, a Pentium Pro.
+  pentiumpro: {
+    name: 'pentiumpro',
+    shiftCountMask: 0x1f,
+    pushSPOriginal: true,
+    pushfSetsReserved: false,
+    bcdAdjustsAX: true,
+    cpuid: true,
+    p6: true,
+    vendor: 'GenuineIntel',
+    signature: 0x0619,
+  },
 };
 
 export const DEFAULT_PROFILE = '386';

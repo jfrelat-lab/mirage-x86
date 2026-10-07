@@ -4,7 +4,7 @@
 // tools/v86/*.mjs do. Minimal on purpose: pick an image, a CPU profile and RAM, boot, watch.
 //
 // URL parameters (so a boot can be bookmarked):
-//   ?img=boot/v86/bl3-5.img   image to boot (a served path)   ?cpu=386|586|pentium   ?mem=64 (MiB)
+//   ?img=boot/v86/bl3-5.img   image to boot (a served path)   ?cpu=386|586|pentium|686|pentiumpro   ?mem=64 (MiB)
 //   ?clock=realtime|turbo   ?pci=1 (QEMU -M pc's bus)   ?com1=1 (a 16550A and a console under the screen)
 //
 // Two clocks. REAL TIME (the default, as v86 and index.html do it): the PIT fires on the wall clock at

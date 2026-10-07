@@ -331,27 +331,28 @@ export class CPU {
    * CPUID. Only reached when the profile has it (src/cpu-profile.js); elsewhere the opcode is #UD.
    *
    * THE FEATURE BITS ARE OURS, and each one is set only if MIRAGE implements the thing — the same
-   * rule as the BIOS configuration table and the CMOS. So: FPU, because src/fpu.js is a real x87;
-   * TSC, because RDTSC (0F 31) answers from the cycle counter; and PSE, because CR4.PSE and 4 MiB
-   * page-directory entries are followed by Memory.walk. Nothing else. In particular SSE
-   * is NOT claimed although src/sse.js exists: it implements the sixteen instructions one 1K intro
-   * uses, and a guest that read an SSE bit here would be entitled to the whole extension.
+   * rule as the BIOS configuration table and the CMOS. So, on every part that has CPUID: FPU,
+   * because src/fpu.js is a real x87; TSC, because RDTSC (0F 31) answers from the cycle counter;
+   * PSE, because CR4.PSE and 4 MiB page-directory entries are followed by Memory.walk; and CX8,
+   * because CMPXCHG8B is there (cmpxchg8b below) — a Pentium has all four. The P6 profiles ('686',
+   * 'pentiumpro') add what a Pentium Pro adds and MIRAGE has: MSR (RDMSR/WRMSR below) and CMOV
+   * (CMOVcc, FCMOVcc, FCOMI). Nothing else. In particular SSE is NOT claimed although src/sse.js
+   * exists: it implements the sixteen instructions one 1K intro uses, and a guest that read an SSE
+   * bit here would be entitled to the whole extension. No MMX (the Pentium Pro has none), no SEP,
+   * no PGE, no MTRR, no APIC.
    *
    * The vendor string is not a copy of anyone's. Claiming GenuineIntel would route a guest down a
    * path chosen for a chip we are not, and an unknown vendor is a truthful answer that software is
-   * built to handle — that is what the string is for.
-   *
-   * The family is 5: CPUID itself implies 486-or-later, and the TSC arrived with the Pentium. We do
-   * not have CMPXCHG8B, which a real Pentium does, so that bit stays clear rather than being
-   * implied by the family.
+   * built to handle — that is what the string is for. The 'pentium' and 'pentiumpro' profiles say
+   * GenuineIntel for the guests that classify by it.
    */
   cpuid() {
-    const leaf = this.reg[0] >>> 0;
+    const leaf = this.reg[0] >>> 0, P = this.profile || {};
     if (leaf === 0) {
-      this.reg[0] = 1;                                   // highest leaf we answer
+      this.reg[0] = P.p6 ? 2 : 1;                        // highest leaf we answer
       // "MIRAGE  " padded to twelve bytes, in the EBX:EDX:ECX order CPUID uses — or the profile's
       // vendor (the 'pentium' profile, for guests that classify by it).
-      const v = (this.profile && this.profile.vendor) || 'MIRAGE      ';
+      const v = P.vendor || 'MIRAGE      ';
       const w = (i) => (v.charCodeAt(i) | (v.charCodeAt(i + 1) << 8) | (v.charCodeAt(i + 2) << 16) | (v.charCodeAt(i + 3) << 24)) >>> 0;
       this.reg[3] = w(0);                                // EBX bytes 0-3
       this.reg[2] = w(4);                                // EDX bytes 4-7
@@ -359,13 +360,57 @@ export class CPU {
       return;
     }
     if (leaf === 1) {
-      this.reg[0] = (this.profile && this.profile.signature) || 0x0500;   // family 5, model 0 (or the profile's)
+      this.reg[0] = P.signature || 0x0500;               // family 5, model 0 (or the profile's)
       this.reg[3] = 0;                                   // EBX: no brand index, no CLFLUSH line
       this.reg[1] = 0;                                   // ECX: none of the later extensions
-      this.reg[2] = (1 << 0) | (1 << 3) | (1 << 4);      // EDX: FPU (bit 0), PSE (bit 3: CR4 + 4 MiB pages), TSC (bit 4)
+      // EDX: FPU (0), PSE (3), TSC (4), CX8 (8); on a P6 also MSR (5) and CMOV (15).
+      this.reg[2] = (1 << 0) | (1 << 3) | (1 << 4) | (1 << 8) | (P.p6 ? (1 << 5) | (1 << 15) : 0);
+      return;
+    }
+    if (leaf === 2 && P.p6) {                            // cache and TLB descriptors, a Pentium Pro's:
+      this.reg[0] = 0x03020101; this.reg[3] = 0; this.reg[1] = 0; this.reg[2] = 0x06040a42;   // (256K L2)
       return;
     }
     this.reg[0] = this.reg[3] = this.reg[1] = this.reg[2] = 0;   // an unknown leaf answers zeros
+  }
+
+  /**
+   * CMPXCHG8B m64 (0F C7 /1): compare EDX:EAX with the quadword; equal, store ECX:EBX and set ZF;
+   * different, load it into EDX:EAX and clear ZF. No other flag changes. The destination is written
+   * either way (the old value back when the compare fails), as the processor does — so a read-only
+   * page faults in both cases, and both halves are probed before either changes.
+   */
+  cmpxchg8b(a, a4) {
+    const m = this.mem, lo = m.r32(a) >>> 0, hi = m.r32(a4) >>> 0;
+    m.w32(a, lo); m.w32(a4, hi);
+    if (lo === (this.reg[0] >>> 0) && hi === (this.reg[2] >>> 0)) {
+      m.w32(a, this.reg[3] >>> 0); m.w32(a4, this.reg[1] >>> 0);
+      this.flags |= ZF;
+    } else { this.reg[0] = lo; this.reg[2] = hi; this.flags &= ~ZF; }
+  }
+
+  /**
+   * RDMSR / WRMSR (0F 32 / 0F 30), ECX = the register, EDX:EAX = the value. The model-specific
+   * registers a guest reads on a Pentium Pro that advertises nothing optional:
+   *   10h  the time-stamp counter, what RDTSC reads (a write is ignored: the counter is the cycle count)
+   *   17h  platform ID, 8Bh  microcode revision — zero: none loaded
+   *   1Bh  APIC base — zero: no local APIC (CPUID says so too)
+   *   2Ah  power-on configuration — zero
+   * Any other register is #GP(0), as on the part; so is either instruction outside ring 0.
+   * Returns false when it raised.
+   */
+  rdmsr() {
+    if (this.cpl !== 0 || (this.flags & 0x20000)) { this.raise(13, 0); return false; }
+    const n = this.reg[1] >>> 0;
+    if (n === 0x10) { this.reg[0] = this.cycles >>> 0; this.reg[2] = Math.floor(this.cycles / 4294967296) >>> 0; return true; }
+    if (n === 0x17 || n === 0x1b || n === 0x2a || n === 0x8b) { this.reg[0] = 0; this.reg[2] = 0; return true; }
+    this.raise(13, 0); return false;
+  }
+  wrmsr() {
+    if (this.cpl !== 0 || (this.flags & 0x20000)) { this.raise(13, 0); return false; }
+    const n = this.reg[1] >>> 0;
+    if (n === 0x10 || n === 0x17 || n === 0x1b || n === 0x2a || n === 0x8b) return true;   // writes ignored
+    this.raise(13, 0); return false;
   }
 
   /** LTR — the TSS descriptor lives in the GDT, like the LDT's. */

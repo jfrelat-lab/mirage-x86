@@ -167,6 +167,25 @@ function eq(name, got, want) {
 { const { cpu } = run([0x66, 0xb8, 0xfa, 0xff, 0xff, 0xff, 0x66, 0xba, 0xff, 0xff, 0xff, 0xff, 0x66, 0xb9, 0x03, 0x00, 0x00, 0x00, 0x66, 0xf7, 0xf9, 0xf4]);
   eq('idiv32 quotient', cpu.reg[0] | 0, -2); eq('idiv32 remainder', cpu.reg[2] | 0, 0); }
 
+// ---- CMPXCHG8B m64 (0F C7 /1): tools/cx8probe.asm, the same four lines as QEMU -cpu pentium ------
+// 66 B8/BA/B9/BB imm32 load EAX/EDX/ECX/EBX; the quadword is at DS:0010h = 22222222:11111111.
+{ const prog = (eax, flags) => [0x66, 0xb8, ...[0, 8, 16, 24].map((k) => (eax >>> k) & 0xff), 0x66, 0xba, 0x22, 0x22, 0x22, 0x22,
+    0x66, 0xb9, 0xaa, 0xaa, 0xaa, 0xaa, 0x66, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0x68, flags & 0xff, flags >> 8, 0x9d, 0x0f, 0xc7, 0x0e, 0x10, 0x00, 0xf4];
+  const go = (eax, flags) => { try { const { mc, cpu } = run(prog(eax, flags), ({ mc }) => { mc.mem.w32(0x2010, 0x11111111); mc.mem.w32(0x2014, 0x22222222); });
+    const h = (v) => (v >>> 0).toString(16); return [h(cpu.reg[2]), h(cpu.reg[0]), h(mc.mem.r32(0x2014)), h(mc.mem.r32(0x2010)), h(cpu.flags & 0x8d5)].join(' '); } catch (e) { return String(e.message).slice(0, 50); } };
+  eq('CMPXCHG8B equal: ECX:EBX stored, ZF set and nothing else', go(0x11111111, 0), '22222222 11111111 aaaaaaaa bbbbbbbb 40');
+  eq('CMPXCHG8B different: the quadword into EDX:EAX, ZF cleared, SF AF PF CF OF kept', go(0x11111112, 0x8d5), '22222222 11111111 22222222 11111111 895'); }
+// The P6 profiles: family 6, CMOV and MSR advertised, leaf 2, and RDMSR itself.
+{ const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiumpro' }); const cpu = mc.cpu;
+  cpu.reg[0] = 0; cpu.cpuid(); const max = cpu.reg[0];
+  cpu.reg[0] = 1; cpu.cpuid();
+  eq("the 'pentiumpro' profile: leaves 0-2, family 6 model 1, FPU PSE TSC MSR CX8 CMOV", [max, (cpu.reg[0] >>> 0).toString(16), (cpu.reg[2] >>> 0).toString(16)].join(), '2,619,8139');
+  let gp = 0; cpu.raise = (n) => { gp = n; };
+  cpu.cycles = 0x123456789; cpu.reg[1] = 0x10; const ok = cpu.rdmsr();
+  eq('...RDMSR 10h is the time-stamp counter', [ok, cpu.reg[2], (cpu.reg[0] >>> 0).toString(16)].join(), 'true,1,23456789');
+  cpu.reg[1] = 0x1234; const bad = cpu.rdmsr();
+  eq('...and a register the part lacks is #GP', [bad, gp].join(), 'false,13'); }
+
 // ---- CMOVcc (0F 40-4F): MOV Gv,Ev only if the condition holds; flags untouched. -------
 // AX=5; CMP AX,5 (ZF=1); CMOVZ CX,BX copies (taken); CMOVNZ DX,BX does not (not taken).
 { const { cpu } = run([0xb8, 0x05, 0x00, 0x3d, 0x05, 0x00, 0xbb, 0x34, 0x12, 0xb9, 0x00, 0x00, 0xba, 0x00, 0x00, 0x0f, 0x44, 0xcb, 0x0f, 0x45, 0xd3, 0xf4]);
@@ -747,7 +766,8 @@ function eq(name, got, want) {
   eq('CPUID claims the FPU', cpu.reg[2] & 1, 1);
   eq('CPUID claims the TSC', (cpu.reg[2] >> 4) & 1, 1);
   eq('CPUID claims no SSE, which we implement only in part', (cpu.reg[2] >> 25) & 1, 0);
-  eq('CPUID claims no CMPXCHG8B, which we do not have', (cpu.reg[2] >> 8) & 1, 0);
+  eq('CPUID claims CMPXCHG8B, which cpu.cmpxchg8b implements', (cpu.reg[2] >> 8) & 1, 1);
+  eq('...and on a 586 neither CMOV nor MSR: those are the P6 profiles', ((cpu.reg[2] >> 15) & 1) | ((cpu.reg[2] >> 5) & 1), 0);
   cpu.reg[0] = 7; cpu.cpuid();
   eq('an unknown leaf answers zeros', (cpu.reg[0] | cpu.reg[1] | cpu.reg[2] | cpu.reg[3]) >>> 0, 0); }
 { // The ID flag and CPUID are one feature: a CPU that accepts the bit but has no CPUID cannot exist.
@@ -1537,7 +1557,7 @@ const udRun = (gated) => {
     const vend = String.fromCharCode(...[p.reg[3], p.reg[2], p.reg[1]].flatMap((w) => [w & 0xff, (w >>> 8) & 0xff, (w >>> 16) & 0xff, w >>> 24]));
     p.reg[0] = 1; p.cpuid(); pent = [vend, (p.reg[0] >>> 0).toString(16), p.reg[2]].join();
   } catch (e) { pent = String(e.message).slice(0, 40); }
-  eq("the 'pentium' profile says GenuineIntel, family 5 model 2, features FPU+PSE+TSC only", pent, 'GenuineIntel,520,25'); }
+  eq("the 'pentium' profile says GenuineIntel, family 5 model 2, features FPU+PSE+TSC+CX8 only", pent, 'GenuineIntel,520,281'); }
 
 // ---- CR4.PSE: a page-directory entry with PS set maps 4 MiB ---------------------------------------
 // 9legacy's loader maps its kernel with 4 MiB pages when CPUID says PSE, and panics at "vmap:

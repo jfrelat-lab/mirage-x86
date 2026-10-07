@@ -1986,6 +1986,21 @@ export class Recompiler {
         case 0x23: { const o = modrmReg(); P(`cpu.dr[${o.reg}]=${rR(o.rm, 32)};`); return; }      // MOV DRn, r32
         case 0x1f: modrm(); return;                                                     // multi-byte NOP
         case 0x31: P('cpu.reg[0]=(cpu.cycles>>>0);cpu.reg[2]=(Math.floor(cpu.cycles/4294967296))>>>0;'); return; // RDTSC → EDX:EAX
+        // RDMSR / WRMSR: ring 0 only, #GP(0) for a register the part does not have (cpu.rdmsr).
+        case 0x32: P(`cpu.eip=${curIpStart};if(!cpu.rdmsr())return;`); return;
+        case 0x30: P(`cpu.eip=${curIpStart};if(!cpu.wrmsr())return;`); return;
+        // CMPXCHG8B m64 (0F C7 /1, Pentium). Only ZF changes, so every other flag is still live.
+        // The register form and the other /r values are #UD.
+        case 0xc7: {
+          const o = modrm();
+          if (!o.isReg && o.reg === 1) {
+            cur.use |= lALL;
+            const a = memAddr(o, 64);
+            P(wrGuard(o.seg) + `cpu.cmpxchg8b(${a},${AM(`${a}+4`)});`); return;
+          }
+          if (guestOwnsUD(mem, rec.cpu)) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          throw new Error(unimplemented('0f 0xc7 /' + o.reg, mask(linStart - ip0 + ip - 2), mem, rec));
+        }
         case 0xa0: P(sz === 16 ? `cpu.push16(cpu.seg[${FS}]);` : `cpu.push32(cpu.seg[${FS}]);`); return;   // PUSH FS
         case 0xa1: P(sz === 16 ? `cpu.setSeg(${FS},cpu.pop16());` : `cpu.setSeg(${FS},cpu.pop32()&0xffff);`); return;  // POP FS
         case 0xa8: P(sz === 16 ? `cpu.push16(cpu.seg[${GS}]);` : `cpu.push32(cpu.seg[${GS}]);`); return;   // PUSH GS
