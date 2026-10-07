@@ -409,7 +409,7 @@ resident grabber snapshots the framebuffer+DAC after K ticks) and in MIRAGE, ren
 PNG (`-dosbox`/`-mirage`/`-diff`) and reports a similarity %. This is the *ground-truth*
 reference (golden is only self-consistency). Expect <100% on FP raytracers (float64 vs 80-bit,
 1-frame phase) — the side-by-side + diff image are the real signal; integer effects should be
-~100%. Needs `nasm` + `dosbox-x` installed (`/opt/homebrew/bin` on this machine).
+~100%. Needs `nasm` + `dosbox-x` installed (the tools look in `/opt/homebrew/bin`, Homebrew's location on an Apple-silicon Mac).
 
 ## Rendering a program to inspect it
 
@@ -527,7 +527,7 @@ it before trusting a capture — the boot text must show `HimemX 3.34 … Always
 QSHOT_IMG=FDXMS.IMG QSHOT_BOOT=14000 node tools/qemu-shot.mjs intros/mesha.com 10 /tmp/shot.ppm
 ```
 
-**And look at the picture.** Two harness bugs and one wrong conclusion in this session came from
+**And look at the picture.** Two harness bugs and one wrong conclusion in one investigation came from
 reading counters instead: a FreeDOS installer prompt, an `Invalid date` prompt eating the typed
 commands, and "mesha renders" from a lit-pixel count on an image that is visibly wrong.
 

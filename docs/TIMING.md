@@ -576,7 +576,7 @@ an `Int32Array` stores 2**32 as 0, and the page would otherwise read back empty 
 **Result**, median of 5 fresh processes each (one process's number moves several percent run to run,
 so a claim this size needs the median, not a run):
 
-| | barrier calls / 20 ticks | avant | après | |
+| | barrier calls / 20 ticks | before | after | |
 |---|---|---|---|---|
 | tube | 3 030 236 | 172.0 MIPS | **179.4** | **+4.3%** |
 | memories | 1 333 327 | 153.1 | **167.6** | **+9.5%** |
@@ -588,7 +588,7 @@ is the shape the mechanism predicts.
 
 **But the Map was only a quarter of the cost, not the whole of it.** Re-profiled:
 
-| `recompiler.js:invalidate` self time | avant | après |
+| `recompiler.js:invalidate` self time | before | after |
 |---|---|---|
 | tube | 9.4% | **7.3%** |
 | memories | 4.7% | **3.7%** |
@@ -764,7 +764,7 @@ state, first three timer services on the same cycle, +0.1 % cumulative lateness)
 defects found on the way stand: `dosdiff`'s fixed 7 s alarm, and the grabber calling DOS from an ISR
 with no InDOS test.
 
-**The method lesson, which is the third time this session:** every one of these wrong readings came
+**The method lesson, learned for the third time in this investigation:** every one of these wrong readings came
 from instrumenting a path the code does not take — `mem.w8` when the recompiler emits inline stores,
 `realInt` when the tick goes through `dpmiIrq`, the real-mode IVT when the vector is protected-mode.
 Before believing a counter that reads zero, make it fire once on purpose.
@@ -876,7 +876,7 @@ extender, whose header states the whole thing outright:
 ;   -timer speed to 100Hz (adjustable)
 ```
 
-Three measurements this session are confirmed by that comment rather than inferred:
+Three measurements made here are confirmed by that comment rather than inferred:
 
 * **"only timer interrupt available"** — the extender masks every hardware interrupt but the timer,
   which it owns. That is why `rtcprobe.asm` goes mute within 62 ms (§14e) and why no real-mode TSR can

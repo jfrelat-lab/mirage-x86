@@ -23,5 +23,5 @@ One-off studies:
   Wine-style, instead of booting real Windows: the measured API surface (`tools/ne-inspect.mjs`),
   what the engine already provides, and the go/no-go.
 
-These are written to survive between sessions — keep them in step with the code when you change
+These are working notes meant to outlive the work that produced them — keep them in step with the code when you change
 the design (especially the run loop, the region compiler, the device model, or the gates).

@@ -1,6 +1,6 @@
 // browser-loop.mjs — run a program under a faithful copy of ui.js's animation-frame loop, in Node.
 //
-// The browser pane in this session stays document.hidden, so requestAnimationFrame never fires and
+// A browser tab driven by automation stays document.hidden, so requestAnimationFrame never fires and
 // the real loop cannot be measured there. Rather than measure something else and call it the same
 // thing, this reproduces the loop exactly: the same FRAME_BUDGET_MS cap, the same per-frame virtual
 // cycle budget, the same "at most one PIT tick per inner iteration", the same 20000-cycle slice, and

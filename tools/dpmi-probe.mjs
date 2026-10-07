@@ -79,7 +79,7 @@ mc.hookInterrupt(0x31, (c, m) => {
     const lin = (c.base[1] + (c.eip >>> 0)) >>> 0;
     const dump = (n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(lin + i) & 0xffffff], 2)).join(' ');
     dpmiLog.push(`  >> after 0204 (BL=21), bytes at ${h(c.seg[1])}:${h(c.eip >>> 0, 4)} ` +
-      `(lineaire ${h(lin, 6)}): ${dump(24)}`);
+      `(linear ${h(lin, 6)}): ${dump(24)}`);
   }
   if (dpmiLog.length < 40) {
     // 0300 and 0302 do NOT finish here — they switch to real mode and complete later at the
@@ -280,7 +280,7 @@ if (beforeNull.length && mc.dpmi) {
   const csBase = 0x32c0;                       // base the client set for 0044 via 0007
   const at = 0x1260;
   const dump = (a, n) => Array.from({ length: n }, (_, i) => h(mc.mem.u8[(csBase + a + i) & 0xffffff], 2)).join(' ');
-  console.log(`\nsite du chainage, 0044:${h(at, 4)} (lineaire ${h(csBase + at, 6)}):`);
+  console.log(`\nchaining site, 0044:${h(at, 4)} (linear ${h(csBase + at, 6)}):`);
   console.log('  ' + dump(at, 16));
   console.log('  ' + dump(at + 16, 16));
 }

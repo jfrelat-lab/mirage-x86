@@ -119,7 +119,7 @@ if cpl0 != 0:
             uc.reg_write(SEGR[i], sel)
     trampoline = iret_off
     print(f'  entree en anneau {cpl0} via IRET a {K_CS:#06x}:{iret_off:#x} '
-          f'(pile TSS {K_SS:#06x}:{esp0:#x}, lineaire {stack_lin:#x})')
+          f'(TSS stack {K_SS:#06x}:{esp0:#x}, linear {stack_lin:#x})')
 else:
     # A segment register can legitimately hold a selector that no longer resolves: the descriptor
     # CACHE keeps whatever was loaded last, so after a real-to-protected switch FS/GS still carry

@@ -572,7 +572,7 @@ export class Recompiler {
       this.derailReported = true;
       const cpu = this.cpu;
       const where = `${(cpu.seg[CS] >>> 0).toString(16).padStart(4, '0')}:` +
-        `${(blk.ip0 >>> 0).toString(16)} (lineaire ${(lin >>> 0).toString(16)})`;
+        `${(blk.ip0 >>> 0).toString(16)} (linear ${(lin >>> 0).toString(16)})`;
       const trail = recentBlocks(this) || '(no trail)';
       const msg = `mirage: DERAILED — ${where}: ${describeRegion(this.mem, lin, cpu)}. ` +
         `A ${blk.count}-instruction block, ${blk.bodyLen || 0} bytes of emitted source. ` +

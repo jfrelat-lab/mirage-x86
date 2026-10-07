@@ -1,6 +1,6 @@
 # MIRAGE — Compatibility Status
 
-A living record of what runs and what's blocked, so a future session starts from the known
+A living record of what runs and what's blocked, so that whoever picks the work up next starts from the known
 frontier instead of re-surveying. Update it when you unblock something.
 
 > ⚠️ When probing a game headless, check the **right framebuffer**: mode 13h → `mem.u8[0xa0000]`;
@@ -12,10 +12,10 @@ frontier instead of re-surveying. Update it when you unblock something.
 > cga/faults/framebuffer-occupancy + any B800 text. Feed keys as make/break hex (e.g. `39,b9` =
 > space). This is the fast path for "what mode did it set / why is the screen wrong".
 
-> 🖥️ **Browser rAF is throttled under preview automation** (tab treated as hidden → the run loop
-> stalls). To drive frames from `javascript_tool`: loop `mirage.machine.pumpKeyboard(); mirage.
+> 🖥️ **`requestAnimationFrame` is throttled in a hidden tab**, and a browser driven by automation
+> often counts as hidden: the run loop stalls. To drive frames from the console, loop `mirage.machine.pumpKeyboard(); mirage.
 > machine.runSlice(20000);` then `mirage.machine.tickTimer(); mirage.video.render();`. Synthetic
-> `KeyboardEvent`s dispatched on `window` DO reach `keyboard.js`; the automation `type` action does not.
+> `KeyboardEvent`s dispatched on `window` DO reach `keyboard.js`; an automation tool's synthetic typing may not.
 
 ## Demos / intros — the golden set (all render)
 
@@ -220,7 +220,7 @@ demos, not just Heaven.
 | Raptor / Jazz Jackrabbit | — | ❌ need **DPMI/protected mode** (DOS/16M, DOS4GW). Pass 386 detection. |
 | Halloween Harry | text | ❌ `HH1.EXE` is an 11 KB launcher (exits 255 after config I/O without a graphics mode). |
 
-## Known rough edges (browser UX — reported by the user, not yet fixed)
+## Known rough edges (browser UX — seen in use, not yet fixed)
 
 1. ~~CATALOG.EXE arrow-scroll + ESC colours~~ — **FIXED** (`6553340`): INT 10h AH=06/07 now honours
    the window rectangle (was scrolling the whole screen, wiping the header/footer) and the correct
@@ -1240,8 +1240,8 @@ HimemX goes from `No Supported A20 method detected / Driver won't be installed` 
 
 * "`INT 2Fh AX=4300` gets no answer" came from reading AX immediately after `swInt` — but `realInt`
   **transfers control**, it does not run the guest's handler in place, so AX was still the input value.
-  An in-guest probe (`tools/xmsq.asm`) answers `XMS AL=80`, entry `0290:0620`. Fifth instance this
-  session of measuring at the wrong instant.
+  An in-guest probe (`tools/xmsq.asm`) answers `XMS AL=80`, entry `0290:0620`. The fifth instance, in this
+  investigation, of measuring at the wrong instant.
 * "mesha exits at startup" came from looking only at the FINAL state — but `mode 3` + `INT 21h AH=4Ch`
   is also mesha's **normal** exit. Sampled during the run: mode 13h reached, framebuffer 100 % filled.
 
@@ -1282,5 +1282,5 @@ Traced, in order, each step measured:
 > code also runs with CS = 0x232d, whose base 0x232d0 is already past the image end. **The next step is
 > a trustworthy trace of where CS is set**, which the obvious one is not: hooking `setSeg` and printing
 > `cpu.eip` reports the instruction AFTER eip has moved, so it blamed `1fe6:08f8`, which disassembles
-> to `E9 0B FF` — a NEAR jump, which cannot load CS at all. Sixth instance this session of reading a
+> to `E9 0B FF` — a NEAR jump, which cannot load CS at all. The sixth instance, in this investigation, of reading a
 > value at the wrong instant; the address has to come from the block's own start, not from eip.
