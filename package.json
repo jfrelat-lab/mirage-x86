@@ -1,5 +1,5 @@
 {
-  "name": "mirage",
+  "name": "mirage-x86",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -31,5 +31,13 @@
     "retrocomputing"
   ],
   "license": "MIT",
-  "author": "Julien Frelat"
+  "author": "Julien Frelat",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jfrelat-lab/mirage-x86.git"
+  },
+  "homepage": "https://github.com/jfrelat-lab/mirage-x86",
+  "bugs": {
+    "url": "https://github.com/jfrelat-lab/mirage-x86/issues"
+  }
 }
