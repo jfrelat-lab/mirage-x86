@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A pure-JavaScript MS-DOS machine with a source-level x86\u2192JS dynamic recompiler.",
+  "description": "An x86 PC in plain JavaScript: an x86-to-JavaScript dynamic recompiler with a built-in DOS, and a bare PC that boots unmodified operating systems.",
   "scripts": {
     "test": "node tools/test.js",
     "test:dos": "node tools/test-dos.js",
@@ -13,7 +13,21 @@
     "demos": "nasm -f bin demos/xormunch.asm -o demos/XORMUNCH.COM && nasm -f bin demos/plasma13.asm -o demos/PLASMA13.COM && nasm -f bin demos/bootload.asm -o demos/BOOTLOAD.IMG && nasm -f bin demos/vesa.asm -o demos/VESA.COM",
     "serve": "python3 tools/serve.py 8761",
     "test:dosapi": "node tools/test-dos-api.js",
-    "test:all": "node tools/test.js && node tools/test-x86-uc.mjs && node tools/test-dos-api.js && node tools/test-dos.js && node tools/test-gfx.js && node tools/test-demos.js && node tools/golden.js",
-    "test:x86": "node tools/test-x86-uc.mjs"
-  }
+    "test:all": "node tools/test.js && node tools/test-x86-uc.mjs && node tools/test-dos.js && node tools/test-gfx.js && node tools/test-demos.js && node tools/golden.js check",
+    "test:x86": "node tools/test-x86-uc.mjs",
+    "golden": "node tools/golden.js check"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "emulator",
+    "x86",
+    "dos",
+    "javascript",
+    "dynamic-recompiler",
+    "jit",
+    "pc",
+    "retrocomputing"
+  ]
 }

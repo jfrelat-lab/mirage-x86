@@ -8,7 +8,7 @@
 //
 //   node d6-profile.mjs WOLF3D WOLF3D.EXE 4
 
-const ROOT = process.env.ROOT || '/Users/julienfrelat/Projects/mirage';
+const ROOT = process.env.ROOT || new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const [dir, exe, secsArg] = process.argv.slice(2);
 const SECS = Number(secsArg || 4);
 

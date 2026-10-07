@@ -10,7 +10,7 @@
 // SNAPBACK = instructions before the fault to snapshot (default 4000).
 import { readdirSync, statSync, readFileSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
-const ROOT='/Users/julienfrelat/Projects/mirage';
+const ROOT=new URL('../..', import.meta.url).pathname.replace(/\/$/, '');
 process.env.MIRAGE_NOTIER2='1';
 const { VFS } = await import(ROOT+'/src/vfs.js');
 const { makeMachine } = await import(ROOT+'/tools/harness.mjs');

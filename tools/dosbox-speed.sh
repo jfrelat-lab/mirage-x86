@@ -2,7 +2,7 @@
 # Run the CPUSPEED probe under DOSBox-X at several `cycles` settings and report each result.
 # The probe writes C:\SPEED.TXT, and C: is a mounted host dir, so the answer lands on the host.
 set -u
-MIR=/Users/julienfrelat/Projects/mirage
+MIR="$(cd "$(dirname "$0")/.." && pwd)"
 DOSBOX=/opt/homebrew/bin/dosbox-x
 OUT=$(mktemp -d)
 

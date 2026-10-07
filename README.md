@@ -1,178 +1,111 @@
-# MIRAGE — a pure-JavaScript x86 / MS-DOS machine
+# MIRAGE
 
-MIRAGE runs MS-DOS programs in a web page with **no WASM and no DOSBox** — just a
-**source-level x86→JavaScript dynamic recompiler**. It decodes real-mode x86 basic
-blocks, emits readable JavaScript, compiles it with `new Function`, and lets the
-browser's own JIT optimise the hot blocks. A two-tier JIT, all client-side.
+**An x86 PC in plain JavaScript: a dynamic recompiler that turns x86 machine code into JavaScript
+source, with a built-in DOS so a `.COM` or `.EXE` runs the moment you drop it on the page.**
+
+No WebAssembly, no build step, no dependencies. It runs in a browser and in Node.
 
 ```
- x86 machine code ─▶ decoder ─▶ JS source ─▶ new Function ─▶ V8/SpiderMonkey JIT ─▶ run
-                     (per basic block, cached by linear address; SMC-aware)
+ x86 machine code ─▶ decoder ─▶ JS source ─▶ new Function ─▶ the engine's own JIT ─▶ run
+                     (per basic block, cached by linear address, aware of self-modifying code)
 ```
 
-It is **not** an interpreter (like a naïve emulator), **not** DOSBox compiled to
-WASM (js-dos), and **not** a WASM-emitting JIT (v86). The generated code is plain
-JavaScript you can read in the debugger.
+MIRAGE is two things sharing one CPU:
 
-## Status
+- **A DOS player** (`index.html`). DOS, the BIOS, XMS, EMS and a DPMI host are implemented in
+  JavaScript, so there is no DOS image to boot: a program starts at once.
+- **A bare PC** (`boot.html`). A BIOS, an 8259/8254/RTC chipset, VGA and VBE, IDE disks, an ATAPI
+  CD-ROM, and optionally a PCI bus and a 16550 serial port: enough to boot unmodified operating
+  systems from a disk image or an El Torito CD.
 
-The core is built and **verified in Node**: a hand-written suite (31 checks) plus a
-**conformance harness that passes 423,736 real-8088 test vectors at 100%** (the
-TomHarte / SingleStepTests set) across the ALU grid, INC/DEC, TEST, MOV/XCHG,
-group-1, shifts, rotates, NOT/NEG/MUL/IMUL and the BCD instructions. In the browser
-you get a working MS-DOS prompt, the CP437 text screen, VGA mode 13h graphics,
-keyboard input, drag-and-drop file mounting, and URL program loading. Running *Dune*
-(Cryo) or *Second Reality* flawlessly is the north star this foundation is built
-toward — see [Roadmap](#roadmap). This is an honest early build of a very large
-machine, not a finished emulator.
+## What runs today
+
+Measured on the images named in [docs/COMPAT.md](docs/COMPAT.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+None of that software is in this repository — see [Third-party software](#third-party-software).
+
+| | Reaches |
+|---|---|
+| DOS intros and demos | 31 of the 32 tried render; 21 are pinned by the golden test |
+| DOS games | real mode, DOS extenders (DPMI), EMS/XMS — per-title status in docs/COMPAT.md |
+| Windows 3.0, 95, 98, ME | the desktop |
+| Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell; runlevel 5 |
+| FreeDOS 1.3 (from its CD), MS-DOS 6.22 | the installer; the prompt |
+| QNX 4.05 demo disk, KolibriOS, OpenBSD | the desktop; the desktop; `login:` |
+
+**What does not work yet**, so nobody has to find out the hard way: Windows NT 3.51 (dies after the
+graphical switch), Windows 2000 (stays on its boot screen), ReactOS (needs ACPI, which MIRAGE does
+not have), BeOS 5 (stays on its splash screen), Plan 9. There is no sound output, no network card,
+no USB, no 64-bit mode. The CPU is a Pentium Pro without MMX.
+
+## How fast
+
+Wall-clock seconds to the arrival screen, same image, same host (lower is better):
+
+| | QEMU (TCG) | v86 | MIRAGE |
+|---|---|---|---|
+| Windows 98 | 28 | 44 | 50 |
+| Windows 95 | 18 | 16 | 34 |
+| QNX 4.05 demo | 4 | 6 | 2 |
+| Linux 2.2 | 10 | — | 8 |
+
+[v86](https://github.com/copy/v86) is the mature project in this space: it compiles to WebAssembly,
+is faster on Windows, and boots systems MIRAGE cannot. MIRAGE's own ground is the built-in DOS, the
+readable generated code, and runs that are reproducible to the cycle.
 
 ## Quick start
 
-No build step, no dependencies.
+```bash
+python3 tools/serve.py 8761      # any static file server works
+# http://localhost:8761/            the DOS player: drop a .COM, .EXE or a folder
+# http://localhost:8761/boot.html   the bare PC: boot a disk image
+```
 
 ```bash
-# from the mirage/ directory
-python3 tools/serve.py 8761      # any static server works
-# open http://localhost:8761
-node tools/test.js               # 31 recompiler checks
-node tools/test-dos.js           # DOS hello-world end-to-end
-node tools/test-gfx.js           # mode-13h demos paint the framebuffer
-node tools/test-demos.js         # real nasm-assembled VGA demos render + animate
-node tools/conformance.js        # 423k+ real-8088 vectors (downloads on demand)
+node tools/test.js                # the unit suite
+npm run test:all                  # every suite that needs nothing outside the repository
 ```
 
-At the prompt: `DIR`, `HELP`, or run a demo. Besides the hand-written `BARS`,
-`PLASMA`, `BANNER`, `HELLO`, two **real nasm-assembled VGA demos** ship in `demos/`
-and mount on `C:`: **`XORMUNCH`** (munching-squares XOR field with a palette
-rotated through the DAC ports) and **`PLASMA13`** (a runtime-LUT plasma under a
-rainbow palette). **Ctrl+C** stops a running program. Drag a `.COM`/`.EXE` onto the
-window to mount it on `C:` (and auto-run it).
+Node 22 (what it is developed on). The assembly sources under `demos/` and `tools/` need `nasm` only if you change
+them; the assembled demos are checked in.
 
-The demos are real-mode VGA programs (`demos/*.asm`); rebuild with `npm run demos`
-(needs `nasm`). They exercise INT 10h mode-set, direct `A000:0` framebuffer writes,
-the VGA DAC palette ports (`0x3C8`/`0x3C9`), `0x3DA` vsync polling, and INT 16h —
-which is what testing *real* programs forced the engine to implement.
+## How it is tested
 
-### URL parameters
+MIRAGE is checked against other machines, not against its own expectations:
 
-```
-?run=PLASMA                 run a program already on C:
-?run=https://…/x.com        fetch a binary, mount it, run it
-?args=...                   command tail passed to the program
-?load=URL[,URL2]            fetch + mount without running
-?cmd=DIR                    run any shell command line
-```
+- `tools/test.js` — the unit suite; each test was written to fail when its fix is reverted.
+- `tools/golden.js` — a fingerprint of the screen and state of 44 programs after a fixed number of
+  cycles. Most are third-party and are skipped when their files are absent.
+- `tools/conformance.js`, `tools/conformance386.mjs`, `tools/test-x86-uc.mjs` — single-instruction
+  tests against the SingleStepTests vectors and against Unicorn.
+- Probes in `tools/*.asm` — small boot programs that print what the hardware answers, run unchanged
+  under QEMU and under MIRAGE and compared line by line (PCI, ATAPI, VBE, the UART, CMPXCHG8B…).
+- Whole-system comparison against QEMU, DOSBox-X and v86 (`tools/v86/`, `tools/cosim/`).
 
-### Testing DOS games
+[docs/TESTING.md](docs/TESTING.md) has the details.
 
-Put each game in its own folder under a local (gitignored) `games/` directory — e.g.
-`games/ALLEYCAT/CAT.EXE` plus any data files — then run `node tools/games-manifest.mjs` to
-(re)generate `games/manifest.json`. The shell's catalogue lists every title at `C:\GAMES\<game>\`,
-so `DIR GAMES` shows what is available; to play one, `CD GAMES\<game>` then run its executable, or
-jump straight in with `?run=GAMES\<game>\<exe>`. Single files still work via drag-and-drop or
-`?run=https://…`.
+## Documentation
 
-**A program runs with its own directory as the root of `C:`** — DOSBox's `mount c games/<game>`,
-and the drive the original media presented. So a title that opens `C:\CONFIG.DAT`, writes a save
-next to itself, or scans the root finds what it shipped with, and it cannot see the catalogue or
-any other title. The narrowed view lasts exactly as long as the program does; the shell goes back
-to browsing the whole tree at the next prompt. The headless tools mount the same way
-(`tools/corpus.mjs`), so what they measure is what the browser runs.
+Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The rest: the recompiler
+([RECOMPILER.md](docs/RECOMPILER.md)), the devices ([DEVICES.md](docs/DEVICES.md)), timing
+([TIMING.md](docs/TIMING.md)), compatibility ([COMPAT.md](docs/COMPAT.md)) and the roadmap
+([ROADMAP.md](docs/ROADMAP.md)). These are working notes kept alongside the code, written as the
+work went: they are detailed and candid rather than polished.
 
-## Architecture
+## Third-party software
 
-The engine is **DOM-free** so it runs identically in Node and the browser, which is
-what makes the headless test harness possible.
+This repository contains MIRAGE and the small demos written for it (`demos/`). It contains no
+operating system, game, intro or BIOS from anyone else, and the tools that expect them look in
+`boot/`, `games/` and `intros/`, which are ignored by git. Bring your own, and check that you are
+allowed to use what you bring.
 
-> In-depth internals reference lives in **[docs/](docs/)** — start with
-> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), then RECOMPILER / DEVICES / TESTING / COMPAT.
+The VGA fonts in `assets/` were rebuilt from rendered glyphs (`tools/build-fonts.mjs`).
 
-| Module | Role |
-|--------|------|
-| `src/memory.js` | Flat physical RAM, little-endian accessors, self-modifying-code page tracking |
-| `src/cpu.js` | Register file (32-bit, 386-ready), segmentation, EFLAGS, mul/div/shift helpers |
-| `src/recompiler.js` | **The dynarec** — decodes basic blocks, emits JS, caches by `(linear, ip)`, SMC invalidation |
-| `src/machine.js` | Run loop, modular I/O-port + interrupt bus, JS-handler vs guest-ISR routing, timer injection |
-| `src/bios.js` | INT 10h (video + DAC palette), INT 16h (keyboard), INT 1Ah (timer), the BIOS Data Area |
-| `src/dos.js` | INT 21h kernel, PSP, bump allocator, COM + MZ-EXE loaders (with relocation) |
-| `src/vfs.js` | In-memory `C:` filesystem, 8.3 paths, DOS handle table, drag-drop ingestion |
-| `src/video.js` | Renders text mode (CP437 glyphs) and mode 13h (256-colour) to a canvas |
-| `src/keyboard.js` | Browser key events → BIOS (scan, ascii) pairs |
-| `src/shell.js` | A COMMAND.COM-style shell (DIR, CD, TYPE, COPY, …) and program launcher |
-| `src/ui.js` / `src/main.js` | App controller (render loop, timer pacing) and DOM wiring |
+## How it was built
 
-### How a block is compiled
+MIRAGE was written with [Claude Code](https://claude.com/claude-code), Anthropic's coding agent,
+directed by Julien Frelat; the commit history says so on every commit. The method is the one above:
+nothing is taken on trust, every behaviour is compared with an independent implementation.
 
-The recompiler walks x86 bytes from CS:IP until the first control transfer, building
-a JavaScript function body that mutates CPU state directly. For example a small loop
-becomes something like:
+## License
 
-```js
-// generated for: ADD AX,CX / LOOP back
-var r = cpu.reg, m = cpu.mem, sb = cpu.base;
-var _0 = (r[0]&0xffff), _1 = (r[1]&0xffff);
-var _2 = (_0+_1)&0xffff; r[0]=(r[0]&~0xffff)|_2; cpu.setAdd(_0,_1,_2,16);
-r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);
-cpu.eip = ((r[1]&0xffff)!==0) ? 5 : 9; return;
-```
-
-Each block is compiled **once** and then re-run from cache — in the browser, the
-PLASMA demo executes ~100M block-invocations from only **7 compiled blocks**.
-
-## Innovations (vs. the state of the art)
-
-- **Source-level x86→JS recompilation.** Readable generated JS, JIT-compiled by the
-  browser. Different approach from js-dos (DOSBox→WASM) and v86 (WASM-JIT).
-- **DOM-free deterministic core** → enables headless framebuffer testing today, and
-  time-travel / deterministic replay tomorrow (the state is fully serialisable).
-- **Modular device + interrupt bus.** I/O ports and interrupt vectors are pluggable;
-  a software INT is trap-and-emulated in JS unless the guest has hooked the vector,
-  in which case a *real* INT runs the guest ISR (so games can install INT 9 / 1Ch).
-- **Live JIT inspector.** The DEVTOOLS panel shows registers/flags, block-compile
-  counts, and execution rate — a window into the recompiler.
-- **Self-modifying-code aware.** Writes to a translated page invalidate its blocks.
-- **Silicon-validated.** `tools/conformance.js` replays the TomHarte 8088 vectors
-  (10k cases/opcode) through the single-step path and compares registers + RAM
-  strictly and flags masked by the 8088's officially-undefined bits. It caught two
-  genuine 8086 quirks during development: DAA/DAS use an **AF-dependent** high-adjust
-  threshold (`0x99` vs `0x9F`), and a DAS low-nibble borrow does **not** set CF.
-
-## Roadmap (toward Dune / Second Reality)
-
-The foundation is deliberately shaped to grow without a rewrite (the register file is
-already 32-bit, operand sizes are parameterised, the device bus is modular).
-
-**Done — Phase A (core correctness):** broad real-mode instruction set incl. BCD,
-bit instructions (BT/BTS/BTR/BTC, BSF/BSR), SHLD/SHRD, XADD, CMPXCHG, INS/OUTS;
-single-step path; 423k-vector conformance at 100%; an **x87 FPU subset** (the full
-memory-operand grid over f32/f64/i16/i32 plus common register ops) wired in as a
-modular coprocessor. Real third-party intros run: **HellMood's "Memories"** (the
-256-byte REVISION 2020 intro, [pouet #85227](https://www.pouet.net/prod.php?which=85227))
-loads and animates through its scenes — it needs only `fild`/`fidivr`/`fstp` plus
-`outsb` for its MIDI music. Use `node tools/run-com.js <program>` to probe any .COM.
-
-**Next:**
-- **Hardware input/timing** — 8259 PIC, keyboard IRQ via INT 9 + port 60h, 8253 PIT,
-  and a mouse INT 33h driver (the path to a *playable* game).
-- **386 protected mode + DPMI** — most larger 90s demos and games need it.
-- **Mode X, planar VGA, palette tricks**, and a WebGL CRT / composite-CGA shader.
-- **Sound Blaster / AdLib (OPL) + MPU-401 MIDI** audio via WebAudio (today the music
-  ports are accepted but silent).
-- **INT 13h disk + disk-image mounting** (boot real DOS, mount `.img`/`.zip`).
-- **More INT 21h** (EXEC/4Bh, full FCB layer) and **lazy flags + block linking** for
-  raw speed, plus a **Web Worker + SharedArrayBuffer** transport to free the main thread.
-
-## Known limitations
-
-- Real-mode 8086/186/286 instruction set (broad and conformance-checked); no protected
-  mode yet, and the **FPU is a pragmatic subset** (float64-backed, no 80-bit precision,
-  no exception/tag machinery). Variable shift counts mask to 5 bits (286+ semantics, not
-  the 8088's full-count behaviour); 32-bit `IMUL` overflow flag is approximate.
-- Audio is not synthesised — AdLib/SB/MPU-401 port writes are accepted but silent.
-- One drive (`C:`), in-memory (not yet persisted to IndexedDB).
-
-## Credits
-
-The CP437 ROM font (`assets/vga-rom-8x16.bin`) is a raw IBM VGA character-ROM dump
-from VileR's [VGA text-mode fonts](https://int10h.org/oldschool-pc-fonts/)
-(CC BY-SA 4.0; see `assets/FONT-LICENSE.txt`). Everything in `src/` is original work.
+To be decided before publication — see `LICENSE`.

@@ -3,7 +3,7 @@
 // REAL mode rather than handling them in PM — so the switching itself is what to look at. cpu.setCR0
 // is the single writer, so one hook sees them all.
 import { readFileSync } from 'fs';
-import { makeMachine } from '/Users/julienfrelat/Projects/mirage/tools/harness.mjs';
+import { makeMachine } from './harness.mjs';
 
 const MAX = Number(process.env.MAXLOG) || 40;
 

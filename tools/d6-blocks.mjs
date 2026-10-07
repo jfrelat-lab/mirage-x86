@@ -4,7 +4,7 @@
 // block and spends 65%. So the cost tracks emitted SOURCE VOLUME, not block count, and the question
 // is what makes some blocks enormous: many instructions, or expensive instructions?
 
-const ROOT = process.env.ROOT || '/Users/julienfrelat/Projects/mirage';
+const ROOT = process.env.ROOT || new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const [dir, exe, secsArg] = process.argv.slice(2);
 const SECS = Number(secsArg || 5);
 const MAXOPS = Number(process.env.MAXOPS || 0);   // 0 = leave the engine's default

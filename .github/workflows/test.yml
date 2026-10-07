@@ -1,0 +1,16 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Everything that needs nothing outside the repository. The golden check skips the programs
+      # whose (third-party) files are absent and still pins the ones that are checked in.
+      - run: npm run test:all

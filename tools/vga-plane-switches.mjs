@@ -10,7 +10,7 @@
 // map-mask writes) so a zero can be told apart from a dead probe — a distinction that has bitten
 // this investigation twice.
 
-const ROOT = '/Users/julienfrelat/Projects/mirage';
+const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const [dir, exe, secs] = process.argv.slice(2);
 const { readFileSync, readdirSync, statSync } = await import('fs');
 const { Machine } = await import(`${ROOT}/src/machine.js`);

@@ -16,7 +16,7 @@
 // ⚠️ Do not set MIRAGE_NOTIER2 or MIRAGE_KEEP_SRC here to get readable bodies: both change block
 // boundaries, so the trace you compare is no longer the run you are debugging.
 import { readFileSync, writeFileSync } from 'fs';
-const ROOT = '/Users/julienfrelat/Projects/mirage';
+const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const { VFS } = await import(ROOT + '/src/vfs.js');
 const { makeMachine } = await import(ROOT + '/tools/harness.mjs');
 const img = new Uint8Array(readFileSync(process.argv[2]));

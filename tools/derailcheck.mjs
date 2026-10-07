@@ -13,10 +13,10 @@
 // and refuses to run on a target until it has fired on a case built to make it fire.
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { makeMachine } from '/Users/julienfrelat/Projects/mirage/tools/harness.mjs';
-import { VFS } from '/Users/julienfrelat/Projects/mirage/src/vfs.js';
-import { walk } from '/Users/julienfrelat/Projects/mirage/tools/corpus.mjs';
-import { bootSector } from '/Users/julienfrelat/Projects/mirage/src/boot.js';
+import { makeMachine } from './harness.mjs';
+import { VFS } from '../src/vfs.js';
+import { walk } from './corpus.mjs';
+import { bootSector } from '../src/boot.js';
 
 const h = (v, n = 4) => (v >>> 0).toString(16).padStart(n, '0');
 
@@ -97,7 +97,7 @@ if (argv[0] === '--boot') {
   r = run({ boot: target, budgetMs: 60000, warm: Math.max(0, total - BACK) });
 } else {
   target = argv[0] || 'HERETIC';
-  r = run({ dir: join('/Users/julienfrelat/Projects/mirage/games', target), exe: argv[1] || 'HERETIC.EXE' });
+  r = run({ dir: join(new URL('../games', import.meta.url).pathname, target), exe: argv[1] || 'HERETIC.EXE' });
 }
 console.log(`${target}: ${r.done ? 'done ' + r.dos.exitCode : (r.fault ? 'FAULT' : 'running')} after ${r.n} blocks`);
 if (r.fault) console.log('  ' + r.fault.message.slice(0, 160));

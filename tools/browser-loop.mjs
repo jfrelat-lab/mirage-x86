@@ -9,7 +9,7 @@
 //   VCPU=8000000 node browser-loop.mjs demos/CPUSPEED.COM
 //   VCPU=0 node browser-loop.mjs demos/CPUSPEED.COM     # 0 = uncapped, today's default
 
-const ROOT = process.env.ROOT || '/Users/julienfrelat/Projects/mirage';
+const ROOT = process.env.ROOT || new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const prog = process.argv[2] || 'demos/CPUSPEED.COM';
 const VCPU = Number(process.env.VCPU || 0) || null;      // null = uncapped
 const TICK_MS = 1000 / 18.2065;

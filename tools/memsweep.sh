@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Sweep the memory-strategy matrix on real workloads, 3 runs each, median reported.
-MIR=/Users/julienfrelat/Projects/mirage
+MIR="$(cd "$(dirname "$0")/.." && pwd)"
 S=$(dirname $0)
 med3() { print -l $1 $2 $3 | sort -n | sed -n 2p; }
 printf '%-16s %12s %12s %12s\n' 'READ/WRITE' 'tube' 'memories' 'WOLF3D'

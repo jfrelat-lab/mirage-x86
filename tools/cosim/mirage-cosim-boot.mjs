@@ -13,7 +13,7 @@
 // TRIG is `cs:ip` in hex; the default is the device-chain walk the derail traces back to.
 
 import { readFileSync, writeFileSync } from 'fs';
-const ROOT = '/Users/julienfrelat/Projects/mirage';
+const ROOT = new URL('../..', import.meta.url).pathname.replace(/\/$/, '');
 process.env.MIRAGE_NOTIER2 = '1';
 const { makeMachine } = await import(ROOT + '/tools/harness.mjs');
 const { bootSector } = await import(ROOT + '/src/boot.js');

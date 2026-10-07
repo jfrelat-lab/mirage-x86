@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.bin binary
+*.COM binary
+*.IMG binary
+tools/x86-uc-expected.json linguist-generated
+tools/dos-oracle-capture.json linguist-generated
+tools/golden-baseline.json linguist-generated
