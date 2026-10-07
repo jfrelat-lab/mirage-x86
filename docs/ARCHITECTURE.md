@@ -1,129 +1,167 @@
 # MIRAGE — Architecture
 
-MIRAGE is a **pure-JavaScript x86→JS dynamic recompiler** plus a minimal **MS-DOS
-environment**. It runs real DOS `.COM`/`.EXE` programs (demoscene intros, EGA/VGA games)
-in the browser and headless in Node. **No WASM** — the design bet is that readable emitted
-JavaScript + the browser's own JIT (V8/JSC) is a fast enough backend. North-star target:
-Cryo's *Dune* and *Second Reality* running accurately and fluidly.
+MIRAGE is an **x86 → JavaScript dynamic recompiler** with two machines built on it: a **DOS player**
+whose DOS and BIOS are written in JavaScript, and a **bare PC** that boots unmodified operating
+systems from disk and CD images. It runs in the browser and, headless, in Node. There is **no
+WebAssembly**: the design bet is that readable emitted JavaScript, handed to the engine's own JIT,
+is a fast enough back end.
 
-Project identity: **precision and speed** — a 100%-passing instruction conformance suite is a
-non-negotiable safety net, and every optimization must preserve it.
+Two rules shape everything else: **precision** — behaviour is checked against independent
+implementations, and the gates must stay green — and **reproducibility** — the same input gives the
+same machine state, cycle for cycle.
 
-> New to the codebase? Read this file, then [RECOMPILER.md](RECOMPILER.md) (the engine),
-> [DEVICES.md](DEVICES.md) (BIOS/DOS/video/timer), [TESTING.md](TESTING.md) (the gates), and
-> [COMPAT.md](COMPAT.md) (what runs today). Keep them updated when you change the design.
+> New to the code? Read this file, then [RECOMPILER.md](RECOMPILER.md) (the engine),
+> [DEVICES.md](DEVICES.md) (BIOS, DOS, video, timer), [TESTING.md](TESTING.md) (the gates) and
+> [COMPAT.md](COMPAT.md) (what runs). Keep them in step with the code when the design changes.
 
-## The one-paragraph model
+## The model in one paragraph
 
-The guest is a 16-bit real-mode x86 (with 386 32-bit operand/address prefixes). Guest memory
-is one flat `Uint8Array`. The recompiler translates a **basic block** of x86 starting at the
-current `CS:IP` into a JavaScript function (a string compiled with `new Function`), caches it
-keyed by linear address, and runs it. Blocks read/write the CPU register file and the memory
-array directly. Software interrupts either trap into a JS BIOS/DOS handler or jump into a
-guest-installed ISR. Hardware interrupts (PIT timer, keyboard) are delivered at block
-boundaries. A hot loop is re-compiled as a single **fused region** (tier-2).
+Guest memory is one flat `Uint8Array`. The recompiler translates a **basic block** of x86, starting
+at the current `CS:EIP`, into the source of a JavaScript function, compiles it with `new Function`,
+caches it by linear address and runs it. Blocks read and write the register file and the memory
+array directly. The CPU is a 386-class processor up to a Pentium Pro, chosen by a profile: real
+mode, 16- and 32-bit protected mode, virtual-8086 mode, paging. A software interrupt either traps
+into a JavaScript service (the BIOS, DOS) or enters the guest's own handler; hardware interrupts go
+through an 8259 pair and are delivered between blocks. Time is counted in retired instructions.
 
-## File map (`src/`, ~3200 LOC)
+## The two machines
 
-| File | LOC | Role |
+| | DOS player (`index.html`) | Bare PC (`boot.html`) |
 |---|---|---|
-| `recompiler.js` | 983 | **The dynarec.** `translate()` (x86→JS emitter), the block cache, the run loop, tier-2 region compiler, SMC invalidation. The heart of the project — see [RECOMPILER.md](RECOMPILER.md). |
-| `cpu.js` | 300 | CPU state (`reg`/`seg`/`base`/`eip`/`flags`/`fst`/`cycles`/`deadline`) + register accessors + ALU/flag helpers used by emitted code (`setSub`, `setAdd`, shifts, BCD, `mul16`, `cond`). |
-| `bios.js` | 300 | BIOS: INT 10h/11h/12h/16h/1Ah, the IVT stubs, and the **I/O-port devices** (VGA DAC, 0x3DA beam, PIT-adjacent, keyboard 8042, SB/OPL stubs). Calls `installVGA`. |
-| `dos.js` | 254 | DOS: the `.COM`/`.EXE` loader (`dos.load`), PSP setup, and the INT 21h services (file I/O via the VFS, memory, exec, date/time). |
-| `machine.js` | 158 | Wires CPU+memory+recompiler; owns the **run loop entry** (`runSlice`), the modular I/O-port + interrupt bus, `swInt`/`realInt` dispatch, the **PIT timer** (`tickTimer`/`serviceTimer`), and keyboard IRQ injection. |
-| `vga.js` | 101 | The **EGA/VGA 16-colour planar device** — 4 bit-planes + latches, all 4 write modes, Sequencer/Graphics-Controller/CRTC/Attribute registers. Mode 13h stays linear (handled in memory/video). |
-| `memory.js` | 87 | Guest RAM: `u8`/`dv` over one `ArrayBuffer`, `codePage[]` (SMC dirty-tracking per 4 KiB page), and the `planar`/`vga` hooks that route A000 writes to `vga.js`. |
-| `fpu.js` | 151 | x87 subset: an 8-deep `fst` register stack + status word; math via JS `Math.*`. Emitted inline by the recompiler (fallback calls for rare ops). |
-| `vfs.js` | 167 | In-memory FAT-ish file system backing DOS file I/O. `VFS.dosName()` (8.3), `addFile`. |
-| `video.js` | 116 | **Browser render** (main thread): mode 13h linear, EGA planar (`_renderPlanar`), and 80×25 text → an `ImageData`/canvas. |
-| `ui.js` | 133 | Browser main loop: rAF, wall-clock PIT pacing, `runSlice` budgeting, the HUD/CRT toggles. |
-| `shell.js` | 164 | A tiny `COMMAND.COM`: prompt, built-ins (`DIR`, `BARS`, `PLASMA`, …), launching programs. |
-| `keyboard.js` / `mouse.js` | 45 / 63 | Browser input → guest scancodes / INT 33h mouse. |
-| `main.js` | 104 | Browser entry: constructs everything, URL-param program loading (`?run=`), drag-drop. |
-| `samples.js` | 78 | Built-in demo programs for the shell. |
+| Entry | `main.js` → `ui.js` | `bootpc.js` |
+| Starts with | `dos.load(bytes, args, path)`: a `.COM` or `.EXE` in a PSP | `bootSector()` or `bootCD()` (`boot.js`): the BIOS handoff |
+| DOS | `dos.js`, in JavaScript, over an in-memory file system (`vfs.js`) | whatever the image contains |
+| Memory managers | XMS, EMS and a DPMI host, in JavaScript | none: the guest loads its own |
+| Typical guest | an intro, a game | Windows 9x, Linux, a BSD, FreeDOS |
 
-Only `video.js`, `keyboard.js`, `mouse.js`, `ui.js`, `main.js`, `shell.js` touch the DOM.
-The 9 engine files (`machine/cpu/memory/recompiler/bios/dos/vfs/fpu` + `vga`) are DOM-free and
-run identically in Node — which is why the test/gate harnesses in `tools/` can drive the whole
-machine headless.
+Both are the same `Machine`: `new Machine({ memSize, cpu })`, then `installBIOS(machine, options)`,
+then for the DOS player `installDOS(machine, vfs)`. `tools/harness.mjs` builds either one for the
+headless tools, composed as the browser composes it.
+
+## File map (`src/`, about 13,000 lines)
+
+**The engine** — no DOM, identical in Node and in the browser.
+
+| File | Role |
+|---|---|
+| `recompiler.js` | **The dynamic recompiler**: the x86 → JavaScript emitter, the block cache, the dispatch loop, invalidation on self-modifying code, the page-fault restart. See [RECOMPILER.md](RECOMPILER.md). |
+| `cpu.js` | Architectural state and everything too rare to emit inline: flag helpers, segment loads and descriptor checks, privilege transitions, far calls and returns, task switches, control registers, CPUID, MSRs, CMPXCHG8B. |
+| `cpu-profile.js` | Which processor MIRAGE claims to be: `386` (the default), `586`, `pentium`, `686`, `pentiumpro`. A profile fixes the generation-specific behaviours and what CPUID reports. |
+| `memory.js` | Guest RAM, the A20 gate, paging (the page walk, two software TLBs, `PageFault`), and the per-page tracking of compiled code. |
+| `mem-strategy.js` | How a memory access is emitted (inline typed-array access, or calls), kept pluggable so alternatives can be measured. |
+| `fpu.js`, `sse.js` | The x87 coprocessor; the XMM registers and the handful of SSE instructions implemented (not advertised by CPUID). |
+| `machine.js` | Wires CPU, memory and recompiler; owns `runSlice`, the I/O-port and interrupt tables, interrupt delivery in every mode, the PIT, VBE mode state. |
+| `derail.js` | Says *what* the guest is executing when it is no longer executing code (a run of zero bytes, data, text), and how it got there. |
+
+**The PC** — installed by `installBIOS`.
+
+| File | Role |
+|---|---|
+| `bios.js` | INT 10h/11h/12h/15h/16h, VBE, the BIOS data area, E820, and the devices that have no file of their own: the VGA DAC and status ports, the 8042 keyboard controller, port 92h, Sound Blaster and OPL stubs. |
+| `vga.js`, `dispi.js`, `vgarom.js` | The EGA/VGA planar device and its registers; the Bochs display interface (ports 1CEh/1CFh); running a real VGA option ROM instead of our INT 10h. |
+| `pic.js`, `rtc.js`, `uart.js` | The 8259A pair; the MC146818 clock and CMOS with INT 1Ah; a 16550A on COM1 (optional). |
+| `disk.js`, `ide.js`, `boot.js` | INT 13h over sector images, CD included; the two IDE channels, with ATA disks and an ATAPI CD-ROM; the boot handoff for a boot sector or an El Torito CD. |
+| `pci.js` | An i440FX/PIIX3 PCI bus as QEMU's `-M pc` presents it, and the PCI BIOS (optional). |
+| `ps2mouse.js` | A PS/2 mouse on the 8042's auxiliary port, and the BIOS services for it. |
+
+**DOS** — the DOS player only.
+
+| File | Role |
+|---|---|
+| `dos.js` | The DOS kernel: INT 21h, the PSP and memory control blocks, the loader, EXEC. |
+| `vfs.js` | The in-memory drive C: with 8.3 names. |
+| `xms.js`, `ems.js`, `dpmi.js` | Extended memory, expanded memory, and a DPMI 0.9 host for DOS extenders. |
+| `mouse.js` | The INT 33h mouse driver. |
+| `shell.js`, `samples.js` | A `COMMAND.COM`-style prompt and the small programs bundled on C:. |
+
+**The browser** — the only files that touch the DOM.
+
+| File | Role |
+|---|---|
+| `main.js`, `ui.js` | The DOS page: drag-and-drop, `?run=`, the animation-frame loop that paces the machine. |
+| `bootpc.js` | The bare-PC page: image, CPU and memory choice, the PCI and COM1 switches, the serial console. |
+| `video.js` | Draws the active mode to a canvas: text, CGA, EGA/VGA planar, mode 13h and Mode X, VBE at 8, 16 and 32 bits per pixel. The headless tools use it too, with a stand-in canvas. |
+| `keyboard.js` | Browser key events to scancodes, for the 8042 and for the BIOS. |
 
 ## CPU state (`cpu.js`)
 
 ```
-reg   : Uint32Array(8)   AX,CX,DX,BX,SP,BP,SI,DI  (index order: AX=0 CX=1 DX=2 BX=3 SP=4 BP=5 SI=6 DI=7)
-seg   : Uint16Array(6)   ES=0 CS=1 SS=2 DS=3 FS=4 GS=5   (the selectors)
-base  : Uint32Array(6)   cached linear base = selector<<4 (real mode); kept in step by setSeg
-eip   : number           16-bit IP (32 under a 66 prefix)
-flags : number           CF=1 PF=4 AF=0x10 ZF=0x40 SF=0x80 TF=0x100 IF=0x200 DF=0x400 OF=0x800
-fst   : Float64Array(8)  x87 stack; ftop = top-of-stack index
-cycles: number           retired-instruction counter — drives RDTSC, the PIT, and the VGA beam
-deadline: number         cpu.cycles at which a running tier-2 region must bail (PIT delivery)
+reg    Uint32Array(8)   EAX ECX EDX EBX ESP EBP ESI EDI, in that index order
+seg    Uint16Array(6)   ES=0 CS=1 SS=2 DS=3 FS=4 GS=5 — the selectors
+base, limit, …          the hidden part of each segment register, refreshed by setSeg
+eip, flags              CF=1 PF=4 AF=0x10 ZF=0x40 SF=0x80 TF IF DF OF=0x800, plus IOPL, NT, RF, VM
+cr0, cr2, cr3, cr4      PE, WP, PG; the fault address; the page directory; PSE
+gdtr, idtr, ldtr, tr    descriptor tables and the task register
+cycles                  retired instructions — the machine's only clock
+deadline                the value of `cycles` at which the next timer tick is due
 ```
 
-8/16/high-low register access goes through getters/setters (`cpu.al`, `cpu.ax`, …); the hot
-emitted path indexes `reg`/`seg`/`base` directly.
+Emitted code indexes `reg`, `seg` and `base` directly; 8- and 16-bit views (`cpu.al`, `cpu.ax`) are
+accessors for the handlers. The current privilege level is stored, not derived from CS, because
+the two differ in the middle of a privilege transition.
 
 ## Memory (`memory.js`)
 
-- One `ArrayBuffer` (16 MiB in the browser, 1 MiB headless). Views: `u8` (`Uint8Array`),
-  `dv` (`DataView`, used for FPU float loads/stores). `mask = size-1`; addresses are masked.
-- **SMC tracking:** `codePage[]` has one flag byte per 4 KiB page (`PAGE_BITS=12`). A page is
-  marked when a block is compiled from it (`markCodePage`). Every guest write checks
-  `codePage[addr>>12]` and, if set, calls `onCodeWrite` (wired to the recompiler's
-  invalidator). Emitted inline writes replicate this check. See [RECOMPILER.md](RECOMPILER.md).
-- **Planar routing:** in EGA/VGA 16-colour modes `mem.planar=true` and A000 byte accesses are
-  routed to `mem.vga.writeByte/readByte` (the plane pipeline) instead of the flat array —
-  emitted inline as `if(m.planar&&(addr>>>16)===10)…`. Mode 13h stays flat. See [DEVICES.md](DEVICES.md).
+- **One `ArrayBuffer`**, 16 MiB by default, with `u8` and `DataView` views.
+- **Paging.** With CR0.PG set, linear addresses go through a page walk (4 KiB pages, and 4 MiB pages
+  under CR4.PSE) with user/supervisor and write protection, CR0.WP included. Two software TLBs
+  keep the walk off the hot path, and a CR3 load invalidates lazily. A miss that cannot be resolved
+  throws `PageFault`; the dispatch loop catches it, sets CR2 and delivers #PF, with EIP still at the
+  faulting instruction.
+- **Self-modifying code.** Every 4 KiB page that holds compiled code is marked. A guest write to a
+  marked page calls the recompiler's invalidator, which drops the blocks the write actually
+  touches. Emitted stores carry the same check inline.
+- **Video memory.** In the 16-colour planar modes, accesses to A000h are routed to `vga.js`; mode
+  13h and VBE framebuffers are plain RAM.
 
-## Execution pipeline (`machine.js` + `recompiler.js`)
+## Execution (`machine.js`, `recompiler.js`)
 
 ```
-runSlice(maxBlocks)                      # machine.js — one time-slice
-  └─ rec.run(machine, maxBlocks)         # recompiler.js — the dispatch loop:
-       set cpu.deadline (next PIT tick, or Infinity if timerAuto off)
-       while tbudget>0 and !halted and !blocked:
-         if IF set: service queued keyboard IRQ, and PIT tick if cpu.cycles≥nextTimerCycle
-         lin = base[CS] + (eip & 0xffff)
-         blk = blockPages[lin>>12][lin&0xfff]         # O(1), no hashing
-         if missing or blk.ip0 != ip0: blk = compile(lin, ip0)   # translate → new Function
-         blk.fn(cpu, blk)                              # run the block (or fused region)
+machine.runSlice(maxBlocks)
+  └─ rec.run(machine, maxBlocks)                  the dispatch loop
+       while budget left, not halted, not blocked:
+         if IF is set: deliver a pending hardware interrupt, the timer tick included
+         lin = base[CS] + eip
+         blk = the cached block at lin, or compile it     (translate → new Function)
+         blk.fn(cpu, blk)
          cpu.cycles += blk.count
-         if tier-1 block: tbudget--; if ++blk.hot == 64: promote to a tier-2 region
 ```
 
-A **basic block** ends at any control-flow instruction (Jcc/JMP/CALL/RET/INT/LOOP/HLT) or at
-`MAXOPS=192` instructions. INT n / INT3 / INTO terminate the block; div/idiv/`aam 0` faults are
-the only mid-block trap (they call `swInt(0)` then continue).
+A block ends at a control transfer or after 192 instructions. Blocks are keyed by linear address and code-segment size. Under paging a
+block also remembers the physical frames it was compiled from: after a CR3 load it is revalidated
+against the new address space rather than thrown away, which is what keeps process switches
+cheap. The cache is capped (16 MiB of source, 64 MiB under paging) and flushed when full.
 
-## Interrupt model (`machine.js`)
+A second tier that fuses a hot loop's blocks into one function exists in the source and is
+**off**: a fused region can run an unbounded amount of work in one slice, and some games ran slower
+or derailed with it. `MIRAGE_TIER2=1` enables it for work on it.
 
-Every IVT vector initially points at a BIOS stub segment (`0xF000`) whose bytes are `IRET`.
-- `swInt(n)`: if vector n still points at the stub → run the **JS handler** for INT n
-  (`intHandlers[n]`, trap-and-emulate; `eip` already points past the INT). Else the guest
-  hooked it → `realInt(n)` pushes FLAGS/CS/IP, clears IF/TF, and jumps to the guest ISR.
-- Hardware IRQs (PIT INT 8 / INT 1Ch, keyboard IRQ1 → INT 9) are delivered by `realInt` at
-  block boundaries **only when IF is set**. See the timer/keyboard sections of [DEVICES.md](DEVICES.md).
+## Interrupts (`machine.js`, `pic.js`)
 
-## Two execution tiers
+Every interrupt vector initially points at a stub in the BIOS segment.
 
-- **Tier-1** — every block is translated once to a JS function and cached. Correct, simple,
-  the conformance/debug path (`stepOne` compiles exactly one instruction, uncached).
-- **Tier-2** — after a block executes `T2_HOT=64` times it is promoted: its hot loop (the block
-  plus its statically-reachable successors, ≤`T2_MAXBLK=24` blocks / `T2_MAXINS=384` instrs) is
-  fused into one `for(;;){switch(_e){…}}` region, so a tight loop runs with zero per-iteration
-  dispatch. Gated by `MIRAGE_NOTIER2`. Regions must be byte-identical to tier-1 — the
-  `fuzz-region` gate enforces it. See [RECOMPILER.md](RECOMPILER.md).
+- **A software interrupt** whose vector still points at its stub is served by the JavaScript
+  handler registered for it (`machine.intHandlers[n]`) — that is how the BIOS and DOS are
+  implemented. If the guest has installed its own handler, the interrupt is delivered to it as the
+  processor would: through the real-mode vector table, or through the IDT with its gates, privilege
+  checks, stack switches and task gates.
+- **Hardware interrupts** are raised on the 8259 pair (`raiseIRQ`) and delivered between blocks
+  when IF is set, honouring the mask, priority and end-of-interrupt.
+- **Exceptions** (#DE, #UD, #GP, #PF…) are raised with EIP at the faulting instruction.
 
-## How a program gets loaded
+## Time and determinism
 
-Headless: `installBIOS(mc)` → `installDOS(mc, vfs)` → `dos.load(bytes, args, 'C:\\PROG.EXE')`,
-then loop `mc.runSlice(N)`. `.COM` loads at PSP:0x100; `.EXE` is relocated per its MZ header.
-Browser: `main.js` does the same via `?run=NAME` / `?run=https://…/x.com` / drag-drop, and
-`ui.js` drives `runSlice` from `requestAnimationFrame`.
+There is one clock: `cpu.cycles`, the count of retired instructions. The PIT, the RTC's periodic
+interrupt, the VGA retrace and RDTSC are all derived from it — one 18.2 Hz timer tick is 182,584
+cycles by default, about 3.3 million instructions per guest second. Nothing reads the host's clock
+or `Math.random`, so a headless run is reproducible exactly; that is what the golden gate relies
+on. In the browser, `ui.js` paces timer ticks to wall-clock time so that a game runs at its real
+speed. [TIMING.md](TIMING.md) records how these numbers were chosen.
 
-## Determinism (why the gates work)
+## Switches
 
-The engine has **no nondeterminism**: `RDTSC` reads `cpu.cycles`, and there is no
-`Math.random`/`Date`. The same input path yields byte-identical memory + video state, which is
-what makes the golden-fingerprint gate possible (see [TESTING.md](TESTING.md)). Keep it that way.
+Behaviour that is optional or experimental is selected by a constructor option, or in Node by an
+environment variable read at start-up: `MIRAGE_CPU` (the profile), `MIRAGE_PCI`, `MIRAGE_SERIAL`,
+`MIRAGE_PITRELOAD` (cycles per timer tick), and a family of kill switches (`MIRAGE_NOD8`,
+`MIRAGE_NOXTLB`, `MIRAGE_NOSTRIP`…) that turn one optimisation off so a gate can be run with and
+without it. Each is documented where it is read.
