@@ -88,7 +88,7 @@ export const PROFILES = {
   },
   // A P6-class part: '586' plus what a Pentium Pro adds and MIRAGE implements — CMOVcc, FCMOVcc and
   // FCOMI, RDMSR/WRMSR, CPUID leaf 2 — which CPUID then reports (CMOV, MSR), family 6. This is the
-  // generation Windows 2000/XP, ReactOS, Haiku and i686 Linux are built for (docs/ROADMAP.md H14-1).
+  // generation Windows 2000/XP, ReactOS, Haiku and i686 Linux are built for (docs/notes/roadmap-log.md, H14-1).
   // No MMX: the Pentium Pro has none. MIRAGE_CPU=686 or `new Machine({ cpu: '686' })`.
   '686': {
     name: '686',

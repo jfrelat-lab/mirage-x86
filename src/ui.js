@@ -35,7 +35,7 @@ const FRAME_DROP_MS = 20;           // a frame gap this long means we missed a d
 // Vorticons menus and story scroll — from flying past. Note that DOSBox does NOT run these titles
 // flat out: its default cycles=auto means 3000 cycles/ms in real mode (max only in protected mode),
 // so Keen is playable on archive.org precisely BECAUSE it is throttled to ~3 M instr/s, and this
-// default is ~24x that. See docs/COMPAT.md for the measured table (demos/cpuspeed.asm) — period
+// default is ~24x that. See docs/notes/compat-log.md for the measured table (demos/cpuspeed.asm) — period
 // games will want ?mhz=3, and the knob stays reachable for them (or new Mirage(c, {vcpuHz})).
 // The 0x3DA retrace is anchored to wall-clock in bios.js, so vsync-paced code still sees a true
 // 70 Hz with no cap in place.

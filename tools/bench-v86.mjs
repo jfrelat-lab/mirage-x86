@@ -26,7 +26,7 @@
 // than to a clock. v86 boots our images; only the metric was wrong here.
 //
 // The ROM must be built with `POST_PORT equ 0x3F8` so both engines can observe the code; see
-// docs/ROADMAP.md.
+// docs/notes/roadmap-log.md.
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';

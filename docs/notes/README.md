@@ -6,11 +6,13 @@ often looks like one already solved.
 
 **They are a record, not a description.** A note says what was true and what was believed on its
 date. It is not updated when the code changes; the present state of the project is in the documents
-one level up ([ARCHITECTURE](../ARCHITECTURE.md), [COMPAT](../COMPAT.md), [TESTING](../TESTING.md),
+one level up ([ARCHITECTURE](../ARCHITECTURE.md), [COMPAT](compat-log.md), [TESTING](../TESTING.md),
 [ROADMAP](../ROADMAP.md)). When a note and one of those disagree, the note is the one that is old.
 
 | Note | What it is |
 |---|---|
+| [roadmap-log.md](roadmap-log.md) | The former task list, which was also the diary: every item with what was tried and found, September and October 2026 in most detail (the operating systems, PCI, the block cache under paging). |
+| [compat-log.md](compat-log.md) | The former compatibility notebook: how each game and intro was unblocked, the speed measurements against DOSBox-X. |
 | [timing.md](timing.md) | How the machine's clock was measured and calibrated against DOSBox-X: interrupt delivery, the timer rate cap, the VGA beam, self-modifying code, and the long hunt that ended in "hardware interrupts were never dispatched through the IDT". Sections are numbered; the code refers to them (`docs/notes/timing.md §6`). |
 | [windows-3.md](windows-3.md) | Getting Windows 3.0 (real, standard and 386 enhanced mode) and Windows 3.1 to start. |
 | [booting-real-dos.md](booting-real-dos.md) | Booting real DOS kernels — FreeDOS, MS-DOS — on MIRAGE's BIOS instead of its built-in DOS. |

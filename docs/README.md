@@ -1,27 +1,30 @@
-# MIRAGE — Docs
+# MIRAGE — Documentation
 
-Architecture and internals reference. Start with **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+Two kinds of document live here, and they are kept apart on purpose.
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the big picture: the execution model, file map, CPU
-  and memory layout, the run loop, the interrupt model, the two execution tiers. Read first.
-- **[RECOMPILER.md](RECOMPILER.md)** — the dynarec (`recompiler.js`): block emission, the cache,
-  flag handling (dead-flag elimination, inlined `cond`), inlined memory/FPU/mul fast paths, SMC,
-  and the tier-2 region compiler (promotion, `cpu.deadline` safepoints, eviction).
-- **[DEVICES.md](DEVICES.md)** — BIOS/DOS/video/timer/input: the INT + I/O-port buses, INT 10h/21h,
-  the EGA/VGA planar device, the cycle-based PIT timer, the 0x3DA beam, keyboard/joystick, sound
-  stubs, and the full port map.
-- **[TESTING.md](TESTING.md)** — the gates (unit, conformance, golden, region/flag fuzzers, bench,
-  DOSBox diff), the golden fingerprint mechanism, the CPU co-sim, and what "verify a change" means.
-- **[COMPAT.md](COMPAT.md)** — what runs today and what's blocked (games + demos), the known
-  rough edges, the engine gaps (DPMI, EMS/XMS, audio, Mode X), and the fixes that got us here.
-- **[ROADMAP.md](ROADMAP.md)** — a menu of candidate next tasks grouped by theme (correctness,
-  compatibility features, content, performance, tooling) with effort/value, to choose what's next.
+## Reference
 
-One-off studies:
+These describe the project **as it is**. They carry no history: when the code changes, they change.
 
-- **[notes/win16-spike.md](notes/win16-spike.md)** — feasibility of running WIN16 (NE) apps directly,
-  Wine-style, instead of booting real Windows: the measured API surface (`tools/ne-inspect.mjs`),
-  what the engine already provides, and the go/no-go.
+| Document | Answers |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How is it built? The model, the file map, execution, interrupts, time. Start here. |
+| [RECOMPILER.md](RECOMPILER.md) | How does x86 become JavaScript? Blocks, the cache, flags, self-modifying code. |
+| [DEVICES.md](DEVICES.md) | How are the BIOS, DOS, video, timer and input implemented? The port map. |
+| [HARDWARE.md](HARDWARE.md) | What machine does a guest see, and what was each part checked against? |
+| [COMPATIBILITY.md](COMPATIBILITY.md) | What runs, how far, and when was that last recorded? |
+| [KNOWN-ISSUES.md](KNOWN-ISSUES.md) | What does not work, and is the cause known? |
+| [TESTING.md](TESTING.md) | What are the gates, the references and the tools? |
+| [ROADMAP.md](ROADMAP.md) | What is open? |
 
-These are working notes meant to outlive the work that produced them — keep them in step with the code when you change
-the design (especially the run loop, the region compiler, the device model, or the gates).
+## Record
+
+[notes/](notes/README.md) holds the investigations, measurements, audits and studies, written while
+the work was done. A note is dated, tells what was tried — including what was wrong — and is not
+revised afterwards.
+
+## The rule
+
+A fact about the present goes in a reference document, without a date and without its story. The
+story — the symptom, the hypotheses, the measurements, the cause — goes in a note, and the reference
+document links to it if it helps. When the two disagree, the note is the one that is old.

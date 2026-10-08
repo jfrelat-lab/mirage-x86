@@ -113,7 +113,7 @@ three onto `machine.font`/`font8x8`/`font8x14`.
 > ⚠️ **Render dispatch is flag/mode-mixed** (`video.js:render`): 13h → gfx13; else `mem.planar`
 > → planar; else mode 4/5/6 → CGA; else text. A program that inherits a stale graphics mode
 > from a *previous* program (MIRAGE never resets the mode when the shell regains control) can
-> render its text through the wrong path — see [COMPAT.md](COMPAT.md) "known rough edges".
+> render its text through the wrong path — see [notes/compat-log.md](notes/compat-log.md) "known rough edges".
 
 ### The DAC (`bios.js`)
 Ports 0x3C8 (write index) / 0x3C7 (read index) / 0x3C9 (RGB data, 6-bit). Most demos set the

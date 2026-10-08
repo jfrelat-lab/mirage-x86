@@ -44,3 +44,14 @@ program and where to obtain it legally is the right way to share a failure.
 
 Say which file (name, size, a checksum if you can), which page (`index.html` or `boot.html`) and
 which options, and what you saw: the last screen, and any message in the browser console.
+
+## Documentation
+
+`docs/` holds reference documents, which describe the project as it is, and `docs/notes/`, which
+holds the record of how it got there. Keep them apart:
+
+- A fact about the present — what runs, what a device does — goes in a reference document, with no
+  date and no story.
+- An investigation goes in a note, `docs/notes/YYYY-MM-DD-subject.md`: symptom, hypotheses,
+  measurements, cause, fix. Wrong turns stay in. A note is not revised later.
+- A result in `COMPATIBILITY.md` carries the date it was recorded.

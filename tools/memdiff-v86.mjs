@@ -12,7 +12,7 @@
 //
 // ⚠️ The ROM must be built with `POST_PORT equ 0x3F8` (the UART data register) so both engines can
 // observe the code: v86 reports it through `serial0-output-byte`, MIRAGE through a port hook. That
-// redirection was checked not to perturb either engine — see docs/ROADMAP.md.
+// redirection was checked not to perturb either engine — see docs/notes/roadmap-log.md.
 import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';

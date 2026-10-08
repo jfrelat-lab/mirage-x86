@@ -6,7 +6,7 @@
 //
 // v86 is NOT committed (the same rule as boot/ and games/): install it where V86_DIR points.
 // The ROM must be built with `POST_PORT equ 0x3F8` so each POST code arrives as a serial byte —
-// see docs/ROADMAP.md for why, and for the numbers the other engines give on the same binary.
+// see docs/notes/roadmap-log.md for why, and for the numbers the other engines give on the same binary.
 //
 // The ROM is the SAME binary the other engines ran: rebuilt with POST_PORT equ 0x3F8, so each POST
 // code arrives as a serial byte. v86 surfaces those through its `serial0-output-byte` event, so no

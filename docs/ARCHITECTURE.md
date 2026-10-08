@@ -12,7 +12,7 @@ same machine state, cycle for cycle.
 
 > New to the code? Read this file, then [RECOMPILER.md](RECOMPILER.md) (the engine),
 > [DEVICES.md](DEVICES.md) (BIOS, DOS, video, timer), [TESTING.md](TESTING.md) (the gates) and
-> [COMPAT.md](COMPAT.md) (what runs). Keep them in step with the code when the design changes.
+> [COMPATIBILITY.md](COMPATIBILITY.md) (what runs). Keep them in step with the code when the design changes.
 
 ## The model in one paragraph
 

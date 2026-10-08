@@ -146,7 +146,7 @@ PROGMAN.EXE       8      52       348       249         93      0   9/1/46
 - **The video layer.** The Windows GUI's own mode is 0x12 (640×480×16 planar). MIRAGE's
   `src/vga.js` implements the planar device (4 planes, latches, all write modes, Sequencer/GC/
   CRTC/Attribute) and `win /3` has already drawn the real Windows 3.0 startup logo through it
-  (`docs/COMPAT.md`). So under variant 1c the **real EGA.DRV** can draw onto hardware we
+  (`docs/notes/compat-log.md`). So under variant 1c the **real EGA.DRV** can draw onto hardware we
   already emulate — nothing new needed.
 - **DOS services.** KERNEL's file layer (`OPENFILE _LOPEN _LREAD _LWRITE _LLSEEK _LCLOSE
   _LCREAT`, `GETWINDOWSDIRECTORY`, the `*.INI` profile calls) bottoms out in INT 21h file I/O
@@ -208,7 +208,7 @@ the ones in the table above that belong to KERNEL — the NE loader, movable seg
 3Fh thunks, the global/local heaps, and the cooperative scheduler — which is a real project but
 a bounded one.
 
-**However**, per `docs/COMPAT.md`, the existing real-Windows path is much further along than
+**However**, per `docs/notes/compat-log.md`, the existing real-Windows path is much further along than
 this spike is: `win /3` already boots to the startup logo and completes enhanced-mode init, and
 `win /r` loads and EXECs the real KERNEL.EXE and fails on a *known, named, DOS-shape* defect
 (our INT 21h/2Fh vectors and InDOS flag live in three unrelated places instead of one low-RAM
@@ -217,5 +217,5 @@ targeted fixes with a working reference; variant 1c would re-derive the same res
 a KERNEL from scratch **without** one.
 
 **Recommendation: do not start the Wine-style path.** Finish the real-Windows path first
-(`docs/COMPAT.md` §Windows 3.0). Should that path stall for a structural reason rather than a
+(`docs/notes/compat-log.md` §Windows 3.0). Should that path stall for a structural reason rather than a
 bug, reopen this document at variant 1c — the 110-entry-point KERNEL — and not at 1a.

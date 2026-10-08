@@ -20,13 +20,13 @@ MIRAGE is two things sharing one CPU:
 
 ## What runs today
 
-Measured on the images named in [docs/COMPAT.md](docs/COMPAT.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+Per-title status, with dates, is in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 None of that software is in this repository — see [Third-party software](#third-party-software).
 
 | | Reaches |
 |---|---|
 | DOS intros and demos | 31 of the 32 tried render; 21 are pinned by the golden test |
-| DOS games | real mode, DOS extenders (DPMI), EMS/XMS — per-title status in docs/COMPAT.md |
+| DOS games | real mode, DOS extenders (DPMI), EMS/XMS — per-title status in docs/COMPATIBILITY.md |
 | Windows 3.0, 95, 98, ME | the desktop |
 | Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell; runlevel 5 |
 | FreeDOS 1.3 (from its CD), MS-DOS 6.22 | the installer; the prompt |
@@ -85,11 +85,17 @@ MIRAGE is checked against other machines, not against its own expectations:
 
 ## Documentation
 
-Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The rest: the recompiler
-([RECOMPILER.md](docs/RECOMPILER.md)), the devices ([DEVICES.md](docs/DEVICES.md)), timing
-([TIMING.md](docs/notes/timing.md)), compatibility ([COMPAT.md](docs/COMPAT.md)) and the roadmap
-([ROADMAP.md](docs/ROADMAP.md)). These are working notes kept alongside the code, written as the
-work went: they are detailed and candid rather than polished.
+Reference — the present state, kept current:
+
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — the model, the file map, how a block runs. Start here.
+- [RECOMPILER.md](docs/RECOMPILER.md), [DEVICES.md](docs/DEVICES.md) — the engine; the BIOS, DOS and devices.
+- [HARDWARE.md](docs/HARDWARE.md) — the machine a guest sees, and what each part was checked against.
+- [COMPATIBILITY.md](docs/COMPATIBILITY.md), [KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) — what runs; what does not, and why.
+- [TESTING.md](docs/TESTING.md) — the gates and the comparison tools.
+- [ROADMAP.md](docs/ROADMAP.md) — what is open.
+
+Record — [docs/notes/](docs/notes/README.md): the investigations, measurements and audits as they
+were written, wrong turns included. They are dated and not updated.
 
 ## Third-party software
 

@@ -1,6 +1,6 @@
 # Booting a real DOS kernel — the investigation
 
-> Moved here unchanged from `docs/COMPAT.md`, where it was written as the work went. A record of
+> Moved here unchanged from `docs/notes/compat-log.md`, where it was written as the work went. A record of
 > what was tried and found at the time, not a description of the present state.
 
 ## Booting a real DOS kernel
