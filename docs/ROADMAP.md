@@ -78,8 +78,8 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 
 | Id | Item | Effort |
 |---|---|---|
-| P1 | A demonstration page (GitHub Pages) with freely redistributable examples | M |
-| P2 | A CD and disk picker in `boot.html` | S |
+| P1 | The home page exists (`index.html`, six free boot-sector programs and five MIRAGE demos); to do: publish it on GitHub Pages, add GPL systems (FreeDOS, KolibriOS) with their sources | S |
+| P2 | `boot.html`: a memory choice that matches what the examples ask for, drag-and-drop of an image | S |
 | P3 | Tools that find `nasm`, `qemu` and `dosbox-x` on the PATH instead of in Homebrew's directory | S |
 | P4 | Sort `tools/`: the gates and probes apart from the one-off investigations | M |
 | H11 | One launcher for both machines: a profile plus content | M |

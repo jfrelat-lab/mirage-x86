@@ -2,37 +2,169 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>MIRAGE — a pure-JS x86 / MS-DOS machine</title>
+<title>MIRAGE — an x86 PC in plain JavaScript</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="style.css?v=1">
+<meta name="description" content="An x86 PC in plain JavaScript: a dynamic recompiler from x86 to JavaScript, a built-in DOS, and a bare PC that boots unmodified operating systems.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101820'/><text x='1.5' y='12' font-family='monospace' font-size='11' fill='%2300d0a0'>M:</text></svg>">
+<style>
+  :root { --bg: #0a0e12; --panel: #0f1620; --line: #1c2a36; --ink: #b8c8d4; --dim: #6a8090; --accent: #00d0a0; }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 12px 24px;
+           background: var(--panel); border-bottom: 1px solid var(--line); }
+  header .logo { color: var(--accent); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: 1px; }
+  header nav { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; font-size: 14px; }
+  main { max-width: 1120px; margin: 0 auto; padding: 0 24px 48px; }
+  .hero { padding: 48px 0 28px; }
+  .hero h1 { margin: 0 0 12px; font-size: clamp(26px, 4vw, 40px); line-height: 1.15; color: #e6eef4; }
+  .hero p { max-width: 760px; margin: 0 0 12px; }
+  .pipeline { display: inline-block; margin: 8px 0 20px; padding: 8px 12px; border: 1px solid var(--line);
+              border-radius: 6px; background: var(--panel); color: var(--dim); white-space: nowrap; overflow-x: auto; max-width: 100%; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn { display: inline-block; padding: 10px 16px; border: 1px solid var(--accent); border-radius: 6px;
+         color: var(--accent); font-weight: 600; }
+  .btn.primary { background: var(--accent); color: #062018; }
+  .btn:hover { text-decoration: none; filter: brightness(1.12); }
+  h2 { margin: 40px 0 6px; font-size: 21px; color: #e6eef4; }
+  .lead { margin: 0 0 18px; color: var(--dim); max-width: 760px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+  .card { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 8px; overflow: hidden; }
+  .card .shot { display: block; aspect-ratio: 8 / 5; background: #000; }
+  .card .shot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
+  .card .body { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 14px; flex: 1; }
+  .card h3 { margin: 0; font-size: 16px; color: #e6eef4; }
+  .card .meta { color: var(--dim); font-size: 13px; }
+  .card .blurb { margin: 0; font-size: 14px; flex: 1; }
+  .card .actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; font-size: 13px; }
+  .card .run { padding: 5px 12px; border-radius: 5px; background: var(--accent); color: #062018; font-weight: 600; }
+  .card .run:hover { text-decoration: none; filter: brightness(1.12); }
+  .tag { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px;
+         font-size: 11px; letter-spacing: .5px; color: var(--dim); text-transform: uppercase; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
+  .box h3 { margin: 0 0 8px; font-size: 16px; color: #e6eef4; }
+  .box p, .box ul { margin: 0 0 8px; } .box ul { padding-left: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+  td:first-child { color: #e6eef4; white-space: nowrap; }
+  footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
+  @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; } }
+</style>
 </head>
-<body class="crt">
-  <header id="bar">
-    <span class="logo">▚ MIRAGE</span>
-    <span class="tag">pure-JavaScript x86 → JS dynamic recompiler · MS-DOS</span>
-    <span class="spacer"></span>
-    <a href="boot.html" title="Boot a floppy or hard-disk image as a bare PC (Linux, BSD, MS-DOS, Windows 9x)" style="color:#5c7080;font-size:11px;letter-spacing:1px">BARE PC →</a>
-    <button id="hud-toggle" title="Toggle the JIT / register inspector">DEVTOOLS</button>
-    <button id="crt-toggle" title="Toggle the CRT scanline shader">CRT</button>
-  </header>
+<body>
+<header>
+  <span class="logo">▚ MIRAGE</span>
+  <nav>
+    <a href="dos.html">DOS player</a>
+    <a href="boot.html">Bare PC</a>
+    <a href="https://github.com/jfrelat-lab/mirage-x86">Source</a>
+    <a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Documentation</a>
+  </nav>
+</header>
 
-  <main id="monitor">
-    <div id="stage">
-      <canvas id="screen" width="640" height="400"></canvas>
-      <div id="crt-overlay"></div>
+<main>
+  <section class="hero">
+    <h1>An x86 PC in plain JavaScript.</h1>
+    <p>MIRAGE translates x86 machine code into JavaScript source, one basic block at a time, and lets
+      the browser's own JIT compile it. No WebAssembly, no plug-in, nothing to install.</p>
+    <div class="pipeline mono">x86 code → decoder → JavaScript source → new Function → the browser's JIT</div>
+    <p>It comes as two machines. The <b>DOS player</b> has its own DOS written in JavaScript: drop a
+      <code>.COM</code> or <code>.EXE</code> on it and it runs at once. The <b>bare PC</b> boots
+      unmodified operating systems from a disk image or a CD — Windows 95 and 98, Linux, the BSDs,
+      FreeDOS.</p>
+    <div class="cta">
+      <a class="btn primary" href="#examples">Try an example</a>
+      <a class="btn" href="dos.html">Open the DOS player</a>
+      <a class="btn" href="boot.html">Boot a disk image</a>
     </div>
-    <aside id="hud"></aside>
-  </main>
+  </section>
 
-  <div id="boot">Loading…</div>
-  <div id="drop"><div>Drop a .COM / .EXE / file onto the virtual C: drive</div></div>
+  <section id="examples">
+    <h2>Examples</h2>
+    <p class="lead">Everything here may be redistributed: demos written for MIRAGE, and boot-sector
+      programs published under free licences by their authors. Each card links to the licence and
+      the source. The screenshots were taken by MIRAGE itself.</p>
+    <div class="grid" id="grid"><p class="lead">Loading the examples…</p></div>
+  </section>
 
-  <footer id="help">
-    Type <b>HELP</b> · run <b>BARS</b>, <b>PLASMA</b>, <b>BANNER</b>, <b>HELLO</b> · drag &amp; drop files ·
-    URL: <code>?run=PLASMA</code>, <code>?cmd=DIR</code>, <code>?run=https://…/x.com</code>
-  </footer>
+  <section>
+    <h2>Bring your own</h2>
+    <div class="two">
+      <div class="box">
+        <h3>A DOS program</h3>
+        <p>Open the <a href="dos.html">DOS player</a> and drop a <code>.COM</code>, an <code>.EXE</code>
+          or a whole folder on the page: it lands on drive C:. Type its name at the prompt. Games that
+          need XMS, EMS or a DOS extender (DPMI) are served too.</p>
+      </div>
+      <div class="box">
+        <h3>A disk image or a CD</h3>
+        <p>Open the <a href="boot.html">bare PC</a>, choose a floppy, hard-disk or ISO image from your
+          computer, a processor and an amount of memory, and boot. Nothing leaves your browser, and
+          nothing is written back to the file.</p>
+      </div>
+    </div>
+    <p class="lead" style="margin-top:14px">MIRAGE ships no operating system or game from anyone else.
+      Use what you are allowed to use.</p>
+  </section>
 
-  <script type="module" src="src/main.js?v=1"></script>
+  <section>
+    <h2>What it runs</h2>
+    <div class="box">
+      <table>
+        <tr><td>Operating systems</td><td>Windows 3.0, 3.1, 95, 98 and ME to their desktop; Linux 2.2 and 2.4;
+          NetBSD, OpenBSD, 386BSD; MS-DOS and FreeDOS; KolibriOS; booted from a CD with El Torito.</td></tr>
+        <tr><td>DOS games</td><td>DOOM, Heretic, Quake and Wolfenstein 3D play; dozens of EGA and VGA titles render.</td></tr>
+        <tr><td>Demos</td><td>31 of the 32 size-coded intros tried, from 32 bytes to 64 KB.</td></tr>
+        <tr><td>Not yet</td><td>Windows NT and 2000, ReactOS, BeOS; sound; a network card; 64-bit.</td></tr>
+      </table>
+      <p style="margin:10px 0 0"><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPATIBILITY.md">The full compatibility list</a>,
+        with the date each result was recorded, and <a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/KNOWN-ISSUES.md">what does not work</a>.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Checked against other machines</h2>
+    <p class="lead">Behaviour is compared with independent implementations, not with MIRAGE's own
+      expectations: CPU test vectors and the test386 self-test; small probe programs that print what the
+      hardware answers, run unchanged under QEMU and under MIRAGE; screens compared pixel for pixel with
+      QEMU, DOSBox-X and v86. <a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/TESTING.md">How it is tested</a>.</p>
+  </section>
+</main>
+
+<footer>
+  MIRAGE is free software under the <a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/LICENSE">MIT licence</a>.
+  The example programs keep their own licences.
+</footer>
+
+<script>
+  // The cards come from examples/manifest.json, the same file tools/demo-thumbs.mjs reads.
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const runUrl = (e) => {
+    if (e.kind === 'dos') {
+      const name = e.file.split('/').pop();
+      return `dos.html?load=${encodeURIComponent(e.file)}&run=${encodeURIComponent(name.replace(/\.[^.]+$/, ''))}`;
+    }
+    return `boot.html?img=${encodeURIComponent(e.file)}&cpu=386&mem=4`;
+  };
+  fetch('examples/manifest.json').then((r) => r.json()).then((list) => {
+    document.getElementById('grid').innerHTML = list.map((e) => {
+      const who = e.author + (e.year ? ', ' + e.year : '');
+      const lic = e.licenseFile ? `<a href="${esc(e.licenseFile)}">${esc(e.license)}</a>` : esc(e.license);
+      const src = e.source ? ` · <a href="${esc(e.source)}">source</a>` : '';
+      return `<article class="card">
+        <a class="shot" href="${runUrl(e)}" aria-label="Run ${esc(e.title)}"><img src="examples/thumbs/${esc(e.id)}.png" alt="${esc(e.title)}, as MIRAGE draws it" loading="lazy"></a>
+        <div class="body">
+          <h3>${esc(e.title)} <span class="tag">${e.kind === 'dos' ? 'DOS' : 'boot sector'}</span></h3>
+          <div class="meta">${esc(who)}</div>
+          <p class="blurb">${esc(e.blurb)}</p>
+          <div class="actions"><a class="run" href="${runUrl(e)}">Run</a><span class="meta">${lic}${src}</span></div>
+        </div></article>`;
+    }).join('');
+  }).catch(() => { document.getElementById('grid').innerHTML = '<p class="lead">The examples could not be loaded.</p>'; });
+</script>
 </body>
 </html>

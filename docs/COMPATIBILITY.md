@@ -58,7 +58,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 Boot-sector programs — BootChess, bootBASIC, bootOS, Invaders, Pillman, sectorFORTH, sectorLISP,
 TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel with QEMU.
 
-## DOS games (the DOS player, `index.html`)
+## DOS games (the DOS player, `dos.html`)
 
 | Title | Video | Status | Notes | Updated |
 |---|---|---|---|---|

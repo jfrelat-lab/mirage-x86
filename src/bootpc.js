@@ -1,13 +1,13 @@
 // bootpc.js — the bare-PC page (boot.html): boot a floppy or hard-disk IMAGE the way a BIOS does,
-// with no HLE DOS underneath. The DOS page (index.html + ui.js) runs programs on our DOS; this one
-// runs whole systems (Linux, the BSDs, MS-DOS, Windows 9x) off their own disks, like the headless
+// with no HLE DOS underneath. The DOS player (dos.html + ui.js) runs programs on our DOS; this one
+// runs whole systems (Linux, the BSDs, MS-DOS, Windows 9x) off their own disks or CDs, like the headless
 // tools/v86/*.mjs do. Minimal on purpose: pick an image, a CPU profile and RAM, boot, watch.
 //
 // URL parameters (so a boot can be bookmarked):
 //   ?img=boot/v86/bl3-5.img   image to boot (a served path)   ?cpu=386|586|pentium|686|pentiumpro   ?mem=64 (MiB)
 //   ?clock=realtime|turbo   ?pci=1 (QEMU -M pc's bus)   ?com1=1 (a 16550A and a console under the screen)
 //
-// Two clocks. REAL TIME (the default, as v86 and index.html do it): the PIT fires on the wall clock at
+// Two clocks. REAL TIME (the default, as v86 and dos.html do it): the PIT fires on the wall clock at
 // the rate the guest programmed, and the CPU runs as fast as the host allows in between, so a game
 // paced by the timer (Keen, Alley Cat) plays at its speed. TURBO: the PIT runs off cpu.cycles, as
 // the headless tools do, so a long boot is not held to real time — an idle HLT skips straight to the
@@ -18,7 +18,7 @@ import { installBIOS } from './bios.js';
 import { installMouse } from './mouse.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
-import { bootSector } from './boot.js';
+import { bootSector, bootCD } from './boot.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), status = $('status'), pick = $('image'), fileIn = $('file');
@@ -30,16 +30,24 @@ const FRAME_MS = 12;
 
 let session = null;                    // { mc, video, keyboard, raf, paused, name, t0 }
 
-// ---- the image list: whatever the static server lists under boot/ and boot/v86/ --------------
+// ---- the image list: the examples, then whatever the static server lists under boot/ -----------
+// GitHub Pages lists no directory, so the redistributable examples come from examples/manifest.json.
 async function listImages() {
   const out = [];
-  for (const dir of ['boot/', 'boot/v86/']) {
+  try {
+    const m = await (await fetch('examples/manifest.json')).json();
+    for (const e of m) if (e.kind === 'boot') out.push(e.file);
+  } catch { /* no manifest */ }
+  for (const dir of ['boot/', 'boot/v86/', 'boot/iso/']) {
     try {
       const html = await (await fetch(dir)).text();
-      for (const m of html.matchAll(/href="([^"?#]+\.(?:img|ima|dsk|vfd))"/gi)) out.push(dir + decodeURIComponent(m[1]));
+      for (const m of html.matchAll(/href="([^"?#]+\.(?:img|ima|dsk|vfd|iso))"/gi)) out.push(dir + decodeURIComponent(m[1]));
     } catch { /* not served */ }
   }
-  pick.innerHTML = '<option value="">— image served by tools/serve.py —</option>' +
+  // An image named in the URL is offered even if no listing knows it.
+  const wanted = new URLSearchParams(location.search).get('img');
+  if (wanted && !out.includes(wanted)) out.unshift(wanted);
+  pick.innerHTML = '<option value="">— choose an image —</option>' +
     out.map((p) => `<option value="${p}">${p}</option>`).join('');
 }
 
@@ -97,11 +105,13 @@ async function boot(name, raw) {
   if (!turbo && mc.rtc) mc.rtc.useHostClock();
   const video = new Video(mc, canvas);
   video.font = mc.font;
-  const { bytes, drive } = attach(mc, raw);
   let fault = null;
   mc.onError = (e) => { fault = e; console.error(e); };
-  try { bootSector(mc, bytes, { drive }); }
-  catch (e) { status.textContent = String(e.message || e); return; }
+  // An ISO boots the El Torito way, from the ATAPI drive; anything else is a floppy or a hard disk.
+  try {
+    if (/\.iso$/i.test(name)) bootCD(mc, raw);
+    else { const { bytes, drive } = attach(mc, raw); bootSector(mc, bytes, { drive }); }
+  } catch (e) { status.textContent = String(e.message || e); return; }
   const keyboard = new Keyboard(mc);
   keyboard.attach(window);
   session = { mc, video, keyboard, raf: 0, paused: false, name, fault: () => fault, host0: performance.now(), turbo, lastTick: performance.now() };

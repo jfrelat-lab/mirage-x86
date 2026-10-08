@@ -26,7 +26,7 @@ through an 8259 pair and are delivered between blocks. Time is counted in retire
 
 ## The two machines
 
-| | DOS player (`index.html`) | Bare PC (`boot.html`) |
+| | DOS player (`dos.html`) | Bare PC (`boot.html`) |
 |---|---|---|
 | Entry | `main.js` → `ui.js` | `bootpc.js` |
 | Starts with | `dos.load(bytes, args, path)`: a `.COM` or `.EXE` in a PSP | `bootSector()` or `bootCD()` (`boot.js`): the BIOS handoff |

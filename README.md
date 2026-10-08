@@ -12,7 +12,7 @@ No WebAssembly, no build step, no dependencies. It runs in a browser and in Node
 
 MIRAGE is two things sharing one CPU:
 
-- **A DOS player** (`index.html`). DOS, the BIOS, XMS, EMS and a DPMI host are implemented in
+- **A DOS player** (`dos.html`). DOS, the BIOS, XMS, EMS and a DPMI host are implemented in
   JavaScript, so there is no DOS image to boot: a program starts at once.
 - **A bare PC** (`boot.html`). A BIOS, an 8259/8254/RTC chipset, VGA and VBE, IDE disks, an ATAPI
   CD-ROM, and optionally a PCI bus and a 16550 serial port: enough to boot unmodified operating
@@ -56,8 +56,9 @@ readable generated code, and runs that are reproducible to the cycle.
 
 ```bash
 python3 tools/serve.py 8761      # any static file server works
-# http://localhost:8761/            the DOS player: drop a .COM, .EXE or a folder
-# http://localhost:8761/boot.html   the bare PC: boot a disk image
+# http://localhost:8761/            the home page, with the examples
+# http://localhost:8761/dos.html    the DOS player: drop a .COM, .EXE or a folder
+# http://localhost:8761/boot.html   the bare PC: boot a floppy, hard-disk or ISO image
 ```
 
 ```bash

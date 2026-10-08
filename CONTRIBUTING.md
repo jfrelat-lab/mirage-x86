@@ -42,7 +42,7 @@ program and where to obtain it legally is the right way to share a failure.
 
 ## Reporting a program that does not run
 
-Say which file (name, size, a checksum if you can), which page (`index.html` or `boot.html`) and
+Say which file (name, size, a checksum if you can), which page (`dos.html` or `boot.html`) and
 which options, and what you saw: the last screen, and any message in the browser console.
 
 ## Documentation

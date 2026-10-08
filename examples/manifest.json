@@ -1,0 +1,169 @@
+[
+  {
+    "id": "plasma13",
+    "kind": "dos",
+    "file": "demos/PLASMA13.COM",
+    "title": "Plasma",
+    "author": "MIRAGE",
+    "license": "MIT",
+    "blurb": "A flowing plasma in VGA mode 13h, redrawn every frame, palette set through the DAC ports.",
+    "secs": 3,
+    "source": "demos/plasma13.asm"
+  },
+  {
+    "id": "xormunch",
+    "kind": "dos",
+    "file": "demos/XORMUNCH.COM",
+    "title": "Munching squares",
+    "author": "MIRAGE",
+    "license": "MIT",
+    "blurb": "x XOR y in mode 13h with a rotating palette, synchronised on the vertical retrace.",
+    "secs": 3,
+    "source": "demos/xormunch.asm"
+  },
+  {
+    "id": "vesa",
+    "kind": "dos",
+    "file": "demos/VESA.COM",
+    "title": "VESA banks",
+    "author": "MIRAGE",
+    "license": "MIT",
+    "blurb": "Finds 640×480×256 by walking the VBE mode list, then draws through five bank switches.",
+    "secs": 3,
+    "source": "demos/vesa.asm"
+  },
+  {
+    "id": "planar",
+    "kind": "dos",
+    "file": "demos/PLANAR.COM",
+    "title": "EGA planes",
+    "author": "MIRAGE",
+    "license": "MIT",
+    "blurb": "The EGA write modes, set/reset, bit mask and latches, in 16-colour planar mode 0Dh.",
+    "secs": 2,
+    "source": "demos/planar.asm"
+  },
+  {
+    "id": "cga",
+    "kind": "dos",
+    "file": "demos/CGA.COM",
+    "title": "CGA palette",
+    "author": "MIRAGE",
+    "license": "MIT",
+    "blurb": "CGA mode 4: four colour bars across the two interleaved banks.",
+    "secs": 2,
+    "source": "demos/cga.asm"
+  },
+  {
+    "id": "tetros",
+    "kind": "boot",
+    "file": "examples/boot/tetros.img",
+    "title": "TetrOS",
+    "author": "Daniel Etzold",
+    "year": 2016,
+    "license": "MIT",
+    "licenseFile": "examples/licenses/tetros.txt",
+    "source": "https://github.com/daniel-e/tetros",
+    "blurb": "Tetris in a 512-byte boot sector. Arrow keys move, Up rotates.",
+    "secs": 15
+  },
+  {
+    "id": "floppybird",
+    "kind": "boot",
+    "file": "examples/boot/floppybird.img",
+    "title": "Floppy Bird",
+    "author": "Mihail Szabolcs",
+    "year": 2014,
+    "license": "MIT",
+    "licenseFile": "examples/licenses/floppybird.txt",
+    "source": "https://github.com/icebreaker/floppybird",
+    "blurb": "Flappy Bird as a bootable floppy, in 16-bit real mode. Space flaps.",
+    "secs": 4
+  },
+  {
+    "id": "bootrogue",
+    "kind": "boot",
+    "file": "examples/boot/bootrogue.img",
+    "title": "bootRogue",
+    "author": "Oscar Toledo G.",
+    "year": 2019,
+    "license": "BSD-2-Clause",
+    "licenseFile": "examples/licenses/bootrogue.txt",
+    "source": "https://github.com/nanochess/bootRogue",
+    "blurb": "A roguelike in 510 bytes: random dungeons, monsters, the amulet. Arrow keys.",
+    "secs": 3
+  },
+  {
+    "id": "bootbasic",
+    "kind": "boot",
+    "file": "examples/boot/bootbasic.img",
+    "title": "bootBASIC",
+    "author": "Oscar Toledo G.",
+    "year": 2019,
+    "license": "BSD-2-Clause",
+    "licenseFile": "examples/licenses/bootbasic.txt",
+    "source": "https://github.com/nanochess/bootBASIC",
+    "blurb": "A BASIC interpreter in 512 bytes. Try: 10 print \"hello\" then run.",
+    "secs": 4,
+    "type": [
+      [
+        1,
+        "10 print \"hello, world\"\n"
+      ],
+      [
+        1.5,
+        "20 goto 10\n"
+      ],
+      [
+        2,
+        "run\n"
+      ]
+    ]
+  },
+  {
+    "id": "sectorlisp",
+    "kind": "boot",
+    "file": "examples/boot/sectorlisp.img",
+    "title": "SectorLISP",
+    "author": "Justine Tunney, Alain Greppin",
+    "year": 2021,
+    "license": "ISC",
+    "licenseFile": "examples/licenses/sectorlisp.txt",
+    "source": "https://github.com/jart/sectorlisp",
+    "blurb": "A LISP with a garbage collector in a boot sector. Try: (CONS (QUOTE A) (QUOTE B))",
+    "secs": 4,
+    "type": [
+      [
+        1,
+        "(CONS (QUOTE HELLO) (QUOTE (WORLD)))\n"
+      ]
+    ]
+  },
+  {
+    "id": "sectorforth",
+    "kind": "boot",
+    "file": "examples/boot/sectorforth.img",
+    "title": "sectorforth",
+    "author": "Cesar Blum",
+    "year": 2020,
+    "license": "MIT",
+    "licenseFile": "examples/licenses/sectorforth.txt",
+    "source": "https://github.com/cesarblum/sectorforth",
+    "blurb": "A 16-bit Forth in 512 bytes: eight primitives (@ ! sp@ rp@ 0= + nand exit), and you define the rest. Try: : dup sp@ @ ;",
+    "secs": 4,
+    "type": [
+      [
+        1,
+        ": dup sp@ @ ;\n"
+      ],
+      [
+        1.5,
+        ": invert dup nand ;\n"
+      ],
+      [
+        2,
+        ": and nand invert ;\n"
+      ]
+    ]
+  }
+]
