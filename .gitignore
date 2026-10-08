@@ -13,12 +13,12 @@ node_modules/
 tools/sst/
 
 # third-party demoscene intros downloaded for local testing (not redistributed)
-intros/
+/intros
 
 # local (gitignored) DOS games for browser testing — not redistributed
-games/
+/games
 
 # boot-sector images fetched for local testing (not redistributed)
-boot/
+/boot
 .dbxlogs/
 tools/sst386/
