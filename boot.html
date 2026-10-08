@@ -21,7 +21,7 @@
   button:disabled { opacity: .4; cursor: default; }
   #stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 12px; }
   #screen { height: 100%; max-width: 100%; aspect-ratio: 4 / 3; background: #000;
-            image-rendering: pixelated; outline: none; }
+            image-rendering: pixelated; outline: none; cursor: none; }   /* the guest draws its own */
   #status { padding: 6px 14px; background: var(--panel); border-top: 1px solid #1c2a36;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #help { padding: 0 14px 8px; background: var(--panel); color: #5c7080; }
@@ -55,7 +55,8 @@
   <main id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas></main>
   <div id="status">choose an image and Boot</div>
   <div id="serial"><pre id="serialOut"></pre><input id="serialIn" placeholder="COM1 — type a line, Enter sends it (with CR)"></div>
-  <div id="help">The keyboard goes to the guest. Click the screen to capture the mouse (Esc releases it).
+  <div id="help">The keyboard goes to the guest, and so does the mouse over the screen. Click the screen to
+    capture the mouse (it then moves freely, and Esc releases it). <b id="mousehint" style="color:var(--accent)"></b>
     The image lives in memory only: nothing is written back to disk.</div>
   <script type="module" src="src/bootpc.js"></script>
 </body>

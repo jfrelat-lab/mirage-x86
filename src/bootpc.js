@@ -23,7 +23,7 @@ import { bootSector, bootCD } from './boot.js';
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), status = $('status'), pick = $('image'), fileIn = $('file');
 const cpuSel = $('cpu'), memSel = $('mem'), clockSel = $('clock'), bootBtn = $('boot'), pauseBtn = $('pause');
-const pciBox = $('pci'), comBox = $('com1'), serialPane = $('serial'), serialOut = $('serialOut'), serialIn = $('serialIn');
+const mouseHint = $('mousehint'), pciBox = $('pci'), comBox = $('com1'), serialPane = $('serial'), serialOut = $('serialOut'), serialIn = $('serialIn');
 const TICK_MS = 1000 / 18.2065;
 const FLOPPIES = [163840, 184320, 327680, 368640, 737280, 1228800, 1474560, 2949120];
 const FRAME_MS = 12;
@@ -182,12 +182,23 @@ function showStatus(s) {
     `video mode ${h(s.mc.mem.u8[0x449], 2)}h`;          // physically: a paging OS may unmap page 0
 }
 
-// ---- mouse: relative motion under pointer lock (a PS/2 or INT 33h guest both read it) -----------
+// ---- mouse: relative motion, with or without pointer lock (a PS/2 or INT 33h guest both read it) -----
+// The guest's driver (Windows' through INT 15h C2xx, a DOS driver through the 8042) only ever sees
+// relative motion, so the host cursor is not needed: over the screen, movement and buttons go to the
+// guest. A click also asks for pointer lock, which hides the host cursor and frees the motion from the
+// edges of the canvas; when the browser refuses it (some embedded views do), the mouse still works.
+// It used to forward nothing until the lock was granted, and a refused lock left the mouse dead with
+// no message: Windows 95 and 98 were unusable that way.
 const btn = (b) => (b === 2 ? 1 : b === 1 ? 2 : 0);
-canvas.addEventListener('click', () => { if (session && !document.pointerLockElement && canvas.requestPointerLock) canvas.requestPointerLock(); });
-canvas.addEventListener('mousemove', (e) => { if (session && document.pointerLockElement === canvas) session.mc.mouseMoveRel(e.movementX | 0, e.movementY | 0); });
-canvas.addEventListener('mousedown', (e) => { if (session && document.pointerLockElement === canvas) session.mc.mouseButton(btn(e.button), true); });
-window.addEventListener('mouseup', (e) => { if (session && document.pointerLockElement === canvas) session.mc.mouseButton(btn(e.button), false); });
+const locked = () => document.pointerLockElement === canvas;
+canvas.addEventListener('click', () => {
+  if (!session || locked() || !canvas.requestPointerLock) return;
+  try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch { /* refused: unlocked mode */ }
+});
+canvas.addEventListener('mousemove', (e) => { if (session) session.mc.mouseMoveRel(e.movementX | 0, e.movementY | 0); });
+canvas.addEventListener('mousedown', (e) => { if (session) session.mc.mouseButton(btn(e.button), true); });
+window.addEventListener('mouseup', (e) => { if (session) session.mc.mouseButton(btn(e.button), false); });
+document.addEventListener('pointerlockchange', () => { mouseHint.textContent = locked() ? 'mouse captured — Esc releases it' : ''; });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---- controls ----------------------------------------------------------------------------------
