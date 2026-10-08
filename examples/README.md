@@ -10,12 +10,14 @@ The programs on the home page (`index.html`), listed in `manifest.json`.
 |---|---|---|---|---|
 | `boot/tetros.img` | TetrOS | Daniel Etzold | MIT | https://github.com/daniel-e/tetros |
 | `boot/floppybird.img` | Floppy Bird | Mihail Szabolcs | MIT | https://github.com/icebreaker/floppybird |
+| `boot/bootchess.img` | BootChess | Olivier Poudade (Baudsurfer/RSi), with Peter Ferrie | WTFPL v2 | `boot/bootchess.txt` (the author's documentation, with the full source) |
 | `boot/bootrogue.img` | bootRogue | Oscar Toledo G. | BSD-2-Clause | https://github.com/nanochess/bootRogue |
 | `boot/bootbasic.img` | bootBASIC | Oscar Toledo G. | BSD-2-Clause | https://github.com/nanochess/bootBASIC |
 | `boot/sectorlisp.img` | SectorLISP | Justine Tunney, Alain Greppin | ISC | https://github.com/jart/sectorlisp |
 | `boot/sectorforth.img` | sectorforth | Cesar Blum | MIT | https://github.com/cesarblum/sectorforth |
 
-The binaries are the ones v86's catalogue serves for the same programs.
+The binaries are the ones v86's catalogue serves for the same programs; BootChess comes with its
+author's release text.
 
 - `thumbs/` are screenshots taken by MIRAGE: `node tools/demo-thumbs.mjs` regenerates them from the
   manifest.

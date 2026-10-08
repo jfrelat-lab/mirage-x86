@@ -81,6 +81,25 @@
     "secs": 4
   },
   {
+    "id": "bootchess",
+    "kind": "boot",
+    "file": "examples/boot/bootchess.img",
+    "title": "BootChess",
+    "author": "Olivier Poudade (Baudsurfer/RSi)",
+    "year": 2015,
+    "license": "WTFPL",
+    "licenseFile": "examples/licenses/bootchess.txt",
+    "source": "examples/boot/bootchess.txt",
+    "blurb": "Chess against the computer in a 512-byte boot sector. Type a move such as e2e4 and press Enter.",
+    "secs": 2,
+    "type": [
+      [
+        1,
+        "e2e4\n"
+      ]
+    ]
+  },
+  {
     "id": "bootrogue",
     "kind": "boot",
     "file": "examples/boot/bootrogue.img",
