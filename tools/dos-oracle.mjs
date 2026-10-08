@@ -266,7 +266,7 @@ const mode = process.argv[2] || 'check';
 
 if (mode === 'capture') {
   const img = process.argv[3] || join(ROOT, 'boot', 'FREEDOS14.IMG');
-  if (!existsSync(img)) { console.error(`no boot image at ${img} — see docs/TESTING.md`); process.exit(2); }
+  if (!existsSync(img)) { console.error(`no boot image at ${img} — see docs/notes/testing-log.md`); process.exit(2); }
   console.log(`booting ${img} and recording every INT 21h …`);
   const { records, blocks, fault, text } = capture(img);
   console.log(text.split('\n').slice(-4).join('\n'));

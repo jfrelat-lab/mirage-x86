@@ -1,244 +1,194 @@
-# MIRAGE — Devices (BIOS, DOS, Video, Timer, Input)
+# MIRAGE — Devices and services
 
-The trap-and-emulate layer around the CPU. Read [ARCHITECTURE.md](ARCHITECTURE.md) first.
+How the BIOS, DOS and the devices are implemented. What the guest sees, and what each part was
+checked against, is in [HARDWARE.md](HARDWARE.md). Read [ARCHITECTURE.md](ARCHITECTURE.md) first.
 
-Everything hangs off `machine.js`'s two buses:
-- **Interrupts:** `hookInterrupt(n, fn)` registers a JS handler for INT n and points its vector
-  at the BIOS stub. `swInt(n)` runs it (or `realInt` into a guest ISR if the guest hooked n).
-- **I/O ports:** `onPortRead(port, fn)` / `onPortWrite(port, fn)`. `ioRead/ioWrite` mask the
-  return width. An unhandled port reads `0xFF`/`0xFFFF`.
+## The two buses (`machine.js`)
 
-## BIOS (`bios.js`)
+Everything outside the CPU hangs off two tables.
 
-INT handlers: **10h** (video), **11h** (equipment), **12h** (memory KB), **16h** (keyboard),
-**1Ah** (RTC/ticks). The BIOS Data Area (`0x400`) is seeded (equipment word, video mode, cols,
-rows). `installVGA(machine)` is called from here.
+- **Interrupts.** `hookInterrupt(n, fn)` registers a JavaScript handler for INT n and points the
+  vector at a one-byte `IRET` stub in the BIOS segment. When the guest executes INT n and the
+  vector still points at the stub, the handler runs; if the guest installed its own handler, the
+  interrupt goes to it, through the real-mode vector table or the IDT. A handler that the guest
+  later reaches by a far call (a program that reads the vector and calls it) runs too: the stub's
+  address is recognised by the recompiler.
+- **I/O ports.** `onPortRead(port, fn)` and `onPortWrite(port, fn)`. A port nobody registered
+  reads as all ones (FFh, FFFFh, FFFFFFFFh) and ignores writes, as an empty ISA bus does.
 
-### INT 10h subfunctions worth knowing
-- `AH=00` set mode → writes BDA 0x449, reloads the default DAC, sets `mem.planar` for
-  EGA/VGA 16-colour modes (0Dh/0Eh/0Fh/10h/11h/12h) and calls `vga.setMode`.
-- `AH=0E` teletype, `AH=09/0A` write char/attr, `AH=13` write string, `AH=02/03` cursor.
-- `AH=12` (BL=10h) returns EGA/VGA info (BX=0x0003, CX=0). Other subfns are acked.
-- `AH=1A` **Get Display Combination Code** — returns **AL=0x1A** (function supported) + BL=0x08
-  (VGA colour). ⚠️ AL *must* be 0x1A; the universal probe is `mov ax,1A00h;int 10h;cmp al,1Ah`.
-  Returning AL=0 reads as "no VGA" (this was God of Thunder's quit bug).
+`installBIOS(machine, options)` installs everything below except DOS; `installDOS(machine, vfs)`
+adds the DOS player's services. Options: `pci`, `serial`, `xms`, `ems`, `dpmi`.
 
-## DOS (`dos.js`)
+## The interrupt controller and the timer
 
-The loader (`dos.load`) builds a PSP, relocates `.EXE` (MZ header) or loads `.COM` at :0x100,
-sets up segments/stack, and jumps to the entry point. INT 21h services implemented (by AH):
+**8259A pair** (`pic.js`): IRR, ISR, IMR, fixed priority, specific and non-specific EOI, the ICW1-4
+initialisation (so a guest can move the vector base), the cascade on IRQ 2, the edge/level control
+registers (ELCR, with PCI). Devices call `machine.raiseIRQ(n)`; delivery happens between blocks when
+IF is set. Not implemented: rotating priority, special mask mode, poll mode.
 
-```
-00 01 02 06 07 08 09 0A 0B 0C 0E   console/char I/O + print$
-19 1A                              current drive / set DTA
-25 35                              set / get interrupt vector   ← games install ISRs here
-2A 2C                              get date / get time
-2F 30 33 36                        get DTA / DOS version(5,0) / ctrl-break / free space
-3C 3D 3E 3F 40 41 42 43 44         create/open/close/read/write/delete/seek/attr/ioctl (files via VFS)
-47 48 49 4A                        get cwd / alloc / free / resize MCB
-4C 4D                              terminate(exit code) / get child return code
-4E 4F 56 57                        findfirst / findnext / rename / file date-time
-```
+**8254 timer, channel 0** (`machine.js`). The tick is clocked off `cpu.cycles`: one 18.2 Hz tick is
+`pitBase` cycles, 182,584 by default (`MIRAGE_PITRELOAD`), chosen so that MIRAGE does as much work
+per tick as DOSBox-X at `cycles=fixed 20000` (see [notes/timing.md](notes/timing.md) §6).
 
-Files live in an in-memory `VFS` (`vfs.js`); `VFS.dosName()` maps to 8.3. No real disk, no
-network. **XMS** is implemented (`xms.js`: INT 2Fh 4300/4310 + the far-call entry, alloc/free/lock/move/realloc).
-Move endpoints are bounds-checked against the block (A4h/A6h), lengths must be even (A7h), the copy is
-a memmove that also runs the SMC dirty check — AH=0Bh is the path games swap *code* overlays over — and
-a grow that would run into a neighbouring block relocates instead of aliasing it. There is
-**no EMS and no DPMI/protected mode** (raptor/jazz need DPMI).
+- **Reprogramming** through ports 43h/40h changes the interrupt rate. The rate is capped at
+  `pitBase / 16` (about 291 Hz) because delivering an interrupt is expensive here
+  (`MIRAGE_PITFLOOR` lowers the cap). Every mode is treated as periodic.
+- **Reading** port 40h returns the live count in 1.193 MHz ticks, counted from the moment the
+  reload value was written, as an 8254 does (`MIRAGE_PITOLD=1` restores an older approximation).
+- **Delivery.** `serviceTimer` runs when `cpu.cycles` reaches `nextTimerCycle`: it bumps the BIOS
+  tick count and delivers IRQ 0. `machine.timerAuto` is on headless (the clock is the cycle count,
+  deterministic); in the browser `ui.js` turns it off and paces ticks to wall-clock time.
+- **Channel 2** and port 61h drive the speaker gate; there is no sound output.
 
-A **real DOS kernel boots on this BIOS**: FreeDOS 1.4 reaches its `A:\>` prompt through
-`tools/run-boot.mjs`, with no unimplemented INT vector and no unhandled port along the way. That is
-the practical statement of how complete the hardware layer is — more useful than any list of
-services, because a kernel exercises the ones that matter and complains about the rest.
+**RTC and CMOS** (`rtc.js`): an MC146818 on ports 70h/71h — the clock, the status registers, the
+periodic interrupt on IRQ 8, CMOS bytes (memory sizes, diskette types, equipment), INT 1Ah's clock
+services. The update-ended and alarm interrupts are not implemented.
 
-A **real VGA BIOS ROM runs on this device model**: SeaVGABIOS initialises without a fault, takes over
-INT 10h, and its mode sets for 03h/0Dh/0Eh/10h/12h/13h leave register state identical to ours — the
-CRTC and Graphics Controller tables in `vga.js` were captured from it rather than derived.
+## Keyboard and mouse
 
-**Interrupt controller** (`pic.js`): a real 8259A pair — IRR, ISR, IMR, fixed priority, non-specific
-and specific EOI, the ICW1-4 initialisation sequence (so a guest can move the vector base) and the
-IRQ2 cascade. Masking and in-service state are honoured: a masked IRQ is not delivered, and a tick
-cannot arrive while the previous ISR is still open. Rotating priority, special mask mode and the poll
-command are not implemented. *When* an interrupt is delivered has not changed — that is D7.
+**8042** (`bios.js`): ports 60h and 64h, IRQ 1. Keys arrive as set-1 make and break scancodes
+(`machine.pushScancodes`, then `pumpKeyboard`) and also as BIOS keystrokes for INT 16h
+(`machine.keyQueue`): a game with its own INT 9 handler reads the port, a program that asks the BIOS
+gets the buffer. The controller's commands are implemented as far as guests use them, including
+the output port, whose bit 1 is the A20 gate (HimemX switches A20 that way). Port 92h is the fast
+A20 gate. The browser side (`keyboard.js`) maps `KeyboardEvent.code` to scancodes; the arrow keys
+are sent without the E0 prefix.
 
-**INT 13h** (`disk.js`) runs over raw sector images attached with `machine.disk.attach(drive, bytes)`;
-standard floppy sizes (160K-2.88M) get their geometry inferred, anything else needs one passed in.
-AH=00/02/03/04/08/15 are implemented; a drive with no image reports 80h "not ready" rather than
-silence, which is the whole point — an unhandled INT 13h let a guest believe it had read a sector and
-parse uninitialised RAM. No drives are attached by default; `tools/run-boot.mjs` attaches the image
-it boots.
+**PS/2 mouse** (`ps2mouse.js`): three-byte packets on the 8042's auxiliary channel, IRQ 12, and INT
+15h AX=C2xx, the BIOS interface a guest's own mouse driver uses. **INT 33h** (`mouse.js`) is the
+DOS player's built-in mouse driver.
+
+**Game port** 201h reads F0h: no joystick (buttons up, axes timed out). FFh would read as a joystick
+whose axes never time out.
+
+## Storage
+
+**INT 13h** (`disk.js`) over sector images attached with `machine.disk.attach(drive, bytes, geom)`:
+CHS reads, writes and verify, drive parameters, the disk type, and the EDD extensions (41h, 42h-44h,
+47h, 48h) for hard disks. Floppy geometry is inferred from standard image sizes. A drive with no
+image answers 80h "not ready". Drive A: exists even when empty, as the CMOS says. The CD-ROM is
+drive E0h, by LBA in 2048-byte sectors, with 4Bh for El Torito.
+
+**IDE** (`ide.js`): two channels, PIO only.
+
+- **Primary**, 1F0h-1F7h and 3F6h, IRQ 14: the images attached as 80h and 81h, as ATA disks. The
+  ATA-4 subset: IDENTIFY, READ/WRITE SECTORS and MULTIPLE, SET MULTIPLE, INITIALIZE DEVICE
+  PARAMETERS, SEEK, VERIFY, SET FEATURES, the power commands, DIAGNOSTIC, the soft reset.
+- **Secondary**, 170h-177h and 376h, IRQ 15: an ATAPI CD-ROM as master, present when a disc is
+  attached (`disk.attachCD`) or when PCI is on (`disk.fitCD`, an empty drive). It answers PACKET
+  with the MMC commands drivers send — TEST UNIT READY, REQUEST SENSE, INQUIRY, MODE SENSE(10),
+  READ CAPACITY, READ(10/12), READ CD, READ TOC, GET CONFIGURATION, GET EVENT STATUS and a few
+  others — and reports a disc inserted while running as UNIT ATTENTION.
+- A channel with no device floats at FFh, as if absent.
+
+**Booting** (`boot.js`): `bootSector` loads the first sector at 0000:7C00 and enters it with DL set;
+`bootCD` follows the El Torito catalogue (no emulation, floppy or hard-disk emulation).
 
 ## Video
 
-Two completely separate paths depending on mode:
+**INT 10h** (`bios.js`): mode set and the BIOS data area, cursor, scrolling, character and string
+output (in text modes and drawn as glyphs in graphics modes), pixels, the palette and DAC calls,
+fonts (AX=11xxh), configuration (12h), the display combination code (1Ah), state save (1Ch), and
+VBE 2.0 (4Fh): the mode list, mode information, mode set with a linear or banked framebuffer, bank
+switching, scan-line length and display start. Where the references disagreed, the choice is
+written next to the code.
 
-### Mode 13h — linear 256-colour (fast path)
-A000 is a flat `320×200` byte framebuffer in `mem.u8`. Emitted writes hit the array directly.
-`video.js._renderGfx13` maps each byte through the DAC palette. No device object involved.
+**VGA registers** (`vga.js`, `bios.js`): the sequencer, graphics controller, attribute controller,
+CRTC, miscellaneous output, the DAC (3C6h-3C9h), the CGA mode and colour registers (3D8h, 3D9h) and
+input status (3DAh, also 3BAh). The 16-colour planar modes keep their picture in `vga.planes`, four
+64 KiB planes, not in A000h: the write pipeline implements the four write modes, set/reset, the
+rotate and logic functions, the bit mask, the latches and both read modes. Mode X (unchained 256
+colours) is the same planar path. The width and height come from the mode set; the CRTC supplies
+the line offset, the display start (scrolling, page flipping) and, in Mode X, the number of
+scan lines. Line compare (split screen) is not implemented.
 
-### EGA/VGA 16-colour — planar (`vga.js`)
-`mem.planar=true` routes A000 byte accesses to the VGA device. The picture lives in
-**`vga.planes`** (4 × 64 KiB bit-planes), **not** in linear A000 — a common trap when writing a
-probe (check `machine.vga.planes`, never `mem.u8[0xa0000]`, in planar modes).
+**Retrace** (3DAh): derived from real time in the browser, so vertical retrace comes at 70 Hz however
+fast the engine runs, and from the cycle count headless (`pitBase / 3.845` cycles per frame), so a
+run stays reproducible. The blanking and retrace fractions follow the CRTC.
 
-The write pipeline (`vga.writeByte`) implements the real Graphics Controller:
-- **Sequencer** (0x3C4/5): reg 2 = Map Mask (per-plane write enable).
-- **Graphics Controller** (0x3CE/F): reg 0 Set/Reset, reg 1 Enable-Set/Reset, reg 3
-  Rotate+ALU-function, reg 4 Read-Map-Select, reg 5 write mode (0–3), reg 8 Bit Mask.
-- **Latches** (4): a CPU *read* loads all four latches (what makes read-modify-write blitting
-  work) and returns the read-map-selected plane. Write modes 0/1(latch-copy)/2/3 all implemented.
-- **Attribute Controller** (0x3C0): the 16-entry palette (index→DAC), flip-flop reset by a
-  0x3DA read. **CRTC** (0x3D4/5): reg 0C/0D display-start (page-flip/scroll), reg 13 offset
-  (logical row width) — `_renderPlanar` honours both, so Keen's smooth scroll works.
+**VBE framebuffer.** VBE modes draw into a framebuffer that is ordinary RAM, 4 MiB aligned on 4 MiB
+near the top of memory when there are 16 MiB or more (reserved in the E820 map), or 2 MiB below.
+`machine.vbe` describes the active mode; the A000h window is a 64 KiB view of the same bytes.
 
-### CGA graphics — modes 4/5/6 (`video.js._renderCGA`)
-Implemented (Alley Cat renders; `demos/CGA.COM` guards it in golden). The B800 framebuffer is
-interleaved: even scanlines at +0x0000, odd at +0x2000, 80 bytes/row. Modes 4/5 = 320×200×4
-(2 bpp) with the palette chosen by the **0x3D9 colour-select register** (`bios.cga.color`:
-bit4 intensity, bit5 palette green/red/brown vs cyan/magenta/white); mode 6 = 640×200 mono.
-`bios.cga = { color, mode }`; ports 0x3D8/0x3D9 in `bios.js`. **INT 10h character output works in
-CGA graphics modes:** teletype/write-char draw each char as an 8×8 font glyph into the B800 bitmap
-(from the real 8×8 `machine.font8x8`, falling back to the 8×16 `machine.font` downsampled), not a
-text char/attr cell — games print prompts over graphics this way (Alley Cat). INT 10h AH=0Bh sets
-the CGA palette/background.
+**DISPI** (`dispi.js`, with PCI): the Bochs display interface on 1CEh/1CFh, setting any mode the
+framebuffer can hold; it reads back a mode set through the VBE BIOS, as QEMU does.
 
-**Fonts** — the three IBM VGA ROM fonts `assets/vga-rom-8x{8,14,16}.bin` (256 glyphs, 1 byte/row,
-MSB=left) cover every mode: 8×8 (CGA/200-line graphics + CGA text), 8×14 (EGA text/350-line), 8×16
-(VGA text mode 3 + 480-line graphics). They were **graphically extracted from DOSBox-X** (the
-reference), not copied from source: `tools/fontdump.asm` draws all glyphs in modes 13h/10h/12h and
-dumps the framebuffer, `tools/build-fonts.mjs` reverse-engineers the bitmaps. `video.js` loads all
-three onto `machine.font`/`font8x8`/`font8x14`.
+**A real VGA BIOS** (`vgarom.js`): a VGA option ROM can be run as INT 10h instead of ours.
 
-> ⚠️ **Render dispatch is flag/mode-mixed** (`video.js:render`): 13h → gfx13; else `mem.planar`
-> → planar; else mode 4/5/6 → CGA; else text. A program that inherits a stale graphics mode
-> from a *previous* program (MIRAGE never resets the mode when the shell regains control) can
-> render its text through the wrong path — see [notes/compat-log.md](notes/compat-log.md) "known rough edges".
+**Drawing** (`video.js`): one renderer for text (with blink and the cursor), CGA, planar 16-colour,
+mode 13h, Mode X and VBE at 8, 16 and 32 bits per pixel. The fonts in `assets/` are the 8×8, 8×14
+and 8×16 VGA fonts, rebuilt from DOSBox-X's rendered glyphs (`tools/build-fonts.mjs`).
 
-### The DAC (`bios.js`)
-Ports 0x3C8 (write index) / 0x3C7 (read index) / 0x3C9 (RGB data, 6-bit). Most demos set the
-palette this way rather than via INT 10h. `bios.dac` is 256×3 bytes.
+## Buses and the rest
 
-## Timer — PIT channel 0 (`machine.js`)
+**PCI** (`pci.js`, option `pci`): configuration mechanism 1 on CF8h/CFCh; functions 00.0 (i440FX),
+01.0 (PIIX3 ISA bridge, with the PCI interrupt routing), 01.1 (PIIX3 IDE in legacy mode, bus-master
+registers at C000h that move no data but set the interrupt bit), 02.0 (a 1234:1111 display whose
+BAR0 is the VBE framebuffer); the ELCR on 4D0h/4D1h; a $PIR routing table; the PCI BIOS through INT
+1Ah B1xxh.
 
-The 18.2 Hz tick is **clocked off `cpu.cycles`**, treating one retired instruction as one
-~1.19 MHz PIT tick. `pitReload` (default 65536 = the real reload → an emulated ~1.2 MIPS 386;
-override with `MIRAGE_PITRELOAD`) is the period; `nextTimerCycle` the next threshold.
+**Serial port** (`uart.js`, option `serial`): a 16550A on 3F8h-3FFh, IRQ 4, with its FIFOs. What the
+guest sends goes to `machine.serial.onTx`; `boot.html` shows it in a console.
 
-- **Counter-0 read (`IN 0x40`)** returns the live countdown value (derived from `cpu.cycles`, LSB-
-  then-MSB per the access mode). Games poll it for fine timing/delays/entropy — Alley Cat's gameplay
-  loop spins on it, so a constant reply froze the game. A counter-0 command re-aligns reads to LSB.
-- **Counter-0 reprogramming honoured:** games set a faster INT 8 rate via `OUT 43h`/`OUT 40h`
-  (Dune ~200 Hz, God of Thunder ~140 Hz for its logo). `machine`'s 0x43/0x40 handlers decode the
-  access mode and call `setPitReload()`, so timer-paced intros run at the intended speed (ignoring
-  this made them 8–11× too slow). `machine.pitBase` keeps the default so the **0x3DA beam** (70 Hz,
-  an independent clock) does not move when the system timer is reprogrammed. In the browser `ui.js`
-  paces `tickTimer` to `pitReload` (clamped, so a kHz sound-rate timer can't flood the loop).
+**Sound** (`bios.js`): detection only. The Sound Blaster DSP answers a reset and a version query on
+22xh; the OPL timer handshake works on 388h, 228h, 220h and 222h. Nothing is synthesised.
 
-- **`serviceTimer()`** — fires when `cpu.cycles ≥ nextTimerCycle`: bumps the BDA tick, runs the
-  guest INT 8 ISR (or chains INT 1Ch) via `realInt`, advances `nextTimerCycle` and `cpu.deadline`.
-  Coalesces a long IF-off gap into a single tick.
-- **Delivered mid-slice** at run-loop block boundaries (and by tier-2 regions via `cpu.deadline`,
-  see [RECOMPILER.md](RECOMPILER.md)). This is why a guest that busy-waits on a timer-updated
-  counter *inside* one `runSlice` (Wolf3D/Stryker/Hocus) now makes progress — the old model only
-  ticked between slices.
-- **`machine.timerAuto`** gates the run-loop firing. **On** headless (deterministic,
-  representative). **Off** in the browser (`ui.js` paces `tickTimer` to wall-clock 18.2 Hz for
-  real-time game speed) and in `bench.js`/`fuzz-region.js` (they need the legacy 1-tick-per-frame
-  model / no async ticks). When off, `cpu.deadline=Infinity` so regions never bail on the timer.
+**Port F4h** is not a MIRAGE device: the probes in `tools/` write to it to end a run, as QEMU's
+`isa-debug-exit` does, and the test tools hook it.
 
-### Known limitation — block-granular timing (and how DOSBox avoids it)
+## DOS (the DOS player)
 
-Two design choices bound how accurate our timing can be, and they matter to a whole class of
-timing-sensitive titles (see the table below):
+**DOS** (`dos.js`). The loader builds a PSP, loads a `.COM` at 100h or relocates an MZ `.EXE`, and
+sets up the memory control blocks. INT 21h:
 
-1. **IRQs are sampled at basic-block boundaries.** `runSlice(N blocks)` runs a fixed block count;
-   `run()` checks `cpu.cycles ≥ nextTimerCycle` only *between* blocks, so a due INT 8 lands up to
-   one block (`MAXOPS` = 192 instructions) late. Errors do not self-correct — the schedule is never
-   re-anchored inside a slice.
-2. **The 0x3DA beam is `cpu.cycles % vgaPeriod`** — the beam phase is *coupled to* `cpu.cycles`, so
-   jitter in when the ISR runs also moves the apparent beam position.
+| Group | AH |
+|---|---|
+| console and character I/O | 00, 01, 02, 06, 07, 09, 0A, 0B, 0C |
+| drives, DTA, vectors | 0E, 19, 1A, 25, 2F, 35, 36 |
+| date, time, version, flags | 2A-2D, 30, 33, 37, 38 |
+| directories and files | 39-44, 47, 4E, 4F, 56, 57, and 29 (parse a name into an FCB) |
+| memory | 48, 49, 4A, 58 |
+| processes | 31, 4B (load and execute, load overlay), 4C, 4D, 50, 51, 62 |
+| internals | 34 (InDOS), 52 (list of lists, with a live System File Table) |
 
-**DOSBox does it differently** (reverse-engineered from dosbox-staging, 2026-08-03):
+The FCB file calls and AH=5Dh are not implemented. Files live in an in-memory file system
+(`vfs.js`, drive C:, 8.3 names); character devices (CON, NUL, PRN, AUX, LPTn, COMn) open as handles.
+INT 20h, 27h, 2Ah and 2Fh are answered too.
 
-| | DOSBox | MIRAGE today |
+**XMS 3.0** (`xms.js`): INT 2Fh 4300h/4310h and the far-call entry; allocate, free, lock, move,
+reallocate, the A20 calls. A move runs the self-modifying-code check, because overlays of code are
+swapped in this way.
+
+**EMS 4.0** (`ems.js`): INT 67h, the subset programs use, and the `EMMXXXX0` device that programs
+open to detect it. Not installed on the bare PC: a guest's own EMM386 would refuse to load.
+
+**DPMI 0.9** (`dpmi.js`): the mode-switch entry, INT 31h services (descriptors, memory, interrupt and
+exception vectors, real-mode calls and callbacks, raw mode switch), and reflection of interrupts
+between the modes. DOOM, Heretic and Quake run on it. `MIRAGE_NODPMI=1` removes it, so that a
+program's own extender takes over.
+
+When a real DOS kernel boots on the bare PC, the XMS driver and the DPMI host stand aside: a guest
+that installs its own handler on INT 2Fh or loads its own extender gets the vector
+(`machine.reclaimVector`).
+
+## Port map
+
+| Ports | Device | File |
 |---|---|---|
-| Run budget | `CPU_Cycles` **capped to the next PIC event** (`pic.cpp` `PIC_RunQueue`), re-anchored at every event | fixed `runSlice(N blocks)` |
-| IRQ sampling | per block, but the budget *ends* at the event, so it returns there | per block, run continues past the tick |
-| 0x3DA beam | `PIC_FullIndex() - vga.draw.delay.framestart` (`vga_misc.cpp`) — **PIC time re-anchored every frame**, immune to CPU-cycle granularity | `cpu.cycles % vgaPeriod` (coupled to cycle jitter) |
-| Trap Flag | dynrec **falls back to the interpreter** (`CPU_Core_Dynrec_Trap_Run` → `CPU_Core_Normal_Run`) | same idea — `run()`'s TF path uses `translate(…,1)` |
-
-Empirically, **DOSBox-X `core=dynamic` renders Heaven identically to `core=normal`** — so this is
-*not* a recompiler-paradigm limit; a block recompiler can be accurate enough. The gap is our
-fixed-slice + raw-cycle-beam design.
-
-**The correct fix path** (see ROADMAP D7): emit a **deadline safepoint inside tier-1 codegen**
-(blocks decrement/check a budget and return, exactly as tier-2 regions already do via
-`cpu.deadline`), plus a PIC-style event scheduler and a frame-anchored beam clock.
-⚠️ **Do NOT bound blocks by re-translating them** — truncating the straddling block with an uncached
-`translate(lin, ip0, room)` per crossing was catastrophically slow (a vsync-poll loop crossing frame
-boundaries re-JITs constantly; a single `runSlice` never completed). Tried and reverted, 2026-08-04.
-
-### Titles that depend on PIT/PIC timing (mutualise the work here)
-
-| Title | What it does | Status today |
-|---|---|---|
-| **Wolf3D** | reprograms counter 0 to ~700 Hz for its sound service | **capped** at `pitBase>>4` ≈ 291 Hz to avoid an INT-8 storm — a real event scheduler could lift this |
-| **Dune (Cryo)** | ~200 Hz timer-paced animation | works (A6) |
-| **God of Thunder** | ~140 Hz for the logo | works (A4) |
-| **Alley Cat** | polls the counter-0 live countdown (`IN 0x40`) for gameplay/entropy | works |
-| **Heaven** (NoooN 4K) | 1 kHz ISR **+ ~240 k 0x3DA polls/frame** for vsync | ✅ runs (`7e1e162`). Its old derail was **never a timing bug** — it was the missing `0x67` prefix (ROADMAP F3). Do **not** use Heaven to justify D7 |
-| **Moktar** `GAME.TDT` | `STI;HLT` between decryption passes | works via the HLT-wake path |
-| 0x3DA-polling intros (kaneda, difze, rv256, revitro) | measure the retrace | work, but their golden fingerprints **shift** whenever delivery timing changes → any timing change needs a per-intro dosdiff re-bless |
-
-## Input
-
-- **Keyboard:** an 8042 controller (ports 0x60 data / 0x64 status) delivers queued keys as
-  make/break scancodes and raises **IRQ1 → INT 9** (`machine.pushScancodes`/`pumpKeyboard` →
-  `hwIrqPending`, serviced at block boundaries when IF set). Games install their own INT 9 and
-  read scancodes from port 0x60 — the BIOS INT 16h buffer (`machine.keyQueue`) is the fallback.
-  - **Browser bridge (`keyboard.js`):** drives BOTH paths. `keydown` → a Set-1 MAKE scancode
-    (keyed by `KeyboardEvent.code`, the physical key) via `pushScancodes`, plus a `(scan,ascii)`
-    pair onto `keyQueue`; `keyup` → the BREAK scancode (`make | 0x80`). Arrows map to bare XT
-    numpad scancodes (0x48/0x4b/0x4d/0x50, no E0). `ui.js`'s run loop calls `pumpKeyboard()` each
-    iteration so staged scancodes reach the guest. Before the 2026-07-20 fix the browser fed only
-    `keyQueue`, so INT-9 games (Alley Cat, God of Thunder, Wolf3D) got no input at all.
-- **Game port 0x201:** reads `0xF0` — "no joystick" (buttons up, axis one-shots timed out).
-  Returning the bus default 0xFF left the axis bits stuck high and hung Keen 4's joystick probe.
-
-## Sound (stubs only — no audio)
-
-Just enough handshake so detection passes:
-- **Sound Blaster** (base 0x220): DSP reset (0x226→0xAA), version query (0x22C `E1`→4.05),
-  read/status ports. Commands accepted and dropped.
-- **AdLib/OPL** (0x388, mirrored at 0x228): the timer-expiry handshake — writing the
-  timer-start bit to register 4 arms the 0xC0 status the probe expects. No FM synthesis.
-
-## Full port map
-
-| Port | Dir | Device |
-|---|---|---|
-| 0x20 / 0xA0 | W | PIC EOI (no-op) |
-| 0x60 / 0x64 | R/W | 8042 keyboard |
-| 0x201 | R/W | game/joystick (0xF0) |
-| 0x226 / 0x22A / 0x22C / 0x22E | R/W | Sound Blaster DSP |
-| 0x228 / 0x229 · 0x388 / 0x389 | R/W | OPL/AdLib |
-| 0x3C0 | W | Attribute Controller |
-| 0x3C4 / 0x3C5 | R/W | VGA Sequencer |
-| 0x3C6 | R/W | DAC pixel mask |
-| 0x3C7 / 0x3C8 / 0x3C9 | R/W | DAC palette |
-| 0x3CE / 0x3CF | R/W | VGA Graphics Controller |
-| 0x3D4 / 0x3D5 | R/W | CRTC |
-| 0x3DA | R | Input Status #1 — the **VGA beam** |
-
-### The 0x3DA beam
-A time-based beam, not a per-read toggle: bit3 (vertical retrace) and bit0 (display-disabled)
-are derived from `cpu.cycles % vgaPeriod`, where `vgaPeriod = pitReload / 3.845` (the 70 Hz VGA
-: 18.2 Hz PIT ratio). Reading 0x3DA also resets the Attribute Controller flip-flop. A short
-retrace pulse at frame end + surrounding vblank; demos that *measure* the retrace (not just wait
-for an edge) see a realistic period.
-
-⚠️ Because the phase is `cpu.cycles % vgaPeriod`, it is **coupled to cycle jitter**: anything that
-shifts when the timer ISR runs also shifts the apparent beam. DOSBox instead measures from a
-**per-frame anchor** (`PIC_FullIndex() - framestart`), which is immune to that. See *Known
-limitation — block-granular timing* above and ROADMAP **D7**.
+| 20h-21h, A0h-A1h | 8259 pair | `pic.js` |
+| 40h, 43h | 8254 channel 0 | `machine.js` |
+| 42h, 61h | channel 2, speaker gate | `bios.js` |
+| 60h, 64h | 8042 keyboard and aux (mouse) | `bios.js`, `ps2mouse.js` |
+| 70h-71h | RTC and CMOS | `rtc.js` |
+| 92h | fast A20 | `bios.js` |
+| 170h-177h, 376h | IDE secondary (CD-ROM) | `ide.js` |
+| 1CEh-1D0h | DISPI (with PCI) | `dispi.js` |
+| 1F0h-1F7h, 3F6h | IDE primary | `ide.js` |
+| 201h | game port | `bios.js` |
+| 220h-22Fh, 388h-389h | Sound Blaster and OPL detection | `bios.js` |
+| 3BAh, 3DAh | input status (retrace) | `bios.js` |
+| 3C0h-3CFh | VGA attribute, misc, sequencer, DAC, graphics | `vga.js`, `bios.js` |
+| 3D4h-3D5h, 3D8h-3D9h | CRTC; CGA mode and colour | `vga.js`, `bios.js` |
+| 3F8h-3FFh | COM1 (option) | `uart.js` |
+| 4D0h-4D1h, CF8h, CFCh | ELCR, PCI configuration (option) | `pci.js` |
+| C000h-C00Fh | IDE bus master (with PCI) | `pci.js` |

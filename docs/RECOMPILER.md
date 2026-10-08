@@ -1,142 +1,171 @@
-# MIRAGE — The Recompiler (`src/recompiler.js`)
+# MIRAGE — The recompiler (`src/recompiler.js`)
 
-The dynarec. It turns x86 basic blocks into JavaScript functions and runs them. ~1000 LOC,
-the densest file in the project. Read [ARCHITECTURE.md](ARCHITECTURE.md) first.
+How x86 machine code becomes JavaScript and runs. Read [ARCHITECTURE.md](ARCHITECTURE.md) first.
 
-## Emitting a block: `translate(linStart, ip0, maxOps=192)`
+## Translating a block: `translate(linStart, ip0, maxOps, d)`
 
-Decodes x86 forward from a linear address, appending JavaScript **strings** to an `out[]`
-array, until a terminator or `MAXOPS`. Then `new Function('cpu', body)` compiles it.
+`translate` decodes x86 forward from a linear address and appends JavaScript **source strings** to
+an array, until a terminator or `maxOps` instructions (192 by default, `MIRAGE_MAXOPS`). `d` is the
+code segment's D bit (16- or 32-bit defaults). The body is compiled with `new Function('cpu', …)`.
 
-The emitted body opens with a preamble binding hot state to locals:
-```js
-var r=cpu.reg, m=cpu.mem, sb=cpu.base;      // + u8,cp,dv when the block needs them
-```
-Each instruction appends statements via `P(str)`. Reads/writes hit `r[i]`, `m.u8[addr]`, etc.
-directly. The returned block object:
-```js
-{ fn, linStart, linEnd, ip0, ipEnd, count, body, term, bodyOut, usesFPU, canFault, hot, kind }
-//  kind: 0 = tier-1 block, 2 = tier-2 region.  count = instructions retired (bumped into cpu.cycles).
-```
-
-**Terminators** end a block and are baked into the emitted tail:
-- `jmp` → `cpu.eip=T`
-- `jcc` → `if(cond){eip=T}else{eip=next}` — `cond` is emitted inline (see flags below)
-- `jcxz`/`loop`/`loope`/`loopne` → their own condition forms
-- RET/RETF/IRET/CALL/CALLF/JMPF/INT/INT3/INTO/HLT emit `cpu.eip=…; return;` directly (`ended=true`)
-
-`stepOne()` is `translate(lin, ip0, 1)` — exactly one instruction, run uncached. It's the
-conformance/debug path and is deliberately never affected by the block cache or tier-2.
-
-## The block cache
-
-Two-level page table, no hashing: `blockPages[lin>>12][lin&0xfff]`. A slot may be reached from
-different `CS:IP` for the same linear address, so `blk.ip0` is re-checked and the block
-recompiled on mismatch (emitted jump targets bake in `ip0`).
-
-## Flags — the subtle part
-
-x86 flags are expensive if computed eagerly. Two mechanisms keep them cheap:
-
-1. **`cond(cc)` inlined** — Jcc/SETcc/CMOVcc emit direct flag-bit tests instead of a helper
-   call, e.g. `JZ → (cpu.flags&64)`, `JL → ((cpu.flags>>>7^cpu.flags>>>11)&1)` (SF≠OF).
-
-2. **Dead-flag elimination** (Phase 1.A, `MIRAGE_NOSTRIP` to disable) — a two-pass liveness
-   scan over the block's instruction list drops `setAdd/setSub/setLogic/…` calls whose result
-   flags are overwritten before any reader. **Live-out at end-of-block is always ALL** (the next
-   block or an external reader may consume them). The def/use table is faithful to
-   `cpu.js`'s *implementation*, not the architecture — e.g. MUL/IMUL are modelled as `def CO
-   only` because our impl preserves S/Z/P/A (`setShiftResult(touchSZP=false)`); modelling them
-   as "def SZP undefined" would let a stale-but-preserved producer be stripped and become
-   visible to a later PUSHF. `stepOne` compiles one instruction → live-out=ALL → **never strips**,
-   so the conformance path is byte-exact by construction (and thus blind to strip bugs — the
-   golden PNG gate catches those instead).
-
-Lazy/last-writer flags are **designed but deferred** (too many hand-audited materialization
-points on the string emitter; belongs in a future IR).
-
-## Inlined fast paths (Phase 1)
-
-The recompiler open-codes what a naive emitter would call helpers for. Each is behind a
-kill-switch env var (kept as permanent debug levers):
-
-- **Memory** (`MIRAGE_NOMEMINLINE`): `m.r8/r16` → `u8[a]` / `(u8[a]|u8[(a+1)&MM]<<8)`; writes
-  emit the value + the **SMC dirty check** inline: `u8[a]=v; if(cp[a>>>12])m._dirty(a,1)`.
-  Composed lanes are **always masked** (`(a+1)&MM`) — the wrap at `a===MM` (FFFF:000F+1) is
-  reachable and an unmasked `u8[MM+1]` would read `undefined`→0. Also inlines push/pop and
-  `mul16` (8% of integer workloads by itself).
-- **FPU** (`MIRAGE_NOFPUINLINE`): each x87 op emits specific JS against a local `ft` mirror of
-  `ftop`, flushed to `cpu.ftop` at every block exit; rare ops (FLDENV/FSAVE/…) fall back to a
-  `cpu.fpuMem/fpuReg` call. FPU stores emit the same SMC dirty check as integer stores.
-- **A000 planar routing**: byte accesses to segment 0xA emit
-  `if(m.planar&&(a>>>16)===10)m.vga.writeByte(a,v);else{…flat…}`.
-
-## Self-modifying code (SMC)
-
-`markCodePage(page)` flags every 4 KiB page a block was compiled from. Guest writes (both the
-`memory.js` methods and the inlined emitted writes) check `codePage[addr>>12]` and call
-`_dirty` → the recompiler invalidates the affected blocks (drops them from the page table so
-they recompile). Demos that patch their own code (`tube`, `darnit`) rely on this. **Known gap
-noted historically:** FPU stores through `dv.setFloat*` must carry the same check (they do, via
-the inlined dirty check) — audit if you touch `fpu.js` emission.
-
-## Tier-2 regions
-
-A block promoted after `T2_HOT=64` executions (`_promote`) becomes a fused region via
-`_emitRegion`: a walk collects the block plus statically-reachable successors (loop body),
-bounded by `T2_MAXBLK=24` blocks / `T2_MAXINS=384` instructions, and emits:
+The body opens by binding hot state to locals:
 
 ```js
-var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;   // + FPU locals if used
-var _e=<rootIp>, dl=cpu.deadline;
-for(;;){
-  if(R.dead){cpu.eip=_e;return;}                              // SMC eviction guard
-  if(cpu.tbudget<=0 || cpu.cycles>=dl){cpu.eip=_e;return;}    // slice budget OR PIT tick due
-  cpu.tbudget--;
-  switch(_e){
-    case <ip>: { <block body>; cpu.cycles+=<count>; <edge> }  // edge: in-region → _e=T;break;  out → eip=T;return;
-    ...
-  }
-}
+var r=cpu.reg, m=cpu.mem, sb=cpu.base, u8=m.u8, cp=m.codePage;   // + st, dv when the block uses the FPU
 ```
 
-Invariants that make regions safe:
-- **Byte-identical to tier-1.** cpu.cycles is bumped per block after its body (as tier-1 does),
-  so an in-block RDTSC reads the same count. The `fuzz-region` gate runs 20k random programs
-  through region-mode `run()` vs tier-1 `stepOne()` and requires identical final state.
-- **Budget parity.** `tbudget` is check-then-decrement, matching tier-1's per-block budget, so a
-  region and tier-1 stop at the same block boundary → same slice boundary → same interrupt timing.
-- **PIT delivery (`cpu.deadline`).** A region never re-enters the dispatch loop, so it must bail
-  when a timer tick comes due — otherwise a timer-delay loop promoted to a region spins forever
-  (this was Stryker's bug). `rec.run` sets `cpu.deadline = timerAuto ? nextTimerCycle : Infinity`
-  per slice; `serviceTimer` advances it; the region bails at `cpu.cycles>=dl`, the run loop
-  fires INT 8, the region re-enters. `dl` is hoisted to a local (refreshed each entry) so the
-  check is free — bench stays within noise. **The deadline bail is gated on `&& (cpu.flags&IF)`**:
-  run() only delivers the timer (and advances the deadline) with IF set, so bailing while IF is
-  clear would return WITHOUT decrementing tbudget and WITHOUT run() being able to make progress →
-  an infinite no-progress bail loop (a game running a hot loop under CLI past a due tick — this
-  was God of Thunder's tier-2 hang). With IF clear the region keeps running, bounded by tbudget;
-  the pending tick fires when the guest re-enables interrupts.
-- **SMC eviction (`R.dead`/`cpu.tgen`).** A write into a region's page sets `R.dead`; the guard
-  stops in-flight execution at the next iteration (staleness bounded to one block, like tier-1).
-  3 evictions of a root → blacklist it (`T2_BLACKLIST`), stays tier-1 (auto-modifying intros).
+Each instruction then appends statements that read and write `r[i]`, `u8[a]` and the rest directly.
+The block object it returns:
 
-`_installRegion` replaces the root's tier-1 slot with the region; constituent blocks stay
-tier-1 (so a mid-region bail can dispatch them). `_evictRegion` undoes it.
+```js
+{ fn, linStart, linEnd, ip0, ipEnd, count, term, usesFPU, canFault, kind, epoch, ph0, ph1, … }
+// count: instructions retired, added to cpu.cycles after the block runs
+// kind:  0 = an ordinary block, 2 = a fused region (second tier, off)
+// epoch, ph0, ph1: the address space it was compiled in (see "Under paging")
+```
 
-## Env kill-switches (all default-on optimizations)
+A block ends at a control transfer, at `maxOps`, one instruction after STI (the interrupt shadow),
+or after an instruction that wrote into its own code (see below). Jumps within the same segment
+record their targets in `term` instead of returning directly, so the second tier can follow them.
 
-`MIRAGE_NOTIER2`, `MIRAGE_NOSTRIP`, `MIRAGE_NOMEMINLINE`, `MIRAGE_NOFPUINLINE`,
-`MIRAGE_PITRELOAD=<cycles>` (PIT rate; default 65536). Every gate must pass with each switch
-both on and off — the golden PNG gate is the only thing that catches multi-instruction strip
-bugs (SST is single-instruction and never strips).
+**Instructions emitted as calls.** Anything rare or long — segment loads with descriptor checks,
+far transfers between privilege levels, task switches, CPUID, CMPXCHG8B, most x87 control
+instructions — is emitted as a call into `cpu.js` or `fpu.js`. The common integer, memory, stack
+and x87 arithmetic paths are emitted inline, and so are string instructions, as a loop (REP
+included), through the memory object's accessors.
 
-## Gotchas when editing
+**BIOS and DOS entry points.** A few fixed addresses in the F000 segment hold a one-byte stub (`CF`
+or `CB`). When a block would start there, `translate` returns a one-instruction block that calls the
+JavaScript service instead: a BIOS interrupt called *inline* (a far call to its vector), the XMS
+driver entry, the DPMI mode switch and its callbacks. The stub byte is checked first, so a program
+that overwrites the address with its own code gets its own code.
 
-- The emitter builds **strings**; a syntax error surfaces as a `new Function` throw at first
-  execution of that block, not at edit time. Test the specific program.
-- `MAXOPS`, terminator handling, and cycle bookkeeping are load-bearing for interrupt timing —
-  change with the `fuzz-region` + `golden` gates watching.
-- Anything that changes *when* the timer/IRQ is delivered can shift timer-sensitive demos
-  (256bytef/intoanew/memories) — that's a golden re-bless, not a bug, **if** you've verified the
-  demos still render (side-by-side PNGs) and tier-1==tier-2.
+## Running blocks: `run(machine, maxBlocks)`
+
+The dispatch loop. Per block: deliver a pending interrupt if IF is set, compute the linear address
+of `CS:EIP`, find the block, run it, add its count to `cpu.cycles`.
+
+- **The cache** is a page table without hashing: `blockPages[lin >>> 12][(lin & 0xfff) | d << 12]`,
+  so the same address compiled for a 16-bit and a 32-bit segment are two entries. A slot reached
+  from a different `CS:IP` with the same linear address is recompiled, because jump targets inside
+  the block are baked in from `ip0`.
+- **The trap flag.** With TF set, each instruction is translated alone, uncached, run, and followed
+  by INT 1. Copy protections that decrypt the next instruction in their single-step handler see the
+  bytes they just wrote.
+- **The size cap.** When the emitted source exceeds the cap (16 MiB, 64 MiB under paging,
+  `MIRAGE_CODE_CAP`), the cache is dropped and the slice ends.
+- **A derail.** A block of 64 instructions or more made entirely of zero bytes means the guest is
+  executing empty memory; it is reported once, with the recent block trail (`src/derail.js`).
+  `MIRAGE_DERAIL_STOP=1` turns the report into a fault.
+
+`stepOne()` translates and runs one instruction without touching the cache. It is the path of the
+conformance harnesses.
+
+## Flags
+
+Flags are kept materialised in `cpu.flags`. Two things keep that cheap:
+
+1. **Conditions are inlined.** Jcc, SETcc and CMOVcc test flag bits directly:
+   `JZ → (cpu.flags&64)`, `JL → ((cpu.flags>>>7^cpu.flags>>>11)&1)`.
+2. **Dead flags are not computed.** A liveness pass over the block's instructions removes a
+   flag-setting call whose flags are all overwritten before anything reads them. The flags live at
+   the end of a block are always *all* of them. The table of what each instruction defines and uses
+   describes MIRAGE's implementation, not the architecture: MUL is modelled as defining CF and OF
+   only, because our implementation leaves SF, ZF and PF as they were, and a later PUSHF would see
+   them. A reader missing from the table is the one unsafe error; the golden test is what catches it.
+   `MIRAGE_NOSTRIP=1` disables the pass. `stepOne` never strips (its live-out is everything), which
+   makes the conformance path exact by construction — and blind to strip bugs.
+
+## Memory access
+
+How a memory access is emitted is chosen by a strategy (`src/mem-strategy.js`), selected
+separately for reads and writes (`MIRAGE_MEM_READ`, `MIRAGE_MEM_WRITE`). Without paging the default
+emits a direct typed-array access, masked to the address space (the A20 wrap included); under
+paging the `paged` strategy goes through the software TLB. Every strategy must give identical
+results; golden and conformance are run for each.
+
+Emitted inline with each access:
+
+- **Planar video.** An access to A000h in a 16-colour planar mode is routed to `vga.js`.
+- **Self-modifying code.** A write checks the page's code flag and calls the invalidator.
+- **Segment limit and write protection.** In protected mode, an offset outside the segment raises
+  #GP or #SS, and a write through a read-only segment raises #GP (`MIRAGE_SEGLIM=0`,
+  `MIRAGE_SEGWP=0` turn them off for measurement).
+- **LOCK.** A LOCK prefix on an instruction that cannot be locked is #UD (`MIRAGE_LOCKUD=0`).
+
+The x87 is emitted inline against a local copy of the stack top, written back at every block exit;
+rare instructions call `fpu.js`. `MIRAGE_NOFPUINLINE=1` makes every x87 instruction a call.
+
+## Self-modifying code
+
+Every 4 KiB page a block was compiled from is marked. A guest write to a marked page calls
+`invalidate(addr, len)`, which evicts only the blocks whose byte range the write overlaps. Three
+filters keep that cheap, because most writes into a code page touch data:
+
+1. per group of 256 pages, the lowest and highest byte any block covers on each page;
+2. per page, a count of blocks covering each 16-byte chunk;
+3. only then, the set of blocks on the page.
+
+**A block that rewrites its own later bytes.** The cache entry is evicted at once, but the block is
+already running. After each instruction that writes memory, the block checks `cpu.smcSelf` — set
+when the eviction hit the running block — and returns, so execution resumes at the next instruction
+from freshly translated code.
+
+## Under paging
+
+When paging is on, the recompiler switches to the paged memory strategy and drops the cache, and it
+does so again whenever paging is switched on or off, or CR4.PSE changes while it is on.
+
+- **Page faults.** A memory access that cannot be translated throws `PageFault` from inside the
+  block. Every instruction stores its own EIP first under paging, so `run` catches the fault, sets
+  CR2 and delivers #PF with EIP at the faulting instruction. Restart is approximate: side effects
+  the instruction had already committed are not undone. Demand paging faults on the access itself,
+  which is the case that matters.
+- **Address spaces.** A CR3 load does not drop the cache. It increments `epoch`; a block compiled in
+  an older epoch is checked the next time it is reached: if its first and last pages still map to
+  the physical frames it was compiled from (`ph0`, `ph1`), it is kept, otherwise evicted. This is
+  what keeps process switches cheap (`MIRAGE_NOD8=1` restores dropping the cache).
+- **INVLPG** refreshes the TLB entry and invalidates the blocks on that page.
+
+A change of the A20 mask drops the cache and ends the slice as well, because `run` keeps the mask
+in a local for the whole slice.
+
+## The second tier (off)
+
+`_promote` can fuse a hot block and its statically reachable successors (up to 24 blocks and 384
+instructions) into one function, a `for(;;){switch(_e){…}}` that runs a loop without returning to
+the dispatcher. It is **off**: a region can run an unbounded amount of work in one slice, and some
+games ran slower or derailed with it. `MIRAGE_TIER2=1` turns it on for work on it.
+
+What it guarantees when on: identical results to the first tier (the `fuzz-region` test runs
+thousands of random programs both ways), the same slice budget, a bail-out when a timer tick falls
+due and IF is set, and eviction when its code is written.
+
+## Switches
+
+All read once at start-up from the environment, all off by default unless stated.
+
+| Switch | Effect |
+|---|---|
+| `MIRAGE_MAXOPS` | instructions per block (192) |
+| `MIRAGE_CODE_CAP` | the size cap of the cache, in bytes |
+| `MIRAGE_TIER2=1` | the second tier |
+| `MIRAGE_NOSTRIP=1` | compute every flag |
+| `MIRAGE_NOFPUINLINE=1` | every x87 instruction as a call |
+| `MIRAGE_MEM_READ`, `MIRAGE_MEM_WRITE` | the memory strategy |
+| `MIRAGE_SEGLIM=0`, `MIRAGE_SEGWP=0`, `MIRAGE_LOCKUD=0` | turn off the limit, write-protection and LOCK checks |
+| `MIRAGE_NOD8=1` | drop the cache on every CR3 load |
+| `MIRAGE_SEGIP=1` | record the instruction that loaded each segment, for diagnosis |
+| `MIRAGE_DERAIL_STOP=1` | stop on a derail |
+
+An optimisation with a switch must pass the gates with the switch both on and off.
+
+## When editing
+
+- The emitter builds strings: a syntax error appears when the block is first compiled, not when the
+  file loads. Run the program that exercises the path.
+- Anything that moves *when* an interrupt is delivered — block length, terminators, cycle counting
+  — shifts the timer-paced intros (`256bytef`, `intoanew`, `memories`). Re-bless their golden
+  fingerprints only after looking at the frames.
+- Emitted code must not depend on anything that can change during a slice without ending it (the
+  A20 mask, paging, the cache arrays): `run` keeps them in locals.

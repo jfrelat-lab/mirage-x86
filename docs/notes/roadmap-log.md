@@ -486,7 +486,7 @@ instead of 415.
 
 `tools/dbx-oracle.mjs --sweep` compares the file / video / INT 21h event streams of all 47 games
 against real DOSBox-X. **38/54 are an exact prefix** (2026-08-25, the corpus having grown by Heretic/Hexen/Quake), up from 20 when the tool was calibrated. See
-[TESTING.md](../TESTING.md) for the six normalisation traps this cost and the two environmental
+[TESTING.md](testing-log.md) for the six normalisation traps this cost and the two environmental
 differences that are *not* defects.
 
 | # | Task | Size | Notes |

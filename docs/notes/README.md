@@ -12,6 +12,7 @@ one level up ([ARCHITECTURE](../ARCHITECTURE.md), [COMPAT](compat-log.md), [TEST
 | Note | What it is |
 |---|---|
 | [roadmap-log.md](roadmap-log.md) | The former task list, which was also the diary: every item with what was tried and found, September and October 2026 in most detail (the operating systems, PCI, the block cache under paging). |
+| [testing-log.md](testing-log.md) | The former testing guide: each tool as it was added, and the incidents behind it (a recording oracle that recorded nothing, normalisations that were false positives first). |
 | [compat-log.md](compat-log.md) | The former compatibility notebook: how each game and intro was unblocked, the speed measurements against DOSBox-X. |
 | [timing.md](timing.md) | How the machine's clock was measured and calibrated against DOSBox-X: interrupt delivery, the timer rate cap, the VGA beam, self-modifying code, and the long hunt that ended in "hardware interrupts were never dispatched through the IDT". Sections are numbered; the code refers to them (`docs/notes/timing.md §6`). |
 | [windows-3.md](windows-3.md) | Getting Windows 3.0 (real, standard and 386 enhanced mode) and Windows 3.1 to start. |
