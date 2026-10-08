@@ -616,7 +616,7 @@ export function installBIOS(machine, opts = {}) {
           // .COM entry) and never sets it, because BL is already 0. Reading BX put `start` at 256,
           // every write landed past the 768-byte DAC array and was silently dropped by the typed
           // array, so its whole palette upload did nothing: the demo then rendered against the
-          // default VGA DAC. Right geometry, wrong colours everywhere (docs/COMPAT.md).
+          // default VGA DAC. Right geometry, wrong colours everywhere (docs/notes/2026-09-05-mesha.md).
           const start = cpu.bx & 0xff, count = cpu.cx & 0xffff;
           let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
           for (let i = 0; i < count; i++) {
@@ -929,7 +929,7 @@ export function installBIOS(machine, opts = {}) {
       // for the configuration we actually boot.
       // Report none only while OUR XMS driver is the one actually serving the guest — that is, while
       // INT 2Fh still points at our stub. A booted kernel installs its own multiplex handler over the
-      // vector, which orphans our driver (docs/COMPAT.md); answering 0 there told the guest's real XMS
+      // vector, which orphans our driver (docs/notes/2026-09-05-mesha.md); answering 0 there told the guest's real XMS
       // driver there was no extended memory, and HimemX refused to install with "Extended memory is
       // too small or not available" even after it had A20 open.
       // AND our DOS has to exist: without it (no machine.dos, the boot-sector case) our XMS driver
@@ -1212,7 +1212,7 @@ export function installBIOS(machine, opts = {}) {
   // open the 1 MiB wrap and the first one an XMS driver tries: HimemX writes 0xD1 to 0x64 then the
   // output-port byte to 0x60, whose bit 1 is A20. Ignoring 0x64 made that method silently inert, so
   // HimemX gave up with "No Supported A20 method detected / Driver won't be installed" and no XMS
-  // existed at all under a booted kernel (docs/COMPAT.md). 0xDD/0xDF are the shorthand forms.
+  // existed at all under a booted kernel (docs/notes/2026-09-05-mesha.md). 0xDD/0xDF are the shorthand forms.
   machine.onPortWrite(0x64, (_p, _s, v) => {
     const c = v & 0xff;
     if (c === 0xd1) { kb.cmd = 0xd1; return; }               // next byte on 0x60 is the output port
@@ -1354,7 +1354,7 @@ export function installBIOS(machine, opts = {}) {
   // A program that can use either then takes its OTHER branch, so comparing the two emulators without
   // matching this compares two different programs. intros/mesha.com is the case: with a host it
   // becomes a client and installs a protected-mode INT 8 handler; without one its extender falls back
-  // to XMS. See docs/TIMING.md §14d.
+  // to XMS. See docs/notes/timing.md §14d.
   // The env test compares against '0' and '' as well as undefined: `!!process.env.X` is TRUE for the
   // string "0", so the obvious spelling would make MIRAGE_NODPMI=0 mean "on".
   const noDpmiEnv = typeof process !== 'undefined' && !!process.env &&

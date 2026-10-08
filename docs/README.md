@@ -19,7 +19,7 @@ Architecture and internals reference. Start with **[ARCHITECTURE.md](ARCHITECTUR
 
 One-off studies:
 
-- **[WIN16-SPIKE.md](WIN16-SPIKE.md)** — feasibility of running WIN16 (NE) apps directly,
+- **[notes/win16-spike.md](notes/win16-spike.md)** — feasibility of running WIN16 (NE) apps directly,
   Wine-style, instead of booting real Windows: the measured API surface (`tools/ne-inspect.mjs`),
   what the engine already provides, and the go/no-go.
 

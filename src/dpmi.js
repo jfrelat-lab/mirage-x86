@@ -915,7 +915,7 @@ export function installDPMI(machine) {
     // offers no DPMI host either — one is a TSR the guest loads, and DOSBox ships none at all. This
     // is not merely cosmetic. Offering DPMI on the boot path pushed intros/mesha.com onto its DPMI
     // branch under FreeDOS, where it faults with #GP at 3c:9fc, instead of the XMS branch that
-    // renders (docs/COMPAT.md). On the HLE path nothing takes the vector, so we answer as before.
+    // renders (docs/notes/2026-09-05-mesha.md). On the HLE path nothing takes the vector, so we answer as before.
     // MIRAGE_DPMI_ALWAYS=1 keeps answering even under a booted kernel. Not for normal use — it puts a
     // client on our host where a real machine would have none — but it is the only way to reproduce
     // ROADMAP F8, the #GP our DPMI path takes on the boot path and not under the HLE DOS.

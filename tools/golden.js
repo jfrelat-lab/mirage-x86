@@ -40,7 +40,7 @@ const TICKS = 60, BUDGET = 400000;
 // a flat fill (2 values) at 60; `mesha` needs ~400 ticks to finish precomputing and draws nothing
 // before that. The engine is deterministic, so any budget is reproducible — the choice is only about
 // sampling where the content is.
-// Re-measured 2026-09-02 after the machine speed was calibrated to the reference (TIMING.md §6):
+// Re-measured 2026-09-02 after the machine speed was calibrated to the reference (docs/notes/timing.md §6):
 // a timer-paced program advances by TICKS, so changing how many instructions a tick is worth moves
 // where its picture is. Only `freality` needed moving (20 -> 40, 2 distinct values -> 90).
 // mesha is pinned at 170 and NOT at 400 because it EXITS at 214: a later sample catches the demo

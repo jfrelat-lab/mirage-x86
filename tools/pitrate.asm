@@ -109,7 +109,7 @@ isr:                                    ; no chaining: the BIOS tick is not the 
         ; -dSMC=1 keeps the ISR's own counter in an IMMEDIATE FIELD and rewrites it every interrupt,
         ; which is what a 1 KB intro does because it has nowhere else to put it — Chrome Revenge
         ; writes at 0x857B and 0x8584, inside this same instruction stream. It is the pattern that
-        ; makes a block recompiler throw its cache away on every tick (docs/TIMING.md §9), so this
+        ; makes a block recompiler throw its cache away on every tick (docs/notes/timing.md §9), so this
         ; measures the mechanism itself rather than one intro that happens to use it.
 patch:  mov     ax, 0x1234              ; the imm16 at patch+1 IS the counter
         inc     ax

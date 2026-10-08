@@ -765,7 +765,7 @@ function asciiz(mc, cpu, off, str) {
   // What the wait must advance is 1000 us of EMULATED time, so the expectation is derived from the
   // machine speed rather than written down: a PIT tick is 1/18.2065 s and costs pitBase cycles, so
   // 1000 us costs pitBase / (1e6 / 18.2065 / 1000). This used to be the constant "~1193 cycles",
-  // which silently assumed pitBase = 65536; calibrating the machine to DOSBox (TIMING.md §7) moved
+  // which silently assumed pitBase = 65536; calibrating the machine to DOSBox (docs/notes/timing.md §7) moved
   // it to 182584 and this was the one test in the suite that noticed — and it stayed red because no
   // gate I was running covered it. Derived, it survives the next speed change.
   const expect = c.mc.pitBase / (1e6 / 18.2065 / 1000);

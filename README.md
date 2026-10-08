@@ -87,7 +87,7 @@ MIRAGE is checked against other machines, not against its own expectations:
 
 Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The rest: the recompiler
 ([RECOMPILER.md](docs/RECOMPILER.md)), the devices ([DEVICES.md](docs/DEVICES.md)), timing
-([TIMING.md](docs/TIMING.md)), compatibility ([COMPAT.md](docs/COMPAT.md)) and the roadmap
+([TIMING.md](docs/notes/timing.md)), compatibility ([COMPAT.md](docs/COMPAT.md)) and the roadmap
 ([ROADMAP.md](docs/ROADMAP.md)). These are working notes kept alongside the code, written as the
 work went: they are detailed and candid rather than polished.
 

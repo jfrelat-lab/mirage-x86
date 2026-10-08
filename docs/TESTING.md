@@ -497,7 +497,7 @@ Send emulator stderr to `/dev/null`, and cap any log you do keep in memory (`qem
 ## An external pixel reference for protected-mode programs — QEMU + XMS
 
 `tools/grabber.asm` rides the timer IRQ, so it cannot capture a program that takes the timer for
-itself — which every self-hosted protected-mode intro does (docs/TIMING.md §14d). `tools/qemu-shot.mjs`
+itself — which every self-hosted protected-mode intro does (docs/notes/timing.md §14d). `tools/qemu-shot.mjs`
 reads the framebuffer from the HOST side through QEMU's monitor `screendump`, so it does not care.
 
 To match DOSBox's configuration — **XMS present, no DPMI host** — the guest needs an XMS driver, and

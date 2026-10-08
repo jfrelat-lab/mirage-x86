@@ -11,7 +11,7 @@
 // It exists because of a defect no other gate could see. INT 10h AH=10h AL=12h took the starting DAC
 // register from BX, where hardware takes BL — port 0x3C8 is eight bits wide. `intros/mesha.com` calls
 // it with BX = 0x100 and BL = 0, so its whole palette upload silently did nothing and every frame it
-// drew was the wrong colour (docs/COMPAT.md). golden was 43/43 through the fix, conformance is a CPU
+// drew was the wrong colour (docs/notes/2026-09-05-mesha.md). golden was 43/43 through the fix, conformance is a CPU
 // oracle and never touches INT 10h, and test-dos-api.js compares our BIOS against itself. Only a real
 // ROM can answer "what does this call actually do".
 //

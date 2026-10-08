@@ -156,7 +156,7 @@ interrupt, the VGA retrace and RDTSC are all derived from it — one 18.2 Hz tim
 cycles by default, about 3.3 million instructions per guest second. Nothing reads the host's clock
 or `Math.random`, so a headless run is reproducible exactly; that is what the golden gate relies
 on. In the browser, `ui.js` paces timer ticks to wall-clock time so that a game runs at its real
-speed. [TIMING.md](TIMING.md) records how these numbers were chosen.
+speed. [notes/timing.md](notes/timing.md) records how these numbers were chosen.
 
 ## Switches
 

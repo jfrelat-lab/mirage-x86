@@ -4,7 +4,7 @@
 //
 // Every other capture path in this repo runs INSIDE the guest and therefore competes with it for the
 // machine: tools/grabber.asm rides the timer IRQ, and a program that takes INT 8 in protected mode —
-// intros/mesha.com does, as a DPMI client — locks it out for good (docs/TIMING.md §14d/§14e). QEMU's
+// intros/mesha.com does, as a DPMI client — locks it out for good (docs/notes/timing.md §14d/§14e). QEMU's
 // monitor has `screendump`, which reads the emulated VGA from the host side: nothing to install in the
 // guest, nothing to hook, and it does not care what mode the CPU is in or who owns the interrupts.
 //

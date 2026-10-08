@@ -1,5 +1,5 @@
 // cr0.mjs — every PE transition mesha makes, in both configurations. The DPMI branch renders and the
-// XMS branch draws nothing (docs/TIMING.md §14h), and PMODE4K services interrupts by dropping back to
+// XMS branch draws nothing (docs/notes/timing.md §14h), and PMODE4K services interrupts by dropping back to
 // REAL mode rather than handling them in PM — so the switching itself is what to look at. cpu.setCR0
 // is the single writer, so one hook sees them all.
 import { readFileSync } from 'fs';

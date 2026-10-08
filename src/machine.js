@@ -132,7 +132,7 @@ export class Machine {
     // sides: DOSBox-X at `cycles=fixed 20000` gives 0x2E60 = 11872 per frame, we gave 0x10A5 = 4261,
     // so a guest got 2.79x less work per frame here than in the configuration every dosdiff and
     // dbx-oracle comparison is made against. 182584 reproduces DOSBox's count exactly, digit for
-    // digit — one comparable unit, at last. See docs/TIMING.md §6.
+    // digit — one comparable unit, at last. See docs/notes/timing.md §6.
     this.pitReload = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITRELOAD) || 182584;
     this.nextTimerCycle = this.pitReload;           // cpu.cycles threshold for the next INT 8
     // pitBase is the default cycles-per-18.2Hz-tick. The 0x3DA VGA beam (70 Hz) scales off THIS,
@@ -696,7 +696,7 @@ export class Machine {
     // nothing left we can safely do: every path below loads CS from a REAL-MODE vector, and a
     // real-mode segment loaded in protected mode is a SELECTOR. Under FreeDOS the kernel hooks
     // INT 1Ch at segment 0x0070, so the tick reflected straight into `#GP(0x70)` — which read as a
-    // DPMI or descriptor bug for a long time and is neither (docs/COMPAT.md, ROADMAP F8). Reflecting
+    // DPMI or descriptor bug for a long time and is neither (docs/notes/2026-09-05-mesha.md, ROADMAP F8). Reflecting
     // to real mode properly means switching modes underneath the client, which the host cannot do
     // mid-flight; a real host defers instead. Keep the BDA clock and the EOI, drop the reflection.
     if ((this.cpu.cr0 & 1) && this.dpmi && this.dpmi.active) {
@@ -712,7 +712,7 @@ export class Machine {
     // there is no LIDT to notice. Measured there: `92 00 08 00 00 8e 00 00` — offset 0x92, selector 8,
     // access 0x8E, a present 32-bit interrupt gate, and offset 0x92 is the same handler the DPMI
     // branch installs with INT 31h AX=0205. All of mesha's rendering lives in that handler, so
-    // without this it drew nothing at all (docs/TIMING.md §14j).
+    // without this it drew nothing at all (docs/notes/timing.md §14j).
     // Guarded on the gate's PRESENT bit: a guest that is in protected mode with no IDT of its own
     // must keep the previous behaviour rather than jump through an empty descriptor.
     // V86 INCLUDED: on a 386 every interrupt taken in virtual-8086 mode goes through the IDT, to the
@@ -789,7 +789,7 @@ export class Machine {
     // uncapped rate becomes an INT-8 storm (headless especially, where serviceTimer fires off
     // cpu.cycles). The cap keeps timer-paced games fast enough (200 Hz Dune / 140 Hz GoT are
     // unaffected) and matches ui.js's wall-clock clamp.
-    // The floor is a SPEED accommodation, not a timing one — measured in docs/TIMING.md §2: interrupt
+    // The floor is a SPEED accommodation, not a timing one — measured in docs/notes/timing.md §2: interrupt
     // dispatch costs ~0.2 µs and 256x the deliveries cost +8% wall clock, so what an uncapped rate
     // actually buys is the guest's own ISR running that many more times. `MIRAGE_PITFLOOR` lowers it
     // for experiments (Chrome Revenge asks for 68 and runs ~33x slower when it gets it).

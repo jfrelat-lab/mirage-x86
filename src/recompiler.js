@@ -15,7 +15,7 @@ import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cp
 import { SSE, XMM_SCRATCH } from './sse.js';
 
 // Cap on basic-block length. Overridable because block boundaries are where IRQs are sampled, so
-// moving them is how you measure what depends on that — see docs/TIMING.md §3, where it showed only
+// moving them is how you measure what depends on that — see docs/notes/timing.md §3, where it showed only
 // one golden of 43 is sensitive. Blocks average 2-3 instructions in practice; this cap is rarely hit.
 const MAXOPS = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_MAXOPS) || 192;
 const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
@@ -233,7 +233,7 @@ export class Recompiler {
     for (let p = addr >>> 12; p <= (end - 1) >>> 12; p++) {
       // Bounds FIRST, and without touching pageBlocks. This is the fast-out and it must not pay
       // for the Map that only the scan below needs: tube calls this barrier 3 030 236 times per
-      // 20 ticks and evicts nothing (docs/TIMING.md §12b), so every one of those was reaching two
+      // 20 ticks and evicts nothing (docs/notes/timing.md §12b), so every one of those was reaching two
       // integer comparisons through a hash lookup.
       const grp = this.pageBounds[p >>> 8];
       if (grp === undefined) continue;                                       // no block on these 256 pages

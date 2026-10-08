@@ -31,7 +31,7 @@ export function bootSector(machine, bytes, opts = {}) {
   // wrap (EXEPACK stubs do), which is why it stays closed on the .COM path — but a POST that is about
   // to boot a kernel opens it, and SeaBIOS does. Leaving it closed made HimemX report "No Supported
   // A20 method detected" and install no XMS driver at all, because its "always on" detection needs to
-  // find A20 already open (docs/COMPAT.md).
+  // find A20 already open (docs/notes/2026-09-05-mesha.md).
   if (machine.bios && machine.bios.setA20) machine.bios.setA20(true);
 
   const { drive = 0x00, strict = true } = opts;

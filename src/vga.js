@@ -102,7 +102,7 @@ export function installVGA(machine) {
   // end of the frame), which made the retrace pulse 8% of a frame against the hardware's 0.45% and
   // did not track the mode at all. It was held back for a while because turning it on drove
   // intros/freality.com into its own divide by zero — and that turned out to be a SPEED artifact,
-  // not a duty-cycle one: with the machine calibrated to the reference (TIMING.md §6) freality runs
+  // not a duty-cycle one: with the machine calibrated to the reference (docs/notes/timing.md §6) freality runs
   // its whole show under this beam and exits normally.
   const LEGACY_BEAM = typeof process !== 'undefined' && process.env && process.env.MIRAGE_BEAM === 'legacy';
   const recomputeBeam = () => {

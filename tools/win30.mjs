@@ -2,10 +2,10 @@
 //
 //   node tools/win30.mjs ["/3"] [out.png] [blocks]      defaults: 30 M blocks, 180 s
 //   WIN30_SECS=600 node tools/win30.mjs …                 to lift the time cap
-//   XMS=0 node tools/win30.mjs            — the memory-driver configurations (see docs/COMPAT.md)
+//   XMS=0 node tools/win30.mjs            — the memory-driver configurations (see docs/notes/windows-3.md)
 //
 // There was no committed runner for this, which is why "where win /3 stops" lived only in
-// docs/COMPAT.md and could not be re-measured after an engine change. Windows announces its own
+// docs/notes/windows-3.md and could not be re-measured after an engine change. Windows announces its own
 // failures in TEXT, so the picture is the least useful output here: what settles a question is the
 // INT 2Fh trail (the enhanced-mode takeover is negotiated over 2Fh), the exception count, and
 // whatever Windows printed through DOS.

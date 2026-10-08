@@ -6,7 +6,7 @@
 // Same method as the game version — run to a trigger, snapshot RAM+CPU at a point with no INT after
 // it, then single-step logging registers so Unicorn can replay the identical window — but the guest
 // is a booted kernel rather than a DOS program. Written for the MS-DOS 6.22 derail (see
-// docs/COMPAT.md): three service-level hypotheses were tested and refuted, and the CPU had never
+// docs/notes/booting-real-dos.md): three service-level hypotheses were tested and refuted, and the CPU had never
 // been checked, which given this project's history (the 0x67 prefix, the trap flag, push-dword) is
 // exactly the class left standing.
 //

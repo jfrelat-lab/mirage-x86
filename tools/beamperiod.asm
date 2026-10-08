@@ -1,6 +1,6 @@
 ; beamperiod.asm — how much work does a guest get inside ONE 0x3DA frame?
 ;
-; The duty cycle of the retrace pulse is checkable against the CRTC (docs/TIMING.md §4). The PERIOD
+; The duty cycle of the retrace pulse is checkable against the CRTC (docs/notes/timing.md §4). The PERIOD
 ; is not: it is a ratio between two clocks — how fast the beam sweeps and how fast the guest runs —
 ; and only the guest can see it. So the guest measures it: sync to a retrace edge, then count poll
 ; iterations across one whole frame. The same binary runs in MIRAGE and in DOSBox-X, and the two

@@ -92,7 +92,7 @@ models a later CPU. Comparing them reports an artifact as a bug — the same tra
 A 22 000-instruction window of IO.SYS init (388 bridged BIOS calls) shows **no divergence**: the CPU
 is not the problem there. Widening to the whole init from instruction 0 runs into flag differences
 after MUL that cascade — Unicorn-vs-8088 artifacts rather than bugs — so the derail in
-`docs/COMPAT.md` is **still unexplained**. The tool is sound; the remaining artifacts are what to
+`docs/notes/booting-real-dos.md` is **still unexplained**. The tool is sound; the remaining artifacts are what to
 tighten next if this is picked up again.
 
 ## 2026-08-19 — three harness defects fixed, and one limit that stands
