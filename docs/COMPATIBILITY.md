@@ -126,6 +126,7 @@ by the golden test. Of pouët's top ten MS-DOS 4K intros, nine rendered (2026-08
 | Juggler 2001 | Renders | after the keypress it asks for | 2026-08-28 |
 | Omniscent, Forever Reality, StarPort BBS 2, Another Soul Lost | Renders | | 2026-08-28 |
 | Void 3 | Starts | sets its VESA mode, then hangs in its timer handler | 2026-08-28 |
+| Difúze (Řrřola) | Fails | horizontal bands instead of diffusion patterns, against QEMU and DOSBox-X | 2026-10-09 |
 | oktaeder | Fails | not a MIRAGE defect — see above | 2026-08-22 |
 
 ## The CPU

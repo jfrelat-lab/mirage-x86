@@ -16,7 +16,20 @@ The programs on the home page (`index.html`), listed in `manifest.json`.
 | `boot/sectorlisp.img` | SectorLISP | Justine Tunney, Alain Greppin | ISC | https://github.com/jart/sectorlisp |
 | `boot/sectorforth.img` | sectorforth | Cesar Blum | MIT | https://github.com/cesarblum/sectorforth |
 
-The binaries are the ones v86's catalogue serves for the same programs; BootChess comes with its
+- `intros/` holds demoscene intros whose authors release them under free licences, with their sources:
+
+| File | Intro | Author | Licence | Where the licence is stated |
+|---|---|---|---|---|
+| `intros/helium.com` | Helium (4K, Assembly 1997) | viznut (ocsa) | CC0 1.0 | https://github.com/viznut/demoscene (the file is taken from that repository) |
+| `intros/puls.com` | Puls (256 bytes, 2009) | Řrřola (Jan Kadlec) | ISC | http://rrrola.wz.cz/downloads.html and COPYING.txt (`licenses/rrrola-isc.txt`) |
+| `intros/symetrie.com` | Symetrie (256 bytes, 2007) | Řrřola | ISC | same |
+| `intros/dirojed.com` | Dírojed (32 bytes, 2007) | Řrřola | ISC | same |
+| `intros/paralaxa.com` | Paralaxa (32 bytes, 2007) | Řrřola | ISC | same |
+
+Řrřola's files come from the zips on his download page. His Difúze is under the same licence but is
+not shown: MIRAGE draws it wrongly (see docs/KNOWN-ISSUES.md).
+
+The binaries of the boot-sector programs are the ones v86's catalogue serves for the same programs; BootChess comes with its
 author's release text.
 
 - `thumbs/` are screenshots taken by MIRAGE: `node tools/demo-thumbs.mjs` regenerates them from the

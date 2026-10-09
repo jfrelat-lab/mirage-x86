@@ -6,7 +6,8 @@
 //
 // An entry may carry `type`: [[seconds, "text"], …] — keys typed at that guest second, on both
 // keyboard paths (the 8042's scancodes and the BIOS buffer), so an interpreter shows something.
-// A program that leaves its graphics mode before exiting is captured at its last graphics frame.
+// A program that leaves its graphics mode before exiting is captured at its last graphics frame —
+// VBE always, any graphics mode when the entry says `lastFrame` (Helium plays once and exits).
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
@@ -52,11 +53,11 @@ for (const e of manifest) {
   }
   let fault = null; mc.onError = (x) => { fault = x; };
   const sec = 18.2065 * mc.pitBase, end = (e.secs || 3) * sec, keys = [...(e.type || [])];
-  let lastGfx = null;
+  let lastGfx = null, slices = 0;
   while (mc.cpu.cycles < end && !fault && !(dos && dos.programDone)) {
     while (keys.length && mc.cpu.cycles >= keys[0][0] * sec) type(mc, keys.shift()[1]);
     mc.runSlice(20000); mc.pumpKeyboard();
-    if (mc.vbe) lastGfx = grab(mc);
+    if (mc.vbe || (e.lastFrame && mc.mem.u8[0x449] !== 3 && ++slices % 8 === 0)) lastGfx = grab(mc);
   }
   const { W, H, rgb } = (mc.vbe || !lastGfx) ? grab(mc) : lastGfx;
   const out = `${ROOT}/examples/thumbs/${e.id}.png`;

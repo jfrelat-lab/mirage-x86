@@ -37,6 +37,9 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
   for five guest seconds, Windows 2000). Not explained.
 - **The real-time clock starts at a fixed date** in headless runs, so a guest sees files "from the
   future".
+- **Fewer instructions per tick than DOSBox-X on some intros.** Measured with `tools/dosdiff.js` at
+  the same tick count: Puls, Symetrie and Dírojed draw the same picture as DOSBox-X, less far
+  along. The calibration (`pitBase`) was made on an integer loop; not investigated further.
 - **The timer interrupt rate is capped** at about 291 Hz. A program that asks for more gets 291.
 - **The second compilation tier is off.** A fused loop can run unbounded work in one slice.
 
@@ -56,6 +59,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
 | Void 3 | hangs inside its own timer handler after setting its VESA mode; cause not found |
+| Difúze (Řrřola, 256 bytes) | draws horizontal bands where QEMU and DOSBox-X both draw reaction–diffusion patterns; cause not found. The golden test pins the wrong picture (`difze`) |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |
 
