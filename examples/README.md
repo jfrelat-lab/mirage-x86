@@ -29,6 +29,13 @@ The programs on the home page (`index.html`), listed in `manifest.json`.
 Řrřola's files come from the zips on his download page. His Difúze is under the same licence but is
 not shown: MIRAGE draws it wrongly (see docs/KNOWN-ISSUES.md).
 
+- `games/` holds DOS programs whose rights holders allow free distribution, as ZIP archives that the
+  DOS player unpacks into C:\GAMES\ (`dos.html?zip=…&run=…`):
+
+| File | Program | Rights holder | Terms | Text |
+|---|---|---|---|---|
+| `games/dunedemo.zip` | Dune, the 1991 demo | Cryo / Virgin Games | "may be given away freely, but it is not to be sold", unaltered | `licenses/dunedemo.txt`, and README.TXT in the archive |
+
 The binaries of the boot-sector programs are the ones v86's catalogue serves for the same programs; BootChess comes with its
 author's release text.
 

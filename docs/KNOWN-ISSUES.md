@@ -59,6 +59,9 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
 | Void 3 | hangs inside its own timer handler after setting its VESA mode; cause not found |
+| Unreal 1.1 (Future Crew) | "FutureExLoader: Block allocation error?" — its loader does not get the DOS memory it asks for; not investigated yet |
+| Jump 'n Bump | #GP in the DPMI client at 47:1BDC9, before the title screen |
+| Second Reality | derails to 0000:0000 at start |
 | Difúze (Řrřola, 256 bytes) | draws horizontal bands where QEMU and DOSBox-X both draw reaction–diffusion patterns; cause not found. The golden test pins the wrong picture (`difze`) |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |

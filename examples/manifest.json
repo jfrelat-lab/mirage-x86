@@ -1,5 +1,19 @@
 [
   {
+    "id": "dunedemo",
+    "kind": "zip",
+    "file": "examples/games/dunedemo.zip",
+    "run": "DUNEDEM",
+    "args": "ENG VGA ADL HIM 386",
+    "title": "Dune (1991 demo)",
+    "author": "Cryo, for Virgin Games",
+    "year": 1991,
+    "license": "free demo",
+    "licenseFile": "examples/licenses/dunedemo.txt",
+    "blurb": "The playable demo of Cryo's Dune: the Virgin and Cryo logos, then Arrakis.",
+    "secs": 20
+  },
+  {
     "id": "plasma13",
     "kind": "dos",
     "file": "demos/PLASMA13.COM",

@@ -1,0 +1,10 @@
+From README.TXT, inside examples/games/dunedemo.zip:
+
+  This demo may be be given away freely, but it is not to be sold.
+  It may only be used in the form of the Demo and not changed or altered
+  in any way without the permission of Virgin Games.
+
+  The Dune Demo is (C) Cryo 1991
+
+The archive holds the demo's files as Cryo shipped them. Two text files a bulletin-board system had
+added to the copy MIRAGE started from (SOURCE.TXT, an advertisement, and ABOUT.ME) are left out.
