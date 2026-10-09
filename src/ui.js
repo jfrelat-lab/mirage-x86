@@ -7,6 +7,7 @@ import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
 import { installDOS } from './dos.js';
 import { VFS } from './vfs.js';
+import { unzip } from './zip.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
 import { installMouse } from './mouse.js';
@@ -167,6 +168,21 @@ export class Mirage {
   }
 
   mountFile(name, bytes) { this.vfs.addFile('\\' + VFS.dosName(name), bytes); }
+  /** Unpack a ZIP archive into C:\GAMES\<NAME>\, NAME from the archive's file name (8.3). A single
+   *  top-level folder inside the archive is dropped, so the program sits at the root of what the
+   *  shell narrows C:\ to when it runs. Returns NAME. */
+  async mountZip(fileName, zipBytes) {
+    const files = await unzip(zipBytes);
+    const name = VFS.dosName(fileName.replace(/\.zip$/i, '')).replace(/\..*$/, '');
+    const tops = new Set(files.map((f) => (f.path.includes('/') ? f.path.split('/')[0] : '')));
+    const strip = tops.size === 1 && !tops.has('') ? [...tops][0].length + 1 : 0;
+    this._mkdirp('\\GAMES\\' + name);
+    for (const f of files) {
+      const rel = f.path.slice(strip).split('/').filter(Boolean).map((seg) => VFS.dosName(seg)).join('\\');
+      if (rel) this.vfs.addFile('\\GAMES\\' + name + '\\' + rel, f.bytes);
+    }
+    return name;
+  }
   runCommand(line) {                                  // inject a command as if typed
     if (this.shell.state !== 'input') return;
     this.shell.print(line + '\r\n');

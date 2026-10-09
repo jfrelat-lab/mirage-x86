@@ -6,6 +6,7 @@
 //   ?run=https://…/x.com fetch a binary, mount it, and run it
 //   ?args=...            command tail passed to the program
 //   ?load=URL[,URL2]     fetch + mount binaries without running
+//   ?zip=URL&run=PROG    fetch a ZIP, unpack it to C:\GAMES\<NAME>\ and run PROG from there
 //   ?cmd=DIR             run an arbitrary shell command line
 //   ?mhz=8               cap the guest at N million cycles/s (default: uncapped — see ui.js VCPU_HZ)
 
@@ -35,6 +36,16 @@ async function handleUrl(p) {
   const loads = (p.get('load') || '').split(',').map(s => s.trim()).filter(Boolean);
   for (const u of loads) await fetchInto(u);
 
+  const zip = p.get('zip');
+  if (zip) {
+    try {
+      const name = await app.mountZip(zip.split('/').pop().split('?')[0], new Uint8Array(await (await fetch(zip)).arrayBuffer()));
+      const run = p.get('run');
+      app.runCommand(run ? `GAMES\\${name}\\${run}` + (p.get('args') ? ' ' + p.get('args') : '') : `CD GAMES\\${name}`);
+      if (!run) app.runCommand('DIR');
+    } catch (e) { console.warn('zip failed', zip, e); }
+    return;
+  }
   const run = p.get('run');
   if (run) {
     if (/^https?:\/\//i.test(run)) { const name = await fetchInto(run); if (name) app.runCommand(name); }
@@ -63,6 +74,10 @@ window.addEventListener('drop', async (e) => {
   const mounted = [];
   for (const f of files) {
     const bytes = new Uint8Array(await f.arrayBuffer());
+    if (/\.zip$/i.test(f.name)) {                     // an archive becomes a folder under C:\GAMES
+      try { mounted.push('GAMES\\' + await app.mountZip(f.name, bytes) + '\\'); } catch (e) { console.warn(e); }
+      continue;
+    }
     const name = VFS.dosName(f.name);
     app.mountFile(name, bytes);
     mounted.push(name);

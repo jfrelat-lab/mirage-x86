@@ -12,6 +12,8 @@ import { installMouse } from '../src/mouse.js';
 import { installDisk } from '../src/disk.js';
 import { installBIOS } from '../src/bios.js';
 import { bootCD } from '../src/boot.js';
+import { unzip } from '../src/zip.js';
+import { deflateRawSync } from 'zlib';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
@@ -649,6 +651,27 @@ function eq(name, got, want) {
   eq('...4B01h: the specification packet (13h bytes, no emulation, E0h, controller 1, sector 25, 07C0h, 4)', [...mem.u8.subarray(0x700, 0x710)].map((b) => b.toString(16)).join(' '), '13 0 e0 1 19 0 0 0 0 0 0 0 c0 7 4 0');
   cpu.ax = 0x4300; cpu.si = 0x600; int13();
   eq('...43h: write protected', [cpu.flags & 1, cpu.ax >> 8].join(), '1,3'); }
+
+// ---- ZIP archives (src/zip.js): a stored entry, a deflated one, a directory entry ----------------
+{ const enc = (str) => Uint8Array.from(str, (c) => c.charCodeAt(0));
+  const entries = [['GAME/', new Uint8Array(0), 0], ['GAME/README.TXT', enc('freeware'), 0], ['GAME/GAME.EXE', enc('MZ'.padEnd(3000, 'x')), 8]];
+  const parts = [], cen = []; let off = 0;
+  for (const [name, data, method] of entries) {
+    const body = method === 8 ? new Uint8Array(deflateRawSync(data)) : data, nm = enc(name);
+    const loc = new Uint8Array(30 + nm.length), ld = new DataView(loc.buffer);
+    ld.setUint32(0, 0x04034b50, true); ld.setUint16(8, method, true); ld.setUint32(18, body.length, true); ld.setUint32(22, data.length, true); ld.setUint16(26, nm.length, true); loc.set(nm, 30);
+    const c = new Uint8Array(46 + nm.length), cd = new DataView(c.buffer);
+    cd.setUint32(0, 0x02014b50, true); cd.setUint16(10, method, true); cd.setUint32(20, body.length, true); cd.setUint32(24, data.length, true); cd.setUint16(28, nm.length, true); cd.setUint32(42, off, true); c.set(nm, 46);
+    parts.push(loc, body); cen.push(c); off += loc.length + body.length;
+  }
+  const cenLen = cen.reduce((a, c) => a + c.length, 0), end = new Uint8Array(22), ed = new DataView(end.buffer);
+  ed.setUint32(0, 0x06054b50, true); ed.setUint16(8, entries.length, true); ed.setUint16(10, entries.length, true); ed.setUint32(12, cenLen, true); ed.setUint32(16, off, true);
+  const zip = new Uint8Array(off + cenLen + 22); let at = 0; for (const b of [...parts, ...cen, end]) { zip.set(b, at); at += b.length; }
+  const files = await unzip(zip);
+  eq('ZIP: stored and deflated entries come back, the directory entry is skipped', files.map((f) => `${f.path}:${f.bytes.length}`).join(), 'GAME/README.TXT:8,GAME/GAME.EXE:3000');
+  eq('...the deflated content is intact', String.fromCharCode(...files[1].bytes.subarray(0, 4)), 'MZxx');
+  let err = ''; try { await unzip(enc('not a zip at all, just text, long enough to be scanned')); } catch (e) { err = e.message; }
+  eq('...and something that is not a ZIP says so', err.startsWith('not a ZIP archive'), true); }
 
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.
