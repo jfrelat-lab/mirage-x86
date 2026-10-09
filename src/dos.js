@@ -543,6 +543,19 @@ export function installDOS(machine, vfs) {
   // the .COM programs that use it), where AH=31h takes paragraphs outright.
   machine.hookInterrupt(0x27, (cpu) => terminateResident(0, ((cpu.dx & 0xffff) + 15) >> 4));
 
+  // Console input, AH=01h/06h/07h/08h. An extended key (an arrow, a function key: ASCII 0) comes out
+  // as TWO characters: 00h, then its scan code on the next call — the scan code waits in DOS until
+  // then. We returned the 00h and dropped the scan code, so a program's runtime that reads the
+  // second byte waited for a key that had already been pressed: Unreal's sound menu ignored the
+  // arrows and then every key after them.
+  dos.pendingScan = -1;
+  const keyReady = () => dos.pendingScan >= 0 || machine.keyQueue.length > 0;
+  const readKey = () => {
+    if (dos.pendingScan >= 0) { const sc = dos.pendingScan; dos.pendingScan = -1; return sc; }
+    const k = machine.keyQueue.shift();
+    if ((k.ascii & 0xff) === 0) dos.pendingScan = k.scan & 0xff;
+    return k.ascii & 0xff;
+  };
   machine.hookInterrupt(0x21, (cpu) => {
     const ah = cpu.ah;
     // Real DOS clears CF on success. Most cases below just `break`, so without this they returned
@@ -555,21 +568,21 @@ export function installDOS(machine, vfs) {
     switch (ah) {
       case 0x00: terminate(0); break;
       case 0x01: { // read char with echo (blocking)
-        if (!machine.keyQueue.length) return machine.block(2);
-        const k = machine.keyQueue.shift(); cpu.al = k.ascii; out(k.ascii); break;
+        if (!keyReady()) return machine.block(2);
+        const ch = readKey(); cpu.al = ch; if (dos.pendingScan < 0 || ch) out(ch); break;
       }
       case 0x02: out(cpu.dx & 0xff); break;                          // write char (DL)
       case 0x06: {                                                   // direct console I/O
         const dl = cpu.dx & 0xff;
         if (dl === 0xff) {
-          if (!machine.keyQueue.length) { cpu.flags |= ZF; cpu.al = 0; }
-          else { cpu.flags &= ~ZF; cpu.al = machine.keyQueue.shift().ascii; }
+          if (!keyReady()) { cpu.flags |= ZF; cpu.al = 0; }
+          else { cpu.flags &= ~ZF; cpu.al = readKey(); }
         } else out(dl);
         break;
       }
       case 0x07: case 0x08: { // read char, no echo (blocking)
-        if (!machine.keyQueue.length) return machine.block(2);
-        cpu.al = machine.keyQueue.shift().ascii; break;
+        if (!keyReady()) return machine.block(2);
+        cpu.al = readKey(); break;
       }
       case 0x09: { // write '$'-terminated string at DS:DX
         let p = cpu.base[DS] + (cpu.dx & 0xffff);
@@ -577,8 +590,8 @@ export function installDOS(machine, vfs) {
         cpu.al = 0x24; break;
       }
       case 0x0a: bufferedInput(); break;
-      case 0x0b: cpu.al = machine.keyQueue.length ? 0xff : 0x00; break; // stdin status
-      case 0x0c: { machine.keyQueue.length = 0; const fn = cpu.al; cpu.ah = fn; if (fn === 1 || fn === 7 || fn === 8) { if (!machine.keyQueue.length) return machine.block(2); cpu.al = machine.keyQueue.shift().ascii; } break; }
+      case 0x0b: cpu.al = keyReady() ? 0xff : 0x00; break; // stdin status, a pending scan code included
+      case 0x0c: { machine.keyQueue.length = 0; dos.pendingScan = -1; const fn = cpu.al; cpu.ah = fn; if (fn === 1 || fn === 7 || fn === 8) { if (!keyReady()) return machine.block(2); cpu.al = readKey(); } break; }
       case 0x0e: cpu.al = 1; break;                                  // select disk → 1 drive
       case 0x19: cpu.al = 2; break;                                  // current drive = C
       case 0x1a: dos.dta = cpu.base[DS] + (cpu.dx & 0xffff); break;  // set DTA

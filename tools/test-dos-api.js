@@ -164,6 +164,18 @@ function asciiz(mc, cpu, off, str) {
   eq('4Eh with no match sets CF', r.cf, CF);
 }
 
+// ---------------------------------------------------------------- extended keys through AH=08h
+{ // Left arrow then "a": 00h, then the scan code 4Bh on the next call, then 61h — what DOSBox-X answers
+  // to tools/extkey.asm. The scan code used to be dropped, and Unreal's menu waited for it for ever.
+  const c = mk();
+  c.mc.keyQueue.push({ scan: 0x4b, ascii: 0 }, { scan: 0x1e, ascii: 0x61 });
+  const got = [0, 1, 2].map(() => int21(c, 0x08).ax & 0xff);
+  eq('08h: an extended key reads as 00h then its scan code', got.map((v) => v.toString(16)).join(), '0,4b,61');
+  c.mc.keyQueue.push({ scan: 0x48, ascii: 0 });
+  int21(c, 0x08);
+  eq('...and 0Bh reports the waiting scan code as input available', int21(c, 0x0b).ax & 0xff, 0xff);
+}
+
 // ---------------------------------------------------------------- memory (48/49/4A)
 {
   const c = mk();
