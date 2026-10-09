@@ -99,7 +99,7 @@ TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel 
 | Fractint 20.0 | VGA 13h | Plays | menus, draws and zooms the Mandelbrot set; needs the AH=58h last-fit strategy | 2026-10-09 |
 | Unreal 1.1 (Future Crew) | VGA 13h | Renders | sound menu (No sound), logos, the scroller part; needed MCBs in front of AH=48h blocks and extended keys through AH=08h | 2026-10-09 |
 | Dune, the 1991 playable demo (Cryo) | VGA 13h | Renders | the logos and the intro, from its ZIP in the browser | 2026-10-09 |
-| Jump 'n Bump | VGA 13h | Fails | #GP in the DPMI client (47:1BDC9) before the title | 2026-10-09 |
+| Jump 'n Bump | Mode X | Renders | the title screen; needed INT 31h to reload DS after DJGPP's crt0 widens it to 4 GiB | 2026-10-10 |
 | Second Reality (Future Crew) | — | Fails | derails to 0000:0000 at start | 2026-10-09 |
 | Stash (The Black Lotus, 64K) | VESA 320×200×16 | Starts | sets its mode, draws nothing in 30 s | 2026-10-09 |
 | Lemmings | VGA/EGA | Starts | the trap-flag decryption works; then wants a raw floppy | 2026-08-01 |

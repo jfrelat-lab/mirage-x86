@@ -17,6 +17,8 @@ import { deflateRawSync } from 'zlib';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
+import { installDOS } from '../src/dos.js';
+import { VFS } from '../src/vfs.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -2600,6 +2602,29 @@ const udRun = (gated) => {
   cpu.ax = 0x0400; mc.intHandlers[0x1a](cpu, mc);
   const y = new Date().getUTCFullYear(), bcd = (n) => ((n / 10 | 0) << 4) | (n % 10);
   eq('on the host clock, INT 1Ah AH=04h gives the host\'s century and year', cpu.cx & 0xffff, (bcd(y / 100 | 0) << 8) | bcd(y % 100)); }
+
+// ---- DPMI: returning from INT 31h reloads the client's data segment registers -----------------
+// tools/dpmireload.asm loads a selector into ES, FS, GS and DS in turn, moves its base with AX=0007h
+// and reads through the register: 'B' if the register was reloaded on the way out, 'A' if it kept
+// the cached descriptor. CWSDPMI answers B four times under DOSBox-X and under QEMU (MS-DOS 6.22).
+// DJGPP's crt0 counts on it: Jump 'n Bump widens DS to 4 GiB with 0008h and goes on using DS, and
+// stopped on a #GP at its first pointer into the stack while the old limit was still cached.
+{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc);
+  const vfs = new VFS(), dos = installDOS(mc, vfs);
+  const hex = (                                         // nasm -f bin tools/dpmireload.asm, 384 bytes
+    'b44abb0010cd218c0e4002b43c31c9ba1e02cd210f82e600a34202b88716cd2f85c00f85d800893e44028c06460289f3' +
+    'b448cd210f82c6008ec0b80100ff1e44020f82b900b806008cdbcd3189164802890e4a0231c0b90100cd31a34c0289c3' +
+    'b8080031c9baffffcd31be3e02e8a1008e064c02be3f02e8970026a00000a22c02be3e02e88a008e264c02be3f02e880' +
+    '0064a00000a23102be3e02e873008e2e4c02be3f02e8690065a00000a23602be3e02e85c00be3f02e848008b1e4c021e' +
+    '8edbb80700cd31a000001fa23b021e07c7066a020040a14202a35e02c70666021500c70662022902a14002a37202b800' +
+    '03bb210031c966bf4e020000cd31b8004ccd218b1648028b0e4a0201f283d100c3e8efff8b1e4c02b80700cd31c34450' +
+    '4d49524c2e5458540045533d3f2046533d3f2047533d3f2044533d3f0d0a4142');
+  const img = new Uint8Array(384); img.set(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)));
+  dos.load(img, '', 'C:\\DPMIRL.COM');
+  let guard = 0; while (!dos.programDone && guard++ < 2000) mc.runSlice(20000);
+  const out = vfs.readFile('\\DPMIRL.TXT');
+  eq('INT 31h returns with ES, FS, GS and DS reloaded from the descriptor it changed',
+    out && new TextDecoder().decode(out).trim(), 'ES=B FS=B GS=B DS=B'); }
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

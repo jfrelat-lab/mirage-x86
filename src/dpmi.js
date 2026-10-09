@@ -231,8 +231,8 @@ export function installDPMI(machine) {
         return ok();
       }
 
-      // Nothing reloads a segment register already holding the selector: hardware keeps the cached
-      // descriptor until the selector is loaded again.
+      // A segment register already holding the selector sees the change when INT 31h returns: see
+      // reloadDataSegs below.
       case 0x000c: {
         const off = descOffset(c.reg[3] & 0xffff);
         if (off < 0) return fail(ERR_INVALID_SELECTOR);
@@ -638,6 +638,27 @@ export function installDPMI(machine) {
         return fail(ERR_UNSUPPORTED);
     }
   });
+
+  // Returning from INT 31h reloads the client's data segment registers. The hardware keeps a
+  // segment register's cached descriptor until the selector is loaded again, but a real host runs
+  // INT 31h on its own selectors and loads the client's back on the way out, so a change made
+  // through 0007/0008/0009/000C reaches a register that already holds the selector.
+  // tools/dpmireload.asm: CWSDPMI under DOSBox-X and under QEMU (MS-DOS 6.22) both read through
+  // the NEW base in ES, FS, GS and DS. DJGPP's crt0 depends on it: Jump 'n Bump widens DS to 4 GiB
+  // with 0008 and goes on using DS, and kept the 64 KiB-era limit here until a #GP.
+  // A selector the call freed (0001) is zeroed instead, as the spec asks of 0001. Not after a
+  // real-mode call under way (0300/0302): realCallReturn puts the client's registers back itself.
+  const reloadDataSegs = () => {
+    if (!(cpu.cr0 & 1) || (cpu.flags & 0x20000)) return;
+    for (const i of [ES, DS, FS, GS]) {
+      const off = descOffset(cpu.seg[i]);
+      if (off < 0) continue;
+      if (!(mem.r8((LDT_BASE + off + 5) >>> 0) & 0x80)) { cpu.seg[i] = 0; cpu.base[i] = 0; cpu.limit[i] = 0; cpu.limLo[i] = 0; continue; }
+      cpu.loadDescriptor(i, cpu.seg[i]);
+    }
+  };
+  { const h31 = machine.intHandlers[0x31];
+    machine.intHandlers[0x31] = (c, m) => { const r = h31(c, m); reloadDataSegs(); return r; }; }
 
   /**
    * Raw mode switch (the routines 0306 hands out). The client sets up the state it wants on the
