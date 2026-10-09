@@ -184,6 +184,23 @@ function asciiz(mc, cpu, off, str) {
   ok('48h blocks do not overlap', b.ax >= seg + 0x10);
   eq('49h free succeeds for a live block', int21(c, 0x49, (cpu) => { cpu.setSeg(0, seg); }).cf, 0);
 }
+{ // Every block AH=48h hands out has its MCB in the paragraph before it, and the chain is walkable
+  // from the program's MCB to the 'Z' block at the top, holes included. Future Crew's Unreal loader
+  // checks the MCB in front of its block and stopped with "Block allocation error!" without it.
+  const c = mk(), m = c.mc.mem;
+  int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });
+  const a = int21(c, 0x48, (cpu) => { cpu.reg[3] = 0x10; }).ax;
+  const b = int21(c, 0x48, (cpu) => { cpu.reg[3] = 0x20; }).ax;
+  const mcb = (seg) => [String.fromCharCode(m.r8(seg << 4)), m.r16((seg << 4) + 1), m.r16((seg << 4) + 3)];
+  eq('48h: the block has an MCB in front of it, owned by the program, of its size', mcb(a - 1).join(), ['M', c.dos.psp, 0x10].join());
+  eq('...and the next block is one paragraph further, after that MCB', b, a + 0x10 + 1);
+  int21(c, 0x49, (cpu) => { cpu.setSeg(0, a); });
+  const walk = []; let seg = c.dos.psp - 1;
+  for (let i = 0; i < 10; i++) { const [sig, owner, size] = mcb(seg); walk.push(`${sig}${owner ? 'u' : 'f'}${size.toString(16)}`); if (sig === 'Z') break; seg += size + 1; }
+  eq('...after freeing the first, the chain is program, free hole, block, free rest', walk.join(' '), `M${'u'}200 Mf10 Mu20 Zf${(0x9fff - (b + 0x20) - 1).toString(16)}`);
+  eq('...the chain ends at the top of conventional memory', seg + mcb(seg)[2] + 1, 0x9fff);
+  const again = int21(c, 0x48, (cpu) => { cpu.reg[3] = 0x08; }).ax;
+  eq('...and first fit reuses the hole', again, a); }
 { // an impossible allocation must fail AND report the largest block available in BX
   const c = mk();
   const r = int21(c, 0x48, (cpu) => { cpu.reg[3] = 0xffff; });

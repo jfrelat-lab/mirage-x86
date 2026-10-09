@@ -148,22 +148,35 @@ export function installDOS(machine, vfs) {
     for (let i = 5; i < 16; i++) mem.w8(b + i, 0);        // reserved + 8-byte owner name (blank)
   };
   const syncMCB = () => {
-    // One block per program that is loaded: every frame on the EXEC stack, oldest first, then the
-    // program running now, then whatever is left above as a single free block. A chain of exactly two
-    // blocks was fine until EXEC, which left the child's block undescribed — and worse, put the
-    // child's PSP ON the free block's MCB header, so the header read as the child's first opcode.
-    // Windows 3.0's WIN386 walks the chain and refused with "conventional memory is fragmented".
-    // base, not psp: an e_maxalloc=0 program sits HIGH inside its block, and its MCB stays at the
-    // block's base. The reference finds no MCB in the paragraph below such a program's own PSP.
-    const progs = dos.execStack.map((f) => ({ base: f.blockBase | 0 || f.psp, psp: f.psp, top: Math.min(f.allocTop | 0, MEM_TOP) }));
-    progs.push({ base: dos.blockBase | 0 || dos.psp, psp: dos.psp, top: Math.min(dos.allocTop | 0, MEM_TOP) });
-    const top = progs[progs.length - 1].top;
-    const hasFree = top < MEM_TOP - 1;
-    for (let i = 0; i < progs.length; i++) {
-      const last = i === progs.length - 1 && !hasFree;
-      writeMCB(progs[i].base - 1, last ? 0x5a : 0x4d, progs[i].psp, progs[i].top - progs[i].base);
+    // The whole arena, in address order, as DOS keeps it: for every program that is loaded (each
+    // frame on the EXEC stack, oldest first, then the program running now) its own block, then
+    // each block it allocated with AH=48h, with a free block in every gap; after the last frame,
+    // whatever is left is one free block, the 'Z' at the end. Every block is preceded by its MCB, a
+    // paragraph the allocator reserves (see AH=48h).
+    // Each frame's region ends at its allocTop, where the next frame's program MCB sits. The program
+    // block runs from its base (not its PSP: an e_maxalloc=0 program sits HIGH inside its block, and
+    // the reference finds no MCB in the paragraph below such a program's own PSP) to its memFloor.
+    // A chain of one program block plus one free block was enough until programs started checking
+    // the MCB in front of a block AH=48h had given them: Future Crew's Unreal loader stops with
+    // "Block allocation error!" when it is not there. Windows 3.0's WIN386 walks the chain too, and
+    // refused with "conventional memory is fragmented" when an EXEC'd child was left undescribed.
+    const frames = dos.execStack.map((f) => ({ base: f.blockBase | 0 || f.psp, psp: f.psp, floor: Math.min(f.memFloor | 0, MEM_TOP), top: Math.min(f.allocTop | 0, MEM_TOP), allocs: f.allocs }));
+    frames.push({ base: dos.blockBase | 0 || dos.psp, psp: dos.psp, floor: Math.min(dos.memFloor | 0, MEM_TOP), top: Math.min(dos.allocTop | 0, MEM_TOP), allocs: dos.allocs });
+    const chain = [];                                   // [mcbSeg, sizeInParagraphs, owner], in order
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i], last = i === frames.length - 1;
+      chain.push([f.base - 1, f.floor - f.base, f.psp]);
+      let cur = f.floor;                                // where the next MCB goes
+      const blocks = [...(f.allocs || new Map())].filter(([sg]) => sg > cur).sort((x, y) => x[0] - y[0]);
+      for (const [sg, par] of blocks) {
+        if (sg - 1 > cur) chain.push([cur, sg - 1 - cur - 1, 0]);   // a hole left by a free
+        chain.push([sg - 1, par, f.psp]);
+        cur = sg + par;
+      }
+      const end = last ? MEM_TOP : f.top;
+      if (last ? end - cur >= 2 : end > cur) chain.push([cur, end - cur - 1, 0]);   // free space up to the next frame / the top
     }
-    if (hasFree) writeMCB(top, 0x5a, 0x0000, MEM_TOP - top - 1);            // free block: 'Z' (last), owner 0
+    chain.forEach(([sg, size, owner], i) => writeMCB(sg, i === chain.length - 1 ? 0x5a : 0x4d, owner, size));
     mem.w16((LOL_SEG << 4) + LOL_OFF - 2, PSP_SEG - 1);                     // list-of-lists: word before it = first MCB (the program's, at PSP-1)
     // PSP:0002 is "first paragraph past this program's block", and it was hard-wired to 0xA000 —
     // i.e. every program was told it owned all of conventional memory no matter how it had been
@@ -711,13 +724,23 @@ export function installDOS(machine, vfs) {
         break;
       case 0x47: { let p = cpu.base[DS] + (cpu.si & 0xffff); const s = vfs.cwd.join('\\'); for (let i = 0; i < s.length; i++) mem.w8(p + i, s.charCodeAt(i)); mem.w8(p + s.length, 0); ok(); break; } // get cwd
       case 0x48: {                                                   // allocate a block
+        // First fit, as DOS's default strategy, over the gaps above the program's own block. Each
+        // block costs one more paragraph than asked for, its MCB, in front of it; so the size reported
+        // on failure is the largest block that could actually be HANDED OUT, header excluded.
         const par = cpu.bx & 0xffff;
-        // The size reported on failure is the largest block that could actually be HANDED OUT, so it
-        // excludes the paragraph its MCB header would take. Ours reported the raw span, which is one
-        // more than our own MCB chain says — the allocator and the chain disagreed with each other.
-        const avail = Math.max(0, MEM_TOP - dos.allocTop - 1);
-        if (par > avail) { err(8); cpu.bx = avail; break; }
-        const seg = dos.allocTop; dos.allocs.set(seg, par); dos.allocTop = seg + par; syncMCB(); cpu.ax = seg; ok(); break;
+        let cur = dos.memFloor, best = 0, seg = -1;
+        for (const [sg, p] of [...dos.allocs].sort((x, y) => x[0] - y[0])) {
+          if (sg <= cur) { cur = Math.max(cur, sg + p); continue; }
+          const room = sg - 1 - cur - 1;                             // the hole, less its MCB
+          if (seg < 0 && room >= par) seg = cur + 1;
+          best = Math.max(best, room);
+          cur = sg + p;
+        }
+        const tail = MEM_TOP - cur - 1;
+        if (seg < 0 && tail >= par) seg = cur + 1;
+        best = Math.max(best, tail, 0);
+        if (seg < 0) { err(8); cpu.bx = best; break; }
+        dos.allocs.set(seg, par); recomputeTop(); cpu.ax = seg; ok(); break;
       }
       case 0x49: {                                                   // free a block (reclaims)
         // Freeing a segment we never handed out used to report success, so a double free — or a
@@ -843,7 +866,11 @@ export function installDOS(machine, vfs) {
         // the caller dereferences it.
         cpu.setSeg(ES, LOL_SEG); cpu.bx = INDOS_OFF; ok(); break;
       case 0x4a: {                                                   // resize memory block
-        const seg = cpu.seg[ES], want = cpu.bx & 0xffff, maxPar = MEM_TOP - seg;
+        const seg = cpu.seg[ES], want = cpu.bx & 0xffff;
+        // A block can grow up to the next block's MCB, or the top of memory.
+        let next = MEM_TOP;
+        for (const [sg] of dos.allocs) if (sg > seg && sg - 1 < next) next = sg - 1;
+        const maxPar = next - seg;
         if (want > maxPar) { err(8); cpu.bx = maxPar; break; }        // not enough memory; report the max
         if (dos.allocs.has(seg)) dos.allocs.set(seg, want);           // resizing a dynamic block
         else if (seg === dos.psp) dos.memFloor = seg + want;          // the *current* program (parent OR an EXEC'd child)
