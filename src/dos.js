@@ -724,22 +724,29 @@ export function installDOS(machine, vfs) {
         break;
       case 0x47: { let p = cpu.base[DS] + (cpu.si & 0xffff); const s = vfs.cwd.join('\\'); for (let i = 0; i < s.length; i++) mem.w8(p + i, s.charCodeAt(i)); mem.w8(p + s.length, 0); ok(); break; } // get cwd
       case 0x48: {                                                   // allocate a block
-        // First fit, as DOS's default strategy, over the gaps above the program's own block. Each
-        // block costs one more paragraph than asked for, its MCB, in front of it; so the size reported
-        // on failure is the largest block that could actually be HANDED OUT, header excluded.
-        const par = cpu.bx & 0xffff;
-        let cur = dos.memFloor, best = 0, seg = -1;
+        // Over the gaps above the program's own block, by the strategy AH=58h set: first fit (0),
+        // best fit (1) or last fit (2), as DOS does. Each block costs one more paragraph than asked
+        // for, its MCB, in front of it, so the size reported on failure is the largest block that
+        // could actually be HANDED OUT, header excluded. Last fit takes the TOP of the highest gap
+        // that fits: Fractint's runtime asks for it, allocates, and then grows its own block into
+        // the space a first-fit block would have taken (otherwise "R6009 - not enough space for
+        // environment").
+        const par = cpu.bx & 0xffff, strategy = dos.allocStrategy & 3;
+        const gaps = [];                                             // [mcbAt, end) — end = next MCB, or the top
+        let cur = dos.memFloor;
         for (const [sg, p] of [...dos.allocs].sort((x, y) => x[0] - y[0])) {
           if (sg <= cur) { cur = Math.max(cur, sg + p); continue; }
-          const room = sg - 1 - cur - 1;                             // the hole, less its MCB
-          if (seg < 0 && room >= par) seg = cur + 1;
-          best = Math.max(best, room);
+          gaps.push([cur, sg - 1]);
           cur = sg + p;
         }
-        const tail = MEM_TOP - cur - 1;
-        if (seg < 0 && tail >= par) seg = cur + 1;
-        best = Math.max(best, tail, 0);
-        if (seg < 0) { err(8); cpu.bx = best; break; }
+        gaps.push([cur, MEM_TOP]);
+        const fits = gaps.filter(([at, end]) => end - at - 1 >= par);
+        const best = Math.max(0, ...gaps.map(([at, end]) => end - at - 1));
+        if (!fits.length) { err(8); cpu.bx = best; break; }
+        let seg;
+        if (strategy === 2) { const [, end] = fits[fits.length - 1]; seg = end - par; }
+        else if (strategy === 1) { const [at] = fits.reduce((x, y) => (y[1] - y[0] < x[1] - x[0] ? y : x)); seg = at + 1; }
+        else seg = fits[0][0] + 1;
         dos.allocs.set(seg, par); recomputeTop(); cpu.ax = seg; ok(); break;
       }
       case 0x49: {                                                   // free a block (reclaims)
@@ -850,10 +857,8 @@ export function installDOS(machine, vfs) {
         ok(); break;
       }
       case 0x58:                                                     // get/set memory allocation strategy
-        // MathRescue/WordRescue set it before allocating. Our allocator is a bump allocator, so
-        // there is no first/best/last fit to honour — we remember the value and hand it back, which
-        // is what the caller checks. Reporting failure here would be worse: the program concludes
-        // it is on a DOS too old to ask.
+        // MathRescue/WordRescue and Fractint set it before allocating; AH=48h honours bits 0-1
+        // (first, best, last fit). The UMB bits are kept and handed back: we have no UMBs.
         if (cpu.al === 0x00) { cpu.ax = dos.allocStrategy; ok(); }
         else if (cpu.al === 0x01) { dos.allocStrategy = cpu.bx & 0xffff; ok(); }
         else if (cpu.al === 0x02) { cpu.ax = dos.umbLink; ok(); }     // UMB link state (we have no UMBs)

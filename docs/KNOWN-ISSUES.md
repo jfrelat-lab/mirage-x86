@@ -47,6 +47,9 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 - **Uncapped speed is too fast** for games paced by neither the timer nor the retrace (the Commander
   Keen menus). `?mhz=` caps it.
+- **EXEC after a last-fit allocation**: a child is placed above the highest allocated block, not in
+  the largest free one as DOS does, so a program that allocates at the top of memory (last fit) and
+  then runs another fails with "insufficient memory".
 - **INT 21h**: the FCB file calls (open, read, write, find by FCB) and AH=5Dh are missing.
 - **`tools/test-dos-api.js` has two failing checks**: the cursor shape reported by INT 10h AH=03h,
   and the pointer returned by INT 21h AH=34h. Neither is known to affect a program.

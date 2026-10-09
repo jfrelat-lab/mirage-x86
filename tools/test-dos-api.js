@@ -201,6 +201,21 @@ function asciiz(mc, cpu, off, str) {
   eq('...the chain ends at the top of conventional memory', seg + mcb(seg)[2] + 1, 0x9fff);
   const again = int21(c, 0x48, (cpu) => { cpu.reg[3] = 0x08; }).ax;
   eq('...and first fit reuses the hole', again, a); }
+{ // AH=58h strategies, as tools/memstrat.asm reads them on MS-DOS 6.22 (in QEMU), DOSBox-X and MIRAGE:
+  // holes A (200h) and C (80h) above the program, then a 40h block under each strategy goes to A
+  // (first fit), C (best fit) or the top of memory (last fit). Fractint asks for last fit and then
+  // grows its own block; with every strategy treated as first fit it stopped with R6009.
+  const c = mk();
+  int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x1000; });
+  const al = (n) => int21(c, 0x48, (cpu) => { cpu.reg[3] = n; }).ax;
+  const A = al(0x200); al(0x10); const C = al(0x80); al(0x10);
+  int21(c, 0x49, (cpu) => { cpu.setSeg(0, A); }); int21(c, 0x49, (cpu) => { cpu.setSeg(0, C); });
+  const placed = [0, 1, 2].map((st) => {
+    int21(c, 0x58, (cpu) => { cpu.reg[0] = 0x5801; cpu.reg[3] = st; });
+    const x = al(0x40); int21(c, 0x49, (cpu) => { cpu.setSeg(0, x); }); return x;
+  });
+  eq('58h/48h: first fit takes the first hole, best fit the smallest, last fit the top of memory',
+    placed.map((x) => (x - c.dos.psp).toString(16)).join(), ['1001', '1213', (0x9fff - 0x40 - c.dos.psp).toString(16)].join()); }
 { // an impossible allocation must fail AND report the largest block available in BX
   const c = mk();
   const r = int21(c, 0x48, (cpu) => { cpu.reg[3] = 0xffff; });
