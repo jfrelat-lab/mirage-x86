@@ -4,7 +4,8 @@
 //   node tools/demo-thumbs.mjs            all entries → examples/thumbs/<id>.png
 //   node tools/demo-thumbs.mjs tetros     one
 //
-// An entry may carry `type`: [[seconds, "text"], …] — keys typed at that guest second, on both
+// An entry may carry `type`: [[seconds, "text"], …] — keys typed at that guest second ({F3}, {ENTER}… for
+// named keys), on both
 // keyboard paths (the 8042's scancodes and the BIOS buffer), so an interpreter shows something.
 // A program that leaves its graphics mode before exiting is captured at its last graphics frame —
 // VBE always, any graphics mode when the entry says `lastFrame` (Helium plays once and exits).
@@ -23,7 +24,17 @@ const MAKE = { a: 0x1e, b: 0x30, c: 0x2e, d: 0x20, e: 0x12, f: 0x21, g: 0x22, h:
   z: 0x2c, 1: 0x02, 2: 0x03, 3: 0x04, 4: 0x05, 5: 0x06, 6: 0x07, 7: 0x08, 8: 0x09, 9: 0x0a, 0: 0x0b, '-': 0x0c,
   '=': 0x0d, ' ': 0x39, '/': 0x35, '.': 0x34, ',': 0x33, ';': 0x27, "'": 0x28, '\n': 0x1c };
 const SHIFTED = { '"': "'", '(': '9', ')': '0', '*': '8', '+': '=', ':': ';', '<': ',', '>': '.', '!': '1', '@': '2' };
+// Named keys inside the text: {ENTER}, {ESC}, {SPACE}, {F1}…{F10}.
+const NAMED = { ENTER: [0x1c, 13], ESC: [0x01, 27], SPACE: [0x39, 32],
+  ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`F${i + 1}`, [0x3b + i, 0]])) };
 const type = (mc, text) => {
+  for (const part of text.split(/(\{[A-Z0-9]+\})/)) {
+    const named = /^\{([A-Z0-9]+)\}$/.exec(part);
+    if (named && NAMED[named[1]]) { const [sc, ascii] = NAMED[named[1]]; mc.pushScancodes([sc, sc | 0x80]); mc.keyQueue.push({ scan: sc, ascii }); continue; }
+    typeChars(mc, part);
+  }
+};
+const typeChars = (mc, text) => {
   for (const ch of text) {
     const base = SHIFTED[ch] ?? ch.toLowerCase(), code = MAKE[base];
     if (code === undefined) continue;

@@ -96,10 +96,11 @@ TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel 
 | Arctic Adventure | CGA | Renders | the map screen | 2026-09-22 |
 | Digger, Lode Runner | CGA | Renders | title; gameplay | 2026-08-01 |
 | Mars (Tim Clarke) | VGA 13h | Renders | steers with the mouse | 2026-08 |
+| Fractint 20.0 | VGA 13h | Plays | menus, draws and zooms the Mandelbrot set; needs the AH=58h last-fit strategy | 2026-10-09 |
+| Unreal 1.1 (Future Crew) | text | Starts | past its loader (it needed MCBs in front of AH=48h blocks), to its setup text | 2026-10-09 |
 | Dune, the 1991 playable demo (Cryo) | VGA 13h | Renders | the logos and the intro, from its ZIP in the browser | 2026-10-09 |
 | Jump 'n Bump | VGA 13h | Fails | #GP in the DPMI client (47:1BDC9) before the title | 2026-10-09 |
 | Second Reality (Future Crew) | — | Fails | derails to 0000:0000 at start | 2026-10-09 |
-| Unreal 1.1 (Future Crew) | — | Fails | its loader prints "Block allocation error?" | 2026-10-09 |
 | Stash (The Black Lotus, 64K) | VESA 320×200×16 | Starts | sets its mode, draws nothing in 30 s | 2026-10-09 |
 | Lemmings | VGA/EGA | Starts | the trap-flag decryption works; then wants a raw floppy | 2026-08-01 |
 | Golden Axe | — | Starts | its video menu; not driven past it headless | 2026-08-01 |

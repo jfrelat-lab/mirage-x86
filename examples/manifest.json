@@ -14,6 +14,30 @@
     "secs": 20
   },
   {
+    "id": "fractint",
+    "kind": "zip",
+    "file": "examples/games/frain200.zip",
+    "run": "FRACTINT",
+    "title": "Fractint 20.0",
+    "author": "The Stone Soup Group",
+    "year": 1999,
+    "license": "freeware",
+    "licenseFile": "examples/licenses/fractint.txt",
+    "source": "https://www.fractint.org/",
+    "blurb": "The classic fractal generator. Enter for the menu, then F3 for VGA 256 colours: it draws the Mandelbrot set; zoom with Page Up and Enter.",
+    "secs": 40,
+    "type": [
+      [
+        4,
+        "{ENTER}"
+      ],
+      [
+        6,
+        "{F3}"
+      ]
+    ]
+  },
+  {
     "id": "plasma13",
     "kind": "dos",
     "file": "demos/PLASMA13.COM",

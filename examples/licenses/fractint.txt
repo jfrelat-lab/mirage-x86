@@ -1,0 +1,16 @@
+From Fractint's own help, section "Conditions on Use" (in FRACTINT.EXE, inside
+examples/games/frain200.zip, the official release package from https://www.fractint.org/):
+
+  Fractint is freeware. The copyright is retained by the Stone Soup Group.
+
+  Fractint may be freely copied and distributed in unmodified form but may not be sold.
+  (A nominal distribution fee may be charged for media and handling by freeware and
+  shareware distributors.) Fractint may be used personally or in a business - if you
+  can do your job better by using Fractint, or using images from it, that's great! It
+  may not be given away with commercial products without explicit permission from the
+  Stone Soup Group.
+
+  There is no warranty of Fractint's suitability for any purpose, nor any acceptance of
+  liability, express or implied.
+
+The archive is served exactly as published (frain200.zip, release 20.0).

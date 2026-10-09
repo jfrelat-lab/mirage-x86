@@ -34,6 +34,7 @@ not shown: MIRAGE draws it wrongly (see docs/KNOWN-ISSUES.md).
 
 | File | Program | Rights holder | Terms | Text |
 |---|---|---|---|---|
+| `games/frain200.zip` | Fractint 20.0 (the official DOS release package) | The Stone Soup Group | freeware: "may be freely copied and distributed in unmodified form but may not be sold" | `licenses/fractint.txt` |
 | `games/dunedemo.zip` | Dune, the 1991 demo | Cryo / Virgin Games | "may be given away freely, but it is not to be sold", unaltered | `licenses/dunedemo.txt`, and README.TXT in the archive |
 
 The binaries of the boot-sector programs are the ones v86's catalogue serves for the same programs; BootChess comes with its
