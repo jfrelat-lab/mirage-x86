@@ -14,6 +14,38 @@
     "secs": 20
   },
   {
+    "id": "unreal",
+    "kind": "zip",
+    "file": "examples/games/unreal11.zip",
+    "run": "UNREAL",
+    "title": "Unreal",
+    "author": "Future Crew",
+    "year": 1992,
+    "license": "freeware",
+    "licenseFile": "examples/licenses/unreal.txt",
+    "source": "https://www.pouet.net/prod.php?which=1274",
+    "blurb": "Future Crew's demo from Assembly '92. MIRAGE has no sound card: pick No sound with the arrows, then Enter.",
+    "secs": 50,
+    "type": [
+      [
+        2,
+        "{LEFT}"
+      ],
+      [
+        2.5,
+        "{LEFT}"
+      ],
+      [
+        3,
+        "{LEFT}"
+      ],
+      [
+        3.5,
+        "{ENTER}"
+      ]
+    ]
+  },
+  {
     "id": "fractint",
     "kind": "zip",
     "file": "examples/games/frain200.zip",

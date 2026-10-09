@@ -34,6 +34,7 @@ not shown: MIRAGE draws it wrongly (see docs/KNOWN-ISSUES.md).
 
 | File | Program | Rights holder | Terms | Text |
 |---|---|---|---|---|
+| `games/unreal11.zip` | Unreal 1.1 | Future Crew | freeware: "can be freely distributed without modifications" | `licenses/unreal.txt`, and README.1ST in the archive |
 | `games/frain200.zip` | Fractint 20.0 (the official DOS release package) | The Stone Soup Group | freeware: "may be freely copied and distributed in unmodified form but may not be sold" | `licenses/fractint.txt` |
 | `games/dunedemo.zip` | Dune, the 1991 demo | Cryo / Virgin Games | "may be given away freely, but it is not to be sold", unaltered | `licenses/dunedemo.txt`, and README.TXT in the archive |
 

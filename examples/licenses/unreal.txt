@@ -1,0 +1,7 @@
+From README.1ST, inside examples/games/unreal11.zip (Unreal 1.1, as scene.org distributes it):
+
+  This demo is freeware.
+  It can be freely distributed without modifications.
+
+Unreal (c) Future Crew 1992. The archive is served as scene.org publishes it
+(https://files.scene.org/view/demos/groups/future_crew/demos/unreal11.zip).

@@ -24,8 +24,8 @@ const MAKE = { a: 0x1e, b: 0x30, c: 0x2e, d: 0x20, e: 0x12, f: 0x21, g: 0x22, h:
   z: 0x2c, 1: 0x02, 2: 0x03, 3: 0x04, 4: 0x05, 5: 0x06, 6: 0x07, 7: 0x08, 8: 0x09, 9: 0x0a, 0: 0x0b, '-': 0x0c,
   '=': 0x0d, ' ': 0x39, '/': 0x35, '.': 0x34, ',': 0x33, ';': 0x27, "'": 0x28, '\n': 0x1c };
 const SHIFTED = { '"': "'", '(': '9', ')': '0', '*': '8', '+': '=', ':': ';', '<': ',', '>': '.', '!': '1', '@': '2' };
-// Named keys inside the text: {ENTER}, {ESC}, {SPACE}, {F1}…{F10}.
-const NAMED = { ENTER: [0x1c, 13], ESC: [0x01, 27], SPACE: [0x39, 32],
+// Named keys inside the text: {ENTER}, {ESC}, {SPACE}, {LEFT} {RIGHT} {UP} {DOWN}, {F1}…{F10}.
+const NAMED = { ENTER: [0x1c, 13], ESC: [0x01, 27], SPACE: [0x39, 32], LEFT: [0x4b, 0], RIGHT: [0x4d, 0], UP: [0x48, 0], DOWN: [0x50, 0],
   ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`F${i + 1}`, [0x3b + i, 0]])) };
 const type = (mc, text) => {
   for (const part of text.split(/(\{[A-Z0-9]+\})/)) {
