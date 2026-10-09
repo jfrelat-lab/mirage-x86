@@ -64,7 +64,7 @@ TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel 
 |---|---|---|---|---|
 | DOOM (id, 1993) | VGA 13h | Plays | attract demo with the status bar; with our DPMI host or its own DOS/4G | 2026-09-09 |
 | Heretic | VGA 13h | Plays | needs our DPMI host; its own extender faults without it | 2026-09-09 |
-| Quake | VGA 13h | Plays | `-nocdaudio`; demo1 with the full HUD. Broken from 2026-09-28 (segment limits enforced) to 2026-10-10 (INT 31h reloads SS) | 2026-10-10 |
+| Quake | VGA 13h | Plays | `-nocdaudio`; demo1 with the full HUD. Broken from 2026-09-23 (segment limits enforced) to 2026-10-10 (INT 31h reloads SS) | 2026-10-10 |
 | Wolfenstein 3D (shareware and registered) | Mode X | Plays | signon, attract loop, a played demo | 2026-09-09 |
 | Alley Cat | CGA | Plays | title, menus, the alley | 2026-07-29 |
 | Blues Brothers | EGA | Plays | a level, timer-paced | 2026-08-01 |
