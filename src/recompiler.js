@@ -47,6 +47,7 @@ const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.
 // takes >300s for work tier-1 does in 8.5ms, a >30,000× cliff that made bench.js look hung.
 // Turn it back on by default once regions carry an instruction budget and the game bugs are fixed.
 const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
+const NOREALSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOREALSPEC);
 const EMPTY_LINES = [];   // shared placeholder for a block whose source is not retained
 const T2_HOT = 64;         // promote a block to a region after this many executions
 const T2_MAXBLK = 24;      // cap region size in blocks
@@ -390,7 +391,7 @@ export class Recompiler {
     out.push('default:cpu.eip=_e;return;', '}}');
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
     const body = pre + '\n' + out.join('\n');
-    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1 };
+    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1, real: 0 };
   }
 
   /** The region-internal edge for a static terminator: an in-region target is a local jump
@@ -447,7 +448,7 @@ export class Recompiler {
     // reached via different CS:IP (the emitted jump targets bake in ip0).
     const page = this.blockPages[lin >>> 12];
     let blk = page !== undefined ? page[(lin & 0xfff) | (this.cpu.csD << 12)] : undefined;
-    if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
+    if (blk === undefined || blk.ip0 !== ip0 || (blk.real && (cpu.cr0 & 1) && !(cpu.flags & 0x20000))) blk = this._compile(lin, ip0);
     if (this.profiling) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
     this.stats.exec++;
     cpu.tbudget = 1 << 20;   // a region (if one is installed) self-bounds against this
@@ -499,7 +500,8 @@ export class Recompiler {
         }
         const page = pages[lin >>> 12];
         let blk = page !== undefined ? page[(lin & 0xfff) | (cpu.csD << 12)] : undefined;
-        if (blk === undefined || blk.ip0 !== ip0) blk = this._compile(lin, ip0);
+        // A block translated without limit guards (`real`, see translate) must not run in protected mode.
+        if (blk === undefined || blk.ip0 !== ip0 || (blk.real && (cpu.cr0 & 1) && !(cpu.flags & 0x20000))) blk = this._compile(lin, ip0);
         else if (paged && blk.epoch !== this.epoch && !this._revalidate(blk, lin)) blk = this._compile(lin, ip0);
         if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
         this.curBlk = blk;
@@ -636,7 +638,7 @@ export class Recompiler {
   }
 
   // -------------------------------------------------------------------------
-  translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD) {
+  translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD, checked = false) {
     const mem = this.mem, MM = this.MM;
     const rec = this;                    // the decoders below are nested closures, where `this` is not us
     const pfRestart = this.pagedMode;
@@ -656,6 +658,15 @@ export class Recompiler {
     const SEGIP = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGIP
       ? (ipStart) => `cpu._segIp=${ipStart};` : () => '';
     const FPREC24 = (this.cpu.fcw & 0x300) === 0;   // x87 precision control = single (see arithE)
+    // A block translated in real or virtual-8086 mode carries no segment-limit guards: every one of
+    // them is `(...)&&(cpu.cr0&1)&&!(cpu.flags&VM)`, false in both modes, so it was dead code that
+    // still computed the offset and loaded two limits on every memory access. The block is marked
+    // `real`, and the dispatch loop retranslates it if it is ever reached with PE set and VM clear.
+    // A block whose LMSW may set PE part-way through is translated checked instead (see `checked`).
+    // Not under tier 2, whose regions run member blocks without passing through that dispatch check.
+    // MIRAGE_NOREALSPEC=1 turns it off.
+    const REAL = !checked && !TIER2 && !NOREALSPEC && (!(this.cpu.cr0 & 1) || (this.cpu.flags & 0x20000) !== 0);
+    let needChecked = false;
     // Shared by LDS/LES/LSS/LFS/LGS: an offset at the effective address, then a 16-bit selector.
     // Its position depends on the operand size — +2 for a word offset, +4 for a dword.
     const loadPtr = (o, segIdx, size) => {
@@ -674,32 +685,32 @@ export class Recompiler {
       const idx = linStart - 0xf0600;
       const fn = new Function('cpu', `cpu.dpmiCallback(${idx});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
     if (linStart === 0xf0250 && mem.u8[linStart] === 0xcb) {
       // Where a client's DPMI exception handler RETFs back to: restore the frame it leaves behind.
       const fn = new Function('cpu', 'cpu.dpmiExcReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
       // Where a 0302 procedure's IRET lands: reaching it means the call is over.
       const fn = new Function('cpu', 'cpu.dpmiRealCallReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
     if ((linStart === 0xf0220 || linStart === 0xf0230) && mem.u8[linStart] === 0xcb) {
       const to = linStart === 0xf0220 ? 1 : 0;
       const fn = new Function('cpu', `cpu.dpmiRawSwitch(${to});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
     if (linStart === 0xf0200 && mem.u8[0xf0200] === 0xcb) {
       // DPMI mode-switch entry. dpmiSwitch consumes the return address itself: coming back means
       // re-entering through a selector, which a RETF cannot express.
       const fn = new Function('cpu', 'cpu.dpmiSwitch();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
     if (linStart === 0xf0100 && mem.u8[0xf0100] === 0xcb) {
       // XMS driver entry (f000:0100, marked with a 0xCB=RETF stub byte). A guest FAR-CALLs it with
@@ -708,7 +719,7 @@ export class Recompiler {
       // address with real opcodes) from being hijacked.
       const fn = new Function('cpu', `cpu.xmsCall();cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
     if (linStart >= 0xf0000 && linStart < 0xf0100 && mem.u8[linStart] === 0xcf) {
       // Guard on the 0xCF stub byte: a real BIOS entry still holds its IRET stub, whereas the
@@ -717,7 +728,7 @@ export class Recompiler {
       const n = linStart - 0xf0000;
       const fn = new Function('cpu', `cpu.biosCallback(${n});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
     const out = ['var t;'];
     const P = (s) => out.push(s);
@@ -853,11 +864,11 @@ export class Recompiler {
     // both guards spelled out. This caught me twice: the write guard on rmW alone left `mov [0],eax`
     // (A3) unprotected, and then the limit guard on memAddr alone left `mov eax,[0x9fffd]` (A1)
     // unprotected — each time the section under test was the one instruction the guard missed.
-    const limGuardOff = (seg, off, bytes) => SEGLIM
+    const limGuardOff = (seg, off, bytes) => SEGLIM && !REAL
       ? `if((${(off >>> 0) + bytes - 1}>cpu.limit[${seg}]||${off >>> 0}<cpu.limLo[${seg}])&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
         `cpu.eip=${curIpStart};cpu.raise(${seg === SS ? 12 : 13},0);return;}` : '';
     const limGuard = (o, bytes) => {
-      if (!SEGLIM) return '';
+      if (!SEGLIM || REAL) return '';
       const t = NT();
       return `var ${t}=((${o.off})>>>0)+${bytes - 1};if((${t}>cpu.limit[${o.seg}]||${t}-${bytes - 1}<cpu.limLo[${o.seg}])&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
         `cpu.eip=${curIpStart};cpu.raise(${o.seg === SS ? 12 : 13},0);return;}`;
@@ -1512,6 +1523,7 @@ export class Recompiler {
     // `bodyOut` is the block body WITHOUT its terminating branch (kept for the region
     // compiler, which re-emits the terminator from `term`); tier-1 then appends the
     // terminator's return form to get the standalone block function.
+    if (needChecked) return this.translate(linStart, ip0, maxOps, d, true);
     const bodyOut = out.slice();
     emitTermReturn();
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
@@ -1528,7 +1540,7 @@ export class Recompiler {
              // epoch/ph0/ph1 (ROADMAP D8) are set by _compile under paging; declared HERE so every block
              // has one shape — adding them afterwards made the dispatch loop's blk.fn/blk.count polymorphic
              // and Windows 3.0's steady state ran at half speed with not one CR3 load or compile.
-             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1 };
+             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: REAL ? 1 : 0 };
 
     // ===================== nested emit helpers =====================
 
@@ -1934,7 +1946,7 @@ export class Recompiler {
           // real mode). DOOM's DOS/4GW, under EMM386, runs `smsw cx / ... / and ax,cx / lmsw ax` with PE
           // clear in AX; applying it dropped the CPU into "real mode with paging on" and every block after
           // derailed, while QEMU stayed in protected mode and DOOM started.
-          if (o.reg === 6) { const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.setCR0((cpu.cr0&~0xf)|(${s}&0xf)|(cpu.cr0&1));`); return; }
+          if (o.reg === 6) { needChecked = REAL; const s = NT(); P(`var ${s}=${rmR(o, 16)};cpu.setCR0((cpu.cr0&~0xf)|(${s}&0xf)|(cpu.cr0&1));`); return; }
           // SGDT/SIDT store a 6-byte pseudo-descriptor: 16-bit limit then 32-bit base.
           if (o.reg === 0 || o.reg === 1) {
             const a = memAddr(o), t = o.reg === 0 ? 'gdtr' : 'idtr';

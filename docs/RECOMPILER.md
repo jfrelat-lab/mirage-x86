@@ -90,7 +90,10 @@ Emitted inline with each access:
 - **Self-modifying code.** A write checks the page's code flag and calls the invalidator.
 - **Segment limit and write protection.** In protected mode, an offset outside the segment raises
   #GP or #SS, and a write through a read-only segment raises #GP (`MIRAGE_SEGLIM=0`,
-  `MIRAGE_SEGWP=0` turn them off for measurement).
+  `MIRAGE_SEGWP=0` turn them off for measurement). A block translated in real or virtual-8086 mode
+  carries no limit check at all, since none can fire there; it is marked `real`, and the dispatch
+  loop retranslates it if it is reached with PE set and VM clear. A block whose LMSW may set PE is
+  translated with the checks (`MIRAGE_NOREALSPEC=1` emits them everywhere).
 - **LOCK.** A LOCK prefix on an instruction that cannot be locked is #UD (`MIRAGE_LOCKUD=0`).
 
 The x87 is emitted inline against a local copy of the stack top, written back at every block exit;
@@ -154,6 +157,7 @@ All read once at start-up from the environment, all off by default unless stated
 | `MIRAGE_NOFPUINLINE=1` | every x87 instruction as a call |
 | `MIRAGE_MEM_READ`, `MIRAGE_MEM_WRITE` | the memory strategy |
 | `MIRAGE_SEGLIM=0`, `MIRAGE_SEGWP=0`, `MIRAGE_LOCKUD=0` | turn off the limit, write-protection and LOCK checks |
+| `MIRAGE_NOREALSPEC=1` | emit the limit checks in real-mode blocks too |
 | `MIRAGE_NOD8=1` | drop the cache on every CR3 load |
 | `MIRAGE_SEGIP=1` | record the instruction that loaded each segment, for diagnosis |
 | `MIRAGE_DERAIL_STOP=1` | stop on a derail |

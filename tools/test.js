@@ -1036,6 +1036,35 @@ eq('a word read whose LAST byte is past the limit is #GP(0)',
 eq('...while one that ends ON the limit is fine',
   segRun([0xb8, 0x18, 0x00, 0x8e, 0xd8, 0xa1, 0xfe, 0x00, 0xf4]), null);     // mov ax,[00FE]
 
+// ---- a block translated in real mode carries no limit guards, and must not run in protected mode --
+// The guards are dead in real and V86 mode, so the recompiler leaves them out of a block translated
+// there and marks it `real`. Two ways that block could then run with PE set: reached again after the
+// switch (the dispatch loop must retranslate it), or switching itself part-way through with LMSW (the
+// block must have been translated checked). Each case faults only if its safeguard is in place.
+{ const realThenPM = (code, between) => {
+    const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+    const GDT = 0x8000, a = GDT + 3 * 8;                // 18: data, writable, base 5000h, limit FFh
+    mem.w16(a, 0x00ff); mem.w16(a + 2, 0x5000); mem.w8(a + 4, 0); mem.w8(a + 5, 0x92);
+    cpu.gdtr = { base: GDT, limit: 0x1f };
+    cpu.setSeg(CS, 0x100); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x500);
+    mem.blit(0x1000, Uint8Array.from(code));
+    let raised = null;
+    mc.protInt = (n, err) => { raised = [n, err]; cpu.halted = true; };
+    const go = () => { cpu.eip = 0; cpu.halted = false; let s = 0; while (!cpu.halted && s++ < 40) mc.rec.step(); };
+    between(cpu, go);
+    return raised && raised.join(',');
+  };
+  eq('a block translated in real mode is retranslated when reached in protected mode',
+    realThenPM([0xa1, 0xff, 0x00, 0xf4], (cpu, go) => {            // mov ax,[00FF] / hlt
+      go();                                                       // real mode: no limit, no fault
+      cpu.cr0 |= 1; cpu.setSeg(DS, 0x18); go();                   // same bytes, DS limit FFh
+    }), '13,0');
+  eq('a real-mode block whose LMSW sets PE keeps its limit guards',
+    realThenPM([0xb8, 0x01, 0x00, 0x0f, 0x01, 0xf0, 0xa1, 0xff, 0x00, 0xf4], (cpu, go) => { // mov ax,1 / lmsw ax / mov ax,[00FF]
+      cpu.cr0 |= 1; cpu.setSeg(DS, 0x18); cpu.cr0 &= ~1;          // DS keeps its FFh limit in real mode
+      go();
+    }), '13,0'); }
+
 // ---- VERR / VERW answer a question, they do not always say yes -------------------------------
 // This was `cpu.flags |= ZF`: a stub that cannot fail, and therefore cannot be told apart from a
 // working implementation until a guest asks about a selector that is NOT accessible. Six of the
