@@ -6,7 +6,8 @@
 ;
 ; For each of ES, FS, GS and DS: allocate a selector with base A, load it, change the base to B
 ; through AX=0007h, then read byte 0 through the register. 'A' = the cached descriptor survived,
-; 'B' = the register was reloaded. Writes one line to DPMIRL.TXT, e.g. "ES=B FS=B GS=B DS=B".
+; 'B' = the register was reloaded. SS likewise, on a copy of its own descriptor. Writes one line
+; to DPMIRL.TXT, e.g. "ES=B FS=B GS=B DS=B SS=B".
 ; A 32-bit client (CWSDPMI accepts no other); the code segment stays 16-bit, as DPMI gives it.
 ;
 ;   nasm -f bin tools/dpmireload.asm -o DPMIRL.COM      (run CWSDPMI first where there is no host)
@@ -89,6 +90,32 @@
         pop     ds
         mov     [res + 18], al
 
+        ; SS: a copy of SS's own descriptor, so the stack stays where it is; then its base moves up
+        ; 16 bytes and byte ssA is read through SS. Reloaded, that lands on ssB, 16 bytes further.
+        xor     ax, ax
+        mov     cx, 1
+        int     0x31
+        mov     [sel2], ax
+        push    ds
+        pop     es
+        mov     ax, 0x0b                ; SS descriptor -> desc
+        mov     bx, ss
+        mov     edi, desc
+        int     0x31
+        mov     ax, 0x0c                ; desc -> sel2
+        mov     bx, [sel2]
+        int     0x31
+        mov     [oldss], ss
+        mov     si, 16
+        call    linear                  ; CX:DX = SS base + 16 (a .COM: SS base = DS base)
+        mov     bx, [sel2]
+        mov     ss, bx
+        mov     ax, 7
+        int     0x31
+        mov     al, [ss:ssA]
+        mov     ss, [oldss]
+        mov     [res + 23], al
+
         push    ds                      ; write the line: AH=40h through AX=0300h
         pop     es
         mov     word [rm_eax], 0x4000
@@ -120,10 +147,16 @@ setbase:                                ; base of [sel] := linear address of SI
         ret
 
 fname   db      'DPMIRL.TXT', 0
-res     db      'ES=? FS=? GS=? DS=?', 13, 10
+res     db      'ES=? FS=? GS=? DS=? SS=?', 13, 10
 reslen  equ     $ - res
 bufA    db      'A'
 bufB    db      'B'
+ssA     db      'A'
+        times 15 db '-'
+ssB     db      'B'
+sel2    dw      0
+oldss   dw      0
+desc    times 8 db 0
 rseg    dw      0
 handle  dw      0
 entry   dd      0

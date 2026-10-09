@@ -165,9 +165,9 @@ open to detect it. Not installed on the bare PC: a guest's own EMM386 would refu
 **DPMI 0.9** (`dpmi.js`): the mode-switch entry, INT 31h services (descriptors, memory, interrupt and
 exception vectors, real-mode calls and callbacks, raw mode switch), and reflection of interrupts
 between the modes. DOOM, Heretic and Quake run on it. `MIRAGE_NODPMI=1` removes it, so that a
-program's own extender takes over. Returning from INT 31h reloads ES, DS, FS and GS from their
-selectors, as CWSDPMI does (`tools/dpmireload.asm`, under DOSBox-X and QEMU): a descriptor changed
-through INT 31h reaches a register that already holds it.
+program's own extender takes over. Returning from INT 31h reloads CS, SS, ES, DS, FS and GS from
+their selectors, as a real host's return to the client does (`tools/dpmireload.asm`: CWSDPMI under
+DOSBox-X and QEMU): a descriptor changed through INT 31h reaches a register that already holds it.
 
 When a real DOS kernel boots on the bare PC, the XMS driver and the DPMI host stand aside: a guest
 that installs its own handler on INT 2Fh or loads its own extender gets the vector

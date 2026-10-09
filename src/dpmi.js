@@ -232,7 +232,7 @@ export function installDPMI(machine) {
       }
 
       // A segment register already holding the selector sees the change when INT 31h returns: see
-      // reloadDataSegs below.
+      // reloadSegs below.
       case 0x000c: {
         const off = descOffset(c.reg[3] & 0xffff);
         if (off < 0) return fail(ERR_INVALID_SELECTOR);
@@ -639,26 +639,31 @@ export function installDPMI(machine) {
     }
   });
 
-  // Returning from INT 31h reloads the client's data segment registers. The hardware keeps a
-  // segment register's cached descriptor until the selector is loaded again, but a real host runs
-  // INT 31h on its own selectors and loads the client's back on the way out, so a change made
-  // through 0007/0008/0009/000C reaches a register that already holds the selector.
-  // tools/dpmireload.asm: CWSDPMI under DOSBox-X and under QEMU (MS-DOS 6.22) both read through
-  // the NEW base in ES, FS, GS and DS. DJGPP's crt0 depends on it: Jump 'n Bump widens DS to 4 GiB
-  // with 0008 and goes on using DS, and kept the 64 KiB-era limit here until a #GP.
-  // A selector the call freed (0001) is zeroed instead, as the spec asks of 0001. Not after a
+  // Returning from INT 31h reloads the client's segment registers. The hardware keeps a segment
+  // register's cached descriptor until the selector is loaded again, but a real host runs INT 31h on
+  // its own selectors and comes back the way the processor does: its IRET to the client's ring
+  // reloads CS and SS, and it restores ES, DS, FS and GS itself. So a change made through
+  // 0007/0008/0009/000C reaches a register that already holds the selector.
+  // tools/dpmireload.asm: CWSDPMI under DOSBox-X and under QEMU (MS-DOS 6.22) both read through the
+  // NEW base in ES, FS, GS, DS and SS. DJGPP's crt0 depends on it: it widens DS and SS (one selector)
+  // to 4 GiB with 0008 and goes on using both. Jump 'n Bump took a #GP through DS, and Quake a #SS
+  // through SS once segment limits were enforced — the cached limit was still the 64 KiB-era one.
+  // A data selector the call freed (0001) is zeroed instead, as the spec asks of 0001. Not after a
   // real-mode call under way (0300/0302): realCallReturn puts the client's registers back itself.
-  const reloadDataSegs = () => {
+  const reloadSegs = () => {
     if (!(cpu.cr0 & 1) || (cpu.flags & 0x20000)) return;
-    for (const i of [ES, DS, FS, GS]) {
+    for (const i of [CS, SS, ES, DS, FS, GS]) {
       const off = descOffset(cpu.seg[i]);
       if (off < 0) continue;
-      if (!(mem.r8((LDT_BASE + off + 5) >>> 0) & 0x80)) { cpu.seg[i] = 0; cpu.base[i] = 0; cpu.limit[i] = 0; cpu.limLo[i] = 0; continue; }
+      if (!(mem.r8((LDT_BASE + off + 5) >>> 0) & 0x80)) {
+        if (i !== CS && i !== SS) { cpu.seg[i] = 0; cpu.base[i] = 0; cpu.limit[i] = 0; cpu.limLo[i] = 0; }
+        continue;
+      }
       cpu.loadDescriptor(i, cpu.seg[i]);
     }
   };
   { const h31 = machine.intHandlers[0x31];
-    machine.intHandlers[0x31] = (c, m) => { const r = h31(c, m); reloadDataSegs(); return r; }; }
+    machine.intHandlers[0x31] = (c, m) => { const r = h31(c, m); reloadSegs(); return r; }; }
 
   /**
    * Raw mode switch (the routines 0306 hands out). The client sets up the state it wants on the
