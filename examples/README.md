@@ -25,9 +25,9 @@ The programs on the home page (`index.html`), listed in `manifest.json`.
 | `intros/symetrie.com` | Symetrie (256 bytes, 2007) | Řrřola | ISC | same |
 | `intros/dirojed.com` | Dírojed (32 bytes, 2007) | Řrřola | ISC | same |
 | `intros/paralaxa.com` | Paralaxa (32 bytes, 2007) | Řrřola | ISC | same |
+| `intros/difuze.com` | Difúze (256 bytes, 2010), the final version | Řrřola | ISC | same |
 
-Řrřola's files come from the zips on his download page. His Difúze is under the same licence but is
-not shown: MIRAGE draws it wrongly (see docs/KNOWN-ISSUES.md).
+Řrřola's files come from the zips on his download page.
 
 - `games/` holds DOS programs whose rights holders allow free distribution, as ZIP archives that the
   DOS player unpacks into C:\GAMES\ (`dos.html?zip=…&run=…`):

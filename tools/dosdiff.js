@@ -8,6 +8,13 @@
 // and a similarity % is reported. Note: x87 is float64 here vs 80-bit on real silicon,
 // and animated effects can be a frame out of phase, so expect <100% on raytracers —
 // the side-by-side + diff image are the real signal; integer effects should be ~100%.
+//
+// DOSBox-X runs at cycles=max: as many instructions per tick as the HOST can execute. "K ticks" is
+// then the same moment on both sides only for a program paced by the timer. For anything bound by
+// raw CPU (a raymarcher, a simulation) the two are frames apart, and the picture says so without
+// meaning it: Difúze was filed as "draws bands" and Puls as "slower per tick" that way
+// (docs/notes/2026-10-10-difuze.md). DDCYCLES="fixed 3323" runs DOSBox-X at MIRAGE's own rate,
+// 182,584 instructions per tick at 18.2 ticks a second.
 
 import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, mkdtempSync, copyFileSync, cpSync, existsSync, rmSync, mkdirSync, statSync } from 'fs';
@@ -44,7 +51,7 @@ function dosboxCapture() {
       run = 'PROG.COM';
     }
     writeFileSync(join(work, 'db.conf'),
-      `[sdl]\noutput=surface\nautolock=false\n[dosbox]\nlogfile=\n[cpu]\ncore=normal\ncputype=pentium\ncycles=max\n[autoexec]\nmount c ${work}\nc:\nGRABBER.COM\n${run}\n`);
+      `[sdl]\noutput=surface\nautolock=false\n[dosbox]\nlogfile=\n[cpu]\ncore=normal\ncputype=pentium\ncycles=${process.env.DDCYCLES || 'max'}\n[autoexec]\nmount c ${work}\nc:\nGRABBER.COM\n${run}\n`);
     // The grabber snapshots after K TIMER ticks, i.e. K/18.2 seconds of EMULATED time, so the wall
     // clock DOSBox needs grows with K. A fixed 7 s silently produced "no capture" for every workload
     // pinned past ~120 ticks — mesha (400) reads as "hooks INT 8" when it hooks no vector at all.

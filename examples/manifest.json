@@ -179,6 +179,19 @@
     "secs": 150
   },
   {
+    "id": "difuze",
+    "kind": "dos",
+    "file": "examples/intros/difuze.com",
+    "title": "Difúze",
+    "author": "Řrřola",
+    "year": 2010,
+    "license": "ISC",
+    "licenseFile": "examples/licenses/rrrola-isc.txt",
+    "source": "examples/intros/difuze.asm",
+    "blurb": "Gray–Scott reaction–diffusion in 256 bytes (Riverwash 2010): sixteen rules, from a single line to cells, worms and spirals. Give it a minute to grow. The music is MIDI, which MIRAGE does not play.",
+    "secs": 1040
+  },
+  {
     "id": "symetrie",
     "kind": "dos",
     "file": "examples/intros/symetrie.com",

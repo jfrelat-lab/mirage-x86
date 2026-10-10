@@ -17,6 +17,7 @@ one level up ([ARCHITECTURE](../ARCHITECTURE.md), [COMPAT](compat-log.md), [TEST
 | [timing.md](timing.md) | How the machine's clock was measured and calibrated against DOSBox-X: interrupt delivery, the timer rate cap, the VGA beam, self-modifying code, and the long hunt that ended in "hardware interrupts were never dispatched through the IDT". Sections are numbered; the code refers to them (`docs/notes/timing.md §6`). |
 | [windows-3.md](windows-3.md) | Getting Windows 3.0 (real, standard and 386 enhanced mode) and Windows 3.1 to start. |
 | [booting-real-dos.md](booting-real-dos.md) | Booting real DOS kernels — FreeDOS, MS-DOS — on MIRAGE's BIOS instead of its built-in DOS. |
+| [2026-10-10-difuze.md](2026-10-10-difuze.md) | Difúze was never wrong: two machines compared at equal ticks while one ran unthrottled. Why `dosdiff.js` takes `DDCYCLES`. |
 | [2026-09-05-mesha.md](2026-09-05-mesha.md) | The intro `mesha.com`: a wrong picture, traced through the palette call, the machine's speed, a real XMS driver and DPMI. Also `intoanew.com` and Wolfenstein 3D. |
 | [2026-08-25-dune.md](2026-08-25-dune.md) | Why Cryo's *Dune* did not animate, from one bit to the screen. |
 | [2026-08-04-audit.md](2026-08-04-audit.md) | A conformance audit of the whole code base against the x86, DOS and VGA specifications. |
