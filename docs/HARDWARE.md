@@ -76,8 +76,9 @@ MIRAGE's BIOS is written in JavaScript: it answers the interrupts instead of run
 | Real-time clock and CMOS, with the periodic interrupt | yes | QEMU |
 | PS/2 keyboard and mouse | yes | — |
 | 16550A serial port, COM1 | option (`serial`) | QEMU (`tools/uartprobe.asm`): identical |
-| Sound Blaster 16 (DSP, mixer, DMA playback, IRQ 7) | yes, silent: no audio output yet | DOSBox-X (`tools/sbprobe.asm`) |
-| PC speaker gate, OPL detection | partial: detection only, no sound | DOSBox-X |
+| Sound Blaster 16 (DSP, mixer, DMA playback, IRQ 7) | yes, heard in the browser | DOSBox-X (`tools/sbprobe.asm`) |
+| PC speaker (port 61h, PIT channel 2) | yes | — (`tools/beep.asm`: 440 Hz measured) |
+| OPL (AdLib FM) | detection only, no sound | DOSBox-X |
 | A network card, a parallel port | no | — |
 
 ## DOS services (the DOS player only)

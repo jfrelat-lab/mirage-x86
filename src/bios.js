@@ -1235,9 +1235,9 @@ export function installBIOS(machine, opts = {}) {
   //           does not accidentally clear the other.
   //   bit 5 — timer-2 output, i.e. the speaker's square wave.
   // Channel 2 of the PIT (0x42) is the tone generator behind it. We honour its reload so the square
-  // wave has the right period; nothing here makes sound, it makes the *timing* readable.
+  // wave has the right period; src/audio.js turns the gate and the reload into sound.
   const ppi = machine.ppi = { portB: 0x00, ch2Reload: 0x10000, _lo: 0, _hiNext: false };
-  machine.onPortWrite(0x61, (_p, _s, v) => { ppi.portB = v & 0xff; });
+  machine.onPortWrite(0x61, (_p, _s, v) => { ppi.portB = v & 0xff; if (machine.onSpeaker) machine.onSpeaker(); });
   machine.onPortRead(0x61, () => {
     const cyc = machine.cpu.cycles;
     // The refresh bit toggles every ~15.085 us = 18 PIT clocks, and cpu.cycles IS the PIT clock.
@@ -1253,6 +1253,7 @@ export function installBIOS(machine, opts = {}) {
     ppi._hiNext = false;
     const r = (v << 8) | ppi._lo;
     ppi.ch2Reload = r === 0 ? 0x10000 : r;
+    if (machine.onSpeaker) machine.onSpeaker();               // the tone's pitch (src/audio.js)
   });
   machine.onPortRead(0x42, () => {                            // live countdown, same shape as ch0
     const count = (ppi.ch2Reload - (machine.cpu.cycles % ppi.ch2Reload)) & 0xffff;

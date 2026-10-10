@@ -11,14 +11,16 @@
 // wall-clock time in the browser, where the PIT follows wall-clock time too — see machine.wallClockMs.
 // The card catches up at every run slice and whenever the guest reads the DMA controller.
 //
-// The samples it pulls are kept, as signed 16-bit stereo at the card's rate, for whoever plays them
-// (sb.drain()); nothing here produces sound.
+// The samples it pulls are kept, as signed 16-bit stereo at the card's rate, for src/audio.js to mix
+// (sb.drain()).
 //
 // The DSP command set is the documented SB16 one (Creative's "Sound Blaster Series Hardware
 // Programming Guide"): 8-bit single-cycle and auto-init (14h, 1Ch), high speed (90h, 91h), the SB16
 // generic Bxh/Cxh commands, time constant and output rate, pause, continue and exit auto-init,
 // speaker, version 4.05, and the test and IRQ-trigger commands. ADPCM and recording are not
 // implemented: their commands are accepted and play silence.
+
+import { clock } from './audio.js';
 
 const BASE = 0x220, IRQ = 7, DMA8 = 1, DMA16 = 5;
 // Arguments each command takes (bytes after the command byte).
@@ -29,7 +31,7 @@ const ARGS = new Map([
 for (let c = 0xb0; c <= 0xcf; c++) ARGS.set(c, 3);
 
 export function installSB(machine) {
-  const cpu = machine.cpu, mem = machine.mem;
+  const mem = machine.mem;
   const sb = {
     inQ: [], outQ: [], cmd: -1, args: [], resetting: false, speaker: false, test: 0,
     rate: 22050, block8: 0x7ff, mixerIndex: 0, mixer: new Uint8Array(256),
@@ -40,8 +42,7 @@ export function installSB(machine) {
     pcm: [], pcmRate: 22050,                 // played samples, interleaved L/R Int16, for drain()
     drain() { const out = Int16Array.from(sb.pcm); sb.pcm.length = 0; return { rate: sb.pcmRate, samples: out }; },
   };
-  const now = () => machine.wallClockMs ? machine.wallClockMs() / 1000
-    : cpu.cycles / (18.2065 * (machine.pitBase || 0x10000));
+  const now = () => clock(machine);
   const raise = (wide) => {
     if (wide) sb.irq16 = true; else sb.irq8 = true;
     machine.raiseIRQ(IRQ);

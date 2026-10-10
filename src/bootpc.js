@@ -19,6 +19,8 @@ import { installMouse } from './mouse.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
 import { bootSector, bootCD } from './boot.js';
+import { installAudio } from './audio.js';
+import { AudioOut } from './audio-out.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), status = $('status'), pick = $('image'), fileIn = $('file');
@@ -98,6 +100,10 @@ async function boot(name, raw) {
   installMouse(mc);
   await loadFonts(mc);
   const turbo = clockSel.value === 'turbo';
+  // Sound only in real time: in turbo the machine's clock is cpu.cycles, far ahead of the listener's.
+  installAudio(mc);
+  audioOut.machine = mc;
+  audioOut.setMuted(turbo || !soundBox.checked);
   mc.timerAuto = turbo;                     // turbo: guest time = cpu.cycles, as headless
   if (!turbo) mc.wallClockMs = () => performance.now();   // anchors the 0x3DA retrace to real 70 Hz
   // In real time the CMOS clock is the host's, as on a real PC: Windows 95 otherwise came up on
@@ -165,6 +171,7 @@ function loop() {
   if (!s.started) { s.started = true; s.gen = ++gen; tick.port2.postMessage(s.gen); }
   s.raf = requestAnimationFrame(loop);
   s.video.render();
+  audioOut.pump();
   if (s.mc.serialFlush) s.mc.serialFlush();
   showStatus(s);
 }
@@ -215,7 +222,12 @@ async function bootSelected() {
   return boot(pick.value.split('/').pop(), bytes);
 }
 const tryBoot = () => bootSelected().catch((e) => { console.error(e); status.textContent = 'boot failed: ' + (e.message || e); });
-bootBtn.addEventListener('click', () => { bootBtn.blur(); tryBoot(); });
+// One output for every session (a page gets few AudioContexts), started by the Boot click — the
+// user gesture a browser wants before it plays anything.
+const audioOut = new AudioOut({ audio: null });
+const soundBox = $('sound');
+soundBox.addEventListener('change', () => { audioOut.setMuted(!soundBox.checked || clockSel.value === 'turbo'); if (soundBox.checked) audioOut.start(); });
+bootBtn.addEventListener('click', () => { bootBtn.blur(); if (soundBox.checked) audioOut.start(); tryBoot(); });
 pick.addEventListener('change', () => { fileIn.value = ''; });
 fileIn.addEventListener('change', () => { pick.value = ''; });
 pauseBtn.addEventListener('click', () => {

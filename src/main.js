@@ -121,4 +121,18 @@ sync(crtBtn, document.body.classList.contains('crt'));
 sync(hudBtn, document.body.classList.contains('show-hud'));
 
 crtBtn.addEventListener('click', () => sync(crtBtn, document.body.classList.toggle('crt')));
+
+// Sound starts with the first gesture — browsers refuse an AudioContext before one — and is on by
+// default after that; the button mutes it. ?mute=1 starts muted.
+const soundBtn = document.getElementById('sound-toggle');
+let soundOn = new URLSearchParams(location.search).get('mute') !== '1';
+app.audioOut.setMuted(!soundOn);
+sync(soundBtn, soundOn);
+const startAudio = () => { if (soundOn) app.audioOut.start(); };
+window.addEventListener('pointerdown', startAudio, { capture: true });
+window.addEventListener('keydown', startAudio, { capture: true });
+soundBtn.addEventListener('click', () => {
+  soundOn = !soundOn; app.audioOut.setMuted(!soundOn); sync(soundBtn, soundOn);
+  if (soundOn) app.audioOut.start();
+});
 hudBtn.addEventListener('click', () => { const on = document.body.classList.toggle('show-hud'); app.setProfiling(on); sync(hudBtn, on); });

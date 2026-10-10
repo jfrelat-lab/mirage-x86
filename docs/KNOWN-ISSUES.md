@@ -8,7 +8,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 | Missing | Consequence |
 |---|---|
-| Sound output | None yet. The Sound Blaster plays its DMA, silently; OPL is detected only. |
+| Sound | The Sound Blaster's digital sound and the PC speaker play; FM music (OPL, AdLib) is detected but not synthesised, and there is no Gravis Ultrasound. ADPCM and recording play silence. |
 | A network card | Systems run without a network; QNX's demo disk stops asking for one. |
 | ACPI | ReactOS (installed for an ACPI machine) stops in its kernel: "did NOT find RSDT". |
 | A floppy *controller* | The BIOS serves drive A:, but a system that drives the controller itself cannot read a floppy. |

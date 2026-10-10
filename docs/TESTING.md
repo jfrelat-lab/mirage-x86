@@ -52,7 +52,8 @@ by line. Where a probe's answer settled a behaviour, `test.js` has a check with 
 | `int10-oracle.mjs`, `vga-rom.mjs` | INT 10h against a real VGA BIOS ROM run inside MIRAGE, call by call. |
 | `dos-oracle.mjs` | INT 21h answers recorded from a real DOS kernel booted on MIRAGE's BIOS. |
 | `dbx-oracle.mjs` | The sequence of file and video events of a program, against DOSBox-X's debug log. |
-| `dosdiff.js`, `egaref.mjs` + `shot.mjs` | A program's picture against DOSBox-X's at the same timer count. |
+| `dosdiff.js`, `egaref.mjs` + `shot.mjs` | A program's picture against DOSBox-X's at the same timer count; `DDCYCLES="fixed 3323"` runs DOSBox-X at MIRAGE's instruction rate, for CPU-bound programs. |
+| `record-audio.mjs` | What a program sounds like, as a WAV, over machine seconds; prints the level of each second. |
 | `qemu-shot.mjs` | A protected-mode program's picture captured from QEMU, from outside the guest. |
 | `v86/qemudiff.mjs` | A boot image's screen under MIRAGE against QEMU's, pixel by pixel. |
 | `v86/compare3.mjs` | Time to the arrival screen under QEMU, v86 and MIRAGE. |

@@ -38,7 +38,7 @@ per tick as DOSBox-X at `cycles=fixed 20000` (see [notes/timing.md](notes/timing
 - **Delivery.** `serviceTimer` runs when `cpu.cycles` reaches `nextTimerCycle`: it bumps the BIOS
   tick count and delivers IRQ 0. `machine.timerAuto` is on headless (the clock is the cycle count,
   deterministic); in the browser `ui.js` turns it off and paces ticks to wall-clock time.
-- **Channel 2** and port 61h drive the speaker gate; there is no sound output.
+- **Channel 2** and port 61h drive the PC speaker (see Audio).
 
 **RTC and CMOS** (`rtc.js`): an MC146818 on ports 70h/71h — the clock, the status registers, the
 periodic interrupt on IRQ 8, CMOS bytes (memory sizes, diskette types, equipment), INT 1Ah's clock
@@ -138,8 +138,14 @@ command set (8-bit single-cycle and auto-init, high speed, the generic Bxh/Cxh c
 and output rate, pause, continue, speaker, version 4.05) and the mixer answers its IRQ and DMA
 registers. Playback pulls samples from the 8237 at the programmed rate, on the machine's clock
 (cycles headless, wall-clock time in the browser), and raises IRQ 7 at the end of each block
-(`tools/sbprobe.asm` against DOSBox-X). The samples are kept for a player (`sb.drain()`); there is no
-audio output yet. ADPCM and recording play silence. The OPL timer handshake (`bios.js`) works on
+(`tools/sbprobe.asm` against DOSBox-X). ADPCM and recording play silence.
+
+**Audio** (`audio.js`, `audio-out.js`): `audio.js` mixes the card (resampled linearly) and the PC
+speaker (port 61h and PIT channel 2, rendered from a timeline of their changes) into stereo at any
+rate, on the machine's clock, through a 16 Hz high-pass as a real output's AC coupling. In the
+browser `audio-out.js` plays it through an AudioWorklet, started by the first click or key; the
+DOS player has a SOUND button, the bare PC a Sound box (real-time clock only).
+`tools/record-audio.mjs` writes it to a WAV headless. The OPL timer handshake (`bios.js`) works on
 388h, 228h, 220h and 222h; nothing is synthesised.
 
 **DMA** (`dma.js`): both 8237s, with base and current address and count, the flip-flop, masks, modes

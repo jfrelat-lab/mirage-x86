@@ -13,6 +13,8 @@ import { Keyboard } from './keyboard.js';
 import { installMouse } from './mouse.js';
 import { Shell } from './shell.js';
 import { SAMPLES } from './samples.js';
+import { installAudio } from './audio.js';
+import { AudioOut } from './audio-out.js';
 
 const TICK_MS = 1000 / 18.2065;     // PC timer period
 // Real host CPU time the run loop may spend per animation frame. This used to be a flat 12 ms,
@@ -56,6 +58,8 @@ export class Mirage {
     this.video = new Video(this.machine, canvas);
     this.keyboard = new Keyboard(this.machine);
     installMouse(this.machine);                     // INT 33h; fed by canvas events in boot()
+    installAudio(this.machine);                     // the Sound Blaster and the speaker, mixed (src/audio.js)
+    this.audioOut = new AudioOut(this.machine);     // started by the page on the first user gesture
     this.shell = null;
     this.onFrame = opts.onFrame || null;
     this._raf = 0;
@@ -262,6 +266,7 @@ export class Mirage {
     }
 
     this.video.render();
+    this.audioOut.pump();
     if (this.onFrame) this.onFrame(this);
   }
 

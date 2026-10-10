@@ -18,6 +18,7 @@ import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
 import { installDOS, DOS_PLAYER_MEM } from '../src/dos.js';
+import { installAudio } from '../src/audio.js';
 import { VFS } from '../src/vfs.js';
 
 let pass = 0, fail = 0;
@@ -2730,6 +2731,29 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   mc.raiseIRQ(3);
   let steps = 0; while (!cpu.halted && steps++ < 20) mc.runSlice(1);
   eq('an unclaimed IRQ 3 is not left in service at the PIC', mc.pic.master.isr & 0x08, 0); }
+
+// ---- sound: the mixer turns the speaker and the Sound Blaster into samples (src/audio.js) ---------
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const audio = installAudio(mc);
+  const sec = 18.2065 * mc.pitBase, o = (p, v) => mc.ioWrite(p, 1, v);
+  const hz = (buf, rate) => { let zc = 0; for (let i = 2; i < buf.length; i += 2) if ((buf[i - 2] < 0) !== (buf[i] < 0)) zc++; return zc / 2 / (buf.length / 2 / rate); };
+  audio.pull(44100);
+  // PIT channel 2 at 1193182 / 2712 = 440 Hz, gate and data bit on, for one machine second.
+  o(0x43, 0xb6); o(0x42, 2712 & 0xff); o(0x42, 2712 >> 8); o(0x61, 3);
+  mc.cpu.cycles += Math.round(sec);
+  const beep = audio.pull(44100);
+  eq('the speaker plays channel 2 at its frequency (440 Hz, within 1%)', Math.abs(hz(beep, 44100) - 440) < 4.4, true);
+  o(0x61, 0); mc.cpu.cycles += Math.round(sec / 10); audio.pull(44100);
+  mc.cpu.cycles += Math.round(sec / 10);
+  eq('...and is silent once the gate closes', Math.max(...audio.pull(44100).map(Math.abs)) < 0.01, true);
+  // The card: 8-bit auto-init at 8000 Hz over a buffer of a 500 Hz square wave (8 samples up, 8 down).
+  for (let i = 0; i < 4096; i++) mc.mem.u8[0x20000 + i] = (i & 8) ? 0xe0 : 0x20;
+  o(0x0a, 5); o(0x0c, 0); o(0x0b, 0x59); o(0x02, 0); o(0x02, 0); o(0x83, 2); o(0x03, 0xff); o(0x03, 0x0f); o(0x0a, 1);
+  const dsp = (v) => o(0x22c, v);
+  o(0x226, 1); o(0x226, 0); dsp(0xd1); dsp(0x40); dsp(256 - 125); dsp(0x48); dsp(0xff); dsp(0x07); dsp(0x1c);
+  const parts = [];                                   // a frame at a time, as the page pulls
+  for (let i = 0; i < 100; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 50) parts.push(...p); }
+  const card = Float32Array.from(parts);
+  eq('the Sound Blaster\'s DMA comes out at its own frequency (500 Hz, within 2%)', Math.abs(hz(card, 44100) - 500) < 10, true); }
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

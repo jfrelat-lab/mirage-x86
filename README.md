@@ -34,7 +34,7 @@ None of that software is in this repository — see [Third-party software](#thir
 
 **What does not work yet**, so nobody has to find out the hard way: Windows NT 3.51 (dies after the
 graphical switch), Windows 2000 (stays on its boot screen), ReactOS (needs ACPI, which MIRAGE does
-not have), BeOS 5 (stays on its splash screen), Plan 9. There is no sound output, no network card,
+not have), BeOS 5 (stays on its splash screen), Plan 9. There is no FM (AdLib) music and no Gravis Ultrasound yet, no network card,
 no USB, no 64-bit mode. The CPU is a Pentium Pro without MMX.
 
 ## How fast
