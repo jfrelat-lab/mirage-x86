@@ -54,3 +54,27 @@ export async function unzip(zip) {
   }
   return files;
 }
+
+/**
+ * id Software's shareware archives (DOOM 1.9, Heretic 1.2) do not hold the game: they hold DEICE.EXE
+ * and a self-extracting PKZIP archive cut into floppy-sized pieces, NAME.1, NAME.2… INSTALL.BAT runs
+ * DEICE, which glues the pieces back into NAME.EXE and runs it. Doing the same here — join the
+ * pieces, read the ZIP inside — serves the archive exactly as id published it, installer included,
+ * instead of a repackaged copy. The self-extractor keeps its central directory's offsets relative to
+ * the start of the whole .EXE, so `unzip` reads it as it stands.
+ * Anything without DEICE.EXE and a NAME.1 beside it is returned unchanged.
+ * @param {{path: string, bytes: Uint8Array}[]} files
+ */
+export async function deice(files) {
+  const byName = new Map(files.map((f) => [f.path.toUpperCase(), f]));
+  const deiceAt = [...byName.keys()].find((p) => p === 'DEICE.EXE' || p.endsWith('/DEICE.EXE'));
+  if (deiceAt === undefined) return files;
+  const dir = deiceAt.slice(0, -'DEICE.EXE'.length);
+  const first = [...byName.keys()].find((p) => p.startsWith(dir) && !p.slice(dir.length).includes('/') && p.endsWith('.1'));
+  if (first === undefined) return files;
+  const stem = first.slice(0, -2), pieces = [];
+  for (let n = 1; byName.has(`${stem}.${n}`); n++) pieces.push(byName.get(`${stem}.${n}`).bytes);
+  const whole = new Uint8Array(pieces.reduce((a, p) => a + p.length, 0));
+  let at = 0; for (const p of pieces) { whole.set(p, at); at += p.length; }
+  return unzip(whole);
+}

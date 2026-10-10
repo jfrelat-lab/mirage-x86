@@ -7,7 +7,7 @@ import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
 import { installDOS } from './dos.js';
 import { VFS } from './vfs.js';
-import { unzip } from './zip.js';
+import { unzip, deice } from './zip.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
 import { installMouse } from './mouse.js';
@@ -172,7 +172,7 @@ export class Mirage {
    *  top-level folder inside the archive is dropped, so the program sits at the root of what the
    *  shell narrows C:\ to when it runs. Returns NAME. */
   async mountZip(fileName, zipBytes) {
-    const files = await unzip(zipBytes);
+    const files = await deice(await unzip(zipBytes));   // id's shareware: the installer's pieces, joined
     const name = VFS.dosName(fileName.replace(/\.zip$/i, '')).replace(/\..*$/, '');
     const tops = new Set(files.map((f) => (f.path.includes('/') ? f.path.split('/')[0] : '')));
     const strip = tops.size === 1 && !tops.has('') ? [...tops][0].length + 1 : 0;

@@ -37,6 +37,15 @@ not shown: MIRAGE draws it wrongly (see docs/KNOWN-ISSUES.md).
 | `games/unreal11.zip` | Unreal 1.1 | Future Crew | freeware: "can be freely distributed without modifications" | `licenses/unreal.txt`, and README.1ST in the archive |
 | `games/frain200.zip` | Fractint 20.0 (the official DOS release package) | The Stone Soup Group | freeware: "may be freely copied and distributed in unmodified form but may not be sold" | `licenses/fractint.txt` |
 | `games/dunedemo.zip` | Dune, the 1991 demo | Cryo / Virgin Games | "may be given away freely, but it is not to be sold", unaltered | `licenses/dunedemo.txt`, and README.TXT in the archive |
+| `games/htic_v12.zip` | Heretic 1.2, shareware | id Software (Raven Software) | shareware: "the right to distribute, royalty free and by electronic means only … in compressed format" | `licenses/heretic.txt`, LICENSE.DOC in the archive |
+| `games/doom19s.zip` | DOOM 1.9, shareware | id Software | shareware; the archive has no licence agreement, only id's "SHAREWARE VERSION — PLEASE DISTRIBUTE!!!" | `licenses/doom.txt` |
+
+The two id archives are the files of id's own `idstuff` directory, as the idgames archive serves
+them (ftp.fu-berlin.de/pc/games/idgames/idstuff/). They hold an installer, not the game: DEICE.EXE
+and a self-extracting ZIP cut into NAME.1 and NAME.2. The player joins the pieces and reads the ZIP
+inside (`deice` in src/zip.js), which is what DEICE does, so the archives are served unmodified.
+Quake's shareware is not here: its licence forbids displaying it publicly and any use of its
+screenshots.
 
 The binaries of the boot-sector programs are the ones v86's catalogue serves for the same programs; BootChess comes with its
 author's release text.

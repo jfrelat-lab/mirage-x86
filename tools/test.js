@@ -12,7 +12,7 @@ import { installMouse } from '../src/mouse.js';
 import { installDisk } from '../src/disk.js';
 import { installBIOS } from '../src/bios.js';
 import { bootCD } from '../src/boot.js';
-import { unzip } from '../src/zip.js';
+import { unzip, deice } from '../src/zip.js';
 import { deflateRawSync } from 'zlib';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
@@ -673,7 +673,13 @@ function eq(name, got, want) {
   eq('ZIP: stored and deflated entries come back, the directory entry is skipped', files.map((f) => `${f.path}:${f.bytes.length}`).join(), 'GAME/README.TXT:8,GAME/GAME.EXE:3000');
   eq('...the deflated content is intact', String.fromCharCode(...files[1].bytes.subarray(0, 4)), 'MZxx');
   let err = ''; try { await unzip(enc('not a zip at all, just text, long enough to be scanned')); } catch (e) { err = e.message; }
-  eq('...and something that is not a ZIP says so', err.startsWith('not a ZIP archive'), true); }
+  eq('...and something that is not a ZIP says so', err.startsWith('not a ZIP archive'), true);
+  // id's shareware layout: DEICE.EXE beside a ZIP cut in pieces. Joined, the pieces are the archive.
+  const cut = zip.length >> 1, outer = [{ path: 'INSTALL.BAT', bytes: enc('DEICE.EXE') }, { path: 'DEICE.EXE', bytes: enc('MZ') },
+    { path: 'GAME_1.DAT', bytes: enc('PATH=\\GAME') }, { path: 'GAME_1.2', bytes: zip.slice(cut) }, { path: 'GAME_1.1', bytes: zip.slice(0, cut) }];
+  eq('DEICE: the pieces NAME.1, NAME.2 are joined and the ZIP inside is what comes back',
+    (await deice(outer)).map((f) => `${f.path}:${f.bytes.length}`).join(), 'GAME/README.TXT:8,GAME/GAME.EXE:3000');
+  eq('...and an archive without DEICE.EXE is left as it is', (await deice(files)) === files, true); }
 
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.

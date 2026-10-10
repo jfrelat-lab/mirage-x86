@@ -16,7 +16,7 @@ const { makeMachine } = await import(ROOT + '/tools/harness.mjs');
 const { bootSector } = await import(ROOT + '/src/boot.js');
 const { Video } = await import(ROOT + '/src/video.js');
 const { writePNG } = await import(ROOT + '/tools/frame.mjs');
-const { unzip } = await import(ROOT + '/src/zip.js');
+const { unzip, deice } = await import(ROOT + '/src/zip.js');
 
 // Set-1 make codes, US layout, for what the entries type.
 const MAKE = { a: 0x1e, b: 0x30, c: 0x2e, d: 0x20, e: 0x12, f: 0x21, g: 0x22, h: 0x23, i: 0x17, j: 0x24, k: 0x25, l: 0x26,
@@ -59,7 +59,7 @@ for (const e of manifest) {
   const { mc, dos, vfs } = makeMachine({ dos: e.kind !== 'boot' });
   if (e.kind === 'dos') dos.load(bytes, '', 'C:\\' + e.file.split('/').pop());
   else if (e.kind === 'zip') {                       // the archive's files at the root of C:, as the player narrows it
-    for (const f of await unzip(bytes)) vfs.addFile('\\' + f.path.replace(/\//g, '\\').toUpperCase(), f.bytes);
+    for (const f of await deice(await unzip(bytes))) vfs.addFile('\\' + f.path.replace(/\//g, '\\').toUpperCase(), f.bytes);
     const exe = (e.run + (/\./.test(e.run) ? '' : '.EXE')).toUpperCase();
     dos.load(vfs.resolve('\\' + exe).node.data, e.args || '', 'C:\\' + exe);
   }

@@ -46,6 +46,34 @@
     ]
   },
   {
+    "id": "doom",
+    "kind": "zip",
+    "file": "examples/games/doom19s.zip",
+    "run": "DOOM",
+    "title": "DOOM (shareware)",
+    "author": "id Software",
+    "year": 1993,
+    "license": "shareware",
+    "licenseFile": "examples/licenses/doom.txt",
+    "source": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/doom19s.txt",
+    "blurb": "Episode one, Knee-Deep in the Dead, from id's own 1.9 shareware archive. It runs on MIRAGE's DPMI host; no sound card.",
+    "secs": 25
+  },
+  {
+    "id": "heretic",
+    "kind": "zip",
+    "file": "examples/games/htic_v12.zip",
+    "run": "HERETIC",
+    "title": "Heretic (shareware)",
+    "author": "Raven Software, published by id Software",
+    "year": 1994,
+    "license": "shareware",
+    "licenseFile": "examples/licenses/heretic.txt",
+    "source": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/heretic/htic_v12.txt",
+    "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive. It runs on MIRAGE's DPMI host; no sound card.",
+    "secs": 25
+  },
+  {
     "id": "fractint",
     "kind": "zip",
     "file": "examples/games/frain200.zip",
