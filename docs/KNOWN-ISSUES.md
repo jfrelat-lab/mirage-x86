@@ -8,7 +8,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 | Missing | Consequence |
 |---|---|
-| Sound output | Sound Blaster and OPL are detected and silent. |
+| Sound output | None yet. The Sound Blaster plays its DMA, silently; OPL is detected only. |
 | A network card | Systems run without a network; QNX's demo disk stops asking for one. |
 | ACPI | ReactOS (installed for an ACPI machine) stops in its kernel: "did NOT find RSDT". |
 | A floppy *controller* | The BIOS serves drive A:, but a system that drives the controller itself cannot read a floppy. |
@@ -58,7 +58,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Program | Cause |
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
-| Void 3 | its timer handler synthesises sound up to the Sound Blaster's DMA position, which never moves here (no card consumes the channel), so every tick renders the whole 4 KiB buffer and the intro gets no time to draw. Also wants one 16 MiB DPMI block: more than the DOS player's 16 MiB of RAM |
+| Void 3 | wants one 16 MiB DPMI block, more than the DOS player's 16 MiB of RAM (CWSDPMI has virtual memory); and its sound synthesis needs a Pentium II's worth of instructions per second, about 30 times MIRAGE's headless clock |
 | Second Reality | derails to 0000:0000 at start |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |

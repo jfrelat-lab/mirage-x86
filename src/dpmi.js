@@ -16,6 +16,12 @@ const STATE_STUB_OFF = 0x0210;                                   // the do-nothi
 const RAW_R2P_OFF = 0x0220, RAW_P2R_OFF = 0x0230;                // raw mode-switch routines (0306)
 const RM_RET_OFF = 0x0240;                                       // where a 0302 real-mode call returns
 const EXC_RET_OFF = 0x0250;                                      // where a client's exception handler RETFs back
+const IRQ_RET_OFF = 0x0260;                                      // where a PM hardware-interrupt handler IRETs back
+// The locked stack hardware interrupts run on. DPMI 0.9 has the host switch to a stack of its own for
+// them, so a client may keep data below its ESP — Void 3 does (`lea esi,[esp-7Eh]`), and the timer
+// handler's frame landed on it. tools/dpmistack.asm, CWSDPMI under DOSBox-X and under QEMU: the
+// handler's SS is not the client's, and 64 bytes below the client's ESP survive five ticks.
+const LOCKED_SIZE = 0x4000;
 const RM_STACK_TOP = 0x0500;                                     // host-provided real-mode stack (256 B below)
 const RMCS_SCRATCH = 0x0300;                                     // 50-byte call structure the host builds
                                                                  // when it reflects a client's INT n
@@ -34,7 +40,10 @@ const SEL_CODE32 = 0x08 | TI | 3, SEL_DATA32 = 0x10 | TI | 3;   // flat 4 GiB, t
 // into a ring-0 selector from ring 3 is a #GP.
 const SEL_HOST_CODE = 0x18 | 3;                   // host code, for far addresses we hand out
 const SEL_CLIENT = 0x20;                          // first client segment (index, TI added on return)
-const SEL_MAX = LDT_ENTRIES * 8;
+// The locked stack: the LDT's LAST entry, kept out of the allocator. Index 0 looked unused, but
+// DOS/4GW (Heretic) treats it as its own and the stack faulted #NP under the first tick.
+const SEL_LOCKED = ((LDT_ENTRIES - 1) * 8) | TI | 3;
+const SEL_MAX = (LDT_ENTRIES - 1) * 8;
 
 export function installDPMI(machine) {
   const mem = machine.mem, cpu = machine.cpu;
@@ -42,8 +51,9 @@ export function installDPMI(machine) {
   const HOST_BASE = Math.min(machine.vbeFbBase || Infinity, machine.ramSize || mem.size) - HOST_SIZE;   // in RAM, below the VBE framebuffer
   const LDT_BASE = HOST_BASE, LDT_LIMIT = LDT_ENTRIES * 8 - 1;
 
+  const LOCKED_BASE = HOST_BASE - LOCKED_SIZE;     // just below the tables
   // Keep XMS out of the host's block, or a game's allocation overwrites the descriptor tables.
-  if (machine.xms) machine.xms.max = Math.min(machine.xms.max, HOST_BASE);
+  if (machine.xms) machine.xms.max = Math.min(machine.xms.max, LOCKED_BASE);
 
   // One pool with two ends: XMS grows up from 1 MiB, this heap grows down from the tables.
   const heapFloor = () => (machine.xms ? machine.xms.top : 0x100000);
@@ -176,6 +186,7 @@ export function installDPMI(machine) {
                                                           // hardware, which is what DPMI promises it
 
     dpmi.active = true; dpmi.is32 = is32;
+    setDesc(SEL_LOCKED, LOCKED_BASE, LOCKED_SIZE - 1, 0xf2, is32 ? 0x40 : 0x00);   // B follows the client
   };
 
   // ---- INT 31h services ------------------------------------------------------
@@ -915,9 +926,45 @@ export function installDPMI(machine) {
   };
   cpu.dpmiExcReturn = excReturn;
 
+  /**
+   * A hardware interrupt for which the client installed a PM handler (0205). On the host's locked
+   * stack, unless it is already there (a nested interrupt): the frame the handler IRETs through
+   * returns to IRQ_RET, which puts the client's SS:ESP back and resumes it from a second frame
+   * pushed underneath — the client's own stack is not touched.
+   */
+  dpmi.irqSaved = [];
+  const deliverIrq = (vec) => {
+    const v = dpmi.pmVec[vec];
+    if (!v) return false;
+    const is32 = dpmi.is32, push = (x) => cpu.pushW(x, is32);
+    const switched = cpu.seg[SS] !== SEL_LOCKED;
+    dpmi.irqSaved.push(switched ? { ss: cpu.seg[SS], esp: cpu.reg[4] >>> 0 } : null);
+    if (switched) {
+      cpu.setSeg(SS, SEL_LOCKED);
+      cpu.reg[4] = is32 ? LOCKED_SIZE : ((cpu.reg[4] & ~0xffff) | LOCKED_SIZE);
+    }
+    push(cpu.flags >>> 0); push(cpu.seg[CS]); push(cpu.eip >>> 0);              // back to the client
+    push(cpu.flags >>> 0); push(SEL_HOST_CODE | TI); push(IRQ_RET_OFF);          // the handler's IRET
+    cpu.flags &= ~(IF_FLAG | TF);
+    cpu.setSeg(CS, v.sel); cpu.eip = v.off >>> 0;
+    cpu.halted = false;
+    return true;
+  };
+  dpmi.deliverIrq = deliverIrq;
+  cpu.dpmiIrqReturn = () => {
+    const is32 = dpmi.is32, pop = () => (is32 ? cpu.pop32() >>> 0 : cpu.pop16());
+    const eip = pop(), cs = pop() & 0xffff, fl = pop();
+    const saved = dpmi.irqSaved.pop();
+    if (saved) { cpu.setSeg(SS, saved.ss); cpu.reg[4] = saved.esp; }
+    cpu.setSeg(CS, cs); cpu.eip = eip >>> 0;
+    const keep = cpu.flags & IOPL_MASK;
+    cpu.flags = is32 ? (fl >>> 0) : ((cpu.flags & ~0xffff) | (fl & 0xffff));
+    if (cpu.cpl !== 0) cpu.flags = (cpu.flags & ~IOPL_MASK) | keep;
+  };
+
   cpu.dpmiRealCallReturn = realCallReturn;
 
-  dpmi.memTop = HOST_BASE;
+  dpmi.memTop = LOCKED_BASE;
   cpu.dpmiSwitch = modeSwitch;
   machine.dpmi = dpmi;
   mem.u8[(DPMI_ENTRY_SEG << 4) + DPMI_ENTRY_OFF] = 0xcb;  // marker byte (RETF) the recompiler guards on
@@ -929,6 +976,7 @@ export function installDPMI(machine) {
   mem.u8[(DPMI_ENTRY_SEG << 4) + RAW_P2R_OFF] = 0xcb;     // guarded: cpu.dpmiRawSwitch(0)
   mem.u8[(DPMI_ENTRY_SEG << 4) + RM_RET_OFF] = 0xcb;      // guarded: cpu.dpmiRealCallReturn()
   mem.u8[(DPMI_ENTRY_SEG << 4) + EXC_RET_OFF] = 0xcb;     // guarded: cpu.dpmiExcReturn()
+  mem.u8[(DPMI_ENTRY_SEG << 4) + IRQ_RET_OFF] = 0xcf;     // guarded: cpu.dpmiIrqReturn()
   for (let i = 0; i < CB_MAX; i++) mem.u8[(DPMI_ENTRY_SEG << 4) + CB_BASE_OFF + i] = 0xcb;
 
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already

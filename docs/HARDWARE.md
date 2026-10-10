@@ -67,7 +67,7 @@ MIRAGE's BIOS is written in JavaScript: it answers the interrupts instead of run
 | Bus-master DMA | partial: the registers and the interrupt bit, no data transfer | — |
 | A floppy drive, through the BIOS | yes | SeaBIOS |
 | A floppy *controller* (82077) | no | — |
-| The 8237 DMA controllers | registers only: address, count and page read back as programmed; nothing transfers, and the mask and status registers are not answered (the references differ) | QEMU, DOSBox-X (`tools/dmaprobe.asm`) |
+| The 8237 DMA controllers | yes, for the Sound Blaster; the mask and status registers are not read back (the references differ) | QEMU, DOSBox-X (`tools/dmaprobe.asm`) |
 
 ## Other devices
 
@@ -76,7 +76,8 @@ MIRAGE's BIOS is written in JavaScript: it answers the interrupts instead of run
 | Real-time clock and CMOS, with the periodic interrupt | yes | QEMU |
 | PS/2 keyboard and mouse | yes | — |
 | 16550A serial port, COM1 | option (`serial`) | QEMU (`tools/uartprobe.asm`): identical |
-| PC speaker gate, Sound Blaster and OPL detection | partial: detection only, no sound | DOSBox-X |
+| Sound Blaster 16 (DSP, mixer, DMA playback, IRQ 7) | yes, silent: no audio output yet | DOSBox-X (`tools/sbprobe.asm`) |
+| PC speaker gate, OPL detection | partial: detection only, no sound | DOSBox-X |
 | A network card, a parallel port | no | — |
 
 ## DOS services (the DOS player only)

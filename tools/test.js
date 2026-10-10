@@ -2676,6 +2676,61 @@ const udRun = (gated) => {
     [w(0x02), w(0x03), i(0x83)].map((v) => v.toString(16)).join(), '1234,fff,5');
   eq('...and channel 6 on the second controller', [(() => { o(0xd8, 0); const lo = i(0xc4); return (i(0xc4) << 8) | lo; })(), i(0x8b)].map((v) => v.toString(16)).join(), '5678,7'); }
 
+// ---- running a .COM probe and reading what it wrote ---------------------------------------------
+const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
+  const mc = new Machine({ memSize: mem }); installBIOS(mc);
+  const vfs = new VFS(), dos = installDOS(mc, vfs);
+  const img = new Uint8Array(size); img.set(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)));
+  dos.load(img, '', 'C:\\' + name);
+  let guard = 0; while (!dos.programDone && guard++ < budget) mc.runSlice(20000);
+  return { mc, vfs };
+};
+
+// ---- DPMI: a PM hardware-interrupt handler runs on the host's locked stack ----------------------
+// tools/dpmistack.asm: CWSDPMI under DOSBox-X and QEMU runs its IRQ 0 handler on another SS, and 64
+// bytes below the client's ESP survive five ticks. Void 3 keeps its scratch there (`lea esi,[esp-7Eh]`);
+// with the frame on the client's stack its blitter read a width of millions and drew nothing.
+{ const hex = (                                         // nasm -f bin tools/dpmistack.asm, 462 bytes
+    'b44abb0010cd218c0e8802b43c31c9ba5d02cd210f82fd00a38a02b88716cd2f85c00f85ef00893e8c028c068e0289f3' +
+    'b448cd210f82dd008ec0b80100ff1e8c020f82d0008c0e90028c1692028c1e9402b80402b308cd316689169602890e9a' +
+    '02b80502b3088cc966ba1a020000cd316689e76683ef40160766b91000000066b8a55aa55a26676689076683c704e2f5' +
+    'fb803e85020572f96689e76683ef4066b910000000c606870231366766813fa55aa55a7405c6068702306683c704e2ea' +
+    'b80502b3088b0e9a02668b169602cd31a08502e86c00a36f02a08602a27902a08702a282021e07c706b8020040a18a02' +
+    'a3ac02c706b4021c00c706b0026902a18802a3c002b80003bb210031c966bf9c020000cd31b8004ccd211e66502ea194' +
+    '028ed8fe0685028cd03b069202c6068602317405c60686023066581f2e66ff2e960288c4c0e804e80a0086c4240fe803' +
+    '0086c4c304303c3976020407c344504d4953544b2e545854005449434b533d3f3f2053414d4553533d3f20494e544143' +
+    '543d3f0d0a003f3f');
+  const { vfs } = runProbe(hex, 462, 'DPMISTK.COM');
+  const out = vfs.readFile('\\DPMISTK.TXT');
+  eq('DPMI: the IRQ 0 handler runs on another stack, and below the client\'s ESP is left alone',
+    out && new TextDecoder().decode(out).trim(), 'TICKS=05 SAMESS=0 INTACT=1'); }
+
+// ---- the Sound Blaster plays its DMA at the rate it was set, then raises IRQ 7 (src/sb.js) ------
+// tools/sbprobe.asm: 11111 bytes at 11111 Hz, single cycle. DOSBox-X: DSP 4.05, the IRQ after 12h
+// ticks (one second), and at tick 9 the count reads 1737h, about half. MIRAGE plays from the first
+// cycle and reads 15F3h — what 9 ticks of 11111 Hz leave of 11111 bytes; DOSBox-X starts ~30 ms late.
+{ const hex = (                                         // nasm -f bin tools/sbprobe.asm, 395 bytes
+    'b80f35cd21891e63028c066502b80f25ba1302cd21e421247fe621ba2602b001eeb96400ece2fd30c0eee80b01b0e1e8' +
+    'fa00e80301a26702e8fd00a26802b0d1e8e900b040e8e400b0a6e8df00fab005e60ae60cb049e60b30c0e602e602b001' +
+    'e683b8662be60388e0e603b001e60afbb014e8b700b066e8b200b02be8ad0031c08ec0268b1e6c0426a16c0429d8803e' +
+    '6c0200752483f8097517833e6a02007510e60ce40388c4e40386c4a36a02b8090083f85b72d2b8ff00a269021ec51663' +
+    '02b80f25cd211fba6e02e87800a06702e87700a06802e87100ba7302e86600a06902e86500ba7b02e85a00a06b02e859' +
+    '00a06a02e85300ba8202e84800a06d02043088c2b402cd21ba8802e83700b8004ccd215052ba2e02ec2ec6066c02012e' +
+    'c6066d0201b020e6205a58cf50ba2c02eca88075fb58eec3ba2e02eca88074fbba2a02ecc3b409cd21c350c0e804e803' +
+    '0058240f04303c397602040788c2b402cd21c300000000000000000000004453503d24205449434b533d242048414c46' +
+    '3d242041434b3d240d0a24');
+  const { mc } = runProbe(hex, 395, 'SBPROBE.COM', 16 << 20, 40000);
+  let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('DSP=')) line = t.trim(); }
+  eq('Sound Blaster: version 4.05, DMA consumed at the set rate, IRQ 7 after a second', line, 'DSP=0405 TICKS=12 HALF=15F3 ACK=1'); }
+
+// ---- an IRQ nobody claimed is acknowledged by the BIOS, as SeaBIOS's default handler does --------
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.flags |= 0x200;
+  mc.mem.blit(0x1000, Uint8Array.from([0x90, 0x90, 0x90, 0xf4]));
+  mc.raiseIRQ(3);
+  let steps = 0; while (!cpu.halted && steps++ < 20) mc.runSlice(1);
+  eq('an unclaimed IRQ 3 is not left in service at the PIC', mc.pic.master.isr & 0x08, 0); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

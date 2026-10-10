@@ -133,8 +133,18 @@ BAR0 is the VBE framebuffer); the ELCR on 4D0h/4D1h; a $PIR routing table; the P
 **Serial port** (`uart.js`, option `serial`): a 16550A on 3F8h-3FFh, IRQ 4, with its FIFOs. What the
 guest sends goes to `machine.serial.onTx`; `boot.html` shows it in a console.
 
-**Sound** (`bios.js`): detection only. The Sound Blaster DSP answers a reset and a version query on
-22xh; the OPL timer handshake works on 388h, 228h, 220h and 222h. Nothing is synthesised.
+**Sound Blaster 16** (`sb.js`) at 220h, IRQ 7, DMA 1 and 5, as `BLASTER` says. The DSP takes the SB16
+command set (8-bit single-cycle and auto-init, high speed, the generic Bxh/Cxh commands, time constant
+and output rate, pause, continue, speaker, version 4.05) and the mixer answers its IRQ and DMA
+registers. Playback pulls samples from the 8237 at the programmed rate, on the machine's clock
+(cycles headless, wall-clock time in the browser), and raises IRQ 7 at the end of each block
+(`tools/sbprobe.asm` against DOSBox-X). The samples are kept for a player (`sb.drain()`); there is no
+audio output yet. ADPCM and recording play silence. The OPL timer handshake (`bios.js`) works on
+388h, 228h, 220h and 222h; nothing is synthesised.
+
+**DMA** (`dma.js`): both 8237s, with base and current address and count, the flip-flop, masks, modes
+and page registers. Only the Sound Blaster transfers. A hardware IRQ nobody claimed is acknowledged
+by the BIOS, as SeaBIOS's default handler does.
 
 **Port F4h** is not a MIRAGE device: the probes in `tools/` write to it to end a run, as QEMU's
 `isa-debug-exit` does, and the test tools hook it.
@@ -171,6 +181,9 @@ between the modes. DOOM, Heretic and Quake run on it. `MIRAGE_NODPMI=1` removes 
 program's own extender takes over. Returning from INT 31h reloads CS, SS, ES, DS, FS and GS from
 their selectors, as a real host's return to the client does (`tools/dpmireload.asm`: CWSDPMI under
 DOSBox-X and QEMU): a descriptor changed through INT 31h reaches a register that already holds it.
+A hardware interrupt runs the client's PM handler on a 16 KiB stack the host keeps, as DPMI 0.9
+specifies (`tools/dpmistack.asm`): data a client keeps below its ESP survives. An IRQ without a PM
+handler is acknowledged, not reflected.
 
 When a real DOS kernel boots on the bare PC, the XMS driver and the DPMI host stand aside: a guest
 that installs its own handler on INT 2Fh or loads its own extender gets the vector
@@ -190,7 +203,9 @@ that installs its own handler on INT 2Fh or loads its own extender gets the vect
 | 1CEh-1D0h | DISPI (with PCI) | `dispi.js` |
 | 1F0h-1F7h, 3F6h | IDE primary | `ide.js` |
 | 201h | game port | `bios.js` |
-| 220h-22Fh, 388h-389h | Sound Blaster and OPL detection | `bios.js` |
+| 220h-22Fh | Sound Blaster 16 DSP and mixer; OPL detection on 220h-223h, 228h | `sb.js`, `bios.js` |
+| 388h-389h | OPL detection | `bios.js` |
+| 00h-0Fh, 81h-8Fh, C0h-DFh | 8237 DMA controllers and page registers | `dma.js` |
 | 3BAh, 3DAh | input status (retrace) | `bios.js` |
 | 3C0h-3CFh | VGA attribute, misc, sequencer, DAC, graphics | `vga.js`, `bios.js` |
 | 3D4h-3D5h, 3D8h-3D9h | CRTC; CGA mode and colour | `vga.js`, `bios.js` |

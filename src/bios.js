@@ -17,6 +17,7 @@ import { installDISPI } from './dispi.js';
 import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
 import { installDMA } from './dma.js';
+import { installSB } from './sb.js';
 
 const VRAM = 0xb8000;          // text video memory
 const BDA = 0x400;             // BIOS Data Area
@@ -1127,18 +1128,7 @@ export function installBIOS(machine, opts = {}) {
   machine.onPortRead(0x3c6, () => pelMask);      // the standard VGA probe writes it and reads back
   machine.onPortWrite(0x3c6, (_p, _s, v) => { pelMask = v & 0xff; });
 
-  // Minimal Sound Blaster DSP detection at base 0x220 (matches BLASTER=A220). We emulate
-  // only the reset handshake and the version query so games that probe for a card start up;
-  // there is no actual audio — DSP commands are accepted and dropped.
-  let sbReset = 0; const sbOut = [];
-  machine.onPortWrite(0x226, (_p, _s, v) => {                            // DSP reset: 1 then 0 → 0xAA ready
-    if ((v & 1) === 1) sbReset = 1;
-    else if (sbReset) { sbReset = 0; sbOut.length = 0; sbOut.push(0xaa); }
-  });
-  machine.onPortWrite(0x22c, (_p, _s, v) => { if (v === 0xe1) sbOut.push(4, 5); }); // command: get-version → 4.05
-  machine.onPortRead(0x22c, () => 0x00);                                 // write-buffer status: bit7=0 = ready
-  machine.onPortRead(0x22e, () => (sbOut.length ? 0x80 : 0x00));         // read-buffer status: bit7 = data ready
-  machine.onPortRead(0x22a, () => (sbOut.length ? sbOut.shift() : 0xff)); // DSP read-data
+  // The Sound Blaster 16's DSP, mixer and DMA playback are src/sb.js, installed with the DMA controllers.
 
   // Minimal AdLib/OPL FM-synth detection. The classic probe resets the two timers, then
   // starts timer 1 and expects the status port's timer-expired bits (0xC0) to appear.
@@ -1338,7 +1328,8 @@ export function installBIOS(machine, opts = {}) {
   installIDE(machine);   // the primary ATA channel over the same images (ports 1F0h-1F7h/3F6h, IRQ 14)
   installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
-  installDMA(machine);   // 8237 pair, registers only: what a program programs, it reads back (src/dma.js)
+  installDMA(machine);   // 8237 pair (src/dma.js)
+  installSB(machine);    // Sound Blaster 16 at 220h, IRQ 7, DMA 1/5, as BLASTER says (src/sb.js)
   // A PCI bus (src/pci.js) is the difference between QEMU's -M pc and -M isapc: off unless asked for —
   // `pci: true`, or MIRAGE_PCI=1 in the tools — so the ISA machine every existing image boots on stays.
   const pciEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PCI === '1';
@@ -1369,6 +1360,19 @@ export function installBIOS(machine, opts = {}) {
   if (opts.dpmi !== false && !noDpmiEnv) {
     installDPMI(machine);  // DPMI host (INT 2Fh AX=1687h + f000:0200 mode-switch entry). AFTER XMS:
   }                        // it chains that INT 2Fh hook and caps the XMS pool below its own tables.
+
+  // A hardware interrupt nobody has claimed is acknowledged, as SeaBIOS's default handler does
+  // (handle_hwpic1/2: EOI, nothing else). Ours answered "unhandled vector" with CF set and no EOI, so
+  // an unexpected IRQ stayed in service at the PIC. The Sound Blaster's end-of-block IRQ 7 reaches a
+  // program that polls the card instead of hooking it (Void 3). Only vectors still on the BIOS's bare
+  // IRET (F000:FF53) or their plain stub: IRQ 12's ROM routine (src/ps2mouse.js) and any device's
+  // own handler stay theirs.
+  for (const [vec, irq] of [[0x0a, 2], [0x0b, 3], [0x0c, 4], [0x0d, 5], [0x0e, 6], [0x0f, 7],
+    [0x70, 8], [0x71, 9], [0x72, 10], [0x73, 11], [0x74, 12], [0x75, 13], [0x76, 14], [0x77, 15]]) {
+    const v = machine.getVector(vec);
+    if (machine.intHandlers[vec] || v.seg !== 0xf000 || (v.off !== vec && v.off !== 0xff53)) continue;
+    machine.hookInterrupt(vec, () => { if (machine.pic) machine.pic.eoi(irq); return true; });
+  }
 
   machine.bios = bios;
   return bios;

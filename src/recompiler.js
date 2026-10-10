@@ -695,6 +695,12 @@ export class Recompiler {
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
                body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
     }
+    if (linStart === 0xf0260 && mem.u8[linStart] === 0xcf) {
+      // Where a client's PM hardware-interrupt handler IRETs to: off the host's locked stack.
+      const fn = new Function('cpu', 'cpu.dpmiIrqReturn();');
+      return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
+               body: 'dpmi-irqret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+    }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
       // Where a 0302 procedure's IRET lands: reaching it means the call is over.
       const fn = new Function('cpu', 'cpu.dpmiRealCallReturn();');

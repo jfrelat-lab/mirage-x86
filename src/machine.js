@@ -833,12 +833,7 @@ export class Machine {
     const v = this.dpmi.pmVec[n];
     if (!v) return false;
     if (pic) pic.acknowledge();
-    const cpu = this.cpu, is32 = this.dpmi.is32;
-    cpu.pushW(cpu.flags, is32); cpu.pushW(cpu.seg[CS], is32); cpu.pushW(cpu.eip >>> 0, is32);
-    cpu.flags &= ~(IF | TF);
-    cpu.setSeg(CS, v.sel); cpu.eip = v.off >>> 0;
-    cpu.halted = false;
-    return true;
+    return this.dpmi.deliverIrq(n);   // on the host's locked stack (src/dpmi.js)
   }
 
   /** Raise IRQ1 (keyboard) into a guest-installed INT 9 handler, if any. */
@@ -927,6 +922,14 @@ export class Machine {
     }
     cpu.halted = false;
     const vec = pic ? pic.vector(n) : (n < 8 ? 8 + n : 0x70 + n - 8);
+    // Under our DPMI host: the client's protected-mode handler if it set one (0205h), else — as for
+    // the timer, see tickTimer — acknowledged and not reflected: the host cannot switch modes under
+    // a running client. It went through the IDT instead and came out as "exception 15 in DPMI client".
+    if ((cpu.cr0 & 1) && this.dpmi && this.dpmi.active) {
+      if (this.dpmi.pmVec[vec]) this.dpmiIrq(vec);
+      else if (pic) pic.eoi(n);
+      return true;
+    }
     if (cpu.cr0 & 1) { this.protInt(vec); return true; }
     const v = this.getVector(vec);
     this.realInt(vec, v.seg, v.off);
@@ -987,6 +990,7 @@ export class Machine {
       this.serviceTimer();                       // fires INT 8; tickTimer clears cpu.halted
     }
     if (this.rtcPoll) this.rtcPoll();          // the RTC's periodic interrupt (src/rtc.js)
+    if (this.sbPoll) this.sbPoll();            // the Sound Blaster plays what DMA has for it (src/sb.js)
     return this.rec.run(this, maxBlocks);
   }
 

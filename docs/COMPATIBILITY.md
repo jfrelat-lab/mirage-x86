@@ -131,7 +131,7 @@ by the golden test. Of pouët's top ten MS-DOS 4K intros, nine rendered (2026-08
 | Mesha | Renders | also under a booted FreeDOS with a real XMS driver | 2026-09-05 |
 | Juggler 2001 | Renders | after the keypress it asks for | 2026-08-28 |
 | Omniscent, Forever Reality, StarPort BBS 2, Another Soul Lost | Renders | | 2026-08-28 |
-| Void 3 | Starts | answers its SB port and DMA questions, sets 320×240×32, precomputes its music; then starves on a Sound Blaster whose DMA never advances (see KNOWN-ISSUES) | 2026-10-10 |
+| Void 3 | Renders | on a 64 MiB machine with a fast clock (`MIRAGE_PITRELOAD`): answer `2` and `1` to its SB questions; it precomputes its music, then plays. Needed DMA playback and the DPMI locked stack | 2026-10-10 |
 | Difúze (Řrřola) | Renders | the reaction–diffusion patterns, after a few hundred frames; identical to Unicorn for 300 frames ([notes/2026-10-10-difuze.md](notes/2026-10-10-difuze.md)) | 2026-10-10 |
 | oktaeder | Fails | not a MIRAGE defect — see above | 2026-08-22 |
 
