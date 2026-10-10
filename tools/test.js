@@ -2644,6 +2644,25 @@ const udRun = (gated) => {
   eq('...because the VBE framebuffer is above the 16 MiB of RAM', mc.vbeFbBase >>> 0, 16 << 20);
   eq('...and INT 15h E801 reports the 16 MiB of RAM, not the 32 MiB address space', (() => { cpu.reg[0] = 0xe801; mc.intHandlers[0x15](cpu, mc); return [cpu.ax & 0xffff, cpu.bx & 0xffff].join(); })(), '15360,0'); }
 
+// ---- POPF that sets TF: the trap comes after the next instruction, not at the end of the block ----
+// tools/reptrap.asm sets TF with POPF, runs `rep stosb` (CX=5) and four more instructions, clears TF
+// with POPF and counts INT 1. DOSBox-X: TRAPS=06, every one with CX=0 (the REP is one step); QEMU
+// traps per iteration and prints 0B. Both trap; MIRAGE ran the traced code inside the POPF's block
+// and printed TRAPS=00.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const vfs = new VFS(), dos = installDOS(mc, vfs);
+  const hex = (                                         // nasm -f bin tools/reptrap.asm, 193 bytes
+    'b80125ba6801cd210e07bfaa01b9050030c0fc9c580d00015030c09df3aa9c5825fffe509da09901bab201b409cd21a0' +
+    '9901e84b00bab901b409cd2131f60fb62e990139ee73158a949a0180c230b402cd21b220cd214683fe1072e7babe01b4' +
+    '09cd21b8004ccd21532e0fb61e990183fb1073052e888f9a012efe0699015bcf50c0e804e8030058240f04303c397602' +
+    '040788c2b402cd21c30000000000000000000000000000000000000000000000000054524150533d242043583d240d0a' +
+    '24');
+  const img = new Uint8Array(193); img.set(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)));
+  dos.load(img, '', 'C:\\REPTRAP.COM');
+  let guard = 0; while (!dos.programDone && guard++ < 2000) mc.runSlice(2000);
+  let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('TRAPS=')) line = t.trim(); }
+  eq('POPF setting TF traps the instructions after it, as DOSBox-X does', line, 'TRAPS=06 CX=0 0 0 0 0 0'); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

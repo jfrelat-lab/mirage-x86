@@ -489,6 +489,8 @@ export class Recompiler {
         // self-modifying tracer (copy-protection decrypting code one step at a time inside
         // its INT-1 handler, e.g. Lemmings) sees the just-written bytes. swInt(1) clears TF
         // for the handler; its IRET restores TF and traps the next instruction in turn.
+        // A REP string instruction counts as one instruction here, as DOSBox-X counts it; QEMU traps
+        // after every iteration instead (tools/reptrap.asm: 6 traps against 11), so it is left alone.
         if (cpu.flags & TF) {
           const blk = this.translate(lin, ip0, 1);
           this.curBlk = blk;
@@ -1234,6 +1236,10 @@ export class Recompiler {
           // only owns the low word — it used to clear ID, so pushf/popf pairs in 16-bit code lost it.
           P(`var ${f}=(${t}&0x4fd5)|2|(cpu.flags&0x20000)|${sz === 32 ? `(${t}&cpu.hiFlags)` : '(cpu.flags&cpu.hiFlags)'}|(${c}?(cpu.flags&0x3000):(${t}&0x3000));`);
           P(`if(${c}>${i})${f}=(${f}&~${IF})|(cpu.flags&${IF});cpu.flags=${f};`);
+          // TF set by POPF traps after the NEXT instruction. The run loop single-steps only between
+          // blocks, so the block ends here when TF is on; left running, it executed the traced code
+          // and the POPF that clears TF again without a single trap (tools/reptrap.asm).
+          P(`if(cpu.flags&${TF}){cpu.eip=${SEQ()};return;}`);
           break;
         }
         case 0x9e: P('cpu.flags=(cpu.flags&~0xff)|(((r[0]>>>8)&0xd5))|2;'); break;       // SAHF

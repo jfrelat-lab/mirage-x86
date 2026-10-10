@@ -51,7 +51,9 @@ of `CS:EIP`, find the block, run it, add its count to `cpu.cycles`.
   the block are baked in from `ip0`.
 - **The trap flag.** With TF set, each instruction is translated alone, uncached, run, and followed
   by INT 1. Copy protections that decrypt the next instruction in their single-step handler see the
-  bytes they just wrote.
+  bytes they just wrote. TF is looked at between blocks, so a POPF that sets it ends its block. A
+  REP string instruction is one step, as in DOSBox-X; QEMU traps after each iteration
+  (`tools/reptrap.asm`).
 - **The size cap.** When the emitted source exceeds the cap (16 MiB, 64 MiB under paging,
   `MIRAGE_CODE_CAP`), the cache is dropped and the slice ends.
 - **A derail.** A block of 64 instructions or more made entirely of zero bytes means the guest is
