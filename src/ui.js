@@ -265,6 +265,13 @@ export class Mirage {
       this.shell.pump();
     }
 
+    // How many cycles a wall-clock second runs here, for devices that schedule in cycles (src/sb.js).
+    { const c = this.machine.cpu.cycles, dt = now - (this._cpsT ?? now);
+      if (this.shell && this.shell.state === 'running' && dt > 0 && dt < 200 && c > this._cyc0) {
+        const rate = (c - this._cyc0) / (dt / 1000), m = this.machine;
+        m.cyclesPerSecond = m.cyclesPerSecond ? m.cyclesPerSecond * 0.9 + rate * 0.1 : rate;
+      }
+      this._cyc0 = c; this._cpsT = now; }
     this.video.render();
     this.audioOut.pump();
     if (this.onFrame) this.onFrame(this);

@@ -138,7 +138,10 @@ command set (8-bit single-cycle and auto-init, high speed, the generic Bxh/Cxh c
 and output rate, pause, continue, speaker, version 4.05) and the mixer answers its IRQ and DMA
 registers. Playback pulls samples from the 8237 at the programmed rate, on the machine's clock
 (cycles headless, wall-clock time in the browser), and raises IRQ 7 at the end of each block
-(`tools/sbprobe.asm` against DOSBox-X). ADPCM and recording play silence.
+(`tools/sbprobe.asm` against DOSBox-X). The end of block is armed as a cycle deadline the run loop
+checks with the PIT's (`machine.nextEvent`), so a driver probing for the IRQ with a 5-byte transfer
+gets it within its few milliseconds. The SB Pro stereo bit is not honoured, as on DOSBox-X's SB16.
+ADPCM and recording play silence.
 
 **Audio** (`audio.js`, `audio-out.js`): `audio.js` mixes the card (resampled linearly) and the PC
 speaker (port 61h and PIT channel 2, rendered from a timeline of their changes) into stereo at any

@@ -24,7 +24,7 @@
     "license": "freeware",
     "licenseFile": "examples/licenses/unreal.txt",
     "source": "https://www.pouet.net/prod.php?which=1274",
-    "blurb": "Future Crew's demo from Assembly '92. MIRAGE has no sound card: pick No sound with the arrows, then Enter.",
+    "blurb": "Future Crew's demo from Assembly '92, with its Sound Blaster music: the menu is set to SoundBlaster Pro (left arrow, then Enter).",
     "secs": 50,
     "type": [
       [
@@ -32,15 +32,7 @@
         "{LEFT}"
       ],
       [
-        2.5,
-        "{LEFT}"
-      ],
-      [
         3,
-        "{LEFT}"
-      ],
-      [
-        3.5,
         "{ENTER}"
       ]
     ]

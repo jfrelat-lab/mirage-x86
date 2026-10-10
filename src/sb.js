@@ -14,6 +14,10 @@
 // The samples it pulls are kept, as signed 16-bit stereo at the card's rate, for src/audio.js to mix
 // (sb.drain()).
 //
+// The SB Pro's stereo bit (mixer register 0Eh) is not honoured: this is an SB16, and DOSBox-X's SB16
+// plays those programs in mono ("stereo control with sbpro only", its default). Unreal asks for SB
+// Pro stereo and is mono there; here it was stereo, with left and right swapped every odd block.
+//
 // The DSP command set is the documented SB16 one (Creative's "Sound Blaster Series Hardware
 // Programming Guide"): 8-bit single-cycle and auto-init (14h, 1Ch), high speed (90h, 91h), the SB16
 // generic Bxh/Cxh commands, time constant and output rate, pause, continue and exit auto-init,
@@ -37,7 +41,7 @@ export function installSB(machine) {
     rate: 22050, block8: 0x7ff, mixerIndex: 0, mixer: new Uint8Array(256),
     irq8: false, irq16: false,
     // The transfer in progress, or null: { wide, stereo, signed, auto, left (units to the IRQ), len }
-    xfer: null, paused: false,
+    xfer: null, paused: false, carry: null,
     clock: 0, frac: 0,                       // last time the card caught up (seconds), and a sample fraction
     pcm: [], pcmRate: 22050,                 // played samples, interleaved L/R Int16, for drain()
     drain() { const out = Int16Array.from(sb.pcm); sb.pcm.length = 0; return { rate: sb.pcmRate, samples: out }; },
@@ -89,7 +93,10 @@ export function installSB(machine) {
         if (x.auto) x.left = x.len; else { sb.xfer = null; }
       }
     }
-    // Keep it as stereo, so a player needs no mode of its own.
+    // Keep it as stereo, so a player needs no mode of its own. A stereo stream alternates left and
+    // right unit by unit whatever the block size: a unit left over from an odd-length block is the
+    // left half of the next frame, not the start of a new pair.
+    if (per === 2) { if (sb.carry !== null) got.unshift(sb.carry); sb.carry = got.length & 1 ? got.pop() : null; }
     if (sb.speaker || x.wide) {
       if (per === 2) for (const v of got) sb.pcm.push(v);
       else for (const v of got) sb.pcm.push(v, v);
@@ -106,12 +113,25 @@ export function installSB(machine) {
     sb.frac = frames - whole;
     if (whole > 0) pull(Math.min(whole, sb.rate));   // at most a second at once: a backlog is dropped
   };
-  machine.sbPoll = catchUp;
+  // When the block in progress ends, in cycles, so the IRQ comes on time and not at the next run
+  // slice: a driver probing for the card's IRQ (Unreal) gives a 5-byte transfer ~10 ms, and a slice
+  // can be longer than that. Exact headless, where the clock IS cycles; in the browser the clock is
+  // wall time and the cycle count is estimated from the measured execution rate.
+  const arm = () => {
+    const x = sb.xfer;
+    if (!x || sb.paused || !sb.rate) return;
+    const frames = x.left / (x.stereo ? 2 : 1), secs = Math.max(0, (frames - sb.frac) / sb.rate);
+    const cps = machine.wallClockMs ? (machine.cyclesPerSecond || 1e8) : 18.2065 * (machine.pitBase || 0x10000);
+    machine.armDevice(machine.cpu.cycles + Math.ceil(secs * cps) + 1);
+  };
+  const poll = () => { catchUp(); arm(); };
+  machine.sbPoll = poll;
   machine.dma.beforeRead = catchUp;
 
   const start = (wide, auto, stereo, signed, units) => {
     sb.clock = now(); sb.frac = 0; sb.paused = false;
     sb.xfer = { wide, auto, stereo, signed, len: units, left: units };
+    arm();
   };
 
   // ---- the DSP ----
@@ -120,20 +140,17 @@ export function installSB(machine) {
     switch (c) {
       case 0x10: if (sb.speaker) sb.pcm.push((a[0] - 0x80) << 8, (a[0] - 0x80) << 8); return;   // direct output
       case 0x14: case 0x16: case 0x17: case 0x24:                          // 8-bit single cycle (ADPCM and input: silence)
-        start(false, false, !!(sb.mixer[0x0e] & 2), false, (a[0] | (a[1] << 8)) + 1); return;
+        start(false, false, false, false, (a[0] | (a[1] << 8)) + 1); return;
       case 0x1c: case 0x1f: case 0x2c:                                     // 8-bit auto-init
-        start(false, true, !!(sb.mixer[0x0e] & 2), false, sb.block8 + 1); return;
-      case 0x90: case 0x98: start(false, true, !!(sb.mixer[0x0e] & 2), false, sb.block8 + 1); return;   // high speed auto-init
-      case 0x91: case 0x99: start(false, false, !!(sb.mixer[0x0e] & 2), false, sb.block8 + 1); return;  // high speed single cycle
-      case 0x40: {                                                         // time constant: 256 - 1e6 / (rate * channels)
-        const ch = (sb.mixer[0x0e] & 2) ? 2 : 1;
-        sb.rate = Math.round(1e6 / (256 - a[0]) / ch); return;
-      }
+        start(false, true, false, false, sb.block8 + 1); return;
+      case 0x90: case 0x98: start(false, true, false, false, sb.block8 + 1); return;   // high speed auto-init
+      case 0x91: case 0x99: start(false, false, false, false, sb.block8 + 1); return;  // high speed single cycle
+      case 0x40: sb.rate = Math.round(1e6 / (256 - a[0])); return;        // time constant: 256 - 1e6 / rate
       case 0x41: case 0x42: sb.rate = (a[0] << 8) | a[1]; return;          // output / input rate, high byte first
       case 0x48: sb.block8 = a[0] | (a[1] << 8); return;                   // block size - 1
       case 0x80: return;                                                   // silence: not modelled
       case 0xd0: case 0xd5: catchUp(); sb.paused = true; return;           // pause
-      case 0xd4: case 0xd6: sb.clock = now(); sb.paused = false; return;   // continue
+      case 0xd4: case 0xd6: sb.clock = now(); sb.paused = false; arm(); return;   // continue
       case 0xd9: case 0xda: if (sb.xfer) sb.xfer.auto = false; return;     // exit auto-init after this block
       case 0xd1: sb.speaker = true; return;
       case 0xd3: sb.speaker = false; return;

@@ -2753,7 +2753,14 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   const parts = [];                                   // a frame at a time, as the page pulls
   for (let i = 0; i < 100; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 50) parts.push(...p); }
   const card = Float32Array.from(parts);
-  eq('the Sound Blaster\'s DMA comes out at its own frequency (500 Hz, within 2%)', Math.abs(hz(card, 44100) - 500) < 10, true); }
+  eq('the Sound Blaster\'s DMA comes out at its own frequency (500 Hz, within 2%)', Math.abs(hz(card, 44100) - 500) < 10, true);
+  // The SB Pro's stereo bit is not an SB16's: with mixer 0Eh bit 1 set, the same bytes still play
+  // mono, as DOSBox-X's SB16 plays them (Unreal's "SoundBlaster Pro stereo" recorded there: L = R).
+  // As stereo they came out at half the pitch, alternate bytes to each side.
+  o(0x224, 0x0e); o(0x225, 0x02); dsp(0x1c);
+  const st = [];
+  for (let i = 0; i < 60; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 20) st.push(...p); }
+  eq('...and the SB Pro stereo bit leaves it mono, at the same pitch', Math.abs(hz(Float32Array.from(st), 44100) - 500) < 10, true); }
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

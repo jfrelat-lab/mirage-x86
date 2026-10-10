@@ -139,6 +139,9 @@ export class Machine {
     // digit — one comparable unit, at last. See docs/notes/timing.md §6.
     this.pitReload = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITRELOAD) || 182584;
     this.nextTimerCycle = this.pitReload;           // cpu.cycles threshold for the next INT 8
+    this.devDeadline = Infinity;                    // the next device event, in cycles (armDevice)
+    this.nextEvent = this.nextTimerCycle;           // the earlier of the two (rearm)
+    this.cyclesPerSecond = 0;                       // measured by the browser loop; 0 = use the PIT's rate
     // pitBase is the default cycles-per-18.2Hz-tick. The 0x3DA VGA beam (70 Hz) scales off THIS,
     // not the dynamic pitReload — a game reprogramming the system timer (below) must not move the
     // video refresh, which is an independent clock.
@@ -801,6 +804,7 @@ export class Machine {
     this.pitReload = Math.max(floor, r);
     this.nextTimerCycle = this.cpu.cycles + this.pitReload;
     this.cpu.deadline = this.nextTimerCycle;
+    this.rearm();
   }
 
   /** Enter a VESA VBE mode. The framebuffer is plain RAM at `vbeFbBase` (reserved by installBIOS),
@@ -911,6 +915,20 @@ export class Machine {
    *  the vector the PIC is programmed for, through the IDT in protected mode — the path IRQ12 takes.
    *  `lowerIRQ` withdraws it before delivery (a level line a driver cleared by reading the status). */
   raiseIRQ(n) { this.irqPendingMask |= 1 << n; this.hwIrqPending = true; }
+  /** A device event due at a CYCLE count, checked by the run loop at every block boundary with IF set
+   *  — the Sound Blaster's end of block, which a driver probing for its IRQ waits a few ms for. Each
+   *  device re-arms devDeadline in its own poll. */
+  armDevice(cycle) { if (cycle < this.devDeadline) this.devDeadline = cycle; if (cycle < this.nextEvent) this.nextEvent = cycle; }
+  serviceDevices() { this.devDeadline = Infinity; if (this.sbPoll) this.sbPoll(); }
+  /** nextEvent: the earliest of the next PIT tick (headless) and the next device event, which the run
+   *  loop compares cpu.cycles with once per block. Recomputed whenever either moves. */
+  rearm() { this.nextEvent = Math.min(this.timerAuto ? this.nextTimerCycle : Infinity, this.devDeadline); }
+  serviceEvents() {
+    const c = this.cpu.cycles;
+    if (this.timerAuto && c >= this.nextTimerCycle) this.serviceTimer();   // PIT tick(s) due mid-slice
+    if (c >= this.devDeadline) this.serviceDevices();
+    this.rearm();
+  }
   lowerIRQ(n) { this.irqPendingMask &= ~(1 << n); if (this.pic) this.pic.lower(n); }
   deliverIRQ(n) {
     const cpu = this.cpu, pic = this.pic;

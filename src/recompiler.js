@@ -475,12 +475,15 @@ export class Recompiler {
     // bail when a PIT tick comes due (else a timer-delay loop promoted to a region spins forever,
     // never letting INT 8 advance the counter it waits on). cpu.deadline is that bail threshold.
     cpu.deadline = machine.timerAuto ? machine.nextTimerCycle : Infinity;
+    machine.rearm();
     let n = 0;
     try {
       while (cpu.tbudget > 0 && !cpu.halted && !machine.blocked) {
         if (cpu.flags & IF) {                                                    // interrupts unmasked: service pending devices
           if (machine.hwIrqPending) machine.serviceHwInts();                     // queued keyboard IRQ
-          if (machine.timerAuto && cpu.cycles >= machine.nextTimerCycle) machine.serviceTimer(); // PIT tick(s) due mid-slice
+          // The next PIT tick or device event (the Sound Blaster's end of block), whichever is first:
+          // one comparison per block for both, as there was one for the timer alone.
+          if (cpu.cycles >= machine.nextEvent) machine.serviceEvents();
         }
         const ip0 = cpu.csD ? (cpu.eip >>> 0) : (cpu.eip & 0xffff);
         const lin = paged ? ((cpu.base[CS] + ip0) >>> 0) : ((cpu.base[CS] + ip0) & MM);
