@@ -102,7 +102,9 @@ the two differ in the middle of a privilege transition.
 
 ## Memory (`memory.js`)
 
-- **One `ArrayBuffer`**, 16 MiB by default, with `u8` and `DataView` views.
+- **One `ArrayBuffer`**, 16 MiB by default, with `u8` and `DataView` views. `machine.ramSize` is how
+  much of it the guest is told is RAM; the DOS player has 16 MiB of RAM in a 32 MiB array, the rest
+  holding the VBE aperture (`DOS_PLAYER_MEM` in `dos.js`).
 - **Paging.** With CR0.PG set, linear addresses go through a page walk (4 KiB pages, and 4 MiB pages
   under CR4.PSE) with user/supervisor and write protection, CR0.WP included. Two software TLBs
   keep the walk off the hot path, and a CR3 load invalidates lazily. A miss that cannot be resolved

@@ -101,7 +101,7 @@ TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel 
 | Dune, the 1991 playable demo (Cryo) | VGA 13h | Renders | the logos and the intro, from its ZIP in the browser | 2026-10-09 |
 | Jump 'n Bump | Mode X | Renders | the title screen; needed INT 31h to reload DS after DJGPP's crt0 widens it to 4 GiB | 2026-10-10 |
 | Second Reality (Future Crew) | — | Fails | derails to 0000:0000 at start | 2026-10-09 |
-| Stash (The Black Lotus, 64K) | VESA 320×200×16 | Starts | sets its mode, draws nothing in 30 s | 2026-10-09 |
+| Stash (The Black Lotus, 64K) | VESA 320×200×16 | Plays | progress bar while it precomputes (3.3 billion instructions, about 30 s), then the whole intro to its end text; needed 12 MiB of XMS in one block | 2026-10-10 |
 | Lemmings | VGA/EGA | Starts | the trap-flag decryption works; then wants a raw floppy | 2026-08-01 |
 | Golden Axe | — | Starts | its video menu; not driven past it headless | 2026-08-01 |
 | Arkanoid | — | Starts | its video menu; no key was accepted | 2026-08-01 |

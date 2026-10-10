@@ -19,6 +19,12 @@ const ENV_SEG = 0x00c0;     // environment block     (linear 0x0C00) — inside 
 // offers a program that shrank to 0x100 paragraphs a largest-free block of 0x96EA, which is
 // 0x9fff - allocTop - 1 (the -1 being the free block's own MCB header). We answered 0x96EC.
 const MEM_TOP = 0x9fff;     // end of conventional memory, in paragraphs
+// The DOS player's machine: 16 MiB of RAM, DOSBox-X's default, in a 32 MiB address space whose upper
+// half holds the VBE card's aperture. With the framebuffer inside 16 MiB of RAM (4 MiB-aligned at the
+// top, XMS kept below it) XMS offered 11,200 KB, where DOSBox-X's 16 MiB machine offers 15,360 KB (its
+// MEM command): a real card's memory is not taken out of the PC's. Stash asks XMS for one 12 MiB
+// block, does not check the refusal, and cleared 10 MiB at an address made of the error code.
+const DOS_PLAYER_MEM = { memSize: 32 << 20, ramSize: 16 << 20 };
 
 export function installDOS(machine, vfs) {
   const mem = machine.mem, cpu = machine.cpu;
@@ -995,4 +1001,4 @@ export function installDOS(machine, vfs) {
   return dos;
 }
 
-export { PSP_SEG, ENV_SEG, MEM_TOP };
+export { PSP_SEG, ENV_SEG, MEM_TOP, DOS_PLAYER_MEM };

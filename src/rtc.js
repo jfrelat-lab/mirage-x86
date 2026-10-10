@@ -143,8 +143,9 @@ export function installRTC(machine) {
     // 001Dh over the segment of IVT[1Ah], and the next INT 1Ah reflected to V86 ran the IVT:
     // "Windows protection error". QEMU with `-global isa-fdc.fdtypeA=none` stops on the logo too.
     const fd = (n) => { const d = drives.get(n); return d ? (FLOPPY_CMOS[d.geom.type] || 4) : n === 0 ? 4 : 0; };
-    const ext = Math.max(0, (mem.size >>> 10) - 1024), ext16 = Math.min(ext, 0xffff);
-    const above16 = Math.max(0, (mem.size - 0x1000000) >>> 16);
+    const ram = machine.ramSize || mem.size;
+    const ext = Math.max(0, (ram >>> 10) - 1024), ext16 = Math.min(ext, 0xffff);
+    const above16 = Math.max(0, (ram - 0x1000000) >>> 16);
     switch (i) {
       case 0x10: return (fd(0) << 4) | fd(1);
       case 0x12: return drives.has(0x80) ? 0xf0 | (drives.has(0x81) ? 0x0f : 0) : 0;

@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Machine } from '../src/machine.js';
 import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
+import { installDOS, DOS_PLAYER_MEM } from '../src/dos.js';
 import { installMouse } from '../src/mouse.js';
 import { VFS } from '../src/vfs.js';
 
@@ -38,13 +38,14 @@ export function loadFonts(machine) {
 
 /**
  * @param {{memSize?: number, dos?: boolean, mouse?: boolean, vfs?: VFS}} opts
- *   memSize defaults to 16 MiB like the browser. Note this does not change real-mode addressing —
+ *   Without memSize: the browser's DOS player machine (DOS_PLAYER_MEM, 16 MiB of RAM with the VBE
+ *   aperture above it), or 16 MiB for a bare machine (`dos: false`). Note this does not change real-mode addressing —
  *   Memory masks to a 1 MiB wrap until A20 is enabled — it only decides how much extended memory
  *   exists for XMS. `dos: false` composes the bare BIOS machine a boot sector runs on.
  * @returns {{mc: Machine, bios: object, dos: object|null, vfs: VFS|null}}
  */
 export function makeMachine(opts = {}) {
-  const mc = new Machine({ memSize: opts.memSize ?? (16 << 20) });
+  const mc = new Machine(opts.memSize ? { memSize: opts.memSize } : opts.dos === false ? { memSize: 16 << 20 } : DOS_PLAYER_MEM);
   // A BARE machine — one a boot sector runs on — has no expanded memory manager. EMS is a DOS
   // driver (EMM386.EXE, loaded by CONFIG.SYS), not part of the PC, and unlike XMS it cannot stand
   // aside once the guest arrives: EMM386 checks the INT 67h vector BEFORE installing, finds ours,

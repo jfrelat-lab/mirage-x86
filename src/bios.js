@@ -67,12 +67,17 @@ export function installBIOS(machine, opts = {}) {
   // 4 MiB from 16 MiB of RAM up: 1024x768x32 needs 3 MiB (SeaVGABIOS lists it as 144h). Smaller
   // machines keep 2 MiB, right under the top, unaligned — aligning 4 MiB-2 MiB down to a 4 MiB
   // boundary would have put a 4 MiB machine's framebuffer at address 0.
+  // A machine whose address space reaches past its RAM (machine.ramSize, the DOS player) has the
+  // aperture where a card's is: above the RAM, 4 MiB-aligned, taking nothing from it.
+  const RAM = machine.ramSize || mem.size;
   const VBE_FB_BYTES = mem.size >= (16 << 20) ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
+  const fbAbove = ((RAM + 0x3fffff) & ~0x3fffff) >>> 0;
   // ALIGNED TO 4 MiB, as a real card's aperture always is (QEMU's is FD000000h): a kernel that has
   // PSE maps the framebuffer with 4 MiB pages, whose frame is the address rounded down to 4 MiB.
   // KolibriOS does, and with the framebuffer at size-2 MiB (62 MiB of 64) it drew 2 MiB below the
   // picture — a black screen — once CPUID said PSE. The RAM above it stays usable (E820 says so).
-  const VBE_FB_LIN = mem.size >= (16 << 20) ? ((mem.size - VBE_FB_BYTES) & ~0x3fffff) >>> 0 : (mem.size - VBE_FB_BYTES) >>> 0;
+  const VBE_FB_LIN = RAM < mem.size && fbAbove + VBE_FB_BYTES <= mem.size ? fbAbove
+    : mem.size >= (16 << 20) ? ((mem.size - VBE_FB_BYTES) & ~0x3fffff) >>> 0 : (mem.size - VBE_FB_BYTES) >>> 0;
   machine.vbeFbBase = VBE_FB_LIN;
   machine.vbeFbBytes = VBE_FB_BYTES;
   for (let i = 0; i < 0x60; i++) mem.w8(((VBE_SEG << 4) + VBE_OEM_OFF + i) >>> 0, 0);
@@ -894,8 +899,8 @@ export function installBIOS(machine, opts = {}) {
     if ((cpu.reg[0] >>> 0) === 0xe820 && (cpu.reg[2] >>> 0) === 0x534d4150) {
       const fb = machine.vbeFbBase >>> 0;
       const fbEnd = Math.min(mem.size, fb + (machine.vbeFbBytes || 2 * 1024 * 1024));
-      const map = [[0, 0xa0000, 1], [0xf0000, 0x10000, 2], [0x100000, fb - 0x100000, 1], [fb, fbEnd - fb, 2]];
-      if (fbEnd < mem.size) map.push([fbEnd, mem.size - fbEnd, 1]);           // RAM above the aligned framebuffer
+      const map = [[0, 0xa0000, 1], [0xf0000, 0x10000, 2], [0x100000, Math.min(fb, RAM) - 0x100000, 1], [fb, fbEnd - fb, 2]];
+      if (fbEnd < RAM) map.push([fbEnd, RAM - fbEnd, 1]);                     // RAM above the aligned framebuffer
       const i = cpu.reg[3] >>> 0;
       if (i >= map.length || (cpu.reg[1] >>> 0) < 20) { cpu.flags |= CF; cpu.ah = 0x86; return; }
       const d = (cpu.base[ES] + (cpu.di & 0xffff)) >>> 0, [b, len, type] = map[i];
@@ -908,7 +913,7 @@ export function installBIOS(machine, opts = {}) {
     // them before it falls back. HimemX asks E801 first; leaving it unanswered made it size its pool
     // from AH=88h alone.
     if ((cpu.ax & 0xffff) === 0xe801) {
-      const kb = Math.max(0, (mem.size - 0x100000) >> 10);
+      const kb = Math.max(0, (RAM - 0x100000) >> 10);
       const below16 = Math.min(kb, 0x3c00);                    // KB in 1..16 MiB, capped at 15 MiB
       const above16 = Math.max(0, (kb - 0x3c00)) >> 6;         // 64 KiB blocks above 16 MiB
       cpu.ax = below16; cpu.cx = below16;
@@ -917,7 +922,7 @@ export function installBIOS(machine, opts = {}) {
       return;
     }
     if (cpu.ah === 0x8a) {                     // extended memory size in KB, DX:AX
-      const kb = Math.max(0, (mem.size - 0x100000) >> 10);
+      const kb = Math.max(0, (RAM - 0x100000) >> 10);
       cpu.ax = kb & 0xffff; cpu.dx = (kb >>> 16) & 0xffff;
       cpu.flags &= ~CF;
       return;
@@ -939,7 +944,7 @@ export function installBIOS(machine, opts = {}) {
       // memory is too small or not available" where QEMU and v86, on the SAME floppy, install HIMEM
       // and allocate the HMA.
       const oursLive = machine.dos && machine.xms && machine.getVector(0x2f).seg === 0xf000;
-      cpu.ax = oursLive ? 0 : Math.min(0xffff, (mem.size - 0x100000) >> 10);
+      cpu.ax = oursLive ? 0 : Math.min(0xffff, (RAM - 0x100000) >> 10);
       cpu.flags &= ~CF;
       return;
     }

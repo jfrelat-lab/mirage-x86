@@ -106,8 +106,11 @@ scan lines. Line compare (split screen) is not implemented.
 fast the engine runs, and from the cycle count headless (`pitBase / 3.845` cycles per frame), so a
 run stays reproducible. The blanking and retrace fractions follow the CRTC.
 
-**VBE framebuffer.** VBE modes draw into a framebuffer that is ordinary RAM, 4 MiB aligned on 4 MiB
-near the top of memory when there are 16 MiB or more (reserved in the E820 map), or 2 MiB below.
+**VBE framebuffer.** VBE modes draw into a framebuffer that is ordinary memory in the machine's
+array. When the address space is larger than the RAM (`machine.ramSize`, the DOS player: 16 MiB of
+RAM in 32 MiB) it sits just above the RAM, 4 MiB-aligned, as a card's aperture does, and costs the
+RAM nothing. Otherwise it is carved from the top of RAM — 4 MiB, 4 MiB-aligned, from 16 MiB up, or
+the top 2 MiB below that — and reserved in the E820 map.
 `machine.vbe` describes the active mode; the A000h window is a 64 KiB view of the same bytes.
 
 **DISPI** (`dispi.js`, with PCI): the Bochs display interface on 1CEh/1CFh, setting any mode the

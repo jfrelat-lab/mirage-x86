@@ -39,7 +39,7 @@ const SEL_MAX = LDT_ENTRIES * 8;
 export function installDPMI(machine) {
   const mem = machine.mem, cpu = machine.cpu;
 
-  const HOST_BASE = (machine.vbeFbBase || mem.size) - HOST_SIZE;   // below the VBE framebuffer, if one is reserved
+  const HOST_BASE = Math.min(machine.vbeFbBase || Infinity, machine.ramSize || mem.size) - HOST_SIZE;   // in RAM, below the VBE framebuffer
   const LDT_BASE = HOST_BASE, LDT_LIMIT = LDT_ENTRIES * 8 - 1;
 
   // Keep XMS out of the host's block, or a game's allocation overwrites the descriptor tables.
@@ -545,7 +545,7 @@ export function installDPMI(machine) {
         mem.w32(a + 0x0c, (mem.size >>> 12));   // linear address space, pages
         mem.w32(a + 0x10, pages);       // total unlocked pages
         mem.w32(a + 0x14, pages);       // free pages
-        mem.w32(a + 0x18, (mem.size >>> 12));   // total physical pages
+        mem.w32(a + 0x18, ((machine.ramSize || mem.size) >>> 12));   // total physical pages
         mem.w32(a + 0x1c, pages);       // free linear address space, pages
         mem.w32(a + 0x20, 0);           // no paging file
         return ok();

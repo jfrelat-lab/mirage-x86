@@ -15,7 +15,7 @@ export function installXMS(machine) {
   const mem = machine.mem, cpu = machine.cpu;
   const xms = {
     top: XMS_BASE,                 // bump allocator for extended memory
-    max: mem.size,                 // top of RAM (16 MiB by default)
+    max: machine.ramSize || mem.size,   // top of RAM (16 MiB by default)
     handles: new Map(),            // handle → { base, size, locked }
     nextHandle: 1,
     reset() { this.top = XMS_BASE; this.handles = new Map(); this.nextHandle = 1; },

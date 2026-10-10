@@ -17,7 +17,7 @@ import { deflateRawSync } from 'zlib';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
-import { installDOS } from '../src/dos.js';
+import { installDOS, DOS_PLAYER_MEM } from '../src/dos.js';
 import { VFS } from '../src/vfs.js';
 
 let pass = 0, fail = 0;
@@ -2633,6 +2633,16 @@ const udRun = (gated) => {
   const out = vfs.readFile('\\DPMIRL.TXT');
   eq('INT 31h returns with ES, FS, GS, DS and SS reloaded from the descriptor it changed',
     out && new TextDecoder().decode(out).trim(), 'ES=B FS=B GS=B DS=B SS=B'); }
+
+// ---- the DOS player's memory: 16 MiB of RAM, and the VBE aperture above it, not inside it --------
+// DOSBox-X's default 16 MiB machine offers 15,360 KB of XMS (its MEM command). With the linear
+// framebuffer carved out of the top of 16 MiB of RAM, MIRAGE offered 11,200: Stash asks for one
+// 12 MiB block, ignores the refusal, and cleared 10 MiB of memory at an address made of the error.
+{ const mc = new Machine(DOS_PLAYER_MEM); installBIOS(mc); const cpu = mc.cpu;
+  cpu.ax = 0x0800; cpu.xmsCall();
+  eq('the DOS player has at least the 14,912 KB of free XMS DOSBox-X\'s 16 MiB machine has', (cpu.ax & 0xffff) >= 14912, true);
+  eq('...because the VBE framebuffer is above the 16 MiB of RAM', mc.vbeFbBase >>> 0, 16 << 20);
+  eq('...and INT 15h E801 reports the 16 MiB of RAM, not the 32 MiB address space', (() => { cpu.reg[0] = 0xe801; mc.intHandlers[0x15](cpu, mc); return [cpu.ax & 0xffff, cpu.bx & 0xffff].join(); })(), '15360,0'); }
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

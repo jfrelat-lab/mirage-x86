@@ -33,6 +33,10 @@ const IRQ_WINDOW_INTS = new Set([0x16, 0x1a]);
 export class Machine {
   constructor(opts = {}) {
     this.mem = new Memory(opts.memSize || 16 * 1024 * 1024);
+    // How much of that is RAM. Everything the guest is TOLD about memory — INT 15h, the CMOS, XMS,
+    // DPMI — reads this, not mem.size. They are the same except in the DOS player, whose address
+    // space also holds the VBE card's aperture above its RAM (see DOS_PLAYER_MEM in src/dos.js).
+    this.ramSize = Math.min(opts.ramSize || this.mem.size, this.mem.size);
     this.mem.pfRaise = true;         // there is a run loop here to catch it — see Memory.xlat
     this.cpu = new CPU(this.mem);
     // Which x86 generation this machine is. Read by the recompiler at TRANSLATION time, so every
