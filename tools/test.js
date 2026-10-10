@@ -2663,6 +2663,19 @@ const udRun = (gated) => {
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('TRAPS=')) line = t.trim(); }
   eq('POPF setting TF traps the instructions after it, as DOSBox-X does', line, 'TRAPS=06 CX=0 0 0 0 0 0'); }
 
+// ---- the 8237 DMA controllers read back what was programmed (src/dma.js) ----------------------
+// tools/dmaprobe.asm under QEMU and DOSBox-X: A1=1234 C1=0FFF P1=05 A3=4321 C3=07FF P3=0A. Every one
+// of those read FFh here, and Void 3, which fills its sound buffer up to `0FFFh - count`, spun in its
+// timer handler on a target it could not reach.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const o = (p, v) => mc.ioWrite(p, 1, v), i = (p) => mc.ioRead(p, 1);
+  o(0x0b, 0x59); o(0x0c, 0); o(0x02, 0x34); o(0x02, 0x12); o(0x03, 0xff); o(0x03, 0x0f); o(0x83, 0x05);
+  o(0x0c, 0); o(0xc4, 0x78); o(0xc4, 0x56); o(0x8b, 0x07);                  // and channel 6, on the second controller
+  const w = (p) => { o(0x0c, 0); o(0xd8, 0); const lo = i(p); return (i(p) << 8) | lo; };
+  eq('8237: channel 1 address, count and page read back as written',
+    [w(0x02), w(0x03), i(0x83)].map((v) => v.toString(16)).join(), '1234,fff,5');
+  eq('...and channel 6 on the second controller', [(() => { o(0xd8, 0); const lo = i(0xc4); return (i(0xc4) << 8) | lo; })(), i(0x8b)].map((v) => v.toString(16)).join(), '5678,7'); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

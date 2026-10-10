@@ -16,6 +16,7 @@ import { installUART } from './uart.js';
 import { installDISPI } from './dispi.js';
 import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
+import { installDMA } from './dma.js';
 
 const VRAM = 0xb8000;          // text video memory
 const BDA = 0x400;             // BIOS Data Area
@@ -1337,6 +1338,7 @@ export function installBIOS(machine, opts = {}) {
   installIDE(machine);   // the primary ATA channel over the same images (ports 1F0h-1F7h/3F6h, IRQ 14)
   installRTC(machine);   // MC146818 clock + CMOS on ports 0x70/0x71, and the INT 1Ah services
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
+  installDMA(machine);   // 8237 pair, registers only: what a program programs, it reads back (src/dma.js)
   // A PCI bus (src/pci.js) is the difference between QEMU's -M pc and -M isapc: off unless asked for —
   // `pci: true`, or MIRAGE_PCI=1 in the tools — so the ISA machine every existing image boots on stays.
   const pciEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PCI === '1';

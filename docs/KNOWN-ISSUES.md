@@ -58,7 +58,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Program | Cause |
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
-| Void 3 | hangs inside its own timer handler after setting its VESA mode; cause not found |
+| Void 3 | its timer handler synthesises sound up to the Sound Blaster's DMA position, which never moves here (no card consumes the channel), so every tick renders the whole 4 KiB buffer and the intro gets no time to draw. Also wants one 16 MiB DPMI block: more than the DOS player's 16 MiB of RAM |
 | Second Reality | derails to 0000:0000 at start |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |

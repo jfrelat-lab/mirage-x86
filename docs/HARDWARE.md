@@ -66,7 +66,8 @@ MIRAGE's BIOS is written in JavaScript: it answers the interrupts instead of run
 | An ATAPI CD-ROM on the secondary channel | when a disc is attached, or with `pci` | QEMU `-cdrom` (`tools/atapiprobe.asm`); Linux 2.2 and 2.4 mount a disc |
 | Bus-master DMA | partial: the registers and the interrupt bit, no data transfer | — |
 | A floppy drive, through the BIOS | yes | SeaBIOS |
-| A floppy *controller* (82077) and the 8237 DMA controller | no | — |
+| A floppy *controller* (82077) | no | — |
+| The 8237 DMA controllers | registers only: address, count and page read back as programmed; nothing transfers, and the mask and status registers are not answered (the references differ) | QEMU, DOSBox-X (`tools/dmaprobe.asm`) |
 
 ## Other devices
 
