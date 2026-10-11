@@ -11,7 +11,7 @@
     "license": "free demo",
     "licenseFile": "examples/licenses/dunedemo.txt",
     "blurb": "The playable demo of Cryo's Dune: the Virgin and Cryo logos, then Arrakis, with Stéphane Picq's AdLib music.",
-    "secs": 20
+    "secs": 25
   },
   {
     "id": "unreal",

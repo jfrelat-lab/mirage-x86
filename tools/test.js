@@ -2543,6 +2543,24 @@ const udRun = (gated) => {
   s = 0; while (!c2.halted && s++ < 20) mc2.rec.step();
   eq('...while LMSW can still set it', c2.cr0 & 1, 1); }
 
+// ---- a tweaked chained 256-colour mode: the size the CRTC gives, blanking included -----------------
+// Helium (examples/intros) sets mode 13h, then CRTC 01h = 47h (display to 72 characters), 02h = 3Fh
+// (blanking from 63), 13h = 20h (256-byte rows), 12h = FFh with 07h = 3Eh (512 lines), 09h = 41h
+// (two lines a row). DOSBox-X's DX-CAPTURE of it is 504x512, every pixel doubled: 252x256 (QEMU shows
+// 288, ignoring the blanking). MIRAGE drew the standard 320x200.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const vid = new Video(mc, canvas); vid.font = new Uint8Array(4096);
+  vid.render();
+  eq('mode 13h as the BIOS sets it is 320x200', `${vid.imgW}x${vid.imgH}`, '320x200');
+  const c = mc.vga.crtc; c[0x11] &= 0x7f;
+  Object.assign(c, { 0x01: 0x47, 0x02: 0x3f, 0x13: 0x20, 0x12: 0xff, 0x07: 0x3e, 0x09: 0x41, 0x15: 0xff });
+  mem.u8[0xa0000 + 256 * 255 + 251] = 7;                                   // last row, last visible pixel
+  vid.render();
+  eq('Helium\'s tweaked 13h is 252x256, the size DOSBox-X shows', `${vid.imgW}x${vid.imgH}`, '252x256');
+  eq('...rows 256 bytes apart', vid.u32 && vid.u32[255 * 252 + 251] === vid.pal[7], true); }
+
 // ---- the Windows 9x logo: 320x400 unchained, with 03h in the BDA ------------------------------------
 // IO.SYS sets mode 13h, turns chain-4 and double scan off (Sequencer 04h = 02h, CRTC 09h = 40h), and
 // writes 03h to 0040:0049. The renderer dispatched on that byte, and INT 10h kept drawing DOS's output

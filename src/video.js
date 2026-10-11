@@ -171,9 +171,10 @@ export class Video {
   }
 
   _renderGfx13() {
-    this._ensure(320, 200);
+    const vga = this.machine.vga, W = vga && vga.crtc ? this._gfx256Width(vga) : 320, H = vga && vga.crtc ? this._modeXHeight(vga) : 200;
+    this._ensure(W, H);
     const mem = this.mem, u32 = this.u32, pal = this.pal;
-    const u8 = mem.u8, base = VRAM_GFX, vga = this.machine.vga;
+    const u8 = mem.u8, base = VRAM_GFX;
     // Chained mode 13h stride = CRTC Offset(0x13) × 8 (offset counts planar-address pairs;
     // ×2 for the pair, ×4 for the 4 chained planes). Standard 13h offset=40 → 320, so every
     // ordinary intro keeps the plain linear read below. Demos that re-program the offset for a
@@ -182,8 +183,8 @@ export class Video {
     const off = vga && vga.crtc ? vga.crtc[0x13] : 0;
     const stride = off ? off * 8 : 320;
     const start = vga && vga.startAddr ? (vga.startAddr() << 2) : 0;
-    if (stride === 320 && start === 0) { for (let i = 0; i < 320 * 200; i++) u32[i] = pal[u8[base + i]]; return; }
-    for (let y = 0, o = 0; y < 200; y++) { const row = (start + y * stride) & 0xffff; for (let x = 0; x < 320; x++) u32[o++] = pal[u8[base + ((row + x) & 0xffff)]]; }
+    if (stride === 320 && start === 0 && W === 320 && H === 200) { for (let i = 0; i < 320 * 200; i++) u32[i] = pal[u8[base + i]]; return; }
+    for (let y = 0, o = 0; y < H; y++) { const row = (start + y * stride) & 0xffff; for (let x = 0; x < W; x++) u32[o++] = pal[u8[base + ((row + x) & 0xffff)]]; }
   }
 
   // Mode-X (unchained 256-colour): pixel (x,y) lives in plane (x&3) at plane-offset
@@ -194,19 +195,31 @@ export class Video {
     return !!(v && (v.gc[5] & 0x40) && (v.gc[6] & 0x01));
   }
 
+  /** Pixels a 256-colour mode shows across: character clocks up to the horizontal display end (01h)
+   *  + 1 or the start of horizontal blanking (02h), whichever comes first — blanking wins over the
+   *  display on a VGA — 4 pixels each (the dot clock is halved, two dots a pixel). 80 → 320 for mode
+   *  13h and Mode X. Helium ends the display at 72 and blanks from 63: DOSBox-X's capture of it is
+   *  252 pixels wide (QEMU ignores the blanking and shows 288, the hidden 36 included); this drew the
+   *  standard 320 and squashed the picture. Falls back when the CRTC is unset. */
+  _gfx256Width(vga) {
+    const c = vga.crtc, hde = (c[0x01] & 0xff) + 1, hbs = c[0x02] & 0xff;
+    const w = (hbs && hbs < hde ? hbs : hde) * 4;
+    return w >= 128 && w <= 400 ? w : 320;
+  }
+
   /** Scanlines a 256-colour unchained mode shows, from the CRTC as the card counts them: the vertical
    *  display end, over (max scan line + 1), halved again by double scan. 200 for Mode X, 400 for the
    *  "Mode Y" Windows 9x paints its logo in (CRTC 09h = 40h). Falls back when the CRTC is unset. */
   _modeXHeight(vga) {
     const c = vga.crtc, ov = c[0x07];
     const vde = (c[0x12] | (((ov >> 1) & 1) << 8) | (((ov >> 6) & 1) << 9)) + 1;
-    let h = Math.floor(vde / ((c[0x09] & 0x1f) + 1));
+    let h = Math.floor(vde / ((c[0x09] & 0x1f) + 1));   // vertical blanking not applied: DOSBox-X does not either
     if (c[0x09] & 0x80) h >>= 1;
-    return h >= 100 && h <= 480 ? h : (vga.height || 200);
+    return h >= 100 && h <= 512 ? h : (vga.height || 200);
   }
 
   _renderModeX() {
-    const vga = this.machine.vga, W = 320, H = this._modeXHeight(vga);
+    const vga = this.machine.vga, W = this._gfx256Width(vga), H = this._modeXHeight(vga);
     this._ensure(W, H);
     const u32 = this.u32, pal = this.pal, planes = vga.planes, PLANE = 0x10000;
     const stride = vga.crtc[0x13] ? vga.crtc[0x13] * 2 : (W >> 2);   // plane-offset addresses per scanline (320px → 80)
