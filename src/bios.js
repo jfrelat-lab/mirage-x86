@@ -752,6 +752,34 @@ export function installBIOS(machine, opts = {}) {
           case 0x03:                                            // get mode
             cpu.bx = machine.vbe ? (machine.vbe.number | (machine.vbe.linear ? 0x4000 : 0)) : 0;
             cpu.ax = 0x004f; break;
+          // 4F06h: the logical scan line, BL=0 set in pixels (CX), 1 get, 2 set in bytes; each answers
+          // BX bytes, CX pixels, DX the lines video memory holds at that width. 4F07h: the display
+          // start, BL=0/80h set (CX first pixel, DX first line), 1 get. tools/vbescan.asm: QEMU and
+          // DOSBox-X agree on all of these, and differ on BL=3 (the maximum; QEMU fails it, as here).
+          // Allegro sets a 1024-pixel line in mode 101h before it draws (Kraptor); failing the call,
+          // MIRAGE showed 640-byte rows of what was drawn 1024 bytes apart.
+          case 0x06: {
+            const v = machine.vbe, bl = cpu.bx & 0xff, B = v ? Math.max(1, v.bpp >> 3) : 1;
+            if (!v || bl > 2) { cpu.ax = 0x014f; break; }
+            if (bl !== 1) {
+              const bytes = bl === 0 ? (cpu.cx & 0xffff) * B : (cpu.cx & 0xffff);
+              const pitch = Math.ceil(bytes / B) * B;
+              if (pitch < v.width * B || pitch * v.height > (machine.vbeFbBytes || VBE_FB_BYTES)) { cpu.ax = 0x024f; break; }
+              v.pitch = pitch;
+              v.base = (v.fbBase + v.startY * v.pitch + v.startX * B) >>> 0;
+            }
+            cpu.bx = v.pitch; cpu.cx = v.pitch / B;
+            cpu.dx = Math.min(0xffff, Math.floor((machine.vbeFbBytes || VBE_FB_BYTES) / v.pitch));
+            cpu.ax = 0x004f; break;
+          }
+          case 0x07: {
+            const v = machine.vbe, bl = cpu.bx & 0xff;
+            if (!v || (bl !== 0 && bl !== 1 && bl !== 0x80)) { cpu.ax = 0x014f; break; }
+            if (bl === 1) { cpu.bx &= 0x00ff; cpu.cx = v.startX; cpu.dx = v.startY; cpu.ax = 0x004f; break; }
+            v.startX = cpu.cx & 0xffff; v.startY = cpu.dx & 0xffff;
+            v.base = (v.fbBase + v.startY * v.pitch + v.startX * Math.max(1, v.bpp >> 3)) >>> 0;
+            cpu.ax = 0x004f; break;
+          }
           // 4F09h: load/read the primary palette, CX entries from DX, at ES:DI in the VBE format —
           // four bytes per entry, BLUE, green, red, padding, at the DAC's 6 bits. BL=00h set, 80h set
           // during retrace (the same here), 01h get; the secondary palette (02h/03h) does not exist.

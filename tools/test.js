@@ -2543,6 +2543,21 @@ const udRun = (gated) => {
   s = 0; while (!c2.halted && s++ < 20) mc2.rec.step();
   eq('...while LMSW can still set it', c2.cr0 & 1, 1); }
 
+// ---- VBE 4F06h / 4F07h: the logical scan line and the display start ---------------------------------
+// tools/vbescan.asm in mode 101h, QEMU (SeaVGABIOS) and DOSBox-X alike: set 1024 pixels → BX 400h
+// bytes, CX 400h pixels, DX the lines video memory holds; set in bytes; display start set and read.
+// Allegro (Kraptor) sets the 1024-pixel line; MIRAGE failed it and showed 640-byte rows.
+{ const mc = new Machine({ memSize: 32 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+  const call = (ax, bx, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc);
+    return [cpu.ax, cpu.bx, cpu.cx, cpu.dx].map((x) => (x & 0xffff).toString(16)).join(' '); };
+  call(0x4f02, 0x101);
+  const lines = ((mc.vbeFbBytes / 1024) & 0xffff).toString(16);
+  eq('VBE 4F06h BL=0: a 1024-pixel line in mode 101h', call(0x4f06, 0, 1024), `4f 400 400 ${lines}`);
+  eq('...and the renderer\'s pitch follows', mc.vbe.pitch, 1024);
+  eq('...BL=2 sets it in bytes', call(0x4f06, 2, 2048), `4f 800 800 ${((mc.vbeFbBytes / 2048) & 0xffff).toString(16)}`);
+  eq('VBE 4F07h: the display start, set then read (BX keeps the 1 asked with, as on both)', (call(0x4f07, 0, 8, 16), call(0x4f07, 1)), '4f 1 8 10');
+  eq('...and the picture starts there', mc.vbe.base - mc.vbe.fbBase, 16 * 2048 + 8); }
+
 // ---- a tweaked chained 256-colour mode: the size the CRTC gives, blanking included -----------------
 // Helium (examples/intros) sets mode 13h, then CRTC 01h = 47h (display to 72 characters), 02h = 3Fh
 // (blanking from 63), 13h = 20h (256-byte rows), 12h = FFh with 07h = 3Eh (512 lines), 09h = 41h

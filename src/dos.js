@@ -935,10 +935,12 @@ export function installDOS(machine, vfs) {
         const t = hnd.node ? hnd.node.mtime >>> 0 : DOS_MTIME;
         cpu.cx = t & 0xffff; cpu.dx = (t >>> 16) & 0xffff; ok(); break;
       }
-      // Unsupported function. Reporting "invalid function" is at least an honest failure, but the
-      // count is what makes the gap visible: `dos.unhandledFnReport()` over the whole games/ tree
-      // says which functions are actually missing instead of us guessing from a reading of the code.
-      default: dos.unhandledFn[ah]++; setCF(true); cpu.ax = 1; break;
+      // Unsupported function: AL = 0 and the carry as it was, as MS-DOS 6.22 answers (tools/lfnprobe.asm,
+      // under QEMU; DOSBox-X agrees, and also sets the carry for 71xxh). The long-file-name calls land
+      // here: DJGPP asks 71A0h and takes AX = 7100h for "no long names" and uses the 8.3 calls; with
+      // AX = 0001h and the carry, which this answered, it kept to 71xxh and Kraptor found none of its
+      // files. The count is what makes the gaps visible: `dos.unhandledFnReport()` over games/.
+      default: dos.unhandledFn[ah]++; cpu.ax = cpu.ax & 0xff00; cpu.flags |= entryCF; break;
     }
   });
 

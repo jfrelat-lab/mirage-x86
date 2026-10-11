@@ -820,7 +820,7 @@ export class Machine {
   setVbeMode(m, linear) {
     const [number, width, height, bpp] = m;
     const pitch = width * (bpp >> 3);
-    this.vbe = { number, width, height, bpp, pitch, linear, base: this.vbeFbBase >>> 0, bank: 0 };
+    this.vbe = { number, width, height, bpp, pitch, linear, base: this.vbeFbBase >>> 0, fbBase: this.vbeFbBase >>> 0, bank: 0, startX: 0, startY: 0 };
     this.mem.u8.fill(0, this.vbe.base, this.vbe.base + height * pitch);
     this.vbeWindow(0);
     this.mem.setPlanar(true);      // route the A000 window through the VGA device (see vga.js vbeWin)

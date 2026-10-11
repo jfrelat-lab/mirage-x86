@@ -275,12 +275,16 @@ function asciiz(mc, cpu, off, str) {
   eq('1Ah/2Fh DTA round-trips the address', ((g.cpu.seg[0] << 4) + (g.cpu.reg[3] & 0xffff)) >>> 0, want >>> 0);
 }
 
-// ---------------------------------------------------------------- unhandled services are loud
+// ---------------------------------------------------------------- unhandled services
+// MS-DOS 6.22 (tools/lfnprobe.asm under QEMU, DOSBox-X alike): AL = 0, the carry left as it came in.
+// AH=71h, the long-name calls, are among them, and DJGPP reads AX = 7100h as "no long names here".
 {
   const c = mk();
-  const r = int21(c, 0xfe);                                       // no such function
-  eq('an unimplemented INT 21h function sets CF', r.cf, CF);
-  eq('an unimplemented INT 21h function reports "invalid function"', r.ax, 1);
+  const r = int21(c, 0xfe);                                       // no such function, CF set going in
+  eq('an unimplemented INT 21h function answers AL = 0', r.ax, 0xfe00);
+  eq('...and leaves a carry that was set', r.cf, CF);
+  c.cpu.ax = 0x71a0; c.cpu.flags &= ~CF; c.mc.intHandlers[0x21](c.cpu, c.mc);
+  eq('...71A0h with the carry clear: AX = 7100h, still clear', `${(c.cpu.ax & 0xffff).toString(16)} ${c.cpu.flags & CF}`, '7100 0');
 }
 { // the F000 segment is ours only while OUR stub is still there
   const mc = new Machine({ memSize: 1 << 20 });
