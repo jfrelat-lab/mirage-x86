@@ -44,6 +44,10 @@ The two id archives are the files of id's own `idstuff` directory, as the idgame
 them (ftp.fu-berlin.de/pc/games/idgames/idstuff/). They hold an installer, not the game: DEICE.EXE
 and a self-extracting ZIP cut into NAME.1 and NAME.2. The player joins the pieces and reads the ZIP
 inside (`deice` in src/zip.js), which is what DEICE does, so the archives are served unmodified.
+`games/doom/DEFAULT.CFG` and `games/heretic/HERETIC.CFG` are ours (MIT): the setup each game's
+SETUP.EXE would write for a Sound Blaster at 220h, IRQ 7, DMA 1, music and effects. A manifest
+entry's `add` lists them, and the player puts them next to the unpacked game (`dos.html?add=`).
+Without one the games start silent.
 Quake's shareware is not here: its licence forbids displaying it publicly and any use of its
 screenshots.
 

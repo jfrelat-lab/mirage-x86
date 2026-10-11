@@ -145,7 +145,8 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const runUrl = (e) => {
     if (e.kind === 'zip') {
-      return `dos.html?zip=${encodeURIComponent(e.file)}&run=${encodeURIComponent(e.run)}` + (e.args ? `&args=${encodeURIComponent(e.args)}` : '') + (e.mem ? `&mem=${e.mem}` : '');
+      return `dos.html?zip=${encodeURIComponent(e.file)}&run=${encodeURIComponent(e.run)}` + (e.args ? `&args=${encodeURIComponent(e.args)}` : '') + (e.mem ? `&mem=${e.mem}` : '') +
+        (e.add ? `&add=${e.add.map(encodeURIComponent).join(',')}` : '');
     }
     if (e.kind === 'dos') {
       const name = e.file.split('/').pop();

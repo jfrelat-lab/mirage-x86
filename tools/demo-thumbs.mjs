@@ -60,6 +60,7 @@ for (const e of manifest) {
   if (e.kind === 'dos') dos.load(bytes, '', 'C:\\' + e.file.split('/').pop());
   else if (e.kind === 'zip') {                       // the archive's files at the root of C:, as the player narrows it
     for (const f of await deice(await unzip(bytes))) vfs.addFile('\\' + f.path.replace(/\//g, '\\').toUpperCase(), f.bytes);
+    for (const a of e.add || []) vfs.addFile('\\' + a.split('/').pop().toUpperCase(), new Uint8Array(readFileSync(ROOT + '/' + a)));
     const exe = (e.run + (/\./.test(e.run) ? '' : '.EXE')).toUpperCase();
     dos.load(vfs.resolve('\\' + exe).node.data, e.args || '', 'C:\\' + exe);
   }

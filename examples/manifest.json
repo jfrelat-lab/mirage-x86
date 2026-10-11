@@ -48,8 +48,11 @@
     "license": "shareware",
     "licenseFile": "examples/licenses/doom.txt",
     "source": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/doom19s.txt",
-    "blurb": "Episode one, Knee-Deep in the Dead, from id's own 1.9 shareware archive. It runs on MIRAGE's DPMI host; no sound card.",
-    "secs": 25
+    "blurb": "Episode one, Knee-Deep in the Dead, from id's own 1.9 shareware archive. It runs on MIRAGE's DPMI host, with its music and sound effects on the Sound Blaster (a DEFAULT.CFG of ours sets it up; press the SOUND button).",
+    "secs": 25,
+    "add": [
+      "examples/games/doom/DEFAULT.CFG"
+    ]
   },
   {
     "id": "heretic",
@@ -62,8 +65,11 @@
     "license": "shareware",
     "licenseFile": "examples/licenses/heretic.txt",
     "source": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/heretic/htic_v12.txt",
-    "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive. It runs on MIRAGE's DPMI host; no sound card.",
-    "secs": 25
+    "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive. It runs on MIRAGE's DPMI host, with its music and sound effects on the Sound Blaster (a HERETIC.CFG of ours sets it up; press the SOUND button).",
+    "secs": 25,
+    "add": [
+      "examples/games/heretic/HERETIC.CFG"
+    ]
   },
   {
     "id": "fractint",
