@@ -931,18 +931,28 @@ export function installDPMI(machine) {
    * stack, unless it is already there (a nested interrupt): the frame the handler IRETs through
    * returns to IRQ_RET, which puts the client's SS:ESP back and resumes it from a second frame
    * pushed underneath — the client's own stack is not touched.
+   * A handler may move to a stack of its own and take a second interrupt there (DOOM's sound driver,
+   * DMX: its timer handler runs on its own stack and the Sound Blaster's IRQ 7 arrives in it). The
+   * outer handler's frame is still on the locked stack, below whatever it pushed before it left:
+   * each level of switching therefore takes its own 4 KiB of the locked stack, from the top down.
+   * Starting every switch at the top overwrote the outer frame, and the timer handler returned into
+   * nowhere.
    */
   dpmi.irqSaved = [];
+  const LOCKED_LEVEL = 0x1000;
   const deliverIrq = (vec) => {
     const v = dpmi.pmVec[vec];
     if (!v) return false;
     const is32 = dpmi.is32, push = (x) => cpu.pushW(x, is32);
     const switched = cpu.seg[SS] !== SEL_LOCKED;
-    dpmi.irqSaved.push(switched ? { ss: cpu.seg[SS], esp: cpu.reg[4] >>> 0 } : null);
     if (switched) {
+      let level = 0;
+      for (const x of dpmi.irqSaved) if (x) level++;
+      const top = LOCKED_SIZE - Math.min(level, LOCKED_SIZE / LOCKED_LEVEL - 1) * LOCKED_LEVEL;
+      dpmi.irqSaved.push({ ss: cpu.seg[SS], esp: cpu.reg[4] >>> 0 });
       cpu.setSeg(SS, SEL_LOCKED);
-      cpu.reg[4] = is32 ? LOCKED_SIZE : ((cpu.reg[4] & ~0xffff) | LOCKED_SIZE);
-    }
+      cpu.reg[4] = is32 ? top : ((cpu.reg[4] & ~0xffff) | top);
+    } else dpmi.irqSaved.push(null);
     push(cpu.flags >>> 0); push(cpu.seg[CS]); push(cpu.eip >>> 0);              // back to the client
     push(cpu.flags >>> 0); push(SEL_HOST_CODE | TI); push(IRQ_RET_OFF);          // the handler's IRET
     cpu.flags &= ~(IF_FLAG | TF);

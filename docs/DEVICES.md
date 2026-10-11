@@ -203,8 +203,10 @@ program's own extender takes over. Returning from INT 31h reloads CS, SS, ES, DS
 their selectors, as a real host's return to the client does (`tools/dpmireload.asm`: CWSDPMI under
 DOSBox-X and QEMU): a descriptor changed through INT 31h reaches a register that already holds it.
 A hardware interrupt runs the client's PM handler on a 16 KiB stack the host keeps, as DPMI 0.9
-specifies (`tools/dpmistack.asm`): data a client keeps below its ESP survives. An IRQ without a PM
-handler is acknowledged, not reflected.
+specifies (`tools/dpmistack.asm`): data a client keeps below its ESP survives. A handler that
+moves to a stack of its own and takes a second IRQ there (DOOM's sound driver) gets the next 4 KiB
+down for it, not the top again, where its own frame still is (`tools/dpminest.asm`, CWSDPMI under
+DOSBox-X). An IRQ without a PM handler is acknowledged, not reflected.
 
 When a real DOS kernel boots on the bare PC, the XMS driver and the DPMI host stand aside: a guest
 that installs its own handler on INT 2Fh or loads its own extender gets the vector

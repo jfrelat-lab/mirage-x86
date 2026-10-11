@@ -2716,6 +2716,27 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   eq('DPMI: the IRQ 0 handler runs on another stack, and below the client\'s ESP is left alone',
     out && new TextDecoder().decode(out).trim(), 'TICKS=05 SAMESS=0 INTACT=1'); }
 
+// tools/dpminest.asm: an IRQ 0 handler leaves the host's locked stack for its own, and the next tick
+// nests in it (DOOM's DMX does this, its Sound Blaster IRQ arriving inside its timer handler). CWSDPMI
+// under DOSBox-X: the outer handler returns, and a marker it left on the host's stack survives. MIRAGE
+// started every switch at the top of the locked stack, over the outer frame: #GP at the outer return.
+{ const hex = (                                         // nasm -f bin tools/dpminest.asm, 464 bytes
+    'b44abb0010cd218c0e8802b43c31c9ba5c02cd210f82b200a38a02b88716cd2f85c00f85a400893e8c028c068e0289f3' +
+    'b448cd210f8292008ec0b80100ff1e8c020f8285008c1e9002b80402b308cd316689169802890e9c02b80502b3088cc9' +
+    '66bacf010000cd31fb803e84020272f9fab80502b3088b0e9c02668b169802cd31fba08402e8b900a36f02a08502e8b0' +
+    '00a37902a08702a281021e07c706ba020040a18a02a3ae02c706b6021b00c706b2026902a18802a3c202b80003bb2100' +
+    '31c966bf9e020000cd31b8004ccd211e66502ea190028ed8803e8602007555c60686020166686824571366892692028c' +
+    '1696028cd88ed066bcd0040000b020e620fba085023a06850274fafa660fb22692026766813c24682457137405c60687' +
+    '02306683c404fe068402c60686020066581f66cffe068502b020e62066581f66cf88c4c0e804e80a0086c4240fe80300' +
+    '86c4c304303c3976020407c344504d494e4553542e545854004f555445523d3f3f204e45535445443d3f3f204d41524b' +
+    '3d3f0d0a0000003100000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '0000000000000000000000000000000000000000000000000000000000000000');
+  let got;
+  try { const out = runProbe(hex, 464, 'DPMINEST.COM').vfs.readFile('\\DPMINEST.TXT'); got = out && new TextDecoder().decode(out).trim(); }
+  catch (e) { got = e.message; }
+  eq('DPMI: an IRQ nested in a handler that left the locked stack does not overwrite its frame',
+    got, 'OUTER=02 NESTED=02 MARK=1'); }
+
 // ---- the Sound Blaster plays its DMA at the rate it was set, then raises IRQ 7 (src/sb.js) ------
 // tools/sbprobe.asm: 11111 bytes at 11111 Hz, single cycle. DOSBox-X: DSP 4.05, the IRQ after 12h
 // ticks (one second), and at tick 9 the count reads 1737h, about half. MIRAGE plays from the first
