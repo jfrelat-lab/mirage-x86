@@ -5,7 +5,9 @@
 //   node tools/chrome-perf.mjs "<url>" [seconds=40] [profileFrom=20] [profileSecs=10]
 //   e.g. node tools/chrome-perf.mjs "http://localhost:8762/dos.html?zip=examples/games/doom19s.zip&run=DOOM&add=examples/games/doom/DEFAULT.CFG"
 //   KEYS="6:Enter,9:ArrowLeft" presses those keys at those seconds (Wolf3D's sign-on, Unreal's menu);
-//   SHOT=<file.png> takes a screenshot at the end.
+//   SHOT=<file.png> takes a screenshot at the end; SHOTS=20,40 SHOTPREFIX=/tmp/x one at each of those seconds.
+//   KEYS items are separated by '|' when one holds a comma; "12:type=cd \\games\\liquiwar\n" types text.
+//   Works on dos.html (window.mirage is the app) and boot.html (window.mirage is the session).
 //
 // Why: a tab driven by automation in the app's own browser pane is hidden, and a hidden tab gets no
 // requestAnimationFrame — the loop that runs the machine stops. Headless Chrome paints. A click at
@@ -45,24 +47,46 @@ const evaluate = async (expr) => { const r = await send('Runtime.evaluate', { ex
 
 await send('Page.enable'); await send('Runtime.enable'); await send('Profiler.enable');
 await send('Page.navigate', { url });
-for (let i = 0; i < 100; i++) { await sleep(200); if (await evaluate('!!(window.mirage && window.mirage.machine)')) break; }
+const tLoad = Date.now();
+for (let i = 0; i < 450; i++) {
+  await sleep(200);
+  if (await evaluate('!!(window.mirage && (window.mirage.machine || window.mirage.mc))')) break;
+  if (process.env.VERBOSE && i % 25 === 0) console.log('waiting:', JSON.stringify(await evaluate("location.href + ' / ' + document.title + ' / ' + ((document.getElementById('status') || {}).textContent)")));
+}
+console.log(`page ready after ${((Date.now() - tLoad) / 1000).toFixed(1)} s` + (await evaluate("document.getElementById('status') ? ' — ' + document.getElementById('status').textContent : ''")));
 // Count animation frames and the main thread's busy time, from inside the page.
 await evaluate(`(() => { window.__frames = 0; const f = () => { window.__frames++; requestAnimationFrame(f); }; requestAnimationFrame(f);
   window.__long = 0; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__long += e.duration; }).observe({ type: 'longtask', buffered: false }); } catch {} })()`);
 await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 5, y: 5, button: 'left', clickCount: 1 });
 await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 5, y: 5, button: 'left', clickCount: 1 });
 
-const sample = () => evaluate(`(() => { const m = window.mirage.machine; return { cyc: m.cpu.cycles, frames: window.__frames, long: window.__long,
+const sample = () => evaluate(`(() => { const m = window.mirage.machine || window.mirage.mc; return { cyc: m.cpu.cycles, frames: window.__frames, long: window.__long,
   cps: m.cyclesPerSecond, pit: m.pitReload, base: m.pitBase, ticks: m.ticks || 0, audio: !!(window.mirage.audioOut && window.mirage.audioOut.ctx && window.mirage.audioOut.ctx.state),
-  ctx: window.mirage.audioOut && window.mirage.audioOut.ctx ? window.mirage.audioOut.ctx.state : 'none', t: performance.now(), stats: window.mirage.stats() }; })()`);
+  ctx: window.mirage.audioOut && window.mirage.audioOut.ctx ? window.mirage.audioOut.ctx.state : 'none', t: performance.now() }; })()`);
 let prev = await sample(), profiling = false;
 console.log(' s   Minstr/s  frames  longtask%  PIT Hz  audio');
-const KEYS = (process.env.KEYS || '').split(',').filter(Boolean).map((k) => { const [t, key] = k.split(':'); return { t: Number(t), key }; });
+const KEYS = (process.env.KEYS || '').split((process.env.KEYS || '').includes('|') ? '|' : ',').filter(Boolean).map((k) => { const i = k.indexOf(':'); return { t: Number(k.slice(0, i)), key: k.slice(i + 1) }; });
 const CODES = { Enter: [13, 'Enter'], ArrowLeft: [37, 'ArrowLeft'], ArrowRight: [39, 'ArrowRight'], ArrowUp: [38, 'ArrowUp'], ArrowDown: [40, 'ArrowDown'], Space: [32, ' '], Escape: [27, 'Escape'] };
 const press = async (key) => { const [vk, k] = CODES[key] || [key.toUpperCase().charCodeAt(0), key];
   for (const type of ['rawKeyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: vk, key: k, code: key.length === 1 ? 'Key' + key.toUpperCase() : key }); };
+const CHAR = (c) => /[a-z]/i.test(c) ? [c.toUpperCase().charCodeAt(0), c, 'Key' + c.toUpperCase()]
+  : /[0-9]/.test(c) ? [c.charCodeAt(0), c, 'Digit' + c] : c === ' ' ? [32, ' ', 'Space'] : c === '\\' ? [220, '\\', 'Backslash']
+  : c === '.' ? [190, '.', 'Period'] : c === '-' ? [189, '-', 'Minus'] : c === '\n' ? [13, 'Enter', 'Enter'] : null;
+const typeText = async (text) => {
+  for (const c of text.replace(/\\n/g, '\n')) { const k = CHAR(c); if (!k) continue;
+    for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: k[0], key: k[1], code: k[2], text: type === 'keyDown' && k[1].length === 1 ? k[1] : undefined });
+    await sleep(30); } };
+const SHOTS = (process.env.SHOTS || '').split(',').filter(Boolean).map(Number);
 for (let s = 1; s <= SECS; s++) {
-  for (const k of KEYS) if (k.t === s) await press(k.key);
+  for (const k of KEYS) if (k.t === s) { if (k.key.startsWith('type=')) await typeText(k.key.slice(5)); else await press(k.key); }
+  // PROBE=<s>: from that second, count port reads/writes and sample CS:IP and the mode for 5 s.
+  if (Number(process.env.PROBE) === s) await evaluate(`(() => { const m = window.mirage.machine || window.mirage.mc, c = m.cpu; window.__io = new Map(); window.__ip = new Map();
+    const r0 = c.ioRead, w0 = c.ioWrite; c.ioRead = (p, z) => { const k = 'r' + p.toString(16); window.__io.set(k, (window.__io.get(k) || 0) + 1); return r0(p, z); };
+    c.ioWrite = (p, z, v) => { const k = 'w' + p.toString(16); window.__io.set(k, (window.__io.get(k) || 0) + 1); return w0(p, z, v); };
+    window.__ticks = 0; const t0 = m.tickTimer.bind(m); m.tickTimer = (...a) => { window.__ticks++; return t0(...a); };
+    window.__ipT = setInterval(() => { const k = ((c.cr0 & 1) ? 'PM ' : 'RM ') + c.seg[1].toString(16) + ':' + (c.eip >>> 0).toString(16) + (c.halted ? ' HLT' : ''); window.__ip.set(k, (window.__ip.get(k) || 0) + 1); }, 3); })()`);
+  if (Number(process.env.PROBE) + 5 === s) console.log('PROBE', await evaluate(`JSON.stringify({ io: [...window.__io].sort((a, b) => b[1] - a[1]).slice(0, 12), ip: [...window.__ip].sort((a, b) => b[1] - a[1]).slice(0, 10), ticks: window.__ticks, IF: !!((window.mirage.machine || window.mirage.mc).cpu.flags & 0x200), mask: (window.mirage.machine || window.mirage.mc).irqPendingMask, hw: (window.mirage.machine || window.mirage.mc).hwIrqPending, pit: (window.mirage.machine || window.mirage.mc).pitReload, pic: JSON.stringify((window.mirage.machine || window.mirage.mc).pic) .slice(0, 400) })`));
+  if (SHOTS.includes(s)) { const r = await send('Page.captureScreenshot', { format: 'png' }); (await import('fs')).writeFileSync(`${process.env.SHOTPREFIX || '/tmp/shot'}-${s}s.png`, Buffer.from(r.result.data, 'base64')); }
   if (s === PROF_FROM + 1 && PROF_SECS > 0) { await send('Profiler.setSamplingInterval', { interval: 200 }); await send('Profiler.start'); profiling = true; }
   await sleep(1000);
   const cur = await sample(), dt = (cur.t - prev.t) / 1000;

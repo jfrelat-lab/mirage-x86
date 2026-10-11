@@ -862,7 +862,11 @@ export function installDOS(machine, vfs) {
         };
         field(8, 1);
         if (mem.r8(p) === 0x2e) { p++; field(3, 9); } else for (let i = 0; i < 3; i++) mem.w8(fcb + 9 + i, 0x20);
-        for (let i = 0; i < 25; i++) mem.w8(fcb + 12 + i, 0);        // current block/size/date fields
+        // Then the current block and the record size, four bytes, and nothing past them: tools/fcbparse.asm,
+        // MS-DOS 6.22 under QEMU and DOSBox-X alike, writes 16 bytes and leaves the rest. Watcom C's exec
+        // parses the FCBs at PSP 5Ch and 6Ch after copying the command line to 80h; clearing 25 bytes
+        // from 6Ch+12 wiped it, and C-Dogs' DOS/4GW said "syntax is DOS4GW <executable.xxx>".
+        for (let i = 0; i < 4; i++) mem.w8(fcb + 12 + i, 0);
         cpu.al = wild;
         cpu.si = (cpu.si & 0xffff) + (p - start);
         break;                                                       // AH=29h does not use CF

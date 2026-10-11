@@ -473,6 +473,11 @@ function asciiz(mc, cpu, off, str) {
   eq('29h expands * to ? across the field', fcbStr(1, 8), 'SAVE????');
   eq('29h keeps a literal ?', fcbStr(9, 3), 'D?T');
   eq('29h reports the wildcard in AL', c.cpu.reg[0] & 0xff, 1);
+  // 16 bytes and no more: tools/fcbparse.asm, MS-DOS 6.22 under QEMU and DOSBox-X alike. Watcom C's exec
+  // parses the FCB at PSP 6Ch after copying the command line to 80h; 37 bytes wiped it (C-Dogs).
+  for (let i = 0; i < 48; i++) c.mc.mem.w8((c.cpu.seg[0] << 4) + fcbOff + i, 0xaa);
+  parse('c:name.ext', 1);
+  eq('29h writes 16 bytes, and leaves what follows', fcbStr(16, 4), '\xaa\xaa\xaa\xaa');
   eq('29h uppercases', (parse('lower.txt'), fcbStr(1, 8)), 'LOWER   ');
 }
 { // AH=38h — country info

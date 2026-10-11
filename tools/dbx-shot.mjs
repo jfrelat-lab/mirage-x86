@@ -27,7 +27,13 @@ const work = mkdtempSync(join(tmpdir(), 'dbxshot-'));
 mkdirSync(join(work, 'c')); mkdirSync(join(work, 'cap'));
 let prog;
 if (statSync(target).isDirectory()) {
-  for (const f of readdirSync(target)) if (statSync(join(target, f)).isFile()) copyFileSync(join(target, f), join(work, 'c', f));
+  const copyTree = (src, dst) => {               // subdirectories too: a game keeps its data in them
+    for (const f of readdirSync(src)) {
+      const from = join(src, f), to = join(dst, f);
+      if (statSync(from).isDirectory()) { mkdirSync(to, { recursive: true }); copyTree(from, to); } else copyFileSync(from, to);
+    }
+  };
+  copyTree(target, join(work, 'c'));
   prog = process.env.PROG;
   if (!prog) { console.error('a directory needs PROG=<NAME.EXE>'); process.exit(2); }
 } else { prog = basename(target); copyFileSync(target, join(work, 'c', prog)); }
