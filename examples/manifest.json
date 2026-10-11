@@ -48,7 +48,7 @@
     "license": "shareware",
     "licenseFile": "examples/licenses/doom.txt",
     "source": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/doom19s.txt",
-    "blurb": "Episode one, Knee-Deep in the Dead, from id's own 1.9 shareware archive. It runs on MIRAGE's DPMI host, with its music and sound effects on the Sound Blaster (a DEFAULT.CFG of ours sets it up; press the SOUND button).",
+    "blurb": "Episode one, Knee-Deep in the Dead, from id's own 1.9 shareware archive. It runs on MIRAGE's DPMI host, with its music and sound effects on the Sound Blaster (a DEFAULT.CFG of ours sets it up; the sound starts with your first click or key).",
     "secs": 25,
     "add": [
       "examples/games/doom/DEFAULT.CFG"
@@ -65,7 +65,7 @@
     "license": "shareware",
     "licenseFile": "examples/licenses/heretic.txt",
     "source": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/heretic/htic_v12.txt",
-    "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive. It runs on MIRAGE's DPMI host, with its music and sound effects on the Sound Blaster (a HERETIC.CFG of ours sets it up; press the SOUND button).",
+    "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive. It runs on MIRAGE's DPMI host, with its music and sound effects on the Sound Blaster (a HERETIC.CFG of ours sets it up; the sound starts with your first click or key).",
     "secs": 25,
     "add": [
       "examples/games/heretic/HERETIC.CFG"
@@ -82,7 +82,7 @@
     "license": "shareware",
     "licenseFile": "examples/licenses/wolf3d.txt",
     "source": "https://ftpmirror1.infania.net/pub/3drealms/share/",
-    "blurb": "Episode one, Escape from Wolfenstein, from Apogee's 1.4 shareware archive, unpacked in the browser as its installer would. Music and effects on the AdLib and Sound Blaster (press the SOUND button).",
+    "blurb": "Episode one, Escape from Wolfenstein, from Apogee's 1.4 shareware archive, unpacked in the browser as its installer would. Music and effects on the AdLib and Sound Blaster; the sound starts with your first click or key.",
     "secs": 60,
     "type": [
       [
@@ -116,7 +116,7 @@
     "license": "shareware",
     "licenseFile": "examples/licenses/keen4.txt",
     "source": "https://ftpmirror1.infania.net/pub/3drealms/share/",
-    "blurb": "Secret of the Oracle, the Apogee shareware episode of Goodbye Galaxy: parallax EGA scrolling and AdLib music (press the SOUND button).",
+    "blurb": "Secret of the Oracle, the Apogee shareware episode of Goodbye Galaxy: parallax EGA scrolling and AdLib music; the sound starts with your first click or key.",
     "secs": 60,
     "type": [
       [
