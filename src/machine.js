@@ -786,10 +786,16 @@ export class Machine {
     }
   }
 
-  /** Set the PIT channel-0 reload (INT 8 period, in cpu.cycles) and reschedule the next tick.
-   *  Called when a guest reprograms the timer via port 0x40/0x43; `ui.js` reads pitReload to pace
-   *  its wall-clock tick rate so the browser delivers INT 8 at the game's chosen frequency. */
+  /** Set the PIT channel-0 reload and reschedule the next tick. `r` is what the guest wrote, in
+   *  PIT ticks (1.193 MHz, 65536 to the BIOS's 18.2 Hz); pitReload is the INT 8 period in cpu.cycles,
+   *  pitBase cycles to 65536 ticks. Called when a guest reprograms the timer via port 0x40/0x43;
+   *  `ui.js` reads pitReload to pace its wall-clock tick rate so the browser delivers INT 8 at the
+   *  game's chosen frequency.
+   *  The reload used to be taken as cycles as it stood, which was the same thing while pitBase was
+   *  65536 and 2.79x too fast once it became 182584: DOOM's 104.6 Hz came at 291 Hz.
+   *  tools/pitrate.asm -dDIVIDER=11932 counts 100 INT 8s a second of beam time on DOSBox-X; 278 here. */
   setPitReload(r) {
+    r = Math.round(r * this.pitBase / 0x10000);
     // Cap the emulated INT 8 rate (floor the reload at pitBase/16 ≈ 291 Hz). Some games drive
     // counter 0 far faster — Wolf3D sets ~700 Hz for its sound service — which real hardware
     // handles with a tiny ISR, but MIRAGE's per-interrupt dispatch is much heavier, so an

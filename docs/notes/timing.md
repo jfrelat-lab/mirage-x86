@@ -1086,3 +1086,24 @@ mesha renders on the branch DOSBox takes, for the first time.
 Gates: golden 43/43, conformance 555764/555764, `test.js` 194/194, `test-dos-api` 268/268, `test-x86-uc`
 green. The DPMI path is untouched (`dpmiIrq` still claims the tick first), which is why mesha's own
 pinned fingerprint does not move.
+
+## 15. A reprogrammed timer ran 2.79x fast — measured 2026-10-11
+
+`setPitReload` took the reload a guest writes to counter 0 — PIT ticks, 65536 to the BIOS's 18.2 Hz —
+as a number of CPU cycles. The two were the same unit while `pitBase` was 65536; §7 made it 182584
+and every reprogrammed timer has run 2.79x fast since, in the browser too (`ui.js` divides
+`pitReload` by `pitBase`). §8 did not see it: its 4096 divisor hits the `pitBase>>4` floor, which is
+exactly 4096 ticks, and its 68 is below it. Found through DOOM, whose DMX timer asks for 104.6 Hz
+and got 291.
+
+`tools/pitrate.asm`, same binary on both sides, INT 8s in 70 retraces:
+
+| divisor | requested | DOSBox-X | MIRAGE before | MIRAGE now |
+|---|---|---|---|---|
+| 4096 | 291 Hz | 291 | 290 | 290 |
+| 11932 | 100 Hz | 100 | **278** | 99 |
+| 32768 | 36.4 Hz | 37 | **101** | 36 |
+
+The reload is now converted, `r * pitBase / 65536` cycles; the floor is unchanged. Three goldens
+reprogram the timer and moved — animate (256 Hz asked), mesha (100 Hz), starport (70 Hz); all three
+still draw their picture.
