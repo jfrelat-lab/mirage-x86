@@ -506,9 +506,12 @@ export function installBIOS(machine, opts = {}) {
         break;
       }
       case 0x02: setCur(cpu.dx & 0xff, (cpu.dx >> 8) & 0xff); break; // set cursor pos
+      // get cursor position + shape: the shape as it was ASKED for, from the BDA (0461h start, 0460h
+      // end), not as scaled for the CRTC's 16-line cells. tools/curshape.asm after AH=01h CX=0607h in
+      // mode 3: QEMU and DOSBox-X both answer 0607h (their CRTC holds 0E0Fh and 0D0Eh); this answered 0E0Fh.
       case 0x03: cpu.dx = (getRow() << 8) | getCol();
-        cpu.cx = (((bios.cursor.hidden ? 0x20 : 0) | (bios.cursor.start & 0x1f)) << 8) | (bios.cursor.end & 0x1f);
-        break; // get cursor position + shape
+        cpu.cx = mem.r16(0x460);
+        break;
       case 0x05: {                               // set active display page
         const page = cpu.al & 0xff;
         mem.w16(BDA + 0x62, page);

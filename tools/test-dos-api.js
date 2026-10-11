@@ -640,12 +640,19 @@ function asciiz(mc, cpu, off, str) {
   // The OPL is mirrored at the SB16 stereo bases too, because BLASTER advertises T6 (an SB16).
   // Claiming a card at a base we then ignore is the inconsistency: a game driving the FM at
   // 0x220/0x222 wrote into nothing and read 0xFF from the status port.
-  for (const base of [0x388, 0x228, 0x220, 0x222]) {
+  // The timers are bank-0 registers: an index written at 222h selects bank 1, whose register 04h is
+  // the OPL3's four-operator select, not the timer control. There only the status read is mirrored.
+  for (const base of [0x388, 0x228, 0x220]) {
     mc.ioWrite(base, 1, 0x04); mc.ioWrite(base + 1, 1, 0x80);   // timer control: reset
     eq(`OPL status reads clear at base 0x${base.toString(16)}`, mc.ioRead(base, 1), 0x00);
+    mc.ioWrite(base, 1, 0x02); mc.ioWrite(base + 1, 1, 0x00);   // timer 1 preset 0: 256 x 80 us
     mc.ioWrite(base, 1, 0x04); mc.ioWrite(base + 1, 1, 0x21);   // start timer 1
+    // Not at once: the chip counts 20.48 ms (tools/oplprobe.asm, DOSBox-X and QEMU: T1=5F70h PIT ticks).
+    eq(`OPL timer 1 has not expired the moment it starts, at base 0x${base.toString(16)}`, mc.ioRead(base, 1), 0x00);
+    mc.cpu.cycles += Math.ceil(0.025 * 18.2065 * mc.pitBase);  // 25 ms of machine time
     eq(`OPL timer-expired shows at base 0x${base.toString(16)}`, mc.ioRead(base, 1), 0xc0);
   }
+  eq('...and the status reads the same at 0x222', mc.ioRead(0x222, 1), mc.ioRead(0x220, 1));
 
   // PIT channel 2 drives the speaker tone; its counter has to count.
   mc.ioWrite(0x42, 1, 0x00); mc.ioWrite(0x42, 1, 0x10);        // reload 0x1000, LSB then MSB
@@ -795,7 +802,10 @@ function asciiz(mc, cpu, off, str) {
   const indos = int21(c, 0x34);                                 // InDOS flag — Keen1
   eq('34h clears CF', indos.cf, 0);
   const p = (c.cpu.seg[0] << 4) + (c.cpu.reg[3] & 0xffff);
-  ok('34h returns a pointer into low memory', p > 0 && p < 0x600);
+  // In the DOS kernel's own segment, as a real DOS has it (tools/dosvec.asm: FreeDOS under QEMU
+  // answers InDOS 00D8:0321 beside INT 21h at 00D8:129A); ours is the List of Lists' segment.
+  const es34 = c.cpu.seg[0], lolSeg = (int21(c, 0x52), c.cpu.seg[0]);   // 52h: the List of Lists' segment
+  eq('34h returns a pointer into the DOS kernel segment, the List of Lists\' (0071h, as DOSBox-X has it)', es34, lolSeg);
   eq('34h: the flag is clear outside a DOS call', c.mc.mem.r8(p), 0);
 }
 
