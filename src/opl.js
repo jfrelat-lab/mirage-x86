@@ -51,8 +51,7 @@ const expLevel = (l) => { if (l > 0x1fff) l = 0x1fff; return (EXPROM[l & 0xff] <
 
 /** The eight waveforms: (phase, envelope) -> signed amplitude. A negative half is the amplitude's
  *  ones' complement, -v-1: a silent operator still contributes -1 there. */
-function wave(wf, ph, env) {
-  ph &= 0x3ff;
+function waveLog(wf, ph) {
   let l, neg = false;
   switch (wf) {
     case 0: neg = !!(ph & 0x200); l = LOGSIN[(ph & 0x100) ? (ph & 0xff) ^ 0xff : ph & 0xff]; break;
@@ -65,14 +64,21 @@ function wave(wf, ph, env) {
     case 6: neg = !!(ph & 0x200); l = 0; break;
     default: if (ph & 0x200) { neg = true; ph = (ph & 0x1ff) ^ 0x1ff; } l = ph << 3;
   }
-  const v = expLevel(l + (env << 3));
-  return neg ? ~v : v;
+  return neg ? l | 0x10000 : l;
 }
+// The same, as one table: waveform * 1024 + phase -> attenuation, and bit 16 for a negative half.
+const WAVE = new Int32Array(8 * 1024);
+for (let wf = 0; wf < 8; wf++) for (let ph = 0; ph < 1024; ph++) WAVE[wf * 1024 + ph] = waveLog(wf, ph);
+const wave = (wf, ph, env) => {
+  const w = WAVE[(wf << 10) | (ph & 0x3ff)];
+  const v = expLevel((w & 0xffff) + (env << 3));
+  return w & 0x10000 ? ~v : v;
+};
 
 function makeSlot(i) {
   return {
     i, mult: 0, ksr: 0, egt: 0, vib: 0, am: 0, ksl: 0, tl: 0, ar: 0, dr: 0, sl: 0, rr: 0, wf: 0,
-    key: 0, egRout: 0x1ff, egOut: 0x1ff, egGen: RELEASE, egKsl: 0,
+    key: 0, egRout: 0x1ff, egOut: 0x1ff, egGen: RELEASE, egKsl: 0, egBase: 0, ch: null,
     phase: 0, phaseOut: 0, pgReset: 0, out: 0, prout: 0, fbmod: 0, mod: ZERO,
   };
 }
@@ -87,7 +93,7 @@ export function createOPL() {
   });
   for (const [a, b] of [[0, 3], [1, 4], [2, 5], [9, 12], [10, 13], [11, 14]]) { chans[a].pair = chans[b]; chans[b].pair = chans[a]; }
   const slotCh = new Int8Array(36);
-  for (const ch of chans) { slotCh[ch.s0] = ch.c; slotCh[ch.s1] = ch.c; }
+  for (const ch of chans) { slotCh[ch.s0] = ch.c; slotCh[ch.s1] = ch.c; slots[ch.s0].ch = ch; slots[ch.s1].ch = ch; }
   const chip = {
     slots, chans, newm: 0, nts: 0, rhy: 0, timer: 0, egTimer: 0, egTimerRem: 0, egState: 0, egAdd: 0, egTimerLo: 0,
     tremoloPos: 0, tremolo: 0, tremoloShift: 4, vibPos: 0, vibShift: 1, noise: 1,
@@ -118,7 +124,12 @@ export function createOPL() {
   };
 
   // ---- frequency, key scale ----
-  const updateKsl = (s, ch) => { const k = (KSLROM[ch.fnum >> 6] << 2) - ((8 - ch.block) << 5); s.egKsl = k < 0 ? 0 : k; };
+  // egBase: the attenuation that only moves with a register write (total level and key scale level).
+  const updateKsl = (s, ch) => {
+    const k = (KSLROM[ch.fnum >> 6] << 2) - ((8 - ch.block) << 5);
+    s.egKsl = k < 0 ? 0 : k;
+    s.egBase = (s.tl << 2) + (s.egKsl >> KSLSHIFT[s.ksl]);
+  };
   const setFreq = (ch, fnum, block) => {
     ch.fnum = fnum; ch.block = block;
     ch.ksv = (block << 1) | ((fnum >> (9 - chip.nts)) & 1);
@@ -204,7 +215,9 @@ export function createOPL() {
 
   // ---- one operator ----
   const envelope = (s, ch) => {
-    s.egOut = s.egRout + (s.tl << 2) + (s.egKsl >> KSLSHIFT[s.ksl]) + (s.am ? chip.tremolo : 0);
+    s.egOut = s.egRout + s.egBase + (s.am ? chip.tremolo : 0);
+    // Released and fully off (most of the 36 operators, most of the time): nothing below would move.
+    if (s.egRout === 0x1ff && !s.key && s.egGen === RELEASE) { s.pgReset = 0; return; }
     let rr = 0, reset = 0;
     if (s.key && s.egGen === RELEASE) { reset = 1; rr = s.ar; }
     else if (s.egGen === ATTACK) rr = s.ar;
@@ -263,9 +276,15 @@ export function createOPL() {
     const base = (f << ch.block) >> 1;
     const phase = (s.phase >>> 9) & 0xffff;
     if (s.pgReset) s.phase = 0;
-    s.phase = (s.phase + ((base * MUL2[s.mult]) >> 1)) >>> 0;
-    const noise = chip.noise;
+    // The chip's accumulator has 32 bits but only bits 9-24 are ever read: keeping 25 keeps it a small
+    // integer for V8 (past 2^30 it becomes a boxed number, and the whole synthesis runs four times slower).
+    s.phase = (s.phase + ((base * MUL2[s.mult]) >> 1)) & 0x1ffffff;
     s.phaseOut = phase;
+  };
+  // Operators 13, 16 and 17 (hi-hat, snare, top cymbal): rhythm mode builds their phase from bits of
+  // 13's and 17's and from the noise generator as it stands at that operator.
+  const rhythmPhase = (s, noise) => {
+    const phase = s.phaseOut;
     if (s.i === 13) { chip.rmHh2 = (phase >> 2) & 1; chip.rmHh3 = (phase >> 3) & 1; chip.rmHh7 = (phase >> 7) & 1; chip.rmHh8 = (phase >> 8) & 1; }
     if (s.i === 17 && (chip.rhy & 0x20)) { chip.rmTc3 = (phase >> 3) & 1; chip.rmTc5 = (phase >> 5) & 1; }
     if (chip.rhy & 0x20) {
@@ -274,27 +293,31 @@ export function createOPL() {
       else if (s.i === 16) s.phaseOut = (chip.rmHh8 << 9) | ((chip.rmHh8 ^ (noise & 1)) << 8);
       else if (s.i === 17) s.phaseOut = (x << 9) | 0x80;
     }
-    chip.noise = (noise >>> 1) | ((((noise >>> 14) ^ noise) & 1) << 22);   // one step per operator
   };
 
   // ---- one sample: [left, right] ----
   const clip = (x) => (x > 32767 ? 32767 : x < -32768 ? -32768 : x);
   const run = (from, to) => {
+    let noise = chip.noise;
     for (let k = from; k < to; k++) {
-      const s = slots[k], ch = chans[slotCh[k]];
+      const s = slots[k], ch = s.ch;
       if (ch.fb) s.fbmod = (s.prout + s.out) >> (9 - ch.fb); else s.fbmod = 0;
       s.prout = s.out;
       envelope(s, ch);
       phaseGen(s, ch);
+      if (k === 13 || k === 16 || k === 17) rhythmPhase(s, noise);
+      noise = (noise >>> 1) | ((((noise >>> 14) ^ noise) & 1) << 22);   // one step per operator
       const m = s.mod === ZERO ? 0 : s.mod === FB ? s.fbmod : slots[s.mod].out;
       s.out = wave(s.wf, s.phaseOut + m, s.egOut);
     }
+    chip.noise = noise;
   };
   const mix = (left) => {
     let sum = 0;
-    for (const ch of chans) {
+    for (let c = 0; c < 18; c++) {
+      const ch = chans[c], outs = ch.outs;
       let acc = 0;
-      for (const k of ch.outs) acc += slots[k].out;
+      for (let j = 0; j < outs.length; j++) acc += slots[outs[j]].out;
       sum += acc & (left ? ch.cha : ch.chb);
     }
     return sum;
@@ -317,10 +340,8 @@ export function createOPL() {
     chip.timer++;
     if (chip.egState) {
       // The envelope clock's rate: one more than the number of trailing zeros of its low 13 bits.
-      const t = chip.egTimer % 8192;
-      let sh = 0;
-      while (sh < 13 && !((t >> sh) & 1)) sh++;
-      chip.egAdd = sh > 12 ? 0 : sh + 1;
+      const t = chip.egTimer & 8191;
+      chip.egAdd = t ? 32 - Math.clz32(t & -t) : 0;
       chip.egTimerLo = t & 3;
     }
     if (chip.egTimerRem || chip.egState) {
