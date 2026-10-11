@@ -97,7 +97,10 @@ export function installSB(machine) {
     // right unit by unit whatever the block size: a unit left over from an odd-length block is the
     // left half of the next frame, not the start of a new pair.
     if (per === 2) { if (sb.carry !== null) got.unshift(sb.carry); sb.carry = got.length & 1 ? got.pop() : null; }
-    if ((sb.speaker || x.wide) && machine.audio) {                     // kept only if someone will play them
+    // The speaker commands (D1h, D3h) do not gate an SB16's output: DOSBox-X's DSP_SetSpeaker returns
+    // before touching the channel when the card is an SB16, and QEMU's only records the flag. DOOM's
+    // DMX never sends D1h; its sound effects were silent here.
+    if (machine.audio) {                                                // kept only if someone will play them
       if (per === 2) for (const v of got) sb.pcm.push(v);
       else for (const v of got) sb.pcm.push(v, v);
     }
@@ -138,7 +141,7 @@ export function installSB(machine) {
   const out = (...b) => { for (const x of b) sb.outQ.push(x & 0xff); };
   const exec = (c, a) => {
     switch (c) {
-      case 0x10: if (sb.speaker) sb.pcm.push((a[0] - 0x80) << 8, (a[0] - 0x80) << 8); return;   // direct output
+      case 0x10: sb.pcm.push((a[0] - 0x80) << 8, (a[0] - 0x80) << 8); return;   // direct output
       case 0x14: case 0x16: case 0x17: case 0x24:                          // 8-bit single cycle (ADPCM and input: silence)
         start(false, false, false, false, (a[0] | (a[1] << 8)) + 1); return;
       case 0x1c: case 0x1f: case 0x2c:                                     // 8-bit auto-init

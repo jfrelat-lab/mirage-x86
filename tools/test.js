@@ -2812,7 +2812,13 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   o(0x224, 0x0e); o(0x225, 0x02); dsp(0x1c);
   const st = [];
   for (let i = 0; i < 60; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 20) st.push(...p); }
-  eq('...and the SB Pro stereo bit leaves it mono, at the same pitch', Math.abs(hz(Float32Array.from(st), 44100) - 500) < 10, true); }
+  eq('...and the SB Pro stereo bit leaves it mono, at the same pitch', Math.abs(hz(Float32Array.from(st), 44100) - 500) < 10, true);
+  // An SB16 plays with its speaker off: D1h/D3h have no effect on it (DOSBox-X, QEMU). DOOM's DMX
+  // starts its DMA without D1h, and its sound effects were silent.
+  o(0x224, 0x0e); o(0x225, 0); o(0x226, 1); o(0x226, 0); dsp(0xd3); dsp(0x40); dsp(256 - 125); dsp(0x48); dsp(0xff); dsp(0x07); dsp(0x1c);
+  const off = [];
+  for (let i = 0; i < 60; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 20) off.push(...p); }
+  eq('...and plays with the speaker off, as an SB16 does', Math.abs(hz(Float32Array.from(off), 44100) - 500) < 10, true); }
 
 // ---- the OPL3 plays FM (src/opl.js) ---------------------------------------------------------------
 // tools/oplnotes.asm recorded here and on DOSBox-X's Nuked-OPL3 (tools/audio-compare.mjs): 16 sections
