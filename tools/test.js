@@ -781,6 +781,31 @@ function eq(name, got, want) {
   eq('...and a remapped code page runs the new bytes', go(), 2);
   } catch (e) { eq('D8 test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
 
+// ---- paging off and on again keeps the blocks; code changed meanwhile is still caught -------------------
+// CWSDPMI returns to real mode for every interrupt: under FreeDOS, Kraptor toggled paging 2600 times a
+// second, each toggle dropped the whole cache, and the browser translated 128 000 blocks a second. Each
+// paging state now keeps its own cache; the one put away is checked against its bytes when it returns.
+{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000, DIR = 0x10000, PT0 = 0x11000, PT1 = 0x12000, A = 0x200000;
+  m.setA20(true); mc.rec.setMask(m.mask);
+  cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
+  const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
+  desc(1, 0x9a); desc(2, 0x92);
+  for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 3);
+  m.w32(DIR, PT0 | 3); m.w32(DIR + 4, PT1 | 3); m.w32(PT1, A | 3);            // linear 400000h -> A
+  m.blit(A, Uint8Array.from([0xb8, 1, 0, 0, 0, 0xeb, 0xfe]));                 // mov eax,1 ; jmp $
+  cpu.setCR3(DIR); cpu.setCR0(0x80000001); cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.reg[4] = 0x9000;
+  const go = () => { cpu.eip = 0x400000; cpu.halted = false; cpu.reg[0] = 0; mc.runSlice(50); return cpu.reg[0]; };
+  const away = () => { cpu.setCR0(0x00000001); cpu.setCR3(DIR); cpu.setCR0(0x80000001); };   // CWSDPMI's round trip
+  try {
+    const first = go(), c1 = mc.rec.stats.compiles;
+    for (let i = 0; i < 20; i++) away();
+    const again = go(), c2 = mc.rec.stats.compiles;
+    eq('paging off and on (CR3 loaded between) keeps the translated blocks', [first, again, c2 - c1].join(), '1,1,0');
+    cpu.setCR0(0x00000001); m.blit(A, Uint8Array.from([0xb8, 3, 0, 0, 0])); cpu.setCR0(0x80000001);
+    eq('...and code rewritten while paging was off runs as rewritten', go(), 3);
+  } catch (e) { eq('paging-toggle test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
+
 // ---- D8 step 3: the xlat TLB keeps protection, dirty bits and INVLPG exact -------------------------
 // The NT/9x kernels live above the installed RAM, where every byte used to take a full page walk;
 // a small TLB now sits in front of the walk. It must not widen any right the walk would refuse.
@@ -2542,6 +2567,19 @@ const udRun = (gated) => {
   mc2.mem.blit(0x1000, Uint8Array.from([0xb8, 0x01, 0x00, 0x0f, 0x01, 0xf0, 0xf4]));   // mov ax,1 / lmsw ax / hlt
   s = 0; while (!c2.halted && s++ < 20) mc2.rec.step();
   eq('...while LMSW can still set it', c2.cr0 & 1, 1); }
+
+// ---- FLDCW changing the precision recompiles the FPU blocks, not the whole cache ------------------------
+// Kraptor (Allegro, DJGPP) sets the precision control thousands of times a second; each change dropped
+// every translated block. A loop alternates single and double precision for 1/3: both results must be
+// exact for their precision, and the loop must not be translated again on every FLDCW.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
+  // nasm: mov cx,50 / L: fldcw [cw24] / fld1 / fidiv word [three] / fstp qword [r1] / fldcw [cw53] / ... / loop L / hlt
+  mc.mem.blit(0x1000, Uint8Array.from('b93200d92e2200d9e8de362600dd1e2800d92e2400d9e8de362600dd1e3000e2e2f47f007f0203000000000000000000000000000000000000'.match(/../g).map((x) => parseInt(x, 16))));
+  let n = 0; while (!cpu.halted && n++ < 400) mc.runSlice(1000);
+  const r1 = mc.mem.dv.getFloat64(0x1028, true), r2 = mc.mem.dv.getFloat64(0x1030, true);
+  eq('FLDCW: single precision gives 1/3 rounded to 24 bits, double to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true');
+  eq('...and the loop is not retranslated on each change of precision', mc.rec.stats.compiles < 30, true); }
 
 // ---- an immediate the code keeps rewriting is read at run time, not retranslated ----------------------
 // DOOM's R_DrawColumn writes each column's texture step into `add ebp,imm32`: every write evicted the

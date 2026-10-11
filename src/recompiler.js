@@ -198,6 +198,14 @@ export class Recompiler {
     this.profiling = false;        // gate heat tracking off the hot path
     this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0, flushes: 0, derailBlocks: 0 };
     this.epoch = 0;                // bumped by each CR3 load under paging; see _revalidate (ROADMAP D8)
+    // Two block caches, paging on and paging off, swapped by switchPaging rather than dropped. A DPMI
+    // host that pages (CWSDPMI) returns to real mode for every interrupt and DOS call: FreeDOS running
+    // Kraptor or Liquid War toggled paging 2600 times a second, and each reset() made it translate
+    // 128 000 blocks a second over again. A restored cache's blocks were not watched while it was put
+    // away, so each is checked once against its bytes (snap) before it runs again.
+    this.banks = [null, null];
+    this.restoreEpoch = 0;         // blocks validated before this epoch must match their bytes again
+    this.banksUsed = false;        // snapshots are taken only once a swap has happened
     this.derailReported = false;   // the message is worth saying once, not once per block
     this.t2evict = new Map();      // region root lin -> SMC-eviction count (for the blacklist)
     this.t2blacklist = new Set();  // roots that self-modify too much -> stay tier-1
@@ -229,7 +237,16 @@ export class Recompiler {
    *  pages map to the frames it was translated from. Bytes changed through the same linear pages are
    *  already caught by the SMC path; a REMAP is what a CR3 load can bring, and this is the check. */
   _revalidate(blk, lin) {
-    if (this._frame(blk.linStart) === blk.ph0 && this._frame(blk.linEnd - 1) === blk.ph1) { blk.epoch = this.epoch; return true; }
+    const framesOk = blk.ph0 === -1 || (this._frame(blk.linStart) === blk.ph0 && this._frame(blk.linEnd - 1) === blk.ph1);
+    let bytesOk = blk.epoch >= this.restoreEpoch;               // no swap since it was last checked
+    if (framesOk && !bytesOk && blk.snap !== null) {
+      const now = this._bytes(blk.linStart, blk.linEnd);
+      bytesOk = now !== null && now.length === blk.snap.length && now.every((v, i) => v === blk.snap[i]);
+    }
+    // An FPU block has the precision control it was translated under folded in (FPREC24): one compiled
+    // under another goes. A change of precision bumps the epoch instead of dropping the whole cache.
+    const precOk = !blk.usesFPU || blk.fprec === (this.cpu.fcw & 0x300);
+    if (framesOk && bytesOk && precOk) { blk.epoch = this.epoch; return true; }
     this._evict(blk, lin);
     this.stats.remaps = (this.stats.remaps || 0) + 1;
     return false;
@@ -340,7 +357,43 @@ export class Recompiler {
     this.pagedMode = !!(this.cpu && this.cpu.pagingOn);
     if (!this.codeCapEnv) this.codeCap = this.pagedMode ? (64 << 20) : (16 << 20);
     this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageBounds = []; this.pageCov = []; this.t2evict.clear(); this.t2blacklist.clear();
-    this.blockCount = 0; this.codeBytes = 0; }
+    this.blockCount = 0; this.codeBytes = 0;
+    if (this.banks) this.banks = [null, null]; }
+
+  /** Paging went on or off: put the current block cache away and bring back the other one, instead of
+   *  reset(). The restored blocks are revalidated against their bytes on their next dispatch. */
+  switchPaging() {
+    const now = !!(this.cpu && this.cpu.pagingOn);
+    if (!this.banks) { this.reset(); return; }
+    // No transition. Without paging (CWSDPMI loads CR3 before it turns paging on, every time) nothing
+    // the blocks were built from has changed; under paging (a CR4 change) the mappings may have, which
+    // is what a CR3 load does too: new epoch, frames rechecked on dispatch. Both used to reset().
+    if (now === this.pagedMode) { if (now) this.epoch++; return; }
+    this.banks[this.pagedMode ? 1 : 0] = { blockPages: this.blockPages, pageBlocks: this.pageBlocks, heat: this.heat,
+      pageBounds: this.pageBounds, pageCov: this.pageCov, t2evict: this.t2evict, t2blacklist: this.t2blacklist,
+      blockCount: this.blockCount, codeBytes: this.codeBytes };
+    const b = this.banks[now ? 1 : 0];
+    this.banks[now ? 1 : 0] = null;
+    this.pagedMode = now;
+    if (!this.codeCapEnv) this.codeCap = now ? (64 << 20) : (16 << 20);
+    this.banksUsed = true;
+    if (b) {
+      this.blockPages = b.blockPages; this.pageBlocks = b.pageBlocks; this.heat = b.heat; this.pageBounds = b.pageBounds;
+      this.pageCov = b.pageCov; this.t2evict = b.t2evict; this.t2blacklist = b.t2blacklist;
+      this.blockCount = b.blockCount; this.codeBytes = b.codeBytes;
+      for (const p of this.pageBlocks.keys()) this.mem.markCodePage(p);   // the other cache may have cleared them
+      this.epoch++; this.restoreEpoch = this.epoch;
+    } else {
+      this.blockPages = []; this.pageBlocks = new Map(); this.heat = new Map(); this.pageBounds = []; this.pageCov = [];
+      this.t2evict = new Map(); this.t2blacklist = new Set(); this.blockCount = 0; this.codeBytes = 0;
+    }
+  }
+
+  /** The bytes of [s, e), as the guest sees them now; null if any of them cannot be read. */
+  _bytes(s, e) {
+    try { const out = new Uint8Array(e - s); for (let i = 0; i < out.length; i++) out[i] = this.mem.r8((s + i) >>> 0); return out; }
+    catch { return null; }
+  }
 
   // ===================== tier-2 region compiler =====================
 
@@ -416,7 +469,7 @@ export class Recompiler {
     out.push('default:cpu.eip=_e;return;', '}}');
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
     const body = pre + '\n' + out.join('\n');
-    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
   }
 
   /** The region-internal edge for a static terminator: an in-region target is a local jump
@@ -532,7 +585,7 @@ export class Recompiler {
         let blk = page !== undefined ? page[(lin & 0xfff) | (cpu.csD << 12)] : undefined;
         // A block translated without limit guards (`real`, see translate) must not run in protected mode.
         if (blk === undefined || blk.ip0 !== ip0 || (blk.real && (cpu.cr0 & 1) && !(cpu.flags & 0x20000))) blk = this._compile(lin, ip0);
-        else if (paged && blk.epoch !== this.epoch && !this._revalidate(blk, lin)) blk = this._compile(lin, ip0);
+        else if (blk.epoch !== this.epoch && !this._revalidate(blk, lin)) blk = this._compile(lin, ip0);
         if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
         this.curBlk = blk;
         blk.fn(cpu, blk);
@@ -630,7 +683,9 @@ export class Recompiler {
       if (this.cpu) this.cpu.tbudget = 0;
     }
     const blk = this.translate(lin, ip0);
-    if (this.pagedMode) { blk.epoch = this.epoch; blk.ph0 = this._frame(blk.linStart); blk.ph1 = this._frame(blk.linEnd - 1); }
+    blk.epoch = this.epoch;
+    if (this.pagedMode) { blk.ph0 = this._frame(blk.linStart); blk.ph1 = this._frame(blk.linEnd - 1); }
+    if (this.banksUsed) blk.snap = this._bytes(blk.linStart, blk.linEnd);
     // A block this long was produced by bytes that never branch, and the commonest such byte is 0x00
     // (`add [bx+si],al`). That is the shape of a guest walking through empty memory — see the check
     // below, which costs nothing until a block is already abnormally long.
@@ -716,38 +771,38 @@ export class Recompiler {
       const idx = linStart - 0xf0600;
       const fn = new Function('cpu', `cpu.dpmiCallback(${idx});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     if (linStart === 0xf0250 && mem.u8[linStart] === 0xcb) {
       // Where a client's DPMI exception handler RETFs back to: restore the frame it leaves behind.
       const fn = new Function('cpu', 'cpu.dpmiExcReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     if (linStart === 0xf0260 && mem.u8[linStart] === 0xcf) {
       // Where a client's PM hardware-interrupt handler IRETs to: off the host's locked stack.
       const fn = new Function('cpu', 'cpu.dpmiIrqReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-irqret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: 'dpmi-irqret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
       // Where a 0302 procedure's IRET lands: reaching it means the call is over.
       const fn = new Function('cpu', 'cpu.dpmiRealCallReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     if ((linStart === 0xf0220 || linStart === 0xf0230) && mem.u8[linStart] === 0xcb) {
       const to = linStart === 0xf0220 ? 1 : 0;
       const fn = new Function('cpu', `cpu.dpmiRawSwitch(${to});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     if (linStart === 0xf0200 && mem.u8[0xf0200] === 0xcb) {
       // DPMI mode-switch entry. dpmiSwitch consumes the return address itself: coming back means
       // re-entering through a selector, which a RETF cannot express.
       const fn = new Function('cpu', 'cpu.dpmiSwitch();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     if (linStart === 0xf0100 && mem.u8[0xf0100] === 0xcb) {
       // XMS driver entry (f000:0100, marked with a 0xCB=RETF stub byte). A guest FAR-CALLs it with
@@ -756,7 +811,7 @@ export class Recompiler {
       // address with real opcodes) from being hijacked.
       const fn = new Function('cpu', `cpu.xmsCall();cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     if (linStart >= 0xf0000 && linStart < 0xf0100 && mem.u8[linStart] === 0xcf) {
       // Guard on the 0xCF stub byte: a real BIOS entry still holds its IRET stub, whereas the
@@ -765,7 +820,7 @@ export class Recompiler {
       const n = linStart - 0xf0000;
       const fn = new Function('cpu', `cpu.biosCallback(${n});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
+               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
     }
     const out = ['var t;'];
     const P = (s) => out.push(s);
@@ -1595,7 +1650,7 @@ export class Recompiler {
              // epoch/ph0/ph1 (ROADMAP D8) are set by _compile under paging; declared HERE so every block
              // has one shape — adding them afterwards made the dispatch loop's blk.fn/blk.count polymorphic
              // and Windows 3.0's steady state ran at half speed with not one CR3 load or compile.
-             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: REAL ? 1 : 0, vol: VOL.length ? VOL : null };
+             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: REAL ? 1 : 0, vol: VOL.length ? VOL : null, snap: null, fprec: this.cpu.fcw & 0x300 };
 
     // ===================== nested emit helpers =====================
 

@@ -54,6 +54,7 @@ const PACKAGES = {
   flpybird: 'a6f5c0c1bf5aa1746c9a335714c58835d4ce1ed90caa8de9072d9fb7f1d08ac9',
   sudoku86: '12c13caecd098748f5a8ace6667bbcacc333da209a70f26e49504fd11cb21eb3',
   liquiwar: '5ad1a6507883f9aacb0ad1914b7dbc266afc640f081797a0638e7e8de92f9ad9',
+  kraptor: 'd14e3a780a488be427dbaa577aef8e878f2d62e8b6ab516902c4e9fc99c929cd',
 };
 const UNDER_DOSDIR = new Set(['BIN', 'DOC', 'APPINFO', 'NLS', 'HELP', 'LINKS', 'BATLINKS', 'CPI']);
 
@@ -87,6 +88,7 @@ const README = `
   Play             CD \\GAMES\\VITETRIS, then TETRIS
                    CD \\GAMES\\SUDOKU86, then SUDOKU86
                    CD \\GAMES\\LIQUIWAR, then LWDOS
+                   CD \\GAMES\\KRAPTOR,  then KRAPTOR
                    FLPYBIRD
   Look around      DIR   TREE \\GAMES   MEM   the manuals in C:\\FREEDOS\\DOC
   Licences         C:\\FREEDOS\\APPINFO\\*.LSM   sources: C:\\SOURCES.TXT

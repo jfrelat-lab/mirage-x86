@@ -57,8 +57,11 @@ export class Machine {
     installFPU(this.cpu);                           // x87 coprocessor
     installSSE(this.cpu);                           // XMM register file + the SSE subset (src/sse.js)
     // FLDCW changing PRECISION CONTROL invalidates every translated FPU block: the rounding is folded
-    // into the emitted code, exactly as the CPU profile's constants are.
-    this.cpu.onFcwPrecChange = () => { this.rec.reset(); this.cpu.tbudget = 0; };
+    // into the emitted code, exactly as the CPU profile's constants are. Only those: a new epoch makes
+    // each block revalidate on its next dispatch, and _revalidate drops the FPU blocks translated under
+    // another precision. Dropping the whole cache cost Kraptor (Allegro/DJGPP, which sets the
+    // precision thousands of times a second) almost all of its time in translate().
+    this.cpu.onFcwPrecChange = () => { this.rec.epoch++; this.cpu.tbudget = 0; };
     this.rec = new Recompiler(this.cpu);
     // Paging plumbing. Memory needs the CPU to walk CR3, and any change to the mapping invalidates
     // both the software TLB and every translated block (their emitted addresses assumed the old
@@ -92,7 +95,7 @@ export class Machine {
     this.cpu.onPagingChange = () => {
       if (this.cpu.pagingOn) this.rec.memStrategy = { read: 'paged', write: 'paged' };
       this.mem.rebuildPageTables();
-      this.rec.reset();
+      this.rec.switchPaging();
       // End the slice. The run loop hoists `pagedMode` into a local at entry — it is read once per
       // slice, not once per block, because it sits on the dispatch path. Turning paging on mid-slice
       // therefore left the REST of that slice masking linear addresses, and those blocks were cached

@@ -1143,3 +1143,21 @@ The floor is pitBase>>6 now, 1024 ticks, about 1165 Hz, and ui.js's is 0.8 ms; C
 17.5 kHz stays capped. tools/pitrate.asm -dDIVIDER=2128: DOSBox-X 560, MIRAGE 559 (290 before).
 Goldens abstract, crevenge, omniscent, paleozoa and qblove ask for more than 291 Hz and moved: the
 same pictures, further on, as their clocks run at the rate they set.
+
+## 18. CWSDPMI under FreeDOS: 128 000 translations a second — measured 2026-10-11
+
+Kraptor and Liquid War on the FreeDOS disk ran at 1.7 M instructions a second in Chrome, the page
+busy in translate(). Counted there (tools/chrome-perf.mjs PROBE): 2600 paging transitions a second,
+two per timer tick, as CWSDPMI returns to real mode for each interrupt, and each one reset the whole
+block cache; CWSDPMI also loads CR3 while paging is off, which took the same path; and Allegro's FLDCW,
+changing the precision control thousands of times a second, reset it too.
+
+- The recompiler keeps one cache per paging state and swaps them (switchPaging). The cache put away
+  is not watched for writes, so each of its blocks is compared with its bytes (`snap`) on its first
+  dispatch after it comes back.
+- A CR3 load with paging off changes nothing; a CR4 change under paging is handled as a CR3 load.
+- A change of precision bumps the epoch; _revalidate drops only the FPU blocks translated under
+  another precision (`fprec`).
+
+Kraptor: 613 000 translations in 5 s → 29; 1.7 → 35-50 M instructions a second, and its title screen.
+tube unchanged; golden 44/0.

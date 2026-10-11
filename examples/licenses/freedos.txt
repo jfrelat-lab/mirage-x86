@@ -1,4 +1,4 @@
-FreeDOS 1.4 — examples/boot/freedos.img.gz (sha256 61dcc19d…aa8abf), a 64 MB hard disk built by
+FreeDOS 1.4 — examples/boot/freedos.img.gz (sha256 473b6d4d…4c4f92), a 64 MB hard disk built by
 tools/mkfreedos.mjs from the FreeDOS project's 1.4 packages, unmodified:
 https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/
 
@@ -30,6 +30,7 @@ SHA-256. The licence of each program is its package's APPINFO/*.LSM, copied to C
   flpybird  Floppy Bird — MIT License
   sudoku86  sudoku86 — Simplified (2-Clause) BSD License
   liquiwar  Liquid War — GNU General Public License, Version 2
+  kraptor   Kraptor — MIT license
 
 FDCONFIG.SYS, AUTOEXEC.BAT, README.TXT and SOURCES.TXT on the disk, its master boot record
 (tools/mbr.asm) and the builder are MIRAGE's (MIT). The boot sector is FreeDOS's own (boot/boot.asm
