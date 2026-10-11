@@ -58,6 +58,7 @@ by line. Where a probe's answer settled a behaviour, `test.js` has a check with 
 | `opl-compare.mjs` | `src/opl.js` against Nuked-OPL3 sample for sample: a program's OPL writes are logged at their sample positions and rendered by both (`tools/nuked-render.c`, built outside the repository: Nuked is LGPL). |
 | `audio-compare.mjs` | Two recordings of the same program (ours and a reference's: DOSBox-X through SDL's disk audio driver, or QEMU's `-audiodev wav`), cut at their silences and compared section by section: duration, level, pitch, spectral centroid, L/R, envelope correlation. |
 | `qemu-shot.mjs` | A protected-mode program's picture captured from QEMU, from outside the guest. |
+| `chrome-perf.mjs` | A page as Chrome runs it — headless, over the DevTools protocol: guest instructions, frames and main-thread load each second, a JS profile, keys to press, a screenshot. The app's own browser pane is hidden and gets no animation frames, so it cannot measure the player. |
 | `dbx-shot.mjs` | The frames DOSBox-X's VGA displays (`DX-CAPTURE /V`, decoded by `zmbv.mjs` from PRISM): what the card shows, CRTC display end and blanking included, not what memory holds. QEMU ignores horizontal blanking (Helium: 288 pixels there, 252 on DOSBox-X). |
 | `v86/qemudiff.mjs` | A boot image's screen under MIRAGE against QEMU's, pixel by pixel. |
 | `v86/compare3.mjs` | Time to the arrival screen under QEMU, v86 and MIRAGE. |

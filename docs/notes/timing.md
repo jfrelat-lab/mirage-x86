@@ -1107,3 +1107,28 @@ and got 291.
 The reload is now converted, `r * pitBase / 65536` cycles; the floor is unchanged. Three goldens
 reprogram the timer and moved — animate (256 Hz asked), mesha (100 Hz), starport (70 Hz); all three
 still draw their picture.
+
+## 16. DOOM at four frames a second in Chrome: self-modifying drawers — measured 2026-10-11
+
+`tools/chrome-perf.mjs` runs a page in headless Chrome (the app's own pane is hidden, and a hidden
+tab gets no requestAnimationFrame) and samples guest instructions, frames and main-thread load each
+second, with a JS profile. DOOM's demo: 0.5 M instructions/s, 4 frames/s, the main thread 100% busy —
+68% of it "(program)" and 30% garbage collection, V8 compiling and discarding the JS we emit. The
+sound (OPL, SB, the worklet) was under 1%.
+
+The cause is §9's, in a game: DOOM's R_DrawColumn takes each column's texture step as the immediate
+of `add ebp,imm32` and rewrites it per column; every write evicted the block, the next column
+translated it again — 14 000 translations in 8 s. Heretic's R_DrawSpan writes a one-byte
+terminator into its unrolled loop, at a different place for every span, evicting a 400-byte block
+each time.
+
+- An immediate whose bytes have evicted their block twice is translated as a read of memory at run
+  time (`immX` in translate; ALU 80h/81h/83h, MOV B0h-BFh, C6h/C7h), and a write that lands only in
+  such bytes no longer evicts. DOOM: invalidations 20 000 → 370 over 30 s; the picture identical to
+  the pixel at four points of the demo.
+- A page that has taken 64 evictions is translated in blocks of 8 instructions, so a rewritten opcode
+  costs a short retranslation.
+
+Chrome, same page: DOOM 0.5 → 50 M instructions/s and 4 → 60 frames/s; Heretic ~10 → 50-60 frames/s.
+tube (bench.js, alternated x3) unchanged. Five goldens moved (crevenge, freality, mesha, omniscent,
+qblove): their blocks end in other places now, the same pictures at slightly different moments.

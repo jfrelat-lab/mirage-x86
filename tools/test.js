@@ -2543,6 +2543,19 @@ const udRun = (gated) => {
   s = 0; while (!c2.halted && s++ < 20) mc2.rec.step();
   eq('...while LMSW can still set it', c2.cr0 & 1, 1); }
 
+// ---- an immediate the code keeps rewriting is read at run time, not retranslated ----------------------
+// DOOM's R_DrawColumn writes each column's texture step into `add ebp,imm32`: every write evicted the
+// block and the next column translated it again — 14 000 translations in 8 s of its demo, four frames
+// a second in Chrome. Here a loop rewrites the immediate of its own `add bx,imm16` with CX each time
+// round: the sum must stay exact, and after the first rewrites the block must stop being translated.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
+  // mov cx,100 / xor bx,bx / L: mov [cs:0x0c],cx / add bx,0x1234 (its immediate at 0x0c) / loop L / hlt
+  mc.mem.blit(0x1000, Uint8Array.from([0xb9, 0x64, 0x00, 0x31, 0xdb, 0x2e, 0x89, 0x0e, 0x0c, 0x00, 0x81, 0xc3, 0x34, 0x12, 0xe2, 0xf5, 0xf4]));
+  let n = 0; while (!cpu.halted && n++ < 5000) mc.rec.step();
+  eq('SMC immediate: the sum uses every rewritten value', cpu.bx & 0xffff, 5050);
+  eq('...and the loop is not retranslated once per rewrite', mc.rec.stats.compiles < 20, true); }
+
 // ---- VBE 4F06h / 4F07h: the logical scan line and the display start ---------------------------------
 // tools/vbescan.asm in mode 101h, QEMU (SeaVGABIOS) and DOSBox-X alike: set 1024 pixels → BX 400h
 // bytes, CX 400h pixels, DX the lines video memory holds; set in bytes; display start set and read.

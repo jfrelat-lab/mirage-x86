@@ -57,6 +57,15 @@ const T2_MAXINS = 384;     // cap region size in instructions
 // to serve a diagnostic would be the wrong trade.
 const DERAIL_STOP = !!(typeof process !== 'undefined' && process.env && process.env.MIRAGE_DERAIL_STOP);
 const T2_BLACKLIST = 3;    // stop re-forming a root after this many SMC evictions
+// An immediate operand whose bytes have been rewritten this many times, each time evicting the block
+// that held them, is read from memory at run time instead of being baked into the emitted code — see
+// Recompiler.invalidate and translate's immX.
+const SMC_HOT = 2;
+// A page of code whose bytes keep being rewritten, opcodes and all — Heretic's R_DrawSpan writes a
+// one-byte terminator into its unrolled loop at a different place for every span — is translated in
+// short blocks once this many evictions have hit it: a write then throws away a few instructions,
+// not the 400-byte block that ran through the whole loop.
+const SMC_PAGE_HOT = 64, SMC_SHORT_OPS = 8;
 
 // Abstract flag-liveness bit set (NOT the EFLAGS register layout) for the dead-flag pass:
 // which of the 6 arithmetic flags an instruction defines / uses. Full ALU ops def all 6;
@@ -193,6 +202,12 @@ export class Recompiler {
     this.t2evict = new Map();      // region root lin -> SMC-eviction count (for the blacklist)
     this.t2blacklist = new Set();  // roots that self-modify too much -> stay tier-1
     this.mem.onCodeWrite = (addr, len) => this.invalidate(addr, len);
+    // Bytes that small writes keep rewriting inside translated code, and how often each did evict a
+    // block. DOOM's R_DrawColumn takes its texture step as the immediate of `add ebp,imm32` and every
+    // column rewrites it: each write evicted the block, and the next column translated it again —
+    // 14 000 translations in 8 s of its demo, V8 compiling each one, four frames a second in Chrome.
+    this.smcHits = new Map();
+    this.smcPages = new Map();     // page -> evictions by writes, for SMC_PAGE_HOT
     this.cpu.invlpg = (lin) => this.invlpg(lin);
   }
 
@@ -254,7 +269,17 @@ export class Recompiler {
         const blk = pg !== undefined ? (pg[lin & 0xfff] || pg[(lin & 0xfff) | 0x1000]) : undefined;
         if (!blk) { set.delete(lin); continue; }              // stale entry
         if (blk.ranges) { if (blk.ranges.some(([s, e]) => s < end && addr < e)) this._evictRegion(blk, lin); }
-        else if (blk.linStart < end && addr < blk.linEnd) this._evict(blk, lin);
+        else if (blk.linStart < end && addr < blk.linEnd) {
+          // A write that lands entirely in bytes this block reads at run time changes nothing it
+          // compiled: keep it. Anything else evicts, and a small write is remembered byte by byte.
+          if (blk.vol !== null && blk.vol.some(([s, e]) => addr >= s && end <= e)) continue;
+          this._evict(blk, lin);
+          this.smcPages.set(p, (this.smcPages.get(p) || 0) + 1);
+          if (len <= 4) {
+            if (this.smcHits.size > 65536) this.smcHits.clear();
+            for (let a = addr; a < end; a++) this.smcHits.set(a, (this.smcHits.get(a) || 0) + 1);
+          }
+        }
       }
       if (set.size === 0) this.mem.clearCodePage(p);            // page no longer holds code
     }
@@ -391,7 +416,7 @@ export class Recompiler {
     out.push('default:cpu.eip=_e;return;', '}}');
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
     const body = pre + '\n' + out.join('\n');
-    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
   }
 
   /** The region-internal edge for a static terminator: an in-region target is a local jump
@@ -645,6 +670,7 @@ export class Recompiler {
   // -------------------------------------------------------------------------
   translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD, checked = false) {
     const mem = this.mem, MM = this.MM;
+    if ((this.smcPages.get(linStart >>> 12) || 0) >= SMC_PAGE_HOT && maxOps > SMC_SHORT_OPS) maxOps = SMC_SHORT_OPS;
     const rec = this;                    // the decoders below are nested closures, where `this` is not us
     const pfRestart = this.pagedMode;
     // Address masking, in one place. Under paging there is no mask — and `& 0xffffffff` is not one,
@@ -690,38 +716,38 @@ export class Recompiler {
       const idx = linStart - 0xf0600;
       const fn = new Function('cpu', `cpu.dpmiCallback(${idx});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     if (linStart === 0xf0250 && mem.u8[linStart] === 0xcb) {
       // Where a client's DPMI exception handler RETFs back to: restore the frame it leaves behind.
       const fn = new Function('cpu', 'cpu.dpmiExcReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     if (linStart === 0xf0260 && mem.u8[linStart] === 0xcf) {
       // Where a client's PM hardware-interrupt handler IRETs to: off the host's locked stack.
       const fn = new Function('cpu', 'cpu.dpmiIrqReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-irqret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: 'dpmi-irqret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
       // Where a 0302 procedure's IRET lands: reaching it means the call is over.
       const fn = new Function('cpu', 'cpu.dpmiRealCallReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     if ((linStart === 0xf0220 || linStart === 0xf0230) && mem.u8[linStart] === 0xcb) {
       const to = linStart === 0xf0220 ? 1 : 0;
       const fn = new Function('cpu', `cpu.dpmiRawSwitch(${to});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     if (linStart === 0xf0200 && mem.u8[0xf0200] === 0xcb) {
       // DPMI mode-switch entry. dpmiSwitch consumes the return address itself: coming back means
       // re-entering through a selector, which a RETF cannot express.
       const fn = new Function('cpu', 'cpu.dpmiSwitch();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     if (linStart === 0xf0100 && mem.u8[0xf0100] === 0xcb) {
       // XMS driver entry (f000:0100, marked with a 0xCB=RETF stub byte). A guest FAR-CALLs it with
@@ -730,7 +756,7 @@ export class Recompiler {
       // address with real opcodes) from being hijacked.
       const fn = new Function('cpu', `cpu.xmsCall();cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     if (linStart >= 0xf0000 && linStart < 0xf0100 && mem.u8[linStart] === 0xcf) {
       // Guard on the 0xCF stub byte: a real BIOS entry still holds its IRET stub, whereas the
@@ -739,7 +765,7 @@ export class Recompiler {
       const n = linStart - 0xf0000;
       const fn = new Function('cpu', `cpu.biosCallback(${n});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0 };
+               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null };
     }
     const out = ['var t;'];
     const P = (s) => out.push(s);
@@ -780,6 +806,20 @@ export class Recompiler {
     const f16 = () => { const w = mem.r16(mask(linStart - ip0 + ip)); ip = ipAdd(ip, 2); return w; };
     const fs8 = () => { const b = f8(); return b < 128 ? b : b - 256; };
     const f32 = () => { const lo = f16(), hi = f16(); return (lo | (hi << 16)) >>> 0; };   // disp32 / moffs32 (0x67)
+    // An immediate of n bytes, as a JS expression. Normally the constant, formatted by `fmt`. If the
+    // code keeps rewriting these bytes (rec.smcHits, see invalidate), the bytes are read from memory
+    // when the instruction runs, and the block records the range so those writes no longer evict it.
+    const VOL = [];
+    const immX = (n, fmt, signed) => {
+      const a = mask(linStart - ip0 + ip);
+      let hot = false;
+      for (let k = 0; k < n && !hot; k++) hot = (rec.smcHits.get(mask(a + k)) || 0) >= SMC_HOT;
+      const v = n === 1 ? f8() : n === 2 ? f16() : ((f16() | (f16() << 16)) >>> 0);
+      if (!hot) return fmt(v);
+      VOL.push([a, a + n]);
+      if (n === 1) return signed ? `((m.r8(${a})<<24)>>24)` : `m.r8(${a})`;
+      return n === 2 ? `m.r16(${a})` : `(m.r32(${a})>>>0)`;
+    };
 
     // ---- operand-size / segment-override / rep prefixes ----
     let opsize, segOv, rep, addr32;
@@ -1140,9 +1180,9 @@ export class Recompiler {
         }
 
         // ---- group1: ALU Eb/Ev, imm ----
-        case 0x80: case 0x82: { const o = modrm(); const i = f8(); const n = ALUNAMES[o.reg]; alu(n, rmR(o, 8), v => rmW(o, 8, v), '' + i, 8); break; }
-        case 0x81: { const o = modrm(); const i = sz === 16 ? f16() : (f16() | (f16() << 16)); const n = ALUNAMES[o.reg]; alu(n, rmR(o, sz), v => rmW(o, sz, v), '' + (i >>> 0), sz); break; }
-        case 0x83: { const o = modrm(); const i = fs8(); const n = ALUNAMES[o.reg]; alu(n, rmR(o, sz), v => rmW(o, sz, v), '(' + i + ')', sz); break; }
+        case 0x80: case 0x82: { const o = modrm(); const i = immX(1, (v) => '' + v); const n = ALUNAMES[o.reg]; alu(n, rmR(o, 8), v => rmW(o, 8, v), i, 8); break; }
+        case 0x81: { const o = modrm(); const i = immX(sz >> 3, (v) => '' + (v >>> 0)); const n = ALUNAMES[o.reg]; alu(n, rmR(o, sz), v => rmW(o, sz, v), i, sz); break; }
+        case 0x83: { const o = modrm(); const i = immX(1, (v) => '(' + (v < 128 ? v : v - 256) + ')', true); const n = ALUNAMES[o.reg]; alu(n, rmR(o, sz), v => rmW(o, sz, v), i, sz); break; }
 
         // ---- TEST / XCHG / MOV (reg/rm) ----
         case 0x84: { const o = modrm(); alu('test', rmR(o, 8), null, rR(o.reg, 8), 8); break; }
@@ -1285,9 +1325,9 @@ export class Recompiler {
 
         // ---- MOV reg, imm ----
         case 0xb0: case 0xb1: case 0xb2: case 0xb3: case 0xb4: case 0xb5: case 0xb6: case 0xb7:
-          P(rW(op & 7, 8, '' + f8())); break;
+          P(rW(op & 7, 8, immX(1, (v) => '' + v))); break;
         case 0xb8: case 0xb9: case 0xba: case 0xbb: case 0xbc: case 0xbd: case 0xbe: case 0xbf:
-          P(rW(op & 7, sz, '' + (sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0)))); break;
+          P(rW(op & 7, sz, immX(sz >> 3, (v) => '' + v))); break;
 
         // ---- group2 shifts ----
         case 0xc0: { const o = modrm(); const c = f8(); emitShift(o, 8, '' + (c & SHIFT_MASK)); break; }   // the 286+ masks the count to 5 bits; an 8088 uses it in full
@@ -1309,8 +1349,8 @@ export class Recompiler {
         // its #UD handler; we loaded ES from nowhere and ran on, into whatever the page held.
         case 0xc4: { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, ES, sz)); break; } // LES
         case 0xc5: { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, DS, sz)); break; } // LDS
-        case 0xc6: { const o = modrm(); const i = f8(); P(rmW(o, 8, '' + i)); break; }
-        case 0xc7: { const o = modrm(); const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(rmW(o, sz, '' + i)); break; }
+        case 0xc6: { const o = modrm(); const i = immX(1, (v) => '' + v); P(rmW(o, 8, i)); break; }
+        case 0xc7: { const o = modrm(); const i = immX(sz >> 3, (v) => '' + v); P(rmW(o, sz, i)); break; }
         // ENTER size,level. The operand size decides the WIDTH of everything it touches: at 32 bits it
         // pushes EBP, sets EBP (not just BP) and copies nested frame pointers as dwords. This was
         // hard-wired to the 16-bit form, so a 32-bit `enter` pushed two bytes instead of four and
@@ -1555,7 +1595,7 @@ export class Recompiler {
              // epoch/ph0/ph1 (ROADMAP D8) are set by _compile under paging; declared HERE so every block
              // has one shape — adding them afterwards made the dispatch loop's blk.fn/blk.count polymorphic
              // and Windows 3.0's steady state ran at half speed with not one CR3 load or compile.
-             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: REAL ? 1 : 0 };
+             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: REAL ? 1 : 0, vol: VOL.length ? VOL : null };
 
     // ===================== nested emit helpers =====================
 
