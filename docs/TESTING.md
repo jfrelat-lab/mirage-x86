@@ -10,6 +10,7 @@ Run before every change to code or tools (documentation-only changes are exempt)
 
 ```bash
 node tools/test.js              # must be all green
+node tools/test-dos-api.js      # must be all green
 node tools/golden.js check      # must report 0 mismatch
 ```
 
@@ -22,7 +23,7 @@ what continuous integration runs.
 | `golden.js check` | The **golden** test: 44 programs run for a fixed number of cycles, and a fingerprint of what they leave — video mode, framebuffer, palette, planes, text, any fault — is compared with `tools/golden-baseline.json`. The only gate that sees a bug spanning several instructions, such as a flag computed by one and read by another. 39 of the programs are third-party files that are not in the repository; on a fresh clone they are skipped. `golden.js capture <file>` re-records one fingerprint: only after looking at the new picture and deciding it is right. |
 | `test-x86-uc.mjs` | Single instructions against expectations captured from Unicorn, including generated cases that walk the ModRM, SIB and prefix grid (`tools/x86-gen.mjs`). |
 | `test-dos.js`, `test-gfx.js`, `test-demos.js` | DOS end to end (a program loads and prints); mode 13h drawing; the assembled demos in `demos/` render and animate. |
-| `test-dos-api.js` | The DOS and BIOS services against expected results. Two checks fail today ([KNOWN-ISSUES.md](KNOWN-ISSUES.md)); it is not part of `test:all`. |
+| `test-dos-api.js` | The DOS and BIOS services against expected results. A gate since 2026-10-11: outside them, six checks had failed unnoticed, one a real BIOS bug. |
 
 ## CPU references
 
