@@ -144,14 +144,17 @@ gets it within its few milliseconds. The SB Pro stereo bit is not honoured, as o
 ADPCM and recording play silence.
 
 **OPL3** (`opl.js`): the YMF262, which plays OPL2 (AdLib) music too, at 388h-38Bh, 220h-223h and
-228h. Written from the chip's documented behaviour: log-sine and exponential tables, 19-bit phase
-generators, ADSR envelopes with key scaling, tremolo and vibrato, the eight waveforms, feedback, FM
-and AM connections, four-operator voices, rhythm mode with its noise generator, OPL3 stereo. It
-renders at the chip's 49716 Hz on the machine's clock, catching up at every register write. The
+228h. The chip's model as the die analyses describe it: per operator, in the chip's order, feedback,
+envelope (on the chip's global envelope clock), phase and a log-sine/exponential lookup; FM and AM
+connections, four-operator voices, rhythm mode and its noise generator, OPL3 stereo, and the
+channel sample delay of channels 6-8. Its output is bit-identical to Nuked-OPL3's for the same
+register writes (`tools/opl-compare.mjs`: tools/oplnotes.asm and 40 s of Dune's AdLib music; the
+test suite pins the former). It renders at the chip's 49716 Hz on the machine's clock, catching up
+at every register write, and only while something listens. The
 timers run for real: on wall time or on executed instructions at the PIT's rate, whichever has
 moved further, so a detection that waits by reading the status port a hundred times sees them
 expire in the browser too. Status and timers checked with `tools/oplprobe.asm` against DOSBox-X and
-QEMU; the sound against DOSBox-X's Nuked-OPL3 (`tools/oplnotes.asm`, `tools/audio-compare.mjs`).
+QEMU.
 
 **Audio** (`audio.js`, `audio-out.js`): `audio.js` mixes the card (resampled linearly) and the PC
 speaker (port 61h and PIT channel 2, rendered from a timeline of their changes) into stereo at any

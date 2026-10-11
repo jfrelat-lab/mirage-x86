@@ -19,6 +19,8 @@ import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
 import { installDOS, DOS_PLAYER_MEM } from '../src/dos.js';
 import { installAudio } from '../src/audio.js';
+import { createOPL } from '../src/opl.js';
+import { createHash } from 'crypto';
 import { VFS } from '../src/vfs.js';
 
 let pass = 0, fail = 0;
@@ -2788,6 +2790,40 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   for (let i = 0; i < 5; i++) { mc.cpu.cycles += Math.round(sec / 50); audio.pull(44100); }
   mc.cpu.cycles += Math.round(sec / 50);
   eq('...and falls silent after key-off', Math.max(...audio.pull(44100).map(Math.abs)) < 0.01, true); }
+
+// ---- the OPL3, sample for sample: Nuked-OPL3's output for the same register writes ---------------
+// tools/oplnotes.asm's 988509 samples (20 s: sine, FM, envelopes, feedback, all eight waveforms,
+// vibrato and tremolo, the five drums, OPL3 stereo, four operators), its register writes logged at
+// their sample positions by tools/opl-compare.mjs, rendered by Nuked-OPL3 outside the repository:
+// SHA-256 of the int16 stereo stream below. Ours must be the same stream, to the bit.
+{ const log = (
+    '1,1,32;4,4,96;7,189,0;10924,32,33;10927,35,33;10929,96,240;10932,99,240;10935,128,15;10938,131,1' +
+    '5;10941,64,63;10944,67,0;10946,192,1;10949,160,68;10952,176,49;60076,176,17;84652,64,20;84655,19' +
+    '2,0;84658,176,49;133804,176,17;158380,64,63;158383,192,1;158386,35,1;158389,99,101;158391,131,5;' +
+    '158394,176,49;256684,176,17;305836,32,33;305839,35,33;305842,96,240;305845,99,240;305848,128,15;' +
+    '305851,131,15;305853,64,0;305856,67,0;305859,192,15;305862,176,49;354989,176,17;379565,64,63;379' +
+    '567,192,1;379570,227,1;379573,176,49;404141,176,17;415063,227,2;415066,176,49;439639,176,17;4505' +
+    '62,227,3;450565,176,49;475138,176,17;486061,227,0;486064,189,192;486067,35,225;486069,176,49;584' +
+    '365,176,17;608941,189,0;608944,35,33;608947,48,1;608950,51,1;608952,80,16;608955,83,0;608958,112' +
+    ',246;608961,115,246;608964,144,6;608967,147,6;608970,49,1;608972,50,1;608975,52,1;608978,53,1;60' +
+    '8981,81,0;608984,82,0;608987,84,0;608989,85,0;608992,113,246;608995,114,246;608998,116,246;60900' +
+    '1,117,246;609004,145,6;609006,146,6;609009,148,6;609012,149,6;609015,166,87;609018,182,9;609021,' +
+    '167,87;609024,183,9;609026,168,87;609029,184,9;609032,198,0;609035,189,48;622595,189,32;622597,1' +
+    '89,40;636248,189,32;636251,189,36;649901,189,32;649904,189,34;663555,189,32;663557,189,33;677208' +
+    ',189,0;701784,261,1;701787,32,33;701790,35,33;701793,96,240;701795,99,240;701798,128,15;701801,1' +
+    '31,15;701804,64,63;701807,67,0;701810,192,17;701812,176,49;726360,176,17;737283,192,33;737286,17' +
+    '6,49;761859,176,17;772782,192,49;772784,227,4;772787,176,49;797358,176,17;808280,227,5;808283,17' +
+    '6,49;832856,176,17;843779,227,6;843782,176,49;868355,176,17;879278,227,7;879281,176,49;903854,17' +
+    '6,17;914777,227,0;914779,260,1;914782,40,33;914785,43,33;914788,72,24;914791,75,0;914794,104,240' +
+    ';914796,107,240;914799,136,15;914802,139,15;914805,64,24;914808,192,48;914811,195,48;914813,176,' +
+    '49;963929,176,17;988505,260,0;988508,261,0');
+  const chip = createOPL(), out = [0, 0], buf = new Int16Array(988509 * 2);
+  let pos = 0;
+  const gen = (until) => { for (; pos < until; pos++) { chip.sample(out); buf[pos * 2] = out[0]; buf[pos * 2 + 1] = out[1]; } };
+  for (const w of log.split(';')) { const [t, r, v] = w.split(',').map(Number); gen(t); chip.write(r >> 8, r & 0xff, v); }
+  gen(988509);
+  const sha = createHash('sha256').update(Buffer.from(buf.buffer)).digest('hex').slice(0, 16);
+  eq('OPL3: tools/oplnotes.asm renders bit for bit as Nuked-OPL3 does', sha, '02264c24e625b726'); }
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

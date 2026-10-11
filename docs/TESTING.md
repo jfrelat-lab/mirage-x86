@@ -54,6 +54,7 @@ by line. Where a probe's answer settled a behaviour, `test.js` has a check with 
 | `dbx-oracle.mjs` | The sequence of file and video events of a program, against DOSBox-X's debug log. |
 | `dosdiff.js`, `egaref.mjs` + `shot.mjs` | A program's picture against DOSBox-X's at the same timer count; `DDCYCLES="fixed 3323"` runs DOSBox-X at MIRAGE's instruction rate, for CPU-bound programs. |
 | `record-audio.mjs` | What a program sounds like, as a WAV, over machine seconds; prints the level of each second. |
+| `opl-compare.mjs` | `src/opl.js` against Nuked-OPL3 sample for sample: a program's OPL writes are logged at their sample positions and rendered by both (`tools/nuked-render.c`, built outside the repository: Nuked is LGPL). |
 | `audio-compare.mjs` | Two recordings of the same program (ours and a reference's: DOSBox-X through SDL's disk audio driver, or QEMU's `-audiodev wav`), cut at their silences and compared section by section: duration, level, pitch, spectral centroid, L/R, envelope correlation. |
 | `qemu-shot.mjs` | A protected-mode program's picture captured from QEMU, from outside the guest. |
 | `v86/qemudiff.mjs` | A boot image's screen under MIRAGE against QEMU's, pixel by pixel. |

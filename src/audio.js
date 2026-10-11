@@ -14,7 +14,7 @@
 // pull(rate) returns the samples for the time elapsed since the previous pull.
 
 const PIT_HZ = 1193182;
-const SPEAKER = 0.25, SB = 0.9, OPL = 1.5;  // levels, against full scale (OPL: DOSBox-X's Nuked-OPL3 level, tools/oplnotes.asm)
+const SPEAKER = 0.25, SB = 0.9, OPL = 1.5;  // levels against full scale; the OPL as loud against the DAC as in DOSBox-X's mix
 
 /** The machine's time in seconds: wall-clock in the browser (where the PIT follows it too),
  *  otherwise cpu.cycles at 18.2065 * pitBase cycles a second, the PIT's own rate. */
