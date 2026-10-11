@@ -2891,6 +2891,20 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   for (let i = 0; i < 60; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 20) off.push(...p); }
   eq('...and plays with the speaker off, as an SB16 does', Math.abs(hz(Float32Array.from(off), 44100) - 500) < 10, true); }
 
+// ---- in the browser the card keeps up with a guest that runs ahead of the wall clock -----------------
+// Unreal waits for the IRQ of a short test transfer in a counted loop. In the browser the card ran on
+// the wall clock alone, the guest ran its loop faster than that, and Unreal answered "Selected sound
+// card not found". The card's time is now the wall clock or the instructions run, whichever is
+// further (as the OPL's timers): here the wall clock stands still while the CPU runs.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  let wall = 1000; mc.wallClockMs = () => wall; mc.cyclesPerSecond = 50e6;
+  const o = (p, v) => mc.ioWrite(p, 1, v), dsp = (v) => o(0x22c, v);
+  o(0x0a, 5); o(0x0c, 0); o(0x0b, 0x49); o(0x02, 0); o(0x02, 0); o(0x83, 2); o(0x03, 15); o(0x03, 0); o(0x0a, 1);
+  o(0x226, 1); o(0x226, 0); dsp(0x40); dsp(256 - 125); dsp(0x14); dsp(15); dsp(0);   // 16 bytes at 8000 Hz: 2 ms
+  mc.cpu.cycles += 0.01 * 50e6;                                            // 10 ms of instructions, no wall time
+  mc.sbPoll();
+  eq('SB: the end-of-block IRQ comes when the guest has run long enough, wall clock or not', (mc.irqPendingMask >> 7) & 1, 1); }
+
 // ---- the OPL3 plays FM (src/opl.js) ---------------------------------------------------------------
 // tools/oplnotes.asm recorded here and on DOSBox-X's Nuked-OPL3 (tools/audio-compare.mjs): 16 sections
 // each, same durations, pitch within the FFT's 3 Hz; Dune's AdLib music: loudness envelopes

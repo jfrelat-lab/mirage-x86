@@ -43,10 +43,19 @@ export function installSB(machine) {
     // The transfer in progress, or null: { wide, stereo, signed, auto, left (units to the IRQ), len }
     xfer: null, paused: false, carry: null,
     clock: 0, frac: 0,                       // last time the card caught up (seconds), and a sample fraction
+    cyc: 0,                                  // ...and the CPU's cycle count then
     pcm: [], pcmRate: 22050,                 // played samples, interleaved L/R Int16, for drain()
     drain() { const out = Int16Array.from(sb.pcm); sb.pcm.length = 0; return { rate: sb.pcmRate, samples: out }; },
   };
-  const now = () => clock(machine);
+  // The card's time: wall time, or the instructions run since it last caught up at the rate the end of
+  // block is armed with, whichever has moved further — as the OPL's timers. In the browser the guest
+  // can run ahead of the wall clock, faster than the measured average: Unreal waits for the IRQ of a
+  // short test transfer in a counted loop, and the wall clock alone had not moved enough to finish
+  // the transfer when the loop gave up — "Selected sound card not found". Headless the two are the
+  // same clock.
+  const cps = () => (machine.wallClockMs ? (machine.cyclesPerSecond || 1e8) : 18.2065 * (machine.pitBase || 0x10000));
+  const now = () => Math.max(clock(machine), sb.clock + (machine.cpu.cycles - sb.cyc) / cps());
+  const mark = (t) => { sb.clock = t; sb.cyc = machine.cpu.cycles; };
   const raise = (wide) => {
     if (wide) sb.irq16 = true; else sb.irq8 = true;
     machine.raiseIRQ(IRQ);
@@ -108,7 +117,7 @@ export function installSB(machine) {
   };
   const catchUp = () => {
     const t = now(), dt = t - sb.clock;
-    sb.clock = t;
+    mark(t);
     if (!sb.xfer || sb.paused || dt <= 0) { sb.frac = 0; return; }
     sb.pcmRate = sb.rate;
     let frames = dt * sb.rate + sb.frac;
@@ -124,15 +133,14 @@ export function installSB(machine) {
     const x = sb.xfer;
     if (!x || sb.paused || !sb.rate) return;
     const frames = x.left / (x.stereo ? 2 : 1), secs = Math.max(0, (frames - sb.frac) / sb.rate);
-    const cps = machine.wallClockMs ? (machine.cyclesPerSecond || 1e8) : 18.2065 * (machine.pitBase || 0x10000);
-    machine.armDevice(machine.cpu.cycles + Math.ceil(secs * cps) + 1);
+    machine.armDevice(machine.cpu.cycles + Math.ceil(secs * cps()) + 1);
   };
   const poll = () => { catchUp(); arm(); };
   machine.sbPoll = poll;
   machine.dma.beforeRead = catchUp;
 
   const start = (wide, auto, stereo, signed, units) => {
-    sb.clock = now(); sb.frac = 0; sb.paused = false;
+    mark(clock(machine)); sb.frac = 0; sb.paused = false;
     sb.xfer = { wide, auto, stereo, signed, len: units, left: units };
     arm();
   };
@@ -153,7 +161,7 @@ export function installSB(machine) {
       case 0x48: sb.block8 = a[0] | (a[1] << 8); return;                   // block size - 1
       case 0x80: return;                                                   // silence: not modelled
       case 0xd0: case 0xd5: catchUp(); sb.paused = true; return;           // pause
-      case 0xd4: case 0xd6: sb.clock = now(); sb.paused = false; arm(); return;   // continue
+      case 0xd4: case 0xd6: mark(clock(machine)); sb.paused = false; arm(); return;   // continue
       case 0xd9: case 0xda: if (sb.xfer) sb.xfer.auto = false; return;     // exit auto-init after this block
       case 0xd1: sb.speaker = true; return;
       case 0xd3: sb.speaker = false; return;
