@@ -9,6 +9,7 @@
 //   ?zip=URL&run=PROG    fetch a ZIP, unpack it to C:\GAMES\<NAME>\ and run PROG from there
 //   ?cmd=DIR             run an arbitrary shell command line
 //   ?mhz=8               cap the guest at N million cycles/s (default: uncapped — see ui.js VCPU_HZ)
+//   ?mem=64              N MiB of RAM instead of 16 (src/dos.js playerMem)
 
 import { Mirage } from './ui.js';
 import { installFullscreen } from './fullscreen.js';
@@ -20,7 +21,9 @@ const boot = document.getElementById('boot');
 const drop = document.getElementById('drop');
 
 const mhz = parseFloat(new URLSearchParams(location.search).get('mhz'));
+const mem = parseInt(new URLSearchParams(location.search).get('mem'), 10);
 const app = new Mirage(canvas, {
+  ...(mem > 0 ? { mem } : {}),
   onFrame: throttle(updateHud, 100),
   ...(mhz > 0 ? { vcpuHz: mhz * 1e6 } : {}),
 });

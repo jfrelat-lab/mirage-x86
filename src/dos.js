@@ -24,7 +24,15 @@ const MEM_TOP = 0x9fff;     // end of conventional memory, in paragraphs
 // top, XMS kept below it) XMS offered 11,200 KB, where DOSBox-X's 16 MiB machine offers 15,360 KB (its
 // MEM command): a real card's memory is not taken out of the PC's. Stash asks XMS for one 12 MiB
 // block, does not check the refusal, and cleared 10 MiB at an address made of the error code.
-const DOS_PLAYER_MEM = { memSize: 32 << 20, ramSize: 16 << 20 };
+// playerMem(n): the same with n MiB of RAM (?mem=n, a manifest entry's `mem`), for the programs that
+// want more — Void 3 asks DPMI for one 16 MiB block. The address space is the smallest power of two
+// that holds the RAM and the aperture's 4 MiB above it.
+const playerMem = (mib = 16) => {
+  const ram = Math.max(1, Math.min(256, Math.floor(mib) || 16)) << 20;
+  let size = 1 << 20; while (size < ram + (4 << 20)) size *= 2;
+  return { memSize: size, ramSize: ram };
+};
+const DOS_PLAYER_MEM = playerMem(16);
 
 export function installDOS(machine, vfs) {
   const mem = machine.mem, cpu = machine.cpu;
@@ -1001,4 +1009,4 @@ export function installDOS(machine, vfs) {
   return dos;
 }
 
-export { PSP_SEG, ENV_SEG, MEM_TOP, DOS_PLAYER_MEM };
+export { PSP_SEG, ENV_SEG, MEM_TOP, DOS_PLAYER_MEM, playerMem };

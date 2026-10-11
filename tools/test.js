@@ -17,7 +17,7 @@ import { deflateRawSync } from 'zlib';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
 import { describeRegion, recentBlocks } from '../src/derail.js';
-import { installDOS, DOS_PLAYER_MEM } from '../src/dos.js';
+import { installDOS, DOS_PLAYER_MEM, playerMem } from '../src/dos.js';
 import { installAudio } from '../src/audio.js';
 import { createOPL } from '../src/opl.js';
 import { createHash } from 'crypto';
@@ -2654,6 +2654,13 @@ const udRun = (gated) => {
   eq('the DOS player has at least the 14,912 KB of free XMS DOSBox-X\'s 16 MiB machine has', (cpu.ax & 0xffff) >= 14912, true);
   eq('...because the VBE framebuffer is above the 16 MiB of RAM', mc.vbeFbBase >>> 0, 16 << 20);
   eq('...and INT 15h E801 reports the 16 MiB of RAM, not the 32 MiB address space', (() => { cpu.reg[0] = 0xe801; mc.intHandlers[0x15](cpu, mc); return [cpu.ax & 0xffff, cpu.bx & 0xffff].join(); })(), '15360,0'); }
+// ?mem=64 (src/dos.js playerMem): 64 MiB of RAM, the aperture above it in a 128 MiB space.
+{ const mc = new Machine(playerMem(64)); installBIOS(mc); const cpu = mc.cpu;
+  eq('?mem=64: INT 15h E801 reports 64 MiB of RAM', (() => { cpu.reg[0] = 0xe801; mc.intHandlers[0x15](cpu, mc); return [cpu.ax & 0xffff, cpu.bx & 0xffff].join(); })(), '15360,768');
+  eq('...the VBE framebuffer sits above it', mc.vbeFbBase >>> 0, 64 << 20);
+  cpu.ax = 0x0800; cpu.xmsCall();
+  eq('...and XMS offers more than 60 MiB of it', (cpu.ax & 0xffff) > 60 * 1024, true);
+  eq('playerMem(16) is the default player machine', JSON.stringify(playerMem(16)), JSON.stringify(DOS_PLAYER_MEM)); }
 
 // ---- POPF that sets TF: the trap comes after the next instruction, not at the end of the block ----
 // tools/reptrap.asm sets TF with POPF, runs `rep stosb` (CX=5) and four more instructions, clears TF

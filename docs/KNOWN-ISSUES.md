@@ -58,7 +58,6 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Program | Cause |
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
-| Void 3 | wants one 16 MiB DPMI block, more than the DOS player's 16 MiB of RAM (CWSDPMI has virtual memory); and its sound synthesis needs a Pentium II's worth of instructions per second, about 30 times MIRAGE's headless clock |
 | Second Reality | derails to 0000:0000 at start |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |

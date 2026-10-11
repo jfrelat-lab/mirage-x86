@@ -3,7 +3,7 @@
 //   node tools/record-audio.mjs <prog.com|prog.exe|game dir> [seconds=10] [out.wav] [tail]
 //   PROG=NAME.EXE        the program to run inside a game directory
 //   KEYS="1c,0d;39,20"   keystrokes (scancode,ascii) fed one at a time once the program starts
-//   MEM=64               a machine of that many MiB instead of the DOS player's
+//   MEM=64               that many MiB of RAM instead of the DOS player's 16 (as dos.html?mem=64)
 //
 // Seconds are the MACHINE's seconds (cpu.cycles at the PIT's rate), so a recording is reproducible to
 // the sample; prints the level of every second, which is how a test tells sound from silence.
@@ -34,7 +34,7 @@ if (statSync(target).isDirectory()) {
   vfs.addFile('\\' + exe, new Uint8Array(readFileSync(target)));
 }
 vfs.chdir('\\');
-const { mc, dos } = makeMachine(process.env.MEM ? { vfs, memSize: Number(process.env.MEM) << 20 } : { vfs });
+const { mc, dos } = makeMachine(process.env.MEM ? { vfs, mem: Number(process.env.MEM) } : { vfs });
 let fault = null; mc.onError = (e) => { fault = e; };
 const audio = installAudio(mc);
 dos.load(vfs.readFile('\\' + exe), tail ? ' ' + tail : '', 'C:\\' + exe);

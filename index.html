@@ -145,11 +145,11 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const runUrl = (e) => {
     if (e.kind === 'zip') {
-      return `dos.html?zip=${encodeURIComponent(e.file)}&run=${encodeURIComponent(e.run)}` + (e.args ? `&args=${encodeURIComponent(e.args)}` : '');
+      return `dos.html?zip=${encodeURIComponent(e.file)}&run=${encodeURIComponent(e.run)}` + (e.args ? `&args=${encodeURIComponent(e.args)}` : '') + (e.mem ? `&mem=${e.mem}` : '');
     }
     if (e.kind === 'dos') {
       const name = e.file.split('/').pop();
-      return `dos.html?load=${encodeURIComponent(e.file)}&run=${encodeURIComponent(name.replace(/\.[^.]+$/, ''))}`;
+      return `dos.html?load=${encodeURIComponent(e.file)}&run=${encodeURIComponent(name.replace(/\.[^.]+$/, ''))}` + (e.mem ? `&mem=${e.mem}` : '');
     }
     return `boot.html?img=${encodeURIComponent(e.file)}&cpu=386&mem=4`;
   };

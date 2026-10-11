@@ -5,7 +5,7 @@
 
 import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
-import { installDOS, DOS_PLAYER_MEM } from './dos.js';
+import { installDOS, DOS_PLAYER_MEM, playerMem } from './dos.js';
 import { VFS } from './vfs.js';
 import { unzip, deice } from './zip.js';
 import { Video } from './video.js';
@@ -48,7 +48,7 @@ export class Mirage {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
     this.opts = opts;
-    this.machine = new Machine(opts.memSize ? { memSize: opts.memSize } : DOS_PLAYER_MEM);
+    this.machine = new Machine(opts.memSize ? { memSize: opts.memSize } : opts.mem ? playerMem(opts.mem) : DOS_PLAYER_MEM);
     this.machine.timerAuto = false;   // browser paces the PIT to wall-clock (18.2 Hz) in _loop() below
     this.machine.vcpuHz = opts.vcpuHz ?? VCPU_HZ;   // emulated CPU speed cap; null = unthrottled
     this.machine.wallClockMs = () => performance.now();   // anchors the 0x3DA beam to real 70 Hz

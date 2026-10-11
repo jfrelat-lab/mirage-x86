@@ -56,7 +56,7 @@ const manifest = JSON.parse(readFileSync(ROOT + '/examples/manifest.json', 'utf8
 for (const e of manifest) {
   if (only && e.id !== only) continue;
   let bytes = new Uint8Array(readFileSync(ROOT + '/' + e.file));
-  const { mc, dos, vfs } = makeMachine({ dos: e.kind !== 'boot' });
+  const { mc, dos, vfs } = makeMachine({ dos: e.kind !== 'boot', mem: e.mem });
   if (e.kind === 'dos') dos.load(bytes, '', 'C:\\' + e.file.split('/').pop());
   else if (e.kind === 'zip') {                       // the archive's files at the root of C:, as the player narrows it
     for (const f of await deice(await unzip(bytes))) vfs.addFile('\\' + f.path.replace(/\//g, '\\').toUpperCase(), f.bytes);
