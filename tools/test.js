@@ -692,6 +692,19 @@ function eq(name, got, want) {
     (await deice(outer)).map((f) => `${f.path}:${f.bytes.length}`).join(), 'GAME/README.TXT:8,GAME/GAME.EXE:3000');
   eq('...and an archive without DEICE.EXE is left as it is', (await deice(files)) === files, true); }
 
+// ---- Apogee's shareware archives: INSTALL.EXE and a .SHR of PKWARE DCL-compressed files (src/zip.js) --
+// examples/games/1keen.zip as 3D Realms served it. Its VENDOR.DOC lists the files that make a legal
+// copy, with their sizes; KEEN1.EXE is the one a Keen 1 shareware install has (sha256 8b3f829f…).
+{ const { readFileSync, existsSync } = await import('fs');
+  const zp = new URL('../examples/games/1keen.zip', import.meta.url);
+  if (existsSync(zp)) {
+    const files = await deice(await unzip(new Uint8Array(readFileSync(zp))));
+    const get = (n) => files.find((f) => f.path === n);
+    eq('SHR: Keen 1\'s archive unpacks to its 33 files beside the installer', files.length, 3 + 33);
+    eq('...at the sizes its VENDOR.DOC lists', ['KEEN1.EXE', 'EGALATCH.CK1', 'LEVEL13.CK1', 'SOUNDS.CK1'].map((n) => get(n) && get(n).bytes.length).join(), '51190,57065,9908,8898');
+    eq('...and KEEN1.EXE is the shareware 1.31 executable', get('KEEN1.EXE') ? createHash('sha256').update(get('KEEN1.EXE').bytes).digest('hex').slice(0, 16) : 'missing', '8b3f829f7eeab18a');
+  } }
+
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.
 { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;

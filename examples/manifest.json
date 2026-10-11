@@ -72,6 +72,60 @@
     ]
   },
   {
+    "id": "wolf3d",
+    "kind": "zip",
+    "file": "examples/games/1wolf14.zip",
+    "run": "WOLF3D",
+    "title": "Wolfenstein 3D (shareware)",
+    "author": "id Software, published by Apogee",
+    "year": 1992,
+    "license": "shareware",
+    "licenseFile": "examples/licenses/wolf3d.txt",
+    "source": "https://ftpmirror1.infania.net/pub/3drealms/share/",
+    "blurb": "Episode one, Escape from Wolfenstein, from Apogee's 1.4 shareware archive, unpacked in the browser as its installer would. Music and effects on the AdLib and Sound Blaster (press the SOUND button).",
+    "secs": 60,
+    "type": [
+      [
+        6,
+        "{ENTER}"
+      ]
+    ]
+  },
+  {
+    "id": "keen1",
+    "kind": "zip",
+    "file": "examples/games/1keen.zip",
+    "run": "KEEN1",
+    "title": "Commander Keen 1 (shareware)",
+    "author": "id Software, published by Apogee",
+    "year": 1990,
+    "license": "shareware",
+    "licenseFile": "examples/licenses/keen1.txt",
+    "source": "https://ftpmirror1.infania.net/pub/3drealms/share/",
+    "blurb": "Marooned on Mars, the Apogee shareware episode of the Invasion of the Vorticons: id's smooth-scrolling EGA platformer, with PC speaker sound.",
+    "secs": 25
+  },
+  {
+    "id": "keen4",
+    "kind": "zip",
+    "file": "examples/games/4keen.zip",
+    "run": "KEEN4E",
+    "title": "Commander Keen 4 (shareware)",
+    "author": "id Software, published by Apogee",
+    "year": 1991,
+    "license": "shareware",
+    "licenseFile": "examples/licenses/keen4.txt",
+    "source": "https://ftpmirror1.infania.net/pub/3drealms/share/",
+    "blurb": "Secret of the Oracle, the Apogee shareware episode of Goodbye Galaxy: parallax EGA scrolling and AdLib music (press the SOUND button).",
+    "secs": 60,
+    "type": [
+      [
+        4,
+        "{ENTER}"
+      ]
+    ]
+  },
+  {
     "id": "fractint",
     "kind": "zip",
     "file": "examples/games/frain200.zip",

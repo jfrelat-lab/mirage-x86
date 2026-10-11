@@ -39,6 +39,9 @@ The programs on the home page (`index.html`), listed in `manifest.json`.
 | `games/dunedemo.zip` | Dune, the 1991 demo | Cryo / Virgin Games | "may be given away freely, but it is not to be sold", unaltered | `licenses/dunedemo.txt`, and README.TXT in the archive |
 | `games/htic_v12.zip` | Heretic 1.2, shareware | id Software (Raven Software) | shareware: "the right to distribute, royalty free and by electronic means only … in compressed format" | `licenses/heretic.txt`, LICENSE.DOC in the archive |
 | `games/doom19s.zip` | DOOM 1.9, shareware | id Software | shareware; the archive has no licence agreement, only id's "SHAREWARE VERSION — PLEASE DISTRIBUTE!!!" | `licenses/doom.txt` |
+| `games/1wolf14.zip` | Wolfenstein 3D 1.4, shareware | id Software, published by Apogee | shareware: "Everyone can … copy, upload and generally pass around this Program without charging for it", complete and unmodified, "Apogee" in the description | `licenses/wolf3d.txt` (VENDOR.DOC) |
+| `games/1keen.zip` | Commander Keen 1 1.31, shareware | id Software, licensed to Apogee | the same Apogee VENDOR.DOC terms | `licenses/keen1.txt` |
+| `games/4keen.zip` | Commander Keen 4 1.4, shareware | id Software, licensed to Apogee | the same Apogee VENDOR.DOC terms | `licenses/keen4.txt` |
 
 The two id archives are the files of id's own `idstuff` directory, as the idgames archive serves
 them (ftp.fu-berlin.de/pc/games/idgames/idstuff/). They hold an installer, not the game: DEICE.EXE
@@ -48,6 +51,10 @@ inside (`deice` in src/zip.js), which is what DEICE does, so the archives are se
 SETUP.EXE would write for a Sound Blaster at 220h, IRQ 7, DMA 1, music and effects. A manifest
 entry's `add` lists them, and the player puts them next to the unpacked game (`dos.html?add=`).
 Without one the games start silent.
+The three Apogee archives are 3D Realms' own (ftp.3drealms.com/share/, through the mirror at
+ftpmirror1.infania.net/pub/3drealms/share/). They hold Apogee's INSTALL.EXE and one NAME.SHR, files
+compressed by the PKWARE Data Compression Library; the player unpacks the .SHR beside the installer
+(`unshr` in src/zip.js), which is what INSTALL does, so these too are served unmodified.
 Quake's shareware is not here: its licence forbids displaying it publicly and any use of its
 screenshots.
 

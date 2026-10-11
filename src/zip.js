@@ -56,6 +56,89 @@ export async function unzip(zip) {
 }
 
 /**
+ * Apogee's shareware archives (Wolfenstein 3D 1.4, Commander Keen 1 and 4, as 3D Realms served them)
+ * hold INSTALL.EXE and one NAME.SHR: a 3Ah-byte header (the file count at 10h), then per file its name
+ * in 128 bytes, 40 bytes of attributes (at +8 the compressed size; the DOS date and time), and the
+ * file compressed by the PKWARE Data Compression Library (`explode`). The installer is not run; its
+ * files are added beside it, as it would have copied them.
+ * @param {Uint8Array} shr
+ * @returns {{path: string, bytes: Uint8Array}[]}
+ */
+export function unshr(shr) {
+  const dv = new DataView(shr.buffer, shr.byteOffset, shr.byteLength), out = [];
+  const count = dv.getUint16(0x10, true);
+  let at = 0x3a;
+  for (let i = 0; i < count && at + 0xa8 <= shr.length; i++) {
+    let name = '';
+    for (let k = 0; k < 128 && shr[at + k]; k++) name += String.fromCharCode(shr[at + k]);
+    const size = dv.getUint32(at + 0x88, true), data = at + 0xa8;
+    if (!name || data + size > shr.length) throw new Error(`unshr: entry ${i} runs past the end`);
+    out.push({ path: name.toUpperCase(), bytes: explode(shr.subarray(data, data + size)) });
+    at = data + size;
+  }
+  return out;
+}
+
+// ---- PKWARE DCL "implode", decompressed ----
+// The format as the Data Compression Library writes it (and as zlib's contrib/blast documents it):
+// a byte saying whether literals are coded (1) or raw (0), a byte with the dictionary's size (4, 5
+// or 6: 1, 2 or 4 KiB), then LSB-first bits. 1 + a length and a distance copies from the output;
+// 0 + a literal. The length 519 ends the stream. The three Huffman tables are fixed; they are given
+// here as the library defines them, each byte a run: (count - 1) << 4 | code length.
+const LIT_RUNS = [11, 124, 8, 7, 28, 7, 188, 13, 76, 4, 10, 8, 12, 10, 12, 10, 8, 23, 8, 9, 7, 6, 7, 8, 7, 6,
+  55, 8, 23, 24, 12, 11, 7, 9, 11, 12, 6, 7, 22, 5, 7, 24, 6, 11, 9, 6, 7, 22, 7, 11, 38, 7, 9, 8, 25, 11, 8,
+  11, 9, 12, 8, 12, 5, 38, 5, 38, 5, 11, 7, 5, 6, 21, 6, 10, 53, 8, 7, 24, 10, 27, 44, 253, 253, 253, 252, 252,
+  252, 13, 12, 45, 12, 45, 12, 61, 12, 45, 44, 173];
+const LEN_RUNS = [2, 35, 36, 53, 38, 23];
+const DIST_RUNS = [2, 20, 53, 230, 247, 151, 248];
+const LEN_BASE = [3, 2, 4, 5, 6, 7, 8, 9, 10, 12, 16, 24, 40, 72, 136, 264];
+const LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+const huffman = (runs) => {
+  const lengths = [];
+  for (const r of runs) for (let k = (r >> 4) + 1; k > 0; k--) lengths.push(r & 15);
+  const count = new Array(14).fill(0), offs = new Array(14).fill(0), symbol = [];
+  for (const l of lengths) count[l]++;
+  for (let l = 1; l < 13; l++) offs[l + 1] = offs[l] + count[l];
+  lengths.forEach((l, sym) => { if (l) symbol[offs[l]++] = sym; });
+  return { count, symbol };
+};
+let TABLES = null;
+function explode(src) {
+  if (!TABLES) TABLES = { lit: huffman(LIT_RUNS), len: huffman(LEN_RUNS), dist: huffman(DIST_RUNS) };
+  let pos = 0, buf = 0, cnt = 0;
+  const bits = (n) => {
+    while (cnt < n) { if (pos >= src.length) throw new Error('explode: out of input'); buf |= src[pos++] << cnt; cnt += 8; }
+    const v = buf & ((1 << n) - 1); buf >>>= n; cnt -= n; return v;
+  };
+  // Codes are stored bit-inverted, first bit first.
+  const decode = (h) => {
+    let code = 0, first = 0, index = 0;
+    for (let l = 1; l <= 13; l++) {
+      code |= bits(1) ^ 1;
+      const c = h.count[l];
+      if (code < first + c) return h.symbol[index + code - first];
+      index += c; first = (first + c) << 1; code <<= 1;
+    }
+    throw new Error('explode: bad code');
+  };
+  const lit = bits(8), dict = bits(8);
+  if (lit > 1 || dict < 4 || dict > 6) throw new Error('explode: not a DCL stream');
+  let out = new Uint8Array(Math.max(1024, src.length * 4)), n = 0;
+  const put = (b) => { if (n === out.length) { const o = new Uint8Array(out.length * 2); o.set(out); out = o; } out[n++] = b; };
+  for (;;) {
+    if (bits(1)) {
+      const s = decode(TABLES.len), len = LEN_BASE[s] + bits(LEN_EXTRA[s]);
+      if (len === 519) break;
+      const sh = len === 2 ? 2 : dict;
+      const dist = (decode(TABLES.dist) << sh) + bits(sh) + 1;
+      if (dist > n) throw new Error('explode: distance too far back');
+      for (let k = 0; k < len; k++) put(out[n - dist]);
+    } else put(lit ? decode(TABLES.lit) : bits(8));
+  }
+  return out.slice(0, n);
+}
+
+/**
  * id Software's shareware archives (DOOM 1.9, Heretic 1.2) do not hold the game: they hold DEICE.EXE
  * and a self-extracting PKZIP archive cut into floppy-sized pieces, NAME.1, NAME.2… INSTALL.BAT runs
  * DEICE, which glues the pieces back into NAME.EXE and runs it. Doing the same here — join the
@@ -67,6 +150,11 @@ export async function unzip(zip) {
  */
 export async function deice(files) {
   const byName = new Map(files.map((f) => [f.path.toUpperCase(), f]));
+  const shr = [...byName.keys()].find((p) => p.endsWith('.SHR'));
+  if (shr !== undefined && [...byName.keys()].some((p) => p.endsWith('INSTALL.EXE'))) {
+    const dir = shr.includes('/') ? shr.slice(0, shr.lastIndexOf('/') + 1) : '';
+    return [...files, ...unshr(byName.get(shr).bytes).map((f) => ({ path: dir + f.path, bytes: f.bytes }))];
+  }
   const deiceAt = [...byName.keys()].find((p) => p === 'DEICE.EXE' || p.endsWith('/DEICE.EXE'));
   if (deiceAt === undefined) return files;
   const dir = deiceAt.slice(0, -'DEICE.EXE'.length);
