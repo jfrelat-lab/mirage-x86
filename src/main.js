@@ -11,6 +11,7 @@
 //   ?mhz=8               cap the guest at N million cycles/s (default: uncapped — see ui.js VCPU_HZ)
 
 import { Mirage } from './ui.js';
+import { installFullscreen } from './fullscreen.js';
 import { VFS } from './vfs.js';
 
 const canvas = document.getElementById('screen');
@@ -111,6 +112,8 @@ function updateHud(a) {
 }
 
 function throttle(fn, ms) { let last = 0; return (...a) => { const t = performance.now(); if (t - last >= ms) { last = t; fn(...a); } }; }
+
+installFullscreen(document.getElementById('stage'), document.getElementById('fullscreen-toggle'));
 
 const crtBtn = document.getElementById('crt-toggle');
 const hudBtn = document.getElementById('hud-toggle');

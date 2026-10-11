@@ -21,9 +21,11 @@ import { Keyboard } from './keyboard.js';
 import { bootSector, bootCD } from './boot.js';
 import { installAudio } from './audio.js';
 import { AudioOut } from './audio-out.js';
+import { installFullscreen } from './fullscreen.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), status = $('status'), pick = $('image'), fileIn = $('file');
+installFullscreen($('stage'), $('fullscreen'));
 const cpuSel = $('cpu'), memSel = $('mem'), clockSel = $('clock'), bootBtn = $('boot'), pauseBtn = $('pause');
 const mouseHint = $('mousehint'), pciBox = $('pci'), comBox = $('com1'), serialPane = $('serial'), serialOut = $('serialOut'), serialIn = $('serialIn');
 const TICK_MS = 1000 / 18.2065;

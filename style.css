@@ -55,6 +55,13 @@ body {
 }
 body.crt #crt-overlay { opacity: 1; }
 
+/* ---- fullscreen (src/fullscreen.js): the stage alone, 4:3, as large as the display allows ---- */
+#stage:fullscreen { background: #000; display: flex; align-items: center; justify-content: center;
+  width: 100vw; height: 100vh; aspect-ratio: auto; }
+#stage:fullscreen #screen { width: min(100vw, 133.333vh); height: min(100vh, 75vw);
+  border-radius: 0; box-shadow: none; }
+#stage:fullscreen #crt-overlay { inset: auto; width: min(100vw, 133.333vh); height: min(100vh, 75vw); border-radius: 0; }
+
 /* ---- HUD / devtools ---- */
 #hud {
   display: none; width: 320px; height: 100%; overflow: auto;

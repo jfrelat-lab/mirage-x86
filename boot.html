@@ -20,6 +20,8 @@
   button { cursor: pointer; } button:hover { border-color: var(--accent); color: var(--accent); }
   button:disabled { opacity: .4; cursor: default; }
   #stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 12px; }
+  #stage:fullscreen { background: #000; padding: 0; }
+  #stage:fullscreen #screen { height: min(100vh, 75vw); width: min(100vw, 133.333vh); max-width: none; }
   #screen { height: 100%; max-width: 100%; aspect-ratio: 4 / 3; background: #000;
             image-rendering: pixelated; outline: none; cursor: none; }   /* the guest draws its own */
   #status { padding: 6px 14px; background: var(--panel); border-top: 1px solid #1c2a36;
@@ -50,6 +52,7 @@
     <label title="the Sound Blaster 16 and the PC speaker, in real time only"><input id="sound" type="checkbox" checked> Sound</label>
     <button id="boot">Boot</button>
     <button id="pause" disabled>Pause</button>
+    <button id="fullscreen" title="Fullscreen (Alt+Enter)">Fullscreen</button>
     <span style="flex:1"></span>
     <a href="dos.html">DOS player →</a> <a href="./">home</a>
   </header>
@@ -58,7 +61,7 @@
   <div id="serial"><pre id="serialOut"></pre><input id="serialIn" placeholder="COM1 — type a line, Enter sends it (with CR)"></div>
   <div id="help">The keyboard goes to the guest, and so does the mouse over the screen. Click the screen to
     capture the mouse (it then moves freely, and Esc releases it). <b id="mousehint" style="color:var(--accent)"></b>
-    The image lives in memory only: nothing is written back to disk.</div>
+    The image lives in memory only: nothing is written back to disk. <b>Alt+Enter</b>: fullscreen.</div>
   <script type="module" src="src/bootpc.js"></script>
 </body>
 </html>
