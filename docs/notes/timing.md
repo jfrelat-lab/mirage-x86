@@ -1132,3 +1132,14 @@ each time.
 Chrome, same page: DOOM 0.5 → 50 M instructions/s and 4 → 60 frames/s; Heretic ~10 → 50-60 frames/s.
 tube (bench.js, alternated x3) unchanged. Five goldens moved (crevenge, freality, mesha, omniscent,
 qblove): their blocks end in other places now, the same pictures at slightly different moments.
+
+## 17. The INT 8 floor, lowered to 1165 Hz — 2026-10-11
+
+The floor of §2 and §8 (pitBase>>4, 4096 PIT ticks, 291 Hz) sat below what games ask for their own
+clocks: Keen 4 sets 561 Hz, Wolf3D ~700 Hz for its sound service, which also counts its 70 Hz
+TimeCount. They ran 1.9x and 2.4x slow, in the browser too, where ui.js had its own 3 ms (333 Hz)
+floor. In Chrome, Wolf3D sat on its title screen past 30 s; at 701 Hz it runs its attract loop.
+The floor is pitBase>>6 now, 1024 ticks, about 1165 Hz, and ui.js's is 0.8 ms; Chrome Revenge's
+17.5 kHz stays capped. tools/pitrate.asm -dDIVIDER=2128: DOSBox-X 560, MIRAGE 559 (290 before).
+Goldens abstract, crevenge, omniscent, paleozoa and qblove ask for more than 291 Hz and moved: the
+same pictures, further on, as their clocks run at the rate they set.

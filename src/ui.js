@@ -217,8 +217,9 @@ export class Mirage {
     // moved to 182584 when that was calibrated to the reference (docs/notes/timing.md §7). Dividing by the
     // old constant made an unreprogrammed guest tick 2.79x too SLOWLY in the browser — and no
     // headless gate can see it, because none of them run this loop.
-    // The 3 ms floor is this path's own rate cap, ~333 Hz, independent of the headless pitBase>>4.
-    const tickMs = Math.max(3, TICK_MS * (this.machine.pitReload / (this.machine.pitBase || 0x10000)));
+    // The 0.8 ms floor is this path's own rate cap, ~1250 Hz, just above the machine's pitBase>>6
+    // (1165 Hz): Keen 4 asks 561 Hz and Wolf3D ~700 Hz, which the old 3 ms floor halved.
+    const tickMs = Math.max(0.8, TICK_MS * (this.machine.pitReload / (this.machine.pitBase || 0x10000)));
     if (now - this._lastTick > 250) this._lastTick = now;   // drop a big backlog (e.g. after the tab was hidden)
 
     if (this.shell.state === 'running') {

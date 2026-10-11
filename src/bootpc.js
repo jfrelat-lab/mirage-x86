@@ -154,7 +154,7 @@ tick.port1.onmessage = (e) => {
       if (!s.turbo) {
         // At the guest's programmed rate (pitReload against pitBase, as ui.js), AT MOST ONE tick per
         // pass so its ISR runs before the next fires; a backlog (a hidden tab) is dropped, not replayed.
-        const tickMs = Math.max(3, TICK_MS * (mc.pitReload / (mc.pitBase || 0x10000)));
+        const tickMs = Math.max(0.8, TICK_MS * (mc.pitReload / (mc.pitBase || 0x10000)));
         if (w - s.lastTick > 250) s.lastTick = w;
         if (w - s.lastTick >= tickMs) { mc.tickTimer(); s.lastTick += tickMs; }
       }

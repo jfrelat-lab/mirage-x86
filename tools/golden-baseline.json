@@ -35,7 +35,7 @@
     "fault": null
   },
   "intros/abstract.com": {
-    "hash": "b52eb55840acbc64909a907ccf34c7a70a2a0edf",
+    "hash": "c793f337b4ea67fd19227d76d5b5456886e4dfcf",
     "mode": 19,
     "fault": null
   },
@@ -110,7 +110,7 @@
     "fault": "mirage: unhandled exception INT 06h re-raised 100000x at the same address 0018:0143 (linear 0x2c3) — the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing will change. INSIDE THE REAL-MODE IVT (vector 176) — the guest left its own code. Recent block starts (oldest first, the last is this one): 0814:100 -> 0814:128 -> 0814:138 -> 0018:140 -> 0018:143"
   },
   "intros/paleozoa.com": {
-    "hash": "025ed7f62fc4632b9ce03930f553313c39a60106",
+    "hash": "5549cd1796c6637deb52e70327e37a180c18d46a",
     "mode": 19,
     "fault": null
   },
@@ -130,7 +130,7 @@
     "fault": null
   },
   "intros/qblove.com": {
-    "hash": "410cbc97decae2837fc64b93aa449e80c803123e",
+    "hash": "9e2cd675e2edf2260f90d9a1dd58ebc270a0109d",
     "mode": 19,
     "fault": null
   },
@@ -190,7 +190,7 @@
     "fault": null
   },
   "intros/omniscent.com": {
-    "hash": "28104fae9392ef39da3b995b9296171391cfe16c",
+    "hash": "cb207c4113770efb9941a4e99f909a3babb706af",
     "mode": 19,
     "fault": null
   },
@@ -210,7 +210,7 @@
     "fault": null
   },
   "intros/crevenge.com": {
-    "hash": "6563db014618abe85769f7cd7f15504bb397d205",
+    "hash": "1881bf2ad483d9df80a92a3905330d820ffbcb6f",
     "mode": 3,
     "fault": null
   },

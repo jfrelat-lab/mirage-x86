@@ -2817,6 +2817,18 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   const n = out ? parseInt(new TextDecoder().decode(out).trim(), 16) : -1;
   eq('PIT: counter 0 programmed for 100 Hz raises IRQ 0 about 100 times a second (DOSBox-X: 100)', n >= 97 && n <= 103 ? 'ok' : n, 'ok'); }
 
+// Divisor 2128, 561 Hz: Keen 4's rate. DOSBox-X counts 560; MIRAGE's floor of pitBase>>4 gave 290, and
+// Keen 4 ran at half speed (Wolf3D, ~700 Hz, at 0.4). The floor is pitBase>>6 now, about 1165 Hz.
+{ const hex = (                                         // nasm -f bin -dDIVIDER=2128 tools/pitrate.asm, 195 bytes
+    'b80835cd21891ead018c06af01b80825ba9601cd21fab034e643b85008e64088e0e640fbb94600bada03eca80875fbec' +
+    'a80874fbe2f4fab034e64330c0e640e6401eb80825c516ad01cd211ffbb43c31c9bab101cd21721f89c3beb901a1ab01' +
+    'e81900a1a901e81300b440b90a00bab901cd21b43ecd21b8004ccd2151b90400c1c00450240f04303c39760204078804' +
+    '4658e2ec59c32eff06a90175052eff06ab0150b020e62058cf00000000000000004f55542e5458540030303030303030' +
+    '300d0a');
+  const out = runProbe(hex, 195, 'PITRATE.COM').vfs.readFile('\\OUT.TXT');
+  const n = out ? parseInt(new TextDecoder().decode(out).trim(), 16) : -1;
+  eq('PIT: 561 Hz asked, about 561 delivered (DOSBox-X: 560), not capped at 291', n >= 550 && n <= 570 ? 'ok' : n, 'ok'); }
+
 // ---- the Sound Blaster plays its DMA at the rate it was set, then raises IRQ 7 (src/sb.js) ------
 // tools/sbprobe.asm: 11111 bytes at 11111 Hz, single cycle. DOSBox-X: DSP 4.05, the IRQ after 12h
 // ticks (one second), and at tick 9 the count reads 1737h, about half. MIRAGE plays from the first

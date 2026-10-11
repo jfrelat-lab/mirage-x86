@@ -796,17 +796,18 @@ export class Machine {
    *  tools/pitrate.asm -dDIVIDER=11932 counts 100 INT 8s a second of beam time on DOSBox-X; 278 here. */
   setPitReload(r) {
     r = Math.round(r * this.pitBase / 0x10000);
-    // Cap the emulated INT 8 rate (floor the reload at pitBase/16 ≈ 291 Hz). Some games drive
-    // counter 0 far faster — Wolf3D sets ~700 Hz for its sound service — which real hardware
-    // handles with a tiny ISR, but MIRAGE's per-interrupt dispatch is much heavier, so an
+    // Cap the emulated INT 8 rate (floor the reload at pitBase/64, 1024 PIT ticks ≈ 1165 Hz). Some
+    // programs drive counter 0 far faster — Chrome Revenge asks 17.5 kHz for a PWM synth — and an
     // uncapped rate becomes an INT-8 storm (headless especially, where serviceTimer fires off
-    // cpu.cycles). The cap keeps timer-paced games fast enough (200 Hz Dune / 140 Hz GoT are
-    // unaffected) and matches ui.js's wall-clock clamp.
+    // cpu.cycles). The floor was pitBase/16, 291 Hz, until 2026-10-11: below what games ask for their
+    // own clocks. Keen 4 sets 561 Hz and Wolf3D ~700 Hz (its sound service, which also counts the
+    // game's 70 Hz TimeCount): they ran 1.9x and 2.4x slow, in the browser too (ui.js's own floor).
+    // DOSBox-X has no cap at all (docs/notes/timing.md §8).
     // The floor is a SPEED accommodation, not a timing one — measured in docs/notes/timing.md §2: interrupt
     // dispatch costs ~0.2 µs and 256x the deliveries cost +8% wall clock, so what an uncapped rate
     // actually buys is the guest's own ISR running that many more times. `MIRAGE_PITFLOOR` lowers it
     // for experiments (Chrome Revenge asks for 68 and runs ~33x slower when it gets it).
-    const floor = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITFLOOR) || (this.pitBase >> 4);
+    const floor = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_PITFLOOR) || (this.pitBase >> 6);
     this.pitReload = Math.max(floor, r);
     this.nextTimerCycle = this.cpu.cycles + this.pitReload;
     this.cpu.deadline = this.nextTimerCycle;
