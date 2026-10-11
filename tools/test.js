@@ -234,15 +234,23 @@ function eq(name, got, want) {
   catch (e) { got = String(e.message).slice(0, 60); }
   eq('WBINVD and INVD run through to the next instruction', got, '5678'); }
 
-// ---- Sound-hardware detection so games start (no audio, just the probe handshakes). ---
+// ---- Sound-hardware detection: the DSP reset handshake, and the OPL timers a detection waits on. ---
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   mc.ioWrite(0x226, 1, 1); mc.ioWrite(0x226, 1, 0);                 // SB DSP reset: 1 then 0
   eq('sb dsp data-ready', mc.ioRead(0x22e, 1) & 0x80, 0x80);       // status bit7 set
   eq('sb dsp reset ack', mc.ioRead(0x22a, 1), 0xaa);               // read-data = 0xAA
-  mc.ioWrite(0x388, 1, 0x04); mc.ioWrite(0x389, 1, 0x21);          // OPL: select timer-ctrl, start timer1
-  eq('opl timer expired', mc.ioRead(0x388, 1), 0xc0);              // status shows timer-expired bits
+  // OPL timers run for real (src/opl.js): timer 1 preset FFh is one 80 us step. tools/oplprobe.asm,
+  // DOSBox-X: S0=00 S1=C0 T1=5EC4 S2=A0 T2=BE58 S3=00 (an OPL3); QEMU's flags agree.
+  const us = (n) => { mc.cpu.cycles += Math.ceil(n * 1e-6 * 18.2065 * mc.pitBase); };
+  mc.ioWrite(0x388, 1, 0x02); mc.ioWrite(0x389, 1, 0xff);          // OPL: timer 1 = FFh
+  mc.ioWrite(0x388, 1, 0x04); mc.ioWrite(0x389, 1, 0x21);          // select timer-ctrl, start timer1
+  eq('opl timer not yet expired', mc.ioRead(0x388, 1), 0x00);
+  us(85);
+  eq('opl timer expired after 80 us', mc.ioRead(0x388, 1), 0xc0);  // status shows timer-expired bits
   mc.ioWrite(0x388, 1, 0x04); mc.ioWrite(0x389, 1, 0x80);          // OPL: reset
-  eq('opl reset clears', mc.ioRead(0x388, 1), 0x00); }
+  eq('opl reset clears', mc.ioRead(0x388, 1), 0x00);
+  us(80);
+  eq('...and the flag comes back at the next overflow, the timer still running', mc.ioRead(0x388, 1), 0xc0); }
 
 // ---- EGA/VGA detection: INT 10h AH=12h BL=10h returns EGA info so games find a card. --
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
@@ -2761,6 +2769,25 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   const st = [];
   for (let i = 0; i < 60; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 20) st.push(...p); }
   eq('...and the SB Pro stereo bit leaves it mono, at the same pitch', Math.abs(hz(Float32Array.from(st), 44100) - 500) < 10, true); }
+
+// ---- the OPL3 plays FM (src/opl.js) ---------------------------------------------------------------
+// tools/oplnotes.asm recorded here and on DOSBox-X's Nuked-OPL3 (tools/audio-compare.mjs): 16 sections
+// each, same durations, pitch within the FFT's 3 Hz; Dune's AdLib music: loudness envelopes
+// correlated 0.96 over 40 s. Here: one carrier, F-number 144h, block 4 = 245.8 Hz, at full level.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const audio = installAudio(mc);
+  const sec = 18.2065 * mc.pitBase, w = (r, v) => { mc.ioWrite(0x388, 1, r); mc.ioWrite(0x389, 1, v); };
+  const hz = (buf, rate) => { let zc = 0; for (let i = 2; i < buf.length; i += 2) if ((buf[i - 2] < 0) !== (buf[i] < 0)) zc++; return zc / 2 / (buf.length / 2 / rate); };
+  audio.pull(44100);
+  w(0x20, 0x21); w(0x23, 0x21); w(0x60, 0xf0); w(0x63, 0xf0); w(0x80, 0x0f); w(0x83, 0x0f);
+  w(0x40, 0x3f); w(0x43, 0x00); w(0xc0, 0x01); w(0xa0, 0x44); w(0xb0, 0x31);
+  const parts = [];
+  for (let i = 0; i < 50; i++) { mc.cpu.cycles += Math.round(sec / 50); const p = audio.pull(44100); if (i >= 10) parts.push(...p); }
+  const tone = Float32Array.from(parts);
+  eq('the OPL plays F-number 144h, block 4 at 245.8 Hz (within 1%)', Math.abs(hz(tone, 44100) - 245.8) < 2.5, true);
+  w(0xb0, 0x11);                                                   // key off: RR 15 releases at once
+  for (let i = 0; i < 5; i++) { mc.cpu.cycles += Math.round(sec / 50); audio.pull(44100); }
+  mc.cpu.cycles += Math.round(sec / 50);
+  eq('...and falls silent after key-off', Math.max(...audio.pull(44100).map(Math.abs)) < 0.01, true); }
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

@@ -1,9 +1,9 @@
 // audio.js — what the machine sounds like, as stereo samples at whatever rate the listener wants.
 // No DOM here: the browser plays it (src/audio-out.js), tools/record-audio.mjs writes it to a WAV.
 //
-// Two sources:
-//   - the Sound Blaster (src/sb.js), whose played samples arrive at the card's rate and are
-//     resampled linearly;
+// Three sources:
+//   - the Sound Blaster's DAC (src/sb.js) and its OPL3 FM (src/opl.js), whose samples arrive at
+//     their own rates (the card's, 49716 Hz) and are resampled linearly;
 //   - the PC speaker: port 61h bits 0-1 and PIT channel 2. With the gate (bit 0) and the data bit
 //     (bit 1) both set it plays channel 2's square wave; with the gate off the data bit drives the
 //     cone directly, which is how speaker-PCM players (and plain clicks) work. Every change is
@@ -14,7 +14,7 @@
 // pull(rate) returns the samples for the time elapsed since the previous pull.
 
 const PIT_HZ = 1193182;
-const SPEAKER = 0.25, SB = 0.9;            // levels, against full scale
+const SPEAKER = 0.25, SB = 0.9, OPL = 1.5;  // levels, against full scale (OPL: DOSBox-X's Nuked-OPL3 level, tools/oplnotes.asm)
 
 /** The machine's time in seconds: wall-clock in the browser (where the PIT follows it too),
  *  otherwise cpu.cycles at 18.2065 * pitBase cycles a second, the PIT's own rate. */
@@ -28,7 +28,8 @@ export function installAudio(machine) {
     last: clock(machine),
     // Speaker timeline: [{ t, b (port 61h bits 0-1), hz }], the state in force from t on.
     spk: [{ t: -Infinity, b: 0, hz: 0, t0: 0 }],
-    sbFifo: [], sbFrac: 0, sbPrev: [0, 0],
+    // The resampled sources: the Sound Blaster's DAC and the OPL3, each with its own fifo.
+    src: [{ name: 'sb', gain: SB, fifo: [], frac: 0, prev: [0, 0] }, { name: 'opl', gain: OPL, fifo: [], frac: 0, prev: [0, 0] }],
     hp: [0, 0, 0, 0],                       // DC blocker state, per channel: x1, y1
     pull,
   };
@@ -42,33 +43,34 @@ export function installAudio(machine) {
     audio.spk.push({ t, b, hz, t0: restart ? t : prev.t0 });
   };
 
-  // Linear resampling of the card's stereo Int16 stream onto `rate`, appended to sbFifo.
-  const takeSB = (rate) => {
-    const sb = machine.sb;
-    if (!sb) return;
-    const { rate: src, samples } = sb.drain();
-    if (!samples.length || !src) return;
-    const step = src / rate, n = samples.length >> 1;
-    let pos = audio.sbFrac;
-    const [p0, p1] = audio.sbPrev;
+  // Linear resampling of a device's stereo Int16 stream onto `rate`, appended to its fifo.
+  const take = (st, rate) => {
+    const dev = machine[st.name];
+    if (!dev) return;
+    if (dev.render) dev.render();                 // the OPL computes its samples up to now
+    const { rate: srcRate, samples } = dev.drain();
+    if (!samples.length || !srcRate) return;
+    const step = srcRate / rate, n = samples.length >> 1;
+    let pos = st.frac;
+    const [p0, p1] = st.prev;
     while (pos < n) {
       const i = Math.floor(pos), f = pos - i;
       const a0 = i === 0 ? p0 : samples[(i - 1) * 2], a1 = i === 0 ? p1 : samples[(i - 1) * 2 + 1];
       const b0 = samples[i * 2], b1 = samples[i * 2 + 1];
-      audio.sbFifo.push((a0 + (b0 - a0) * f) / 32768 * SB, (a1 + (b1 - a1) * f) / 32768 * SB);
+      st.fifo.push((a0 + (b0 - a0) * f) / 32768 * st.gain, (a1 + (b1 - a1) * f) / 32768 * st.gain);
       pos += step;
     }
-    audio.sbFrac = pos - n;
-    audio.sbPrev = [samples[(n - 1) * 2], samples[(n - 1) * 2 + 1]];
-    // Never let the card get more than a quarter of a second ahead of the listener.
+    st.frac = pos - n;
+    st.prev = [samples[(n - 1) * 2], samples[(n - 1) * 2 + 1]];
+    // Never let a device get more than a quarter of a second ahead of the listener.
     const max = Math.ceil(rate * 0.25) * 2;
-    if (audio.sbFifo.length > max) audio.sbFifo.splice(0, audio.sbFifo.length - max);
+    if (st.fifo.length > max) st.fifo.splice(0, st.fifo.length - max);
   };
 
   function pull(rate) {
     const now = clock(machine), t0 = audio.last;
     audio.last = now;
-    takeSB(rate);
+    for (const st of audio.src) take(st, rate);
     const frames = Math.max(0, Math.min(Math.round((now - t0) * rate), rate));   // a second at most
     const out = new Float32Array(frames * 2);
     // The speaker, sample by sample along its timeline.
@@ -87,10 +89,12 @@ export function installAudio(machine) {
     }
     // Keep only the state in force from now on.
     audio.spk = tl.slice(Math.max(0, k));
-    // The card, from its fifo.
-    const n = Math.min(frames * 2, audio.sbFifo.length);
-    for (let i = 0; i < n; i++) out[i] += audio.sbFifo[i];
-    audio.sbFifo.splice(0, n);
+    // The card's DAC and its FM, from their fifos.
+    for (const st of audio.src) {
+      const n = Math.min(frames * 2, st.fifo.length);
+      for (let i = 0; i < n; i++) out[i] += st.fifo[i];
+      st.fifo.splice(0, n);
+    }
     // A ~16 Hz high-pass on the mix, as the AC coupling of a real output does: neither the speaker's
     // resting level nor a card playing a buffer of zeros (00h is -128 in unsigned 8-bit) is audible.
     const a = 1 - 1 / (rate * 0.01), hp = audio.hp;

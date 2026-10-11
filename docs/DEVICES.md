@@ -143,13 +143,22 @@ checks with the PIT's (`machine.nextEvent`), so a driver probing for the IRQ wit
 gets it within its few milliseconds. The SB Pro stereo bit is not honoured, as on DOSBox-X's SB16.
 ADPCM and recording play silence.
 
+**OPL3** (`opl.js`): the YMF262, which plays OPL2 (AdLib) music too, at 388h-38Bh, 220h-223h and
+228h. Written from the chip's documented behaviour: log-sine and exponential tables, 19-bit phase
+generators, ADSR envelopes with key scaling, tremolo and vibrato, the eight waveforms, feedback, FM
+and AM connections, four-operator voices, rhythm mode with its noise generator, OPL3 stereo. It
+renders at the chip's 49716 Hz on the machine's clock, catching up at every register write. The
+timers run for real: on wall time or on executed instructions at the PIT's rate, whichever has
+moved further, so a detection that waits by reading the status port a hundred times sees them
+expire in the browser too. Status and timers checked with `tools/oplprobe.asm` against DOSBox-X and
+QEMU; the sound against DOSBox-X's Nuked-OPL3 (`tools/oplnotes.asm`, `tools/audio-compare.mjs`).
+
 **Audio** (`audio.js`, `audio-out.js`): `audio.js` mixes the card (resampled linearly) and the PC
 speaker (port 61h and PIT channel 2, rendered from a timeline of their changes) into stereo at any
 rate, on the machine's clock, through a 16 Hz high-pass as a real output's AC coupling. In the
 browser `audio-out.js` plays it through an AudioWorklet, started by the first click or key; the
 DOS player has a SOUND button, the bare PC a Sound box (real-time clock only).
-`tools/record-audio.mjs` writes it to a WAV headless. The OPL timer handshake (`bios.js`) works on
-388h, 228h, 220h and 222h; nothing is synthesised.
+`tools/record-audio.mjs` writes it to a WAV headless. The FM is the OPL3, below.
 
 **DMA** (`dma.js`): both 8237s, with base and current address and count, the flip-flop, masks, modes
 and page registers. Only the Sound Blaster transfers. A hardware IRQ nobody claimed is acknowledged
@@ -212,8 +221,8 @@ that installs its own handler on INT 2Fh or loads its own extender gets the vect
 | 1CEh-1D0h | DISPI (with PCI) | `dispi.js` |
 | 1F0h-1F7h, 3F6h | IDE primary | `ide.js` |
 | 201h | game port | `bios.js` |
-| 220h-22Fh | Sound Blaster 16 DSP and mixer; OPL detection on 220h-223h, 228h | `sb.js`, `bios.js` |
-| 388h-389h | OPL detection | `bios.js` |
+| 220h-22Fh | Sound Blaster 16 DSP and mixer; the OPL3 on 220h-223h and 228h | `sb.js`, `opl.js` |
+| 388h-38Bh | the OPL3 (AdLib) | `opl.js` |
 | 00h-0Fh, 81h-8Fh, C0h-DFh | 8237 DMA controllers and page registers | `dma.js` |
 | 3BAh, 3DAh | input status (retrace) | `bios.js` |
 | 3C0h-3CFh | VGA attribute, misc, sequencer, DAC, graphics | `vga.js`, `bios.js` |

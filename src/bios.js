@@ -18,6 +18,7 @@ import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
 import { installDMA } from './dma.js';
 import { installSB } from './sb.js';
+import { installOPL } from './opl.js';
 
 const VRAM = 0xb8000;          // text video memory
 const BDA = 0x400;             // BIOS Data Area
@@ -1130,23 +1131,8 @@ export function installBIOS(machine, opts = {}) {
 
   // The Sound Blaster 16's DSP, mixer and DMA playback are src/sb.js, installed with the DMA controllers.
 
-  // Minimal AdLib/OPL FM-synth detection. The classic probe resets the two timers, then
-  // starts timer 1 and expects the status port's timer-expired bits (0xC0) to appear.
-  // We fake exactly that handshake (no synthesis): a write of the timer-start bit to
-  // register 4 arms the expired status; a reset clears it. Mirrored at the SB Pro OPL base.
-  let oplReg = 0, oplStatus = 0;
-  const oplData = (v) => { if (oplReg === 0x04) oplStatus = (v & 0x80) ? 0 : (v & 0x01) ? 0xc0 : 0; };
-  // Bases: 0x388 (Adlib), 0x228 (SB-compatible FM) and — because BLASTER advertises T6, an SB16 —
-  // the OPL3 stereo pair at 0x220/0x221 and 0x222/0x223. Those two were unregistered, so a game
-  // driving the FM there wrote into nothing and read 0xFF from the status port. tools/survey-ports
-  // caught it as HOCUS reading 0x220 and 0x222 about 165000 times each: not a stalled poll, but the
-  // standard "delay by reading the FM status port" between the register write and the data write.
-  // The reads were harmless; the inconsistency was not — we claimed a card at a base we ignored.
-  for (const base of [0x388, 0x228, 0x220, 0x222]) {
-    machine.onPortWrite(base, (_p, _s, v) => { oplReg = v & 0xff; });     // register select
-    machine.onPortWrite(base + 1, (_p, _s, v) => oplData(v & 0xff));      // register data
-    machine.onPortRead(base, () => oplStatus);                            // OPL status
-  }
+  // The OPL3 (AdLib FM) is src/opl.js, installed with the Sound Blaster. HOCUS reads its status
+  // ports at 220h and 222h about 165000 times as a delay between writes, so both answer.
 
   // Game/joystick port 0x201: no joystick attached, so every line floats high — 0xFF, the same
   // value DOSBox returns with joysticktype=none. Axis bits reading 0 (the old 0xF0) says "the
@@ -1331,6 +1317,7 @@ export function installBIOS(machine, opts = {}) {
   installPIC(machine);   // 8259A pair: IRR/ISR/IMR, fixed priority, EOI, ICW init (ports 0x20/0x21, 0xA0/0xA1)
   installDMA(machine);   // 8237 pair (src/dma.js)
   installSB(machine);    // Sound Blaster 16 at 220h, IRQ 7, DMA 1/5, as BLASTER says (src/sb.js)
+  installOPL(machine);   // its OPL3, also the AdLib at 388h (src/opl.js)
   // A PCI bus (src/pci.js) is the difference between QEMU's -M pc and -M isapc: off unless asked for —
   // `pci: true`, or MIRAGE_PCI=1 in the tools — so the ISA machine every existing image boots on stays.
   const pciEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PCI === '1';

@@ -97,7 +97,7 @@ export function installSB(machine) {
     // right unit by unit whatever the block size: a unit left over from an odd-length block is the
     // left half of the next frame, not the start of a new pair.
     if (per === 2) { if (sb.carry !== null) got.unshift(sb.carry); sb.carry = got.length & 1 ? got.pop() : null; }
-    if (sb.speaker || x.wide) {
+    if ((sb.speaker || x.wide) && machine.audio) {                     // kept only if someone will play them
       if (per === 2) for (const v of got) sb.pcm.push(v);
       else for (const v of got) sb.pcm.push(v, v);
     }

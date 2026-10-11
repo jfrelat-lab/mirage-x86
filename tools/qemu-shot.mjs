@@ -73,6 +73,9 @@ const qemu = spawn('/bin/sh', ['-c', `ulimit -t ${Math.ceil(HARD_S)}; exec "$@"`
   '-m', process.env.QSHOT_MEM || '16', '-fda', floppy, '-boot', 'a',
   '-drive', `file=fat:rw:${work},format=raw,if=ide,index=0`,
   '-display', 'none', '-monitor', 'stdio', '-no-reboot',
+  // QSHOT_QEMUARGS: more devices, e.g. "-audiodev wav,id=a,path=out.wav -device adlib,audiodev=a"
+  // to record what an AdLib (or -device sb16) plays — the sound oracle for src/opl.js and src/sb.js.
+  ...(process.env.QSHOT_QEMUARGS ? process.env.QSHOT_QEMUARGS.split(' ').filter(Boolean) : []),
 ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
 // Capped: the monitor is chatty on error and this string is only ever used to print the tail.

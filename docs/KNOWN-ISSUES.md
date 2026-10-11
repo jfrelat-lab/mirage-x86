@@ -8,7 +8,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 | Missing | Consequence |
 |---|---|
-| Sound | The Sound Blaster's digital sound and the PC speaker play; FM music (OPL, AdLib) is detected but not synthesised, and there is no Gravis Ultrasound. ADPCM and recording play silence. |
+| Sound | No Gravis Ultrasound. ADPCM and recording play silence. The OPL3 matches Nuked-OPL3 in pitch, timing and the shape of the music, not sample for sample: levels differ by up to ~3 dB depending on the voice, and FM depth, waveform 7 and four-operator voices sound slightly brighter. |
 | A network card | Systems run without a network; QNX's demo disk stops asking for one. |
 | ACPI | ReactOS (installed for an ACPI machine) stops in its kernel: "did NOT find RSDT". |
 | A floppy *controller* | The BIOS serves drive A:, but a system that drives the controller itself cannot read a floppy. |
