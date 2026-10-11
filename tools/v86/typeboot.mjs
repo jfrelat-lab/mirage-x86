@@ -73,3 +73,15 @@ for (const line of lines) {
   console.log(screen().filter((l, i, a) => l || a.slice(i).some(Boolean)).slice(-12).join('\n'));
 }
 if (fault) console.log('FAULT', String(fault.message).slice(0, 200));
+// SHOT=<file.png>: the screen at the end through src/video.js, the browser's renderer — a game's
+// graphics mode, which the text dump above cannot show.
+if (process.env.SHOT) {
+  const { Video } = await import('../../src/video.js');
+  const { writePNG } = await import('../frame.mjs');
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const v = new Video(mc, canvas); v.font = mc.font; v.frame = 16; v.render();
+  const rgb = new Uint8Array(v.imgW * v.imgH * 3);
+  for (let i = 0; i < v.imgW * v.imgH; i++) { const p = v.u32[i]; rgb[3 * i] = p & 255; rgb[3 * i + 1] = (p >> 8) & 255; rgb[3 * i + 2] = (p >> 16) & 255; }
+  writePNG(process.env.SHOT, rgb, v.imgW, v.imgH, 1);
+  console.log(`screen ${v.imgW}x${v.imgH} -> ${process.env.SHOT}`);
+}

@@ -412,5 +412,20 @@
         ": and nand invert ;\n"
       ]
     ]
+  },
+  {
+    "id": "freedos",
+    "kind": "boot",
+    "file": "examples/boot/freedos.img.gz",
+    "title": "FreeDOS 1.4",
+    "author": "The FreeDOS Project",
+    "year": 2025,
+    "license": "GPL and others",
+    "licenseFile": "examples/licenses/freedos.txt",
+    "source": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/",
+    "blurb": "A whole DOS on a 64 MB hard disk, built from the FreeDOS project's own packages: EDIT, Bywater BASIC and FreeBASIC to write programs, Lua and NASM, and a few games (vitetris, Sudoku86, Liquid War, Floppy Bird). The menu is on screen.",
+    "cpu": "586",
+    "mem": 64,
+    "secs": 25
   }
 ]

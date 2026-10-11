@@ -46,8 +46,8 @@ export function loadFonts(machine) {
  */
 export function makeMachine(opts = {}) {
   // mem: the DOS player's machine with that many MiB of RAM (src/dos.js playerMem), as ?mem= gives it.
-  const mc = new Machine(opts.memSize ? { memSize: opts.memSize } : opts.mem ? playerMem(opts.mem)
-    : opts.dos === false ? { memSize: 16 << 20 } : DOS_PLAYER_MEM);
+  const mc = new Machine({ ...(opts.memSize ? { memSize: opts.memSize } : opts.mem ? playerMem(opts.mem)
+    : opts.dos === false ? { memSize: 16 << 20 } : DOS_PLAYER_MEM), ...(opts.cpu ? { cpu: opts.cpu } : {}) });
   // A BARE machine — one a boot sector runs on — has no expanded memory manager. EMS is a DOS
   // driver (EMM386.EXE, loaded by CONFIG.SYS), not part of the PC, and unlike XMS it cannot stand
   // aside once the guest arrives: EMM386 checks the INT 67h vector BEFORE installing, finds ours,

@@ -1,0 +1,39 @@
+FreeDOS 1.4 — examples/boot/freedos.img.gz (sha256 61dcc19d…aa8abf), a 64 MB hard disk built by
+tools/mkfreedos.mjs from the FreeDOS project's 1.4 packages, unmodified:
+https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/
+
+Each package is copied without its SOURCE directory; the package zips at that address hold the
+source code of every program on the disk, and the disk's C:\SOURCES.TXT lists them with their
+SHA-256. The licence of each program is its package's APPINFO/*.LSM, copied to C:\FREEDOS\APPINFO:
+
+  kernel    The FreeDOS Kernel — GNU General Public License, Version 2
+  freecom   FreeCom — GNU General Public License, Version 2 (GPL)
+  himemx    HIMEMX — General Public License, Artistic license and Public Domain
+  ctmouse   CTMouse — GNU General Public License, Version 2
+  edit      FreeDOS Edit — GNU General Public License, Version 2
+  mem       MEM — GNU General Public License, Version 2
+  more      more — GNU General Public License, Version 2
+  deltree   DELTREE — GNU General Public License, Version 2
+  xcopy     XCopy — GNU General Public License, Version 2
+  attrib    attrib — GNU General Public License, Version 2
+  find      find — GNU General Public License, Version 2
+  tree      Tree — GPL (using public domain findfile by Jeremy Davis and optional
+  choice    choice — GNU General Public License, Version 2
+  mode      mode — GNU General Public License, Version 2
+  sort      sort — GNU General Public License, Version 2
+  fc        fc — GNU General Public License, Version 2
+  bwbasic   Bywater BASIC — GNU General Public License, Version 2
+  fbc       FreeBASIC — GNU General Public License, Version 2
+  nasm      Nasm — Simplified (2-Clause) BSD License
+  lua       Lua — MIT license
+  vitetris  Vitetris — Simplified (2-Clause) BSD License
+  flpybird  Floppy Bird — MIT License
+  sudoku86  sudoku86 — Simplified (2-Clause) BSD License
+  liquiwar  Liquid War — GNU General Public License, Version 2
+
+FDCONFIG.SYS, AUTOEXEC.BAT, README.TXT and SOURCES.TXT on the disk, its master boot record
+(tools/mbr.asm) and the builder are MIRAGE's (MIT). The boot sector is FreeDOS's own (boot/boot.asm
+from the kernel package's sources, GPL v2), assembled for FAT16.
+
+The GNU General Public License, version 2, under which most of these programs are released, is in
+the kernel package as DOC/KERNEL/COPYING, on the disk at C:\FREEDOS\DOC\KERNEL\COPYING.

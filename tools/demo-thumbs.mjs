@@ -10,6 +10,7 @@
 // A program that leaves its graphics mode before exiting is captured at its last graphics frame —
 // VBE always, any graphics mode when the entry says `lastFrame` (Helium plays once and exits).
 import { readFileSync, writeFileSync } from 'fs';
+import { gunzipSync } from 'zlib';
 import { fileURLToPath } from 'url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const { makeMachine } = await import(ROOT + '/tools/harness.mjs');
@@ -56,7 +57,8 @@ const manifest = JSON.parse(readFileSync(ROOT + '/examples/manifest.json', 'utf8
 for (const e of manifest) {
   if (only && e.id !== only) continue;
   let bytes = new Uint8Array(readFileSync(ROOT + '/' + e.file));
-  const { mc, dos, vfs } = makeMachine({ dos: e.kind !== 'boot', mem: e.mem });
+  // A boot entry's `mem` is the bare PC's memory, as boot.html?mem= gives it; a DOS entry's is RAM.
+  const { mc, dos, vfs } = makeMachine(e.kind === 'boot' ? { dos: false, memSize: (e.mem || 16) << 20, cpu: e.cpu && String(e.cpu) } : { mem: e.mem });
   if (e.kind === 'dos') dos.load(bytes, '', 'C:\\' + e.file.split('/').pop());
   else if (e.kind === 'zip') {                       // the archive's files at the root of C:, as the player narrows it
     for (const f of await deice(await unzip(bytes))) vfs.addFile('\\' + f.path.replace(/\//g, '\\').toUpperCase(), f.bytes);
@@ -65,9 +67,15 @@ for (const e of manifest) {
     dos.load(vfs.resolve('\\' + exe).node.data, e.args || '', 'C:\\' + exe);
   }
   else {
-    if (bytes.length < 1474560) { const p = new Uint8Array(1474560); p.set(bytes); bytes = p; }
-    mc.disk.attach(0, bytes);
-    bootSector(mc, bytes, { drive: 0 });
+    if (/\.gz$/.test(e.file)) bytes = new Uint8Array(gunzipSync(bytes));
+    if (bytes.length > 2949120) {                    // a hard disk: 16 heads, 63 sectors, as tools/mkfreedos.mjs makes it
+      mc.disk.attach(0x80, bytes, { cyl: Math.floor(bytes.length / (16 * 63 * 512)), heads: 16, spt: 63, type: 3 });
+      bootSector(mc, bytes, { drive: 0x80 });
+    } else {
+      if (bytes.length < 1474560) { const p = new Uint8Array(1474560); p.set(bytes); bytes = p; }
+      mc.disk.attach(0, bytes);
+      bootSector(mc, bytes, { drive: 0 });
+    }
   }
   let fault = null; mc.onError = (x) => { fault = x; };
   const sec = 18.2065 * mc.pitBase, end = (e.secs || 3) * sec, keys = [...(e.type || [])];

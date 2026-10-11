@@ -152,7 +152,7 @@
       const name = e.file.split('/').pop();
       return `dos.html?load=${encodeURIComponent(e.file)}&run=${encodeURIComponent(name.replace(/\.[^.]+$/, ''))}` + (e.mem ? `&mem=${e.mem}` : '');
     }
-    return `boot.html?img=${encodeURIComponent(e.file)}&cpu=386&mem=4`;
+    return `boot.html?img=${encodeURIComponent(e.file)}&cpu=${e.cpu || 386}&mem=${e.mem || 4}`;
   };
   fetch('examples/manifest.json').then((r) => r.json()).then((list) => {
     document.getElementById('grid').innerHTML = list.map((e) => {

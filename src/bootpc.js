@@ -220,8 +220,11 @@ async function bootSelected() {
   url.searchParams.set('img', pick.value); url.searchParams.set('cpu', cpuSel.value); url.searchParams.set('mem', memSel.value); url.searchParams.set('clock', clockSel.value);
   url.searchParams.set('pci', pciBox.checked ? '1' : '0'); url.searchParams.set('com1', comBox.checked ? '1' : '0');
   history.replaceState(null, '', url);
-  const bytes = new Uint8Array(await (await fetch(pick.value)).arrayBuffer());
-  return boot(pick.value.split('/').pop(), bytes);
+  // A .gz image (the FreeDOS disk of the home page: 64 MB, 25 MB compressed) is inflated here.
+  const res = await fetch(pick.value);
+  const body = /\.gz$/i.test(pick.value) ? res.body.pipeThrough(new DecompressionStream('gzip')) : res.body;
+  const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+  return boot(pick.value.split('/').pop().replace(/\.gz$/i, ''), bytes);
 }
 const tryBoot = () => bootSelected().catch((e) => { console.error(e); status.textContent = 'boot failed: ' + (e.message || e); });
 // One output for every session (a page gets few AudioContexts), started by the Boot click — the

@@ -58,6 +58,11 @@ compressed by the PKWARE Data Compression Library; the player unpacks the .SHR b
 Quake's shareware is not here: its licence forbids displaying it publicly and any use of its
 screenshots.
 
+`boot/freedos.img.gz` is a FreeDOS 1.4 hard disk that `node tools/mkfreedos.mjs <packages> <out>` builds,
+the same bytes every time, from 24 packages of the FreeDOS 1.4 repository, unmodified and pinned by
+SHA-256; `licenses/freedos.txt` lists each with its licence (GPL v2 for most, MIT, BSD) and where its
+source is. boot.html inflates it in the browser.
+
 The binaries of the boot-sector programs are the ones v86's catalogue serves for the same programs; BootChess comes with its
 author's release text.
 
