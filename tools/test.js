@@ -2934,6 +2934,15 @@ const runLinux = (hex, argv) => {
     '000000000100000000000000008004080080040873000000730000000500000000100000d9e8d9e8dcc0dec1db7c24e0' +
     'db6c24e0db5c24f88b5c24f8b801000000cd80');
   eq('linux: FSTP TBYTE under paging stores at the linear address', runLinux(hex, ['/w/FPU80']).status, 3); }
+// tools/linux/fileio.asm: open(O_CREAT), write, lseek, read, fstat64 on the in-memory file system.
+// Docker: "cde6", status 3 (the descriptor).
+{ const hex = (                                         // nasm -f bin tools/linux/fileio.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408f0000000001100000700000000100000b805000000bbdb800408b942' +
+    '000000baa4010000cd8089c7b80400000089fbb9e6800408ba06000000cd80b81300000089fbb90200000031d2cd80b8' +
+    '0300000089fbb9ec800408ba03000000cd80b8c500000089fbb900900408cd80a02c9004080430a2ef800408b8040000' +
+    '00bb01000000b9ec800408ba04000000cd80b80100000089fbcd8066696c65696f2e746d70006162636465663f3f3f3f');
+  eq('linux: a file is created, written, sought, read back and stat-ed', JSON.stringify(runLinux(hex, ['/w/FILEIO'])), JSON.stringify({ out: 'cde6', status: 3 })); }
 
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept

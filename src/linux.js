@@ -24,7 +24,8 @@ const STACK_TOP = 0xc0000000, STACK_SIZE = 0x40000;       // 256 KiB, mapped up 
 const MMAP_BASE = 0x40000000;
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
-const E = { EPERM: 1, ENOENT: 2, EBADF: 9, ENOMEM: 12, EFAULT: 14, EINVAL: 22, ENOTTY: 25, ENOSYS: 38 };
+const E = { EPERM: 1, ENOENT: 2, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
+  EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39 };
 
 export function installLinux(machine, { onOutput } = {}) {
   const cpu = machine.cpu, mem = machine.mem;
@@ -164,6 +165,7 @@ export function installLinux(machine, { onOutput } = {}) {
     cpu.eip = entry >>> 0;
     cpu.flags = 0x0002;                     // IF clear: no device interrupts reach a program here
     lx.done = false; lx.status = 0; lx.signal = 0;
+    lx.exe = norm(argv[0] || '/a.out');
   };
 
   // ---- ending ------------------------------------------------------------------------------------
@@ -178,9 +180,148 @@ export function installLinux(machine, { onOutput } = {}) {
     exit(0, sig);
   };
 
+  // ---- files -------------------------------------------------------------------------------------
+  // One in-memory tree: absolute path -> node. A directory is { dir: true }, a file { data, size }.
+  // Paths are case-sensitive and '/'-separated, as a Linux program writes them. The host fills it
+  // before the run (addFile) and reads it after (readFile): tools/linux/run.mjs mounts the program's
+  // own directory at /w and starts there, which is what `docker run -v dir:/w -w /w` does.
+  const fs = new Map([['/', { dir: true, mtime: 0 }]]);
+  const norm = (path, base = lx.cwd) => {
+    const parts = [];
+    for (const p of ((path.startsWith('/') ? '' : base + '/') + path).split('/')) {
+      if (!p || p === '.') continue;
+      if (p === '..') parts.pop(); else parts.push(p);
+    }
+    return '/' + parts.join('/');
+  };
+  const parent = (p) => p.slice(0, p.lastIndexOf('/')) || '/';
+  const mkdirs = (p) => { if (fs.has(p)) return; mkdirs(parent(p)); fs.set(p, { dir: true, mtime: lx.now() }); };
+  lx.fs = fs; lx.cwd = '/';
+  lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
+  lx.readFile = (path) => { const n = fs.get(norm(path, '/')); return n && !n.dir ? n.data.subarray(0, n.size) : null; };
+  lx.mkdir = (path) => mkdirs(norm(path, '/'));
+  lx.chdir = (path) => { lx.cwd = norm(path, '/'); };
+  lx.stdin = new Uint8Array(0); lx.stdinPos = 0;
+  lx.exe = '/a.out';
+  // Time runs with the guest's cycles from a fixed start, so a run repeats.
+  lx.epoch = 1767225600;                                       // 2026-01-01T00:00:00Z
+  lx.now = () => lx.epoch + cpu.cycles / (machine.cyclesPerSecond || 1e8);
+
+  // File descriptors: 0-2 are the pipes the oracle has (Docker without -t), never a terminal.
+  const fds = [{ pipe: 0 }, { pipe: 1 }, { pipe: 2 }];
+  lx.fds = fds;
+  const fdOf = (fd) => { const f = fds[fd]; if (!f) throw E.EBADF; return f; };
+  const newFd = (f, min = 0) => { let i = min; while (fds[i]) i++; fds[i] = f; return i; };
+  const grow = (node, size) => {
+    if (size <= node.data.length) return;
+    const d = new Uint8Array(Math.max(size, node.data.length * 2, 256)); d.set(node.data); node.data = d;
+  };
   const out = (fd, bytes) => {
     (fd === 2 ? lx.stderr : lx.stdout).push(...bytes);
     if (lx.onOutput) lx.onOutput(fd, bytes);
+  };
+  const doWrite = (fd, bytes) => {
+    const f = fdOf(fd);
+    if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
+    if (f.node.dir) return -E.EISDIR;
+    if ((f.flags & 3) === 0) return -E.EBADF;                               // O_RDONLY
+    if (f.flags & 0x400) f.pos = f.node.size;                               // O_APPEND
+    grow(f.node, f.pos + bytes.length);
+    f.node.data.set(bytes, f.pos); f.pos += bytes.length;
+    f.node.size = Math.max(f.node.size, f.pos); f.node.mtime = lx.now();
+    return bytes.length;
+  };
+  const doRead = (fd, buf, n, at) => {
+    const f = fdOf(fd);
+    let src;
+    if (f.pipe !== undefined) {
+      if (f.pipe !== 0) return -E.EBADF;
+      src = lx.stdin.subarray(lx.stdinPos, lx.stdinPos + n); lx.stdinPos += src.length;
+    } else {
+      if (f.node.dir) return -E.EISDIR;
+      if ((f.flags & 3) === 1) return -E.EBADF;                             // O_WRONLY
+      const pos = at === undefined ? f.pos : at;
+      src = f.node.data.subarray(Math.min(pos, f.node.size), Math.min(pos + n, f.node.size));
+      if (at === undefined) f.pos += src.length;
+    }
+    wrBytes(buf, src); return src.length;
+  };
+  const doOpen = (path, flags, base = lx.cwd) => {
+    const p = norm(path, base);
+    let node = fs.get(p);
+    if (node && (flags & 0xc0) === 0xc0) return -E.EEXIST;                  // O_CREAT|O_EXCL
+    if (!node) {
+      if (!(flags & 0x40)) return -E.ENOENT;                                // O_CREAT
+      const dir = fs.get(parent(p));
+      if (!dir) return -E.ENOENT;
+      if (!dir.dir) return -E.ENOTDIR;
+      node = { data: new Uint8Array(0), size: 0, mtime: lx.now() }; fs.set(p, node);
+    }
+    if (node.dir && (flags & 3)) return -E.EISDIR;
+    if ((flags & 0x10000) && !node.dir) return -E.ENOTDIR;                  // O_DIRECTORY
+    if ((flags & 0x200) && !node.dir && (flags & 3)) { node.size = 0; node.mtime = lx.now(); }   // O_TRUNC
+    return newFd({ node, path: p, pos: 0, flags });
+  };
+  const atBase = (dirfd) => {                                               // the *at() calls' starting directory
+    if ((dirfd | 0) === -100) return lx.cwd;                                // AT_FDCWD
+    const f = fdOf(dirfd); if (!f.node || !f.node.dir) throw E.ENOTDIR; return f.path;
+  };
+  // struct stat64, 96 bytes (arch/x86/include/uapi/asm/stat.h).
+  const inoOf = (p) => { let h = 2166136261; for (let i = 0; i < p.length; i++) h = Math.imul(h ^ p.charCodeAt(i), 16777619); return (h >>> 0) || 1; };
+  const putStat = (buf, node, p) => {
+    const b = new Uint8Array(96), d = new DataView(b.buffer);
+    const isPipe = node.pipe !== undefined;
+    d.setUint32(0, isPipe ? 0xc : 0x801, true);                             // st_dev
+    d.setUint32(12, inoOf(p), true);
+    d.setUint32(16, isPipe ? 0o010600 : node.dir ? 0o040755 : 0o100644, true);
+    d.setUint32(20, node.dir ? 2 : 1, true);
+    const size = isPipe || node.dir ? (node.dir ? 4096 : 0) : node.size;
+    d.setUint32(44, size, true);
+    d.setUint32(52, 4096, true);
+    d.setUint32(56, Math.ceil(size / 512), true);
+    const t = Math.floor(node.mtime || lx.epoch);
+    d.setUint32(64, t, true); d.setUint32(72, t, true); d.setUint32(80, t, true);
+    d.setUint32(88, inoOf(p), true);
+    wrBytes(buf, b); return 0;
+  };
+  const statPath = (base, path, buf) => {
+    const p = norm(rdStr(path), base), node = fs.get(p);
+    return node ? putStat(buf, node, p) : -E.ENOENT;
+  };
+  const putTime = (buf, s, frac, scale, wide) => {                          // timespec / timeval, 32- or 64-bit seconds
+    if (wide) { wr32(buf, s >>> 0); wr32(buf + 4, Math.floor(s / 4294967296)); wr32(buf + 8, Math.floor(frac * scale)); wr32(buf + 12, 0); }
+    else { wr32(buf, s >>> 0); wr32(buf + 4, Math.floor(frac * scale)); }
+  };
+  const clock = (id, buf, wide) => {
+    const t = id === 0 || id === 5 || id === 8 ? lx.now() : cpu.cycles / (machine.cyclesPerSecond || 1e8);   // REALTIME*, else monotonic
+    putTime(buf, Math.floor(t), t - Math.floor(t), 1e9, wide); return 0;
+  };
+  const getdents = (fd, buf, cnt) => {
+    const f = fdOf(fd);
+    if (!f.node || !f.node.dir) return -E.ENOTDIR;
+    const pre = f.path === '/' ? '/' : f.path + '/';
+    const names = ['.', '..', ...[...fs.keys()].filter((k) => k !== '/' && k.startsWith(pre) && !k.slice(pre.length).includes('/')).map((k) => k.slice(pre.length)).sort()];
+    let o = 0;
+    while (f.pos < names.length) {
+      const name = new TextEncoder().encode(names[f.pos]);
+      const len = (19 + name.length + 1 + 7) & ~7;
+      if (o + len > cnt) { if (o === 0) return -E.EINVAL; break; }
+      const full = names[f.pos] === '.' ? f.path : names[f.pos] === '..' ? parent(f.path) : pre + names[f.pos];
+      const node = fs.get(full);
+      const b = new Uint8Array(len), d = new DataView(b.buffer);
+      d.setUint32(0, inoOf(full), true); d.setUint32(8, f.pos + 1, true);
+      d.setUint16(16, len, true); b[18] = node && node.dir ? 4 : 8;         // DT_DIR / DT_REG
+      b.set(name, 19);
+      wrBytes(buf + o, b); o += len; f.pos++;
+    }
+    return o;
+  };
+  const seek = (fd, off, whence) => {
+    const f = fdOf(fd);
+    if (f.pipe !== undefined) return -E.ESPIPE;
+    const base = whence === 0 ? 0 : whence === 1 ? f.pos : whence === 2 ? f.node.size : NaN;
+    if (Number.isNaN(base) || base + off < 0) return -E.EINVAL;
+    f.pos = base + off; return f.pos;
   };
 
   // ---- system calls --------------------------------------------------------------------------------
@@ -188,34 +329,124 @@ export function installLinux(machine, { onOutput } = {}) {
   const SYS = {
     1: (status) => { exit(status); },                                      // exit
     252: (status) => { exit(status); },                                    // exit_group
-    4: (fd, buf, n) => {                                                   // write
-      if (fd !== 1 && fd !== 2) return -E.EBADF;
-      out(fd, rdBytes(buf, n)); return n;
-    },
-    146: (fd, iov, cnt) => {                                               // writev
-      if (fd !== 1 && fd !== 2) return -E.EBADF;
+    3: (fd, buf, n) => doRead(fd, buf, n),                                 // read
+    4: (fd, buf, n) => doWrite(fd, rdBytes(buf, n)),                       // write
+    145: (fd, iov, cnt) => {                                               // readv
       let total = 0;
-      for (let i = 0; i < cnt; i++) { const b = rd32(iov + i * 8), n = rd32(iov + i * 8 + 4); out(fd, rdBytes(b, n)); total += n; }
+      for (let i = 0; i < cnt; i++) {
+        const b = rd32(iov + i * 8), n = rd32(iov + i * 8 + 4), got = doRead(fd, b, n);
+        if (got < 0) return total || got;
+        total += got; if (got < n) break;
+      }
       return total;
     },
-    3: (fd) => (fd === 0 ? 0 : -E.EBADF),                                  // read: stdin is empty
-    6: (fd) => (fd <= 2 ? 0 : -E.EBADF),                                   // close
+    146: (fd, iov, cnt) => {                                               // writev
+      let total = 0;
+      for (let i = 0; i < cnt; i++) { const r = doWrite(fd, rdBytes(rd32(iov + i * 8), rd32(iov + i * 8 + 4))); if (r < 0) return total || r; total += r; }
+      return total;
+    },
+    180: (fd, buf, n, lo, hi) => doRead(fd, buf, n, lo + hi * 4294967296),  // pread64
+    5: (path, flags) => doOpen(rdStr(path), flags),                        // open
+    295: (dirfd, path, flags) => doOpen(rdStr(path), flags, atBase(dirfd)),// openat
+    6: (fd) => { fdOf(fd); delete fds[fd]; return 0; },                    // close
+    19: (fd, off, whence) => seek(fd, off | 0, whence),                    // lseek
+    140: (fd, hi, lo, res, whence) => {                                    // _llseek
+      const r = seek(fd, (hi | 0) * 4294967296 + lo, whence);
+      if (r < 0) return r;
+      wr32(res, r >>> 0); wr32(res + 4, Math.floor(r / 4294967296)); return 0;
+    },
+    195: (path, buf) => statPath(lx.cwd, path, buf),                       // stat64
+    196: (path, buf) => statPath(lx.cwd, path, buf),                       // lstat64: no links here
+    197: (fd, buf) => { const f = fdOf(fd); return putStat(buf, f.node || f, f.path || 'pipe:' + fd); },   // fstat64
+    300: (dirfd, path, buf, flags) => {                                    // fstatat64
+      if ((flags & 0x1000) && rd8(path) === 0) return SYS[197](dirfd, buf);  // AT_EMPTY_PATH
+      return statPath(atBase(dirfd), path, buf);
+    },
+    33: (path) => (fs.has(norm(rdStr(path))) ? 0 : -E.ENOENT),             // access
+    307: (dirfd, path) => (fs.has(norm(rdStr(path), atBase(dirfd))) ? 0 : -E.ENOENT),   // faccessat
+    183: (buf, size) => {                                                  // getcwd
+      const b = new TextEncoder().encode(lx.cwd + '\0');
+      if (b.length > size) return -E.ERANGE;
+      wrBytes(buf, b); return b.length;
+    },
+    12: (path) => {                                                        // chdir
+      const p = norm(rdStr(path)), n = fs.get(p);
+      if (!n) return -E.ENOENT; if (!n.dir) return -E.ENOTDIR;
+      lx.cwd = p; return 0;
+    },
+    39: (path) => {                                                        // mkdir
+      const p = norm(rdStr(path));
+      if (fs.has(p)) return -E.EEXIST;
+      if (!fs.has(parent(p))) return -E.ENOENT;
+      fs.set(p, { dir: true, mtime: lx.now() }); return 0;
+    },
+    296: (dirfd, path) => SYS[39](path),                                   // mkdirat (relative to cwd only)
+    40: (path) => {                                                        // rmdir
+      const p = norm(rdStr(path)), n = fs.get(p);
+      if (!n) return -E.ENOENT; if (!n.dir) return -E.ENOTDIR;
+      if ([...fs.keys()].some((k) => k.startsWith(p + '/'))) return -E.ENOTEMPTY;
+      fs.delete(p); return 0;
+    },
+    10: (path) => {                                                        // unlink
+      const p = norm(rdStr(path)), n = fs.get(p);
+      if (!n) return -E.ENOENT; if (n.dir) return -E.EISDIR;
+      fs.delete(p); return 0;
+    },
+    301: (dirfd, path, flags) => (flags & 0x200 ? SYS[40](path) : SYS[10](path)),   // unlinkat (AT_REMOVEDIR)
+    38: (from, to) => {                                                    // rename
+      const a = norm(rdStr(from)), b = norm(rdStr(to)), n = fs.get(a);
+      if (!n) return -E.ENOENT;
+      if (!fs.has(parent(b))) return -E.ENOENT;
+      for (const [k, v] of [...fs]) if (k === a || k.startsWith(a + '/')) { fs.delete(k); fs.set(b + k.slice(a.length), v); }
+      return 0;
+    },
+    220: (fd, buf, cnt) => getdents(fd, buf, cnt),                         // getdents64
+    41: (fd) => newFd({ ...fdOf(fd) }),                                    // dup (the offset is not shared: enough here)
+    63: (fd, to) => { const f = fdOf(fd); if (fd !== to) fds[to] = { ...f }; return to; },   // dup2
+    221: (fd, cmd, arg) => {                                               // fcntl64
+      const f = fdOf(fd);
+      if (cmd === 0 || cmd === 1030) return newFd({ ...f }, arg);           // F_DUPFD, F_DUPFD_CLOEXEC
+      if (cmd === 1 || cmd === 2) return 0;                                 // F_GETFD / F_SETFD
+      if (cmd === 3) return f.flags !== undefined ? f.flags : (f.pipe === 0 ? 0 : 1);   // F_GETFL
+      return 0;
+    },
+    194: (fd, lo, hi) => { const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EINVAL; const n = lo + hi * 4294967296; grow(f.node, n); f.node.data.fill(0, Math.min(n, f.node.size), n); f.node.size = n; return 0; },   // ftruncate64
+    118: () => 0, 148: () => 0,                                            // fsync, fdatasync
+    54: (fd) => { fdOf(fd); return -E.ENOTTY; },                           // ioctl: nothing is a terminal
+    85: (path, buf, size) => {                                             // readlink: only /proc/self/exe
+      if (rdStr(path) !== '/proc/self/exe') return -E.EINVAL;
+      const b = new TextEncoder().encode(lx.exe).subarray(0, size);
+      wrBytes(buf, b); return b.length;
+    },
     45: (addr) => {                                                        // brk
       if (addr === 0 || addr < lx.brkStart) return lx.brk;
       if (addr > lx.brk) mapRange(lx.brk, addr, true);
       lx.brk = addr; return lx.brk;
     },
-    192: (addr, len, prot, flags, fd) => {                                 // mmap2: anonymous only
-      if (!(flags & 0x20)) return -E.ENOSYS;                               // MAP_ANONYMOUS
+    192: (addr, len, prot, flags, fd, pgoff) => {                          // mmap2
       const size = Math.ceil(len / PAGE) * PAGE;
       const at = (flags & 0x10) ? addr : lx.mmapNext;                      // MAP_FIXED
       if (!(flags & 0x10)) lx.mmapNext += size;
+      let src = null;
+      if (!(flags & 0x20)) {                                                // a file: copied, not shared
+        const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EACCES;
+        src = f.node.data.subarray(Math.min(pgoff * PAGE, f.node.size), Math.min(pgoff * PAGE + len, f.node.size));
+      }
       unmapRange(at, at + size); mapRange(at, at + size, true);
+      if (src) wrBytes(at, src);
       return at;
     },
+    90: () => -E.ENOSYS,                                                   // old_mmap: libcs use mmap2
     91: (addr, len) => { unmapRange(addr, addr + len); return 0; },        // munmap
+    163: (old, oldLen, newLen, flags) => {                                 // mremap: move to fresh pages
+      if (!(flags & 1)) return newLen <= oldLen ? old : -E.ENOMEM;          // MREMAP_MAYMOVE
+      const at = lx.mmapNext, size = Math.ceil(newLen / PAGE) * PAGE; lx.mmapNext += size;
+      mapRange(at, at + size, true);
+      wrBytes(at, rdBytes(old, Math.min(oldLen, newLen)));
+      unmapRange(old, old + oldLen); return at;
+    },
     125: () => 0,                                                          // mprotect: pages stay as mapped
-    54: (fd, req) => (fd <= 2 ? -E.ENOTTY : -E.EBADF),                     // ioctl: not a terminal
+    219: () => 0,                                                          // madvise
     243: (uinfo) => {                                                      // set_thread_area
       let idx = rd32(uinfo) | 0;
       if (idx === -1) idx = TLS_MIN;
@@ -226,10 +457,20 @@ export function installLinux(machine, { onOutput } = {}) {
       return 0;
     },
     258: () => 1,                                                          // set_tid_address -> tid
-    20: () => 1,                                                           // getpid
-    224: () => 1,                                                          // gettid
-    174: () => 0, 175: () => 0,                                            // rt_sigaction, rt_sigprocmask
+    311: () => 0,                                                          // set_robust_list
+    20: () => 1, 64: () => 0, 224: () => 1,                                // getpid, getppid, gettid
+    174: () => 0, 175: () => 0, 186: () => 0,                              // rt_sigaction, rt_sigprocmask, sigaltstack
     199: () => 0, 200: () => 0, 201: () => 0, 202: () => 0,                // get[e]uid32, get[e]gid32
+    60: () => 0o022,                                                       // umask
+    191: (res, rl) => { wr32(rl, 0xffffffff); wr32(rl + 4, 0xffffffff); if (res === 3) { wr32(rl, 8 << 20); } return 0; },   // ugetrlimit: stack 8 MiB, the rest unlimited
+    340: (pid, res, nw, old) => { if (old) { wr32(old, 0xffffffff); wr32(old + 4, 0xffffffff); wr32(old + 8, 0xffffffff); wr32(old + 12, 0xffffffff); if (res === 3) { wr32(old, 8 << 20); wr32(old + 4, 0); } } return 0; },   // prlimit64
+    355: (buf, n) => { for (let i = 0; i < n; i++) wr8(buf + i, (lx.rng = (Math.imul(lx.rng || 12345, 1103515245) + 12345) >>> 0) >>> 24); return n; },   // getrandom: seeded, so runs repeat
+    13: (tloc) => { const t = Math.floor(lx.now()); if (tloc) wr32(tloc, t); return t; },   // time
+    78: (tv) => { const t = lx.now(); if (tv) putTime(tv, Math.floor(t), t - Math.floor(t), 1e6, false); return 0; },   // gettimeofday
+    265: (id, ts) => clock(id, ts, false),                                 // clock_gettime
+    403: (id, ts) => clock(id, ts, true),                                  // clock_gettime64
+    266: (id, ts) => { if (ts) putTime(ts, 0, 1e-9, 1e9, false); return 0; },   // clock_getres
+    162: () => 0,                                                          // nanosleep: no time to wait for
     122: (buf) => {                                                        // uname: as the oracle's i386 kernel says
       const f = ['Linux', 'mirage', '2.6.32', '#1', 'i686', '(none)'];
       for (let i = 0; i < 6; i++) { const b = new TextEncoder().encode(f[i]); wrBytes(buf + i * 65, b); wr8(buf + i * 65 + b.length, 0); }
