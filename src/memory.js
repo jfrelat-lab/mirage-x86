@@ -65,6 +65,11 @@ export class Memory {
     // plain — so the SMC check leaves the fast path instead of sitting beside the device test.
     this.rdOfs = new Int32Array(size >> PAGE_BITS);
     this.wrOfs = new Int32Array(size >> PAGE_BITS);
+    // The tables WITHOUT paging depend only on the A20 mask, the planar window and which pages hold
+    // code. A DPMI host that pages (CWSDPMI) leaves paging for every interrupt and DOS call — 2000
+    // times a second for Liquid War — and each time the identity table was rebuilt page by page, 16384
+    // entries for 64 MiB. It is kept, with `tblGen` bumped by whatever it depends on, and copied back.
+    this.tblGen = 0; this._idGen = -1; this._idRd = null; this._idWr = null;
     // Under paging the table is filled ON DEMAND (ROADMAP D8 step 2): a CR3 load marks every entry
     // stale and sends it to the helper, whose first access to a page fills it. Walking every page of
     // RAM on each load — 16384 walks for 64 MiB — was most of the 12% `walk` took in Windows 98's
@@ -99,7 +104,9 @@ export class Memory {
     if (this.tlbTag) this.tlbTag.fill(0);
     const n = this.rdOfs.length, paging = !!(this.cpu && this.cpu.pagingOn);
     if (paging && this.lazyTlb) { this.rdOfs.fill(-1); this.wrOfs.fill(-1); this.tlbStale.fill(1); return; }
+    if (!paging && this._idGen === this.tblGen) { this.rdOfs.set(this._idRd); this.wrOfs.set(this._idWr); return; }
     for (let p = 0; p < n; p++) this._fillPage(p, paging);
+    if (!paging) { this._idRd = this.rdOfs.slice(); this._idWr = this.wrOfs.slice(); this._idGen = this.tblGen; }
   }
 
   /** First helper access to a stale page under paging: fill its entry as the eager rebuild did —
@@ -202,7 +209,7 @@ export class Memory {
   /** Open (A20 on) or close the 1 MiB address wrap. On: the full installed RAM is addressable
    *  (real-mode HMA at FFFF:0010+). Off: segment:offset wraps at 1 MiB like an 8086. */
   setA20(on) {
-    this.a20 = !!on;
+    this.a20 = !!on; this.tblGen++;
     this.mask = on ? (this.size - 1) : Math.min(this.size - 1, 0xfffff);
     this.rebuildPageTables();
   }
@@ -210,7 +217,7 @@ export class Memory {
   /** Entering or leaving a planar EGA/VGA mode moves A000-AFFF between plain RAM and the device. */
   setPlanar(on) {
     if (this.planar === !!on) return;
-    this.planar = !!on;
+    this.planar = !!on; this.tblGen++;
     // Under paging the window can sit behind any linear page: re-derive every entry from its frame.
     if (this.paged) this.rebuildPageTables();
     else for (let p = 0xa0; p < 0xb0; p++) { this.rdOfs[p] = this.planar ? -1 : 0; this.wrOfs[p] = this.planar || this.codePage[p] ? -1 : 0; }
@@ -333,8 +340,8 @@ export class Memory {
 
   // A page gaining or losing translated code moves it in and out of the write fast path. wrOfs
   // mirrors rdOfs when the page is clean, so a device page stays a device page either way.
-  markCodePage(page) { this.codePage[page] = 1; if (page < this.wrOfs.length) this.wrOfs[page] = -1; }
-  clearCodePage(page) { this.codePage[page] = 0; if (page < this.wrOfs.length) this.wrOfs[page] = this.rdOfs[page]; }
+  markCodePage(page) { if (!this.codePage[page]) this.tblGen++; this.codePage[page] = 1; if (page < this.wrOfs.length) this.wrOfs[page] = -1; }
+  clearCodePage(page) { if (this.codePage[page]) this.tblGen++; this.codePage[page] = 0; if (page < this.wrOfs.length) this.wrOfs[page] = this.rdOfs[page]; }
 
   // ---- bulk helpers --------------------------------------------------------
   /** Copy bytes in, marking SMC if they land on code pages. */

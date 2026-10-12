@@ -806,6 +806,25 @@ function eq(name, got, want) {
     eq('...and code rewritten while paging was off runs as rewritten', go(), 3);
   } catch (e) { eq('paging-toggle test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
 
+// ---- leaving paging copies the identity tables back instead of refilling every page --------------------
+// CWSDPMI leaves paging 2000 times a second for Liquid War; each time the tables were refilled page by
+// page, 16384 entries for 64 MiB, and loading the game ran at 1 M instructions a second in Chrome. The
+// identity tables are kept and copied back, and must still follow a page that gains code and the A20.
+{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const DIR = 0x10000, PT0 = 0x11000;
+  m.setA20(true); mc.rec.setMask(m.mask);
+  for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 3);
+  m.w32(DIR, PT0 | 3);
+  let fills = 0; const f0 = m._fillPage.bind(m); m._fillPage = (p, pg) => { fills++; return f0(p, pg); };
+  const round = () => { cpu.setCR3(DIR); cpu.setCR0(0x80000001); cpu.setCR0(0x00000001); };
+  round(); fills = 0;
+  for (let i = 0; i < 10; i++) round();
+  eq('leaving paging ten times refills no page of the identity tables', fills, 0);
+  m.markCodePage(0x150); round();
+  eq('...a page that gained code while paged still traps writes', [m.wrOfs[0x150], m.rdOfs[0x150], m.wrOfs[0x151]].join(), '-1,0,0');
+  m.setA20(false); round();
+  eq('...and closing the A20 sends the pages above 1 MiB to the helper again', [m.rdOfs[0x100], m.rdOfs[0x50]].join(), '-1,0'); }
+
 // ---- D8 step 3: the xlat TLB keeps protection, dirty bits and INVLPG exact -------------------------
 // The NT/9x kernels live above the installed RAM, where every byte used to take a full page walk;
 // a small TLB now sits in front of the walk. It must not widen any right the walk would refuse.

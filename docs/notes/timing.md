@@ -1161,3 +1161,12 @@ changing the precision control thousands of times a second, reset it too.
 
 Kraptor: 613 000 translations in 5 s → 29; 1.7 → 35-50 M instructions a second, and its title screen.
 tube unchanged; golden 44/0.
+
+## 19. Leaving paging copies the identity tables back — 2026-10-12
+
+After §18 and the latched tick, Liquid War's loading still ran at 1 M instructions a second in Chrome:
+12.5% in rebuildPageTables, as every return to real mode (2000 a second under CWSDPMI) refilled the
+identity tables page by page, 16384 entries for 64 MiB. Those tables depend only on the A20 mask, the
+planar window and which pages hold code: they are kept with a generation number those bump, and copied
+back (`set`, a native copy into the same arrays the emitted code holds). Loading at 35-50 M
+instructions a second; the menu 28 s after the command instead of ~75. tube unchanged.
