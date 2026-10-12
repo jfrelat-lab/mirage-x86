@@ -28,7 +28,7 @@ const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
 const E = { EPERM: 1, ENOENT: 2, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
   EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39 };
 
-export function installLinux(machine, { onOutput } = {}) {
+export function installLinux(machine, { onOutput, realTime } = {}) {
   const cpu = machine.cpu, mem = machine.mem;
   const lx = {
     pages: new Map(),          // virtual page number -> { frame, write }
@@ -210,9 +210,13 @@ export function installLinux(machine, { onOutput } = {}) {
   lx.chdir = (path) => { lx.cwd = norm(path, '/'); };
   lx.stdin = new Uint8Array(0); lx.stdinPos = 0;
   lx.exe = '/a.out';
-  // Time runs with the guest's cycles from a fixed start, so a run repeats.
+  // Time runs with the guest's cycles from a fixed start, so a run repeats. A benchmark wants the
+  // host's clock instead — how fast MIRAGE really is — and `realTime` (run.mjs: MIRAGE_LXWALLCLOCK=1)
+  // gives every clock the wall clock.
   lx.epoch = 1767225600;                                       // 2026-01-01T00:00:00Z
-  lx.now = () => lx.epoch + cpu.cycles / (machine.cyclesPerSecond || 1e8);
+  lx.realTime = !!realTime;
+  lx.now = () => lx.realTime ? Date.now() / 1000 : lx.epoch + cpu.cycles / (machine.cyclesPerSecond || 1e8);
+  lx.mono = () => lx.realTime ? performance.now() / 1000 : cpu.cycles / (machine.cyclesPerSecond || 1e8);
 
   // File descriptors: 0-2 are the pipes the oracle has (Docker without -t), never a terminal.
   const fds = [{ pipe: 0 }, { pipe: 1 }, { pipe: 2 }];
@@ -311,7 +315,7 @@ export function installLinux(machine, { onOutput } = {}) {
     else { wr32(buf, s >>> 0); wr32(buf + 4, Math.floor(frac * scale)); }
   };
   const clock = (id, buf, wide) => {
-    const t = id === 0 || id === 5 || id === 8 ? lx.now() : cpu.cycles / (machine.cyclesPerSecond || 1e8);   // REALTIME*, else monotonic
+    const t = id === 0 || id === 5 || id === 8 ? lx.now() : lx.mono();   // REALTIME*, else monotonic and CPU time
     putTime(buf, Math.floor(t), t - Math.floor(t), 1e9, wide); return 0;
   };
   const getdents = (fd, buf, cnt) => {
@@ -496,6 +500,11 @@ export function installLinux(machine, { onOutput } = {}) {
     403: (id, ts) => clock(id, ts, true),                                  // clock_gettime64
     266: (id, ts) => { if (ts) putTime(ts, 0, 1e-9, 1e9, false); return 0; },   // clock_getres
     162: () => 0,                                                          // nanosleep: no time to wait for
+    43: (buf) => {                                                         // times: all of it user time, in 100 Hz ticks
+      const ticks = Math.floor(lx.mono() * 100);
+      if (buf) { wr32(buf, ticks); wr32(buf + 4, 0); wr32(buf + 8, 0); wr32(buf + 12, 0); }
+      return ticks;
+    },
     122: (buf) => {                                                        // uname: as the oracle's i386 kernel says
       const f = ['Linux', 'mirage', '2.6.32', '#1', 'i686', '(none)'];
       for (let i = 0; i < 6; i++) { const b = new TextEncoder().encode(f[i]); wrBytes(buf + i * 65, b); wr8(buf + i * 65 + b.length, 0); }

@@ -6,7 +6,7 @@
 // the oracle: `docker run --rm --platform linux/386 -v $PWD:/w i386/debian /w/<program> [args...]`.
 // The program's directory is mounted at /w and is the working directory, as with `-v dir:/w -w /w`;
 // our stdin is the program's. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
-// calls that were not answered.
+// calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks).
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { Machine } from '../../src/machine.js';
@@ -15,7 +15,7 @@ import { installLinux } from '../../src/linux.js';
 const [prog, ...args] = process.argv.slice(2);
 if (!prog) { console.error('usage: node tools/linux/run.mjs <program> [args...]'); process.exit(2); }
 const mc = new Machine({ memSize: (Number(process.env.MIRAGE_LXMEM) || 64) << 20, cpu: process.env.MIRAGE_CPU || '686' });
-const lx = installLinux(mc, { onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });
+const lx = installLinux(mc, { realTime: !!process.env.MIRAGE_LXWALLCLOCK, onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });
 const mount = (dir, at) => {
   for (const f of readdirSync(dir)) {
     const p = join(dir, f), st = statSync(p);
