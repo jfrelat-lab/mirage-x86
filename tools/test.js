@@ -2962,6 +2962,18 @@ const runLinux = (hex, argv) => {
     '00000000010000000000000000800408008004087b0000007b0000000500000000100000b9e8030000c74424f8150000' +
     '00d16424f88b4424f8014424f84975e98b5c24f8b801000000cd80');
   eq('linux: read-modify-write through the paged fast path', runLinux(hex, ['/w/RMW']).status, 84); }
+// tools/linux/symlink.asm: a PIE (ET_DYN) loaded at a base of the kernel's choosing, a symbolic link
+// made, opened through and read with readlink. Docker: "ok t.b\n", 7.
+{ const hex = (                                         // nasm -f bin tools/linux/symlink.asm
+    '7f454c460101010000000000000000000300030001000000540000003400000000000000000000003400200001000000' +
+    '00000000010000000000000000000000000000002b0100002b0100000700000000100000e8000000005d81ed59000000' +
+    'b8050000008d9d09010000b941000000baa4010000cd8089c3b8040000008d8d11010000ba02000000cd80b806000000' +
+    'cd80b8530000008d9d090100008d8d0d010000cd80b8050000008d9d0d01000031c9cd8089c3b8030000008d8d130100' +
+    '00ba02000000cd80b8550000008d9d0d0100008d8d16010000ba10000000cd808d5004c68428160100000ab804000000' +
+    'bb010000008d8d13010000cd80b801000000bb07000000cd80742e6200742e6c006f6b3f3f2000000000000000000000' +
+    '0000000000000000000000');
+  let got; try { got = JSON.stringify(runLinux(hex, ['/w/SYMLINK'])); } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: a PIE runs, and a symbolic link is followed and read', got, JSON.stringify({ out: 'ok t.b\n', status: 7 })); }
 
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept

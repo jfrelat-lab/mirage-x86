@@ -5,9 +5,11 @@
 // Its stdout and stderr go to ours and its exit status becomes ours, so a run compares directly with
 // the oracle: `docker run --rm --platform linux/386 -v $PWD:/w i386/debian /w/<program> [args...]`.
 // The program's directory is mounted at /w and is the working directory, as with `-v dir:/w -w /w`;
-// our stdin is the program's. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
+// our stdin is the program's. With MIRAGE_LXROOT=<dir> that directory is the root file system instead
+// (a Debian i386 tree from `docker export`), read as the program asks for it, and <program> is a path
+// in it: MIRAGE_LXROOT=rootfs node tools/linux/run.mjs /bin/ls -l /etc. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
 // calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks).
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { Machine } from '../../src/machine.js';
 import { installLinux } from '../../src/linux.js';
@@ -22,9 +24,28 @@ const mount = (dir, at) => {
     if (st.isDirectory()) { lx.mkdir(at + '/' + f); mount(p, at + '/' + f); } else if (st.size < 64 << 20) lx.addFile(at + '/' + f, readFileSync(p));
   }
 };
-lx.mkdir('/w'); lx.mkdir('/tmp'); mount(dirname(prog), '/w'); lx.chdir('/w');
+const ROOT = process.env.MIRAGE_LXROOT;
+if (ROOT) {
+  const at = (p) => join(ROOT, p);
+  lx.host = {
+    lstat: (p) => {
+      let st; try { st = lstatSync(at(p)); } catch { return null; }
+      const meta = { mode: st.mode, mtime: Math.floor(st.mtimeMs / 1000), nlink: st.nlink };
+      return st.isSymbolicLink() ? { type: 'link', target: readlinkSync(at(p)), ...meta }
+        : st.isDirectory() ? { type: 'dir', ...meta } : { type: 'file', size: st.size, ...meta };
+    },
+    read: (p) => new Uint8Array(readFileSync(at(p))),
+    list: (p) => { try { return readdirSync(at(p)); } catch { return []; } },
+  };
+  lx.chdir('/');
+} else { lx.mkdir('/w'); lx.mkdir('/tmp'); mount(dirname(prog), '/w'); lx.chdir('/w'); }
+// The guest's clock starts at the host's present, as the oracle's does (ls -l prints a recent file's
+// time and an older one's year); it then runs with the guest's cycles, or the wall clock.
+lx.epoch = Math.floor(Date.now() / 1000);
 if (!process.stdin.isTTY) { try { lx.stdin = new Uint8Array(readFileSync(0)); } catch { /* no stdin */ } }
-lx.load(new Uint8Array(readFileSync(prog)), ['/w/' + basename(prog), ...args], ['PATH=/usr/bin:/bin', 'HOME=/root']);
+const image = ROOT ? lx.readFile(prog) : new Uint8Array(readFileSync(prog));
+if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT}`); process.exit(127); }
+lx.load(image, [ROOT ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C']);
 const LIMIT = 2e10;
 while (!lx.done && mc.cpu.cycles < LIMIT) mc.runSlice(200000);
 if (!lx.done) { console.error('mirage-linux: still running after', LIMIT, 'cycles'); process.exit(124); }
