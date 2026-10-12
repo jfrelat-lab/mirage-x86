@@ -30,15 +30,17 @@ const CODE2SCAN = {
   Numpad4: 0x4b, Numpad5: 0x4c, Numpad6: 0x4d, NumpadAdd: 0x4e,
   Numpad1: 0x4f, Numpad2: 0x50, Numpad3: 0x51, Numpad0: 0x52, NumpadDecimal: 0x53,
   F11: 0x57, F12: 0x58,
-  // Arrows / navigation → their XT numeric-keypad scancodes, with NO E0 prefix. That is what
-  // DOS-era games actually read (the 83-key XT had no separate cursor pad); games like Alley
-  // Cat handle bare 0x48/0x4b/0x4d/0x50, not the E0-extended form. The numpad keys alias them.
+  // The cursor pad and the right-hand keys the 83-key XT did not have: an AT keyboard sends them
+  // as the XT keypad's codes behind an E0 prefix (EXTENDED below). An XT-era ISR that knows nothing
+  // of E0 takes it for the release of a key that does not exist and still reads 48h for Up, as
+  // Alley Cat does; one that knows (C-Dogs) tells the arrows from the keypad's 8/2/4/6 by it, and
+  // without the prefix its arrow keys did nothing.
   ArrowUp: 0x48, ArrowDown: 0x50, ArrowLeft: 0x4b, ArrowRight: 0x4d,
   Home: 0x47, End: 0x4f, PageUp: 0x49, PageDown: 0x51, Insert: 0x52, Delete: 0x53,
-  // Right-hand modifiers collapse onto their left twins (games rarely distinguish, and this
-  // avoids emitting an E0 prefix an XT-era ISR might not understand).
   ControlRight: 0x1d, AltRight: 0x38, NumpadEnter: 0x1c, NumpadDivide: 0x35,
 };
+const EXTENDED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown',
+  'Insert', 'Delete', 'ControlRight', 'AltRight', 'NumpadEnter', 'NumpadDivide']);
 
 // BIOS (scan, ascii) pairs keyed by KeyboardEvent.key, for the INT 16h / keyQueue path.
 // Extended keys carry ascii 0 and a scan code, as on a real PC.
@@ -80,7 +82,7 @@ export class Keyboard {
 
     // (1) hardware path: MAKE scancode → port 0x60 + IRQ1 (for INT-9h games).
     const s = CODE2SCAN[e.code];
-    if (s !== undefined && this.machine.pushScancodes) this.machine.pushScancodes([s]);
+    if (s !== undefined && this.machine.pushScancodes) this.machine.pushScancodes(EXTENDED.has(e.code) ? [0xe0, s] : [s]);
 
     // (2) BIOS path: (scan, ascii) → keyQueue (for INT 16h / the shell).
     const k = e.key;
@@ -96,6 +98,6 @@ export class Keyboard {
   _onUp(e) {
     // hardware path: BREAK code (MAKE | 0x80) so the guest ISR sees the key released.
     const s = CODE2SCAN[e.code];
-    if (s !== undefined && this.machine.pushScancodes) this.machine.pushScancodes([s | 0x80]);
+    if (s !== undefined && this.machine.pushScancodes) this.machine.pushScancodes(EXTENDED.has(e.code) ? [0xe0, s | 0x80] : [s | 0x80]);
   }
 }

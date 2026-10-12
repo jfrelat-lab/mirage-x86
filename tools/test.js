@@ -11,6 +11,7 @@ import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
 import { installDisk } from '../src/disk.js';
 import { installBIOS } from '../src/bios.js';
+import { Keyboard } from '../src/keyboard.js';
 import { bootCD } from '../src/boot.js';
 import { unzip, deice } from '../src/zip.js';
 import { deflateRawSync } from 'zlib';
@@ -293,6 +294,13 @@ function eq(name, got, want) {
   mc.pushScancodes([0x1e]);                                     // scancode for 'a'
   for (let i = 0; i < 4; i++) { mc.pumpKeyboard(); mc.runSlice(2000); }
   eq('8042 IRQ1 delivers scancode to guest INT 9', mem.u8[0x100 * 16 + 0x80], 0x1e); }
+
+// The browser's arrow keys reach port 60h as an AT keyboard sends them, E0 48 / E0 C8, not as the
+// keypad's 8: C-Dogs tells the two apart, and its menus ignored the arrows.
+{ const sent = [], kb = new Keyboard({ keyQueue: [], pushScancodes: (a) => sent.push(...a) });
+  kb._onDown({ code: 'ArrowUp', key: 'ArrowUp', preventDefault() {} }); kb._onUp({ code: 'ArrowUp' });
+  kb._onDown({ code: 'Numpad8', key: '8', preventDefault() {} }); kb._onUp({ code: 'Numpad8' });
+  eq('keyboard: an arrow is E0-prefixed, the keypad is not', sent.map((x) => x.toString(16)).join(' '), 'e0 48 e0 c8 48 c8'); }
 
 // ---- 0x67 address-size prefix: 32-bit effective addresses (ModRM + SIB + disp32) ------------
 // The 8088 conformance vectors cannot reach this (386-only), and a mis-decode is silent: a 0x67

@@ -66,15 +66,17 @@ const sample = () => evaluate(`(() => { const m = window.mirage.machine || windo
 let prev = await sample(), profiling = false;
 console.log(' s   Minstr/s  frames  longtask%  PIT Hz  audio');
 const KEYS = (process.env.KEYS || '').split((process.env.KEYS || '').includes('|') ? '|' : ',').filter(Boolean).map((k) => { const i = k.indexOf(':'); return { t: Number(k.slice(0, i)), key: k.slice(i + 1) }; });
-const CODES = { Enter: [13, 'Enter'], ArrowLeft: [37, 'ArrowLeft'], ArrowRight: [39, 'ArrowRight'], ArrowUp: [38, 'ArrowUp'], ArrowDown: [40, 'ArrowDown'], Space: [32, ' '], Escape: [27, 'Escape'] };
+const CODES = { Enter: [13, 'Enter'], ArrowLeft: [37, 'ArrowLeft'], ArrowRight: [39, 'ArrowRight'], ArrowUp: [38, 'ArrowUp'], ArrowDown: [40, 'ArrowDown'], Space: [32, ' '], Escape: [27, 'Escape'], ControlLeft: [17, 'Control'] };
 const press = async (key) => { const [vk, k] = CODES[key] || [key.toUpperCase().charCodeAt(0), key];
-  for (const type of ['rawKeyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: vk, key: k, code: key.length === 1 ? 'Key' + key.toUpperCase() : key }); };
+  // Held ~100 ms, as a hand does: a game that polls a key-state table once a frame (C-Dogs) never
+  // sees a press whose release came in the same frame.
+  for (const type of ['rawKeyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: vk, key: k, code: key.length === 1 ? 'Key' + key.toUpperCase() : key }); if (type !== 'keyUp') await sleep(100); } };
 const CHAR = (c) => /[a-z]/i.test(c) ? [c.toUpperCase().charCodeAt(0), c, 'Key' + c.toUpperCase()]
   : /[0-9]/.test(c) ? [c.charCodeAt(0), c, 'Digit' + c] : c === ' ' ? [32, ' ', 'Space'] : c === '\\' ? [220, '\\', 'Backslash']
   : c === '.' ? [190, '.', 'Period'] : c === '-' ? [189, '-', 'Minus'] : c === '\n' ? [13, 'Enter', 'Enter'] : null;
 const typeText = async (text) => {
   for (const c of text.replace(/\\n/g, '\n')) { const k = CHAR(c); if (!k) continue;
-    for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: k[0], key: k[1], code: k[2], text: type === 'keyDown' && k[1].length === 1 ? k[1] : undefined });
+    for (const type of ['keyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: k[0], key: k[1], code: k[2], text: type === 'keyDown' && k[1].length === 1 ? k[1] : undefined }); if (type === 'keyDown') await sleep(60); }
     await sleep(30); } };
 const SHOTS = (process.env.SHOTS || '').split(',').filter(Boolean).map(Number);
 for (let s = 1; s <= SECS; s++) {
