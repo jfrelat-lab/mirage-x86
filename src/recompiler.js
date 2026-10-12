@@ -117,6 +117,7 @@ const CPL_EXPR = `((cpu.flags&0x20000)?3:(cpu.seg[${CS}]&3))`;
  * "unimplemented opcode 0x0f 0xff" at a fault the guest had just asked for.
  */
 function guestOwnsUD(mem, cpu) {
+  if (cpu && cpu.udToGuest) return true;                   // MIRAGE-LINUX: the kernel makes it SIGILL
   if (!cpu || !(cpu.cr0 & 1)) return mem.r16(6 * 4 + 2) !== 0xf000;
   const idt = cpu.idtr;
   if (6 * 8 + 7 > idt.limit) return false;                 // no entry for vector 6 at all

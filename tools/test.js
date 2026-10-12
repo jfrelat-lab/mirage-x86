@@ -2943,6 +2943,19 @@ const runLinux = (hex, argv) => {
     '0300000089fbb9ec800408ba03000000cd80b8c500000089fbb900900408cd80a02c9004080430a2ef800408b8040000' +
     '00bb01000000b9ec800408ba04000000cd80b80100000089fbcd8066696c65696f2e746d70006162636465663f3f3f3f');
   eq('linux: a file is created, written, sought, read back and stat-ed', JSON.stringify(runLinux(hex, ['/w/FILEIO'])), JSON.stringify({ out: 'cde6', status: 3 })); }
+// tools/linux/sigabrt.asm: a write 2 MiB below ESP (the stack grows on demand), then tkill(SIGABRT).
+// Docker: 134. MIRAGE had 256 KiB of stack (139) and no tkill.
+{ const hex = (                                         // nasm -f bin tools/linux/sigabrt.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004087a0000007a0000000500000000100000c684240000e0ff01b8140000' +
+    '00cd8089c3b8ee000000b906000000cd80b80100000031dbcd80');
+  eq('linux: the stack grows on demand, and SIGABRT to oneself ends with 134', runLinux(hex, ['/w/SIGABRT']).status, 134); }
+// tools/linux/ud2.asm: Docker 132 (SIGILL). MIRAGE threw "unimplemented opcode 0x0f 0x0b".
+{ const hex = (                                         // nasm -f bin tools/linux/ud2.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408560000005600000005000000001000000f0b');
+  let got; try { got = runLinux(hex, ['/w/UD2']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: an invalid opcode is SIGILL', got, 132); }
 
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept

@@ -20,7 +20,8 @@ const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
 const USER_CS = 0x73, USER_DS = 0x7b;                     // GDT entries 14 and 15, RPL 3
 const TLS_MIN = 6, TLS_ENTRIES = 3;                       // set_thread_area's slots, as Linux has them
 const GDT_ENTRIES = 32;
-const STACK_TOP = 0xc0000000, STACK_SIZE = 0x40000;       // 256 KiB, mapped up front
+const STACK_TOP = 0xc0000000, STACK_SIZE = 0x40000;       // 256 KiB mapped up front...
+const STACK_MAX = 8 << 20;                                // ...and grown on demand to 8 MiB, RLIMIT_STACK
 const MMAP_BASE = 0x40000000;
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
@@ -39,6 +40,7 @@ export function installLinux(machine, { onOutput } = {}) {
     onOutput,
   };
   machine.linux = lx;
+  cpu.udToGuest = true;          // an invalid opcode is the program's SIGILL, not ours to report
 
   // ---- page tables -------------------------------------------------------------------------------
   const allocFrame = () => {
@@ -175,6 +177,10 @@ export function installLinux(machine, { onOutput } = {}) {
     machine.rec.stop && machine.rec.stop();
   };
   lx.fault = (n, err) => {
+    // The stack grows on demand, as a kernel grows it: a page fault anywhere in its 8 MiB maps the
+    // page and the instruction runs again. gcc's memcpy-1 keeps two 1 MiB arrays there.
+    const cr2 = cpu.cr2 >>> 0;
+    if (n === 14 && !(err & 1) && cr2 < STACK_TOP && cr2 >= STACK_TOP - STACK_MAX) { mapPage(cr2 >>> 12, true); return; }
     const sig = n === 0 ? SIG.SIGFPE : n === 6 ? SIG.SIGILL : n === 16 || n === 19 ? SIG.SIGFPE : SIG.SIGSEGV;
     lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0 };
     exit(0, sig);
@@ -197,6 +203,7 @@ export function installLinux(machine, { onOutput } = {}) {
   const parent = (p) => p.slice(0, p.lastIndexOf('/')) || '/';
   const mkdirs = (p) => { if (fs.has(p)) return; mkdirs(parent(p)); fs.set(p, { dir: true, mtime: lx.now() }); };
   lx.fs = fs; lx.cwd = '/';
+  fs.set('/tmp', { dir: true, mtime: 0 });                                 // tmpnam() and friends write there
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const n = fs.get(norm(path, '/')); return n && !n.dir ? n.data.subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
@@ -215,6 +222,17 @@ export function installLinux(machine, { onOutput } = {}) {
   const grow = (node, size) => {
     if (size <= node.data.length) return;
     const d = new Uint8Array(Math.max(size, node.data.length * 2, 256)); d.set(node.data); node.data = d;
+  };
+  // A signal sent to ourselves takes its default action: most end the process with 128+sig, a few
+  // are ignored. One with a handler installed is not delivered yet — it ends the process too, which
+  // is what a program that relies on its handler would not expect; lx.sigHandlers says which.
+  lx.sigHandlers = [];
+  const IGNORED = new Set([17, 23, 28]);                                   // SIGCHLD, SIGURG, SIGWINCH
+  const raise = (sig) => {
+    if (sig === 0) return 0;
+    if (sig < 1 || sig > 64) return -E.EINVAL;
+    if (lx.sigHandlers[sig] === 1 || (IGNORED.has(sig) && !lx.sigHandlers[sig])) return 0;   // SIG_IGN
+    exit(0, sig); return 0;
   };
   const out = (fd, bytes) => {
     (fd === 2 ? lx.stderr : lx.stdout).push(...bytes);
@@ -459,7 +477,14 @@ export function installLinux(machine, { onOutput } = {}) {
     258: () => 1,                                                          // set_tid_address -> tid
     311: () => 0,                                                          // set_robust_list
     20: () => 1, 64: () => 0, 224: () => 1,                                // getpid, getppid, gettid
-    174: () => 0, 175: () => 0, 186: () => 0,                              // rt_sigaction, rt_sigprocmask, sigaltstack
+    174: (sig, act) => {                                                   // rt_sigaction: remembered, not yet delivered
+      if (act) lx.sigHandlers[sig] = rd32(act);
+      return 0;
+    },
+    175: () => 0, 186: () => 0,                                            // rt_sigprocmask, sigaltstack
+    37: (pid, sig) => raise(sig),                                          // kill: there is one process
+    238: (tid, sig) => raise(sig),                                         // tkill
+    270: (tgid, tid, sig) => raise(sig),                                   // tgkill
     199: () => 0, 200: () => 0, 201: () => 0, 202: () => 0,                // get[e]uid32, get[e]gid32
     60: () => 0o022,                                                       // umask
     191: (res, rl) => { wr32(rl, 0xffffffff); wr32(rl + 4, 0xffffffff); if (res === 3) { wr32(rl, 8 << 20); } return 0; },   // ugetrlimit: stack 8 MiB, the rest unlimited
