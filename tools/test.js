@@ -2841,6 +2841,20 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   eq('DPMI: an IRQ nested in a handler that left the locked stack does not overwrite its frame',
     got, 'OUTER=02 NESTED=02 MARK=1'); }
 
+// ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
+// The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept
+// only until the next tick, and lost unless IF happened to be set just then: CWSDPMI runs with IF clear
+// most of the time, and Liquid War's Allegro timer got none of its ticks. A PIC keeps the request.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+  mc.timerAuto = false;
+  mc.mem.blit(0x2000, Uint8Array.from([0xfe, 0x06, 0x00, 0x30, 0xb0, 0x20, 0xe6, 0x20, 0xcf]));   // inc byte [3000h] / EOI / iret
+  mc.setVector(8, 0x0200, 0);
+  mc.mem.blit(0x1000, Uint8Array.from([0xfb, 0x90, 0x90, 0xeb, 0xfe]));   // sti / nop / nop / jmp $
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0); cpu.flags &= ~0x200;
+  mc.tickTimer();                                                          // IF clear: latched
+  mc.runSlice(20);
+  eq('a tick that came with IF clear runs its handler once IF is set', mc.mem.r8(0x3000), 1); }
+
 // ---- the PIT: a reprogrammed counter 0 raises IRQ 0 at the rate it was given ------------------------
 // tools/pitrate.asm -dDIVIDER=11932 (100 Hz) counts INT 8 over 70 vertical retraces. DOSBox-X: 100
 // (and 291 for 4096, 37 for 32768). MIRAGE took the reload for a number of cycles, right while pitBase

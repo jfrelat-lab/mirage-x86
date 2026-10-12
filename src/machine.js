@@ -685,7 +685,12 @@ export class Machine {
     // With IF clear the tick is not LOST: IRQ0 stays requested in the PIC until something lets it
     // in. On a PC the thing that lets it in is often a BIOS service — see biosIrqWindow. `force`
     // is that window.
-    if (!(this.cpu.flags & IF) && !force) { this.timerLatched = true; return; }
+    // In the browser (no timerAuto) the latched tick also goes into the queue the run loop serves at
+    // the next block boundary with IF set, as the PIC's request is taken at the next STI. It waited
+    // for the NEXT tick instead, and was lost unless IF happened to be set just then: CWSDPMI spends
+    // most of its time with IF clear, and Liquid War's Allegro timer got none of its 1165 Hz — its
+    // menu never came up. Headless the run loop delivers ticks at block boundaries already.
+    if (!(this.cpu.flags & IF) && !force) { this.timerLatched = true; if (!this.timerAuto) this.hwIrqPending = true; return; }
     this.timerLatched = false;
     // Raise IRQ0 on the PIC and let it decide. This is where masking and in-service state start
     // mattering: a guest that has masked IRQ0 in the IMR no longer receives the tick (it used to,
@@ -887,6 +892,7 @@ export class Machine {
   serviceHwInts() {
     if (!this.hwIrqPending || !(this.cpu.flags & IF)) return;
     this.hwIrqPending = false;
+    if (this.timerLatched && !this.timerAuto) this.tickTimer();      // a tick that came while IF was clear
     // Two sources share the guard. Raising IRQ1 for a mouse packet delivered the keyboard ISR a
     // stale scancode, so each is raised only for itself.
     if (this.kbIrqPending) { this.kbIrqPending = false; this.raiseKeyboardIRQ(); }
