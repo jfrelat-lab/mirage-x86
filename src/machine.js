@@ -389,6 +389,8 @@ export class Machine {
 
   _protInt(n, err, faultIp, soft) {
     const cpu = this.cpu, m = this.mem;
+    // MIRAGE-LINUX: there is no kernel to take the exception; the process gets its signal.
+    if (this.linux) { if (faultIp !== undefined) cpu.eip = faultIp >>> 0; return this.linux.fault(n, err); }
     // No IDT for a client (see dpmi.js): software interrupts are reflected, so reaching here means a
     // genuine exception. Name it rather than dispatching through an empty table.
     if (this.dpmi && this.dpmi.active) {
@@ -507,6 +509,8 @@ export class Machine {
       }
     }
     if (cpu.cr0 & 1) {
+      // MIRAGE-LINUX (src/linux.js): INT 80h is a system call, answered in JS.
+      if (this.linux && n === 0x80) { cpu.eip = nextIp; this.linux.syscall(); return; }
       // A host reflects a protected-mode software interrupt to the real-mode handler. Ours are JS
       // services, so reflection is calling them: no gate, no frame, no mode change.
       if (this.dpmi && this.dpmi.active) {

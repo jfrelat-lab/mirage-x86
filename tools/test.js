@@ -12,6 +12,7 @@ import { installMouse } from '../src/mouse.js';
 import { installDisk } from '../src/disk.js';
 import { installBIOS } from '../src/bios.js';
 import { Keyboard } from '../src/keyboard.js';
+import { installLinux } from '../src/linux.js';
 import { bootCD } from '../src/boot.js';
 import { unzip, deice } from '../src/zip.js';
 import { deflateRawSync } from 'zlib';
@@ -2909,6 +2910,30 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
     const out = vfs.readFile('\\PMKEY.TXT'); got = out && new TextDecoder().decode(out).trim();
   } catch (e) { got = e.message; }
   eq('DPMI: INT 16h waiting for a key from protected mode gets it', got, 'KEY=1C0D'); }
+
+// ---- MIRAGE-LINUX (src/linux.js): static i386 ELF programs, system calls answered in JS ---------
+// The oracle is a real kernel: `docker run --platform linux/386 i386/debian` on the same binaries.
+const runLinux = (hex, argv) => {
+  const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+  lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), argv);
+  for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+  return { out: new TextDecoder().decode(Uint8Array.from(lx.stdout)), status: lx.done ? lx.status : -1 };
+};
+// tools/linux/hello.asm: the initial stack (argc, argv) and write/exit. Docker: "argc=3\n/w/HELLO\na\nbc\n", 42.
+{ const hex = (                                         // nasm -f bin tools/linux/hello.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408b7000000b7000000070000000010000089e6ad89c50430a2b4800408' +
+    'b9af800408ba07000000e8330000004d7824ad89c131d2803c1100740342ebf7e81d000000b9b6800408ba01000000e8' +
+    '0e000000ebd9b801000000bb2a000000cd80b804000000bb01000000cd80c3617267633d3f0a0a');
+  const r = runLinux(hex, ['/w/HELLO', 'a', 'bc']);
+  eq('linux: argv on the initial stack, write and exit', JSON.stringify(r), JSON.stringify({ out: 'argc=3\n/w/HELLO\na\nbc\n', status: 42 })); }
+// tools/linux/fpu80.asm: an 80-bit store to the stack at BFFFxxxxh, far above physical memory, under
+// paging. Docker: 3. MIRAGE masked the linear address to the size of RAM: SIGSEGV, 139.
+{ const hex = (                                         // nasm -f bin tools/linux/fpu80.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040873000000730000000500000000100000d9e8d9e8dcc0dec1db7c24e0' +
+    'db6c24e0db5c24f88b5c24f8b801000000cd80');
+  eq('linux: FSTP TBYTE under paging stores at the linear address', runLinux(hex, ['/w/FPU80']).status, 3); }
 
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept

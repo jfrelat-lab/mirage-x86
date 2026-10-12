@@ -103,7 +103,9 @@ export function installFPU(cpu) {
     return sign * Number(m) * Math.pow(2, exp - 16383 - 63);
   };
   const f80s = (a, v) => {
-    a &= msk();
+    // Masked only where the address is physical, as the stores above are: under paging it is LINEAR,
+    // and masking it to the size of RAM moved a store to the stack at BFFFFFA8h onto 03FFFFA8h —
+    // musl's printf keeps its long double argument there (MIRAGE-LINUX, tools/linux/fpu80.asm).
     let se = 0, m = 0n;
     if (Number.isNaN(v)) { se = 0x7fff; m = 0xc000000000000000n; }
     else {
@@ -118,6 +120,7 @@ export function installFPU(cpu) {
       }
     }
     if (cpu.mem.paged) return pwr(a, 10, (w, o) => { w.setBigUint64(o, m, true); w.setUint16(o + 8, se, true); });
+    a &= msk();
     dv.setBigUint64(a, m, true); dv.setUint16(a + 8, se, true);
     if (cp[a >>> 12] || cp[((a + 9) & msk()) >>> 12]) cpu.mem._dirty(a, 10);
   };
