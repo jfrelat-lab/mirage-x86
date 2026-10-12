@@ -46,7 +46,7 @@ export function resolveMemStrategy(opts = {}) {
 export function memPrologue(strategy) {
   const parts = [];
   parts.push('var _smc=0;');   // set by the inline write marker, tested at the instruction boundary
-  if (strategy.read === 'paged' || strategy.write === 'paged') parts.push('var _po=0;');
+  if (strategy.read === 'paged' || strategy.write === 'paged') parts.push('var _po=0,_pw=0;');
   if (strategy.read === 'paged') parts.push('var rdo=m.rdOfs;');
   if (strategy.write === 'paged') parts.push('var wro=m.wrOfs;');
   return parts.join('');
@@ -69,9 +69,15 @@ const READ = {
   // use. A negative entry means "not plain RAM": device, or (for writes) a page holding translated
   // code. Multi-byte accesses take the helper whenever they could straddle a page boundary, which
   // the single flat array used to hide.
-  paged: (MM) => (a, sz) => sz === 8 ? `((_po=rdo[${a}>>>12])>=0?u8[_po+${a}]:m.r8(${a}))`
-    : sz === 16 ? `(((${a}&4095)<4095&&(_po=rdo[${a}>>>12])>=0)?(u8[_po+${a}]|(u8[_po+${a}+1]<<8)):m.r16(${a}))`
-      : `(((${a}&4095)<4093&&(_po=rdo[${a}>>>12])>=0)?((u8[_po+${a}]|(u8[_po+${a}+1]<<8)|(u8[_po+${a}+2]<<16)|(u8[_po+${a}+3]<<24))>>>0):m.r32(${a}))`,
+  //
+  // The entry is physical - linear, a multiple of 4096 that is NEGATIVE whenever the page sits below
+  // its linear address — every page of a Linux program (0804_8000h onto a few MiB) and Windows 9x's
+  // kernel at C000_0000h. "Valid" used to be `>= 0`, so all of those took the helper; and above
+  // 2^31 the plain sum overflowed. -1 can never be a page's bias, so it is the sentinel, and the sum
+  // wraps modulo 2^32 the way the linear address does.
+  paged: (MM) => (a, sz) => sz === 8 ? `((_po=rdo[${a}>>>12])!==-1?u8[(_po+${a})>>>0]:m.r8(${a}))`
+    : sz === 16 ? `(((${a}&4095)<4095&&(_po=rdo[${a}>>>12])!==-1)?(_po=(_po+${a})>>>0,u8[_po]|(u8[_po+1]<<8)):m.r16(${a}))`
+      : `(((${a}&4095)<4093&&(_po=rdo[${a}>>>12])!==-1)?(_po=(_po+${a})>>>0,(u8[_po]|(u8[_po+1]<<8)|(u8[_po+2]<<16)|(u8[_po+3]<<24))>>>0):m.r32(${a}))`,
 
   // No test at all. Correct only because vga.js mirrors the planar window into u8[] (see its
   // "linear read shadow" section) — the whole cost moves off the access path and onto planar
@@ -101,9 +107,12 @@ const WRITE = {
   // instead of sitting beside the planar test. That merge is the reason to expect a win here even
   // though the synthetic read benchmark was neutral.
   paged: (MM, NT) => (a, sz, v) => {
-    if (sz === 8) return `if((_po=wro[${a}>>>12])>=0)u8[_po+${a}]=(${v});else m.w8(${a},(${v}));`;
+    // The same sentinel and wrapping sum as the paged read, in a variable of its own: the VALUE of a
+    // read-modify-write (`shl dword [eax],1`) holds the paged read, which sets _po between this probe
+    // and the store.
     const t = NT();
-    if (sz === 16) return `if((${a}&4095)<4095&&(_po=wro[${a}>>>12])>=0){var ${t}=(${v});u8[_po+${a}]=${t};u8[_po+${a}+1]=${t}>>>8;}else m.w16(${a},(${v}));`;
-    return `if((${a}&4095)<4093&&(_po=wro[${a}>>>12])>=0){var ${t}=(${v});u8[_po+${a}]=${t};u8[_po+${a}+1]=${t}>>>8;u8[_po+${a}+2]=${t}>>>16;u8[_po+${a}+3]=${t}>>>24;}else m.w32(${a},(${v}));`;
+    if (sz === 8) return `if((_pw=wro[${a}>>>12])!==-1){var ${t}=(${v});u8[(_pw+${a})>>>0]=${t};}else m.w8(${a},(${v}));`;
+    if (sz === 16) return `if((${a}&4095)<4095&&(_pw=wro[${a}>>>12])!==-1){var ${t}=(${v});_pw=(_pw+${a})>>>0;u8[_pw]=${t};u8[_pw+1]=${t}>>>8;}else m.w16(${a},(${v}));`;
+    return `if((${a}&4095)<4093&&(_pw=wro[${a}>>>12])!==-1){var ${t}=(${v});_pw=(_pw+${a})>>>0;u8[_pw]=${t};u8[_pw+1]=${t}>>>8;u8[_pw+2]=${t}>>>16;u8[_pw+3]=${t}>>>24;}else m.w32(${a},(${v}));`;
   },
 };

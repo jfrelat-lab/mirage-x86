@@ -2956,6 +2956,12 @@ const runLinux = (hex, argv) => {
     '0000000001000000000000000080040800800408560000005600000005000000001000000f0b');
   let got; try { got = runLinux(hex, ['/w/UD2']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: an invalid opcode is SIGILL', got, 132); }
+// tools/linux/rmw.asm: read-modify-write on the stack through the paged fast path. Docker: 84.
+{ const hex = (                                         // nasm -f bin tools/linux/rmw.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004087b0000007b0000000500000000100000b9e8030000c74424f8150000' +
+    '00d16424f88b4424f8014424f84975e98b5c24f8b801000000cd80');
+  eq('linux: read-modify-write through the paged fast path', runLinux(hex, ['/w/RMW']).status, 84); }
 
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept
