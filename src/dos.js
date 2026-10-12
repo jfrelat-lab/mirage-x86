@@ -63,6 +63,7 @@ export function installDOS(machine, vfs) {
     allocStrategy: 0,         // AH=58h: 0 = first fit. Remembered, not honoured — see the handler.
     umbLink: 0,               // AH=58h AL=02/03: UMBs are not in the allocation chain
     onPrint: null,            // optional tap for headless capture
+    conLine: [], conEdit: [], // AH=3Fh on the console: the line handed out, and the one being typed
   };
 
   // The five standard handles are opened by the VFS constructor, before the program's PSP exists:
@@ -683,6 +684,18 @@ export function installDOS(machine, vfs) {
       // past 64 KB. Keen asks for a hard-coded 0FFFFh into a buffer at offset 4 and must get 65532.
       case 0x3f: {                                                   // read
         const n = segCap(cpu.cx & 0xffff, cpu.dx & 0xffff);
+        const con = vfs.handles.get(cpu.bx & 0xffff);
+        // THE CONSOLE in cooked mode hands out a LINE: DOS reads keys with echo and editing until
+        // Enter, then returns the line with CR LF, as much as the caller asked for at a time and the
+        // rest on the next reads. Ours answered 0 bytes — end of file — so a C program's scanf on
+        // stdin read nothing: DJGPP's Dhrystone ran "0 runs through Dhrystone".
+        if (con && con.device === 'CON') {
+          if (!dos.conLine.length && !conReadLine()) return;          // waiting for Enter
+          const take = dos.conLine.splice(0, n);
+          const p = cpu.base[DS] + (cpu.dx & 0xffff);
+          for (let i = 0; i < take.length; i++) mem.w8(p + i, take[i]);
+          cpu.ax = take.length; ok(); break;
+        }
         const data = vfs.read(cpu.bx, n);
         if (data === null) { err(6); break; }
         let p = cpu.base[DS] + (cpu.dx & 0xffff);
@@ -947,6 +960,19 @@ export function installDOS(machine, vfs) {
       default: dos.unhandledFn[ah]++; cpu.ax = cpu.ax & 0xff00; cpu.flags |= entryCF; break;
     }
   });
+
+  /** The console's line, for a read of handle 0 (AH=3Fh): keys with echo until Enter, then the line
+   *  and CR LF wait in dos.conLine. False while the line is still being typed (the call blocks). */
+  function conReadLine() {
+    while (machine.keyQueue.length) {
+      const k = machine.keyQueue.shift();
+      if (k.ascii === 0x0d) { dos.conEdit.push(0x0d, 0x0a); out(0x0d); out(0x0a); dos.conLine = dos.conEdit; dos.conEdit = []; return true; }
+      if (k.ascii === 0x08) { if (dos.conEdit.length) { dos.conEdit.pop(); out(0x08); out(0x20); out(0x08); } continue; }
+      if (k.ascii && dos.conEdit.length < 126) { dos.conEdit.push(k.ascii); out(k.ascii); }
+    }
+    machine.block(2);
+    return false;
+  }
 
   function bufferedInput() {
     const p = cpu.base[DS] + (cpu.dx & 0xffff);

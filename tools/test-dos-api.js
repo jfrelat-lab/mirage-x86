@@ -176,6 +176,20 @@ function asciiz(mc, cpu, off, str) {
   eq('...and 0Bh reports the waiting scan code as input available', int21(c, 0x0b).ax & 0xff, 0xff);
 }
 
+// ---------------------------------------------------------------- 3Fh on the console reads a line
+{ // tools/conread.asm under DOSBox-X: a read of handle 0 at the keyboard waits for Enter and returns the
+  // line with CR LF, "0004 68690D0A". Ours answered 0 bytes (end of file), and DJGPP's scanf read
+  // nothing: Dhrystone ran "0 runs through Dhrystone".
+  const c = mk();
+  const rd = (n) => int21(c, 0x3f, (cpu) => { cpu.reg[3] = 0; cpu.reg[1] = n; cpu.reg[2] = 0x300; });
+  c.mc.blocked = false; rd(10);
+  eq('3Fh on the console with no key typed waits', c.mc.blocked, true);
+  c.mc.blocked = false;
+  c.mc.keyQueue.push({ scan: 0x23, ascii: 0x68 }, { scan: 0x17, ascii: 0x69 }, { scan: 0x1c, ascii: 0x0d });
+  const a = rd(10), got = [0, 1, 2, 3].map((i) => c.mc.mem.r8((c.cpu.seg[3] << 4) + 0x300 + i));
+  eq('3Fh on the console: the line, CR and LF', JSON.stringify([a.ax, got]), JSON.stringify([4, [0x68, 0x69, 0x0d, 0x0a]]));
+}
+
 // ---------------------------------------------------------------- memory (48/49/4A)
 {
   const c = mk();
