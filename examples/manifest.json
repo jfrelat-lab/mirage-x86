@@ -72,6 +72,23 @@
     ]
   },
   {
+    "id": "cdogs",
+    "kind": "zip",
+    "file": "examples/games/cdogs106.zip",
+    "run": "CDOGS",
+    "title": "C-Dogs 1.06",
+    "author": "Ronny Wester",
+    "year": 1999,
+    "license": "freeware",
+    "licenseFile": "examples/licenses/cdogs.txt",
+    "source": "https://web.archive.org/web/2005id_/http://www.orcsoftware.com/~ronny/cdogs106.zip",
+    "blurb": "Ronny Wester's top-down shooter for one or two players, the sequel to Cyberdogs, on DOS/4GW. Its effects play on the Sound Blaster 16 (a SOUND.CFG of ours sets it up; the sound starts with your first click or key).",
+    "secs": 12,
+    "add": [
+      "examples/games/cdogs/SOUND.CFG"
+    ]
+  },
+  {
     "id": "wolf3d",
     "kind": "zip",
     "file": "examples/games/1wolf14.zip",

@@ -132,6 +132,7 @@ by the golden test. Of pouët's top ten MS-DOS 4K intros, nine rendered (2026-08
 | Juggler 2001 | Renders | after the keypress it asks for | 2026-08-28 |
 | Omniscent, Forever Reality, StarPort BBS 2, Another Soul Lost | Renders | | 2026-08-28 |
 | Void 3 | Renders | in the DOS player's 16 MiB (its 16 MiB DPMI block now fits): answer `2` and `1` to its SB questions; it precomputes its music, then plays. Its synthesis wants ~30 M instructions a second: headless that is `MIRAGE_PITRELOAD=1800000`, the browser measured 73 M. `?mem=` gives a program more RAM when one needs it. Needed DMA playback and the DPMI locked stack | 2026-10-11 |
+| C-Dogs 1.06 | Plays | DOS/4GW 1.97 on MIRAGE's DPMI host, Sound Blaster 16 effects (SOUND.CFG from its DSETUP32). Needed selector 0040h in the host's GDT, a waiting INT 16h reached through a client's chain, and E0-prefixed arrow keys | 2026-10-12 |
 | Difúze (Řrřola) | Renders | the reaction–diffusion patterns, after a few hundred frames; identical to Unicorn for 300 frames ([notes/2026-10-10-difuze.md](notes/2026-10-10-difuze.md)) | 2026-10-10 |
 | oktaeder | Fails | not a MIRAGE defect — see above | 2026-08-22 |
 

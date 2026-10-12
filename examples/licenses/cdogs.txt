@@ -1,0 +1,21 @@
+C-Dogs 1.06 — examples/games/cdogs106.zip, Ronny Wester's own distribution of the game, as his
+page at orcsoftware.com served it (through the Internet Archive's copy,
+https://web.archive.org/web/2005id_/http://www.orcsoftware.com/~ronny/cdogs106.zip;
+sha256 de6c5e02…19b7b50cc).
+
+From README.TXT, inside the archive:
+
+  C-Dogs v1.05
+  A FreeWare DOS-game
+  (c) 1997-1999 Ronny Wester
+
+  The basic terms for redistribution are as follows:
+  a) All files must be distributed unmodified
+  b) There must be no charge for the shareware version as such.
+
+MIRAGE serves the archive exactly as published, free of charge; nothing in it is modified.
+examples/games/cdogs/SOUND.CFG is ours (MIT): what the archive's DSETUP32.EXE writes for a Sound
+Blaster 16 at 220h, IRQ 7, DMA 5, 22 kHz stereo. The player puts it next to the unpacked game.
+
+The README also says some of the sound effects were "borrowed from some other games"; they are
+served as part of the author's unmodified archive.
