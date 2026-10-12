@@ -283,7 +283,11 @@ export class Machine {
       // it overwrote the rewind block() had just done, so the guest never re-asked, `blocked`
       // stayed set and AX was never loaded. Leave the caller's frame alone and re-enter this same
       // entry when the slice resumes, so the service is retried instead of silently completing.
-      cpu.setSeg(CS, BIOS_SEG); cpu.eip = n;
+      // In protected mode CS already names the stub through a selector of the host's (a DPMI
+      // client chaining to the vector 0204 gave it): F000 is not a selector, and loading it was
+      // #GP(F000) — DSETUP32's menu waiting on a key under DOS/4GW.
+      if (!(cpu.cr0 & 1) || (cpu.flags & VM)) cpu.setSeg(CS, BIOS_SEG);
+      cpu.eip = n;
       return;
     }
     // A service may TRANSFER control rather than return: 0300/0302 switch to real mode and set CS:IP

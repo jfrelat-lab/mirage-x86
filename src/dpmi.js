@@ -52,8 +52,13 @@ export function installDPMI(machine) {
   const LDT_BASE = HOST_BASE, LDT_LIMIT = LDT_ENTRIES * 8 - 1;
 
   const LOCKED_BASE = HOST_BASE - LOCKED_SIZE;     // just below the tables
+  // A GDT of our own, one page below the locked stack, for one entry: selector 0040h, the BIOS data
+  // area, which DPMI 0.9 has every host provide. tools/sel40.asm under CWSDPMI: LAR F200h, LSL FFFFh,
+  // the BDA's equipment word read through it. DOS/4GW 1.97 (C-Dogs) loads it as it stands; with no
+  // GDT that was #GP(40h).
+  const GDT_BASE = LOCKED_BASE - 0x1000, GDT_LIMIT = 9 * 8 - 1;
   // Keep XMS out of the host's block, or a game's allocation overwrites the descriptor tables.
-  if (machine.xms) machine.xms.max = Math.min(machine.xms.max, LOCKED_BASE);
+  if (machine.xms) machine.xms.max = Math.min(machine.xms.max, GDT_BASE);
 
   // One pool with two ends: XMS grows up from 1 MiB, this heap grows down from the tables.
   const heapFloor = () => (machine.xms ? machine.xms.top : 0x100000);
@@ -137,6 +142,10 @@ export function installDPMI(machine) {
     // Load LDTR directly rather than through LLDT: that would need a GDT entry describing the LDT,
     // and nothing here reads one. The GDT stays empty — a client never sees a GDT selector from us.
     cpu.ldtr.sel = 0; cpu.ldtr.base = LDT_BASE; cpu.ldtr.limit = LDT_LIMIT;
+    for (let i = 0; i < GDT_LIMIT + 1; i++) mem.w8(GDT_BASE + i, 0);
+    { const a = GDT_BASE + 0x40;                         // 0040h: base 400h, limit FFFFh, data RW, DPL 3
+      mem.w16(a, 0xffff); mem.w16(a + 2, 0x0400); mem.w8(a + 4, 0); mem.w8(a + 5, 0xf2); mem.w8(a + 6, 0); mem.w8(a + 7, 0); }
+    cpu.gdtr.base = GDT_BASE; cpu.gdtr.limit = GDT_LIMIT;
   };
 
   /**
@@ -974,7 +983,7 @@ export function installDPMI(machine) {
 
   cpu.dpmiRealCallReturn = realCallReturn;
 
-  dpmi.memTop = LOCKED_BASE;
+  dpmi.memTop = GDT_BASE;
   cpu.dpmiSwitch = modeSwitch;
   machine.dpmi = dpmi;
   mem.u8[(DPMI_ENTRY_SEG << 4) + DPMI_ENTRY_OFF] = 0xcb;  // marker byte (RETF) the recompiler guards on

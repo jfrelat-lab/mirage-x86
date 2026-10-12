@@ -2860,6 +2860,48 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   eq('DPMI: an IRQ nested in a handler that left the locked stack does not overwrite its frame',
     got, 'OUTER=02 NESTED=02 MARK=1'); }
 
+// ---- DPMI: selector 0040h is the BIOS data area -------------------------------------------------
+// tools/sel40.asm: CWSDPMI under DOSBox-X gives a client 0040h in its GDT, base 400h, limit FFFFh,
+// a ring-3 data segment (LAR F200). DOS/4GW 1.97 (C-Dogs) loads it as it stands; with no GDT of
+// ours that was #GP(40h).
+{ const hex = (                                         // nasm -f bin tools/sel40.asm, 367 bytes
+    'b44abb0010cd218c0e3502a12c000631c08ec026a1100407a33302b43c31c9bafa01cd210f82b500a33702b88716cd2f' +
+    '85c00f85a700893e39028c063b0289f3b448cd210f8295008ec0b80100ff1e39020f828800c7063102addeb840000f02' +
+    'c8c6062c0230751bc6062c0231890e2d020f03c8890e2f02068ec026a11000a3310207bf0802a12d02e85600bf1102a1' +
+    '2f02e84d00bf1902a13102e84400bf2102a13302e83b00a02c02a229021e07c70659020040a13702a34d02c706550228' +
+    '00c70651020402a13502a36102b80003bb210031c966bf3d020000cd31b8004ccd21b90400c1c00450240f04303c3976' +
+    '02040788054758e2ecc353454c34302e545854004c41523d3f3f3f3f204c534c3d3f3f3f3f2045513d3f3f3f3f20524d' +
+    '3d3f3f3f3f205a463d3f0d0a3f0000000000000000000000000000000000000000000000000000000000000000000000' +
+    '00000000000000000000000000000000000000000000000000000000000000');
+  const out = runProbe(hex, 367, 'SEL40.COM').vfs.readFile('\\SEL40.TXT');
+  const got = out ? new TextDecoder().decode(out).trim() : '';
+  const m = /EQ=(\w+) RM=(\w+)/.exec(got);
+  eq('DPMI: selector 0040h is a data segment on the BIOS data area',
+    got.replace(/EQ=\w+ RM=\w+/, m && m[1] === m[2] ? 'EQ=RM' : 'EQ!=RM'), 'LAR=F200 LSL=FFFF EQ=RM ZF=1'); }
+
+// tools/pmkey.asm: INT 16h AH=00 from a 32-bit client before any key is typed, called through the
+// vector 0204h reports, as DOS/4GW chains to it. A waiting service is retried at its stub; reloading CS=F000 for that is #GP(F000) in protected mode, and DSETUP32 (C-Dogs'
+// sound setup) never saw a key.
+{ const hex = (                                         // nasm -f bin tools/pmkey.asm, 253 bytes
+    'b44abb0010cd218c0ebd01b43c31c9baa901cd217276a3bf01b88716cd2f85c0756a893ec1018c06c30189f3b448cd21' +
+    '725a8ec0b80100ff1ec101724fb80402b316cd31668916c501890ec90130e4669c66ff1ec501bfb701e835001e07c706' +
+    'e7010040a1bf01a3db01c706e3010a00c706df01b301a1bd01a3ef01b80003bb210031c966bfcb010000cd31b8004ccd' +
+    '21b90400c1c00450240f04303c397602040788054758e2ecc3504d4b45592e545854004b45593d3f3f3f3f0d0a000000' +
+    '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '00000000000000000000000000');
+  const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc);
+  const vfs = new VFS(), dos = installDOS(mc, vfs);
+  const img = new Uint8Array(253); img.set(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)));
+  dos.load(img, '', 'C:\\PMKEY.COM');
+  let got;
+  try {
+    for (let i = 0; i < 200 && !dos.programDone; i++) mc.runSlice(20000);
+    mc.keyQueue.push({ scan: 0x1c, ascii: 13 });
+    for (let i = 0; i < 2000 && !dos.programDone; i++) mc.runSlice(20000);
+    const out = vfs.readFile('\\PMKEY.TXT'); got = out && new TextDecoder().decode(out).trim();
+  } catch (e) { got = e.message; }
+  eq('DPMI: INT 16h waiting for a key from protected mode gets it', got, 'KEY=1C0D'); }
+
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept
 // only until the next tick, and lost unless IF happened to be set just then: CWSDPMI runs with IF clear
