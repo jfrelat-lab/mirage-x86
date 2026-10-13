@@ -7,16 +7,19 @@
 // The program's directory is mounted at /w and is the working directory, as with `-v dir:/w -w /w`;
 // our stdin is the program's. With MIRAGE_LXROOT=<dir> that directory is the root file system instead
 // (a Debian i386 tree from `docker export`), read as the program asks for it, and <program> is a path
-// in it: MIRAGE_LXROOT=rootfs node tools/linux/run.mjs /bin/ls -l /etc. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
+// in it: MIRAGE_LXROOT=rootfs node tools/linux/run.mjs /bin/ls -l /etc. MIRAGE_LXCWD sets the
+// working directory there. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
 // calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks).
 import { readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { Machine } from '../../src/machine.js';
 import { installLinux } from '../../src/linux.js';
+import { installBIOS } from '../../src/bios.js';
 
 const [prog, ...args] = process.argv.slice(2);
 if (!prog) { console.error('usage: node tools/linux/run.mjs <program> [args...]'); process.exit(2); }
 const mc = new Machine({ memSize: (Number(process.env.MIRAGE_LXMEM) || 64) << 20, cpu: process.env.MIRAGE_CPU || '686' });
+installBIOS(mc);                                   // the PC's devices: the VGA SVGAlib programs, the keyboard
 const lx = installLinux(mc, { realTime: !!process.env.MIRAGE_LXWALLCLOCK, onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });
 const mount = (dir, at) => {
   for (const f of readdirSync(dir)) {
@@ -37,7 +40,7 @@ if (ROOT) {
     read: (p) => new Uint8Array(readFileSync(at(p))),
     list: (p) => { try { return readdirSync(at(p)); } catch { return []; } },
   };
-  lx.chdir('/');
+  lx.chdir(process.env.MIRAGE_LXCWD || '/');
 } else { lx.mkdir('/w'); lx.mkdir('/tmp'); mount(dirname(prog), '/w'); lx.chdir('/w'); }
 // The guest's clock starts at the host's present, as the oracle's does (ls -l prints a recent file's
 // time and an older one's year); it then runs with the guest's cycles, or the wall clock.
@@ -45,6 +48,7 @@ lx.epoch = Math.floor(Date.now() / 1000);
 if (!process.stdin.isTTY) { try { lx.stdin = new Uint8Array(readFileSync(0)); } catch { /* no stdin */ } }
 const image = ROOT ? lx.readFile(prog) : new Uint8Array(readFileSync(prog));
 if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT}`); process.exit(127); }
+if (process.env.MIRAGE_LXCONSOLE) lx.consoleStdio();   // stdio on /dev/tty1, a virtual console (SVGAlib wants one)
 lx.load(image, [ROOT ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C']);
 const LIMIT = 2e10;
 while (!lx.done && mc.cpu.cycles < LIMIT) mc.runSlice(200000);

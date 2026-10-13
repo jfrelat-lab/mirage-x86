@@ -17,6 +17,14 @@
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
+// The GDT's LINEAR address: in the kernel's part of the address space, as Linux keeps its tables. At
+// its physical address (11000h) it sat inside an a.out ZMAGIC program, whose text runs from address 0:
+// linuxsdoom's first page mapping replaced it, and loading CS took #GP(70h).
+const GDT_LIN = 0xffc00000;
+// A TSS for its I/O permission bitmap only: ioperm(2) opens ports in it, as the kernel does, and the
+// CPU consults it for IN/OUT at CPL 3 whatever IOPL says (SVGAlib asks ioperm, then iopl(3), then
+// iopl(0) again, and keeps programming the card through the ports ioperm gave it).
+const TSS_BASE = 0x12000, TSS_LIN = 0xffc01000, IOMAP = 0x68, TSS_LIMIT = IOMAP + 8192;
 const USER_CS = 0x73, USER_DS = 0x7b;                     // GDT entries 14 and 15, RPL 3
 const TLS_MIN = 6, TLS_ENTRIES = 3;                       // set_thread_area's slots, as Linux has them
 const GDT_ENTRIES = 32;
@@ -26,7 +34,7 @@ const MMAP_BASE = 0x40000000;
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
 const E = { EPERM: 1, ENOENT: 2, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
-  EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61 };
+  EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11 };
 
 export function installLinux(machine, { onOutput, realTime } = {}) {
   const cpu = machine.cpu, mem = machine.mem;
@@ -67,6 +75,16 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   const mapRange = (start, end, write) => {
     for (let p = start >>> 12; p < Math.ceil(end / PAGE); p++) mapPage(p, write);
+  };
+  /** Map virtual pages straight onto physical frames — /dev/mem. The frames are the machine's own:
+   *  A0000h-AFFFFh is the emulated VGA's window, so SVGAlib drawing through its mapping draws on it. */
+  const mapPhys = (va, pa, len, write) => {
+    for (let i = 0; i < Math.ceil(len / PAGE); i++) {
+      const vpn = (va >>> 12) + i, frame = (pa & ~0xfff) + i * PAGE;
+      lx.pages.set(vpn, { frame, write: !!write, phys: true });
+      setPte(vpn, frame, write);
+    }
+    cpu.setCR3(cpu.cr3);
   };
   const unmapRange = (start, end) => {
     for (let p = start >>> 12; p < Math.ceil(end / PAGE); p++) {
@@ -142,6 +160,38 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     return Math.ceil((hi - lo) / PAGE) * PAGE;
   };
 
+  // ---- a.out, the format before ELF (Linux 0.x-1.2, libc 4) ---------------------------------------
+  // struct exec: a_info (magic in the low 16 bits), a_text, a_data, a_bss, a_syms, a_entry, a_trsize,
+  // a_drsize. As fs/binfmt_aout.c lays it out: ZMAGIC's text starts at file offset 1024 and runs at
+  // address 0; QMAGIC's header is part of its text, which runs at 0x1000; OMAGIC/NMAGIC follow a
+  // 32-byte header and run at 0. The data follows the text (page-aligned but OMAGIC), then the bss.
+  const ZMAGIC = 0x10b, QMAGIC = 0xcc, OMAGIC = 0x107, NMAGIC = 0x108;
+  const aoutHeader = (b) => {
+    if (b.length < 32) return null;
+    const d = new DataView(b.buffer, b.byteOffset, b.byteLength), magic = d.getUint32(0, true) & 0xffff;
+    if (![ZMAGIC, QMAGIC, OMAGIC, NMAGIC].includes(magic)) return null;
+    return { magic, text: d.getUint32(4, true), data: d.getUint32(8, true), bss: d.getUint32(12, true), entry: d.getUint32(20, true) };
+  };
+  const loadAout = (b, h, base) => {                                      // base: a library's own address, else per magic
+    const txtOff = h.magic === ZMAGIC ? 1024 : h.magic === QMAGIC ? 0 : 32;
+    const txtAddr = base !== undefined ? base : h.magic === QMAGIC ? PAGE : 0;
+    const datAddr = h.magic === OMAGIC ? txtAddr + h.text : txtAddr + Math.ceil(h.text / PAGE) * PAGE;
+    mapRange(txtAddr, txtAddr + h.text, true);                            // writable: libc 4 patches its jump table
+    mapRange(datAddr, datAddr + h.data + h.bss, true);
+    for (let k = 0; k < h.text; k++) mem.u8[phys(txtAddr + k)] = b[txtOff + k];
+    for (let k = 0; k < h.data; k++) mem.u8[phys(datAddr + k)] = b[txtOff + h.text + k];
+    return datAddr + h.data + h.bss;
+  };
+  /** uselib(2): an a.out library at the address its a_entry names, or an ELF with one PT_LOAD at its
+   *  own address — how libc 4's crt0 brings in /lib/ld.so, and ld.so the DLL-jump libraries. */
+  const uselib = (path) => {
+    const b = lx.readFile(path);
+    if (!b) return -E.ENOENT;
+    const h = aoutHeader(b);
+    if (h) { loadAout(b, h, h.entry & 0xfffff000); return 0; }
+    try { loadImage(b, elfHeader(b), 0); return 0; } catch { return -E.ENOEXEC; }
+  };
+
   /**
    * Map an ELF32 i386 program — static, or dynamic through its PT_INTERP — and point the CPU at the
    * entry, with the initial stack a kernel builds: argc, argv[], NULL, envp[], NULL, the auxiliary
@@ -149,17 +199,21 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
    * file system and started instead; it finds the program through AT_PHDR and AT_ENTRY.
    */
   lx.load = (elf, argv = ['a.out'], envp = []) => {
-    const h = elfHeader(elf);
     mem.u8.fill(0, PD_BASE, PD_BASE + PAGE);
     // The GDT is read through paging like any other linear address: identity-mapped, supervisor only.
-    setPte(GDT_BASE >>> 12, GDT_BASE, true, false);
+    setPte(GDT_LIN >>> 12, GDT_BASE, true, false);
+    for (let i = 0; i < 3; i++) setPte((TSS_LIN >>> 12) + i, TSS_BASE + i * PAGE, true, false);
+    mem.u8.fill(0, TSS_BASE, TSS_BASE + IOMAP); mem.u8.fill(0xff, TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1);   // every port closed
+    dv.setUint16(TSS_BASE + 0x66, IOMAP, true);
     lx.mmapNext = MMAP_BASE;
-    const bias = h.type === 3 ? PIE_BASE : 0;
-    const main = loadImage(elf, h, bias);
+    const ah = aoutHeader(elf);
+    const h = ah ? null : elfHeader(elf);
+    const bias = h && h.type === 3 ? PIE_BASE : 0;
+    const main = h ? loadImage(elf, h, bias) : { phdr: 0, top: loadAout(elf, ah) };
     lx.brkStart = lx.brk = Math.ceil(main.top / PAGE) * PAGE;
-    const entry = (h.entry + bias) >>> 0;
+    const entry = ((h ? h.entry : ah.entry) + bias) >>> 0;
     let start = entry, interpBase = 0;
-    const pin = h.ph.find((ph) => ph.type === 3);                         // PT_INTERP
+    const pin = h && h.ph.find((ph) => ph.type === 3);                    // PT_INTERP
     if (pin) {
       let name = ''; for (let k = pin.off; elf[k]; k++) name += String.fromCharCode(elf[k]);
       const ib = lx.readFile(name);
@@ -181,9 +235,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     sp -= 16; const random = sp;
     for (let i = 0; i < 16; i++) mem.u8[phys(random + i)] = (i * 73 + 41) & 0xff;   // AT_RANDOM: fixed, so runs repeat
     sp &= ~15;
-    const auxv = [[3, main.phdr], [4, h.phentsize], [5, h.phnum], [6, PAGE], [7, interpBase], [8, 0], [9, entry],
+    const auxv = [[3, main.phdr], [4, h ? h.phentsize : 32], [5, h ? h.phnum : 0], [6, PAGE], [7, interpBase], [8, 0], [9, entry],
       [11, 0], [12, 0], [13, 0], [14, 0], [16, 0], [17, 100], [23, 0], [25, random], [15, platform], [31, execfn], [0, 0]];
-    const words = [argv.length, ...argAddrs, 0, ...envAddrs, 0, ...auxv.flat()];
+    let words = [argv.length, ...argAddrs, 0, ...envAddrs, 0, ...auxv.flat()];
+    // a.out has no auxiliary vector, and its crt0 takes argv and envp as POINTERS to the arrays above
+    // them (create_aout_tables): argc, &argv[0], &envp[0], argv[], NULL, envp[], NULL.
+    if (ah) {
+      const arrays = [...argAddrs, 0, ...envAddrs, 0];
+      sp -= arrays.length * 4; sp &= ~15;
+      for (let i = 0; i < arrays.length; i++) dv.setUint32(phys(sp + i * 4), arrays[i] >>> 0, true);
+      words = [argv.length, sp, sp + (argAddrs.length + 1) * 4];
+    }
     sp -= words.length * 4; sp &= ~15;
     for (let i = 0; i < words.length; i++) dv.setUint32(phys(sp + i * 4), words[i] >>> 0, true);
 
@@ -191,7 +253,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     mem.u8.fill(0, GDT_BASE, GDT_BASE + GDT_ENTRIES * 8);
     setDesc(USER_CS >> 3, 0, 0xfffff, 0xfa, 0xc0);                       // code, DPL 3, 4 GiB, 32-bit
     setDesc(USER_DS >> 3, 0, 0xfffff, 0xf2, 0xc0);                       // data, DPL 3
-    cpu.gdtr.base = GDT_BASE; cpu.gdtr.limit = GDT_ENTRIES * 8 - 1;
+    cpu.tr.sel = 0x80; cpu.tr.base = TSS_LIN; cpu.tr.limit = TSS_LIMIT;
+    cpu.gdtr.base = GDT_LIN; cpu.gdtr.limit = GDT_ENTRIES * 8 - 1;
     cpu.idtr.base = 0; cpu.idtr.limit = 0;                               // INT 80h and faults never reach it
     mem.setA20(true); machine.rec.setMask(mem.mask);
     cpu.setCR3(PD_BASE);
@@ -288,7 +351,22 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // The character devices every program assumes. A tree unpacked on the host has none (macOS's tar
   // cannot make device nodes), and Perl stops at once: "Can't open /dev/null".
   fs.set('/dev', { dir: true, mtime: 0 });
-  for (const d of ['null', 'zero', 'full', 'random', 'urandom']) fs.set('/dev/' + d, { dev: d, mtime: 0 });
+  for (const d of ['null', 'zero', 'full', 'random', 'urandom', 'mem']) fs.set('/dev/' + d, { dev: d, mtime: 0 });
+  // The console, as a program on the PC's own screen sees it (SVGAlib opens it to switch the virtual
+  // terminal to graphics and the keyboard to raw). Its input is lx.ttyIn, bytes the host feeds in.
+  // Device numbers as Linux has them: the virtual consoles are major 4 (tty0 the current one, tty1-63),
+  // /dev/tty 5:0, /dev/console 5:1. SVGAlib insists its stdio is a VT, 4:1-63.
+  const RDEV = { console: 0x501, tty: 0x500, tty0: 0x400, null: 0x103, zero: 0x105, full: 0x107, random: 0x108, urandom: 0x109, mem: 0x101 };
+  for (const d of ['console', 'tty', 'tty0', 'tty1', 'tty2', 'tty3', 'tty4', 'tty5', 'tty6']) fs.set('/dev/' + d, { dev: 'tty', rdev: RDEV[d] || (0x400 | +d.slice(3)), mtime: 0 });
+  for (const d of ['null', 'zero', 'full', 'random', 'urandom', 'mem']) fs.get('/dev/' + d).rdev = RDEV[d];
+  // A mouse on the first serial port, as SVGAlib assumes one ("Microsoft mouse" on /dev/mouse): it
+  // takes the line settings and has nothing to say until lx.mouseIn holds its 3-byte packets.
+  fs.set('/dev/mouse', { dev: 'mouse', rdev: 0x440, mtime: 0 }); fs.set('/dev/ttyS0', fs.get('/dev/mouse'));
+  lx.mouseIn = [];
+  /** Put stdin, stdout and stderr on the first virtual console, as for a program started there. */
+  lx.consoleStdio = () => { const n = fs.get('/dev/tty1'); for (let i = 0; i < 3; i++) fds[i] = { node: n, path: '/dev/tty1', pos: 0, flags: 2 }; };
+  lx.ttyIn = [];
+  lx.tty = { kdMode: 0, kbMode: 1, termios: null };
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
@@ -330,6 +408,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const doWrite = (fd, bytes) => {
     const f = fdOf(fd);
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
+    if (f.node.dev === 'tty') { out(1, bytes); return bytes.length; }
+    if (f.node.dev === 'mouse') return bytes.length;
     if (f.node.dev) return f.node.dev === 'full' ? -E.ENOSPC : bytes.length;
     if (f.node.dir) return -E.EISDIR;
     if ((f.flags & 3) === 0) return -E.EBADF;                               // O_RDONLY
@@ -345,6 +425,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (f.pipe !== undefined) {
       if (f.pipe !== 0) return -E.EBADF;
       src = lx.stdin.subarray(lx.stdinPos, lx.stdinPos + n); lx.stdinPos += src.length;
+    } else if (f.node.dev === 'mouse') {
+      if (!lx.mouseIn.length) return (f.flags & 0x800) ? -E.EAGAIN : 0;
+      src = Uint8Array.from(lx.mouseIn.splice(0, n));
+    } else if (f.node.dev === 'tty') {
+      if (!lx.ttyIn.length) return (f.flags & 0x800) ? -E.EAGAIN : 0;   // O_NONBLOCK; else nothing to wait for here
+      src = Uint8Array.from(lx.ttyIn.splice(0, n));
     } else if (f.node.dev) {
       const d = f.node.dev;
       src = d === 'null' ? new Uint8Array(0) : new Uint8Array(Math.min(n, 1 << 20));
@@ -382,15 +468,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   // struct stat64, 96 bytes (arch/x86/include/uapi/asm/stat.h).
   const inoOf = (p) => { let h = 2166136261; for (let i = 0; i < p.length; i++) h = Math.imul(h ^ p.charCodeAt(i), 16777619); return (h >>> 0) || 1; };
-  const putStat = (buf, node, p) => {
-    const b = new Uint8Array(96), d = new DataView(b.buffer);
+  const putStat = (buf, node, p) => { const b = new Uint8Array(96); putStatInto(b, node, p); wrBytes(buf, b); return 0; };
+  const putStatInto = (b, node, p) => {
+    const d = new DataView(b.buffer);
     const isPipe = node.pipe !== undefined;
     d.setUint32(0, isPipe ? 0xc : 0x801, true);                             // st_dev
     d.setUint32(12, inoOf(p), true);
     const type = isPipe ? 0o010000 : node.dev ? 0o020000 : node.dir ? 0o040000 : node.link !== undefined ? 0o120000 : 0o100000;
-    const perm = node.link !== undefined ? 0o777 : node.mode !== undefined ? node.mode & 0o7777 : isPipe ? 0o600 : node.dev ? 0o666 : node.dir ? 0o755 : node.link !== undefined ? 0o777 : 0o644;
+    const perm = node.link !== undefined ? 0o777 : node.dev === 'tty' ? 0o620 : node.mode !== undefined ? node.mode & 0o7777 : isPipe ? 0o600 : node.dev ? 0o666 : node.dir ? 0o755 : node.link !== undefined ? 0o777 : 0o644;
     d.setUint32(16, type | perm, true);
     d.setUint32(20, node.nlink || (node.dir ? 2 : 1), true);
+    d.setUint32(32, node.rdev || 0, true);                                  // st_rdev
     const size = isPipe || node.dir ? (node.dir ? 4096 : 0) : node.link !== undefined ? node.link.length : node.size;
     d.setUint32(44, size, true);
     d.setUint32(52, 4096, true);
@@ -398,8 +486,19 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const t = Math.floor(node.mtime || lx.epoch);
     d.setUint32(64, t, true); d.setUint32(72, t, true); d.setUint32(80, t, true);
     d.setUint32(88, inoOf(p), true);
+  };
+  // struct stat (i386, 64 bytes): the 32-bit form libc 4 and 5 ask for with stat/lstat/fstat 106-108.
+  const putOldStat = (buf, node, p) => {
+    const t = new Uint8Array(96); putStatInto(t, node, p);
+    const s64 = new DataView(t.buffer), b = new Uint8Array(64), d = new DataView(b.buffer);
+    d.setUint32(0, s64.getUint32(0, true), true);  d.setUint32(4, s64.getUint32(12, true), true);
+    d.setUint16(8, s64.getUint32(16, true), true); d.setUint16(10, s64.getUint32(20, true), true);
+    d.setUint32(16, s64.getUint32(32, true), true);
+    d.setUint32(20, s64.getUint32(44, true), true); d.setUint32(24, 4096, true); d.setUint32(28, s64.getUint32(56, true), true);
+    d.setUint32(32, s64.getUint32(64, true), true); d.setUint32(40, s64.getUint32(72, true), true); d.setUint32(48, s64.getUint32(80, true), true);
     wrBytes(buf, b); return 0;
   };
+  const oldStat = (p, buf) => { const n = p && getNode(p); return n ? putOldStat(buf, n, p) : -E.ENOENT; };
   const statPath = (base, path, buf, follow = true) => {
     const p = resolve(rdStr(path), base, follow), node = p && getNode(p);
     return node ? putStat(buf, node, p) : -E.ENOENT;
@@ -436,6 +535,45 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       wrBytes(buf + o, b); o += len; f.pos++;
     }
     return o;
+  };
+  // ioctl on the console: what a kernel answers on virtual terminal 1 (linux/vt.h, linux/kd.h,
+  // asm/termbits.h). Pipes and files are not terminals.
+  const ioctl = (f, req, arg) => {
+    if (!f.node || (f.node.dev !== 'tty' && f.node.dev !== 'mouse')) return -E.ENOTTY;
+    const t = lx.tty;
+    switch (req) {
+      case 0x5401: {                                                        // TCGETS: struct termios, 36 bytes
+        const b = t.termios || Uint8Array.from([0x00, 0x05, 0, 0, 0x05, 0x00, 0, 0, 0xbf, 0x04, 0, 0, 0x3b, 0x8a, 0, 0, 0,
+          3, 0x1c, 0x7f, 0x15, 4, 0, 1, 0, 0x11, 0x13, 0x1a, 0, 0x12, 0x0f, 0x17, 0x16, 0, 0, 0]);
+        wrBytes(arg, b); return 0;
+      }
+      case 0x5402: case 0x5403: case 0x5404: t.termios = rdBytes(arg, 36); return 0;   // TCSETS(W/F)
+      case 0x5413: wr32(arg, (25 << 0) | (80 << 16)); wr32(arg + 4, 0); return 0;     // TIOCGWINSZ: 25 rows, 80 columns
+      case 0x540f: wr32(arg, 1); return 0;                                  // TIOCGPGRP
+      case 0x4b3b: wr32(arg, t.kdMode); return 0;                          // KDGETMODE
+      case 0x4b3a: t.kdMode = arg; return 0;                               // KDSETMODE: KD_TEXT 0 / KD_GRAPHICS 1
+      case 0x4b44: wr32(arg, t.kbMode); return 0;                          // KDGKBMODE
+      case 0x4b45: t.kbMode = arg; return 0;                               // KDSKBMODE: K_RAW 0, K_XLATE 1, K_MEDIUMRAW 2
+      case 0x4b33: wr8(arg, 4); return 0;                                  // KDGKBTYPE: KB_101
+      case 0x5600: wr32(arg, 1); return 0;                                 // VT_OPENQRY
+      case 0x5601: for (let i = 0; i < 8; i++) wr8(arg + i, 0); return 0;  // VT_GETMODE: VT_AUTO
+      case 0x5603: wr8(arg, 1); wr8(arg + 1, 0); wr8(arg + 2, 0); wr8(arg + 3, 0); wr8(arg + 4, 2); wr8(arg + 5, 0); return 0;   // VT_GETSTATE: v_active 1
+      default: return 0;                                                   // VT_SETMODE, VT_ACTIVATE, VT_WAITACTIVE, KDSETLED...
+    }
+  };
+  const select = (n, inp, outp, exp) => {
+    let ready = 0;
+    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
+      if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0; return true; };
+    for (const [set, test] of [[inp, has], [outp, (fd) => !!fds[fd]], [exp, () => false]]) {
+      if (!set) continue;
+      for (let w = 0; w < Math.ceil(n / 32); w++) {
+        let bits = rd32(set + w * 4), keep = 0;
+        for (let b = 0; b < 32; b++) if ((bits >>> b) & 1 && test(w * 32 + b)) { keep |= 1 << b; ready++; }
+        wr32(set + w * 4, keep >>> 0);
+      }
+    }
+    return ready;
   };
   const readlink = (path, base, buf, size) => {
     let t;
@@ -548,7 +686,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     },
     194: (fd, lo, hi) => { const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EINVAL; const n = lo + hi * 4294967296; grow(f.node, n); f.node.data.fill(0, Math.min(n, f.node.size), n); f.node.size = n; return 0; },   // ftruncate64
     118: () => 0, 148: () => 0,                                            // fsync, fdatasync
-    54: (fd) => { fdOf(fd); return -E.ENOTTY; },                           // ioctl: nothing is a terminal
+    54: (fd, req, arg) => ioctl(fdOf(fd), req, arg),                       // ioctl
     85: (path, buf, size) => readlink(rdStr(path), lx.cwd, buf, size),     // readlink
     305: (dirfd, path, buf, size) => readlink(rdStr(path), atBase(dirfd), buf, size),   // readlinkat
     45: (addr) => {                                                        // brk
@@ -561,6 +699,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const at = (flags & 0x10) ? addr : lx.mmapNext;                      // MAP_FIXED
       if (!(flags & 0x10)) lx.mmapNext += size;
       let src = null;
+      if (!(flags & 0x20) && fds[fd] && fds[fd].node && fds[fd].node.dev === 'mem') {
+        unmapRange(at, at + size); mapPhys(at, pgoff * PAGE, size, (prot & 2) !== 0); return at;
+      }
       if (!(flags & 0x20)) {                                                // a file: copied, not shared
         const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EACCES;
         src = f.node.data.subarray(Math.min(pgoff * PAGE, f.node.size), Math.min(pgoff * PAGE + len, f.node.size));
@@ -569,7 +710,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (src) wrBytes(at, src);
       return at;
     },
-    90: () => -E.ENOSYS,                                                   // old_mmap: libcs use mmap2
+    90: (args) => {                                                        // old_mmap: its six arguments in a struct (libc 4, ld.so)
+      const off = rd32(args + 20);
+      if (off & 0xfff) return -E.EINVAL;
+      return SYS[192](rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12), rd32(args + 16), off >>> 12);
+    },
+    86: (path) => uselib(rdStr(path)),                                     // uselib
     91: (addr, len) => { unmapRange(addr, addr + len); return 0; },        // munmap
     163: (old, oldLen, newLen, flags) => {                                 // mremap: move to fresh pages
       if (!(flags & 1)) return newLen <= oldLen ? old : -E.ENOMEM;          // MREMAP_MAYMOVE
@@ -620,6 +766,27 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // system without ACLs — ENODATA to a get, an empty list. ls -l asks for each file it lists.
     229: () => -E.ENODATA, 230: () => -E.ENODATA, 231: () => -E.ENODATA,
     232: () => 0, 233: () => 0, 234: () => 0,
+    // ---- libc 4 / a.out era ----
+    24: () => 0, 49: () => 0, 47: () => 0, 50: () => 0,                    // get[e]uid, get[e]gid (16-bit): root, as SVGAlib requires
+    23: () => 0, 46: () => 0, 213: () => 0, 214: () => 0,                  // setuid, setgid (16- and 32-bit): root may
+    67: (sig, act, old) => { if (old) { wr32(old, 0); wr32(old + 4, 0); wr32(old + 8, 0); } return 0; },   // sigaction (old)
+    101: (from, num, on) => {                                              // ioperm: the ports are the emulated card's
+      if (from + num > 0x10000) return -E.EINVAL;
+      for (let port = from; port < from + num; port++) {
+        const a = TSS_BASE + IOMAP + (port >>> 3);
+        mem.u8[a] = on ? mem.u8[a] & ~(1 << (port & 7)) : mem.u8[a] | (1 << (port & 7));
+      }
+      return 0;
+    },
+    110: (level) => { cpu.flags = (cpu.flags & ~0x3000) | ((level & 3) << 12); return 0; },   // iopl
+    106: (path, buf) => oldStat(resolve(rdStr(path)), buf),                // stat (struct stat, not stat64)
+    107: (path, buf) => oldStat(resolve(rdStr(path), lx.cwd, false), buf),  // lstat
+    108: (fd, buf) => { const f = fdOf(fd); return f.path ? oldStat(f.path, buf) : putOldStat(buf, f, 'pipe:' + fd); },   // fstat
+    42: () => -E.EMFILE,                                                   // pipe: no second process to talk to
+    // select: a descriptor with input waiting is ready to read, every one is ready to write; with
+    // nothing ready it returns at once (there is no other process to wait for).
+    142: (n, inp, outp, exp) => select(n, inp, outp, exp),                 // _newselect
+    82: (args) => select(rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12)),   // select (old: its arguments in a struct)
     122: (buf) => {                                                        // uname: as the oracle's i386 kernel says
       const f = ['Linux', 'mirage', '2.6.32', '#1', 'i686', '(none)'];
       for (let i = 0; i < 6; i++) { const b = new TextEncoder().encode(f[i]); wrBytes(buf + i * 65, b); wr8(buf + i * 65 + b.length, 0); }
