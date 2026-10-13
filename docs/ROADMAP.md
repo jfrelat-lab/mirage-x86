@@ -68,11 +68,30 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | Id | Item | Effort |
 |---|---|---|
 | K1 | The serial console in a terminal, like `qemu -nographic` | S |
-| K2 | `mirage prog.exe`: user-space DOS with a host directory as C: | M |
 | K3, K5 | VGA text as ANSI; graphics through terminal image protocols | M |
 | K4 | Recording to GIF or video | S |
-| K6–K7, H12, H14 | User-space Linux and Win32 programs, their system calls answered in JavaScript | L |
-| K8 | A native window with sound | M |
+| H12 | User-space Linux: started (static, Debian dynamic, a.out with libc 4 — id's Linux DOOM runs); next its keyboard, a web terminal, fork/exec, the 80-bit x87 | L |
+| K7, H14 | User-space Win32 programs, their API answered in JavaScript | L |
+| K8 | A native window with sound — for OASIS's `oasis run` (O4) | M |
+
+## OASIS — images for every world of the period PC
+
+A container format and runner on MIRAGE, the way Docker is one on Linux: an **image** is a manifest
+(the world — DOS, Linux user space, Win16, a bootable PC — the machine profile, the entry point) and
+file layers fetched on demand; `oasis run <image> [cmd]` runs it in a terminal, a native window or
+the browser. What Docker does not: no daemon and nothing to install, the same x86 on every host
+(phones included), a VGA screen and a Sound Blaster, period binaries (DOS, DPMI, a.out, Win16),
+runs reproducible to the cycle, and a commit that saves the whole machine — CPU included — so a URL
+resumes a program at the instant it was taken. The name: what a mirage promises, an oasis is.
+
+| Id | Item | Effort |
+|---|---|---|
+| O1 | The image format: manifest (world, profile, entry, env, cwd) and layers (zip/tar, content-addressed); the examples' `manifest.json` and `tools/run.mjs`'s signature switch are its first draft | M |
+| O2 | `oasis run|pull|commit` from the command line on top of `tools/run.mjs`, `tools/dos/run.mjs` and `tools/linux/run.mjs` | M |
+| O3 | Layers read on demand over HTTP in the browser (byte ranges), cached offline; a registry is any static host | M |
+| O4 | Output: a terminal (stdio, ANSI), a native window (K8: the system browser in app mode, or a WebView) and the web page; keyboard, mouse and sound in all three | M |
+| O5 | `commit` of the machine state (`tools/snapshot.mjs`), and URLs that resume or replay a run | L |
+| O6 | First images: `dos/c-dogs`, `dos/doom`, `linux/debian-bookworm-i386`, `linux/slackware-1995` with id's DOOM, `win/3.0` | M |
 
 ## The project
 
