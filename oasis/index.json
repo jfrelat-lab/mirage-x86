@@ -1,0 +1,46 @@
+[
+  {
+    "name": "dos/c-dogs",
+    "title": "C-Dogs 1.06",
+    "world": "dos",
+    "year": 1999,
+    "author": "Ronny Wester",
+    "thumb": "examples/thumbs/cdogs.png",
+    "output": "window"
+  },
+  {
+    "name": "dos/doom",
+    "title": "DOOM 1.9 (shareware)",
+    "world": "dos",
+    "year": 1993,
+    "author": "id Software",
+    "thumb": "examples/thumbs/doom.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/debian-bookworm",
+    "title": "Debian 12 (bookworm), i386, from Docker's image",
+    "world": "linux",
+    "year": 2023,
+    "author": "Debian",
+    "output": "terminal"
+  },
+  {
+    "name": "linux/doom-1994",
+    "title": "Linux DOOM 1.8 for SVGAlib (id Software, December 1994)",
+    "world": "linux",
+    "year": 1994,
+    "author": "id Software, port by Dave Taylor",
+    "thumb": "oasis/thumbs/linux-doom-1994.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/mirage",
+    "title": "Debian 12 with id's 1994 Linux DOOM — a real bash on the console",
+    "world": "linux",
+    "year": 2023,
+    "author": "Debian; id Software",
+    "thumb": "oasis/thumbs/linux-mirage.png",
+    "output": "window"
+  }
+]

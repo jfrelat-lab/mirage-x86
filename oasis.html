@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MIRAGE — OASIS images</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101820'/><text x='1.5' y='12' font-family='monospace' font-size='11' fill='%2300d0a0'>M:</text></svg>">
+<!--
+  OASIS's images, each with its whole recipe: the world it runs in, the machine, every layer and
+  where it comes from, the entry point, and the manifest itself. An image holds no software of its
+  own — it points at the original archives (Debian's, idgames, the repository's examples) — so this
+  page is what an image IS. Reads oasis/index.json and oasis/images/<name>.json, from any static host.
+-->
+<style>
+  :root { --bg: #0a0e12; --panel: #0f1620; --panel-2: #141d28; --edge: #1f2c38; --ink: #c6d4de; --dim: #6f8494; --accent: #00d0a0; --warn: #e3b341; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  header { display: flex; gap: 10px; align-items: center; padding: 9px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); position: sticky; top: 0; z-index: 2; }
+  .logo { font-weight: 700; letter-spacing: .14em; color: var(--accent); text-decoration: none; }
+  .logo small { display: block; font-weight: 400; letter-spacing: 0; color: var(--dim); font-size: 10px; }
+  .logo:hover { filter: brightness(1.25); }
+  .sep { flex: 1; }
+  header nav a { color: var(--dim); text-decoration: none; border: 1px solid var(--edge); border-radius: 5px; padding: 5px 9px; margin-left: 6px; }
+  header nav a:hover, header nav a[aria-current] { color: var(--accent); border-color: var(--accent); }
+  main { max-width: 1080px; margin: 0 auto; padding: 22px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 6px; color: #e6f0f6; letter-spacing: .02em; }
+  h1 span { color: var(--accent); }
+  .lede { color: var(--dim); max-width: 78ch; margin: 0 0 18px; }
+  pre, code { font: 13px ui-monospace, Menlo, monospace; }
+  .cmd { background: #05080b; border: 1px solid var(--edge); border-radius: 7px; padding: 10px 12px; margin: 0 0 22px; color: #cfe3d8; overflow-x: auto; }
+  .cmd b { color: var(--accent); font-weight: 400; }
+  .image { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; margin: 0 0 18px; overflow: hidden; }
+  .head { display: grid; grid-template-columns: 220px 1fr; gap: 16px; padding: 14px; align-items: start; }
+  @media (max-width: 720px) { .head { grid-template-columns: 1fr; } }
+  .head img, .head .noimg { width: 220px; aspect-ratio: 8 / 5; object-fit: cover; image-rendering: pixelated; border-radius: 6px; background: #000; border: 1px solid var(--edge); }
+  .head .noimg { display: grid; place-items: center; color: var(--dim); font-size: 12px; }
+  .name { color: var(--dim); font-size: 12px; }
+  .title { font-size: 17px; font-weight: 700; color: #e6f0f6; margin: 2px 0 4px; }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+  .badge { font-size: 11px; border: 1px solid var(--edge); border-radius: 99px; padding: 2px 9px; color: var(--dim); }
+  .badge.world { color: var(--accent); border-color: #1d6a55; }
+  .notes { color: var(--dim); font-size: 13px; margin: 0 0 10px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btn { display: inline-block; text-decoration: none; color: #04130e; background: var(--accent); border-radius: 6px; padding: 5px 12px; font-weight: 700; }
+  .btn.ghost { background: none; color: var(--ink); border: 1px solid var(--edge); font-weight: 400; }
+  .btn:hover { filter: brightness(1.1); }
+  .needs { color: var(--warn); font-size: 12px; }
+  .recipe { border-top: 1px solid var(--edge); padding: 10px 14px 14px; background: var(--panel-2); }
+  .recipe h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); margin: 6px 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 5px 8px; border-top: 1px solid var(--edge); vertical-align: top; overflow-wrap: anywhere; }
+  td.k { width: 7ch; color: var(--accent); }
+  td a { color: #8fd3ff; text-decoration: none; } td a:hover { text-decoration: underline; }
+  td.to { color: var(--dim); width: 34%; }
+  .entry { margin: 10px 0 0; }
+  .entry code { color: #e6f0f6; }
+  details { margin-top: 10px; } summary { cursor: pointer; color: var(--dim); }
+  details pre { background: #05080b; border: 1px solid var(--edge); border-radius: 7px; padding: 10px; overflow-x: auto; color: #cfe3d8; max-height: 420px; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="./" title="MIRAGE — home">▚ MIRAGE<small>x86 → JavaScript</small></a>
+  <span class="sep"></span>
+  <nav><a href="machines.html">Machines</a><a href="oasis.html" aria-current="page">OASIS</a><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/OASIS.md">Docs</a></nav>
+</header>
+<main>
+  <h1><span>OASIS</span> — images of the period PC</h1>
+  <p class="lede">An OASIS image is a recipe, not an archive: the world a program needs (DOS or Linux user
+    space, both answered in JavaScript), the machine, and layers of files fetched from where their
+    authors published them — Debian's archive, idgames, the examples of this repository. Nothing below
+    is copied into MIRAGE; each layer says where it comes from.</p>
+  <pre class="cmd"><b>node tools/oasis.mjs serve --open</b>          every image, in the Machines page (Linux needs it)
+<b>node tools/oasis.mjs run</b> linux/mirage         one image, in a window of its own
+<b>node tools/oasis.mjs run</b> linux/debian-bookworm -c 'ls /'      in the terminal
+<b>node tools/oasis.mjs pull</b> linux/doom-1994       fetch its layers into ~/.cache/oasis</pre>
+  <div id="list">loading…</div>
+</main>
+<script type="module">
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const REPO = 'https://github.com/jfrelat-lab/mirage-x86/blob/main/';
+const src = (s) => /^https?:/.test(s) ? `<a href="${esc(s)}">${esc(s)}</a>` : `<a href="${esc(REPO + s)}">${esc(s)}</a> <span class="name">(this repository)</span>`;
+const layer = (l) => {
+  if (l.docker) return ['docker', `the Docker image <code>${esc(l.docker)}</code> (${esc(l.platform || 'linux/386')}), exported whole`, '/'];
+  if (l.deb) return ['deb', src(l.deb), l.into ? '/' + l.into : '/'];
+  if (l.tar) return ['tar', src(l.tar), l.into ? '/' + l.into : '/'];
+  if (l.zip) return ['zip', src(l.zip), 'C:\\ (DOS) or /'];
+  if (l.gz) return ['gz', src(l.gz), l.to];
+  if (l.file) return ['file', src(l.file), l.to || 'beside the program'];
+  if (l.dir) return ['dir', src(l.dir), '/'];
+  if (l.links) return ['links', Object.entries(l.links).map(([p, t]) => `${esc(p)} → ${esc(t)}`).join('<br>'), 'symbolic links'];
+  if (l.mkdir) return ['mkdir', [].concat(l.mkdir).map(esc).join(' '), 'empty directories'];
+  return ['?', esc(JSON.stringify(l)), ''];
+};
+const runLink = (m) => {
+  if (m.world === 'dos') {
+    const zip = (m.layers || []).find((l) => l.zip), adds = (m.layers || []).filter((l) => l.file);
+    if (zip && !/^https?:/.test(zip.zip)) {
+      const q = new URLSearchParams({ zip: zip.zip, run: m.entry.run.replace(/\.(exe|com|bat)$/i, '') });
+      if (adds.length) q.set('add', adds.map((l) => l.file).join(','));
+      return { href: `dos.html?${q}`, note: '' };
+    }
+  }
+  if (m.world === 'linux') return { href: `machines.html?m=linux&run=${encodeURIComponent(m.name)}`, note: 'needs <code>node tools/oasis.mjs serve</code>: its layers come from Debian\'s and idgames\' servers, which a page cannot read directly' };
+  return null;
+};
+const list = document.getElementById('list');
+try {
+  const index = await (await fetch('oasis/index.json')).json();
+  const images = await Promise.all(index.map(async (x) => ({ ...(await (await fetch(`oasis/images/${x.name}.json`)).json()), name: x.name })));
+  list.innerHTML = images.map((m) => {
+    const run = runLink(m), e = m.entry || {};
+    const rows = (m.layers || []).map((l) => { const [k, from, to] = layer(l); return `<tr><td class="k">${k}</td><td>${from}</td><td class="to">${esc(to)}</td></tr>`; }).join('');
+    return `<section class="image" id="${esc(m.name)}">
+      <div class="head">
+        ${m.thumb ? `<img src="${esc(m.thumb)}" alt="" loading="lazy">` : '<span class="noimg">no picture</span>'}
+        <div>
+          <div class="name">${esc(m.name)}</div>
+          <div class="title">${esc(m.title)}</div>
+          <div class="badges"><span class="badge world">${esc(m.world)}</span>${m.year ? `<span class="badge">${esc(m.year)}</span>` : ''}${m.author ? `<span class="badge">${esc(m.author)}</span>` : ''}
+            <span class="badge">${esc((m.machine && m.machine.cpu) || '')} · ${esc((m.machine && m.machine.mem) || 16)} MB</span><span class="badge">${esc(m.output)}</span></div>
+          ${m.notes ? `<p class="notes">${esc(m.notes)}</p>` : ''}
+          <div class="actions">
+            ${run ? `<a class="btn" href="${run.href}">Run</a>` : ''}
+            <a class="btn ghost" href="${esc(REPO + 'oasis/images/' + m.name + '.json')}">Manifest on GitHub</a>
+            ${m.license ? `<a class="btn ghost" href="${esc(m.license)}">Licence</a>` : ''}
+            ${run && run.note ? `<span class="needs">${run.note}</span>` : ''}
+          </div>
+        </div>
+      </div>
+      <div class="recipe">
+        <h3>Recipe — layers, bottom to top</h3>
+        <table>${rows}</table>
+        <p class="entry">entry: <code>${esc([e.run, ...(e.args || [])].join(' '))}</code>${e.cwd ? ` in <code>${esc(e.cwd)}</code>` : ''}${e.console ? ' on the console (tty1)' : ''}${e.env ? ` · env <code>${esc(Object.entries(e.env).map(([k, v]) => k + '=' + v).join(' '))}</code>` : ''}</p>
+        <p class="entry">run it: <code>node tools/oasis.mjs run ${esc(m.name)}</code></p>
+        <details><summary>manifest — ${esc('oasis/images/' + m.name + '.json')}</summary><pre>${esc(JSON.stringify(Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'name')), null, 2))}</pre></details>
+      </div>
+    </section>`;
+  }).join('');
+  if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+} catch (e) { list.textContent = 'could not read oasis/index.json: ' + (e.message || e); }
+</script>
+</body>
+</html>

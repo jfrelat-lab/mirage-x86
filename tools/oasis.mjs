@@ -7,6 +7,7 @@
 //   node tools/oasis.mjs pull <image>               fetch and unpack its remote layers into the cache
 //   node tools/oasis.mjs run <image> [args...]      run it (pulls first if needed)
 //   node tools/oasis.mjs serve [--open]             every image, for machines.html (Linux images need it)
+//   node tools/oasis.mjs index                      write oasis/index.json, the list oasis.html reads
 //       --window      in a window of its own: the system's Chrome or Edge in app mode, else the browser
 //       --terminal    in this terminal: its output on stdout, our stdin as its keyboard
 //       --serve       a window's page, served without opening it (prints the URL; for tests)
@@ -233,8 +234,9 @@ function serve(img, host, port = 0) {
         const want = u.searchParams.get('img');
         try { return send(200, JSON.stringify(want ? { ...findImage(want), name: want } : img), 'application/json'); } catch (e) { return send(404, e.message); }
       }
-      if (u.pathname === '/oasis-images.json') return send(200, JSON.stringify(listImages().map((n) => { const m = findImage(n); return { name: n, title: m.title, world: m.world, year: m.year, author: m.author, thumb: m.thumb, output: m.output }; })), 'application/json');
-      const p = join(ROOT, decodeURIComponent(u.pathname));
+      if (u.pathname === '/oasis-images.json') return send(200, JSON.stringify(imageIndex()), 'application/json');
+      let p = join(ROOT, decodeURIComponent(u.pathname));
+      if (p.startsWith(ROOT) && existsSync(p) && statSync(p).isDirectory()) p = join(p, 'index.html');   // the logo's "./", as a static host does
       if (!p.startsWith(ROOT) || !existsSync(p) || statSync(p).isDirectory()) return send(404, 'not found');
       send(200, readFileSync(p), MIME[extname(p)] || 'application/octet-stream');
     });
@@ -306,8 +308,15 @@ async function window(img, page, host) {
   srv.close();
 }
 
+/** What a listing of the images needs, without their layers: the server's /oasis-images.json, and
+ *  oasis/index.json for a static host, which cannot list a directory. */
+function imageIndex() {
+  return listImages().map((n) => { const m = findImage(n); return { name: n, title: m.title, world: m.world, year: m.year, author: m.author, thumb: m.thumb, output: m.output }; });
+}
+const indexText = () => JSON.stringify(imageIndex(), null, 2) + '\n';
+
 // ---- command line ---------------------------------------------------------------------------------
-export { findImage, listImages, linuxRoot, hostOver, untar, undeb };
+export { findImage, listImages, linuxRoot, hostOver, untar, undeb, indexText };
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [cmd, name, ...rest] = process.argv.slice(2);
   const flags = rest.filter((a) => a === '--window' || a === '--terminal' || a === '--serve'), args = rest.filter((a) => !flags.includes(a));
@@ -315,6 +324,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (cmd === 'list') for (const n of listImages()) { const m = findImage(n); console.log(`${n.padEnd(28)} ${m.world.padEnd(6)} ${m.title || ''}`); }
     else if (cmd === 'inspect') { const m = findImage(name); console.log(JSON.stringify(m, null, 2)); for (const l of m.layers || []) if (needsPull(l)) console.log((existsSync(join(cacheDir(l), '.oasis-done')) ? 'cached  ' : 'remote  ') + JSON.stringify(l)); }
     else if (cmd === 'pull') { await pull(findImage(name)); console.error('oasis: pulled'); }
+    else if (cmd === 'index') { writeFileSync(join(ROOT, 'oasis', 'index.json'), indexText()); console.error('oasis: wrote oasis/index.json'); }
     else if (cmd === 'serve') {
       const port = Number(process.env.OASIS_PORT) || 0;
       const { port: p } = await serve(null, null, port);

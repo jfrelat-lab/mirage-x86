@@ -30,11 +30,12 @@
   #serial { display: none; background: var(--panel); border-top: 1px solid #1c2a36; padding: 6px 14px; }
   #serial pre { margin: 0 0 6px; height: 9em; overflow: auto; white-space: pre-wrap; color: #cfe3d8; background: #05080b; padding: 6px; }
   #serial input { width: 100%; }
+  a.logo { text-decoration: none; color: inherit; } a.logo:hover { filter: brightness(1.25); }
 </style>
 </head>
 <body>
   <header id="bar">
-    <span class="logo">▚ MIRAGE · bare PC</span>
+    <a class="logo" href="./" title="MIRAGE — home">▚ MIRAGE · bare PC</a>
     <select id="image"><option>loading…</option></select>
     <span>or</span><input id="file" type="file" accept=".img,.ima,.dsk,.vfd,.bin,.iso">
     <label>CPU <select id="cpu">

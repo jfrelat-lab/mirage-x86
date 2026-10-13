@@ -22,6 +22,7 @@ body {
   border-bottom: 1px solid #1c2a36; font-size: 13px;
 }
 #bar .logo { color: var(--accent); font-weight: 700; letter-spacing: 1px; }
+#bar a.logo { text-decoration: none; } #bar a.logo:hover { filter: brightness(1.25); }
 #bar .tag { color: #5c7080; }
 #bar .spacer { flex: 1; }
 #bar button {

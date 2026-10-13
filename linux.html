@@ -18,10 +18,11 @@
   #out { margin: 0; height: 7.5em; overflow: auto; white-space: pre-wrap; color: #cfe3d8; background: #05080b;
          padding: 6px 12px; border-top: 1px solid #1c2a36; }
   #status { padding: 4px 12px; background: var(--panel); border-top: 1px solid #1c2a36; }
+  a.logo { text-decoration: none; color: inherit; } a.logo:hover { filter: brightness(1.25); }
 </style>
 </head>
 <body>
-  <header id="bar"><span class="logo">▚ MIRAGE · Linux</span><span id="title"></span></header>
+  <header id="bar"><a class="logo" href="./" title="MIRAGE — home">▚ MIRAGE · Linux</a><span id="title"></span></header>
   <main id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas></main>
   <pre id="out"></pre>
   <div id="status">loading…</div>

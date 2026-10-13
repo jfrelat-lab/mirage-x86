@@ -83,6 +83,9 @@ in this repository**: an image is a recipe that points at the original archives.
 
 ## The images
 
+[`oasis.html`](../oasis.html) shows each image's whole recipe — every layer and the archive it comes
+from, the entry, the manifest — from `oasis/index.json`, which `node tools/oasis.mjs index` writes.
+
 | Image | World | What it is |
 |---|---|---|
 | `dos/c-dogs` | dos | C-Dogs 1.06, with the Sound Blaster 16 set up |

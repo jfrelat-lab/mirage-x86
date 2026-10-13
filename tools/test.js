@@ -3082,6 +3082,12 @@ const runLinux = (hex, argv) => {
   fsm.rmSync(dir, { recursive: true, force: true });
   eq('oasis: tar keeps an empty directory, a file, a symbolic link and a long name', JSON.stringify(got), JSON.stringify([true, 'hi\n', 'usr/bin', 'ok'])); }
 
+// oasis.html and the machines page read the images from oasis/index.json, which a static host can serve:
+// it must say what oasis/images/ holds. `node tools/oasis.mjs index` writes it again.
+{ const { indexText } = await import('./oasis.mjs'); const fsm = await import('fs');
+  let got; try { got = fsm.readFileSync(new URL('../oasis/index.json', import.meta.url), 'utf8') === indexText(); } catch (e) { got = e.message.slice(0, 60); }
+  eq('oasis: oasis/index.json lists oasis/images/ (node tools/oasis.mjs index)', got, true); }
+
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept
 // only until the next tick, and lost unless IF happened to be set just then: CWSDPMI runs with IF clear
