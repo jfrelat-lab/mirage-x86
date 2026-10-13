@@ -13,6 +13,7 @@
   shell's DIR, a BIOS boot menu, a shell's ls -l. The shelf beside it lists the same programs as
   cards. (The idea of the machine rail comes from PRISM, MIRAGE's sibling project.)
 -->
+<link rel="stylesheet" href="site.css">
 <style>
   :root {
     --bg: #0a0e12; --panel: #0f1620; --panel-2: #141d28; --edge: #1f2c38;
@@ -45,6 +46,14 @@
 
   main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 26%); min-height: 0; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); } aside { border-left: none; border-top: 1px solid var(--edge); } }
+  /* A phone: the page scrolls — the screen at its own 4:3 above the shelf, the header on two rows. */
+  @media (max-width: 600px) {
+    body { display: block; height: auto; }
+    header { flex-wrap: wrap; overflow: visible; padding: 8px 12px; } .logo small, .sep { display: none; }
+    #rail { order: 3; width: 100%; } #rail .machine { flex: 1; min-width: 0; } .machine .msub { display: none; }
+    main { display: block; } #vm { padding: 8px; } #stage { aspect-ratio: 4 / 3; }
+    #shelf { overflow: visible; }
+  }
 
   /* The machine's window: its title strip, then its screen. */
   #vm { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; padding: 12px; }
@@ -100,7 +109,7 @@
           background: var(--panel-2); border: 1px solid var(--edge); border-radius: 8px; padding: 6px; color: var(--ink); font: inherit; }
   .card:hover { border-color: var(--accent); }
   .card[aria-selected="true"] { border-color: var(--accent); background: #10261f; }
-  .card img, .card .noimg { width: 96px; height: 60px; object-fit: cover; image-rendering: pixelated; border-radius: 4px; background: #000; }
+  .card img, .card .noimg { width: 96px; height: 60px; object-fit: cover; image-rendering: auto;   /* smaller than drawn: pixelated would drop whole lines */ border-radius: 4px; background: #000; }
   .card .noimg { display: grid; place-items: center; color: var(--dim); font-size: 10px; }
   .card .t { font-weight: 600; display: block; }
   .card .s { color: var(--dim); font-size: 11px; margin-top: 2px; display: block; }
@@ -112,9 +121,7 @@
   <a class="logo" href="./" title="MIRAGE — home">▚ MIRAGE<small>x86 → JavaScript</small></a>
   <nav id="rail" aria-label="Machines"></nav>
   <span class="sep"></span>
-  <a href="./">Home</a>
-  <a href="oasis.html">OASIS</a>
-  <a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a>
+  <nav class="site" aria-label="Site"><a href="machines.html" aria-current="page">Machines</a><a href="oasis.html">OASIS</a><a href="dos.html">DOS player</a><a href="boot.html">Bare PC</a><a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a></nav>
 </header>
 <main>
   <div id="vm">

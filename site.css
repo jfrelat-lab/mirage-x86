@@ -1,0 +1,5 @@
+/* The site's navigation, the same on every page but the home page (which has its own, larger). */
+nav.site { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+nav.site a { color: #6f8494; text-decoration: none; border: 1px solid transparent; border-radius: 5px; padding: 4px 8px; white-space: nowrap; }
+nav.site a:hover { color: #00d0a0; border-color: #1f2c38; }
+nav.site a[aria-current] { color: #00d0a0; border-color: #1d6a55; }

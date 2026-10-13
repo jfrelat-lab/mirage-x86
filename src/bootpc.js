@@ -195,6 +195,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---- controls ----------------------------------------------------------------------------------
 async function bootSelected() {
+  $('idle').hidden = true;
   const f = fileIn.files && fileIn.files[0];
   if (f) { status.textContent = `reading ${f.name}…`; return boot(f.name, new Uint8Array(await f.arrayBuffer())); }
   if (!pick.value) { status.textContent = 'choose an image first'; return; }
@@ -216,8 +217,8 @@ const audioOut = new AudioOut({ audio: null });
 const soundBox = $('sound');
 soundBox.addEventListener('change', () => { audioOut.setMuted(!soundBox.checked || clockSel.value === 'turbo'); if (soundBox.checked) audioOut.start(); });
 bootBtn.addEventListener('click', () => { bootBtn.blur(); if (soundBox.checked) audioOut.start(); tryBoot(); });
-pick.addEventListener('change', () => { fileIn.value = ''; });
-fileIn.addEventListener('change', () => { pick.value = ''; });
+pick.addEventListener('change', () => { fileIn.value = ''; $('fileName').textContent = ''; });
+fileIn.addEventListener('change', () => { pick.value = ''; $('fileName').textContent = fileIn.files[0] ? fileIn.files[0].name : ''; });
 pauseBtn.addEventListener('click', () => {
   pauseBtn.blur();
   if (!session) return;

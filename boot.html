@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>MIRAGE — bare PC</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="site.css">
 <style>
   :root { --bg: #0a0e12; --panel: #0f1620; --ink: #9fb4c4; --accent: #00d0a0; }
   * { box-sizing: border-box; }
@@ -12,7 +13,8 @@
          display: flex; flex-direction: column; height: 100vh; }
   #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 14px;
          background: var(--panel); border-bottom: 1px solid #1c2a36; }
-  #bar .logo { color: var(--accent); font-weight: 700; letter-spacing: 1px; }
+  #top { display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: var(--panel); border-bottom: 1px solid #1c2a36; }
+  #top .logo { color: var(--accent); font-weight: 700; letter-spacing: 1px; }
   #bar a { color: #5c7080; }
   select, button, input { background: #0a0e12; color: var(--ink); border: 1px solid #2a3a48;
          border-radius: 4px; font: inherit; padding: 3px 6px; }
@@ -30,14 +32,21 @@
   #serial { display: none; background: var(--panel); border-top: 1px solid #1c2a36; padding: 6px 14px; }
   #serial pre { margin: 0 0 6px; height: 9em; overflow: auto; white-space: pre-wrap; color: #cfe3d8; background: #05080b; padding: 6px; }
   #serial input { width: 100%; }
+  .filebtn { border: 1px solid #2a3a48; border-radius: 4px; padding: 3px 8px; cursor: pointer; background: #0a0e12; }
+  .filebtn:hover { border-color: var(--accent); color: var(--accent); }
+  #fileName { color: var(--accent); max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #stage { position: relative; }
+  #idle { position: absolute; max-width: 52ch; padding: 18px 22px; border: 1px solid #1f2c38; border-radius: 10px; background: rgba(15, 22, 32, .92); line-height: 1.55; }
+  #idle[hidden] { display: none; }
+  #idle > b { color: var(--accent); letter-spacing: 1px; } #idle p { margin: 8px 0 0; } #idle .dim { color: #5c7080; }
   a.logo { text-decoration: none; color: inherit; } a.logo:hover { filter: brightness(1.25); }
 </style>
 </head>
 <body>
-  <header id="bar">
-    <a class="logo" href="./" title="MIRAGE — home">▚ MIRAGE · bare PC</a>
+  <header id="top"><a class="logo" href="./" title="MIRAGE — home">▚ MIRAGE · bare PC</a><span style="flex:1"></span><nav class="site" aria-label="Site"><a href="machines.html">Machines</a><a href="oasis.html">OASIS</a><a href="dos.html">DOS player</a><a href="boot.html" aria-current="page">Bare PC</a><a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a></nav></header>
+  <div id="bar">
     <select id="image"><option>loading…</option></select>
-    <span>or</span><input id="file" type="file" accept=".img,.ima,.dsk,.vfd,.bin,.iso">
+    <span>or</span><label class="filebtn" title="a floppy, hard-disk or CD image from your computer: read here, never uploaded">Open a file…<input id="file" type="file" accept=".img,.ima,.dsk,.vfd,.bin,.iso" hidden></label><span id="fileName"></span>
     <label>CPU <select id="cpu">
       <option value="8088">8088</option><option value="286">286</option><option value="386">386</option>
       <option value="586" selected>586</option><option value="pentium">pentium</option><option value="686">686</option><option value="pentiumpro">pentiumpro</option>
@@ -54,10 +63,10 @@
     <button id="boot">Boot</button>
     <button id="pause" disabled>Pause</button>
     <button id="fullscreen" title="Fullscreen (Alt+Enter)">Fullscreen</button>
-    <span style="flex:1"></span>
-    <a href="dos.html">DOS player →</a> <a href="./">home</a>
-  </header>
-  <main id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas></main>
+  </div>
+  <main id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas>
+    <div id="idle"><b>Bare PC</b><p>Choose an image in the list above, or open a floppy, hard-disk or CD image from your
+      computer, then press <b>Boot</b>.</p><p class="dim">The image is read in this page: nothing is uploaded, and nothing is written back to the file.</p></div></main>
   <div id="status">choose an image and Boot</div>
   <div id="serial"><pre id="serialOut"></pre><input id="serialIn" placeholder="COM1 — type a line, Enter sends it (with CR)"></div>
   <div id="help">The keyboard goes to the guest, and so does the mouse over the screen. Click the screen to
