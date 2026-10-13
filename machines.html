@@ -84,6 +84,13 @@
   .term .b { color: #fff; } .term .g { color: #5f5; } .term .y { color: #ff5; } .term a { color: #5ff; cursor: pointer; text-decoration: none; }
   .term a:hover { text-decoration: underline; }
   .term .note { white-space: normal; color: #aaa; max-width: 70ch; }
+  .needs { background: radial-gradient(circle at 50% 30%, #10261f, #05080b 70%); display: grid; place-items: center; padding: 4%; }
+  .needs .panel { max-width: 62ch; background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 18px 22px; color: var(--ink); font: 14px/1.55 ui-monospace, Menlo, monospace; }
+  .needs img { width: 100%; max-height: 180px; object-fit: cover; image-rendering: pixelated; border-radius: 6px; border: 1px solid var(--edge); }
+  .needs h2 { font-size: 16px; color: #e6f0f6; margin: 10px 0 8px; }
+  .needs p { margin: 0 0 10px; } .needs .dim { color: var(--dim); font-size: 13px; }
+  .needs pre { background: #05080b; border: 1px solid var(--edge); border-radius: 6px; padding: 8px 10px; color: var(--accent); margin: 0 0 10px; white-space: pre-wrap; }
+  .needs a { color: var(--accent); text-decoration: none; } .needs a:hover { text-decoration: underline; }
 
   /* The shelf: the same programs, as cards. */
   aside { border-left: 1px solid var(--edge); background: var(--panel); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }

@@ -51,6 +51,16 @@
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: top; }
   td:first-child { color: #e6eef4; white-space: nowrap; }
+  .three { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 18px 0 16px; }
+  .mach { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; color: var(--ink); }
+  .mach:hover { border-color: var(--accent); text-decoration: none; }
+  .mach b { display: block; color: var(--accent); font: 700 15px ui-monospace, Menlo, monospace; margin-bottom: 6px; }
+  .mach span { font-size: 14px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 24px 0 6px; }
+  .stats div { border-left: 2px solid var(--accent); padding: 2px 0 2px 12px; }
+  .stats b { display: block; font: 700 26px ui-monospace, Menlo, monospace; color: #e6eef4; }
+  .stats span { color: var(--dim); font-size: 13px; }
+  .more { margin: 10px 0 0; font-size: 14px; }
   footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
   @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; } }
 </style>
@@ -74,16 +84,28 @@
     <p>MIRAGE translates x86 machine code into JavaScript source, one basic block at a time, and lets
       the browser's own JIT compile it. No WebAssembly, no plug-in, nothing to install.</p>
     <div class="pipeline mono">x86 code → decoder → JavaScript source → new Function → the browser's JIT</div>
-    <p>It comes as two machines. The <b>DOS player</b> has its own DOS written in JavaScript: drop a
-      <code>.COM</code> or <code>.EXE</code> on it and it runs at once. The <b>bare PC</b> boots
-      unmodified operating systems from a disk image or a CD — Windows 95 and 98, Linux, the BSDs,
-      FreeDOS.</p>
-    <div class="cta">
-      <a class="btn primary" href="#examples">Try an example</a>
-      <a class="btn" href="machines.html">Choose a machine</a>
-      <a class="btn" href="dos.html">Open the DOS player</a>
-      <a class="btn" href="boot.html">Boot a disk image</a>
+    <div class="three">
+      <a class="mach" href="machines.html?m=dos"><b>DOS</b><span>A DOS written in JavaScript, with its BIOS, XMS, EMS and a
+        DPMI host: drop a <code>.COM</code> or an <code>.EXE</code> on it and it runs at once. DOOM, Heretic, Wolfenstein 3D.</span></a>
+      <a class="mach" href="machines.html?m=linux"><b>Linux</b><span>Linux's system calls answered in JavaScript — no kernel:
+        a real <code>bash</code> from Debian 12, and id's DOOM of 1994 on SVGAlib, an a.out binary.</span></a>
+      <a class="mach" href="machines.html?m=pc"><b>Bare PC</b><span>BIOS, VGA, disks and CD: boots unmodified operating
+        systems from an image — Windows 95 and 98, Linux, the BSDs, FreeDOS.</span></a>
     </div>
+    <p>Programs come as <a href="oasis.html"><b>OASIS images</b></a>: recipes that fetch a program's files from where
+      their authors published them, and say which machine it needs — like a Docker image, for the PC of 1990.</p>
+    <div class="cta">
+      <a class="btn primary" href="machines.html">Choose a machine</a>
+      <a class="btn" href="#examples">Try an example</a>
+      <a class="btn" href="oasis.html">OASIS images</a>
+      <a class="btn" href="boot.html">Boot your own disk image</a>
+    </div>
+    <div class="stats">
+      <div><b>82 M</b><span>x86 instructions per second, compiled to JavaScript (Dhrystone on MIRAGE-DOS, Apple M1)</span></div>
+      <div><b>13 s</b><span>BYTE's Sieve: 730.7 M instructions — DOSBox-X 6.2 s, PCjs 64.3 s, same host</span></div>
+      <div><b>1994</b><span>id's Linux DOOM, an a.out binary on libc 4, runs unchanged — on no Linux kernel at all</span></div>
+    </div>
+    <p class="more"><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPARISON.md">How MIRAGE compares with QEMU, DOSBox-X, v86, PCjs and Docker →</a></p>
   </section>
 
   <section id="examples">
@@ -120,9 +142,10 @@
       <table>
         <tr><td>Operating systems</td><td>Windows 3.0, 3.1, 95, 98 and ME to their desktop; Linux 2.2 and 2.4;
           NetBSD, OpenBSD, 386BSD; MS-DOS and FreeDOS; KolibriOS; booted from a CD with El Torito.</td></tr>
+        <tr><td>Linux programs</td><td>i386 ELF (static, PIE, dynamic) and a.out from 1994 to today: Debian 12's bash and coreutils, gcc-built tests, id's Linux DOOM.</td></tr>
         <tr><td>DOS games</td><td>DOOM, Heretic, Quake and Wolfenstein 3D play; dozens of EGA and VGA titles render.</td></tr>
         <tr><td>Demos</td><td>31 of the 32 size-coded intros tried, from 32 bytes to 64 KB.</td></tr>
-        <tr><td>Not yet</td><td>Windows NT and 2000, ReactOS, BeOS; sound; a network card; 64-bit.</td></tr>
+        <tr><td>Not yet</td><td>Windows NT and 2000, ReactOS, BeOS; the Gravis Ultrasound; sound for Linux programs; a network card; 64-bit.</td></tr>
       </table>
       <p style="margin:10px 0 0"><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPATIBILITY.md">The full compatibility list</a>,
         with the date each result was recorded, and <a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/KNOWN-ISSUES.md">what does not work</a>.</p>
@@ -165,7 +188,7 @@
       return `<article class="card">
         <a class="shot" href="${runUrl(e)}" aria-label="Run ${esc(e.title)}"><img src="examples/thumbs/${esc(e.id)}.png" alt="${esc(e.title)}, as MIRAGE draws it" loading="lazy"></a>
         <div class="body">
-          <h3>${esc(e.title)} <span class="tag">${e.kind === 'boot' ? 'boot sector' : e.kind === 'zip' ? 'DOS game' : 'DOS'}</span></h3>
+          <h3>${esc(e.title)} <span class="tag">${esc(e.tag || (e.kind === 'boot' ? 'boot sector' : e.kind === 'zip' ? 'DOS game' : 'DOS'))}</span></h3>
           <div class="meta">${esc(who)}</div>
           <p class="blurb">${esc(e.blurb)}</p>
           <div class="actions"><a class="run" href="${runUrl(e)}">Run</a><span class="meta">${lic}${src}</span></div>

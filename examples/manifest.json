@@ -1,6 +1,7 @@
 [
   {
     "id": "dunedemo",
+    "tag": "game demo",
     "kind": "zip",
     "file": "examples/games/dunedemo.zip",
     "run": "DUNEDEM",
@@ -15,6 +16,7 @@
   },
   {
     "id": "unreal",
+    "tag": "demo",
     "kind": "zip",
     "file": "examples/games/unreal11.zip",
     "run": "UNREAL",
@@ -144,6 +146,7 @@
   },
   {
     "id": "fractint",
+    "tag": "DOS program",
     "kind": "zip",
     "file": "examples/games/frain200.zip",
     "run": "FRACTINT",
@@ -432,6 +435,7 @@
   },
   {
     "id": "freedos",
+    "tag": "hard disk",
     "kind": "boot",
     "file": "examples/boot/freedos.img.gz",
     "title": "FreeDOS 1.4",

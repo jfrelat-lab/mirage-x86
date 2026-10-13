@@ -199,10 +199,27 @@ async function linux() {
   try { images = (await (await fetch('/oasis-images.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { images = null; }
   over.className = 'over term'; over.hidden = false;
   if (!images) {
-    setState('no images', 'err');
-    over.innerHTML = `<span class="b">$ ls /oasis/images/linux</span>\nls: cannot access '/oasis/images/linux': No such file or directory\n\n<div class="note">The Linux machine reads its programs from OASIS images, which bring their file trees from their original archives (Debian's, idgames…). Start the page from OASIS:\n\n<span class="g">node tools/oasis.mjs serve --open</span>\n\n— or one image in a window of its own: <span class="g">node tools/oasis.mjs run linux/doom-1994</span>. See docs/OASIS.md.</div>`;
-    shelf('OASIS Linux images', [], null);
-    status.textContent = 'served without OASIS';
+    // A static host: the images are listed (oasis/index.json) but their layers come from Debian's and
+    // idgames' servers, which a page cannot read — the OASIS server fetches them.
+    let listed = [];
+    try { listed = (await (await fetch('oasis/index.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { /* none */ }
+    setState('needs OASIS', '');
+    const needs = (m) => {
+      over.className = 'over needs'; over.hidden = false;
+      over.innerHTML = `<div class="panel">${m && m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : ''}
+        <h2>${esc(m ? m.title : 'Linux programs, from OASIS images')}</h2>
+        <p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
+        OASIS images, which bring their files from where their authors published them: Debian's archive, idgames. A page
+        cannot fetch from those servers itself, so these images run from the OASIS server, on your computer:</p>
+        <pre>node tools/oasis.mjs serve --open</pre>
+        <p class="dim">or one image in a window of its own: <code>node tools/oasis.mjs run ${esc(m ? m.name : 'linux/mirage')}</code></p>
+        <p><a href="oasis.html${m ? '#' + esc(m.name) : ''}">See ${m ? 'this image\'s' : 'each image\'s'} recipe →</a></p></div>`;
+      for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
+    };
+    const items = listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => needs(m) }));
+    shelf('OASIS Linux images', items, null);
+    needs(null);
+    status.textContent = 'served without OASIS: the images are listed, not run';
     return;
   }
   const run = async (m) => {

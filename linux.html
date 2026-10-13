@@ -30,7 +30,9 @@
 // The browser side of `oasis run <linux image>` (tools/oasis.mjs serves it): src/linuxrun.js does the work.
 import { startLinux, oasisHost } from './src/linuxrun.js';
 const out = document.getElementById('out'), status = document.getElementById('status');
-const img = await (await fetch('/oasis-image.json')).json();
+// Served by anything else (a static host), there is no image to run here: the Linux machine says why.
+const img = await fetch('/oasis-image.json').then((r) => r.json()).catch(() => null);
+if (!img) { location.replace('machines.html?m=linux'); await new Promise(() => {}); }
 document.title = img.title || img.name; document.getElementById('title').textContent = img.title || img.name;
 let text = '';
 try {
