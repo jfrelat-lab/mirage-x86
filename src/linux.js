@@ -614,7 +614,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     } else if (f.node.dev === 'tty') {
       if (!lx.ttyIn.length) {
         if (lx.tty.eof) { lx.tty.eof = false; return 0; }                // ^D on an empty line
-        return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;                    // O_NONBLOCK, or wait for a key
+        if (f.flags & 0x800) return -E.EAGAIN;                           // O_NONBLOCK
+        // Non-canonical with VMIN 0 (c_cc[6], byte 23 of termios) returns at once: SVGAlib's keyboard
+        // polls the console that way, every frame of DOOM.
+        const t = lx.tty.termios;
+        if (t && !(termios().lflag & 2) && t[23] === 0) return 0;
+        return BLOCK;                                                    // wait for a key
       }
       // Canonical mode hands out at most one line per read.
       const { lflag } = termios();
@@ -730,7 +735,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // asm/termbits.h). Pipes and files are not terminals.
   const ioctl = (f, req, arg) => {
     if (!f.node || (f.node.dev !== 'tty' && f.node.dev !== 'mouse')) return -E.ENOTTY;
-    const t = lx.tty;
+    // The console's settings are the console's; a serial line (the mouse) has its own. Sharing them,
+    // the mouse's 1200-baud setup (VMIN 1) became the console's, and DOOM's keyboard poll then waited.
+    const t = f.node.dev === 'mouse' ? f.node : lx.tty;
     switch (req) {
       case 0x5401: {                                                        // TCGETS: struct termios, 36 bytes
         const b = t.termios || Uint8Array.from([0x00, 0x05, 0, 0, 0x05, 0x00, 0, 0, 0xbf, 0x04, 0, 0, 0x3b, 0x8a, 0, 0, 0,
