@@ -12,8 +12,9 @@
          display: flex; flex-direction: column; height: 100vh; }
   #bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid #1c2a36; }
   #bar .logo { color: var(--accent); font-weight: 700; letter-spacing: 1px; }
-  #stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 8px; }
-  #screen { height: 100%; max-width: 100%; aspect-ratio: 4 / 3; background: #000; image-rendering: pixelated; outline: none; }
+  #stage { flex: 1; position: relative; min-height: 0; margin: 8px; }
+  /* Absolute and contained, so a short window letterboxes the picture instead of cutting its bottom. */
+  #screen { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; image-rendering: pixelated; outline: none; }
   #out { margin: 0; height: 7.5em; overflow: auto; white-space: pre-wrap; color: #cfe3d8; background: #05080b;
          padding: 6px 12px; border-top: 1px solid #1c2a36; }
   #status { padding: 4px 12px; background: var(--panel); border-top: 1px solid #1c2a36; }
