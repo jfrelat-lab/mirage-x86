@@ -73,7 +73,7 @@ const press = async (key) => { const [vk, k] = CODES[key] || [key.toUpperCase().
   for (const type of ['rawKeyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: vk, key: k, code: key.length === 1 ? 'Key' + key.toUpperCase() : key }); if (type !== 'keyUp') await sleep(100); } };
 const CHAR = (c) => /[a-z]/i.test(c) ? [c.toUpperCase().charCodeAt(0), c, 'Key' + c.toUpperCase()]
   : /[0-9]/.test(c) ? [c.charCodeAt(0), c, 'Digit' + c] : c === ' ' ? [32, ' ', 'Space'] : c === '\\' ? [220, '\\', 'Backslash']
-  : c === '.' ? [190, '.', 'Period'] : c === '-' ? [189, '-', 'Minus'] : c === '\n' ? [13, 'Enter', 'Enter'] : null;
+  : c === '.' ? [190, '.', 'Period'] : c === '-' ? [189, '-', 'Minus'] : c === '/' ? [191, '/', 'Slash'] : c === ';' ? [186, ';', 'Semicolon'] : c === '\n' ? [13, 'Enter', 'Enter'] : null;
 const typeText = async (text) => {
   for (const c of text.replace(/\\n/g, '\n')) { const k = CHAR(c); if (!k) continue;
     for (const type of ['keyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: k[0], key: k[1], code: k[2], text: type === 'keyDown' && k[1].length === 1 ? k[1] : undefined }); if (type === 'keyDown') await sleep(60); }

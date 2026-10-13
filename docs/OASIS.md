@@ -88,12 +88,13 @@ in this repository**: an image is a recipe that points at the original archives.
 | `dos/c-dogs` | dos | C-Dogs 1.06, with the Sound Blaster 16 set up |
 | `dos/doom` | dos | DOOM 1.9 shareware, id's own archive |
 | `linux/doom-1994` | linux | `linuxsdoom`, id's SVGAlib DOOM of December 1994, an a.out binary with libc 4 — its libraries from Debian 1.3 ("bo") on archive.debian.org, its binary and WAD from idgames. SVGAlib drives the emulated VGA; the keyboard reaches it in K_MEDIUMRAW. No sound yet (`sndserver` is a second process) |
-| `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. Built-in shell commands and single programs run; `$( )`, pipes and external commands need fork and exec, not there yet |
+| `linux/mirage` | linux | Debian 12 i386 with Debian 1.3's a.out libraries and id's 1994 DOOM in `/usr/games/doom`: a real `bash` on the console (tty1, the VGA text screen), where `cd /usr/games/doom; ./linuxsdoom` forks and execs DOOM. The Linux machine of `machines.html` boots into it |
+| `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
 
 ## What is not there yet
 
 - O3: layers fetched over HTTP by the browser itself, so an image runs from a static host with no
   `oasis` command at all; and the cache offline.
 - O5: `commit` — saving the whole machine, CPU included — and URLs that resume a run.
-- The `win16` and `pc` worlds; DOS images other than one ZIP plus files in a window; fork and exec
-  for Linux; sound for Linux programs.
+- The `win16` and `pc` worlds; DOS images other than one ZIP plus files in a window; sound for
+  Linux programs (DOOM's `sndserver` runs beside it, which needs two processes at once).

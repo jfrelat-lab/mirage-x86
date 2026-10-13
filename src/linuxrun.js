@@ -9,6 +9,7 @@ import { installBIOS } from './bios.js';
 import { installLinux } from './linux.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
+import { VtConsole } from './vtconsole.js';
 
 /** A synchronous view of the image's tree, as lx.host wants it. */
 export function oasisHost(imgName) {
@@ -43,7 +44,11 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   lx.epoch = Math.floor(Date.now() / 1000);
   const e = img.entry || {};
   lx.chdir(e.cwd || '/');
-  if (e.console) lx.consoleStdio();
+  if (e.console) {
+    lx.consoleStdio();
+    lx.console = new VtConsole(mc.mem.u8);                               // the tty's text on the VGA screen
+    lx.console.clear(); lx.console.row = 0; lx.console.col = 0;
+  }
   const env = ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`)];
   const image = lx.readFile(e.run);
   if (!image) throw new Error(`${e.run}: not in the image`);
@@ -62,10 +67,14 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   tick.port1.onmessage = () => {
     if (stopped) return;
     const t0 = performance.now();
-    while (!paused && !lx.done && !fault && performance.now() - t0 < 12) mc.runSlice(20000);
+    let waiting = false;
+    while (!paused && !lx.done && !fault && performance.now() - t0 < 12) {
+      mc.runSlice(20000);
+      if (mc.blocked && !lx.ttyIn.length) { waiting = true; break; }     // a read waits for a key: give the time back
+    }
     if (lx.done) onStatus(`exited with status ${lx.status}` + (lx.signal ? ` (signal ${lx.signal})` : ''));
     else if (fault) onStatus(String(fault.message || fault).split('\n')[0]);
-    else if (paused) setTimeout(() => tick.port2.postMessage(0), 50);
+    else if (paused || waiting) setTimeout(() => tick.port2.postMessage(0), paused ? 50 : 10);
     else tick.port2.postMessage(0);
   };
   tick.port2.postMessage(0);

@@ -213,7 +213,7 @@ async function linux() {
     let lastLine = '';
     try {
       const s = await startLinux({ canvas, img, host: oasisHost(m.name),
-        onOutput: (t) => { lastLine = (lastLine + t).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
+        onOutput: (t) => { lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
         onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) setState('exited', ''); } });
       session = { pause: s.pause, audio: null };
       window.mirage = s;
@@ -222,15 +222,11 @@ async function linux() {
     } catch (e) { status.textContent = String(e.message || e); setState('failed', 'err'); }
   };
   const items = images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => run(m) }));
-  shelf('OASIS Linux images', items, params.get('run'));
-  const wanted = images.find((m) => m.name === params.get('run'));
-  if (wanted) { run(wanted); return; }
-  setState('login', '');
-  over.innerHTML = `<span class="g">mirage login:</span> root\nLinux mirage 2.6.32 i686 — MIRAGE-LINUX: no kernel, the system calls in JavaScript\n\n<span class="b">root@mirage:~# ls -l /oasis/images/linux</span>\n` +
-    images.map((m, i) => `-rwxr-xr-x 1 root root ${String(m.year || '').padStart(6)}  <a data-i="${i}">${esc(m.name.split('/').pop())}</a>   <span class="y">${esc(m.title)}</span>`).join('\n') +
-    `\n\n<span class="b">root@mirage:~#</span> <span style="color:#aaa">click a name to run it</span>`;
-  for (const a of over.querySelectorAll('a')) a.onclick = () => run(images[+a.dataset.i]);
-  status.textContent = `${images.length} image(s)`;
+  shelf('OASIS Linux images', items, params.get('run') || 'linux/mirage');
+  // The machine boots into a real shell: bash on tty1 of the image that has one (linux/mirage),
+  // typed at as a console is; the shelf starts any image instead.
+  const wanted = images.find((m) => m.name === params.get('run')) || images.find((m) => m.name === 'linux/mirage') || images[0];
+  if (wanted) run(wanted);
 }
 
 ({ dos, pc, linux })[mid]().catch((e) => { status.textContent = String(e.message || e); setState('failed', 'err'); console.error(e); });

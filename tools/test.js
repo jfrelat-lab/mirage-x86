@@ -3010,12 +3010,38 @@ const runLinux = (hex, argv) => {
     '000000000100000000000000008004080080040883000000830000000500000000100000b865000000bb81000000b901' +
     '000000ba01000000cd80b86e00000031dbcd80b05ae681b801000000bb05000000cd80');
   eq('linux: a port opened by ioperm stays open under IOPL 0', runLinux(hex, ['/w/IOPERM']).status, 5); }
+// tools/linux/fork.asm: fork, a child that writes and exits 3, a parent that waits for it with wait4.
+// Docker: "child\nparent\n", status 13. MIRAGE-LINUX had no fork.
+{ const hex = (                                         // nasm -f bin tools/linux/fork.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408d6000000d60000000700000000100000b802000000cd8085c07522b8' +
+    '04000000bb01000000b9c5800408ba06000000cd80b801000000bb03000000cd80b872000000bbffffffffb9d2800408' +
+    '31d231f6cd80b804000000bb01000000b9cb800408ba07000000cd808b1dd2800408c1eb0881e3ff00000083c30ab801' +
+    '000000cd806368696c640a706172656e740a00000000');
+  eq('linux: fork, the child runs and exits, the parent waits and reads its status', JSON.stringify(runLinux(hex, ['/w/FORK'])), JSON.stringify({ out: 'child\nparent\n', status: 13 })); }
+// The console's line discipline (n_tty with the default termios: ICANON ECHO ICRNL, OPOST ONLCR): a
+// line is edited — Backspace erases — and handed over at Enter, its echo on the screen.
+{ const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), echoed = [];
+  lx.onOutput = (fd, b) => echoed.push(...b);
+  lx.tty.kbMode = 1;
+  let got; try { lx.keyScancodes([0x1e, 0x9e, 0x30, 0xb0, 0x0e, 0x8e, 0x2e, 0xae]); const before = lx.ttyIn.length;   // a b BS c
+    lx.keyScancodes([0x1c, 0x9c]);                                       // Enter
+    got = `${before} ${String.fromCharCode(...lx.ttyIn).replace('\n', '|')} ${String.fromCharCode(...echoed).replace(/\x08/g, '<').replace('\r\n', '|')}`;
+  } catch (e) { got = e.message; }
+  eq('linux: a console line is edited and handed over at Enter, with its echo', got, '0 ac| ab< <c|'); }
+// src/vtconsole.js: the tty's text on the VGA text screen — CR LF, a CSI cursor position, SGR colour.
+{ const { VtConsole } = await import('../src/vtconsole.js');
+  const u8 = new Uint8Array(0xc0000), vt = new VtConsole(u8);
+  vt.write([...'ab\r\ncd\x1b[3;5H\x1b[31mX\x1b[0m'].map((c) => c.charCodeAt(0)));
+  const at = (r, c) => String.fromCharCode(u8[0xb8000 + (r * 80 + c) * 2]) + u8[0xb8000 + (r * 80 + c) * 2 + 1].toString(16);
+  eq('linux: the VGA text console places text, moves the cursor, colours', [at(0, 0), at(1, 1), at(2, 4), u8[0x450], u8[0x451]].join(' '), 'a7 d7 X4 5 2'); }
 // The console's keyboard modes, as the kernel delivers keys (drivers/tty/vt/keyboard.c): K_MEDIUMRAW gives
 // keycodes — an ordinary key's scancode, the kernel's number for an E0 key (Up 103), bit 7 on release —
 // which is what SVGAlib reads for id's Linux DOOM; K_XLATE gives characters; K_RAW the scancodes.
 { const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), keys = [0xe0, 0x48, 0xe0, 0xc8, 0x1e, 0x9e];
+  lx.tty.termios = new Uint8Array(36);                                  // raw: no ICANON, no ECHO, no ICRNL
   let got; try { got = [2, 1, 0].map((mode) => { lx.tty.kbMode = mode; lx.ttyIn.length = 0; lx.keyScancodes(keys); return lx.ttyIn.join(','); }).join(' / '); } catch (e) { got = e.message; }
-  eq('linux: keys reach the console as keycodes, characters or scancodes by its mode', got, '103,231,30,158 / 97 / 224,72,224,200,30,158'); }
+  eq('linux: keys reach the console as keycodes, characters or scancodes by its mode', got, '103,231,30,158 / 27,91,65,97 / 224,72,224,200,30,158'); }
 
 // ---- OASIS: tools/oasis.mjs's own tar reader ---------------------------------------------------------
 // Images are unpacked from Debian packages, idgames tarballs and `docker export` without the host's tar,

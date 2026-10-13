@@ -125,7 +125,7 @@ async function pullLayer(l) {
     spawnSync('docker', ['rm', id]);
     if (e.status !== 0) throw new Error(`oasis: docker export: ${e.stderr}`);
     untar(e.stdout, dir);
-  } else if (l.deb) undeb(await fetchBytes(l.deb), dir);
+  } else if (l.deb) undeb(await fetchBytes(l.deb), l.into ? join(dir, l.into) : dir);
   else if (l.tar) { const b = await fetchBytes(l.tar); untar(/\.(tgz|gz)$/.test(l.tar) ? gunzipSync(b) : b, l.into ? join(dir, l.into) : dir); }
   else {                                                                       // a remote zip, file or gz
     const src = l.zip || l.file || l.gz, b = await fetchBytes(src);

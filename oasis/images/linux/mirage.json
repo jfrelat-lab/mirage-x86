@@ -1,0 +1,26 @@
+{
+  "oasis": 1,
+  "title": "Debian 12 with id's 1994 Linux DOOM — a real bash on the console",
+  "year": 2023,
+  "author": "Debian; id Software",
+  "thumb": "oasis/thumbs/linux-mirage.png",
+  "world": "linux",
+  "machine": { "cpu": "686", "mem": 64 },
+  "layers": [
+    { "docker": "i386/debian:bookworm-slim", "platform": "linux/386" },
+    { "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/libc4_4.6.27-15.deb", "into": "usr" },
+    { "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/base/ldso_1.8.12-1.deb", "into": "usr" },
+    { "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/aout-svgalib_1.2.10-5.deb" },
+    { "tar": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/linux/linuxsdoom.tar.gz", "into": "usr/games/doom" },
+    { "gz": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/doom-1.8.wad.gz", "to": "/usr/games/doom/doom1.wad" },
+    { "links": {
+        "/usr/lib/ld.so": "ld.so.1.8.12",
+        "/usr/lib/libc.so.4": "libc.so.4.6.27",
+        "/usr/lib/libm.so.4": "libm.so.4.6.27",
+        "/usr/lib/libvga.so.1": "/usr/lib/i486-linuxaout/libvga.so.1.2.10"
+    } }
+  ],
+  "entry": { "run": "/bin/bash", "args": ["-l"], "cwd": "/root", "console": true, "env": { "HOME": "/root", "TERM": "linux", "USER": "root" } },
+  "output": "window",
+  "notes": "Type `cd /usr/games/doom; ./linuxsdoom`. Debian's i386 image from Docker, Debian 1.3's a.out libc 4, ld.so and SVGAlib from archive.debian.org, id's binary and WAD from idgames — none of it in this repository."
+}

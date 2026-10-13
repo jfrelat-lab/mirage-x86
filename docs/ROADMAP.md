@@ -70,7 +70,7 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | K1 | The serial console in a terminal, like `qemu -nographic` | S |
 | K3, K5 | VGA text as ANSI; graphics through terminal image protocols | M |
 | K4 | Recording to GIF or video | S |
-| H12 | User-space Linux: started (static, Debian dynamic, a.out with libc 4 — id's Linux DOOM runs); next its keyboard, a web terminal, fork/exec, the 80-bit x87 | L |
+| H12 | User-space Linux: static, Debian dynamic and a.out programs; processes (fork, exec, wait, pipes — one process at a time) and the console (n_tty line discipline, the VGA text screen): Debian's bash runs id's 1994 DOOM. Next: two processes at once (DOOM's sndserver, interactive pipes), signals delivered to handlers, the 80-bit x87 | L |
 | K7, H14 | User-space Win32 programs, their API answered in JavaScript | L |
 | K8 | A native window with sound — for OASIS's `oasis run` (O4) | M |
 

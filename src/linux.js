@@ -33,8 +33,9 @@ const STACK_MAX = 8 << 20;                                // ...and grown on dem
 const MMAP_BASE = 0x40000000;
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
+const BLOCK = Symbol('block');                            // a system call that waits: int 80h runs again
 const E = { EPERM: 1, ENOENT: 2, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
-  EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11 };
+  EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11, ECHILD: 10 };
 
 export function installLinux(machine, { onOutput, realTime } = {}) {
   const cpu = machine.cpu, mem = machine.mem;
@@ -51,9 +52,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   cpu.udToGuest = true;          // an invalid opcode is the program's SIGILL, not ours to report
 
   // ---- page tables -------------------------------------------------------------------------------
+  // Frames come back when a process exits or execs, so a shell that forks for every command does
+  // not run out of memory.
+  const freeFrames = [];
   const allocFrame = () => {
-    const f = lx.nextFrame; lx.nextFrame += PAGE;
-    if (lx.nextFrame > mem.size) throw new Error('mirage-linux: out of physical memory');
+    let f = freeFrames.pop();
+    if (f === undefined) {
+      f = lx.nextFrame; lx.nextFrame += PAGE;
+      if (lx.nextFrame > mem.size) throw new Error('mirage-linux: out of physical memory');
+    }
     mem.u8.fill(0, f, f + PAGE);
     return f;
   };
@@ -86,9 +93,21 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     }
     cpu.setCR3(cpu.cr3);
   };
+  /** Drop every user mapping of a page set (its PTEs), and give its frames back. */
+  const releasePages = (pages, free = true) => {
+    for (const [vpn, pg] of pages) {
+      const pde = dv.getUint32(PD_BASE + (vpn >>> 10) * 4, true);
+      if (pde & 1) dv.setUint32((pde & 0xfffff000) + (vpn & 0x3ff) * 4, 0, true);
+      if (free && !pg.phys) freeFrames.push(pg.frame);
+    }
+  };
+  const installPages = (pages) => { for (const [vpn, pg] of pages) setPte(vpn, pg.frame, pg.write); };
   const unmapRange = (start, end) => {
     for (let p = start >>> 12; p < Math.ceil(end / PAGE); p++) {
-      if (!lx.pages.delete(p)) continue;
+      const had = lx.pages.get(p);
+      if (!had) continue;
+      lx.pages.delete(p);
+      if (!had.phys) freeFrames.push(had.frame);
       const pde = dv.getUint32(PD_BASE + (p >>> 10) * 4, true);
       if (pde & 1) dv.setUint32((pde & 0xfffff000) + (p & 0x3ff) * 4, 0, true);
     }
@@ -272,6 +291,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
 
   // ---- ending ------------------------------------------------------------------------------------
   const exit = (status, signal = 0) => {
+    if (lx.stack.length) {                                               // a child: its parent resumes
+      const pid = lx.pid;
+      closeAll();
+      releasePages(lx.pages);
+      restore(lx.stack.pop());
+      lx.zombies.set(pid, signal ? signal & 0x7f : (status & 0xff) << 8);
+      return;
+    }
     lx.done = true; lx.status = signal ? 128 + signal : status & 0xff; lx.signal = signal;
     cpu.halted = true;
     machine.rec.stop && machine.rec.stop();
@@ -285,6 +312,87 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0 };
     exit(0, sig);
   };
+
+  // ---- processes -----------------------------------------------------------------------------------
+  // One process runs at a time. fork() saves the parent whole — registers, x87 and SSE state, its
+  // pages, descriptors, directory — and the child runs on copies of its pages until it exits; then
+  // the parent resumes with the child's pid, and wait4 finds the child's status. That is enough for
+  // a shell: it forks, the child execs, the parent waits. A pipeline's left side runs to its end
+  // before the right side starts, its output held in the pipe.
+  lx.pid = 1; lx.ppid = 0; lx.nextPid = 100; lx.stack = []; lx.zombies = new Map();
+  const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
+  const snapshot = () => ({
+    pid: lx.pid, ppid: lx.ppid, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext,
+    fds: fds.slice(), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
+    reg: cpu.reg.slice(), eip: cpu.eip, flags: cpu.flags, seg: Array.from(cpu.seg),
+    fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
+    xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null,
+    tls: mem.u8.slice(TLS_A, TLS_Z), io: mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1),
+  });
+  const restore = (s) => {
+    Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: s.brkStart, brk: s.brk, mmapNext: s.mmapNext,
+      cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies });
+    fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; });
+    installPages(s.pages);
+    mem.u8.set(s.tls, TLS_A); mem.u8.set(s.io, TSS_BASE + IOMAP);
+    cpu.setCR3(cpu.cr3);
+    machine.rec.reset();                                                 // the child may have exec'd other code here
+    cpu.reg.set(s.reg); cpu.eip = s.eip; cpu.flags = s.flags;
+    for (let i = 0; i < 6; i++) cpu.setSeg(i, s.seg[i]);
+    if (s.fst) { cpu.fst.set(s.fst); cpu.ftop = s.ftop; cpu.fsw = s.fsw; cpu.fcw = s.fcw; cpu.focc.set(s.focc); }
+    if (s.xmm) cpu.xmm.u8.set(s.xmm);
+    cpu.halted = false; lx.done = false;
+  };
+  const fork = (flags = 0x11, ctid = 0) => {
+    if (flags & 0x100) return -E.ENOSYS;                                 // CLONE_VM: threads, not here
+    const parent = snapshot(), pid = lx.nextPid++;
+    parent.reg[0] = pid;                                                 // what fork returns to it
+    const pages = new Map();
+    for (const [vpn, pg] of lx.pages) {
+      if (pg.phys) { pages.set(vpn, { ...pg }); continue; }
+      const f = allocFrame();
+      mem.u8.copyWithin(f, pg.frame, pg.frame + PAGE);
+      pages.set(vpn, { frame: f, write: pg.write });
+    }
+    lx.stack.push(parent);
+    lx.pages = pages; installPages(pages); cpu.setCR3(cpu.cr3);
+    lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map();
+    if ((flags & 0x01000000) && ctid) wr32(ctid, pid);                   // CLONE_CHILD_SETTID
+    return 0;
+  };
+  const closeAll = () => { fds.length = 0; };
+  const wait = (pid, statusPtr, options) => {
+    let key = null;
+    for (const k of lx.zombies.keys()) if (pid <= 0 || pid === k) { key = k; break; }
+    if (key === null) return (options & 1) ? 0 : -E.ECHILD;               // WNOHANG
+    const st = lx.zombies.get(key); lx.zombies.delete(key);
+    if (statusPtr) wr32(statusPtr, st);
+    return key;
+  };
+  const execve = (path, argv, envp) => {
+    const p = resolve(path), n = p && getNode(p);
+    if (!n) return -E.ENOENT;
+    if (n.dir) return -E.EACCES;
+    let bytes = dataOf(n);
+    if (bytes[0] === 0x23 && bytes[1] === 0x21) {                         // #!interpreter [arg]
+      let line = ''; for (let i = 2; i < bytes.length && bytes[i] !== 10 && i < 256; i++) line += String.fromCharCode(bytes[i]);
+      const [interp, ...rest] = line.trim().split(/\s+/);
+      argv = [interp, ...(rest.length ? [rest.join(' ')] : []), path, ...argv.slice(1)];
+      const ib = lx.readFile(interp);
+      if (!ib) return -E.ENOENT;
+      bytes = ib;
+    }
+    if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes)) return -E.ENOEXEC;
+    releasePages(lx.pages);
+    lx.pages = new Map(); lx.sigHandlers = [];
+    const io = mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1);   // ioperm survives execve
+    lx.load(bytes, argv, envp);
+    mem.u8.set(io, TSS_BASE + IOMAP);
+    lx.exe = p;
+    machine.rec.reset();
+    return undefined;                                                    // it does not return
+  };
+  const strings = (ptr) => { const out = []; if (!ptr) return out; for (let a; (a = rd32(ptr)); ptr += 4) out.push(rdStr(a)); return out; };
 
   // ---- files -------------------------------------------------------------------------------------
   // One in-memory tree: absolute path -> node. A directory is { dir: true }, a file { data, size }.
@@ -373,18 +481,71 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
    *  for an E0 key (Up 103, Left 105...), bit 7 for a release — and K_XLATE the characters. */
   const E0KEY = { 0x1c: 96, 0x1d: 97, 0x35: 98, 0x38: 100, 0x47: 102, 0x48: 103, 0x49: 104, 0x4b: 105,
     0x4d: 106, 0x4f: 107, 0x50: 108, 0x51: 109, 0x52: 110, 0x53: 111 };
-  const ASCII = '\x00\x1b1234567890-=\x7f\tqwertyuiop[]\r\x00asdfghjkl;\'`\x00\\zxcvbnm,./\x00*\x00 ';
-  let e0 = false;
+  // US layout, set 1, unshifted and shifted (drivers/tty/vt/defkeymap.c_shipped, plain and shift maps).
+  const KMAP = '\x00\x1b1234567890-=\x7f\tqwertyuiop[]\r\x00asdfghjkl;\'`\x00\\zxcvbnm,./\x00*\x00 ';
+  const KSHIFT = '\x00\x1b!@#$%^&*()_+\x7f\tQWERTYUIOP{}\r\x00ASDFGHJKL:"~\x00|ZXCVBNM<>?\x00*\x00 ';
+  // The sequences the console sends for the cursor and editing keys in K_XLATE.
+  const E0SEQ = { 0x48: '\x1b[A', 0x50: '\x1b[B', 0x4d: '\x1b[C', 0x4b: '\x1b[D', 0x47: '\x1b[1~', 0x4f: '\x1b[4~',
+    0x52: '\x1b[2~', 0x53: '\x1b[3~', 0x49: '\x1b[5~', 0x51: '\x1b[6~', 0x1c: '\r', 0x35: '/' };
+  let e0 = false, shift = 0, ctrl = 0, caps = false;
   lx.keyScancodes = (codes) => {
     for (const c of codes) {
       if (c === 0xe0) { e0 = true; if (lx.tty.kbMode === 0) lx.ttyIn.push(c); continue; }
       const mode = lx.tty.kbMode, rel = c & 0x80, sc = c & 0x7f;
+      if (sc === 0x2a || sc === 0x36) shift = rel ? 0 : 1;
+      else if (sc === 0x1d) ctrl = rel ? 0 : 1;
+      else if (sc === 0x3a && !rel) caps = !caps;
       if (mode === 0) lx.ttyIn.push(c);
       else if (mode === 2) { const k = e0 ? E0KEY[sc] : sc; if (k !== undefined) lx.ttyIn.push(k | rel); }
-      else if (!rel && !e0 && sc < ASCII.length && ASCII.charCodeAt(sc)) lx.ttyIn.push(ASCII.charCodeAt(sc));
+      else if (!rel) {
+        let str = '';
+        if (e0) str = E0SEQ[sc] || '';
+        else if (sc < KMAP.length) {
+          let ch = (shift ? KSHIFT : KMAP)[sc];
+          if (caps && /[a-z]/i.test(ch)) ch = shift ? ch.toLowerCase() : ch.toUpperCase();
+          if (ctrl && /[a-z@\[\\\]^_]/i.test(ch)) ch = String.fromCharCode(ch.toUpperCase().charCodeAt(0) & 0x1f);
+          if (ch !== '\x00') str = ch;
+        }
+        if (str) ttyInput([...str].map((x) => x.charCodeAt(0)));
+      }
       e0 = false;
     }
+    if (lx.ttyIn.length) machine.blocked = false;
   };
+  // The line discipline, as n_tty does it with the termios flags in force: ICRNL on input, ICANON's
+  // line editing (erase, kill, ^D) with ECHO, or the bytes as they come; OPOST/ONLCR on output.
+  const termios = () => {
+    const t = lx.tty.termios;
+    if (!t) return { iflag: 0x500, oflag: 0x5, lflag: 0x8a3b };
+    const d = new DataView(t.buffer, t.byteOffset, t.byteLength);
+    return { iflag: d.getUint32(0, true), oflag: d.getUint32(4, true), lflag: d.getUint32(12, true) };
+  };
+  lx.tty.line = [];
+  const ttyInput = (bytes) => {
+    const { iflag, lflag } = termios(), echo = (lflag & 8) !== 0;
+    for (let b of bytes) {
+      if (b === 13 && (iflag & 0x100)) b = 10;                           // ICRNL
+      if (!(lflag & 2)) { lx.ttyIn.push(b); if (echo) ttyOutput([b]); continue; }   // raw
+      const line = lx.tty.line;
+      if (b === 0x7f || b === 8) { if (line.length) { line.pop(); if (echo) ttyOutput([8, 32, 8]); } continue; }
+      if (b === 0x15) { while (line.length) { line.pop(); if (echo) ttyOutput([8, 32, 8]); } continue; }   // ^U
+      if (b === 3 && (lflag & 1)) { line.length = 0; if (echo) ttyOutput([0x5e, 0x43, 10]); continue; }   // ^C (no signal yet)
+      if (b === 4) { lx.ttyIn.push(...line); line.length = 0; lx.tty.eof = !lx.ttyIn.length; continue; }   // ^D
+      line.push(b);
+      if (echo) ttyOutput(b < 32 && b !== 10 && b !== 9 ? [0x5e, b + 64] : [b]);
+      if (b === 10) { lx.ttyIn.push(...line); line.length = 0; }
+    }
+  };
+  /** What a program writes to the console: through OPOST/ONLCR, then to the screen (lx.console,
+   *  set by a page that shows the VGA text console) and to onOutput. */
+  const ttyOutput = (bytes) => {
+    const { oflag } = termios();
+    const o = [];
+    for (const b of bytes) { if (b === 10 && (oflag & 1) && (oflag & 4)) o.push(13); o.push(b); }
+    if (lx.console && lx.tty.kdMode === 0) lx.console.write(o);
+    out(1, Uint8Array.from(o));
+  };
+  lx.ttyInput = ttyInput;
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
@@ -425,8 +586,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   const doWrite = (fd, bytes) => {
     const f = fdOf(fd);
+    if (f.pp) { if (f.rd) return -E.EBADF; for (const b of bytes) f.pp.buf.push(b); return bytes.length; }
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
-    if (f.node.dev === 'tty') { out(1, bytes); return bytes.length; }
+    if (f.node.dev === 'tty') { ttyOutput(bytes); return bytes.length; }
     if (f.node.dev === 'mouse') return bytes.length;
     if (f.node.dev) return f.node.dev === 'full' ? -E.ENOSPC : bytes.length;
     if (f.node.dir) return -E.EISDIR;
@@ -440,6 +602,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const doRead = (fd, buf, n, at) => {
     const f = fdOf(fd);
     let src;
+    // A pipe: what its writer left. Its writer has run to its end already (one process at a time), so an
+    // empty pipe is the end of it.
+    if (f.pp) { if (!f.rd) return -E.EBADF; const take = f.pp.buf.splice(0, n); wrBytes(buf, Uint8Array.from(take)); return take.length; }
     if (f.pipe !== undefined) {
       if (f.pipe !== 0) return -E.EBADF;
       src = lx.stdin.subarray(lx.stdinPos, lx.stdinPos + n); lx.stdinPos += src.length;
@@ -447,8 +612,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (!lx.mouseIn.length) return (f.flags & 0x800) ? -E.EAGAIN : 0;
       src = Uint8Array.from(lx.mouseIn.splice(0, n));
     } else if (f.node.dev === 'tty') {
-      if (!lx.ttyIn.length) return (f.flags & 0x800) ? -E.EAGAIN : 0;   // O_NONBLOCK; else nothing to wait for here
-      src = Uint8Array.from(lx.ttyIn.splice(0, n));
+      if (!lx.ttyIn.length) {
+        if (lx.tty.eof) { lx.tty.eof = false; return 0; }                // ^D on an empty line
+        return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;                    // O_NONBLOCK, or wait for a key
+      }
+      // Canonical mode hands out at most one line per read.
+      const { lflag } = termios();
+      let take = n;
+      if (lflag & 2) { const nl = lx.ttyIn.indexOf(10); if (nl >= 0) take = Math.min(n, nl + 1); }
+      src = Uint8Array.from(lx.ttyIn.splice(0, take));
     } else if (f.node.dev) {
       const d = f.node.dev;
       src = d === 'null' ? new Uint8Array(0) : new Uint8Array(Math.min(n, 1 << 20));
@@ -489,7 +661,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const putStat = (buf, node, p) => { const b = new Uint8Array(96); putStatInto(b, node, p); wrBytes(buf, b); return 0; };
   const putStatInto = (b, node, p) => {
     const d = new DataView(b.buffer);
-    const isPipe = node.pipe !== undefined;
+    const isPipe = node.pipe !== undefined || !!node.pp;
     d.setUint32(0, isPipe ? 0xc : 0x801, true);                             // st_dev
     d.setUint32(12, inoOf(p), true);
     const type = isPipe ? 0o010000 : node.dev ? 0o020000 : node.dir ? 0o040000 : node.link !== undefined ? 0o120000 : 0o100000;
@@ -579,19 +751,30 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       default: return 0;                                                   // VT_SETMODE, VT_ACTIVATE, VT_WAITACTIVE, KDSETLED...
     }
   };
-  const select = (n, inp, outp, exp) => {
-    let ready = 0;
-    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
+  const select = (n, inp, outp, exp, tv) => {
+    let ready = 0, waitsOnTty = false;
+    if (!tv && inp) for (let fd = 0; fd < n; fd++) if ((rd32(inp + (fd >>> 5) * 4) >>> (fd & 31)) & 1 && fds[fd] && fds[fd].node && fds[fd].node.dev === 'tty') waitsOnTty = true;
+    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.pp) return true; if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
       if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0; return true; };
+    const writes = [];
     for (const [set, test] of [[inp, has], [outp, (fd) => !!fds[fd]], [exp, () => false]]) {
       if (!set) continue;
       for (let w = 0; w < Math.ceil(n / 32); w++) {
         let bits = rd32(set + w * 4), keep = 0;
         for (let b = 0; b < 32; b++) if ((bits >>> b) & 1 && test(w * 32 + b)) { keep |= 1 << b; ready++; }
-        wr32(set + w * 4, keep >>> 0);
+        writes.push([set + w * 4, keep >>> 0]);
       }
     }
+    // No timeout and nothing ready on a terminal: wait for a key — leaving the sets as they were, since
+    // the call runs again from the start.
+    if (!ready && waitsOnTty && !lx.ttyIn.length) return BLOCK;
+    for (const [a, v] of writes) wr32(a, v);
     return ready;
+  };
+  const pipe = (ptr) => {
+    const pp = { buf: [] };
+    const r = newFd({ pp, rd: true }), w = newFd({ pp, rd: false });
+    wr32(ptr, r); wr32(ptr + 4, w); return 0;
   };
   const readlink = (path, base, buf, size) => {
     let t;
@@ -602,7 +785,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   const seek = (fd, off, whence) => {
     const f = fdOf(fd);
-    if (f.pipe !== undefined) return -E.ESPIPE;
+    if (f.pipe !== undefined || f.pp) return -E.ESPIPE;
     if (f.node.dev) return 0;
     const base = whence === 0 ? 0 : whence === 1 ? f.pos : whence === 2 ? f.node.size : NaN;
     if (Number.isNaN(base) || base + off < 0) return -E.EINVAL;
@@ -620,6 +803,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       let total = 0;
       for (let i = 0; i < cnt; i++) {
         const b = rd32(iov + i * 8), n = rd32(iov + i * 8 + 4), got = doRead(fd, b, n);
+        if (got === BLOCK) return total || BLOCK;
         if (got < 0) return total || got;
         total += got; if (got < n) break;
       }
@@ -693,11 +877,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       fs.set(p, { link: rdStr(target), mtime: lx.now() }); gone.delete(p); return 0;
     },
     220: (fd, buf, cnt) => getdents(fd, buf, cnt),                         // getdents64
-    41: (fd) => newFd({ ...fdOf(fd) }),                                    // dup (the offset is not shared: enough here)
-    63: (fd, to) => { const f = fdOf(fd); if (fd !== to) fds[to] = { ...f }; return to; },   // dup2
+    41: (fd) => newFd(fdOf(fd)),                                           // dup: the same open file, offset shared
+    63: (fd, to) => { const f = fdOf(fd); fds[to] = f; return to; },       // dup2
+    330: (fd, to) => { const f = fdOf(fd); if (fd === to) return -E.EINVAL; fds[to] = f; return to; },   // dup3
     221: (fd, cmd, arg) => {                                               // fcntl64
       const f = fdOf(fd);
-      if (cmd === 0 || cmd === 1030) return newFd({ ...f }, arg);           // F_DUPFD, F_DUPFD_CLOEXEC
+      if (cmd === 0 || cmd === 1030) return newFd(f, arg);                  // F_DUPFD, F_DUPFD_CLOEXEC
       if (cmd === 1 || cmd === 2) return 0;                                 // F_GETFD / F_SETFD
       if (cmd === 3) return f.flags !== undefined ? f.flags : (f.pipe === 0 ? 0 : 1);   // F_GETFL
       if (cmd === 4) { f.flags = ((f.flags || 0) & ~0x2c00) | (arg & 0x2c00); return 0; }   // F_SETFL: O_APPEND, O_NONBLOCK, O_ASYNC
@@ -754,9 +939,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       wr32(uinfo, idx);
       return 0;
     },
-    258: () => 1,                                                          // set_tid_address -> tid
+    258: () => lx.pid,                                                     // set_tid_address -> tid
     311: () => 0,                                                          // set_robust_list
-    20: () => 1, 64: () => 0, 224: () => 1,                                // getpid, getppid, gettid
+    20: () => lx.pid, 64: () => lx.ppid, 224: () => lx.pid,                // getpid, getppid, gettid
     174: (sig, act) => {                                                   // rt_sigaction: remembered, not yet delivered
       if (act) lx.sigHandlers[sig] = rd32(act);
       return 0;
@@ -801,11 +986,22 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     106: (path, buf) => oldStat(resolve(rdStr(path)), buf),                // stat (struct stat, not stat64)
     107: (path, buf) => oldStat(resolve(rdStr(path), lx.cwd, false), buf),  // lstat
     108: (fd, buf) => { const f = fdOf(fd); return f.path ? oldStat(f.path, buf) : putOldStat(buf, f, 'pipe:' + fd); },   // fstat
-    42: () => -E.EMFILE,                                                   // pipe: no second process to talk to
+    42: (ptr) => pipe(ptr),                                                // pipe
+    331: (ptr) => pipe(ptr),                                               // pipe2
+    2: () => fork(),                                                       // fork
+    190: () => fork(),                                                     // vfork: a fork here
+    120: (flags, sp, ptid, tls, ctid) => fork(flags, ctid),                // clone, without CLONE_VM
+    11: (path, argv, envp) => execve(rdStr(path), strings(argv), strings(envp)),   // execve
+    114: (pid, st, opt) => wait(pid | 0, st, opt),                         // wait4
+    7: (pid, st, opt) => wait(pid | 0, st, opt),                           // waitpid
+    57: () => 0, 65: () => lx.pid, 132: () => lx.pid, 66: () => lx.pid, 147: () => lx.pid,   // setpgid, getpgrp, getpgid, setsid, getsid
     // select: a descriptor with input waiting is ready to read, every one is ready to write; with
     // nothing ready it returns at once (there is no other process to wait for).
-    142: (n, inp, outp, exp) => select(n, inp, outp, exp),                 // _newselect
-    82: (args) => select(rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12)),   // select (old: its arguments in a struct)
+    142: (n, inp, outp, exp, tv) => select(n, inp, outp, exp, tv),         // _newselect
+    308: (n, inp, outp, exp, ts) => select(n, inp, outp, exp, ts),         // pselect6 (readline waits for keys with it)
+    439: (dirfd, path) => { const r = resolve(rdStr(path), atBase(dirfd)); return r && getNode(r) ? 0 : -E.ENOENT; },   // faccessat2
+    94: () => 0, 15: () => 0, 306: () => 0,                                // fchmod, chmod, fchmodat: modes are not kept
+    82: (args) => select(rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12), rd32(args + 16)),   // select (old: its arguments in a struct)
     122: (buf) => {                                                        // uname: as the oracle's i386 kernel says
       const f = ['Linux', 'mirage', '2.6.32', '#1', 'i686', '(none)'];
       for (let i = 0; i < 6; i++) { const b = new TextEncoder().encode(f[i]); wrBytes(buf + i * 65, b); wr8(buf + i * 65 + b.length, 0); }
@@ -822,6 +1018,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       try { ret = fn(r[3] >>> 0, r[1] >>> 0, r[2] >>> 0, r[6] >>> 0, r[7] >>> 0, r[5] >>> 0); }
       catch (e) { if (typeof e === 'number') ret = -e; else throw e; }
     }
+    if (ret === BLOCK) { cpu.eip = (cpu.eip - 2) >>> 0; machine.blocked = true; return; }   // int 80h again when input comes
     if (!lx.done && ret !== undefined) r[0] = ret | 0;
   };
 
