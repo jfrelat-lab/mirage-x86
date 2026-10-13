@@ -712,7 +712,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const pre = f.path === '/' ? '/' : f.path + '/';
     if (!f.names) {
       const set = new Set([...fs.keys()].filter((k) => k !== '/' && k.startsWith(pre) && !k.slice(pre.length).includes('/')).map((k) => k.slice(pre.length)));
-      if (lx.host && f.node.host) for (const n of lx.host.list(f.path)) if (!gone.has(pre + n)) set.add(n);
+      // The host's entries too, for any directory the host has — '/' and /dev included, which we
+      // create ourselves: ls / showed only what had been looked up so far.
+      const onHost = lx.host && (f.node.host || (lx.host.lstat(f.path) || {}).type === 'dir');
+      if (onHost) for (const n of lx.host.list(f.path)) if (!gone.has(pre + n)) set.add(n);
       f.names = ['.', '..', ...[...set].sort()];
     }
     const names = f.names;

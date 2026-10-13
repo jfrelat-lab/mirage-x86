@@ -2,15 +2,16 @@
 //
 // What a program writes to /dev/tty1 (after the tty's output processing, src/linux.js) appears on the
 // 80x25 text screen at B8000h, with the cursor where the BIOS data area says (0450h/0451h), which is
-// where src/video.js draws it. Control characters and the escape sequences the Linux console answers
+// where src/video.js draws it — and in the CRTC's cursor location registers (0Eh/0Fh), which is where
+// the VGA (and so the picture) takes it from, as the Linux console's vgacon sets them. Control characters and the escape sequences the Linux console answers
 // that readline, ls --color and the like use: CR LF BS TAB BEL; CSI A B C D H f J K m, and the
 // private ones they send at start-up (cursor visibility, modes), which are accepted and ignored.
 const COLS = 80, ROWS = 25, TEXT = 0xb8000;
 const ANSI_TO_VGA = [0, 4, 2, 6, 1, 5, 3, 7];             // ANSI black red green yellow blue magenta cyan white
 
 export class VtConsole {
-  constructor(u8) {
-    this.u8 = u8; this.fg = 7; this.bg = 0; this.bold = false; this.rev = false;
+  constructor(u8, vga = null) {
+    this.u8 = u8; this.vga = vga; this.fg = 7; this.bg = 0; this.bold = false; this.rev = false;
     this.state = 0; this.params = ''; this.saved = [0, 0];
   }
   get attr() {
@@ -27,7 +28,13 @@ export class VtConsole {
     this.clear(COLS * (ROWS - 1), COLS * ROWS);
   }
   lf() { if (this.row === ROWS - 1) this.scroll(); else this.row = this.row + 1; }
-  write(bytes) { for (const b of bytes) this.put(b); }
+  write(bytes) { for (const b of bytes) this.put(b); this.syncCursor(); }
+  /** Where the cursor is drawn: the CRTC's location registers, relative to the display start. */
+  syncCursor() {
+    const v = this.vga; if (!v || !v.crtc) return;
+    const loc = (v.startAddr ? v.startAddr() : 0) + this.row * COLS + Math.min(this.col, COLS - 1);
+    v.crtc[0x0e] = (loc >> 8) & 0xff; v.crtc[0x0f] = loc & 0xff;
+  }
   put(b) {
     if (this.state === 1) {                                              // after ESC
       if (b === 0x5b) { this.state = 2; this.params = ''; return; }      // CSI

@@ -46,8 +46,8 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   lx.chdir(e.cwd || '/');
   if (e.console) {
     lx.consoleStdio();
-    lx.console = new VtConsole(mc.mem.u8);                               // the tty's text on the VGA screen
-    lx.console.clear(); lx.console.row = 0; lx.console.col = 0;
+    lx.console = new VtConsole(mc.mem.u8, mc.vga);                       // the tty's text on the VGA screen
+    lx.console.clear(); lx.console.row = 0; lx.console.col = 0; lx.console.syncCursor();
   }
   const env = ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`)];
   const image = lx.readFile(e.run);
@@ -55,9 +55,24 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   lx.load(image, [e.run, ...(e.args || [])], env);
 
   const video = new Video(mc, canvas); video.font = mc.font;
-  // The page's keys go to the console as the PC keyboard's scancodes (src/keyboard.js), and from
-  // there as the kernel would deliver them in the console's current mode (K_MEDIUMRAW for SVGAlib).
-  const keyboard = new Keyboard({ keyQueue: [], pushScancodes: (a) => lx.keyScancodes(a) });
+  // The page's keys reach the console two ways (src/keyboard.js gives both). In K_XLATE — a shell,
+  // anything that reads characters — the CHARACTER the host's own layout produced goes to the line
+  // discipline, so an AZERTY keyboard types what is printed on its keys; the cursor and editing keys
+  // become the console's escape sequences. In K_RAW and K_MEDIUMRAW — SVGAlib, DOOM — the PC
+  // keyboard's scancodes go, by physical position, as the kernel would deliver them.
+  const SEQ = { 0x48: '\x1b[A', 0x50: '\x1b[B', 0x4d: '\x1b[C', 0x4b: '\x1b[D', 0x47: '\x1b[1~', 0x4f: '\x1b[4~',
+    0x52: '\x1b[2~', 0x53: '\x1b[3~', 0x49: '\x1b[5~', 0x51: '\x1b[6~' };
+  const typed = {
+    length: 0, shift() {},
+    push({ scan, ascii }) {
+      if (lx.tty.kbMode !== 1) return;
+      const bytes = ascii ? [ascii === 8 ? 0x7f : ascii] : [...(SEQ[scan] || '')].map((c) => c.charCodeAt(0));
+      if (!bytes.length) return;
+      lx.ttyInput(bytes);
+      mc.blocked = false;                                                 // a read waiting for a key runs again
+    },
+  };
+  const keyboard = new Keyboard({ keyQueue: typed, pushScancodes: (a) => { if (lx.tty.kbMode !== 1) lx.keyScancodes(a); } });
   keyboard.attach(window);
 
   // The CPU runs in ~12 ms chunks chained through a MessageChannel; requestAnimationFrame only draws.

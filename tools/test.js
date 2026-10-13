@@ -3019,6 +3019,20 @@ const runLinux = (hex, argv) => {
     '31d231f6cd80b804000000bb01000000b9cb800408ba07000000cd808b1dd2800408c1eb0881e3ff00000083c30ab801' +
     '000000cd806368696c640a706172656e740a00000000');
   eq('linux: fork, the child runs and exits, the parent waits and reads its status', JSON.stringify(runLinux(hex, ['/w/FORK'])), JSON.stringify({ out: 'child\nparent\n', status: 13 })); }
+// tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
+// makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
+// MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).
+{ const hex = (                                         // nasm -f bin tools/linux/lsroot.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408a3000000002000000700000000100000b805000000bba1800408b900' +
+    '000100cd8089c731edb8dc00000089fbb900900408ba00100000cd8085c07e18be009004088d9000900408450fb74e10' +
+    '01ce39d672f5ebd1b80100000089ebcd802f00');
+  const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+  const dirs = { '/': ['etc', 'var'], '/etc': [], '/var': [] };
+  lx.host = { lstat: (q) => (dirs[q] ? { type: 'dir' } : null), list: (q) => dirs[q] || [], read: () => null };
+  lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/LSROOT']);
+  for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+  eq('linux: / lists the host root merged with its own directories', lx.status, 6); }
 // The console's line discipline (n_tty with the default termios: ICANON ECHO ICRNL, OPOST ONLCR): a
 // line is edited — Backspace erases — and handed over at Enter, its echo on the screen.
 { const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), echoed = [];
@@ -3031,10 +3045,11 @@ const runLinux = (hex, argv) => {
   eq('linux: a console line is edited and handed over at Enter, with its echo', got, '0 ac| ab< <c|'); }
 // src/vtconsole.js: the tty's text on the VGA text screen — CR LF, a CSI cursor position, SGR colour.
 { const { VtConsole } = await import('../src/vtconsole.js');
-  const u8 = new Uint8Array(0xc0000), vt = new VtConsole(u8);
+  const u8 = new Uint8Array(0xc0000), vga = { crtc: new Uint8Array(32), startAddr: () => 0 }, vt = new VtConsole(u8, vga);
   vt.write([...'ab\r\ncd\x1b[3;5H\x1b[31mX\x1b[0m'].map((c) => c.charCodeAt(0)));
   const at = (r, c) => String.fromCharCode(u8[0xb8000 + (r * 80 + c) * 2]) + u8[0xb8000 + (r * 80 + c) * 2 + 1].toString(16);
-  eq('linux: the VGA text console places text, moves the cursor, colours', [at(0, 0), at(1, 1), at(2, 4), u8[0x450], u8[0x451]].join(' '), 'a7 d7 X4 5 2'); }
+  // The cursor is where the VGA draws it from, CRTC 0Eh/0Fh: row 2, column 5 is location 165.
+  eq('linux: the VGA text console places text, moves the cursor, colours', [at(0, 0), at(1, 1), at(2, 4), u8[0x450], u8[0x451], (vga.crtc[0x0e] << 8) | vga.crtc[0x0f]].join(' '), 'a7 d7 X4 5 2 165'); }
 // The console's keyboard modes, as the kernel delivers keys (drivers/tty/vt/keyboard.c): K_MEDIUMRAW gives
 // keycodes — an ordinary key's scancode, the kernel's number for an E0 key (Up 103), bit 7 on release —
 // which is what SVGAlib reads for id's Linux DOOM; K_XLATE gives characters; K_RAW the scancodes.
