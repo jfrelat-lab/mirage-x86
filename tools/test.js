@@ -3010,6 +3010,12 @@ const runLinux = (hex, argv) => {
     '000000000100000000000000008004080080040883000000830000000500000000100000b865000000bb81000000b901' +
     '000000ba01000000cd80b86e00000031dbcd80b05ae681b801000000bb05000000cd80');
   eq('linux: a port opened by ioperm stays open under IOPL 0', runLinux(hex, ['/w/IOPERM']).status, 5); }
+// The console's keyboard modes, as the kernel delivers keys (drivers/tty/vt/keyboard.c): K_MEDIUMRAW gives
+// keycodes — an ordinary key's scancode, the kernel's number for an E0 key (Up 103), bit 7 on release —
+// which is what SVGAlib reads for id's Linux DOOM; K_XLATE gives characters; K_RAW the scancodes.
+{ const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), keys = [0xe0, 0x48, 0xe0, 0xc8, 0x1e, 0x9e];
+  let got; try { got = [2, 1, 0].map((mode) => { lx.tty.kbMode = mode; lx.ttyIn.length = 0; lx.keyScancodes(keys); return lx.ttyIn.join(','); }).join(' / '); } catch (e) { got = e.message; }
+  eq('linux: keys reach the console as keycodes, characters or scancodes by its mode', got, '103,231,30,158 / 97 / 224,72,224,200,30,158'); }
 
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept

@@ -367,6 +367,24 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.consoleStdio = () => { const n = fs.get('/dev/tty1'); for (let i = 0; i < 3; i++) fds[i] = { node: n, path: '/dev/tty1', pos: 0, flags: 2 }; };
   lx.ttyIn = [];
   lx.tty = { kdMode: 0, kbMode: 1, termios: null };
+  /** The PC keyboard's set-1 scancodes (make, or make|80h for a release; E0 before an extended key),
+   *  delivered to the console as the kernel would in its current mode (KDSKBMODE): K_RAW passes the
+   *  scancodes, K_MEDIUMRAW gives keycodes — the scancode for an ordinary key, the kernel's own number
+   *  for an E0 key (Up 103, Left 105...), bit 7 for a release — and K_XLATE the characters. */
+  const E0KEY = { 0x1c: 96, 0x1d: 97, 0x35: 98, 0x38: 100, 0x47: 102, 0x48: 103, 0x49: 104, 0x4b: 105,
+    0x4d: 106, 0x4f: 107, 0x50: 108, 0x51: 109, 0x52: 110, 0x53: 111 };
+  const ASCII = '\x00\x1b1234567890-=\x7f\tqwertyuiop[]\r\x00asdfghjkl;\'`\x00\\zxcvbnm,./\x00*\x00 ';
+  let e0 = false;
+  lx.keyScancodes = (codes) => {
+    for (const c of codes) {
+      if (c === 0xe0) { e0 = true; if (lx.tty.kbMode === 0) lx.ttyIn.push(c); continue; }
+      const mode = lx.tty.kbMode, rel = c & 0x80, sc = c & 0x7f;
+      if (mode === 0) lx.ttyIn.push(c);
+      else if (mode === 2) { const k = e0 ? E0KEY[sc] : sc; if (k !== undefined) lx.ttyIn.push(k | rel); }
+      else if (!rel && !e0 && sc < ASCII.length && ASCII.charCodeAt(sc)) lx.ttyIn.push(ASCII.charCodeAt(sc));
+      e0 = false;
+    }
+  };
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
@@ -682,6 +700,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (cmd === 0 || cmd === 1030) return newFd({ ...f }, arg);           // F_DUPFD, F_DUPFD_CLOEXEC
       if (cmd === 1 || cmd === 2) return 0;                                 // F_GETFD / F_SETFD
       if (cmd === 3) return f.flags !== undefined ? f.flags : (f.pipe === 0 ? 0 : 1);   // F_GETFL
+      if (cmd === 4) { f.flags = ((f.flags || 0) & ~0x2c00) | (arg & 0x2c00); return 0; }   // F_SETFL: O_APPEND, O_NONBLOCK, O_ASYNC
       return 0;
     },
     194: (fd, lo, hi) => { const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EINVAL; const n = lo + hi * 4294967296; grow(f.node, n); f.node.data.fill(0, Math.min(n, f.node.size), n); f.node.size = n; return 0; },   // ftruncate64
