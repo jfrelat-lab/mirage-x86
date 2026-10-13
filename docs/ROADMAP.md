@@ -86,12 +86,11 @@ resumes a program at the instant it was taken. The name: what a mirage promises,
 
 | Id | Item | Effort |
 |---|---|---|
-| O1 | The image format: manifest (world, profile, entry, env, cwd) and layers (zip/tar, content-addressed); the examples' `manifest.json` and `tools/run.mjs`'s signature switch are its first draft | M |
-| O2 | `oasis run|pull|commit` from the command line on top of `tools/run.mjs`, `tools/dos/run.mjs` and `tools/linux/run.mjs` | M |
+| — | O1 and O2 are done: [OASIS.md](OASIS.md) (the manifest, the layers), `node tools/oasis.mjs list|inspect|pull|run` with a window in app mode or the terminal; `linux.html` | — |
 | O3 | Layers read on demand over HTTP in the browser (byte ranges), cached offline; a registry is any static host | M |
-| O4 | Output: a terminal (stdio, ANSI), a native window (K8: the system browser in app mode, or a WebView) and the web page; keyboard, mouse and sound in all three | M |
+| O4 | Output: done for a window in app mode (DOS, Linux) and the terminal; to do: ANSI in the terminal, mouse and sound for Linux, a WebView | M |
 | O5 | `commit` of the machine state (`tools/snapshot.mjs`), and URLs that resume or replay a run | L |
-| O6 | First images: `dos/c-dogs`, `dos/doom`, `linux/debian-bookworm-i386`, `linux/slackware-1995` with id's DOOM, `win/3.0` | M |
+| O6 | First images: `dos/c-dogs`, `dos/doom`, `linux/debian-bookworm`, `linux/doom-1994` exist; to do: `win/3.0`, more | M |
 
 ## The project
 

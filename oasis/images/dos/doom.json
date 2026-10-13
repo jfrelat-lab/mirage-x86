@@ -1,0 +1,13 @@
+{
+  "oasis": 1,
+  "title": "DOOM 1.9 (shareware)",
+  "world": "dos",
+  "machine": { "cpu": "586" },
+  "layers": [
+    { "zip": "examples/games/doom19s.zip" },
+    { "file": "examples/games/doom/DEFAULT.CFG" }
+  ],
+  "entry": { "run": "DOOM.EXE" },
+  "output": "window",
+  "license": "examples/licenses/doom.txt"
+}

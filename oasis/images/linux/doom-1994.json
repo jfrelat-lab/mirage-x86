@@ -1,0 +1,23 @@
+{
+  "oasis": 1,
+  "title": "Linux DOOM 1.8 for SVGAlib (id Software, December 1994)",
+  "world": "linux",
+  "machine": { "cpu": "686", "mem": 64 },
+  "layers": [
+    { "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/libc4_4.6.27-15.deb" },
+    { "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/base/ldso_1.8.12-1.deb" },
+    { "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/aout-svgalib_1.2.10-5.deb" },
+    { "tar": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/linux/linuxsdoom.tar.gz", "into": "usr/games/doom" },
+    { "gz": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/doom-1.8.wad.gz", "to": "/usr/games/doom/doom1.wad" },
+    { "links": {
+        "/lib/ld.so": "ld.so.1.8.12",
+        "/lib/libc.so.4": "libc.so.4.6.27",
+        "/lib/libm.so.4": "libm.so.4.6.27",
+        "/lib/libvga.so.1": "/usr/lib/i486-linuxaout/libvga.so.1.2.10"
+    } },
+    { "mkdir": ["/tmp", "/root"] }
+  ],
+  "entry": { "run": "/usr/games/doom/linuxsdoom", "cwd": "/usr/games/doom", "console": true, "env": { "HOME": "/root", "TERM": "linux" } },
+  "output": "window",
+  "notes": "The binary, its WAD and the a.out libraries are fetched from their original archives (idgames, archive.debian.org); nothing of them is in this repository."
+}

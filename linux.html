@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MIRAGE — Linux</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #0a0e12; --panel: #0f1620; --ink: #9fb4c4; --accent: #00d0a0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+         display: flex; flex-direction: column; height: 100vh; }
+  #bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid #1c2a36; }
+  #bar .logo { color: var(--accent); font-weight: 700; letter-spacing: 1px; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 8px; }
+  #screen { height: 100%; max-width: 100%; aspect-ratio: 4 / 3; background: #000; image-rendering: pixelated; outline: none; }
+  #out { margin: 0; height: 7.5em; overflow: auto; white-space: pre-wrap; color: #cfe3d8; background: #05080b;
+         padding: 6px 12px; border-top: 1px solid #1c2a36; }
+  #status { padding: 4px 12px; background: var(--panel); border-top: 1px solid #1c2a36; }
+</style>
+</head>
+<body>
+  <header id="bar"><span class="logo">▚ MIRAGE · Linux</span><span id="title"></span></header>
+  <main id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas></main>
+  <pre id="out"></pre>
+  <div id="status">loading…</div>
+<script type="module">
+// The browser side of an OASIS Linux image (tools/oasis.mjs serves this page): the image's manifest
+// from /oasis-image.json, its file tree from /oasis-fs/{lstat,list,read}. MIRAGE-LINUX's file system
+// asks synchronously, as a disk would answer, so the requests are synchronous too.
+import { Machine } from './src/machine.js';
+import { installBIOS } from './src/bios.js';
+import { installLinux } from './src/linux.js';
+import { Video } from './src/video.js';
+import { Keyboard } from './src/keyboard.js';
+
+const canvas = document.getElementById('screen'), out = document.getElementById('out'), status = document.getElementById('status');
+const img = await (await fetch('/oasis-image.json')).json();
+document.title = img.title || img.name; document.getElementById('title').textContent = img.title || img.name;
+
+const sync = (op, p, binary) => {
+  const x = new XMLHttpRequest();
+  x.open('GET', `/oasis-fs/${op}?p=${encodeURIComponent(p)}`, false);
+  if (binary) x.overrideMimeType('text/plain; charset=x-user-defined');
+  x.send();
+  if (x.status !== 200) return null;
+  if (!binary) return JSON.parse(x.responseText);
+  const s = x.responseText, b = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff;
+  return b;
+};
+
+const m = img.machine || {};
+const mc = new Machine({ memSize: (m.mem || 64) << 20, cpu: m.cpu || '686' });
+installBIOS(mc);
+for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
+  try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }
+}
+let text = '';
+const lx = installLinux(mc, { realTime: true, onOutput: (fd, b) => { text = (text + new TextDecoder().decode(b)).slice(-20000); out.textContent = text; out.scrollTop = out.scrollHeight; } });
+lx.host = { lstat: (p) => sync('lstat', p), list: (p) => sync('list', p) || [], read: (p) => sync('read', p, true) };
+lx.epoch = Math.floor(Date.now() / 1000);
+const e = img.entry || {};
+lx.chdir(e.cwd || '/');
+if (e.console) lx.consoleStdio();
+const env = ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`)];
+lx.load(lx.readFile(e.run), [e.run, ...(e.args || [])], env);
+
+const video = new Video(mc, canvas); video.font = mc.font;
+// The page's keys go to the console as the PC keyboard's scancodes (src/keyboard.js), and from there
+// as the kernel would deliver them in the console's current mode (K_MEDIUMRAW for SVGAlib).
+const keyboard = new Keyboard({ keyQueue: [], pushScancodes: (a) => lx.keyScancodes(a) });
+keyboard.attach(window);
+window.mirage = { mc, lx };
+canvas.focus();
+
+// The CPU runs in ~12 ms chunks chained through a MessageChannel; requestAnimationFrame only draws.
+const tick = new MessageChannel();
+let fault = null; mc.onError = (err) => { fault = err; console.error(err); };
+tick.port1.onmessage = () => {
+  const t0 = performance.now();
+  while (!lx.done && !fault && performance.now() - t0 < 12) mc.runSlice(20000);
+  if (lx.done) status.textContent = `exited with status ${lx.status}` + (lx.signal ? ` (signal ${lx.signal})` : '');
+  else if (fault) status.textContent = String(fault.message || fault).split('\n')[0];
+  else tick.port2.postMessage(0);
+};
+tick.port2.postMessage(0);
+let frames = 0, last = performance.now(), c0 = 0;
+(function draw() {
+  video.render(); frames++;
+  const now = performance.now();
+  if (now - last > 1000 && !lx.done && !fault) {
+    status.textContent = `${((mc.cpu.cycles - c0) / (now - last) / 1000).toFixed(1)} M instructions/s · ${frames} fps`;
+    frames = 0; last = now; c0 = mc.cpu.cycles;
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

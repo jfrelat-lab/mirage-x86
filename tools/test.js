@@ -3017,6 +3017,30 @@ const runLinux = (hex, argv) => {
   let got; try { got = [2, 1, 0].map((mode) => { lx.tty.kbMode = mode; lx.ttyIn.length = 0; lx.keyScancodes(keys); return lx.ttyIn.join(','); }).join(' / '); } catch (e) { got = e.message; }
   eq('linux: keys reach the console as keycodes, characters or scancodes by its mode', got, '103,231,30,158 / 97 / 224,72,224,200,30,158'); }
 
+// ---- OASIS: tools/oasis.mjs's own tar reader ---------------------------------------------------------
+// Images are unpacked from Debian packages, idgames tarballs and `docker export` without the host's tar,
+// which on macOS dropped Debian's empty directories (/etc/apt/keyrings): an empty directory, a file, a
+// symbolic link and a GNU long name must all come through as the archive has them.
+{ const { untar } = await import('./oasis.mjs');
+  const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
+  const hdr = (name, type, size = 0, link = '') => { const h = Buffer.alloc(512);
+    h.write(name.slice(0, 99), 0, 'latin1'); h.write('0000644\0', 100); h.write('0000000\0', 108); h.write('0000000\0', 116);
+    h.write(size.toString(8).padStart(11, '0') + '\0', 124); h.write('00000000000\0', 136); h.write(type, 156); h.write(link, 157);
+    h.write('        ', 148); let sum = 0; for (const b of h) sum += b; h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148); return h; };
+  const pad = (b) => Buffer.concat([b, Buffer.alloc((512 - b.length % 512) % 512)]);
+  const long = 'deep/' + 'x'.repeat(120) + '.txt';
+  const tar = Buffer.concat([hdr('etc/apt/keyrings/', '5'), hdr('etc/hello.txt', '0', 3), pad(Buffer.from('hi\n')),
+    hdr('bin', '2', 0, 'usr/bin'), hdr('././@LongLink', 'L', long.length + 1), pad(Buffer.from(long + '\0')), hdr('ignored', '0', 2), pad(Buffer.from('ok')), Buffer.alloc(1024)]);
+  const dir = fsm.mkdtempSync(pm.join(osm.tmpdir(), 'oasis-test-'));
+  let got;
+  try {
+    untar(tar, dir);
+    got = [fsm.existsSync(pm.join(dir, 'etc/apt/keyrings')), fsm.readFileSync(pm.join(dir, 'etc/hello.txt'), 'utf8'),
+      fsm.readlinkSync(pm.join(dir, 'bin')), fsm.readFileSync(pm.join(dir, long), 'utf8')];
+  } catch (e) { got = e.message.slice(0, 60); }
+  fsm.rmSync(dir, { recursive: true, force: true });
+  eq('oasis: tar keeps an empty directory, a file, a symbolic link and a long name', JSON.stringify(got), JSON.stringify([true, 'hi\n', 'usr/bin', 'ok'])); }
+
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept
 // only until the next tick, and lost unless IF happened to be set just then: CWSDPMI runs with IF clear

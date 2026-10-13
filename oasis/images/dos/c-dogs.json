@@ -1,0 +1,13 @@
+{
+  "oasis": 1,
+  "title": "C-Dogs 1.06",
+  "world": "dos",
+  "machine": { "cpu": "586" },
+  "layers": [
+    { "zip": "examples/games/cdogs106.zip" },
+    { "file": "examples/games/cdogs/SOUND.CFG" }
+  ],
+  "entry": { "run": "CDOGS.EXE" },
+  "output": "window",
+  "license": "examples/licenses/cdogs.txt"
+}

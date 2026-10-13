@@ -27,8 +27,13 @@ const mount = (dir, at) => {
     if (st.isDirectory()) { lx.mkdir(at + '/' + f); mount(p, at + '/' + f); } else if (st.size < 64 << 20) lx.addFile(at + '/' + f, readFileSync(p));
   }
 };
-const ROOT = process.env.MIRAGE_LXROOT;
-if (ROOT) {
+const ROOT = process.env.MIRAGE_LXROOT, SPEC = process.env.MIRAGE_LXROOTSPEC;
+if (SPEC) {                                    // an OASIS image's layers (tools/oasis.mjs): several roots, files and links on top
+  const { hostOver } = await import('../oasis.mjs');
+  const s = JSON.parse(readFileSync(SPEC, 'utf8'));
+  lx.host = hostOver({ dirs: s.dirs, files: new Map(s.files), links: new Map(s.links), mkdirs: new Set(s.mkdirs) });
+  lx.chdir(process.env.MIRAGE_LXCWD || '/');
+} else if (ROOT) {
   const at = (p) => join(ROOT, p);
   lx.host = {
     lstat: (p) => {
@@ -46,10 +51,11 @@ if (ROOT) {
 // time and an older one's year); it then runs with the guest's cycles, or the wall clock.
 lx.epoch = Math.floor(Date.now() / 1000);
 if (!process.stdin.isTTY) { try { lx.stdin = new Uint8Array(readFileSync(0)); } catch { /* no stdin */ } }
-const image = ROOT ? lx.readFile(prog) : new Uint8Array(readFileSync(prog));
-if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT}`); process.exit(127); }
+const image = ROOT || SPEC ? lx.readFile(prog) : new Uint8Array(readFileSync(prog));
+if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT || 'the image'}`); process.exit(127); }
 if (process.env.MIRAGE_LXCONSOLE) lx.consoleStdio();   // stdio on /dev/tty1, a virtual console (SVGAlib wants one)
-lx.load(image, [ROOT ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C']);
+const extraEnv = Object.entries(JSON.parse(process.env.MIRAGE_LXENV || '{}')).map(([k, v]) => `${k}=${v}`);
+lx.load(image, [ROOT || SPEC ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...extraEnv]);
 const LIMIT = 2e10;
 while (!lx.done && mc.cpu.cycles < LIMIT) mc.runSlice(200000);
 if (!lx.done) { console.error('mirage-linux: still running after', LIMIT, 'cycles'); process.exit(124); }
