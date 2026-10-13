@@ -1,6 +1,6 @@
 # MIRAGE compared
 
-MIRAGE beside the tools it is measured against every day: **QEMU** (whole-system emulation with
+MIRAGE beside the tools it is measured against every day — and, for speed, **PCjs**: **QEMU** (whole-system emulation with
 TCG, and `qemu-user` for Linux programs), **DOSBox-X** (DOS, with its own DOS and BIOS), **v86** (an
 x86 PC in the browser, compiled to WebAssembly) — and **Docker**, which is not an emulator but is
 what most people reach for to "run a program somewhere else".
@@ -122,6 +122,23 @@ clock follows guest cycles); the others report their own score. n.m. = not measu
 | Dhrystone 2.1, per second | 🏆 4,100,000 | 1,111,000 | n.m. | 169,000 | 156,500 |
 | CoreMark, iterations per second | 🏆 7,763 | n.m. | n.m. | 210 | 242 |
 | Guest instructions per second | ➖ | ➖ | ➖ | 82 M | 76–79 M |
+
+BYTE's Sieve of Eratosthenes (8190 flags, 5000 times: `tools/bench/sieve.asm`, a 16-bit `.COM` of 126
+bytes, 730.7 M instructions), wall-clock seconds on the same host, lower is better. It is run in
+real mode so that every emulator executes the same instructions: on PCjs, DJGPP's Dhrystone stopped
+with a general protection fault inside CWSDPMI.
+
+| | DOSBox-X (dynamic, `cycles=max`) | MIRAGE-DOS | PCjs (COMPAQ DeskPro 386, at its highest speed) |
+|---|---|---|---|
+| Sieve, seconds | 🏆 6.2 | 13 | 64.3 |
+| Relative to MIRAGE | 2.1x faster | 1 | 4.9x slower |
+
+PCjs runs a machine at its original clock (16 MHz for the DeskPro 386); its debugger page's speed
+button doubles the target, and the host reached about 53 MHz of 386 cycles, about 4 cycles an
+instruction here. PCjs also hosts Windows 1.0-95, DOS and OS/2 images "for archival/demonstration
+purposes only" (its licence excludes "all programs, images and documentation produced by other
+parties"), as v86 hosts Windows 1.01 to 2000 marked "Proprietary"; MIRAGE serves only what may be
+redistributed.
 
 Booting whole systems, wall-clock seconds to the arrival screen (lower is better), from the
 [README](../README.md#how-fast):
