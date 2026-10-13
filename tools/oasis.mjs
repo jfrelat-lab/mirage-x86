@@ -6,6 +6,7 @@
 //   node tools/oasis.mjs inspect <image>            its manifest, and which layers are cached
 //   node tools/oasis.mjs pull <image>               fetch and unpack its remote layers into the cache
 //   node tools/oasis.mjs run <image> [args...]      run it (pulls first if needed)
+//   node tools/oasis.mjs serve [--open]             every image, for machines.html (Linux images need it)
 //       --window      in a window of its own: the system's Chrome or Edge in app mode, else the browser
 //       --terminal    in this terminal: its output on stdout, our stdin as its keyboard
 //       --serve       a window's page, served without opening it (prints the URL; for tests)
@@ -205,28 +206,39 @@ async function dosDir(img) {
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
   '.png': 'image/png', '.svg': 'image/svg+xml', '.bin': 'application/octet-stream', '.zip': 'application/zip', '.wasm': 'application/wasm' };
 
-/** Serve the repository, and for a Linux image its file tree (lstat/list/read), on a free port. */
-function serve(img, host) {
+/** Serve the repository, and for a Linux image its file tree (lstat/list/read), on a free port.
+ *  With no image, every image: /oasis-images.json lists them and ?img=<name> picks a tree. */
+const hosts = new Map();
+async function hostFor(name) {
+  if (!hosts.has(name)) hosts.set(name, (async () => { const m = findImage(name); await pull(m); return hostOver(await linuxRoot(m)); })());
+  return hosts.get(name);
+}
+function serve(img, host, port = 0) {
   return new Promise((ok) => {
-    const srv = createServer((req, res) => {
+    const srv = createServer(async (req, res) => {
       const u = new URL(req.url, 'http://x');
       const send = (code, body, type = 'application/octet-stream') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(body); };
       if (u.pathname.startsWith('/oasis-fs/')) {
-        if (!host) return send(404, 'no file system');
-        const p = u.searchParams.get('p') || '/', op = u.pathname.slice(10);
+        const p = u.searchParams.get('p') || '/', op = u.pathname.slice(10), want = u.searchParams.get('img');
         try {
-          if (op === 'lstat') return send(200, JSON.stringify(host.lstat(p)), 'application/json');
-          if (op === 'list') return send(200, JSON.stringify(host.list(p)), 'application/json');
-          if (op === 'read') return send(200, Buffer.from(host.read(p)));
+          const h = want ? await hostFor(want) : host;
+          if (!h) return send(404, 'no file system');
+          if (op === 'lstat') return send(200, JSON.stringify(h.lstat(p)), 'application/json');
+          if (op === 'list') return send(200, JSON.stringify(h.list(p)), 'application/json');
+          if (op === 'read') return send(200, Buffer.from(h.read(p)));
         } catch (e) { return send(404, String(e.message)); }
         return send(400, 'unknown');
       }
-      if (u.pathname === '/oasis-image.json') return send(200, JSON.stringify(img), 'application/json');
+      if (u.pathname === '/oasis-image.json') {
+        const want = u.searchParams.get('img');
+        try { return send(200, JSON.stringify(want ? { ...findImage(want), name: want } : img), 'application/json'); } catch (e) { return send(404, e.message); }
+      }
+      if (u.pathname === '/oasis-images.json') return send(200, JSON.stringify(listImages().map((n) => { const m = findImage(n); return { name: n, title: m.title, world: m.world, year: m.year, author: m.author, thumb: m.thumb, output: m.output }; })), 'application/json');
       const p = join(ROOT, decodeURIComponent(u.pathname));
       if (!p.startsWith(ROOT) || !existsSync(p) || statSync(p).isDirectory()) return send(404, 'not found');
       send(200, readFileSync(p), MIME[extname(p)] || 'application/octet-stream');
     });
-    srv.listen(0, '127.0.0.1', () => ok({ srv, port: srv.address().port }));
+    srv.listen(port, '127.0.0.1', () => ok({ srv, port: srv.address().port }));
   });
 }
 
@@ -303,6 +315,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (cmd === 'list') for (const n of listImages()) { const m = findImage(n); console.log(`${n.padEnd(28)} ${m.world.padEnd(6)} ${m.title || ''}`); }
     else if (cmd === 'inspect') { const m = findImage(name); console.log(JSON.stringify(m, null, 2)); for (const l of m.layers || []) if (needsPull(l)) console.log((existsSync(join(cacheDir(l), '.oasis-done')) ? 'cached  ' : 'remote  ') + JSON.stringify(l)); }
     else if (cmd === 'pull') { await pull(findImage(name)); console.error('oasis: pulled'); }
+    else if (cmd === 'serve') {
+      const port = Number(process.env.OASIS_PORT) || 0;
+      const { port: p } = await serve(null, null, port);
+      const url = `http://127.0.0.1:${p}/machines.html`;
+      console.log(url);
+      if ([name, ...rest].includes('--open')) openWindow(url, 'MIRAGE');
+      await new Promise(() => {});
+    }
     else if (cmd === 'run') { SERVE_ONLY = flags.includes('--serve'); await run(findImage(name), args, flags.includes('--window') || SERVE_ONLY ? 'window' : flags.includes('--terminal') ? 'terminal' : null); }
     else { console.error('usage: node tools/oasis.mjs list | inspect <image> | pull <image> | run <image> [--window|--terminal] [args...]'); process.exitCode = 2; }
   } catch (e) { console.error(String(e.message || e)); process.exitCode = 1; }

@@ -1,11 +1,24 @@
 {
   "oasis": 1,
   "title": "Debian 12 (bookworm), i386, from Docker's image",
+  "year": 2023,
+  "author": "Debian",
   "world": "linux",
-  "machine": { "cpu": "686" },
+  "machine": {
+    "cpu": "686"
+  },
   "layers": [
-    { "docker": "i386/debian:bookworm-slim", "platform": "linux/386" }
+    {
+      "docker": "i386/debian:bookworm-slim",
+      "platform": "linux/386"
+    }
   ],
-  "entry": { "run": "/bin/bash", "cwd": "/root", "env": { "TERM": "dumb" } },
+  "entry": {
+    "run": "/bin/bash",
+    "cwd": "/root",
+    "env": {
+      "TERM": "dumb"
+    }
+  },
   "output": "terminal"
 }

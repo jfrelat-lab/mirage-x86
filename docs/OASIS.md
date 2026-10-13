@@ -12,7 +12,14 @@ node tools/oasis.mjs pull linux/doom-1994         fetch its layers from their or
 node tools/oasis.mjs run dos/c-dogs               in a window (the image's `output`)
 node tools/oasis.mjs run linux/doom-1994          id's Linux DOOM of 1994, in a window
 node tools/oasis.mjs run linux/debian-bookworm -c 'echo hello'      in this terminal
+node tools/oasis.mjs serve --open                 every image, in machines.html (OASIS_PORT to fix the port)
 ```
+
+`machines.html` is MIRAGE's machines on one page — DOS, Linux, the bare PC — each choosing its
+programs on its own screen (the DOS shell's DIR, a shell's `ls -l`, a BIOS boot menu) and on a shelf
+of cards beside it. DOS and the PC take their titles from `examples/manifest.json` and work from any
+static host; the Linux machine reads its images from the OASIS server, so it needs `oasis serve`
+until layers can be hosted beside the page (O3).
 
 ## The window
 

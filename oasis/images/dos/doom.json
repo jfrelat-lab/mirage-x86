@@ -1,13 +1,24 @@
 {
   "oasis": 1,
   "title": "DOOM 1.9 (shareware)",
+  "year": 1993,
+  "author": "id Software",
+  "thumb": "examples/thumbs/doom.png",
   "world": "dos",
-  "machine": { "cpu": "586" },
+  "machine": {
+    "cpu": "586"
+  },
   "layers": [
-    { "zip": "examples/games/doom19s.zip" },
-    { "file": "examples/games/doom/DEFAULT.CFG" }
+    {
+      "zip": "examples/games/doom19s.zip"
+    },
+    {
+      "file": "examples/games/doom/DEFAULT.CFG"
+    }
   ],
-  "entry": { "run": "DOOM.EXE" },
+  "entry": {
+    "run": "DOOM.EXE"
+  },
   "output": "window",
   "license": "examples/licenses/doom.txt"
 }

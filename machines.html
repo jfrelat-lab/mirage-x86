@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MIRAGE — machines</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101820'/><text x='1.5' y='12' font-family='monospace' font-size='11' fill='%2300d0a0'>M:</text></svg>">
+<!--
+  MIRAGE's machines on one page: DOS, Linux and the bare PC. You pick a MACHINE before you pick a
+  program, because that is the choice MIRAGE makes — the same CPU under a DOS implemented in
+  JavaScript, under Linux system calls implemented in JavaScript, or under nothing but a BIOS. Each
+  machine's own screen is where its programs are chosen, the way that machine chose them: the DOS
+  shell's DIR, a BIOS boot menu, a shell's ls -l. The shelf beside it lists the same programs as
+  cards. (The idea of the machine rail comes from PRISM, MIRAGE's sibling project.)
+-->
+<style>
+  :root {
+    --bg: #0a0e12; --panel: #0f1620; --panel-2: #141d28; --edge: #1f2c38;
+    --ink: #c6d4de; --dim: #6f8494; --accent: #00d0a0; --warn: #e3b341; --err: #f28b82;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+         display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
+
+  header { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; overflow-x: auto;
+           padding: 9px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); }
+  header > * { flex: none; }
+  .logo { font-weight: 700; letter-spacing: .14em; color: var(--accent); }
+  .logo small { display: block; font-weight: 400; letter-spacing: 0; color: var(--dim); font-size: 10px; }
+  .sep { flex: 1; }
+  header a { color: var(--dim); text-decoration: none; border: 1px solid var(--edge); border-radius: 5px; padding: 5px 9px; }
+  header a:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* The machines: the one this page IS is lit. */
+  #rail { display: flex; gap: 6px; }
+  .machine { display: grid; gap: 2px; text-align: left; cursor: pointer; font: inherit; color: var(--ink);
+             background: var(--panel-2); border: 1px solid var(--edge); border-radius: 7px; padding: 6px 11px 7px; text-decoration: none; }
+  .machine:hover { border-color: var(--accent); }
+  .machine[aria-current="page"] { border-color: var(--accent); background: #10261f; }
+  .machine .mname { display: flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: .04em; }
+  .machine .dot { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--dim); flex: none; }
+  .machine[aria-current="page"] .dot { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .machine .msub { font-size: 10px; color: var(--dim); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 26%); min-height: 0; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); } aside { border-left: none; border-top: 1px solid var(--edge); } }
+
+  /* The machine's window: its title strip, then its screen. */
+  #vm { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; padding: 12px; }
+  .vmtop { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto; background: var(--panel);
+           border: 1px solid var(--edge); border-bottom: none; border-radius: 9px 9px 0 0; padding: 7px 10px; }
+  .vmtop > * { flex: none; }
+  #vmName { font-weight: 700; letter-spacing: .05em; }
+  .pill { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--edge); border-radius: 99px; padding: 3px 8px; }
+  .pill.on { color: var(--accent); border-color: #1d6a55; }
+  .pill.err { color: var(--err); border-color: #7a3a36; }
+  #vmSpec { color: var(--dim); font-size: 11px; }
+  button { font: inherit; color: var(--ink); background: var(--panel-2); border: 1px solid var(--edge); border-radius: 5px; padding: 4px 9px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button[aria-pressed="true"] { border-color: #1d6a55; color: var(--accent); }
+
+  #stage { position: relative; display: grid; place-items: center; min-height: 0; overflow: hidden; background: #000;
+           border: 1px solid var(--edge); border-radius: 0 0 9px 9px; }
+  #screen { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; background: #000; outline: none; }
+  #stage:fullscreen { background: #000; }
+  #stage:fullscreen #screen { width: 100vw; height: 100vh; }
+  #under { color: var(--dim); padding: 6px 2px 0; font-size: 11px; display: flex; gap: 14px; white-space: nowrap; overflow: hidden; }
+  #under #status { color: var(--ink); }
+
+  /* A chooser drawn over the screen, in the idiom of the machine. */
+  .over { position: absolute; inset: 0; overflow: auto; }
+  .bios { background: #0000aa; color: #fff; font: 16px/1.25 "Px437 IBM VGA8", ui-monospace, Menlo, monospace; padding: 4% 6%; }
+  .bios h1 { font: inherit; text-align: center; background: #aaa; color: #000; margin: 0 0 1em; padding: .15em; }
+  .bios .hint { color: #aaa; margin-top: 1.2em; }
+  .bios ul { list-style: none; margin: 0; padding: 0; }
+  .bios li { padding: .1em .6em; cursor: pointer; display: flex; gap: 1em; }
+  .bios li .kind { color: #ff5; width: 11ch; flex: none; }
+  .bios li.sel { background: #aaa; color: #000; }
+  .bios li.sel .kind { color: #000; }
+  .term { background: #000; color: #aaa; font: 15px/1.3 ui-monospace, Menlo, monospace; padding: 2% 3%; white-space: pre; }
+  .term .b { color: #fff; } .term .g { color: #5f5; } .term .y { color: #ff5; } .term a { color: #5ff; cursor: pointer; text-decoration: none; }
+  .term a:hover { text-decoration: underline; }
+  .term .note { white-space: normal; color: #aaa; max-width: 70ch; }
+
+  /* The shelf: the same programs, as cards. */
+  aside { border-left: 1px solid var(--edge); background: var(--panel); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+  aside .bar { padding: 9px 12px; border-bottom: 1px solid var(--edge); color: var(--dim); }
+  #shelf { overflow-y: auto; padding: 10px; display: grid; gap: 8px; align-content: start; }
+  .card { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: center; cursor: pointer; text-align: left;
+          background: var(--panel-2); border: 1px solid var(--edge); border-radius: 8px; padding: 6px; color: var(--ink); font: inherit; }
+  .card:hover { border-color: var(--accent); }
+  .card[aria-selected="true"] { border-color: var(--accent); background: #10261f; }
+  .card img, .card .noimg { width: 96px; height: 60px; object-fit: cover; image-rendering: pixelated; border-radius: 4px; background: #000; }
+  .card .noimg { display: grid; place-items: center; color: var(--dim); font-size: 10px; }
+  .card .t { font-weight: 600; display: block; }
+  .card .s { color: var(--dim); font-size: 11px; margin-top: 2px; display: block; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">▚ MIRAGE<small>x86 → JavaScript</small></span>
+  <nav id="rail" aria-label="Machines"></nav>
+  <span class="sep"></span>
+  <a href="./">Home</a>
+  <a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a>
+</header>
+<main>
+  <div id="vm">
+    <div class="vmtop">
+      <span id="vmName">—</span>
+      <span class="pill" id="vmState">powered off</span>
+      <span id="vmSpec"></span>
+      <span class="sep"></span>
+      <button id="pause">Pause</button>
+      <button id="sound" aria-pressed="true" title="Sound Blaster and speaker">Sound</button>
+      <button id="fullscreen" title="Fullscreen (Alt+Enter)">Fullscreen</button>
+    </div>
+    <div id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas><div id="over" class="over" hidden></div></div>
+    <div id="under"><span id="status">starting…</span><span id="hint"></span></div>
+  </div>
+  <aside>
+    <div class="bar" id="shelfTitle">Programs</div>
+    <div id="shelf"></div>
+  </aside>
+</main>
+<script type="module" src="./src/machines.js"></script>
+</body>
+</html>

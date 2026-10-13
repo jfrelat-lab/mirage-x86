@@ -150,10 +150,33 @@ export class Mirage {
     }
   }
 
+  /**
+   * A title that lives in one ZIP archive (the examples' kind "zip"): C:\GAMES\<NAME> exists at once,
+   * so DIR lists it, and the archive — plus `adds`, files put beside it — is fetched and unpacked the
+   * first time a command touches it. `run` makes NAME a command of its own, typed anywhere.
+   */
+  registerTitle({ name, zip, adds = [], run, args }) {
+    name = String(name).toUpperCase();
+    if (!this._games) this._games = new Map();
+    this._games.set(name, { zip, adds, files: [], loaded: false, pending: null });
+    this._mkdirp('\\GAMES\\' + name);
+    if (run && this.shell) this.shell.aliases.set(name, `GAMES\\${name}\\${run}` + (args ? ' ' + args : ''));
+  }
+
   /** Fetch one title's files into the VFS, once. Null when there is nothing to wait for. */
   ensureGame(title) {
     const g = this._games && this._games.get(String(title).toUpperCase());
     if (!g || g.loaded) return null;
+    if (!g.pending && g.zip) {
+      const name = String(title).toUpperCase();
+      g.pending = (async () => {
+        await this.mountZip(name + '.ZIP', new Uint8Array(await (await fetch(g.zip)).arrayBuffer()));
+        for (const u of g.adds) {
+          const bytes = new Uint8Array(await (await fetch(u)).arrayBuffer());
+          this.vfs.addFile(`\\GAMES\\${name}\\` + VFS.dosName(u.split('/').pop().split('?')[0]), bytes);
+        }
+      })().then(() => { g.loaded = true; });
+    }
     if (!g.pending) {
       g.pending = Promise.all(g.files.map(async (f) => {
         try {
@@ -210,6 +233,8 @@ export class Mirage {
   _loop() {
     this._raf = requestAnimationFrame(() => this._loop());
     const now = performance.now();
+    // Paused: the picture stays, the guest's clock does not move (machines.html's Pause button).
+    if (this.paused) { this._lastTick = this._lastLoop = now; return; }
 
     // The timer interrupt is paced at the guest's programmed PIT rate (default 18.2 Hz; games such
     // as Dune/Cosmo reprogram counter 0 to 200–1000 Hz — machine.pitReload tracks it, capped).

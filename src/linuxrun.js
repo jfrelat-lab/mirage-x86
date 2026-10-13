@@ -1,0 +1,89 @@
+// linuxrun.js — an OASIS Linux image in the browser: MIRAGE-LINUX on a canvas, its keys from the page.
+//
+// The image's manifest and file tree come from the OASIS server (tools/oasis.mjs): /oasis-fs/{lstat,
+// list,read}?p=<path>[&img=<name>]. MIRAGE-LINUX's file system asks synchronously, as a disk would
+// answer, so the requests are synchronous too (XMLHttpRequest on the page's own thread). Used by
+// linux.html (one image) and machines.html (the Linux machine).
+import { Machine } from './machine.js';
+import { installBIOS } from './bios.js';
+import { installLinux } from './linux.js';
+import { Video } from './video.js';
+import { Keyboard } from './keyboard.js';
+
+/** A synchronous view of the image's tree, as lx.host wants it. */
+export function oasisHost(imgName) {
+  const q = (p) => `p=${encodeURIComponent(p)}` + (imgName ? `&img=${encodeURIComponent(imgName)}` : '');
+  const sync = (op, p, binary) => {
+    const x = new XMLHttpRequest();
+    x.open('GET', `/oasis-fs/${op}?${q(p)}`, false);
+    if (binary) x.overrideMimeType('text/plain; charset=x-user-defined');
+    x.send();
+    if (x.status !== 200) return null;
+    if (!binary) return JSON.parse(x.responseText);
+    const s = x.responseText, b = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff;
+    return b;
+  };
+  return { lstat: (p) => sync('lstat', p), list: (p) => sync('list', p) || [], read: (p) => sync('read', p, true) };
+}
+
+/**
+ * Start an image's entry on `canvas`. `onOutput(text)` gets what it writes to its console or stdout,
+ * `onStatus(text)` a line a second (speed) and the end. Returns { mc, lx, stop }.
+ */
+export async function startLinux({ canvas, img, host, onOutput = () => {}, onStatus = () => {} }) {
+  const m = img.machine || {};
+  const mc = new Machine({ memSize: (m.mem || 64) << 20, cpu: m.cpu || '686' });
+  installBIOS(mc);
+  for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
+    try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }
+  }
+  const lx = installLinux(mc, { realTime: true, onOutput: (fd, b) => onOutput(new TextDecoder().decode(b)) });
+  lx.host = host;
+  lx.epoch = Math.floor(Date.now() / 1000);
+  const e = img.entry || {};
+  lx.chdir(e.cwd || '/');
+  if (e.console) lx.consoleStdio();
+  const env = ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`)];
+  const image = lx.readFile(e.run);
+  if (!image) throw new Error(`${e.run}: not in the image`);
+  lx.load(image, [e.run, ...(e.args || [])], env);
+
+  const video = new Video(mc, canvas); video.font = mc.font;
+  // The page's keys go to the console as the PC keyboard's scancodes (src/keyboard.js), and from
+  // there as the kernel would deliver them in the console's current mode (K_MEDIUMRAW for SVGAlib).
+  const keyboard = new Keyboard({ keyQueue: [], pushScancodes: (a) => lx.keyScancodes(a) });
+  keyboard.attach(window);
+
+  // The CPU runs in ~12 ms chunks chained through a MessageChannel; requestAnimationFrame only draws.
+  const tick = new MessageChannel();
+  let fault = null, stopped = false, paused = false;
+  mc.onError = (err) => { fault = err; console.error(err); };
+  tick.port1.onmessage = () => {
+    if (stopped) return;
+    const t0 = performance.now();
+    while (!paused && !lx.done && !fault && performance.now() - t0 < 12) mc.runSlice(20000);
+    if (lx.done) onStatus(`exited with status ${lx.status}` + (lx.signal ? ` (signal ${lx.signal})` : ''));
+    else if (fault) onStatus(String(fault.message || fault).split('\n')[0]);
+    else if (paused) setTimeout(() => tick.port2.postMessage(0), 50);
+    else tick.port2.postMessage(0);
+  };
+  tick.port2.postMessage(0);
+  let frames = 0, last = performance.now(), c0 = 0, raf = 0;
+  const draw = () => {
+    if (stopped) return;
+    video.render(); frames++;
+    const now = performance.now();
+    if (now - last > 1000 && !lx.done && !fault) {
+      onStatus(paused ? 'paused' : `${((mc.cpu.cycles - c0) / (now - last) / 1000).toFixed(1)} M instructions/s · ${frames} fps`);
+      frames = 0; last = now; c0 = mc.cpu.cycles;
+    }
+    raf = requestAnimationFrame(draw);
+  };
+  draw();
+  return {
+    mc, lx,
+    pause(on) { paused = on; },
+    stop() { stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); },
+  };
+}

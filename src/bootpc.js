@@ -18,7 +18,7 @@ import { installBIOS } from './bios.js';
 import { installMouse } from './mouse.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
-import { bootSector, bootCD } from './boot.js';
+import { bootSector, bootCD, attachImage as attach } from './boot.js';
 import { installAudio } from './audio.js';
 import { AudioOut } from './audio-out.js';
 import { installFullscreen } from './fullscreen.js';
@@ -29,7 +29,6 @@ installFullscreen($('stage'), $('fullscreen'));
 const cpuSel = $('cpu'), memSel = $('mem'), clockSel = $('clock'), bootBtn = $('boot'), pauseBtn = $('pause');
 const mouseHint = $('mousehint'), pciBox = $('pci'), comBox = $('com1'), serialPane = $('serial'), serialOut = $('serialOut'), serialIn = $('serialIn');
 const TICK_MS = 1000 / 18.2065;
-const FLOPPIES = [163840, 184320, 327680, 368640, 737280, 1228800, 1474560, 2949120];
 const FRAME_MS = 12;
 
 let session = null;                    // { mc, video, keyboard, raf, paused, name, t0 }
@@ -56,22 +55,6 @@ async function listImages() {
 }
 
 // ---- disk geometry: a hard disk's comes from its partition table, like bootshot.mjs -------------
-function attach(mc, bytes) {
-  if (bytes.length <= 2949120) {
-    if (!FLOPPIES.includes(bytes.length)) { const p = new Uint8Array(1474560); p.set(bytes.subarray(0, 1474560)); bytes = p; }
-    mc.disk.attach(0, bytes);
-    return { bytes, drive: 0x00 };
-  }
-  const dv = new DataView(bytes.buffer, bytes.byteOffset), e = 0x1be;
-  const lba = dv.getUint32(e + 8, true), n = dv.getUint32(e + 12, true), sh = bytes[e + 1], ss = bytes[e + 2] & 63;
-  const eh = bytes[e + 5], es = bytes[e + 6] & 63, ec = bytes[e + 7] | ((bytes[e + 6] & 0xc0) << 2);
-  const ok = (bytes[e] === 0 || bytes[e] === 0x80) && bytes[e + 4] && n && ec;
-  const spt = ok && sh ? (lba - (ss - 1)) / sh : 63;
-  const heads = ok ? Math.round(((lba + n - 1 - (es - 1)) / spt - eh) / ec) : 16;
-  const g = Number.isInteger(spt) && spt > 0 && heads > 0 && heads <= 255 ? { spt, heads } : { spt: 63, heads: 16 };
-  mc.disk.attach(0x80, bytes, { cyl: Math.floor(bytes.length / (g.heads * g.spt * 512)), heads: g.heads, spt: g.spt, type: 3 });
-  return { bytes, drive: 0x80 };
-}
 
 async function loadFonts(mc) {
   for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {

@@ -6,6 +6,7 @@
 
 export class Shell {
   constructor(machine) {
+    this.aliases = new Map();          // NAME -> command line (Mirage.registerTitle)
     this.machine = machine;
     this.bios = machine.bios;
     this.dos = machine.dos;
@@ -51,6 +52,10 @@ export class Shell {
    *  sits in 'loading', where pump() ignores keys and the UI's run loop leaves the CPU alone, so
    *  nothing can observe a half-mounted directory. With no hook this is just submit(). */
   dispatch(line) {
+    // A title's own name runs it from anywhere (Mirage.registerTitle): CDOGS is GAMES\CDOGS\CDOGS.
+    const sp = line.trim().indexOf(' '), word = (sp < 0 ? line.trim() : line.trim().slice(0, sp)).toUpperCase();
+    const alias = this.aliases.get(word);
+    if (alias && !this.vfs.readFile(word + '.COM') && !this.vfs.readFile(word + '.EXE')) line = alias + (sp < 0 ? '' : line.trim().slice(sp));
     const pre = this.beforeCommand && this.beforeCommand(line);
     if (!pre || typeof pre.then !== 'function') { this.submit(line); return; }
     this.state = 'loading';
