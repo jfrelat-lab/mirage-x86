@@ -3,3 +3,21 @@ nav.site { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font: 
 nav.site a { color: #6f8494; text-decoration: none; border: 1px solid transparent; border-radius: 5px; padding: 4px 8px; white-space: nowrap; }
 nav.site a:hover { color: #00d0a0; border-color: #1f2c38; }
 nav.site a[aria-current] { color: #00d0a0; border-color: #1d6a55; }
+
+/* The site's header: the same height, logo and place for the navigation on every page. `:is(#_, header)`
+   gives these rules an ID's weight, above the pages' own `#bar` and `#top`, without naming each page. */
+:is(#_, header).site { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 16px; flex-wrap: nowrap;
+  background: #0f1620; border-bottom: 1px solid #1c2a36; box-sizing: border-box; }
+:is(#_, header).site .logo { flex: none; display: block; border: none; padding: 0; text-decoration: none; color: #00d0a0;
+  font: 700 14px/1.15 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .14em; }
+:is(#_, header).site .logo:hover { filter: brightness(1.25); }
+:is(#_, header).site .logo small { display: block; margin-top: 2px; font-weight: 400; font-size: 10px; letter-spacing: 0; color: #6f8494; }
+:is(#_, header).site .page { color: #6f8494; font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+:is(#_, header).site nav.site { margin-left: auto; flex: none; }
+:is(#_, header).site nav.site ~ nav.site, :is(#_, header).site .spacer { display: none; }
+:is(#_, header).site .grow { flex: 1; }
+/* A narrow window: the navigation goes under the logo instead of off the edge. */
+@media (max-width: 720px) {
+  :is(#_, header).site { flex-wrap: wrap; padding: 8px 12px; row-gap: 6px; }
+  :is(#_, header).site nav.site { margin-left: -8px; width: 100%; order: 9; }
+}

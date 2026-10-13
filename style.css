@@ -38,6 +38,8 @@ body {
 #monitor { flex: 1; display: flex; align-items: center; justify-content: center; gap: 18px; padding: 22px; min-height: 0; }
 
 #stage { position: relative; height: 100%; aspect-ratio: 4 / 3; }
+/* A window narrower than 4:3 of its height (a phone upright): the screen takes the width instead. */
+@media (max-aspect-ratio: 4 / 3) { #stage { height: auto; width: 100%; } }
 #screen {
   width: 100%; height: 100%;
   image-rendering: pixelated;

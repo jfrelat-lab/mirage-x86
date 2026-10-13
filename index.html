@@ -5,6 +5,7 @@
 <title>MIRAGE — an x86 PC in plain JavaScript</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="An x86 PC in plain JavaScript: a dynamic recompiler from x86 to JavaScript, a built-in DOS, and a bare PC that boots unmodified operating systems.">
+<link rel="stylesheet" href="site.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101820'/><text x='1.5' y='12' font-family='monospace' font-size='11' fill='%2300d0a0'>M:</text></svg>">
 <style>
   :root { --bg: #0a0e12; --panel: #0f1620; --line: #1c2a36; --ink: #b8c8d4; --dim: #6a8090; --accent: #00d0a0; }
@@ -15,8 +16,6 @@
   code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em; }
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 12px 24px;
            background: var(--panel); border-bottom: 1px solid var(--line); }
-  header .logo { color: var(--accent); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: 1px; }
-  header nav { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; font-size: 14px; }
   main { max-width: 1120px; margin: 0 auto; padding: 0 24px 48px; }
   .hero { padding: 48px 0 28px; }
   .hero h1 { margin: 0 0 12px; font-size: clamp(26px, 4vw, 40px); line-height: 1.15; color: #e6eef4; }
@@ -66,16 +65,9 @@
 </style>
 </head>
 <body>
-<header>
-  <span class="logo">▚ MIRAGE</span>
-  <nav>
-    <a href="machines.html">Machines</a>
-    <a href="oasis.html">OASIS images</a>
-    <a href="dos.html">DOS player</a>
-    <a href="boot.html">Bare PC</a>
-    <a href="https://github.com/jfrelat-lab/mirage-x86">Source</a>
-    <a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Documentation</a>
-  </nav>
+<header class="site">
+  <span class="logo">▚ MIRAGE<small>x86 → JavaScript</small></span>
+  <nav class="site" aria-label="Site"><a href="machines.html">Machines</a><a href="oasis.html">OASIS</a><a href="dos.html">DOS player</a><a href="boot.html">Bare PC</a><a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a><a href="https://github.com/jfrelat-lab/mirage-x86">Source</a></nav>
 </header>
 
 <main>
