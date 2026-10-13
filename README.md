@@ -93,6 +93,7 @@ Reference — the present state, kept current:
 - [HARDWARE.md](docs/HARDWARE.md) — the machine a guest sees, and what each part was checked against.
 - [COMPATIBILITY.md](docs/COMPATIBILITY.md), [KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) — what runs; what does not, and why.
 - [TESTING.md](docs/TESTING.md) — the gates and the comparison tools.
+- [COMPARISON.md](docs/COMPARISON.md) — MIRAGE beside QEMU, DOSBox-X and v86: modes, CPU, devices, conformance, speed.
 - [ROADMAP.md](docs/ROADMAP.md) — what is open.
 
 Record — [docs/notes/](docs/notes/README.md): the investigations, measurements and audits as they
