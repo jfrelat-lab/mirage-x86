@@ -60,6 +60,9 @@
   .stats b { display: block; font: 700 26px ui-monospace, Menlo, monospace; color: #e6eef4; }
   .stats span { color: var(--dim); font-size: 13px; }
   .more { margin: 10px 0 0; font-size: 14px; }
+  .fine { color: var(--dim); font-size: 12px; margin: 12px 0 0; }
+  #gallery .shot img { image-rendering: auto; }   /* desktops of 640 to 1024 pixels shown at 250: smoothed, or lines drop out */
+  .card .run.ghost { background: none; border: 1px solid var(--accent); color: var(--accent); }
   footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
   @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; } }
 </style>
@@ -106,6 +109,16 @@
       boot-sector programs that their authors publish under free licences. Each card links to the licence and
       the source. The screenshots were taken by MIRAGE itself.</p>
     <div class="grid" id="grid"><p class="lead">Loading the examples…</p></div>
+  </section>
+
+  <section id="booted">
+    <h2>Booted by MIRAGE</h2>
+    <p class="lead">Operating systems MIRAGE starts from their own disks to their desktop. Those disks are not ours
+      to share, so these are screenshots — taken by MIRAGE itself — and the button opens the bare PC set up for
+      that system: boot your own copy, nothing is uploaded.</p>
+    <div class="grid" id="gallery"></div>
+    <p class="fine">Screenshots of Microsoft products used with permission from Microsoft. Windows is a trademark of
+      the Microsoft group of companies; MIRAGE is not affiliated with or endorsed by Microsoft.</p>
   </section>
 
   <section>
@@ -172,6 +185,20 @@
     }
     return `boot.html?img=${encodeURIComponent(e.file)}&cpu=${e.cpu || 386}&mem=${e.mem || 4}`;
   };
+  // Systems booted to their desktop, from examples/gallery.json: a screenshot and the bare PC set up for them.
+  fetch('examples/gallery.json').then((r) => r.json()).then((list) => {
+    document.getElementById('gallery').innerHTML = list.map((g) => {
+      const q = new URLSearchParams({ cpu: g.cpu, mem: g.mem, pci: g.pci ? '1' : '0', for: g.title });
+      return `<article class="card">
+        <span class="shot"><img src="${esc(g.thumb)}" alt="${esc(g.title)} on MIRAGE" loading="lazy"></span>
+        <div class="body">
+          <h3>${esc(g.title)} <span class="tag">your image</span></h3>
+          <div class="meta">${esc(g.vendor)}, ${esc(g.year)}</div>
+          <p class="blurb">${esc(g.blurb)}</p>
+          <div class="actions"><a class="run ghost" href="boot.html?${q}">Boot your copy</a><span class="meta">${esc(g.cpu)} · ${esc(g.mem)} MB${g.pci ? ' · PCI' : ''}</span></div>
+        </div></article>`;
+    }).join('');
+  }).catch(() => { document.getElementById('booted').hidden = true; });
   fetch('examples/manifest.json').then((r) => r.json()).then((list) => {
     document.getElementById('grid').innerHTML = list.map((e) => {
       const who = e.author + (e.year ? ', ' + e.year : '');

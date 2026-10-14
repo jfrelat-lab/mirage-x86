@@ -1,0 +1,52 @@
+[
+  {
+    "id": "win101",
+    "title": "Windows 1.01",
+    "vendor": "Microsoft",
+    "year": 1985,
+    "thumb": "examples/thumbs/os-win101.png",
+    "cpu": "386",
+    "mem": 16,
+    "blurb": "The MS-DOS Executive in EGA 640×350, from Windows 1.01's own floppy disk: there in 15 guest seconds."
+  },
+  {
+    "id": "win2",
+    "title": "Windows 2",
+    "vendor": "Microsoft",
+    "year": 1987,
+    "thumb": "examples/thumbs/os-win2.png",
+    "cpu": "386",
+    "mem": 16,
+    "blurb": "The MS-DOS Executive in VGA, overlapping windows at last, from a hard disk with MS-DOS."
+  },
+  {
+    "id": "win30",
+    "title": "Windows 3.0",
+    "vendor": "Microsoft",
+    "year": 1990,
+    "thumb": "examples/thumbs/os-win30.png",
+    "cpu": "386",
+    "mem": 16,
+    "blurb": "The Program Manager in VGA, from a hard disk with MS-DOS: the Windows that sold."
+  },
+  {
+    "id": "win31",
+    "title": "Windows 3.1",
+    "vendor": "Microsoft",
+    "year": 1992,
+    "thumb": "examples/thumbs/os-win31.png",
+    "cpu": "386",
+    "mem": 16,
+    "blurb": "The Program Manager in standard mode at 1024×768 in 256 colours (SVGA256.DRV), pixel for pixel the screen QEMU draws."
+  },
+  {
+    "id": "win98",
+    "title": "Windows 98",
+    "vendor": "Microsoft",
+    "year": 1998,
+    "thumb": "examples/thumbs/os-win98.png",
+    "cpu": "586",
+    "mem": 128,
+    "blurb": "The desktop, from the same hard-disk image v86 boots, in about 100 guest seconds: paging, V86 mode, the VMM and its drivers."
+  }
+]

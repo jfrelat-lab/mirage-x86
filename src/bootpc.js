@@ -236,4 +236,10 @@ if (q.get('mem')) memSel.value = q.get('mem');
 if (q.get('clock')) clockSel.value = q.get('clock');
 if (q.get('pci')) pciBox.checked = q.get('pci') === '1';
 if (q.get('com1')) comBox.checked = q.get('com1') === '1';
+// From the home page's gallery: the machine is set up for a system whose disk the visitor brings.
+if (q.get('for') && !q.get('img')) {
+  const idle = $('idle'), b = idle.querySelector('b');
+  b.textContent = `Set up for ${q.get('for')}`;
+  idle.querySelector('p').textContent = `CPU ${cpuSel.value}, ${memSel.value} MiB${pciBox.checked ? ', PCI' : ''}. Open your own disk image of ${q.get('for')} (Open a file…), then press Boot.`;
+}
 listImages().then(() => { if (q.get('img')) { pick.value = q.get('img'); tryBoot(); } });
