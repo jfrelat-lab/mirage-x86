@@ -4,7 +4,8 @@
 //
 //   MEM=64 MIRAGE_CPU=586 STEP=300 node bootshot.mjs <image> <seconds> <outdir>
 // ENTER=5 presses Enter at guest second 5 (BeOS's partition menu waits for it); ENTER=200,260,320
-// presses it at each (Windows 95's three dialogs before its desktop).
+// presses it at each (Windows 95's three dialogs before its desktop); ESC=1120 presses Esc likewise
+// (Windows ME's Add New Hardware wizard).
 // With MIRAGE_SERIAL=1, what the guest sends to COM1 is written to <outdir>/serial.txt (ReactOS's debug log).
 // An .iso image boots El Torito (src/boot.js bootCD); CDROM=<iso> puts a disc in the drive beside a disk.
 import { readFileSync, mkdirSync, writeFileSync, appendFileSync, openSync, readSync, fstatSync, closeSync } from 'fs';
@@ -47,11 +48,14 @@ const v = new Video(mc, canvas); v.font = mc.font;
 const c = mc.cpu, sec = 18.2065 * mc.pitBase, t0 = Date.now(), h = (x, n = 8) => (x >>> 0).toString(16).padStart(n, '0');
 const enters = (process.env.ENTER || '').split(',').filter(Boolean).map((x) => Number(x) * sec);
 let enterAt = enters.shift() || 0;
+const escs = (process.env.ESC || '').split(',').filter(Boolean).map((x) => Number(x) * sec);
+let escAt = escs.shift() || 0;
 for (let t = STEP; t <= SECS && !fault; t += STEP) {
   // HLT with IF clear never wakes (a kernel's halt after a crash): guest time stops for good, and
   // waiting for the next STEP would spin for ever on the host. Say so and stop.
   const end = t * sec;
   while (!fault && c.cycles < end && !(c.halted && !(c.flags & 0x200))) {
+    if (escAt && c.cycles > escAt) { escAt = escs.shift() || 0; mc.pushScancodes([0x01, 0x81]); mc.keyQueue.push({ scan: 0x01, ascii: 27 }); }
     if (enterAt && c.cycles > enterAt) { enterAt = enters.shift() || 0; mc.pushScancodes([0x1c, 0x9c]); mc.keyQueue.push({ scan: 0x1c, ascii: 13 }); }
     mc.runSlice(20000); mc.pumpKeyboard();
   }

@@ -40,6 +40,16 @@
     "blurb": "The Program Manager in standard mode at 1024×768 in 256 colours (SVGA256.DRV), pixel for pixel the screen QEMU draws."
   },
   {
+    "id": "win95",
+    "title": "Windows 95",
+    "vendor": "Microsoft",
+    "year": 1995,
+    "thumb": "examples/thumbs/os-win95.png",
+    "cpu": "586",
+    "mem": 64,
+    "blurb": "The desktop at 1024×768 in 256 colours, its Sound Blaster 16 found (the volume icon), after the network and clock dialogs a machine without a network card shows."
+  },
+  {
     "id": "win98",
     "title": "Windows 98",
     "vendor": "Microsoft",
