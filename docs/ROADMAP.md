@@ -13,7 +13,7 @@ Effort: **S** a few hours, **M** a day or two, **L** more.
 |---|---|---|
 | L1 | Windows 2000: find what it waits for after its delay calibration (compare with v86, which boots the same image) | M |
 | L2 | ACPI: the tables and the PIIX4 power-management function — ReactOS, and probably Windows XP | L |
-| L3 | A clock rate that goes with the CPU profile, so a Pentium is not given a 386's 3.3 MIPS | S |
+| L3 | Optional: a cycle rate per CPU profile in turbo and headless runs, where a guest second is 3.32 M instructions whatever the profile. Not a fidelity gap: in real time MIRAGE runs as fast as the host, as QEMU and v86 do, and DOSBox-X's fixed cycles and QEMU's `-icount` do not follow the CPU model either. It would move every headless measurement, goldens included | S |
 | L4 | BeOS 5: why the display server does not start | M |
 | L5 | Windows NT 3.51: the stop error after the graphical switch | M |
 | L6 | Plan 9: an instruction pointer above FFFFh in a 16-bit segment | S |
@@ -24,8 +24,8 @@ Effort: **S** a few hours, **M** a day or two, **L** more.
 | Id | Item | Effort |
 |---|---|---|
 | I5 | A network card: NE2000 with "no cable" first (ends the driver dialogs in Windows 9x, lets QNX go on) | M |
-| I6 | Sound: an OPL core to WebAudio; then Sound Blaster PCM, which needs the 8237 | L |
-| I7 | The 8237 DMA controller and the 82077 floppy controller; bus-master DMA that moves data | M |
+| I6 | Sound — done: OPL3 FM (checked against Nuked-OPL3), Sound Blaster 16 PCM playback to WebAudio, the IRQ and DMA channels its mixer selects, the ASP commands Windows 95's driver probes. To do: ADPCM and recording, the Gravis Ultrasound | M |
+| I7 | DMA — done: the 8237 pair (current address and count, terminal count, auto-init) feeding the Sound Blaster. To do: the 82077 floppy controller, bus-master IDE DMA that moves data | M |
 | I2 | A `486` profile; MMX for a Pentium II | M |
 | I8 | RTC alarm and update interrupts, a valid CMOS checksum; COM2-4; a parallel-port stub | S |
 | B7 | (same as I6) | |
