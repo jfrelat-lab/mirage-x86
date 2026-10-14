@@ -3161,6 +3161,18 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message; }
   eq('Sound Blaster ASP: 0F 83 answers 00, 0E/0F keep a register, 04/05 take their arguments', JSON.stringify(got), JSON.stringify([0, 0x56, 4, 5, -1])); }
 
+// ---- the SB16 raises the IRQ its mixer register 80h selects (src/sb.js) ---------------------------
+// Windows 95's driver writes 80h = 02h (IRQ 5); the card kept raising IRQ 7 and the startup sound
+// waited for ever. DOSBox-X, QEMU and ALSA agree: 80h selects the IRQ, 81h the DMA channels.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+    const o = (p, v) => mc.ioWrite(p, 1, v), irq = () => { const m = mc.irqPendingMask & 0xa0; mc.irqPendingMask = 0; return m; };
+    o(0x226, 1); o(0x226, 0); irq();
+    o(0x22c, 0xf2); const before = irq();                                  // after a reset: IRQ 7
+    o(0x224, 0x80); o(0x225, 0x02); o(0x22c, 0xf2); got = [before, irq()];
+  } catch (e) { got = e.message; }
+  eq('Sound Blaster: IRQ 7 after reset, IRQ 5 once mixer 80h selects it', JSON.stringify(got), JSON.stringify([0x80, 0x20])); }
+
 // ---- an IRQ nobody claimed is acknowledged by the BIOS, as SeaBIOS's default handler does --------
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.flags |= 0x200;

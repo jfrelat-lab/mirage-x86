@@ -1,4 +1,4 @@
-// sb.js — a Sound Blaster 16 at 220h, IRQ 7, DMA 1 and 5: what DOS's BLASTER variable says.
+// sb.js — a Sound Blaster 16 at 220h; IRQ 7, DMA 1 and 5 unless a driver selects others (mixer 80h/81h).
 //
 // The DSP takes commands and data on 22Ch and answers on 22Ah; reading 22Eh (8-bit) or 22Fh (16-bit)
 // acknowledges its interrupt. Playback is DMA: the card pulls samples from the 8237 at the rate the
@@ -26,7 +26,14 @@
 
 import { clock } from './audio.js';
 
-const BASE = 0x220, IRQ = 7, DMA8 = 1, DMA16 = 5;
+const BASE = 0x220;
+// The card's IRQ and DMA channels are what mixer registers 80h and 81h select — 7, 1 and 5 after a
+// reset, as BLASTER says — and a driver may choose others: Windows 95's writes 80h = 02h (IRQ 5), and
+// its startup sound waited for ever on IRQ 5 while the card raised 7. DOSBox-X (an SB16 that is not
+// PnP), QEMU's sb16.c and ALSA's sb16_main.c agree: the lowest bit set wins, none set means none.
+const irqOf = (v) => (v & 1 ? 2 : v & 2 ? 5 : v & 4 ? 7 : v & 8 ? 10 : -1);
+const dma8Of = (v) => (v & 1 ? 0 : v & 2 ? 1 : v & 8 ? 3 : -1);
+const dma16Of = (v) => (v & 0x20 ? 5 : v & 0x40 ? 6 : v & 0x80 ? 7 : -1);
 // Arguments each command takes (bytes after the command byte).
 const ARGS = new Map([
   [0x10, 1], [0x14, 2], [0x16, 2], [0x17, 2], [0x24, 2], [0x40, 1], [0x41, 2], [0x42, 2], [0x48, 2],
@@ -62,7 +69,8 @@ export function installSB(machine) {
   const mark = (t) => { sb.clock = t; sb.cyc = machine.cpu.cycles; };
   const raise = (wide) => {
     if (wide) sb.irq16 = true; else sb.irq8 = true;
-    machine.raiseIRQ(IRQ);
+    const irq = irqOf(sb.mixer[0x80]);
+    if (irq >= 0) machine.raiseIRQ(irq);
   };
 
   // ---- the mixer (224h index, 225h data) ----
@@ -89,7 +97,8 @@ export function installSB(machine) {
   // Pull `frames` sample frames from DMA. A frame is one unit (mono) or two (stereo); a unit is a
   // byte on the 8-bit channel and a word on the 16-bit one, which is also what the 8237 counts.
   const pull = (frames) => {
-    const x = sb.xfer, c = x.wide ? DMA16 : DMA8, per = x.stereo ? 2 : 1;
+    const x = sb.xfer, c = x.wide ? dma16Of(sb.mixer[0x81]) : dma8Of(sb.mixer[0x81]), per = x.stereo ? 2 : 1;
+    if (c < 0) return;                        // no channel selected: the card cannot fetch
     let units = frames * per, got = [];
     while (units > 0 && sb.xfer) {
       const n = Math.min(units, x.left);
