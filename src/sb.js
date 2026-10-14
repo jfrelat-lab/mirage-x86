@@ -31,6 +31,10 @@ const BASE = 0x220, IRQ = 7, DMA8 = 1, DMA16 = 5;
 const ARGS = new Map([
   [0x10, 1], [0x14, 2], [0x16, 2], [0x17, 2], [0x24, 2], [0x40, 1], [0x41, 2], [0x42, 2], [0x48, 2],
   [0x74, 2], [0x75, 2], [0x76, 2], [0x77, 2], [0x80, 2], [0xe0, 1], [0xe4, 1], [0xe2, 1],
+  // The ASP/CSP commands (SB16 "Advanced Signal Processor"): set mode, set codec parameter, set
+  // register, get register. Windows 95's SB16 driver sends 04 FC, 04 FA, then 0F 83 and waits for the
+  // answer; taking their argument bytes for commands and never answering left it at its logo for good.
+  [0x04, 1], [0x05, 2], [0x0e, 2], [0x0f, 1],
 ]);
 for (let c = 0xb0; c <= 0xcf; c++) ARGS.set(c, 3);
 
@@ -38,7 +42,7 @@ export function installSB(machine) {
   const mem = machine.mem;
   const sb = {
     inQ: [], outQ: [], cmd: -1, args: [], resetting: false, speaker: false, test: 0,
-    rate: 22050, block8: 0x7ff, mixerIndex: 0, mixer: new Uint8Array(256),
+    rate: 22050, block8: 0x7ff, mixerIndex: 0, mixer: new Uint8Array(256), csp: new Uint8Array(256),
     irq8: false, irq16: false,
     // The transfer in progress, or null: { wide, stereo, signed, auto, left (units to the IRQ), len }
     xfer: null, paused: false, carry: null,
@@ -169,6 +173,12 @@ export function installSB(machine) {
       case 0xe0: out(~a[0]); return;                                       // DSP identification
       case 0xe1: out(4, 5); return;                                        // version 4.05
       case 0xe3: for (const ch of 'COPYRIGHT (C) CREATIVE TECHNOLOGY LTD, 1992.') out(ch.charCodeAt(0)); out(0); return;
+      // ASP/CSP, measured with tools/cspprobe.asm: QEMU -device sb16 and DOSBox-X both answer 00 to
+      // 0F 83 and nothing to 04 and 05. A register 0E wrote reads back as QEMU has it (DOSBox-X answers
+      // otherwise); 03 stays unanswered (QEMU 10h, DOSBox-X nothing).
+      case 0x0e: sb.csp[a[0]] = a[1]; return;
+      case 0x0f: out(sb.csp[a[0]]); return;
+      case 0x04: case 0x05: return;
       case 0xe4: sb.test = a[0]; return;
       case 0xe8: out(sb.test); return;
       case 0xf2: raise(false); return;                                     // trigger the 8-bit IRQ

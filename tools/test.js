@@ -3146,6 +3146,21 @@ const runLinux = (hex, argv) => {
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('DSP=')) line = t.trim(); }
   eq('Sound Blaster: version 4.05, DMA consumed at the set rate, IRQ 7 after a second', line, 'DSP=0405 TICKS=12 HALF=15F3 ACK=1'); }
 
+// ---- the SB16's ASP/CSP commands take their arguments, and 0Fh answers (src/sb.js) --------------
+// Windows 95's SB16 driver sends 04 FC, 04 FA, 0F 83 and waits for 0F's answer at its logo. Measured
+// with tools/cspprobe.asm: QEMU -device sb16 and DOSBox-X both answer 00 to 0F 83 and nothing to 04;
+// QEMU reads back what 0E wrote. Before: 04's argument FC ran as a command, 0F never answered.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+    const o = (p, v) => mc.ioWrite(p, 1, v), i = (p) => mc.ioRead(p, 1), dsp = (...b) => b.forEach((v) => o(0x22c, v));
+    const rd = () => (i(0x22e) & 0x80 ? i(0x22a) : -1);
+    o(0x226, 1); o(0x226, 0); rd();
+    dsp(0x04, 0xfc); dsp(0x04, 0xfa); dsp(0x0f, 0x83); const r83 = rd();
+    dsp(0x0e, 0x34, 0x56); dsp(0x0f, 0x34); const r34 = rd();
+    dsp(0x05, 0x12, 0x34); dsp(0xe1); got = [r83, r34, rd(), rd(), rd()];
+  } catch (e) { got = e.message; }
+  eq('Sound Blaster ASP: 0F 83 answers 00, 0E/0F keep a register, 04/05 take their arguments', JSON.stringify(got), JSON.stringify([0, 0x56, 4, 5, -1])); }
+
 // ---- an IRQ nobody claimed is acknowledged by the BIOS, as SeaBIOS's default handler does --------
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.flags |= 0x200;
