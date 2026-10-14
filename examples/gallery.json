@@ -58,5 +58,15 @@
     "cpu": "586",
     "mem": 128,
     "blurb": "The desktop, from the same hard-disk image v86 boots, in about 100 guest seconds: paging, V86 mode, the VMM and its drivers."
+  },
+  {
+    "id": "winme",
+    "title": "Windows ME",
+    "vendor": "Microsoft",
+    "year": 2000,
+    "thumb": "examples/thumbs/os-winme.png",
+    "cpu": "586",
+    "mem": 128,
+    "blurb": "The desktop with its Sound Blaster found, after ScanDisk and the hardware dialogs a disk saved mid-session brings — the last Windows on DOS."
   }
 ]
