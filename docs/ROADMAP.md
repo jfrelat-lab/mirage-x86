@@ -70,7 +70,16 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | K1 | The serial console in a terminal, like `qemu -nographic` | S |
 | K3, K5 | VGA text as ANSI; graphics through terminal image protocols | M |
 | K4 | Recording to GIF or video | S |
-| H12 | User-space Linux: static, Debian dynamic and a.out programs; processes (fork, exec, wait, pipes — one process at a time) and the console (n_tty line discipline, the VGA text screen): Debian's bash runs id's 1994 DOOM. Next: two processes at once (DOOM's sndserver, interactive pipes), signals delivered to handlers, the 80-bit x87 | L |
+| H12 | **User-space Linux (MIRAGE-LINUX)** — done: static, Debian dynamic (ELF, PIE, the interpreter) and a.out programs; processes (fork, exec, wait, pipes — one process at a time); the console (n_tty line discipline, the VGA text screen and its cursor, the keyboard in XLATE, MEDIUMRAW and RAW); ioperm and /dev; Debian 12's bash runs id's 1994 DOOM and comes back when it quits. Dhrystone 77–79 M instructions/s | — |
+| H12a | Two processes at once: a scheduler over the snapshots fork already takes — DOOM's sndserver beside it, interactive pipes (`ls \| less`) | L |
+| H12b | Signals delivered to the handlers a program installs (sigaction, sigreturn, the frame on the user stack), SIGCHLD, SIGINT from ^C | M |
+| H12c | The 80-bit x87: extended precision where a program asks for it, not float64 | M |
+| H12d | Threads: clone with a shared address space, futex, thread-local storage (set_thread_area) — after H12a | L |
+| H12e | Sockets: Unix-domain first (X11, sndserver), then TCP/UDP over a host proxy (WebSocket), for OASIS's network (O17) and Docker images (O13) | L |
+| H12f | A fuller /proc and /sys (self, cpuinfo, meminfo, mounts, the pid directories) for the tools that read them (ps, top, free) | M |
+| H12g | Sound for Linux programs: /dev/dsp (OSS) on src/audio.js — DOOM's sndserver writes there | M |
+| H12h | The mouse through /dev/input and gpm, and X11 programs through PRISM's X11 layer or a real X server (with H12e) | L |
+| H12i | x86-64 user space: the long-mode decoder and 64-bit registers, the x86-64 system call table — what most Docker images are | XL |
 | K7, H14 | User-space Win32 programs, their API answered in JavaScript | L |
 | K8 | A native window with sound — for OASIS's `oasis run` (O4) | M |
 
