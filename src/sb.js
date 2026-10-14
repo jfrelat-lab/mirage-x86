@@ -173,9 +173,11 @@ export function installSB(machine) {
       case 0xe0: out(~a[0]); return;                                       // DSP identification
       case 0xe1: out(4, 5); return;                                        // version 4.05
       case 0xe3: for (const ch of 'COPYRIGHT (C) CREATIVE TECHNOLOGY LTD, 1992.') out(ch.charCodeAt(0)); out(0); return;
-      // ASP/CSP, measured with tools/cspprobe.asm: QEMU -device sb16 and DOSBox-X both answer 00 to
-      // 0F 83 and nothing to 04 and 05. A register 0E wrote reads back as QEMU has it (DOSBox-X answers
-      // otherwise); 03 stays unanswered (QEMU 10h, DOSBox-X nothing).
+      // ASP/CSP. Three sources agree on what is here: Linux's driver for the chip (ALSA sb16_csp.c:
+      // set_register is 0E reg val, read_register 0F reg then one byte; csp_detect writes ~x to 83h and
+      // reads it back), QEMU's sb16.c and DOSBox-X's sblaster.cpp ("Windows 98 SB16 driver requires"
+      // 0F's answer); tools/cspprobe.asm measures the last two. 03 is left unanswered: after 05 val par
+      // ALSA expects par, QEMU answers 10h, DOSBox-X has no 03 — the sources disagree.
       case 0x0e: sb.csp[a[0]] = a[1]; return;
       case 0x0f: out(sb.csp[a[0]]); return;
       case 0x04: case 0x05: return;
