@@ -55,14 +55,21 @@ const B_SET = 0x80, B_DSE = 0x01;
 
 export function installRTC(machine) {
   const mem = machine.mem, cpu = machine.cpu;
+  // MIRAGE_RTC: 'host' reads the host's clock live (wall time); 'hostdate' starts from it, below.
+  const env = typeof process !== 'undefined' && !!process.env ? process.env.MIRAGE_RTC : undefined;   // guarded: the browser has no process
   const rtc = {
     ram: new Uint8Array(64),
     index: 0,
     nmiDisabled: false,
     offsetMs: 0,                  // what a guest's "set the clock" moved us by
-    host: typeof process !== 'undefined' && !!process.env && process.env.MIRAGE_RTC === 'host',   // guarded: the browser has no process
+    host: env === 'host',
     pending: new Map(),           // time registers written while SET is high
   };
+  // MIRAGE_RTC=hostdate: start at the host's date and time, then advance with guest time like the
+  // default clock — a headless run (guest time = cycles) keeps one consistent clock, and file dates
+  // are not "in the future" (Damn Small Linux's tar warned for every file of its 1990 boot). The
+  // BDA tick stays at 08:00, so the offset is the host's instant minus that boot instant.
+  if (env === 'hostdate') rtc.offsetMs = Date.now() - (RTC_EPOCH_MS + BOOT_HOUR * 3600000);
   machine.rtc = rtc;
 
   // Divider on and a 1.024 kHz periodic rate, 24-hour BCD with no daylight saving, and a battery

@@ -3146,6 +3146,15 @@ const runLinux = (hex, argv) => {
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('DSP=')) line = t.trim(); }
   eq('Sound Blaster: version 4.05, DMA consumed at the set rate, IRQ 7 after a second', line, 'DSP=0405 TICKS=12 HALF=15F3 ACK=1'); }
 
+// ---- MIRAGE_RTC=hostdate: a headless machine starts on the host's date (src/rtc.js) -------------------
+// The default is 1990-01-01 08:00, reproducible; Damn Small Linux's tar then called every file of its
+// CD "in the future". With hostdate the clock starts at the host's instant and runs on guest time.
+{ let got; const was = process.env.MIRAGE_RTC;
+  try { process.env.MIRAGE_RTC = 'hostdate'; const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+    got = Math.abs(mc.rtc.now().getTime() - Date.now()) < 60000;
+  } catch (e) { got = e.message; } finally { if (was === undefined) delete process.env.MIRAGE_RTC; else process.env.MIRAGE_RTC = was; }
+  eq('RTC: MIRAGE_RTC=hostdate starts the clock at the host\'s date and time', got, true); }
+
 // ---- the SB16's ASP/CSP commands take their arguments, and 0Fh answers (src/sb.js) --------------
 // Windows 95's SB16 driver sends 04 FC, 04 FA, 0F 83 and waits for 0F's answer at its logo. Measured
 // with tools/cspprobe.asm: QEMU -device sb16 and DOSBox-X both answer 00 to 0F 83 and nothing to 04;
