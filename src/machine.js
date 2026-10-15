@@ -156,6 +156,7 @@ export class Machine {
     this._pitAccess = 3; this._pitHiNext = false; this._pitLo = 0; this._pitReadHi = false;
     this.onPortWrite(0x43, (_p, _s, v) => {
       v &= 0xff;
+      if (((v >> 6) & 3) === 2) { if (this.onPit2Control) this.onPit2Control(v); return; }   // counter 2: src/bios.js
       if (((v >> 6) & 3) !== 0) return;              // not counter 0
       const access = (v >> 4) & 3;
       this._pitReadHi = false;                        // any counter-0 command re-aligns reads to LSB first

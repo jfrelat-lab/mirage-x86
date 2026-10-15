@@ -1254,26 +1254,67 @@ export function installBIOS(machine, opts = {}) {
   // Channel 2 of the PIT (0x42) is the tone generator behind it. We honour its reload so the square
   // wave has the right period; src/audio.js turns the gate and the reload into sound.
   const ppi = machine.ppi = { portB: 0x00, ch2Reload: 0x10000, _lo: 0, _hiNext: false };
-  machine.onPortWrite(0x61, (_p, _s, v) => { ppi.portB = v & 0xff; if (machine.onSpeaker) machine.onSpeaker(); });
+  // Channel 2 as the 8254 runs it, once a control word has reached it (machine.onPit2Control): its
+  // mode, its GATE (port 61h bit 0) and the count, in PIT clocks = cpu.cycles. Mode 0 (interrupt on
+  // terminal count): OUT low from the control word, high once the count has run out with GATE high —
+  // GRUB 2 calibrates its TSC that way, polling bit 5 of 61h; the square wave answered high at once,
+  // GRUB measured no time, and its menu countdown stood still. Mode 1: a one-shot GATE triggers.
+  // Modes 2 and 3: periodic, held high while GATE is low and restarted by its rising edge. The
+  // datasheet's behaviour, as QEMU's i8254.c and DOSBox model it. Before any control word: the old
+  // free-running square wave, which programs that only read bit 5 or 42h rely on.
+  const ch2 = { set: false, mode: 3, access: 3, loaded: false, accum: 0, start: 0, trig: false };
+  const gate = () => ppi.portB & 1, now = () => machine.cpu.cycles;
+  const elapsed = () => ch2.accum + (ch2.loaded && (gate() || ch2.mode === 1) ? now() - ch2.start : 0);
+  const out2 = () => {
+    if (!ch2.set) { const half = ppi.ch2Reload >> 1; return half > 0 && (now() % ppi.ch2Reload) < half ? 1 : 0; }
+    const r = ppi.ch2Reload, e = elapsed();
+    switch (ch2.mode) {
+      case 0: return ch2.loaded && e >= r ? 1 : 0;
+      case 1: return !ch2.trig || e >= r ? 1 : 0;
+      case 2: return !gate() || (e % r) !== r - 1 ? 1 : 0;
+      default: return !gate() || (e % r) < (r + 1 >> 1) ? 1 : 0;      // mode 3: high for the first half
+    }
+  };
+  machine.onPit2Control = (v) => {
+    const access = (v >> 4) & 3;
+    if (access === 0) return;                                 // counter latch: the count reads on
+    ch2.set = true; ch2.access = access; ch2.mode = (v >> 1) & 7; if (ch2.mode > 5) ch2.mode -= 4;
+    ch2.loaded = false; ch2.trig = false; ch2.accum = 0; ppi._hiNext = false;
+  };
+  const load2 = (r) => {
+    ppi.ch2Reload = r === 0 ? 0x10000 : r;
+    if (ch2.set) { ch2.loaded = true; ch2.accum = 0; ch2.start = now(); }
+    if (machine.onSpeaker) machine.onSpeaker();               // the tone's pitch (src/audio.js)
+  };
+  machine.onPortWrite(0x61, (_p, _s, v) => {
+    const was = gate();
+    if (ch2.set && ch2.loaded && was && !(v & 1) && ch2.mode !== 1) ch2.accum += now() - ch2.start;   // GATE falls: the count pauses
+    ppi.portB = v & 0xff;
+    if (ch2.set && !was && gate()) {                          // GATE rises
+      if (ch2.mode === 1 || ch2.mode === 2 || ch2.mode === 3) { ch2.accum = 0; ch2.trig = true; }
+      ch2.start = now();
+    }
+    if (machine.onSpeaker) machine.onSpeaker();
+  });
   machine.onPortRead(0x61, () => {
     const cyc = machine.cpu.cycles;
     // The refresh bit toggles every ~15.085 us = 18 PIT clocks, and cpu.cycles IS the PIT clock.
     const refresh = ((cyc / 18) | 0) & 1;
-    // Timer 2 output: a square wave at the programmed reload, high for the first half of a period.
-    const half = ppi.ch2Reload >> 1;
-    const out = half > 0 && (cyc % ppi.ch2Reload) < half ? 1 : 0;
-    return (ppi.portB & 0x0f) | (refresh << 4) | (out << 5);
+    return (ppi.portB & 0x0f) | (refresh << 4) | (out2() << 5);
   });
-  machine.onPortWrite(0x42, (_p, _s, v) => {                  // channel 2 reload, LSB then MSB
+  machine.onPortWrite(0x42, (_p, _s, v) => {                  // channel 2 reload: LSB, MSB, or LSB then MSB
     v &= 0xff;
+    if (ch2.set && ch2.access === 1) { load2(v); return; }
+    if (ch2.set && ch2.access === 2) { load2(v << 8); return; }
     if (!ppi._hiNext) { ppi._lo = v; ppi._hiNext = true; return; }
     ppi._hiNext = false;
-    const r = (v << 8) | ppi._lo;
-    ppi.ch2Reload = r === 0 ? 0x10000 : r;
-    if (machine.onSpeaker) machine.onSpeaker();               // the tone's pitch (src/audio.js)
+    load2((v << 8) | ppi._lo);
   });
   machine.onPortRead(0x42, () => {                            // live countdown, same shape as ch0
-    const count = (ppi.ch2Reload - (machine.cpu.cycles % ppi.ch2Reload)) & 0xffff;
+    const r = ppi.ch2Reload;
+    const count = (ch2.set ? (ch2.mode === 0 || ch2.mode === 1 ? r - elapsed() : r - (elapsed() % r)) : r - (machine.cpu.cycles % r)) & 0xffff;
+    if (ch2.set && ch2.access === 1) return count & 0xff;
+    if (ch2.set && ch2.access === 2) return (count >> 8) & 0xff;
     const b = ppi._hiNext ? (count >> 8) & 0xff : count & 0xff;
     ppi._hiNext = !ppi._hiNext;
     return b;

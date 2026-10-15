@@ -3233,6 +3233,22 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message; }
   eq('Sound Blaster: IRQ 7 after reset, IRQ 5 once mixer 80h selects it', JSON.stringify(got), JSON.stringify([0x80, 0x20])); }
 
+// ---- PIT channel 2 in mode 0: OUT (port 61h bit 5) low until the count runs out with GATE high ----------
+// GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
+// measured no time, and the menu countdowns of HelenOS and Sortix stood still at 8 s. 8254 datasheet,
+// QEMU's i8254.c: mode 0's OUT goes low with the control word and high at terminal count; a low GATE
+// pauses the count.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const o = (p, v) => mc.ioWrite(p, 1, v), b5 = () => (mc.ioRead(0x61, 1) >> 5) & 1;
+    mc.cpu.cycles = 1000;
+    o(0x61, 0); o(0x43, 0xb0); o(0x42, 100); o(0x42, 0);        // GATE low, ch2 mode 0 LSB/MSB, count 100
+    mc.cpu.cycles += 500; const paused = b5();                  // GATE low: no counting
+    o(0x61, 1); const atStart = b5();
+    mc.cpu.cycles += 60; const mid = b5();
+    mc.cpu.cycles += 60; got = [paused, atStart, mid, b5()];
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('PIT channel 2, mode 0: OUT low, held by GATE, high at terminal count', JSON.stringify(got), '[0,0,0,1]'); }
+
 // ---- an IRQ nobody claimed is acknowledged by the BIOS, as SeaBIOS's default handler does --------
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.flags |= 0x200;
