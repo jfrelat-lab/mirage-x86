@@ -800,7 +800,18 @@ export function installBIOS(machine, opts = {}) {
             }
             cpu.ax = 0x004f; break;
           }
-          default: cpu.ax = 0x014f;                             // AH=01 failed, AL=4F supported
+          // 4F08h: the DAC's width. Get (BL=1) is answered BH=6 by the real Cirrus GD5446 BIOS,
+          // DOSBox-X and SeaVGABIOS alike (tools/vbefull.asm); a set (BL=0) cannot widen this DAC and
+          // answers the width it keeps, as VBE says a set returns the width in effect.
+          case 0x08:
+            if ((cpu.bx & 0xff) > 1) { cpu.ax = 0x014f; break; }
+            cpu.bx = (cpu.bx & 0x00ff) | 0x0600; cpu.ax = 0x004f; break;
+          // A function VBE defines but this BIOS does not do: AH=01 failed, AL=4F "supported" — as the
+          // real Cirrus BIOS answers 4F10h. A number VBE does not define at all (4FFFh, 4F0Ch...): AL is
+          // NOT 4Fh — the Cirrus BIOS leaves AX as it was, DOSBox-X and SeaVGABIOS return other AXs
+          // with AL != 4Fh; all three agree that it is not a supported function. MIRAGE said 014Fh.
+          default:
+            if (cpu.al <= 0x0b || cpu.al === 0x10 || cpu.al === 0x15) cpu.ax = 0x014f;
         }
         break;
       }

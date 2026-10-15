@@ -3261,6 +3261,16 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 60); }
   eq('VBE 4F03h in text mode: the standard mode 03h', got, '4f 3'); }
 
+// ---- VBE 4F08h and an undefined VBE function (tools/vbefull.asm) --------------------------------------
+// The real Cirrus GD5446 BIOS, DOSBox-X and SeaVGABIOS all answer 4F08h get with BH=6, and 4FFFh with
+// AL != 4Fh (not supported). MIRAGE answered 014Fh to both.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, i10 = () => mc.intHandlers[0x10](cpu, mc);
+    cpu.ax = 0x4f08; cpu.bx = 0x0001; i10(); const dac = [cpu.ax & 0xffff, (cpu.bx >> 8) & 0xff];
+    cpu.ax = 0x4fff; i10(); got = [...dac, cpu.ax & 0xff].map((x) => x.toString(16)).join(' ');
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('VBE: 4F08h get answers a 6-bit DAC, 4FFFh is not a supported function', got, '4f 6 ff'); }
+
 // ---- PIT channel 2 in mode 0: OUT (port 61h bit 5) low until the count runs out with GATE high ----------
 // GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
 // measured no time, and the menu countdowns of HelenOS and Sortix stood still at 8 s. 8254 datasheet,
