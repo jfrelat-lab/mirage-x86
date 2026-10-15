@@ -9,8 +9,11 @@
 ;   QEMU 11.1  004F 0003 004F 002F 0000 0050 0019 0004 004F 00BB 0004 0140 00C8 0008
 ;   DOSBox-X   004F 0003 014F 0000 0000 0000 0000 0000 014F 0000 0000 0000 0000 0000   (svga_s3)
 ;   MIRAGE     004F 0003 014F ...   (4F03h was BX=0000)
-; Both answer 4F03h with the standard mode 0003h. 4F01h for a standard mode: SeaVGABIOS describes it,
-; DOSBox-X refuses it; MIRAGE refuses it until the two agree.
+;   Cirrus     004F 0003 014F 0000 0000 0000 0000 0000 014F 0000 0000 0000 0000 0000   (the real
+;              CL-GD5436/46 PCI VGA BIOS 1.25 of 1996, boot/roms/5446bv.vbi, in QEMU -device
+;              cirrus-vga,romfile=… — a manufacturer's BIOS on the chip it was written for)
+; All answer 4F03h with the standard mode 0003h. 4F01h for a standard VGA mode: the Cirrus BIOS and
+; DOSBox-X refuse it (014Fh), SeaVGABIOS alone describes it. MIRAGE refuses it, as the real BIOS does.
         org 0x100
         bits 16
         mov ax, 0x0003
