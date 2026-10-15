@@ -178,10 +178,14 @@ export class CPU {
     //   S=0 is a SYSTEM descriptor (LDT, TSS, gate): never loadable into a segment register.
     //   Into a data register, a code segment is only loadable if it is READABLE (bit 1).
     //   Into SS, only a WRITABLE DATA segment will do.
+    //   Into CS, only a CODE segment — readable or not (the SDM's far JMP/CALL: "segment type is not
+    //   code → #GP"). The data registers' rule was applied to CS too: HelenOS's kernel jumps to its
+    //   execute-only code segment (access 98h) and took #GP(8), with no IDT yet — a triple fault.
+    //   And a data segment loaded into CS was accepted.
     // Without these, an LDT or TSS descriptor loaded as if it were a segment and addressed whatever
     // its base and limit fields happened to encode — test386's POST-B expects #GP(selector).
     const isSys = !(access & 0x10), isCode = (access & 0x08) !== 0, rw = (access & 0x02) !== 0;
-    if (isSys || (i === SS ? (isCode || !rw) : (isCode && !rw))) { this.raise(13, sel & 0xfffc); return false; }
+    if (isSys || (i === CS ? !isCode : i === SS ? (isCode || !rw) : (isCode && !rw))) { this.raise(13, sel & 0xfffc); return false; }
     // PRIVILEGE. A data load needs max(CPL, RPL) <= DPL; a CONFORMING code segment is exempt, since
     // its whole point is to be reachable from less privileged code. SS is stricter still: RPL and DPL
     // must both equal CPL. test386 runs the whole fault series a second time from ring 3, and this is

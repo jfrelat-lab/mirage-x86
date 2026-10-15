@@ -549,6 +549,24 @@ function eq(name, got, want) {
   eq('interrupt gate: the handler runs with NT clear, the pushed EFLAGS has it',
     [cpu.eip.toString(16), (cpu.flags >> 14) & 1, (m.r32(0x7000 - 4) >> 14) & 1].join(), '5000,0,1'); }
 
+// ---- CS takes any code segment, readable or not, and nothing else ---------------------------------------
+// HelenOS's kernel far-jumps to its execute-only code segment (access 98h): the data registers' rule
+// "a code segment must be readable" was applied to CS, and the #GP(8) came before any IDT — a triple
+// fault. The SDM: far JMP/CALL raise #GP(selector) when the target "is not code"; readability is a
+// data-register rule. And a writable data segment loaded into CS is that #GP.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000, IDT = 0x8800;
+  cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff; cpu.idtr.base = IDT; cpu.idtr.limit = 0x7ff;
+  const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
+  desc(1, 0x9a); desc(2, 0x92); desc(3, 0x98);                                // 08 code, 10 data, 18 execute-only code
+  const g = IDT + 13 * 8; m.w16(g, 0x6000); m.w16(g + 2, 0x08); m.w8(g + 4, 0); m.w8(g + 5, 0x8e); m.w16(g + 6, 0);   // #GP → 08:6000
+  cpu.cr0 = 1; cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.reg[4] = 0x7000; cpu.eip = 0x1000;
+  let got;
+  try { cpu.farJmp(0x18, 0x2000, 0x1000, 0x1007); const a = [cpu.seg[CS].toString(16), cpu.eip.toString(16)];
+    cpu.farJmp(0x10, 0x3000, 0x2000, 0x2007); got = [...a, cpu.eip.toString(16), (m.r32(cpu.reg[4]) >>> 0).toString(16)].join();
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('CS: an execute-only code segment loads, a data segment is #GP', got, '18,2000,6000,10'); }
+
 // ---- a far CALL/JMP to a code segment keeps CPL: CS's RPL becomes the CPL -----------------------
 // QNX 4 calls a CONFORMING DPL-0 segment (00E0h) from ring 1; we loaded CS=00E0h as given and ran it
 // in ring 0, so its RETF was taken for an outward return and popped an SS:ESP that was never pushed.
