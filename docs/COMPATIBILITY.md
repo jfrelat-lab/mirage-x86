@@ -40,7 +40,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | FreeDOS 1.3, Legacy CD (*official media*) | Starts | the installer's language menu; not installed | — | 2026-10-04 |
 | PC-MOS/386 | Starts | the date prompt | — | 2026-09 |
 | Linux 2.2 (BasicLinux 3.5) | Plays | a shell; mounts a CD-ROM | `586` | 2026-10-07 |
-| Linux 2.4 (Damn Small Linux 4.4.10 CD, *official media*) | Starts | runlevel 5; the desktop was not seen | 64 MiB, `586` | 2026-10-04 |
+| Linux 2.4 (Damn Small Linux 4.4.10 CD, *official media*) | Starts | runlevel 5, then a black screen and an idle CPU (X starting? not seen) after 900 guest s | 64 MiB, `586` | 2026-10-15 |
 | ELKS | Plays | `login:` | — | 2026-09 |
 | Unix V7/x86 | Plays | a single-user shell | — | 2026-09 |
 | 386BSD 1.0 | Plays | `login:`, and a single-user shell | — | 2026-09 |
@@ -53,7 +53,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | BeOS 5 | Fails | the splash screen | 128 MiB, `586`, PCI | 2026-10-04 |
 | ReactOS 0.4.15 | Fails | a stop in the kernel: it needs ACPI | 256 MiB, `pentiumpro`, PCI | 2026-10-07 |
 | Plan 9 (9legacy) | Fails | the loader starts the kernel, which then stops | PCI | 2026-10 |
-| Haiku | Unknown | not tried | — | — |
+| Haiku | Starts | its boot splash with all seven icons lit (Enter at the Boot Manager), then no desktop after 900 guest s | 256 MiB, `pentiumpro`, PCI | 2026-10-15 |
 
 Boot-sector programs — BootChess, bootBASIC, bootOS, Invaders, Pillman, sectorFORTH, sectorLISP,
 TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel with QEMU.
