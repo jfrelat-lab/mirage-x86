@@ -70,6 +70,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `{ "gz": path or URL, "to": path }` | one gzip-compressed file | decompressed, at `to` |
 | `{ "tar": path or URL, "into": dir }` | a tar archive, `.tar.gz` or `.tgz` | under `into` |
 | `{ "deb": URL }` | a Debian package | its `data.tar` |
+| `{ "zip": path or URL, "lha": member, "into": dir, "files": { name: path } }` | an LHA archive inside a ZIP (an "LHA's SFX" self-extractor, as id's `quake106.zip` holds) — `-lh0-` and `-lh5-`, read by `src/lha.js` | the files `files` names, renamed (all of them without it), under `into` |
 | `{ "docker": image, "platform": "linux/386" }` | a Docker image | its whole file system (`docker create` + `docker export`; Docker is needed for `pull` only) |
 | `{ "dir": path }` | a directory of the repository | used where it is |
 | `{ "links": { path: target } }` | symbolic links | — |
@@ -92,6 +93,7 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 | `dos/doom` | dos | DOOM 1.9 shareware, id's own archive |
 | `linux/doom-1994` | linux | `linuxsdoom`, id's SVGAlib DOOM of December 1994, an a.out binary with libc 4 — its libraries from Debian 1.3 ("bo") on archive.debian.org, its binary and WAD from idgames. SVGAlib drives the emulated VGA; the keyboard reaches it in K_MEDIUMRAW. No sound yet (`sndserver` is a second process) |
 | `linux/mirage` | linux | Debian 12 i386 with Debian 1.3's a.out libraries and id's 1994 DOOM in `/usr/games/doom`: a real `bash` on the console (tty1, the VGA text screen), where `cd /usr/games/doom; ./linuxsdoom` forks and execs DOOM. The Linux machine of `machines.html` boots into it |
+| `linux/quake-1997` | linux | `squake` 1.1, id's svgalib Quake of August 1997 — an ELF binary on libc5 and svgalib from Debian 1.3, the shareware `pak0.pak` from id's own `quake106.zip` (its LHA self-extractor read by `src/lha.js`). It plays its demos; run with `-nosound -noudp` (no OSS yet, and no network) |
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
 
 ## What is not there yet

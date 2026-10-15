@@ -55,7 +55,7 @@ const isUrl = (s) => /^https?:\/\//.test(s);
 const local = (s) => resolve(ROOT, s);
 const layerKey = (l) => createHash('sha256').update(JSON.stringify(l)).digest('hex').slice(0, 16);
 const cacheDir = (l) => join(CACHE, 'layers', layerKey(l));
-const needsPull = (l) => (l.tar || l.deb || l.docker || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
+const needsPull = (l) => (l.tar || l.deb || l.docker || l.lha || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
 
 async function fetchBytes(src) {
   if (!isUrl(src)) return readFileSync(local(src));
@@ -128,6 +128,18 @@ async function pullLayer(l) {
     untar(e.stdout, dir);
   } else if (l.deb) undeb(await fetchBytes(l.deb), l.into ? join(dir, l.into) : dir);
   else if (l.tar) { const b = await fetchBytes(l.tar); untar(/\.(tgz|gz)$/.test(l.tar) ? gunzipSync(b) : b, l.into ? join(dir, l.into) : dir); }
+  else if (l.lha) {                     // an LHA archive inside a ZIP (Quake's resource.1): the files `files` names, renamed
+    const { unzip } = await import(join(ROOT, 'src', 'zip.js')), { unlha } = await import(join(ROOT, 'src', 'lha.js'));
+    const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
+    const inner = (await unzip(new Uint8Array(zb))).find((f) => f.path.toLowerCase() === l.lha.toLowerCase());
+    if (!inner) throw new Error(`oasis: ${l.lha} is not in ${l.zip}`);
+    const base = l.into ? join(dir, l.into) : dir;
+    for (const f of unlha(inner.bytes)) {
+      const to = l.files ? l.files[f.path] : f.path;
+      if (!to) continue;
+      mkdirSync(dirname(join(base, to)), { recursive: true }); writeFileSync(join(base, to), f.bytes);
+    }
+  }
   else {                                                                       // a remote zip, file or gz
     const src = l.zip || l.file || l.gz, b = await fetchBytes(src);
     writeFileSync(join(dir, basename(src.split('?')[0]).replace(/\.gz$/, l.gz ? '' : '.gz')), l.gz ? gunzipSync(b) : b);
@@ -143,7 +155,7 @@ async function linuxRoot(img) {
   const dirs = [], files = new Map(), links = new Map(), mkdirs = new Set();
   for (const l of img.layers || []) {
     if (l.dir) dirs.push(local(l.dir));
-    else if (l.tar || l.deb || l.docker) dirs.push(await pullLayer(l));
+    else if (l.tar || l.deb || l.docker || l.lha) dirs.push(await pullLayer(l));
     else if (l.gz || l.file) {
       const src = l.gz || l.file;
       let host = needsPull(l) ? join(await pullLayer(l), basename(src.split('?')[0]).replace(/\.gz$/, '')) : local(src);

@@ -10,6 +10,9 @@
 // in it: MIRAGE_LXROOT=rootfs node tools/linux/run.mjs /bin/ls -l /etc. MIRAGE_LXCWD sets the
 // working directory there. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
 // calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks).
+// MIRAGE_LXSHOT=<dir> writes the screen as PNG every MIRAGE_LXSTEP guest seconds (default 10), through
+// src/video.js as the browser draws it; MIRAGE_LXSECS stops the run after that many guest seconds —
+// for programs that never exit on their own (Quake, DOOM).
 import { readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { Machine } from '../../src/machine.js';
@@ -56,8 +59,30 @@ if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT || 't
 if (process.env.MIRAGE_LXCONSOLE) lx.consoleStdio();   // stdio on /dev/tty1, a virtual console (SVGAlib wants one)
 const extraEnv = Object.entries(JSON.parse(process.env.MIRAGE_LXENV || '{}')).map(([k, v]) => `${k}=${v}`);
 lx.load(image, [ROOT || SPEC ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...extraEnv]);
-const LIMIT = 2e10;
-while (!lx.done && mc.cpu.cycles < LIMIT) mc.runSlice(200000);
+const SEC = 18.2065 * mc.pitBase, SECS = Number(process.env.MIRAGE_LXSECS) || 0;
+const LIMIT = SECS ? SECS * SEC : 2e10;
+const SHOT = process.env.MIRAGE_LXSHOT, STEP = (Number(process.env.MIRAGE_LXSTEP) || 10) * SEC;
+let shoot = null;
+if (SHOT) {
+  const { mkdirSync } = await import('fs');
+  const { Video } = await import('../../src/video.js');
+  const { writePNG } = await import('../frame.mjs');
+  mkdirSync(SHOT, { recursive: true });
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const v = new Video(mc, canvas); v.font = mc.font;
+  let next = STEP;
+  shoot = () => {
+    if (mc.cpu.cycles < next) return;
+    const t = Math.round(next / SEC); next += STEP;
+    v.frame = 16; v.render();                    // as tools/v86/bootshot.mjs: v.u32 holds the picture
+    const W = v.imgW, H = v.imgH, rgb = new Uint8Array(W * H * 3);
+    for (let i = 0; i < W * H; i++) { const p = v.u32[i]; rgb[i * 3] = p & 0xff; rgb[i * 3 + 1] = (p >> 8) & 0xff; rgb[i * 3 + 2] = (p >> 16) & 0xff; }
+    writePNG(join(SHOT, `${basename(prog)}-${String(t).padStart(5, '0')}.png`), rgb, W, H, 1);
+    console.error(`mirage-linux: ${t}s ${W}x${H} -> ${SHOT}`);
+  };
+}
+while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (shoot) shoot(); }
+if (!lx.done && SECS) { console.error(`mirage-linux: stopped after ${SECS} guest seconds`); process.exit(0); }
 if (!lx.done) { console.error('mirage-linux: still running after', LIMIT, 'cycles'); process.exit(124); }
 if (lx.signal) {
   const f = lx.faultInfo;

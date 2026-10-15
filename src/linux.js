@@ -67,7 +67,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const dv = new DataView(mem.u8.buffer, mem.u8.byteOffset, mem.u8.byteLength);
   const mapPage = (vpn, write) => {
     const have = lx.pages.get(vpn);
-    if (have) { if (write && !have.write) { have.write = true; setPte(vpn, have.frame, true); } return have.frame; }
+    if (have) { if (have.none || (write && !have.write)) { have.none = false; if (write) have.write = true; setPte(vpn, have.frame, have.write); } return have.frame; }
     const frame = allocFrame();
     lx.pages.set(vpn, { frame, write: !!write });
     setPte(vpn, frame, write);
@@ -101,7 +101,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (free && !pg.phys) freeFrames.push(pg.frame);
     }
   };
-  const installPages = (pages) => { for (const [vpn, pg] of pages) setPte(vpn, pg.frame, pg.write); };
+  const clearPte = (vpn) => { const pde = dv.getUint32(PD_BASE + (vpn >>> 10) * 4, true); if (pde & 1) dv.setUint32((pde & 0xfffff000) + (vpn & 0x3ff) * 4, 0, true); };
+  const installPages = (pages) => { for (const [vpn, pg] of pages) if (pg.none) clearPte(vpn); else setPte(vpn, pg.frame, pg.write); };
   const unmapRange = (start, end) => {
     for (let p = start >>> 12; p < Math.ceil(end / PAGE); p++) {
       const had = lx.pages.get(p);
@@ -938,7 +939,22 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       wrBytes(at, rdBytes(old, Math.min(oldLen, newLen)));
       unmapRange(old, old + oldLen); return at;
     },
-    125: () => 0,                                                          // mprotect: pages stay as mapped
+    // mprotect: the pages' rights as Linux sets them — writable with PROT_WRITE, absent with PROT_NONE
+    // (the kernel's own reads go through lx.pages, not the PTEs). Quake's Sys_MakeCodeWriteable asks
+    // for its text to be writable and patches its own assembly; answered 0 and left read-only, its
+    // first patch faulted (err 7) in the code.
+    125: (addr, len, prot) => {
+      if (addr & 0xfff) return -E.EINVAL;
+      const first = addr >>> 12, end = Math.ceil((addr + len) / PAGE);
+      for (let p = first; p < end; p++) if (!lx.pages.has(p)) return -E.ENOMEM;
+      for (let p = first; p < end; p++) {
+        const pg = lx.pages.get(p);
+        pg.write = !!(prot & 2); pg.none = !(prot & 7);
+        if (pg.none) clearPte(p); else setPte(p, pg.frame, pg.write);
+      }
+      cpu.setCR3(cpu.cr3);                                 // the software TLB forgets the old rights
+      return 0;
+    },
     219: () => 0,                                                          // madvise
     243: (uinfo) => {                                                      // set_thread_area
       let idx = rd32(uinfo) | 0;

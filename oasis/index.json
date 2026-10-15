@@ -42,5 +42,14 @@
     "author": "Debian; id Software",
     "thumb": "oasis/thumbs/linux-mirage.png",
     "output": "window"
+  },
+  {
+    "name": "linux/quake-1997",
+    "title": "Linux Quake 1.1 for SVGAlib (id Software, August 1997)",
+    "world": "linux",
+    "year": 1997,
+    "author": "id Software, port by Dave 'Zoid' Kirsch",
+    "thumb": "oasis/thumbs/linux-quake-1997.png",
+    "output": "window"
   }
 ]

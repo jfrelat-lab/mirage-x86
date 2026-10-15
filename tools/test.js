@@ -2956,6 +2956,14 @@ const runLinux = (hex, argv) => {
     '0000000001000000000000000080040800800408560000005600000005000000001000000f0b');
   let got; try { got = runLinux(hex, ['/w/UD2']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: an invalid opcode is SIGILL', got, 132); }
+// tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
+// Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
+{ const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
+    '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000' +
+    '000000010000000000000000800408008004088a0000008a0000000500000000100000b87d000000bb00800408b9001000' +
+    '00ba07000000cd8085c07510c605768004082ab300b801000000cd80bb01000000b801000000cd80');
+  let got; try { got = runLinux(hex, ['/w/MPROTECT']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: mprotect makes the code writable, and the program patches itself', got, 42); }
 // tools/linux/rmw.asm: read-modify-write on the stack through the paged fast path. Docker: 84.
 { const hex = (                                         // nasm -f bin tools/linux/rmw.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
@@ -3081,6 +3089,24 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 60); }
   fsm.rmSync(dir, { recursive: true, force: true });
   eq('oasis: tar keeps an empty directory, a file, a symbolic link and a long name', JSON.stringify(got), JSON.stringify([true, 'hi\n', 'usr/bin', 'ok'])); }
+
+// ---- LHA (src/lha.js): id's quake106.zip keeps its game in an LHA self-extractor -----------------------
+// Built here bit by bit, with no third-party data: a -lh5- stream of two blocks, each with one-symbol
+// tables (n = 0) — 'M', then a match of length 4 at distance 1 — and a -lh0- (stored) file, behind a
+// few bytes of "self-extractor" the reader must skip. Checked against bsdtar on resource.1 (16 files).
+{ let got;
+  try { const { unlha } = await import('../src/lha.js');
+    const bits = []; const put = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >> i) & 1); };
+    for (const c of [77, 256 + 1]) { put(1, 16); put(0, 5); put(0, 5); put(0, 9); put(c, 9); put(0, 4); put(0, 4); }
+    while (bits.length % 8) bits.push(0);
+    const lh5 = []; for (let i = 0; i < bits.length; i += 8) lh5.push(parseInt(bits.slice(i, i + 8).join(''), 2));
+    const entry = (method, name, data, orig) => { const n = [...name].map((c) => c.charCodeAt(0));
+      const le = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, v >>> 24];
+      return [22 + n.length, 0, ...[...method].map((c) => c.charCodeAt(0)), ...le(data.length), ...le(orig), 0, 0, 0, 0, 0x20, 0, n.length, ...n, 0, 0, ...data]; };
+    const arc = Uint8Array.from([0x4d, 0x5a, 1, 2, 3, ...entry('-lh5-', 'ID1\\M.TXT', lh5, 5), ...entry('-lh0-', 'HI.TXT', [104, 105], 2), 0]);
+    got = unlha(arc).map((f) => f.path + '=' + new TextDecoder().decode(f.bytes)).join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('LHA: -lh5- blocks with a literal and a match, a stored file, after a self-extractor', got, 'ID1/M.TXT=MMMMM HI.TXT=hi'); }
 
 // oasis.html and the machines page read the images from oasis/index.json, which a static host can serve:
 // it must say what oasis/images/ holds. `node tools/oasis.mjs index` writes it again.
