@@ -35,6 +35,15 @@
     "output": "window"
   },
   {
+    "name": "linux/doom-mini",
+    "title": "Linux DOOM 1.8 on busybox — no distribution",
+    "world": "linux",
+    "year": 1994,
+    "author": "id Software, port by Dave Taylor; busybox 1.35",
+    "thumb": "oasis/thumbs/linux-doom-1994.png",
+    "output": "window"
+  },
+  {
     "name": "linux/mirage",
     "title": "Debian 12 with id's 1994 Linux DOOM — a real bash on the console",
     "world": "linux",

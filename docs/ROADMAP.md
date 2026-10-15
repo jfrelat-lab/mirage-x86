@@ -82,7 +82,7 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | H12i | x86-64 user space: the long-mode decoder and 64-bit registers, the x86-64 system call table — what most Docker images are | XL |
 | H12j | ✅ **Quake for Linux** (id's svgalib `squake` 1.1, 1997): `linux/quake-1997` plays its demos — mprotect sets page rights (Quake patches its own code), libc5 and svgalib from Debian 1.3, `pak0.pak` from id's `quake106.zip` through an LHA layer (`src/lha.js`). Runs with `-nosound -noudp` until H12g and H12e | — |
 | H12k | **Build DOOM inside MIRAGE-LINUX**: the 1997 source release, `make` in Debian's bash (make, gcc, cc1, as, ld one after another), then play the binary it made — a toolchain of the period in a tab, and O8's twin without PRISM | M |
-| H12l | **A Linux without a distribution**: an image of a few MB — static busybox i386 (shell, coreutils, vi), the program and its data, and only the libraries it needs (linuxsdoom: ld.so, libc4, libvga) — that starts in seconds and suits a static host (O3). Debian stays the fidelity reference | S |
+| H12l | ✅ **A Linux without a distribution**: `linux/doom-mini` — static busybox 1.35 (an OASIS `busybox` layer links its 402 applets from its own `--list`), ld.so, libc4 and libvga, linuxsdoom and its WAD: about 4 MB; busybox's shell starts DOOM. Debian stays the fidelity reference | — |
 | H12m | **Libraries in JavaScript beyond svgalib** (with O9): the part of libc4 an old binary uses (DOOM: some sixty functions), so a program runs with no library of its time — optional, less faithful than the real code | L |
 | K7, H14 | User-space Win32 programs, their API answered in JavaScript | L |
 | K8 | A native window with sound — for OASIS's `oasis run` (O4) | M |

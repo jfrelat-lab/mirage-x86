@@ -3131,6 +3131,22 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('LHA: -lh5- blocks with a literal and a match, a stored file, after a self-extractor', got, 'ID1/M.TXT=MMMMM HI.TXT=hi'); }
 
+// ---- OASIS: the busybox layer links every applet the binary lists (tools/oasis.mjs) ------------------
+// A Linux with no distribution (linux/doom-mini): one static busybox, linked as `busybox --install -s`
+// would, its applet list taken from the binary itself run on MIRAGE-LINUX. tools/linux/applets.asm
+// stands in for busybox: it lists ls, busybox and cat.
+{ let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
+  const tmp = fsm.mkdtempSync(pm.join(osm.tmpdir(), 'oasis-bb-')); let layerDir = null;
+  try { const { linuxRoot } = await import('./oasis.mjs');
+    const hex = '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040882000000820000000500000000100000b804000000bb01000000b973800408ba0f000000cd80b80100000031dbcd806c730a62757379626f780a6361740a';
+    fsm.writeFileSync(pm.join(tmp, 'busybox'), Buffer.from(hex, 'hex'));
+    const root = await linuxRoot({ layers: [{ busybox: pm.join(tmp, 'busybox') }] }); layerDir = root.dirs[0];
+    const bin = pm.join(layerDir, 'bin');
+    got = fsm.readdirSync(bin).sort().map((n) => n + (fsm.lstatSync(pm.join(bin, n)).isSymbolicLink() ? '->' + fsm.readlinkSync(pm.join(bin, n)) : '')).join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  fsm.rmSync(tmp, { recursive: true, force: true }); if (layerDir) fsm.rmSync(layerDir, { recursive: true, force: true });
+  eq('oasis: a busybox layer links each applet the binary lists', got, 'busybox cat->busybox ls->busybox'); }
+
 // ---- OASIS: a DOS image's zip layer as the C: directory (tools/oasis.mjs dosDir) -----------------------
 // `oasis run dos/<image> --terminal` threw "unzip is not a function or its return value is not
 // iterable": dosDir iterated src/zip.js's unzip as if it were synchronous and read f.name / f.data,

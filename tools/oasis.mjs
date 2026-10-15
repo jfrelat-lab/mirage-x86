@@ -16,7 +16,7 @@
 // <image> is a name under oasis/images/ (dos/c-dogs) or a path to a manifest. The cache is
 // $OASIS_CACHE or ~/.cache/oasis: one directory per layer, named by the hash of its source.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, lstatSync, readlinkSync,
-  symlinkSync, rmSync, mkdtempSync, copyFileSync, renameSync } from 'fs';
+  symlinkSync, rmSync, mkdtempSync, copyFileSync, renameSync, chmodSync } from 'fs';
 import { createHash } from 'crypto';
 import { gunzipSync } from 'zlib';
 import { join, dirname, resolve, relative, basename, extname } from 'path';
@@ -55,7 +55,7 @@ const isUrl = (s) => /^https?:\/\//.test(s);
 const local = (s) => resolve(ROOT, s);
 const layerKey = (l) => createHash('sha256').update(JSON.stringify(l)).digest('hex').slice(0, 16);
 const cacheDir = (l) => join(CACHE, 'layers', layerKey(l));
-const needsPull = (l) => (l.tar || l.deb || l.docker || l.lha || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
+const needsPull = (l) => (l.tar || l.deb || l.docker || l.lha || l.busybox || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
 
 async function fetchBytes(src) {
   if (!isUrl(src)) return readFileSync(local(src));
@@ -128,6 +128,16 @@ async function pullLayer(l) {
     untar(e.stdout, dir);
   } else if (l.deb) undeb(await fetchBytes(l.deb), l.into ? join(dir, l.into) : dir);
   else if (l.tar) { const b = await fetchBytes(l.tar); untar(/\.(tgz|gz)$/.test(l.tar) ? gunzipSync(b) : b, l.into ? join(dir, l.into) : dir); }
+  else if (l.busybox) {                // a static busybox, and a link per applet as `busybox --install -s` makes
+    const bin = join(dir, l.into || 'bin'); mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'busybox'), isUrl(l.busybox) ? await fetchBytes(l.busybox) : readFileSync(local(l.busybox))); chmodSync(join(bin, 'busybox'), 0o755);
+    // The applets are the binary's own answer to --list, run on MIRAGE-LINUX itself.
+    const r = spawnSync(process.execPath, [join(ROOT, 'tools', 'linux', 'run.mjs'), join(bin, 'busybox'), '--list'], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`oasis: busybox --list: ${r.stderr}`);
+    for (const a of r.stdout.split('\n').map((x) => x.trim()).filter((x) => x && x !== 'busybox' && !x.includes('/'))) {
+      try { symlinkSync('busybox', join(bin, a)); } catch { /* already there */ }
+    }
+  }
   else if (l.lha) {                     // an LHA archive inside a ZIP (Quake's resource.1): the files `files` names, renamed
     const { unzip } = await import(join(ROOT, 'src', 'zip.js')), { unlha } = await import(join(ROOT, 'src', 'lha.js'));
     const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
@@ -155,7 +165,7 @@ async function linuxRoot(img) {
   const dirs = [], files = new Map(), links = new Map(), mkdirs = new Set();
   for (const l of img.layers || []) {
     if (l.dir) dirs.push(local(l.dir));
-    else if (l.tar || l.deb || l.docker || l.lha) dirs.push(await pullLayer(l));
+    else if (l.tar || l.deb || l.docker || l.lha || l.busybox) dirs.push(await pullLayer(l));
     else if (l.gz || l.file) {
       const src = l.gz || l.file;
       let host = needsPull(l) ? join(await pullLayer(l), basename(src.split('?')[0]).replace(/\.gz$/, '')) : local(src);
