@@ -80,6 +80,10 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | H12g | Sound for Linux programs: /dev/dsp (OSS) on src/audio.js — DOOM's sndserver writes there | M |
 | H12h | The mouse through /dev/input and gpm, and X11 programs through PRISM's X11 layer or a real X server (with H12e) | L |
 | H12i | x86-64 user space: the long-mode decoder and 64-bit registers, the x86-64 system call table — what most Docker images are | XL |
+| H12j | **Quake for Linux** (id's svgalib `squake`, 1996–97), the next showcase after DOOM: the same console and svgalib path, heavy x87 and software 3D, larger binaries; the shareware `pak0.pak` | M |
+| H12k | **Build DOOM inside MIRAGE-LINUX**: the 1997 source release, `make` in Debian's bash (make, gcc, cc1, as, ld one after another), then play the binary it made — a toolchain of the period in a tab, and O8's twin without PRISM | M |
+| H12l | **A Linux without a distribution**: an image of a few MB — static busybox i386 (shell, coreutils, vi), the program and its data, and only the libraries it needs (linuxsdoom: ld.so, libc4, libvga) — that starts in seconds and suits a static host (O3). Debian stays the fidelity reference | S |
+| H12m | **Libraries in JavaScript beyond svgalib** (with O9): the part of libc4 an old binary uses (DOOM: some sixty functions), so a program runs with no library of its time — optional, less faithful than the real code | L |
 | K7, H14 | User-space Win32 programs, their API answered in JavaScript | L |
 | K8 | A native window with sound — for OASIS's `oasis run` (O4) | M |
 
