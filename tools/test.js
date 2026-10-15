@@ -234,6 +234,11 @@ function eq(name, got, want) {
 
 // ---- INVD / WBINVD (0F 08 / 0F 09, 486+): no cache to flush, execution just goes on. ----------
 // KolibriOS's kernel (v86 kolibri.img) stopped on WBINVD as an unimplemented opcode.
+// ENDBR32 (F3 0F 1E FB) and the other reserved-NOP hints (0F 19-1E, 0F 18 prefetch) run as NOPs, as
+// in QEMU: FreeNOS, built with -fcf-protection, stopped on "unimplemented opcode 0x0f 0x1e".
+{ let got; try { const { cpu } = run([0xf3, 0x0f, 0x1e, 0xfb, 0x0f, 0x18, 0x0e, 0x00, 0x00, 0x0f, 0x19, 0xc0, 0xbb, 0x34, 0x12, 0xf4]); got = cpu.bx.toString(16); }
+  catch (e) { got = e.message.slice(0, 60); }
+  eq('ENDBR32, PREFETCH and the 0F 19-1E hints are NOPs', got, '1234'); }
 { let got; try { const { cpu } = run([0x0f, 0x09, 0x0f, 0x08, 0xbb, 0x78, 0x56, 0xf4]); got = cpu.bx.toString(16); }
   catch (e) { got = String(e.message).slice(0, 60); }
   eq('WBINVD and INVD run through to the next instruction', got, '5678'); }

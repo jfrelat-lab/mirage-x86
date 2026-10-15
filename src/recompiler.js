@@ -2107,7 +2107,12 @@ export class Recompiler {
         // why DR6/DR7 keep only the bits a write can set.
         case 0x21: { const o = modrmReg(); P(rW(o.rm, 32, `(cpu.dr[${o.reg}]>>>0)`)); return; }   // MOV r32, DRn
         case 0x23: { const o = modrmReg(); P(`cpu.dr[${o.reg}]=${rR(o.rm, 32)};`); return; }      // MOV DRn, r32
-        case 0x1f: modrm(); return;                                                     // multi-byte NOP
+        // 0F 1F /0 is NOP; 0F 19-1E are the "reserved-NOP" hints of the SDM's opcode map, which QEMU
+        // also executes as NOPs (its 0x119-0x11f) — among them ENDBR32 (F3 0F 1E FB), which gcc's
+        // -fcf-protection puts at every function entry: FreeNOS stopped on it. 0F 18 /0-3 are the
+        // PREFETCH hints, NOPs too as far as a guest can tell.
+        case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c: case 0x1d: case 0x1e:
+        case 0x1f: modrm(); return;                                                     // multi-byte NOP and hints
         case 0x31: P('cpu.reg[0]=(cpu.cycles>>>0);cpu.reg[2]=(Math.floor(cpu.cycles/4294967296))>>>0;'); return; // RDTSC → EDX:EAX
         // RDMSR / WRMSR: ring 0 only, #GP(0) for a register the part does not have (cpu.rdmsr).
         case 0x32: P(`cpu.eip=${curIpStart};if(!cpu.rdmsr())return;`); return;
