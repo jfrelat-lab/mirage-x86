@@ -54,6 +54,19 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | ReactOS 0.4.15 | Fails | a stop in the kernel: it needs ACPI | 256 MiB, `pentiumpro`, PCI | 2026-10-07 |
 | Plan 9 (9legacy) | Fails | the loader starts the kernel, which then stops | PCI | 2026-10 |
 | Haiku | Starts | its boot splash with all seven icons lit (Enter at the Boot Manager), then no desktop after 900 guest s | 256 MiB, `pentiumpro`, PCI | 2026-10-15 |
+| MikeOS 4.7 | Plays | its interface chooser (program menu or command line) | — | 2026-10-15 |
+| MS-DOS 4 (floppy) | Plays | the date and time prompts | — | 2026-10-15 |
+| FreeNOS 1.0.3 | Plays | its system information and a shell; its timer reads "0 ticks" | 256 MiB, `686` | 2026-10-15 |
+| xwoaf (Linux, X11 on a floppy-sized CD) | Starts | the keyboard chooser before `login:` | 256 MiB | 2026-10-15 |
+| Oberon | Starts | "OBERON loading…", then nothing | 64 MiB | 2026-10-15 |
+| Linux 3.x (v86's mini CD) | Starts | the kernel boots, then waits for a virtio 9p root (v86's own) | 128 MiB, `686` | 2026-10-15 |
+| Linux 2.6 (v86's mini CD) | Fails | ISOLINUX: "Booting kernel failed: Invalid argument" | 128 MiB, `686` | 2026-10-15 |
+| TinyCore 11 | Starts | "Loading extensions…", udev killing slow modprobes, after 900 guest s | 256 MiB, `686` | 2026-10-15 |
+| SliTaz rolling 2024 | Fails | a kernel panic, page fault in an interrupt (`__queue_work`) | 512 MiB, `686` | 2026-10-15 |
+| HelenOS 0.14.1 | Fails | GRUB loads the kernel and modules, then "can't get mode info" (VBE) and a triple fault | 256 MiB, `686` | 2026-10-15 |
+| Sortix 1.0 | Starts | GRUB loading its 5 MB initrd, unfinished after 600 guest s | 512 MiB, `686` | 2026-10-15 |
+| ToaruOS 1.6.1 | Starts | its bootloader menu; Enter is not taken | 512 MiB, `686` | 2026-10-15 |
+| Tilck | Fails | its bootloader and kernel start (800x600x32 console), then a kernel panic on a #GP in kmain | 128 MiB, `686` | 2026-10-15 |
 
 Boot-sector programs — BootChess, bootBASIC, bootOS, Invaders, Pillman, sectorFORTH, sectorLISP,
 TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel with QEMU.
