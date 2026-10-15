@@ -205,9 +205,9 @@ async function dosDir(img) {
   for (const l of img.layers || []) {
     if (l.zip) {
       const b = needsPull(l) ? readFileSync(join(await pullLayer(l), basename(l.zip))) : readFileSync(local(l.zip));
-      for (const f of unzip(new Uint8Array(b))) {
-        if (f.dir) continue;
-        const to = join(dir, f.name.toUpperCase()); mkdirSync(dirname(to), { recursive: true }); writeFileSync(to, f.data);
+      // unzip is async and gives { path, bytes }, directories left out (src/zip.js).
+      for (const f of await unzip(new Uint8Array(b))) {
+        const to = join(dir, f.path.toUpperCase()); mkdirSync(dirname(to), { recursive: true }); writeFileSync(to, f.bytes);
       }
     } else if (l.file) copyFileSync(needsPull(l) ? join(await pullLayer(l), basename(l.file)) : local(l.file), join(dir, (l.to || basename(l.file)).toUpperCase()));
     else if (l.dir) spawnSync('cp', ['-R', local(l.dir) + '/.', dir]);
@@ -328,7 +328,7 @@ function imageIndex() {
 const indexText = () => JSON.stringify(imageIndex(), null, 2) + '\n';
 
 // ---- command line ---------------------------------------------------------------------------------
-export { findImage, listImages, linuxRoot, hostOver, untar, undeb, indexText };
+export { findImage, listImages, linuxRoot, hostOver, untar, undeb, indexText, dosDir };
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [cmd, name, ...rest] = process.argv.slice(2);
   const flags = rest.filter((a) => a === '--window' || a === '--terminal' || a === '--serve'), args = rest.filter((a) => !flags.includes(a));

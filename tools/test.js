@@ -3108,6 +3108,26 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('LHA: -lh5- blocks with a literal and a match, a stored file, after a self-extractor', got, 'ID1/M.TXT=MMMMM HI.TXT=hi'); }
 
+// ---- OASIS: a DOS image's zip layer as the C: directory (tools/oasis.mjs dosDir) -----------------------
+// `oasis run dos/<image> --terminal` threw "unzip is not a function or its return value is not
+// iterable": dosDir iterated src/zip.js's unzip as if it were synchronous and read f.name / f.data,
+// where it is async and gives { path, bytes }. A stored ZIP built here: GAME/RUN.BAT holds "hi".
+{ let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
+  const tmp = fsm.mkdtempSync(pm.join(osm.tmpdir(), 'oasis-dos-'));
+  try { const { dosDir } = await import('./oasis.mjs');
+    const name = [...'game/run.bat'].map((c) => c.charCodeAt(0)), data = [104, 105];
+    const le16 = (v) => [v & 255, v >> 8], le32 = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, v >>> 24];
+    const crc = (() => { let c = ~0; for (const b of data) { c ^= b; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; })();
+    const loc = [...le32(0x04034b50), ...le16(10), 0, 0, 0, 0, 0, 0, 0, 0, ...le32(crc), ...le32(2), ...le32(2), ...le16(name.length), 0, 0, ...name, ...data];
+    const cen = [...le32(0x02014b50), ...le16(20), ...le16(10), 0, 0, 0, 0, 0, 0, 0, 0, ...le32(crc), ...le32(2), ...le32(2), ...le16(name.length), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...le32(0), ...name];
+    const eocd = [...le32(0x06054b50), 0, 0, 0, 0, 1, 0, 1, 0, ...le32(cen.length), ...le32(loc.length), 0, 0];
+    fsm.writeFileSync(pm.join(tmp, 'g.zip'), Uint8Array.from([...loc, ...cen, ...eocd]));
+    const dir = await dosDir({ layers: [{ zip: pm.join(tmp, 'g.zip') }] });
+    got = fsm.readFileSync(pm.join(dir, 'GAME', 'RUN.BAT'), 'utf8'); fsm.rmSync(dir, { recursive: true, force: true });
+  } catch (e) { got = e.message.slice(0, 80); }
+  fsm.rmSync(tmp, { recursive: true, force: true });
+  eq('oasis: a DOS image\'s zip layer becomes the C: directory, names upper-cased', got, 'hi'); }
+
 // oasis.html and the machines page read the images from oasis/index.json, which a static host can serve:
 // it must say what oasis/images/ holds. `node tools/oasis.mjs index` writes it again.
 { const { indexText } = await import('./oasis.mjs'); const fsm = await import('fs');
