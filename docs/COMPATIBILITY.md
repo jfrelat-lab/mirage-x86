@@ -63,7 +63,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | Linux 2.6 (v86's mini CD) | Fails | ISOLINUX: "Booting kernel failed: Invalid argument" | 128 MiB, `686` | 2026-10-15 |
 | TinyCore 11 | Starts | "Loading extensions…", udev killing slow modprobes, after 900 guest s | 256 MiB, `686` | 2026-10-15 |
 | SliTaz rolling 2024 | Fails | a kernel panic, page fault in an interrupt (`__queue_work`) | 512 MiB, `686` | 2026-10-15 |
-| HelenOS 0.14.1 | Fails | GRUB loads the kernel and modules, then "can't get mode info" (VBE) and a triple fault | 256 MiB, `686` | 2026-10-15 |
+| HelenOS 0.14.1 | Starts | the SPARTAN kernel boots and starts its services (ns, locsrv, rd, vfs, logger, ext4fs); rd and ns then die on a user-mode page fault at the same kernel address, 80167F55h | 256 MiB, `686` (or `586`) | 2026-10-15 |
 | Sortix 1.0 | Starts | GRUB loading its 5 MB initrd, unfinished after 600 guest s | 512 MiB, `686` | 2026-10-15 |
 | ToaruOS 1.6.1 | Starts | its bootloader menu; Enter is not taken | 512 MiB, `686` | 2026-10-15 |
 | Tilck | Fails | its bootloader and kernel start (800x600x32 console), then a kernel panic on a #GP in kmain | 128 MiB, `686` | 2026-10-15 |
