@@ -752,8 +752,11 @@ export function installBIOS(machine, opts = {}) {
             else machine.vbeWindow(cpu.dx & 0xffff);
             cpu.ax = 0x004f; break;
           }
-          case 0x03:                                            // get mode
-            cpu.bx = machine.vbe ? (machine.vbe.number | (machine.vbe.linear ? 0x4000 : 0)) : 0;
+          // 4F03h: the current mode — a standard VGA mode number when no VBE mode is set, as SeaVGABIOS
+          // (QEMU) and DOSBox-X both answer (tools/vbecur.asm: 0003h in text mode). It answered 0, and
+          // GRUB 2 asked 4F01h for mode 0 and stopped with "can't get mode info" (HelenOS).
+          case 0x03:
+            cpu.bx = machine.vbe ? (machine.vbe.number | (machine.vbe.linear ? 0x4000 : 0)) : mem.u8[BDA + 0x49];
             cpu.ax = 0x004f; break;
           // 4F06h: the logical scan line, BL=0 set in pixels (CX), 1 get, 2 set in bytes; each answers
           // BX bytes, CX pixels, DX the lines video memory holds at that width. 4F07h: the display

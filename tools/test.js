@@ -3233,6 +3233,16 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message; }
   eq('Sound Blaster: IRQ 7 after reset, IRQ 5 once mixer 80h selects it', JSON.stringify(got), JSON.stringify([0x80, 0x20])); }
 
+// ---- VBE 4F03h in text mode answers the standard mode (tools/vbecur.asm) -----------------------------
+// QEMU's SeaVGABIOS and DOSBox-X both give BX=0003h; MIRAGE gave 0, and GRUB 2 then asked 4F01h for
+// mode 0 and stopped with "can't get mode info" (HelenOS).
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+    cpu.ax = 0x0003; mc.intHandlers[0x10](cpu, mc); cpu.ax = 0x4f03; cpu.bx = 0x1234; mc.intHandlers[0x10](cpu, mc);
+    got = [cpu.ax & 0xffff, cpu.bx & 0xffff].map((x) => x.toString(16)).join(' ');
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('VBE 4F03h in text mode: the standard mode 03h', got, '4f 3'); }
+
 // ---- PIT channel 2 in mode 0: OUT (port 61h bit 5) low until the count runs out with GATE high ----------
 // GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
 // measured no time, and the menu countdowns of HelenOS and Sortix stood still at 8 s. 8254 datasheet,
