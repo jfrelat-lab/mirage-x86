@@ -59,7 +59,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     let f = freeFrames.pop();
     if (f === undefined) {
       f = lx.nextFrame; lx.nextFrame += PAGE;
-      if (lx.nextFrame > mem.size) throw new Error('mirage-linux: out of physical memory');
+      // Not into the card's framebuffer: on a 64 MiB machine it is the last 4 MiB (src/bios.js), and a
+      // process page there would be drawn on the screen — and overwritten by /dev/fb0.
+      const top = machine.vbeFbBase && machine.vbeFbBase < mem.size ? machine.vbeFbBase : mem.size;
+      if (lx.nextFrame > top) throw new Error('mirage-linux: out of physical memory');
     }
     mem.u8.fill(0, f, f + PAGE);
     return f;
@@ -530,6 +533,43 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // paces it. The samples go to src/audio.js (machine.dsp, beside the Sound Blaster). OSS's defaults:
   // 8 kHz, unsigned 8-bit, mono; 16 fragments of 4 KiB until SNDCTL_DSP_SETFRAGMENT says otherwise.
   // DOOM's sndserver mixes there; it stopped at "Could not open /dev/dsp".
+  // /dev/fb0 (29:0), the framebuffer device (linux/fb.h): the emulated card's linear framebuffer in
+  // 640x480 at 32 bits (VBE mode 112h, set at the first open), truecolor, mmap'd straight onto the card —
+  // what a program draws there is on the screen. busybox's fbset and fbsplash, SDL's fbcon, Xfbdev.
+  fs.set('/dev/fb0', { dev: 'fb', rdev: 0x1d00, mtime: 0 }); fs.set('/dev/fb', fs.get('/dev/fb0'));
+  const FB = { w: 640, h: 480, bpp: 32 };
+  const fbOn = () => {
+    if (!machine.vbeFbBase || !machine.setVbeMode) throw 19;    // ENODEV: no card on this machine
+    if (!machine.vbe || machine.vbe.number !== 0x112) machine.setVbeMode([0x112, FB.w, FB.h, FB.bpp], true);
+    return machine.vbeFbBase >>> 0;
+  };
+  const fbLen = () => FB.w * FB.h * (FB.bpp >> 3);
+  const fbIoctl = (req, arg) => {
+    const base = fbOn(), line = FB.w * (FB.bpp >> 3);
+    const z = (a, n) => { for (let i = 0; i < n; i += 4) wr32(a + i, 0); };
+    switch (req) {
+      case 0x4600: case 0x4601: {                            // FBIO{GET,PUT}_VSCREENINFO: one mode, given back
+        z(arg, 160);
+        wr32(arg, FB.w); wr32(arg + 4, FB.h); wr32(arg + 8, FB.w); wr32(arg + 12, FB.h);   // xres yres, virtual
+        wr32(arg + 24, FB.bpp);
+        wr32(arg + 32, 16); wr32(arg + 36, 8); wr32(arg + 44, 8); wr32(arg + 48, 8);        // red at 16, green at 8
+        wr32(arg + 56, 0); wr32(arg + 60, 8);                                               // blue at 0, 8 bits each
+        wr32(arg + 88, 0xffffffff); wr32(arg + 92, 0xffffffff);                             // height, width in mm: unknown
+        wr32(arg + 100, 39721);                                                             // pixclock: 25.175 MHz, VGA's
+        return 0;
+      }
+      case 0x4602: {                                          // FBIOGET_FSCREENINFO
+        z(arg, 68);
+        const id = 'MIRAGE VBE'; for (let i = 0; i < id.length; i++) wr8(arg + i, id.charCodeAt(i));
+        wr32(arg + 16, base); wr32(arg + 20, machine.vbeFbBytes || fbLen());                // smem_start, smem_len
+        wr32(arg + 24, 0); wr32(arg + 32, 2);                                               // packed pixels, truecolor
+        wr32(arg + 44, line);                                                               // line_length
+        return 0;
+      }
+      case 0x4604: case 0x4605: case 0x4606: case 0x4611: return 0;   // GET/PUTCMAP (truecolor), PAN_DISPLAY, BLANK
+      default: return -E.EINVAL;
+    }
+  };
   fs.set('/dev/dsp', { dev: 'dsp', rdev: 0xe03, mtime: 0 }); fs.set('/dev/audio', fs.get('/dev/dsp'));
   const dsp = lx.dsp = { rate: 8000, fmt: 8, ch: 1, fragShift: 12, frags: 16, queued: 0, t: 0, played: 0, pcm: [] };
   const dspBps = () => dsp.rate * dsp.ch * (dsp.fmt === 0x10 ? 2 : 1);
@@ -690,6 +730,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (f.node.dev === 'mouse') return bytes.length;
     if (f.node.dev === 'mice') { for (const c of bytes) { lx.miceIn.push(0xfa); if (c === 0xf2) lx.miceIn.push(0x00); } return bytes.length; }
     if (f.node.dev === 'dsp') return dspWrite(f, bytes);
+    if (f.node.dev === 'fb') {                                // cat image > /dev/fb0
+      const base = fbOn(), room = Math.max(0, fbLen() - (f.pos || 0)), n = Math.min(bytes.length, room);
+      if (!n && bytes.length) return -E.ENOSPC;
+      mem.u8.set(bytes.subarray(0, n), base + (f.pos || 0)); f.pos = (f.pos || 0) + n; return n;
+    }
     if (f.node.dev) return f.node.dev === 'full' ? -E.ENOSPC : bytes.length;
     if (f.node.dir) return -E.EISDIR;
     if ((f.flags & 3) === 0) return -E.EBADF;                               // O_RDONLY
@@ -715,6 +760,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     } else if (f.node.dev === 'mouse') {
       if (!lx.mouseIn.length) return (f.flags & 0x800) ? -E.EAGAIN : 0;
       src = Uint8Array.from(lx.mouseIn.splice(0, n));
+    } else if (f.node.dev === 'fb') {
+      const base = fbOn(), pos = at === undefined ? (f.pos || 0) : at;
+      src = mem.u8.slice(base + Math.min(pos, fbLen()), base + Math.min(pos + n, fbLen()));
+      if (at === undefined) f.pos = pos + src.length;
     } else if (f.node.dev === 'mice') {
       if (!lx.miceIn.length) return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;   // a device that waits for a move
       src = Uint8Array.from(lx.miceIn.splice(0, n - (n % 3) || n));
@@ -845,6 +894,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // asm/termbits.h). Pipes and files are not terminals.
   const ioctl = (f, req, arg) => {
     if (f.node && f.node.dev === 'dsp') return dspIoctl(req >>> 0, arg);
+    if (f.node && f.node.dev === 'fb') return fbIoctl(req >>> 0, arg);
     if (!f.node || (f.node.dev !== 'tty' && f.node.dev !== 'mouse')) return -E.ENOTTY;
     // The console's settings are the console's; a serial line (the mouse) has its own. Sharing them,
     // the mouse's 1200-baud setup (VMIN 1) became the console's, and DOOM's keyboard poll then waited.
@@ -934,8 +984,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const seek = (fd, off, whence) => {
     const f = fdOf(fd);
     if (f.pipe !== undefined || f.pp) return -E.ESPIPE;
-    if (f.node.dev) return 0;
-    const base = whence === 0 ? 0 : whence === 1 ? f.pos : whence === 2 ? f.node.size : NaN;
+    if (f.node.dev && f.node.dev !== 'fb') return 0;
+    const size = f.node.dev === 'fb' ? fbLen() : f.node.size;
+    const base = whence === 0 ? 0 : whence === 1 ? (f.pos || 0) : whence === 2 ? size : NaN;
     if (Number.isNaN(base) || base + off < 0) return -E.EINVAL;
     f.pos = base + off; return f.pos;
   };
@@ -1055,6 +1106,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         unmapRange(at, at + size); mapRange(at, at + size, true);
         dsp.map = { va: at, size: Math.min(size, dspBuf()) }; dsp.trig = false; dsp.played = 0; dsp.t = lx.mono();
         return at;
+      }
+      if (!(flags & 0x20) && fds[fd] && fds[fd].node && fds[fd].node.dev === 'fb') {    // the card's framebuffer itself
+        const base = fbOn(), len2 = Math.min(size, (machine.vbeFbBytes || fbLen()) - pgoff * PAGE);
+        if (len2 <= 0) return -E.EINVAL;
+        unmapRange(at, at + size); mapPhys(at, base + pgoff * PAGE, len2, (prot & 2) !== 0); return at;
       }
       if (!(flags & 0x20) && fds[fd] && fds[fd].node && fds[fd].node.dev === 'mem') {
         unmapRange(at, at + size); mapPhys(at, pgoff * PAGE, size, (prot & 2) !== 0); return at;

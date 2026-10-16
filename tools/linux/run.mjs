@@ -72,13 +72,13 @@ if (SHOT) {
   const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
   const v = new Video(mc, canvas); v.font = mc.font;
   let next = STEP;
-  shoot = () => {
-    if (mc.cpu.cycles < next) return;
-    const t = Math.round(next / SEC); next += STEP;
+  shoot = (last = false) => {
+    if (!last && mc.cpu.cycles < next) return;
+    const t = last ? 'end' : Math.round(next / SEC); if (!last) next += STEP;
     v.frame = 16; v.render();                    // as tools/v86/bootshot.mjs: v.u32 holds the picture
     const W = v.imgW, H = v.imgH, rgb = new Uint8Array(W * H * 3);
     for (let i = 0; i < W * H; i++) { const p = v.u32[i]; rgb[i * 3] = p & 0xff; rgb[i * 3 + 1] = (p >> 8) & 0xff; rgb[i * 3 + 2] = (p >> 16) & 0xff; }
-    writePNG(join(SHOT, `${basename(prog)}-${String(t).padStart(5, '0')}.png`), rgb, W, H, 1);
+    writePNG(join(SHOT, `${basename(prog)}-${String(t).padStart(5, '0')}.png`), rgb, W, H, 1);   // and -00end.png when the run ends
     console.error(`mirage-linux: ${t}s ${W}x${H} -> ${SHOT}`);
   };
 }
@@ -86,6 +86,7 @@ const WAV = process.env.MIRAGE_LXWAV, played = [];
 let wavRate = 0;
 const record = () => { if (!WAV || !mc.dsp) return; const { rate, samples } = mc.dsp.drain(); if (samples.length) { wavRate = rate; for (const v of samples) played.push(v); } };
 while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (shoot) shoot(); record(); }
+if (shoot) shoot(true);                         // the screen as the run left it
 if (WAV) {
   const { writeFileSync } = await import('fs');
   const n = played.length, b = Buffer.alloc(44 + n * 2), r = wavRate || 11025;

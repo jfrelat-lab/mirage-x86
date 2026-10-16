@@ -3019,6 +3019,24 @@ const runLinux = (hex, argv) => {
     got = lx.miceIn.map((b) => b.toString(16)).join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: /dev/input/mice as PS/2 packets, Y up', got, '9 5 3 3a fe fc'); }
+// tools/linux/fb.asm: /dev/fb0 as fbset, fbsplash and Xfbdev use it — its two screen infos, an mmap of the
+// card's framebuffer, a pixel written there and read back. 63 when all hold; with no /dev/fb0, 0.
+{ const hex = (                                         // nasm -f bin tools/linux/fb.asm (its file part)
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004085f0100004b020000070000000010000031ffb805000000bb56810408' +
+    'b902000000cd8085c00f88de000000a35f810408b8360000008b1d5f810408b900460000ba67810408cd80813d678104' +
+    '0880020000750383cf01813d6b810408e0010000750383cf02833d7f81040820750383cf04b8360000008b1d5f810408' +
+    'b902460000ba07820408cd80813d33820408000a0000750383cf08b8c000000031dbb900c01200ba03000000be010000' +
+    '0055bd00000000578b3d5f810408cd805f5d3d00f0ffff774483cf10c74004ff00ff00b8130000008b1d5f810408b904' +
+    '00000031d2cd80b8030000008b1d5f810408b963810408ba04000000cd80813d63810408ff00ff00750383cf2089fbb8' +
+    '01000000cd802f6465762f66623000');
+  let got;
+  try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);   // a machine with its card
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/FB']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    got = lx.done ? lx.status : -1;
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: /dev/fb0 — screen infos, mmap onto the card, a pixel read back', got, 63); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
