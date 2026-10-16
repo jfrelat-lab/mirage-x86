@@ -292,14 +292,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
 
   // ---- ending ------------------------------------------------------------------------------------
   const exit = (status, signal = 0) => {
-    if (lx.stack.length) {                                               // a child: its parent resumes
-      const pid = lx.pid;
+    if (lx.pid !== lx.rootPid && lx.procs.length) {                      // not the first process: another runs
+      const pid = lx.pid, ppid = lx.ppid, code = signal ? signal & 0x7f : (status & 0xff) << 8;
       closeAll();
       releasePages(lx.pages);
-      restore(lx.stack.pop());
-      lx.zombies.set(pid, signal ? signal & 0x7f : (status & 0xff) << 8);
+      const parent = lx.procs.find((q) => q.pid === ppid);
+      (parent ? parent.zombies : lx.orphans).set(pid, code);
+      switchTo(lx.procs.shift());
       return;
     }
+    for (const q of lx.procs) releasePages(q.pages);                     // the first process ends the run, as PID 1 does a container's
+    lx.procs.length = 0;
     lx.done = true; lx.status = signal ? 128 + signal : status & 0xff; lx.signal = signal;
     cpu.halted = true;
     machine.rec.stop && machine.rec.stop();
@@ -315,12 +318,18 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
 
   // ---- processes -----------------------------------------------------------------------------------
-  // One process runs at a time. fork() saves the parent whole — registers, x87 and SSE state, its
-  // pages, descriptors, directory — and the child runs on copies of its pages until it exits; then
-  // the parent resumes with the child's pid, and wait4 finds the child's status. That is enough for
-  // a shell: it forks, the child execs, the parent waits. A pipeline's left side runs to its end
-  // before the right side starts, its output held in the pipe.
-  lx.pid = 1; lx.ppid = 0; lx.nextPid = 100; lx.stack = []; lx.zombies = new Map();
+  // Processes run in turn. The one on the CPU is lx and the machine; the others wait in lx.procs,
+  // each saved whole — registers, x87 and SSE state, pages, descriptors, directory, its children's
+  // exit codes. A switch happens on a system-call boundary only, where the state is whole: when a
+  // call blocks (the process tries it again on its next turn), when a call returns after the
+  // quantum is spent, and at nanosleep. fork() puts the parent in the queue and runs the child first,
+  // as before. A process that exits leaves its code with its parent; when every process is blocked
+  // the machine waits for input, as one blocked process did. DOOM's sndserver reads a pipe that DOOM
+  // writes, both running; until this one process ran at a time, a pipeline's left side to its end
+  // before its right side started.
+  lx.pid = 1; lx.ppid = 0; lx.nextPid = 100; lx.zombies = new Map();
+  lx.rootPid = 1; lx.procs = []; lx.orphans = new Map(); lx.sliceStart = 0; lx.blockRun = 0;
+  const QUANTUM = () => 0.02 * (machine.cyclesPerSecond || 1e8);         // 20 ms of guest time
   const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
   const snapshot = () => ({
     pid: lx.pid, ppid: lx.ppid, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext,
@@ -344,6 +353,19 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (s.xmm) cpu.xmm.u8.set(s.xmm);
     cpu.halted = false; lx.done = false;
   };
+  /** Put the running process aside (its pages unmapped, not freed) and run `next`. */
+  const switchTo = (next) => {
+    restore(next);
+    lx.sliceStart = cpu.cycles;
+  };
+  const yieldTo = () => {
+    if (!lx.procs.length) return;
+    const me = snapshot();
+    releasePages(lx.pages, false);
+    lx.procs.push(me);
+    switchTo(lx.procs.shift());
+  };
+  lx.alive = (pid) => pid === lx.pid || lx.procs.some((q) => q.pid === pid);
   const fork = (flags = 0x11, ctid = 0) => {
     if (flags & 0x100) return -E.ENOSYS;                                 // CLONE_VM: threads, not here
     const parent = snapshot(), pid = lx.nextPid++;
@@ -355,8 +377,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       mem.u8.copyWithin(f, pg.frame, pg.frame + PAGE);
       pages.set(vpn, { frame: f, write: pg.write });
     }
-    lx.stack.push(parent);
+    releasePages(lx.pages, false);
+    lx.procs.push(parent);
     lx.pages = pages; installPages(pages); cpu.setCR3(cpu.cr3);
+    lx.sliceStart = cpu.cycles;
     lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map();
     if ((flags & 0x01000000) && ctid) wr32(ctid, pid);                   // CLONE_CHILD_SETTID
     return 0;
@@ -365,7 +389,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const wait = (pid, statusPtr, options) => {
     let key = null;
     for (const k of lx.zombies.keys()) if (pid <= 0 || pid === k) { key = k; break; }
-    if (key === null) return (options & 1) ? 0 : -E.ECHILD;               // WNOHANG
+    if (key === null) {
+      const kids = lx.procs.some((q) => q.ppid === lx.pid && (pid <= 0 || q.pid === pid));
+      if (!kids) return -E.ECHILD;
+      return (options & 1) ? 0 : BLOCK;                                   // WNOHANG, or wait for it
+    }
     const st = lx.zombies.get(key); lx.zombies.delete(key);
     if (statusPtr) wr32(statusPtr, st);
     return key;
@@ -605,7 +633,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     let src;
     // A pipe: what its writer left. Its writer has run to its end already (one process at a time), so an
     // empty pipe is the end of it.
-    if (f.pp) { if (!f.rd) return -E.EBADF; const take = f.pp.buf.splice(0, n); wrBytes(buf, Uint8Array.from(take)); return take.length; }
+    if (f.pp) {
+      if (!f.rd) return -E.EBADF;
+      if (!f.pp.buf.length && n > 0 && writerOpen(f.pp)) return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;   // a writer may still write
+      const take = f.pp.buf.splice(0, n); wrBytes(buf, Uint8Array.from(take)); return take.length;
+    }
     if (f.pipe !== undefined) {
       if (f.pipe !== 0) return -E.EBADF;
       src = lx.stdin.subarray(lx.stdinPos, lx.stdinPos + n); lx.stdinPos += src.length;
@@ -765,7 +797,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const select = (n, inp, outp, exp, tv) => {
     let ready = 0, waitsOnTty = false;
     if (!tv && inp) for (let fd = 0; fd < n; fd++) if ((rd32(inp + (fd >>> 5) * 4) >>> (fd & 31)) & 1 && fds[fd] && fds[fd].node && fds[fd].node.dev === 'tty') waitsOnTty = true;
-    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.pp) return true; if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
+    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
       if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0; return true; };
     const writes = [];
     for (const [set, test] of [[inp, has], [outp, (fd) => !!fds[fd]], [exp, () => false]]) {
@@ -779,9 +811,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // No timeout and nothing ready on a terminal: wait for a key — leaving the sets as they were, since
     // the call runs again from the start.
     if (!ready && waitsOnTty && !lx.ttyIn.length) return BLOCK;
+    if (!ready && !tv && lx.procs.length) return BLOCK;                  // no timeout: wait while another process runs
     for (const [a, v] of writes) wr32(a, v);
     return ready;
   };
+  /** Is a pipe's write end open in any process? Then an empty pipe is not its end yet. */
+  const writerOpen = (pp) => [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.pp === pp && !f.rd));
   const pipe = (ptr) => {
     const pp = { buf: [] };
     const r = newFd({ pp, rd: true }), w = newFd({ pp, rd: false });
@@ -973,7 +1008,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       return 0;
     },
     175: () => 0, 186: () => 0,                                            // rt_sigprocmask, sigaltstack
-    37: (pid, sig) => raise(sig),                                          // kill: there is one process
+    37: (pid, sig) => {                                                    // kill: ourselves, or another process ends
+      if ((pid | 0) <= 0 || pid === lx.pid) return raise(sig);
+      const i = lx.procs.findIndex((q) => q.pid === pid);
+      if (i < 0) return -3;                                                // ESRCH
+      if (sig === 0) return 0;
+      const [q] = lx.procs.splice(i, 1);
+      releasePages(q.pages);
+      const parent = q.ppid === lx.pid ? lx : lx.procs.find((x) => x.pid === q.ppid);
+      ((parent && parent.zombies) || lx.orphans).set(pid, sig & 0x7f);
+      return 0;
+    },
     238: (tid, sig) => raise(sig),                                         // tkill
     270: (tgid, tid, sig) => raise(sig),                                   // tgkill
     199: () => 0, 200: () => 0, 201: () => 0, 202: () => 0,                // get[e]uid32, get[e]gid32
@@ -986,7 +1031,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     265: (id, ts) => clock(id, ts, false),                                 // clock_gettime
     403: (id, ts) => clock(id, ts, true),                                  // clock_gettime64
     266: (id, ts) => { if (ts) putTime(ts, 0, 1e-9, 1e9, false); return 0; },   // clock_getres
-    162: () => 0,                                                          // nanosleep: no time to wait for
+    162: () => { yieldTo(); return 0; },                                   // nanosleep: no time to wait for; the others run
     43: (buf) => {                                                         // times: all of it user time, in 100 Hz ticks
       const ticks = Math.floor(lx.mono() * 100);
       if (buf) { wr32(buf, ticks); wr32(buf + 4, 0); wr32(buf + 8, 0); wr32(buf + 12, 0); }
@@ -1044,8 +1089,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       try { ret = fn(r[3] >>> 0, r[1] >>> 0, r[2] >>> 0, r[6] >>> 0, r[7] >>> 0, r[5] >>> 0); }
       catch (e) { if (typeof e === 'number') ret = -e; else throw e; }
     }
-    if (ret === BLOCK) { cpu.eip = (cpu.eip - 2) >>> 0; machine.blocked = true; return; }   // int 80h again when input comes
+    if (ret === BLOCK) {                                                 // int 80h again: on its next turn, or when input comes
+      cpu.eip = (cpu.eip - 2) >>> 0;
+      if (lx.procs.length && ++lx.blockRun <= lx.procs.length) { yieldTo(); return; }
+      lx.blockRun = 0; machine.blocked = true; return;                   // every process waits
+    }
+    lx.blockRun = 0;
     if (!lx.done && ret !== undefined) r[0] = ret | 0;
+    if (lx.procs.length && !lx.done && cpu.cycles - lx.sliceStart > QUANTUM()) yieldTo();
   };
 
   return lx;

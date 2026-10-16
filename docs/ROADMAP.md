@@ -71,7 +71,7 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | K3, K5 | VGA text as ANSI; graphics through terminal image protocols | M |
 | K4 | Recording to GIF or video | S |
 | H12 | **User-space Linux (MIRAGE-LINUX)** — done: static, Debian dynamic (ELF, PIE, the interpreter) and a.out programs; processes (fork, exec, wait, pipes — one process at a time); the console (n_tty line discipline, the VGA text screen and its cursor, the keyboard in XLATE, MEDIUMRAW and RAW); ioperm and /dev; Debian 12's bash runs id's 1994 DOOM and comes back when it quits. Dhrystone 77–79 M instructions/s | — |
-| H12a | Two processes at once: a scheduler over the snapshots fork already takes — DOOM's sndserver beside it, interactive pipes (`ls \| less`) | L |
+| H12a | ✅ **Processes run in turn**: a queue in src/linux.js, switching on a system-call boundary — when a call blocks (the process retries it on its next turn), after a 20 ms quantum, at nanosleep; an empty pipe blocks while a writer is open somewhere; wait4 waits for a living child; the first process ends the run, as PID 1 does a container. DOOM's sndserver now starts beside it (and stops at /dev/dsp: H12g). Each switch drops the translated code (≈8% on DOOM under a shell) — to be kept across switches later | — |
 | H12b | Signals delivered to the handlers a program installs (sigaction, sigreturn, the frame on the user stack), SIGCHLD, SIGINT from ^C | M |
 | H12c | The 80-bit x87: extended precision where a program asks for it, not float64 | M |
 | H12d | Threads: clone with a shared address space, futex, thread-local storage (set_thread_area) — after H12a | L |

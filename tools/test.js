@@ -2979,6 +2979,16 @@ const runLinux = (hex, argv) => {
     '0000000001000000000000000080040800800408560000005600000005000000001000000f0b');
   let got; try { got = runLinux(hex, ['/w/UD2']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: an invalid opcode is SIGILL', got, 132); }
+// tools/linux/pipewait.asm: two processes at once — the child reads a pipe before its parent writes
+// it and waits for the byte. Docker: 88. One process at a time, the child read EOF and exited 0.
+{ const hex = (                                         // nasm -f bin tools/linux/pipewait.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408cb000000db0000000700000000100000b82a000000bbcb800408cd80' +
+    'b802000000cd8085c07525b8030000008b1dcb800408b9d3800408ba01000000cd800fb61dd3800408b801000000cd80' +
+    'b8040000008b1dcf800408b9ca800408ba01000000cd80b872000000bbffffffffb9d780040831d231f6cd800fb61dd8' +
+    '800408b801000000cd805800000000000000000000000000000000');
+  let got; try { got = runLinux(hex, ['/w/PIPEWAIT']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: a child waits on a pipe its parent writes later (two processes at once)', got, 88); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
