@@ -1,0 +1,136 @@
+{
+  "oasis": 1,
+  "title": "id's X11 DOOM built and played in MIRAGE-LINUX \u2014 gcc 2.7.2 and XFree86 3.3 of 1997",
+  "year": 1997,
+  "author": "id Software, the XFree86 Project, the Debian project, busybox",
+  "thumb": "oasis/thumbs/linux-doom-x11.png",
+  "world": "linux",
+  "machine": {
+    "cpu": "686",
+    "mem": 64
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/base/libc5_5.4.33-6.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/base/ldso_1.8.12-1.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/devel/gcc_2.7.2.1-9.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/interpreters/cpp_2.7.2.1-9.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/devel/binutils_2.7.0.9-3.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/libs/libbfd2.7.0.9_2.7.0.9-3.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/devel/make_3.75-4.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/devel/libc5-dev_5.4.33-6.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xlib6_3.3-4.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xlib6-dev_3.3-4.deb"
+    },
+    {
+      "zip": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/source/doomsrc.zip",
+      "member": "linuxdoom-1.10.src.tgz",
+      "into": "usr/src"
+    },
+    {
+      "zip": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/source/doomsrc.zip",
+      "member": "sndserv.tgz",
+      "into": "usr/src"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/libc4_4.6.27-15.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/aout-svgalib_1.2.10-5.deb"
+    },
+    {
+      "tar": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/linux/linuxsdoom.tar.gz",
+      "into": "usr/games/doom"
+    },
+    {
+      "gz": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/doom/doom-1.8.wad.gz",
+      "to": "/usr/games/doom/doom1.wad"
+    },
+    {
+      "file": "oasis/files/errnos.h",
+      "to": "/usr/include/errnos.h"
+    },
+    {
+      "file": "oasis/files/libnsl.a",
+      "to": "/usr/lib/libnsl.a"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xext_3.3-4.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xserver-svga_3.3-4.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xbase_3.3-4.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xfntbase_3.3-4.deb"
+    },
+    {
+      "file": "oasis/files/XF86Config",
+      "to": "/etc/X11/XF86Config"
+    },
+    {
+      "file": "oasis/files/ld.so.conf-x11",
+      "to": "/etc/ld.so.conf"
+    },
+    {
+      "file": "oasis/files/twmrc-doom",
+      "to": "/root/.twmrc"
+    },
+    {
+      "links": {
+        "/lib/ld-linux.so.1": "ld-linux.so.1.8.12",
+        "/lib/ld.so": "ld.so.1.8.12",
+        "/lib/libc.so.4": "libc.so.4.6.27",
+        "/lib/libm.so.4": "libm.so.4.6.27",
+        "/lib/libvga.so.1": "/usr/lib/i486-linuxaout/libvga.so.1.2.10",
+        "/usr/bin/doom": "/usr/games/doom/linuxsdoom",
+        "/usr/bin/sndserver": "/usr/src/sndserv/linux/sndserver",
+        "/sbin/ldconfig": "ldconfig.new",
+        "/lib/libdl.so.1": "libdl.so.1.8.12"
+      }
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/tmp/.X11-unix",
+        "/root"
+      ]
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "cwd": "/usr/src/linuxdoom-1.10",
+    "console": true,
+    "env": {
+      "HOME": "/root",
+      "TERM": "linux",
+      "PATH": "/usr/X11R6/bin:/usr/bin:/bin:/sbin",
+      "PS1": "doom:\\w# "
+    }
+  },
+  "output": "window",
+  "notes": "id's linuxdoom-1.10 built with Debian 1.3's gcc 2.7.2 and played on XFree86 3.3's server, on MIRAGE's VGA, under twm (which installs DOOM's colormap, as 1997's window managers did): ldconfig; make (about 18 minutes); XF86_SVGA :0 & DISPLAY=unix:0 twm & cd /usr/games/doom; DISPLAY=unix:0 /usr/src/linuxdoom-1.10/linux/linuxxdoom -warp 1 1. The picture reaches the server through MIT-SHM (System V shared memory). DOOM 1.10 does not play the shareware WAD's demos (recorded by 1.8), so its attract loop shows the title, credits and order screens."
+}

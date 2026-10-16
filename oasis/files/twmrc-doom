@@ -1,0 +1,5 @@
+# twm for DOOM on a 320x200 screen: windows placed without asking (RandomPlacement), no title bar;
+# twm installs the colormap of the window the pointer is in, which DOOM leaves to its window manager.
+RandomPlacement
+NoTitle
+BorderWidth 0

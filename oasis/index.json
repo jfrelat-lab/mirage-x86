@@ -52,6 +52,15 @@
     "output": "window"
   },
   {
+    "name": "linux/doom-x11",
+    "title": "id's X11 DOOM built and played in MIRAGE-LINUX — gcc 2.7.2 and XFree86 3.3 of 1997",
+    "world": "linux",
+    "year": 1997,
+    "author": "id Software, the XFree86 Project, the Debian project, busybox",
+    "thumb": "oasis/thumbs/linux-doom-x11.png",
+    "output": "window"
+  },
+  {
     "name": "linux/mirage",
     "title": "Debian 12 with id's 1994 Linux DOOM — a real bash on the console",
     "world": "linux",
