@@ -1012,6 +1012,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // the peer is open somewhere and has not shut down; then it is the end. Bound names live in the file
   // system (a node { sock }) or, abstract, in lx.abstract. No AF_INET yet: EAFNOSUPPORT.
   lx.abstract = new Map();
+  lx.shm = new Map(); lx.shmNext = 1;
   // Open while a descriptor holds it — or while it waits in a listener's queue: a client may write
   // before the server accepts, and the bytes wait for it.
   const sockOpen = (sk) => sk.pending || [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.sk === sk));
@@ -1380,6 +1381,49 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     },
     175: () => 0, 186: () => 0,                                            // rt_sigprocmask, sigaltstack
     126: (how, set, old) => { if (old) wr32(old, 0); return 0; },           // sigprocmask (old): nothing is blocked
+    // ipc (117): System V shared memory, the MIT-SHM X extension's — id's X DOOM puts its picture in a
+    // segment and the X server attaches the same one. A segment is physical frames of its own; each
+    // shmat maps them into the process (as /dev/mem's pages: shared, never freed by an exit or a fork).
+    // shmat's i386 form: ipc(SHMAT, id, flags, &raddr, addr), the address written to raddr.
+    117: (call, first, second, third, ptr) => {
+      call &= 0xffff;
+      if (call === 23) {                                                   // SHMGET key size flags
+        const key = first | 0, size = second, flags = third;
+        if (key !== 0) for (const [id, sg] of lx.shm) if (sg.key === key && !sg.rmid) return (flags & 0o3000) === 0o3000 ? -E.EEXIST : id;
+        if (key !== 0 && !(flags & 0o1000)) return -E.ENOENT;               // no IPC_CREAT
+        if (!size) return -E.EINVAL;
+        const id = lx.shmNext++, frames = [];
+        for (let i = 0; i < Math.ceil(size / PAGE); i++) frames.push(allocFrame());
+        lx.shm.set(id, { key, size, frames, rmid: false, mode: flags & 0o777 });
+        return id;
+      }
+      if (call === 21) {                                                   // SHMAT id flags &raddr addr
+        const sg = lx.shm.get(first); if (!sg) return -E.EINVAL;
+        const len = sg.frames.length * PAGE, at = ptr ? (ptr & ~0xfff) >>> 0 : lx.mmapNext;
+        if (!ptr) lx.mmapNext += len;
+        unmapRange(at, at + len);
+        sg.frames.forEach((fr, i) => { const vpn = (at >>> 12) + i; lx.pages.set(vpn, { frame: fr, write: !(second & 0o10000), phys: true, shm: first }); setPte(vpn, fr, !(second & 0o10000)); });
+        cpu.setCR3(cpu.cr3);
+        wr32(third, at); return 0;
+      }
+      if (call === 22) {                                                   // SHMDT addr
+        let vpn = ptr >>> 12; const pg = lx.pages.get(vpn); if (!pg || pg.shm === undefined) return -E.EINVAL;
+        const id = pg.shm; let end = vpn; while (lx.pages.get(end) && lx.pages.get(end).shm === id) end++;
+        unmapRange(vpn * PAGE, end * PAGE); return 0;
+      }
+      if (call === 24) {                                                   // SHMCTL id cmd buf
+        const sg = lx.shm.get(first); if (!sg) return -E.EINVAL;
+        const cmd = second & 0xff;
+        if (cmd === 0) { sg.rmid = true; return 0; }                        // IPC_RMID: gone when the last detaches (frames kept)
+        if (cmd === 2 && ptr) {                                             // IPC_STAT, libc5's shmid_ds: ipc_perm (mode at 12), segsz at 16, nattch at 36
+          for (let i = 0; i < 48; i += 4) wr32(ptr + i, 0);
+          wr32(ptr, sg.key); wr8(ptr + 12, sg.mode & 0xff); wr8(ptr + 13, sg.mode >> 8); wr32(ptr + 16, sg.size); wr8(ptr + 36, 1);
+          return 0;
+        }
+        return 0;
+      }
+      return -E.ENOSYS;                                                    // semaphores and message queues: not here
+    },
     37: (pid, sig) => {                                                    // kill: ourselves, or another process ends
       if ((pid | 0) <= 0 || pid === lx.pid) return raise(sig);
       const i = lx.procs.findIndex((q) => q.pid === pid);

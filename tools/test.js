@@ -3080,6 +3080,17 @@ const runLinux = (hex, argv) => {
     'cd804c2e41004c2e4200');
   let got; try { got = runLinux(hex, ['/w/XCALLS']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: link, and FIONBIO/FIONREAD on a socket (X11)', got, 7); }
+// tools/linux/shm.asm: System V shared memory between two processes (MIT-SHM's X picture): a child
+// attaches and writes, the parent attaches and reads it back, IPC_STAT gives the size. 3; MIRAGE had no ipc.
+{ const hex = (                                         // nasm -f bin tools/linux/shm.asm (its file part)
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004080f01000057010000070000000010000031ffb875000000bb17000000' +
+    '31c9ba00100000be80030000cd80a30f810408b802000000cd8085c07514e869000000c7005a5a5a5ab80100000031db' +
+    'cd80b872000000bbffffffff31c931d231f6cd80e84300000081385a5a5a5a750383cf01b875000000bb180000008b0d' +
+    '0f810408ba0200000031f657bf17810408cd805f813d2781040800100000750383cf0289fbb801000000cd80b8750000' +
+    '00bb150000008b0d0f81040831d2be138104085731ffcd805fa113810408c3');
+  let got; try { got = runLinux(hex, ['/w/SHM']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: System V shared memory between two processes (ipc SHMGET/SHMAT/SHMCTL)', got, 3); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
