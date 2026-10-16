@@ -83,6 +83,18 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   };
   const keyboard = new Keyboard({ keyQueue: typed, pushScancodes: (a) => { if (lx.tty.kbMode !== 1) lx.keyScancodes(a); } });
   keyboard.attach(window);
+  // The mouse: a click on the screen captures it (pointer lock, Esc releases it), and its moves and
+  // buttons go to /dev/mouse as a Microsoft serial mouse's packets — SVGAlib's mouse, Quake's aim.
+  let buttons = 0;
+  const btn = (b) => (b === 0 ? 1 : b === 2 ? 2 : 0);
+  const onDown = (ev) => {
+    if (document.pointerLockElement !== canvas) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
+    buttons |= btn(ev.button); lx.mouseInput(0, 0, buttons); ev.preventDefault();
+  };
+  const onUp = (ev) => { if (document.pointerLockElement !== canvas) return; buttons &= ~btn(ev.button); lx.mouseInput(0, 0, buttons); };
+  const onMove = (ev) => { if (document.pointerLockElement === canvas && (ev.movementX || ev.movementY)) lx.mouseInput(ev.movementX, ev.movementY, buttons); };
+  canvas.addEventListener('mousedown', onDown); window.addEventListener('mouseup', onUp); window.addEventListener('mousemove', onMove);
+  canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 
   // The CPU runs in ~12 ms chunks chained through a MessageChannel; requestAnimationFrame only draws.
   const tick = new MessageChannel();
@@ -118,6 +130,6 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   return {
     mc, lx, audio,
     pause(on) { paused = on; },
-    stop() { stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); },
+    stop() { stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove); },
   };
 }

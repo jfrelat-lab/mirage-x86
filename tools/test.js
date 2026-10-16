@@ -3001,6 +3001,16 @@ const runLinux = (hex, argv) => {
     '65762f64737000112b00001000000001000000');
   let got; try { got = runLinux(hex, ['/w/DSP']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: /dev/dsp takes OSS rate, format, stereo, answers GETOSPACE, plays a write', got, 31); }
+// The page's mouse on /dev/mouse, as a Microsoft serial mouse: 01LRYYXX, X's low six bits, Y's — decoded
+// the way SVGAlib's ms handler does (dx = (b0 & 3) << 6 | b1, dy = (b0 & 0Ch) << 4 | b2, signed bytes).
+// Nothing fed it: SVGAlib programs (Quake's aim) had no mouse in the page.
+{ let got;
+  try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.mouseInput(5, -3, 1); lx.mouseInput(200, 0, 2);
+    const p = lx.mouseIn, dec = (i) => [((p[i] & 3) << 6 | p[i + 1]) << 24 >> 24, ((p[i] & 0x0c) << 4 | p[i + 2]) << 24 >> 24, (p[i] >> 5) & 1, (p[i] >> 4) & 1, (p[i] >> 6) & 1];
+    got = [dec(0), dec(3), dec(6)].map((x) => x.join(',')).join(' ');
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: the mouse as Microsoft serial packets, a large move split', got, '5,-3,1,0,1 127,0,0,1,1 73,0,0,1,1'); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm

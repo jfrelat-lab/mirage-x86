@@ -503,6 +503,18 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // takes the line settings and has nothing to say until lx.mouseIn holds its 3-byte packets.
   fs.set('/dev/mouse', { dev: 'mouse', rdev: 0x440, mtime: 0 }); fs.set('/dev/ttyS0', fs.get('/dev/mouse'));
   lx.mouseIn = [];
+  /** A move and the buttons (1 left, 2 right), as a Microsoft serial mouse reports them: three bytes
+   *  per packet — 01LRYYXX with the deltas' top bits, then X's and Y's low six bits; Y grows downward.
+   *  Deltas beyond -128..127 go as several packets. SVGAlib's default ("Assuming Microsoft mouse"). */
+  lx.mouseInput = (dx, dy, buttons) => {
+    dx = Math.round(dx); dy = Math.round(dy);
+    do {
+      const x = Math.max(-128, Math.min(127, dx)), y = Math.max(-128, Math.min(127, dy));
+      dx -= x; dy -= y;
+      lx.mouseIn.push(0x40 | ((buttons & 1) << 5) | ((buttons & 2) << 3) | ((y >> 4) & 0x0c) | ((x >> 6) & 0x03), x & 0x3f, y & 0x3f);
+    } while (dx || dy);
+    machine.blocked = false;
+  };
   // /dev/dsp, the OSS sound device (14:3): what a program writes is played at the rate, format and
   // channels it set, on the program's own clock — a full buffer blocks the writer, as the card's DMA
   // paces it. The samples go to src/audio.js (machine.dsp, beside the Sound Blaster). OSS's defaults:
