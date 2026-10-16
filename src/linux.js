@@ -941,7 +941,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   // ioctl on the console: what a kernel answers on virtual terminal 1 (linux/vt.h, linux/kd.h,
   // asm/termbits.h). Pipes and files are not terminals.
-  const ioctl = (f, req, arg) => {
+  const ioctl = (f, req, arg, fd) => {
+    // The descriptor's own ioctls, any file (asm-generic/ioctls.h): FIONBIO, FIONREAD, FIOCLEX,
+    // FIONCLEX. Xlib makes its socket non-blocking with FIONBIO and asks FIONREAD what is waiting;
+    // refused ("Not a typewriter"), every X client stopped with a fatal IO error.
+    req >>>= 0;
+    if (req === 0x5421) { const on = rd32(arg) !== 0; f.flags = ((f.flags || 0) & ~0x800) | (on ? 0x800 : 0); return 0; }   // FIONBIO
+    if (req === 0x541b && (f.sk || f.pp || f.pipe !== undefined)) {                                                       // FIONREAD
+      wr32(arg, f.sk ? f.sk.rx.length : f.pp ? (f.rd ? f.pp.buf.length : 0) : Math.max(0, lx.stdin.length - lx.stdinPos)); return 0;
+    }
+    if (req === 0x5451) { lx.cloexec.add(fd); return 0; }                // FIOCLEX
+    if (req === 0x5450) { lx.cloexec.delete(fd); return 0; }             // FIONCLEX
     if (f.node && f.node.dev === 'dsp') return dspIoctl(req >>> 0, arg);
     if (f.node && f.node.dev === 'fb') return fbIoctl(req >>> 0, arg);
     if (!f.node || (f.node.dev !== 'tty' && f.node.dev !== 'mouse')) return -E.ENOTTY;
@@ -1253,6 +1263,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       for (const [k, v] of [...fs]) if (k === a || k.startsWith(a + '/')) { removeNode(k); fs.set(b + k.slice(a.length), v); gone.delete(b + k.slice(a.length)); }
       return 0;
     },
+    // link: a hard link — the same node under a second name (nlink counts them). X's lock file is made
+    // so: its pid in a temporary file, linked to /tmp/.X0-lock; without link the server could not lock.
+    9: (from, to) => {
+      const a = resolve(rdStr(from), lx.cwd, false), b = resolve(rdStr(to), lx.cwd, false), n = a && getNode(a);
+      if (!n) return -E.ENOENT; if (b === null || !getNode(parent(b))) return -E.ENOENT;
+      if (getNode(b)) return -E.EEXIST; if (n.dir) return -E.EPERM;
+      dataOf(n); n.nlink = (n.nlink || 1) + 1; fs.set(b, n); gone.delete(b); return 0;
+    },
+    303: (dfa, from, dfb, to) => SYS[9](from, to),                         // linkat
     83: (target, path) => {                                                // symlink
       const p = resolve(rdStr(path), lx.cwd, false);
       if (p === null) return -E.ENOENT; if (getNode(p)) return -E.EEXIST;
@@ -1278,7 +1297,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     55: (fd, cmd, arg) => SYS[221](fd, cmd, arg),
     194: (fd, lo, hi) => { const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EINVAL; const n = lo + hi * 4294967296; grow(f.node, n); f.node.data.fill(0, Math.min(n, f.node.size), n); f.node.size = n; return 0; },   // ftruncate64
     118: () => 0, 148: () => 0,                                            // fsync, fdatasync
-    54: (fd, req, arg) => ioctl(fdOf(fd), req, arg),                       // ioctl
+    54: (fd, req, arg) => ioctl(fdOf(fd), req, arg, fd),                   // ioctl
     85: (path, buf, size) => readlink(rdStr(path), lx.cwd, buf, size),     // readlink
     305: (dirfd, path, buf, size) => readlink(rdStr(path), atBase(dirfd), buf, size),   // readlinkat
     45: (addr) => {                                                        // brk
@@ -1360,6 +1379,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       return 0;
     },
     175: () => 0, 186: () => 0,                                            // rt_sigprocmask, sigaltstack
+    126: (how, set, old) => { if (old) wr32(old, 0); return 0; },           // sigprocmask (old): nothing is blocked
     37: (pid, sig) => {                                                    // kill: ourselves, or another process ends
       if ((pid | 0) <= 0 || pid === lx.pid) return raise(sig);
       const i = lx.procs.findIndex((q) => q.pid === pid);

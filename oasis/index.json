@@ -68,5 +68,14 @@
     "author": "id Software, port by Dave 'Zoid' Kirsch",
     "thumb": "oasis/thumbs/linux-quake-1997.png",
     "output": "window"
+  },
+  {
+    "name": "linux/x11-1997",
+    "title": "X11 of 1997 — XFree86 3.3 on MIRAGE's VGA, no Linux kernel",
+    "world": "linux",
+    "year": 1997,
+    "author": "The XFree86 Project, the Debian project, busybox",
+    "thumb": "oasis/thumbs/linux-x11-1997.png",
+    "output": "window"
   }
 ]

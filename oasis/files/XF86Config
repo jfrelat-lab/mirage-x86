@@ -1,0 +1,42 @@
+# XF86Config for XFree86 3.3 (Debian 1.3) on MIRAGE's VGA: the SVGA server's generic driver, which
+# drives a plain VGA through its ports, in its one 256-colour mode — 320x200, VGA's mode 13h timing.
+Section "Files"
+    RgbPath     "/usr/X11R6/lib/X11/rgb"
+    FontPath    "/usr/X11R6/lib/X11/fonts/misc/"
+EndSection
+
+Section "ServerFlags"
+EndSection
+
+Section "Keyboard"
+    Protocol    "Standard"
+    AutoRepeat  500 5
+EndSection
+
+Section "Pointer"
+    Protocol    "Microsoft"
+    Device      "/dev/mouse"
+EndSection
+
+Section "Monitor"
+    Identifier  "VGA"
+    HorizSync   31.5
+    VertRefresh 50-90
+    # 320x200, double-scanned to 400 lines at 70 Hz: what a VGA's mode 13h sends.
+    Modeline "320x200" 12.588 320 336 384 400 200 204 205 225 Doublescan
+EndSection
+
+Section "Device"
+    Identifier  "MIRAGE VGA"
+    Chipset     "generic"
+EndSection
+
+Section "Screen"
+    Driver      "svga"
+    Device      "MIRAGE VGA"
+    Monitor     "VGA"
+    Subsection "Display"
+        Depth   8
+        Modes   "320x200"
+    EndSubsection
+EndSection

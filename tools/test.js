@@ -3067,6 +3067,19 @@ const runLinux = (hex, argv) => {
     '00cd800100006d69726167652d786869');
   let got; try { got = runLinux(hex, ['/w/UNIXSOCK']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: a Unix socket between two processes (bind, listen, connect, accept, the end)', got, 3); }
+// tools/linux/xcalls.asm: what XFree86 3.3 and Xlib asked beyond sockets — link (X's lock file), and on a
+// socket ioctl FIONBIO and FIONREAD. Docker: 7. MIRAGE had no link and answered ENOTTY ("Not a typewriter").
+{ const hex = (                                         // nasm -f bin tools/linux/xcalls.asm (its file part)
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004085a010000e6010000070000000010000031ffb808000000bb52810408' +
+    'b9a4010000cd80b809000000bb52810408b956810408cd80b86a000000bb56810408b95a810408cd8066833d64810408' +
+    '02750383cf01c705ba81040801000000c705be81040801000000c705c281040800000000c705c6810408d2810408b866' +
+    '000000bb08000000b9ba810408cd80c705da81040801000000b8360000008b1dd2810408b921540000bada810408cd80' +
+    'b8030000008b1dd2810408b9e2810408ba01000000cd8083f8f5750383cf02b8040000008b1dd6810408b952810408ba' +
+    '01000000cd80b8360000008b1dd2810408b91b540000bade810408cd80833dde81040801750383cf0489fbb801000000' +
+    'cd804c2e41004c2e4200');
+  let got; try { got = runLinux(hex, ['/w/XCALLS']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: link, and FIONBIO/FIONREAD on a socket (X11)', got, 7); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
