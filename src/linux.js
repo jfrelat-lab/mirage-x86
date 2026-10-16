@@ -732,6 +732,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   const doWrite = (fd, bytes) => {
     const f = fdOf(fd);
+    if (f.sk) return sockWrite(f, bytes);
     if (f.pp) { if (f.rd) return -E.EBADF; for (const b of bytes) f.pp.buf.push(b); return bytes.length; }
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
     if (f.node.dev === 'tty') { ttyOutput(bytes); return bytes.length; }
@@ -755,6 +756,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const doRead = (fd, buf, n, at) => {
     const f = fdOf(fd);
     let src;
+    if (f.sk) { const r = sockRead(f, n); if (typeof r !== 'object') return r; wrBytes(buf, r); return r.length; }
     // A pipe: what its writer left. Its writer has run to its end already (one process at a time), so an
     // empty pipe is the end of it.
     if (f.pp) {
@@ -835,7 +837,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const isPipe = node.pipe !== undefined || !!node.pp;
     d.setUint32(0, isPipe ? 0xc : 0x801, true);                             // st_dev
     d.setUint32(12, inoOf(p), true);
-    const type = isPipe ? 0o010000 : node.dev ? 0o020000 : node.dir ? 0o040000 : node.link !== undefined ? 0o120000 : 0o100000;
+    const type = node.sock || node.sk ? 0o140000 : isPipe ? 0o010000 : node.dev ? 0o020000 : node.dir ? 0o040000 : node.link !== undefined ? 0o120000 : 0o100000;
     const perm = node.link !== undefined ? 0o777 : node.dev === 'tty' ? 0o620 : node.mode !== undefined ? node.mode & 0o7777 : isPipe ? 0o600 : node.dev ? 0o666 : node.dir ? 0o755 : node.link !== undefined ? 0o777 : 0o644;
     d.setUint32(16, type | perm, true);
     d.setUint32(20, node.nlink || (node.dir ? 2 : 1), true);
@@ -992,10 +994,143 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       default: return -E.EINVAL;
     }
   };
+  // ---- Unix sockets (AF_UNIX, SOCK_STREAM) ----------------------------------------------------------
+  // An X server listens on /tmp/.X11-unix/X0 (and the abstract name "@/tmp/.X11-unix/X0"); its clients
+  // connect there. A socket is { st: 'new' | 'listening' | 'connected', rx: bytes to read, peer, q:
+  // connections waiting for accept }; a connection is two of them, each the other's peer, built on
+  // connect and handed to the listener's queue. A read with nothing waits (another process runs) while
+  // the peer is open somewhere and has not shut down; then it is the end. Bound names live in the file
+  // system (a node { sock }) or, abstract, in lx.abstract. No AF_INET yet: EAFNOSUPPORT.
+  lx.abstract = new Map();
+  // Open while a descriptor holds it — or while it waits in a listener's queue: a client may write
+  // before the server accepts, and the bytes wait for it.
+  const sockOpen = (sk) => sk.pending || [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.sk === sk));
+  const sockAddr = (addr, len) => {                         // sockaddr_un -> { abstract, name }
+    if (!addr || len < 3) return null;
+    if ((rd8(addr) | (rd8(addr + 1) << 8)) !== 1) return -97;   // EAFNOSUPPORT: not AF_UNIX
+    if (rd8(addr + 2) === 0) return { abstract: true, name: new TextDecoder('latin1').decode(rdBytes(addr + 3, Math.max(0, len - 3))) };
+    return { abstract: false, name: rdStr(addr + 2) };
+  };
+  const putAddr = (sk, addr, lenp) => {
+    if (!addr || !lenp) return 0;
+    const n = sk.name ? new TextEncoder().encode(sk.name.name) : new Uint8Array(0);
+    const b = new Uint8Array(2 + (sk.name && sk.name.abstract ? 1 : 0) + n.length + 1); b[0] = 1;
+    b.set(n, sk.name && sk.name.abstract ? 3 : 2);
+    const room = rd32(lenp); wrBytes(addr, b.subarray(0, Math.min(room, b.length))); wr32(lenp, b.length);
+    return 0;
+  };
+  const sockFd = (fd) => { const f = fdOf(fd); if (!f.sk) throw 88; return f; };   // ENOTSOCK
+  const newSock = () => ({ st: 'new', rx: [], peer: null, q: [], name: null, shutRd: false, shutWr: false });
+  const NET = {
+    socket: (dom, type) => {
+      if (dom !== 1) return -97;                             // EAFNOSUPPORT
+      if ((type & 0xf) !== 1) return -94;                    // ESOCKTNOSUPPORT: streams only
+      return newFd({ sk: newSock(), flags: 2 | (type & 0x800) }, 0, (type & 0x80000) !== 0);
+    },
+    socketpair: (dom, type, proto, sv) => {
+      if (dom !== 1) return -97;
+      const a = newSock(), b = newSock(); a.st = b.st = 'connected'; a.peer = b; b.peer = a;
+      const ce = (type & 0x80000) !== 0;
+      wr32(sv, newFd({ sk: a, flags: 2 | (type & 0x800) }, 0, ce)); wr32(sv + 4, newFd({ sk: b, flags: 2 | (type & 0x800) }, 0, ce));
+      return 0;
+    },
+    bind: (fd, addr, len) => {
+      const f = sockFd(fd), a = sockAddr(addr, len); if (typeof a === 'number') return a; if (!a) return -E.EINVAL;
+      if (a.abstract) { if (lx.abstract.has(a.name)) return -98; lx.abstract.set(a.name, f.sk); }   // EADDRINUSE
+      else {
+        const pth = resolve(a.name); if (pth === null) return -E.ENOENT;
+        if (getNode(pth)) return -98;
+        const dir = getNode(parent(pth)); if (!dir || !dir.dir) return -E.ENOENT;
+        fs.set(pth, { sock: f.sk, size: 0, mtime: lx.now(), mode: 0o777 & ~lx.umask });
+      }
+      f.sk.name = a; return 0;
+    },
+    listen: (fd) => { const f = sockFd(fd); f.sk.st = 'listening'; return 0; },
+    connect: (fd, addr, len) => {
+      const f = sockFd(fd), a = sockAddr(addr, len); if (typeof a === 'number') return a; if (!a) return -E.EINVAL;
+      let target;
+      if (a.abstract) target = lx.abstract.get(a.name);
+      else { const pth = resolve(a.name), n = pth && getNode(pth); if (!n) return -E.ENOENT; target = n.sock; if (!target) return -111; }
+      if (!target || target.st !== 'listening' || !sockOpen(target)) return -111;   // ECONNREFUSED
+      const srv = newSock(); srv.pending = true; srv.st = f.sk.st = 'connected'; srv.peer = f.sk; f.sk.peer = srv; srv.name = target.name;
+      target.q.push(srv);
+      return 0;
+    },
+    accept: (fd, addr, lenp, flags = 0) => {
+      const f = sockFd(fd);
+      if (f.sk.st !== 'listening') return -E.EINVAL;
+      if (!f.sk.q.length) return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;
+      const sk = f.sk.q.shift(); sk.pending = false;
+      if (addr && lenp) wr32(lenp, 2), wrBytes(addr, Uint8Array.of(1, 0));   // the client is unnamed
+      return newFd({ sk, flags: 2 | (flags & 0x800) }, 0, (flags & 0x80000) !== 0);
+    },
+    getsockname: (fd, addr, lenp) => putAddr(sockFd(fd).sk, addr, lenp),
+    getpeername: (fd, addr, lenp) => { const f = sockFd(fd); if (!f.sk.peer) return -107; return putAddr(f.sk.peer, addr, lenp); },   // ENOTCONN
+    shutdown: (fd, how) => { const f = sockFd(fd); if (how !== 1) f.sk.shutRd = true; if (how !== 0) f.sk.shutWr = true; return 0; },
+    setsockopt: () => 0,
+    getsockopt: (fd, level, opt, val, lenp) => {
+      sockFd(fd);
+      if (level === 1 && opt === 17 && val) { wr32(val, lx.pid); wr32(val + 4, 0); wr32(val + 8, 0); if (lenp) wr32(lenp, 12); return 0; }   // SO_PEERCRED
+      if (val) wr32(val, opt === 3 ? 1 : 0); if (lenp) wr32(lenp, 4); return 0;   // SO_TYPE: stream; SO_ERROR: none
+    },
+  };
+  const sockRead = (f, n) => {
+    const sk = f.sk;
+    if (sk.st !== 'connected') return -107;
+    if (!sk.rx.length) {
+      const peer = sk.peer;
+      if (sk.shutRd || !peer || peer.shutWr || !sockOpen(peer)) return 0;   // the end
+      return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;
+    }
+    return Uint8Array.from(sk.rx.splice(0, n));
+  };
+  const sockWrite = (f, bytes) => {
+    const sk = f.sk;
+    if (sk.st !== 'connected') return -107;
+    if (sk.shutWr || !sk.peer || !sockOpen(sk.peer)) return -32;   // EPIPE
+    for (const b of bytes) sk.peer.rx.push(b);
+    return bytes.length;
+  };
+  const sockReady = (f) => f.sk.st === 'listening' ? f.sk.q.length > 0 : f.sk.rx.length > 0 || !f.sk.peer || f.sk.peer.shutWr || !sockOpen(f.sk.peer);
+  const msgIov = (msg) => ({ iov: rd32(msg + 8), cnt: rd32(msg + 12) });   // struct msghdr: name, namelen, iov, iovlen, control...
+  const NETCALL = {                                         // socketcall's numbers (linux/net.h)
+    1: (a) => NET.socket(a[0], a[1], a[2]), 2: (a) => NET.bind(a[0], a[1], a[2]), 3: (a) => NET.connect(a[0], a[1], a[2]),
+    4: (a) => NET.listen(a[0], a[1]), 5: (a) => NET.accept(a[0], a[1], a[2]), 6: (a) => NET.getsockname(a[0], a[1], a[2]),
+    7: (a) => NET.getpeername(a[0], a[1], a[2]), 8: (a) => NET.socketpair(a[0], a[1], a[2], a[3]),
+    9: (a) => doWrite(a[0], rdBytes(a[1], a[2])), 10: (a) => doRead(a[0], a[1], a[2]),                       // send, recv
+    11: (a) => doWrite(a[0], rdBytes(a[1], a[2])), 12: (a) => { const r = doRead(a[0], a[1], a[2]); if (typeof r === 'number' && r >= 0 && a[4] && a[5]) wr32(a[5], 0); return r; },   // sendto, recvfrom
+    13: (a) => NET.shutdown(a[0], a[1]), 14: (a) => NET.setsockopt(), 15: (a) => NET.getsockopt(a[0], a[1], a[2], a[3], a[4]),
+    16: (a) => { const { iov, cnt } = msgIov(a[1]); return SYS[146](a[0], iov, cnt); },                       // sendmsg
+    17: (a) => { const { iov, cnt } = msgIov(a[1]); wr32(a[1] + 20, 0); return SYS[145](a[0], iov, cnt); },   // recvmsg: no ancillary data
+    18: (a) => NET.accept(a[0], a[1], a[2], a[3]),                                                            // accept4
+  };
+  // poll: like select, on struct pollfd { fd, events, revents } — POLLIN 1, POLLOUT 4, POLLHUP 10h, POLLNVAL 20h.
+  const poll = (pfds, n, timeout) => {
+    let ready = 0, waitsOnInput = false;
+    const res = [];
+    for (let i = 0; i < n; i++) {
+      const a = pfds + i * 8, fd = rd32(a) | 0, ev = rd8(a + 4) | (rd8(a + 5) << 8), f = fd >= 0 ? fds[fd] : null;
+      let rev = 0;
+      if (fd >= 0 && !f) rev = 0x20;
+      else if (f) {
+        const readable = f.sk ? sockReady(f) : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
+          : f.node && f.node.dev === 'tty' ? lx.ttyIn.length > 0 : f.node && f.node.dev === 'mice' ? lx.miceIn.length > 0 : f.node && f.node.dev === 'mouse' ? lx.mouseIn.length > 0 : true;
+        if ((ev & 1) && readable) rev |= 1;
+        if (ev & 4) rev |= 4;
+        if (f.sk && f.sk.st === 'connected' && (!f.sk.peer || !sockOpen(f.sk.peer))) rev |= 0x10;
+        if (f.node && (f.node.dev === 'tty' || f.node.dev === 'mice')) waitsOnInput = true;
+      }
+      res.push([a + 6, rev]);
+      if (rev) ready++;
+    }
+    if (!ready && timeout !== 0 && (lx.procs.length || (waitsOnInput && !lx.ttyIn.length && !lx.miceIn.length))) return BLOCK;
+    for (const [a, rev] of res) { wr8(a, rev & 0xff); wr8(a + 1, rev >> 8); }
+    return ready;
+  };
   const select = (n, inp, outp, exp, tv) => {
     let ready = 0, waitsOnTty = false;
     if (!tv && inp) for (let fd = 0; fd < n; fd++) if ((rd32(inp + (fd >>> 5) * 4) >>> (fd & 31)) & 1 && fds[fd] && fds[fd].node && (fds[fd].node.dev === 'tty' || fds[fd].node.dev === 'mice')) waitsOnTty = true;   // an input device: wait for it
-    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
+    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.sk) return sockReady(f); if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
       if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0;
       if (f.node && f.node.dev === 'mice') return lx.miceIn.length > 0; return true; };
     const writes = [];
@@ -1286,6 +1421,16 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // select: a descriptor with input waiting is ready to read, every one is ready to write; with
     // nothing ready it returns at once (there is no other process to wait for).
     142: (n, inp, outp, exp, tv) => select(n, inp, outp, exp, tv),         // _newselect
+    168: (pfds, n, timeout) => poll(pfds, n, timeout | 0),                 // poll
+    309: (pfds, n, ts) => poll(pfds, n, ts ? (rd32(ts) * 1000 + Math.floor(rd32(ts + 4) / 1e6)) : -1),   // ppoll
+    102: (call, args) => { const fn = NETCALL[call]; if (!fn) return -E.EINVAL; return fn([0, 1, 2, 3, 4, 5].map((i) => rd32(args + i * 4))); },   // socketcall
+    359: (a, b, c) => NET.socket(a, b, c), 360: (a, b, c, d) => NET.socketpair(a, b, c, d), 361: (a, b, c) => NET.bind(a, b, c),
+    362: (a, b, c) => NET.connect(a, b, c), 363: (a, b) => NET.listen(a, b), 364: (a, b, c, d) => NET.accept(a, b, c, d),
+    365: (a, b, c, d, e) => NET.getsockopt(a, b, c, d, e), 366: () => 0, 367: (a, b, c) => NET.getsockname(a, b, c),
+    368: (a, b, c) => NET.getpeername(a, b, c), 369: (fd, buf, n) => doWrite(fd, rdBytes(buf, n)), 371: (fd, buf, n, fl, src, lenp) => { const r = doRead(fd, buf, n); if (typeof r === 'number' && r >= 0 && src && lenp) wr32(lenp, 0); return r; },
+    370: (fd, msg) => { const { iov, cnt } = msgIov(msg); return SYS[146](fd, iov, cnt); },
+    372: (fd, msg) => { const { iov, cnt } = msgIov(msg); wr32(msg + 20, 0); return SYS[145](fd, iov, cnt); },
+    373: (a, b) => NET.shutdown(a, b),
     308: (n, inp, outp, exp, ts) => select(n, inp, outp, exp, ts),         // pselect6 (readline waits for keys with it)
     439: (dirfd, path) => { const r = resolve(rdStr(path), atBase(dirfd)); return r && getNode(r) ? 0 : -E.ENOENT; },   // faccessat2
     // chmod, fchmod, fchmodat: the mode is kept (stat reports it; a.out and ELF run whatever it says).

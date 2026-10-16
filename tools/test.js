@@ -3050,6 +3050,23 @@ const runLinux = (hex, argv) => {
     '89fbb801000000cd80542e58002e00');
   let got; try { got = runLinux(hex, ['/w/OLDCALLS']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: creat keeps its mode, fcntl 55, getdents 141, readdir 89 (libc5)', got, 15); }
+// tools/linux/unixsock.asm: a Unix stream socket between two processes, as X uses one — bind to an
+// abstract name, listen, fork; the child connects and writes "hi" before the parent accepts; the parent
+// reads it, then the end. Docker: 3. MIRAGE had no sockets.
+{ const hex = (                                         // nasm -f bin tools/linux/unixsock.asm (its file part)
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408f001000014020000070000000010000031ffc705f881040801000000' +
+    'c705fc81040801000000c7050082040800000000b866000000bb01000000b9f8810408cd80a3f0810408a3f8810408c7' +
+    '05fc810408e3810408c705008204080b000000b866000000bb02000000b9f8810408cd80c705fc81040801000000b866' +
+    '000000bb04000000b9f8810408cd80b802000000cd8085c07577c705f881040801000000c705fc81040801000000c705' +
+    '0082040800000000b866000000bb01000000b9f8810408cd8089c6a3f8810408c705fc810408e3810408c70500820408' +
+    '0b000000b866000000bb03000000b9f8810408cd80b80400000089f3b9ee810408ba02000000cd80b80100000031dbcd' +
+    '80a1f0810408a3f8810408c705fc81040800000000c7050082040800000000b866000000bb05000000b9f8810408cd80' +
+    'a3f4810408b8030000008b1df4810408b910820408ba02000000cd8066813d108204086869750383cf01b8030000008b' +
+    '1df4810408b910820408ba02000000cd8085c0750383cf02b872000000bbffffffff31c931d231f6cd8089fbb8010000' +
+    '00cd800100006d69726167652d786869');
+  let got; try { got = runLinux(hex, ['/w/UNIXSOCK']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: a Unix socket between two processes (bind, listen, connect, accept, the end)', got, 3); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
