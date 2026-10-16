@@ -3037,6 +3037,19 @@ const runLinux = (hex, argv) => {
     got = lx.done ? lx.status : -1;
   } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: /dev/fb0 — screen infos, mmap onto the card, a pixel read back', got, 63); }
+// tools/linux/oldcalls.asm: libc5's calls — creat with a mode kept (0755: ld's output runs), fcntl 55 with
+// FD_CLOEXEC, getdents 141 and readdir 89. 15; Docker (qemu-user on this host) 7, lacking readdir.
+{ const hex = (                                         // nasm -f bin tools/linux/oldcalls.asm (its file part)
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004085f010000c7110000070000000010000031ffb83c000000bb12000000' +
+    'cd80b808000000bb59810408b9ed010000cd80a35f810408b86a000000bb59810408b967810408cd800fb7056f810408' +
+    '25ff0100003ded010000750383cf01b8370000008b1d5f810408b902000000ba01000000cd80b8370000008b1d5f8104' +
+    '08b901000000cd8083f801750383cf02b805000000bb5d810408b900000100cd80a363810408b88d0000008b1d638104' +
+    '08b9c7810408ba00100000cd8085c07e23bec78104088d90c781040839d673d6817e0a542e5800750383cf040fb74608' +
+    '01c6ebe8b805000000bb5d810408b900000100cd8089c3b859000000b9c7810408ba01000000cd8083f801750383cf08' +
+    '89fbb801000000cd80542e58002e00');
+  let got; try { got = runLinux(hex, ['/w/OLDCALLS']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: creat keeps its mode, fcntl 55, getdents 141, readdir 89 (libc5)', got, 15); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm

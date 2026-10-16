@@ -55,7 +55,7 @@ const isUrl = (s) => /^https?:\/\//.test(s);
 const local = (s) => resolve(ROOT, s);
 const layerKey = (l) => createHash('sha256').update(JSON.stringify(l)).digest('hex').slice(0, 16);
 const cacheDir = (l) => join(CACHE, 'layers', layerKey(l));
-const needsPull = (l) => (l.tar || l.deb || l.docker || l.lha || l.busybox || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
+const needsPull = (l) => (l.tar || l.deb || l.docker || l.lha || l.busybox || l.member || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
 
 async function fetchBytes(src) {
   if (!isUrl(src)) return readFileSync(local(src));
@@ -138,6 +138,13 @@ async function pullLayer(l) {
       try { symlinkSync('busybox', join(bin, a)); } catch { /* already there */ }
     }
   }
+  else if (l.zip && l.member) {         // a tar inside a ZIP (id's doomsrc.zip holds linuxdoom-1.10.src.tgz)
+    const { unzip } = await import(join(ROOT, 'src', 'zip.js'));
+    const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
+    const inner = (await unzip(new Uint8Array(zb))).find((f) => f.path.toLowerCase() === l.member.toLowerCase());
+    if (!inner) throw new Error(`oasis: ${l.member} is not in ${l.zip}`);
+    untar(/\.(tgz|gz)$/i.test(l.member) ? gunzipSync(inner.bytes) : Buffer.from(inner.bytes), l.into ? join(dir, l.into) : dir);
+  }
   else if (l.lha) {                     // an LHA archive inside a ZIP (Quake's resource.1): the files `files` names, renamed
     const { unzip } = await import(join(ROOT, 'src', 'zip.js')), { unlha } = await import(join(ROOT, 'src', 'lha.js'));
     const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
@@ -165,7 +172,7 @@ async function linuxRoot(img) {
   const dirs = [], files = new Map(), links = new Map(), mkdirs = new Set();
   for (const l of img.layers || []) {
     if (l.dir) dirs.push(local(l.dir));
-    else if (l.tar || l.deb || l.docker || l.lha || l.busybox) dirs.push(await pullLayer(l));
+    else if (l.tar || l.deb || l.docker || l.lha || l.busybox || (l.zip && l.member)) dirs.push(await pullLayer(l));
     else if (l.gz || l.file) {
       const src = l.gz || l.file;
       let host = needsPull(l) ? join(await pullLayer(l), basename(src.split('?')[0]).replace(/\.gz$/, '')) : local(src);

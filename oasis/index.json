@@ -35,6 +35,14 @@
     "output": "window"
   },
   {
+    "name": "linux/doom-build",
+    "title": "Building DOOM in MIRAGE-LINUX — id's 1997 source and Debian 1.3's gcc 2.7.2",
+    "world": "linux",
+    "year": 1997,
+    "author": "id Software (source), the Debian project (toolchain), busybox",
+    "output": "window"
+  },
+  {
     "name": "linux/doom-mini",
     "title": "Linux DOOM 1.8 on busybox — no distribution",
     "world": "linux",

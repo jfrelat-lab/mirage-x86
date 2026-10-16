@@ -233,7 +233,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const h = ah ? null : elfHeader(elf);
     const bias = h && h.type === 3 ? PIE_BASE : 0;
     const main = h ? loadImage(elf, h, bias) : { phdr: 0, top: loadAout(elf, ah) };
-    lx.brkStart = lx.brk = Math.ceil(main.top / PAGE) * PAGE;
+    // The break starts at the end of the BSS itself, not at its page's end: Linux 2.0 to 2.6 set
+    // start_brk = brk = elf_brk (binfmt_elf.c; set_brk aligns only the mapping). libc5's malloc asks
+    // brk(&end) and takes anything else for a refusal — gcc 2.7.2 said "virtual memory exhausted".
+    lx.brkStart = lx.brk = main.top >>> 0;
     const entry = ((h ? h.entry : ah.entry) + bias) >>> 0;
     let start = entry, interpBase = 0;
     const pin = h && h.ph.find((ph) => ph.type === 3);                    // PT_INTERP
@@ -336,7 +339,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
   const snapshot = () => ({
     pid: lx.pid, ppid: lx.ppid, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext,
-    fds: fds.slice(), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
+    fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
     reg: cpu.reg.slice(), eip: cpu.eip, flags: cpu.flags, seg: Array.from(cpu.seg),
     fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
     xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null,
@@ -345,7 +348,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const restore = (s) => {
     Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: s.brkStart, brk: s.brk, mmapNext: s.mmapNext,
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies });
-    fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; });
+    fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
     installPages(s.pages);
     mem.u8.set(s.tls, TLS_A); mem.u8.set(s.io, TSS_BASE + IOMAP);
     cpu.setCR3(cpu.cr3);
@@ -420,6 +423,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes)) return -E.ENOEXEC;
     releasePages(lx.pages);
     lx.pages = new Map(); lx.sigHandlers = [];
+    for (const fd of lx.cloexec) delete fds[fd];                          // close-on-exec
+    lx.cloexec.clear();
     const io = mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1);   // ioperm survives execve
     lx.load(bytes, argv, envp);
     mem.u8.set(io, TSS_BASE + IOMAP);
@@ -702,7 +707,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const fds = [{ pipe: 0 }, { pipe: 1 }, { pipe: 2 }];
   lx.fds = fds;
   const fdOf = (fd) => { const f = fds[fd]; if (!f) throw E.EBADF; return f; };
-  const newFd = (f, min = 0) => { let i = min; while (fds[i]) i++; fds[i] = f; return i; };
+  // Close-on-exec is a flag of the descriptor NUMBER, not of the open file it shares with its dups:
+  // lx.cloexec holds those numbers, saved with the process; execve closes them.
+  lx.cloexec = new Set();
+  const newFd = (f, min = 0, cloexec = false) => { let i = min; while (fds[i]) i++; fds[i] = f; if (cloexec) lx.cloexec.add(i); else lx.cloexec.delete(i); return i; };
   const grow = (node, size) => {
     if (size <= node.data.length) return;
     const d = new Uint8Array(Math.max(size, node.data.length * 2, 256)); d.set(node.data); node.data = d;
@@ -795,7 +803,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     }
     wrBytes(buf, src); return src.length;
   };
-  const doOpen = (path, flags, base = lx.cwd) => {
+  lx.umask = 0o022;
+  const doOpen = (path, flags, base = lx.cwd, mode = 0o666) => {
     const p = resolve(path, base);
     if (p === null) return -E.ENOENT;
     let node = getNode(p);
@@ -805,13 +814,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const dir = getNode(parent(p));
       if (!dir) return -E.ENOENT;
       if (!dir.dir) return -E.ENOTDIR;
-      node = { data: new Uint8Array(0), size: 0, mtime: lx.now() }; fs.set(p, node);
+      // The mode asked for, less the umask: ld creates its output 0777 and the program is executable.
+      node = { data: new Uint8Array(0), size: 0, mtime: lx.now(), mode: (mode & ~lx.umask) & 0o7777 }; fs.set(p, node);
     }
     if (node.dir && (flags & 3)) return -E.EISDIR;
     if (!node.dir && !node.dev) dataOf(node);
     if ((flags & 0x10000) && !node.dir) return -E.ENOTDIR;                  // O_DIRECTORY
     if ((flags & 0x200) && !node.dir && (flags & 3)) { node.size = 0; node.mtime = lx.now(); }   // O_TRUNC
-    return newFd({ node, path: p, pos: 0, flags });
+    return newFd({ node, path: p, pos: 0, flags }, 0, (flags & 0x80000) !== 0);   // O_CLOEXEC
   };
   const atBase = (dirfd) => {                                               // the *at() calls' starting directory
     if ((dirfd | 0) === -100) return lx.cwd;                                // AT_FDCWD
@@ -862,9 +872,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const t = id === 0 || id === 5 || id === 8 ? lx.now() : lx.mono();   // REALTIME*, else monotonic and CPU time
     putTime(buf, Math.floor(t), t - Math.floor(t), 1e9, wide); return 0;
   };
-  const getdents = (fd, buf, cnt) => {
-    const f = fdOf(fd);
-    if (!f.node || !f.node.dir) return -E.ENOTDIR;
+  const dirNames = (f) => {
     const pre = f.path === '/' ? '/' : f.path + '/';
     if (!f.names) {
       const set = new Set([...fs.keys()].filter((k) => k !== '/' && k.startsWith(pre) && !k.slice(pre.length).includes('/')).map((k) => k.slice(pre.length)));
@@ -874,7 +882,46 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (onHost) for (const n of lx.host.list(f.path)) if (!gone.has(pre + n)) set.add(n);
       f.names = ['.', '..', ...[...set].sort()];
     }
-    const names = f.names;
+    return { names: f.names, pre };
+  };
+  /** One directory entry: its name, inode and type (DT_DIR 4, DT_LNK 10, DT_REG 8). */
+  const dirEntry = (f, pre, i) => {
+    const n = f.names[i], full = n === '.' ? f.path : n === '..' ? parent(f.path) : pre + n, node = getNode(full);
+    return { name: new TextEncoder().encode(n), ino: inoOf(full), type: node && node.dir ? 4 : node && node.link !== undefined ? 10 : 8 };
+  };
+  // getdents (141), the record libc5 reads: d_ino, d_off, d_reclen, the name, a NUL, d_type in the
+  // record's last byte (linux/dirent.h's linux_dirent). readdir (89): one old_linux_dirent per call
+  // — d_ino, d_offset, d_namlen, the name — 1 while there is one, 0 at the end. Both were missing,
+  // and libc5's getcwd, which walks up through "..", failed: make stopped at "getcwd".
+  const getdents32 = (fd, buf, cnt) => {
+    const f = fdOf(fd);
+    if (!f.node || !f.node.dir) return -E.ENOTDIR;
+    const { names, pre } = dirNames(f);
+    let o = 0;
+    while (f.pos < names.length) {
+      const e = dirEntry(f, pre, f.pos), len = (10 + e.name.length + 2 + 3) & ~3;
+      if (o + len > cnt) { if (o === 0) return -E.EINVAL; break; }
+      const b = new Uint8Array(len), d = new DataView(b.buffer);
+      d.setUint32(0, e.ino, true); d.setUint32(4, f.pos + 1, true); d.setUint16(8, len, true);
+      b.set(e.name, 10); b[len - 1] = e.type;
+      wrBytes(buf + o, b); o += len; f.pos++;
+    }
+    return o;
+  };
+  const oldReaddir = (fd, buf) => {
+    const f = fdOf(fd);
+    if (!f.node || !f.node.dir) return -E.ENOTDIR;
+    const { names, pre } = dirNames(f);
+    if (f.pos >= names.length) return 0;
+    const e = dirEntry(f, pre, f.pos), b = new Uint8Array(10 + e.name.length + 1), d = new DataView(b.buffer);
+    d.setUint32(0, e.ino, true); d.setUint32(4, f.pos, true); d.setUint16(8, e.name.length, true); b.set(e.name, 10);
+    wrBytes(buf, b); f.pos++;
+    return 1;
+  };
+  const getdents = (fd, buf, cnt) => {
+    const f = fdOf(fd);
+    if (!f.node || !f.node.dir) return -E.ENOTDIR;
+    const { names, pre } = dirNames(f);
     let o = 0;
     while (f.pos < names.length) {
       const name = new TextEncoder().encode(names[f.pos]);
@@ -969,9 +1016,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   /** Is a pipe's write end open in any process? Then an empty pipe is not its end yet. */
   const writerOpen = (pp) => [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.pp === pp && !f.rd));
-  const pipe = (ptr) => {
-    const pp = { buf: [] };
-    const r = newFd({ pp, rd: true }), w = newFd({ pp, rd: false });
+  const pipe = (ptr, flags = 0) => {
+    const pp = { buf: [] }, ce = (flags & 0x80000) !== 0;
+    const r = newFd({ pp, rd: true }, 0, ce), w = newFd({ pp, rd: false }, 0, ce);
     wr32(ptr, r); wr32(ptr + 4, w); return 0;
   };
   const readlink = (path, base, buf, size) => {
@@ -1014,9 +1061,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       return total;
     },
     180: (fd, buf, n, lo, hi) => doRead(fd, buf, n, lo + hi * 4294967296),  // pread64
-    5: (path, flags) => doOpen(rdStr(path), flags),                        // open
-    295: (dirfd, path, flags) => doOpen(rdStr(path), flags, atBase(dirfd)),// openat
-    6: (fd) => { fdOf(fd); delete fds[fd]; return 0; },                    // close
+    5: (path, flags, mode) => doOpen(rdStr(path), flags, lx.cwd, mode),    // open
+    8: (path, mode) => doOpen(rdStr(path), 0x241, lx.cwd, mode),           // creat: O_CREAT|O_WRONLY|O_TRUNC
+    295: (dirfd, path, flags, mode) => doOpen(rdStr(path), flags, atBase(dirfd), mode),   // openat
+    6: (fd) => { fdOf(fd); delete fds[fd]; lx.cloexec.delete(fd); return 0; },   // close
     19: (fd, off, whence) => seek(fd, off | 0, whence),                    // lseek
     140: (fd, hi, lo, res, whence) => {                                    // _llseek
       const r = seek(fd, (hi | 0) * 4294967296 + lo, whence);
@@ -1076,17 +1124,23 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       fs.set(p, { link: rdStr(target), mtime: lx.now() }); gone.delete(p); return 0;
     },
     220: (fd, buf, cnt) => getdents(fd, buf, cnt),                         // getdents64
+    141: (fd, buf, cnt) => getdents32(fd, buf, cnt),                       // getdents
+    89: (fd, buf) => oldReaddir(fd, buf),                                  // readdir
     41: (fd) => newFd(fdOf(fd)),                                           // dup: the same open file, offset shared
-    63: (fd, to) => { const f = fdOf(fd); fds[to] = f; return to; },       // dup2
-    330: (fd, to) => { const f = fdOf(fd); if (fd === to) return -E.EINVAL; fds[to] = f; return to; },   // dup3
+    63: (fd, to) => { const f = fdOf(fd); fds[to] = f; if (fd !== to) lx.cloexec.delete(to); return to; },   // dup2
+    330: (fd, to, flags) => { const f = fdOf(fd); if (fd === to) return -E.EINVAL; fds[to] = f; if (flags & 0x80000) lx.cloexec.add(to); else lx.cloexec.delete(to); return to; },   // dup3
     221: (fd, cmd, arg) => {                                               // fcntl64
       const f = fdOf(fd);
-      if (cmd === 0 || cmd === 1030) return newFd(f, arg);                  // F_DUPFD, F_DUPFD_CLOEXEC
-      if (cmd === 1 || cmd === 2) return 0;                                 // F_GETFD / F_SETFD
+      if (cmd === 0 || cmd === 1030) return newFd(f, arg, cmd === 1030);    // F_DUPFD, F_DUPFD_CLOEXEC
+      if (cmd === 1) return lx.cloexec.has(fd) ? 1 : 0;                     // F_GETFD: FD_CLOEXEC
+      if (cmd === 2) { if (arg & 1) lx.cloexec.add(fd); else lx.cloexec.delete(fd); return 0; }   // F_SETFD
       if (cmd === 3) return f.flags !== undefined ? f.flags : (f.pipe === 0 ? 0 : 1);   // F_GETFL
       if (cmd === 4) { f.flags = ((f.flags || 0) & ~0x2c00) | (arg & 0x2c00); return 0; }   // F_SETFL: O_APPEND, O_NONBLOCK, O_ASYNC
       return 0;
     },
+    // fcntl (55), libc5's: the same commands as fcntl64. Missing, it answered ENOSYS, and libc5's
+    // getcwd — which opens ".." and sets it close-on-exec — failed: make stopped at "getcwd".
+    55: (fd, cmd, arg) => SYS[221](fd, cmd, arg),
     194: (fd, lo, hi) => { const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EINVAL; const n = lo + hi * 4294967296; grow(f.node, n); f.node.data.fill(0, Math.min(n, f.node.size), n); f.node.size = n; return 0; },   // ftruncate64
     118: () => 0, 148: () => 0,                                            // fsync, fdatasync
     54: (fd, req, arg) => ioctl(fdOf(fd), req, arg),                       // ioctl
@@ -1185,7 +1239,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     238: (tid, sig) => raise(sig),                                         // tkill
     270: (tgid, tid, sig) => raise(sig),                                   // tgkill
     199: () => 0, 200: () => 0, 201: () => 0, 202: () => 0,                // get[e]uid32, get[e]gid32
-    60: () => 0o022,                                                       // umask
+    60: (m) => { const old = lx.umask; lx.umask = m & 0o777; return old; },  // umask
     191: (res, rl) => { wr32(rl, 0xffffffff); wr32(rl + 4, 0xffffffff); if (res === 3) { wr32(rl, 8 << 20); } return 0; },   // ugetrlimit: stack 8 MiB, the rest unlimited
     340: (pid, res, nw, old) => { if (old) { wr32(old, 0xffffffff); wr32(old + 4, 0xffffffff); wr32(old + 8, 0xffffffff); wr32(old + 12, 0xffffffff); if (res === 3) { wr32(old, 8 << 20); wr32(old + 4, 0); } } return 0; },   // prlimit64
     355: (buf, n) => { for (let i = 0; i < n; i++) wr8(buf + i, (lx.rng = (Math.imul(lx.rng || 12345, 1103515245) + 12345) >>> 0) >>> 24); return n; },   // getrandom: seeded, so runs repeat
@@ -1221,7 +1275,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     107: (path, buf) => oldStat(resolve(rdStr(path), lx.cwd, false), buf),  // lstat
     108: (fd, buf) => { const f = fdOf(fd); return f.path ? oldStat(f.path, buf) : putOldStat(buf, f, 'pipe:' + fd); },   // fstat
     42: (ptr) => pipe(ptr),                                                // pipe
-    331: (ptr) => pipe(ptr),                                               // pipe2
+    331: (ptr, flags) => pipe(ptr, flags),                                 // pipe2
     2: () => fork(),                                                       // fork
     190: () => fork(),                                                     // vfork: a fork here
     120: (flags, sp, ptid, tls, ctid) => fork(flags, ctid),                // clone, without CLONE_VM
@@ -1234,7 +1288,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     142: (n, inp, outp, exp, tv) => select(n, inp, outp, exp, tv),         // _newselect
     308: (n, inp, outp, exp, ts) => select(n, inp, outp, exp, ts),         // pselect6 (readline waits for keys with it)
     439: (dirfd, path) => { const r = resolve(rdStr(path), atBase(dirfd)); return r && getNode(r) ? 0 : -E.ENOENT; },   // faccessat2
-    94: () => 0, 15: () => 0, 306: () => 0,                                // fchmod, chmod, fchmodat: modes are not kept
+    // chmod, fchmod, fchmodat: the mode is kept (stat reports it; a.out and ELF run whatever it says).
+    15: (path, mode) => { const p = resolve(rdStr(path)), n = p && getNode(p); if (!n) return -E.ENOENT; n.mode = mode & 0o7777; return 0; },
+    94: (fd, mode) => { const f = fdOf(fd); if (f.node) f.node.mode = mode & 0o7777; return 0; },
+    306: (dirfd, path, mode) => { const p = resolve(rdStr(path), atBase(dirfd)), n = p && getNode(p); if (!n) return -E.ENOENT; n.mode = mode & 0o7777; return 0; },
     82: (args) => select(rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12), rd32(args + 16)),   // select (old: its arguments in a struct)
     122: (buf) => {                                                        // uname: as the oracle's i386 kernel says
       const f = ['Linux', 'mirage', '2.6.32', '#1', 'i686', '(none)'];
