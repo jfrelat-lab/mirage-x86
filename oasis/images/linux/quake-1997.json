@@ -45,7 +45,6 @@
   "entry": {
     "run": "/usr/games/quake/squake",
     "args": [
-      "-nosound",
       "-noudp",
       "-nocdaudio"
     ],

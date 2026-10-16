@@ -346,7 +346,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     installPages(s.pages);
     mem.u8.set(s.tls, TLS_A); mem.u8.set(s.io, TSS_BASE + IOMAP);
     cpu.setCR3(cpu.cr3);
-    machine.rec.reset();                                                 // the child may have exec'd other code here
+    // No machine.rec.reset(): the CR3 load above starts a new epoch, and a translated block is checked
+    // against the frames it was built from before it runs again (ROADMAP D8) — another process's code
+    // at the same addresses is retranslated, the rest is kept. Dropping everything at each switch made
+    // DOOM with its sndserver (switching every few ms) run several times slower.
     cpu.reg.set(s.reg); cpu.eip = s.eip; cpu.flags = s.flags;
     for (let i = 0; i < 6; i++) cpu.setSeg(i, s.seg[i]);
     if (s.fst) { cpu.fst.set(s.fst); cpu.ftop = s.ftop; cpu.fsw = s.fsw; cpu.fcw = s.fcw; cpu.focc.set(s.focc); }
@@ -500,6 +503,50 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // takes the line settings and has nothing to say until lx.mouseIn holds its 3-byte packets.
   fs.set('/dev/mouse', { dev: 'mouse', rdev: 0x440, mtime: 0 }); fs.set('/dev/ttyS0', fs.get('/dev/mouse'));
   lx.mouseIn = [];
+  // /dev/dsp, the OSS sound device (14:3): what a program writes is played at the rate, format and
+  // channels it set, on the program's own clock — a full buffer blocks the writer, as the card's DMA
+  // paces it. The samples go to src/audio.js (machine.dsp, beside the Sound Blaster). OSS's defaults:
+  // 8 kHz, unsigned 8-bit, mono; 16 fragments of 4 KiB until SNDCTL_DSP_SETFRAGMENT says otherwise.
+  // DOOM's sndserver mixes there; it stopped at "Could not open /dev/dsp".
+  fs.set('/dev/dsp', { dev: 'dsp', rdev: 0xe03, mtime: 0 }); fs.set('/dev/audio', fs.get('/dev/dsp'));
+  const dsp = lx.dsp = { rate: 8000, fmt: 8, ch: 1, fragShift: 12, frags: 16, queued: 0, t: 0, played: 0, pcm: [] };
+  const dspBps = () => dsp.rate * dsp.ch * (dsp.fmt === 0x10 ? 2 : 1);
+  const dspBuf = () => (1 << dsp.fragShift) * dsp.frags;
+  const dspDrain = () => {                                   // what the card has played since the last look
+    const now = lx.mono();
+    if (dsp.map) {                                           // mmap'd: the card runs round its buffer
+      if (!dsp.trig) { dsp.t = now; return; }
+      const n = Math.floor((now - dsp.t) * dspBps()), step = (dsp.fmt === 0x10 ? 2 : 1) * dsp.ch, n2 = n - (n % step);
+      if (n2 <= 0) return;
+      const size = dsp.map.size, take = Math.min(n2, size);   // more than a lap behind: the last lap only
+      const from = (dsp.played + n2 - take) % size, bytes = new Uint8Array(take);
+      for (let i = 0; i < take; i++) bytes[i] = rd8(dsp.map.va + (from + i) % size);
+      toPcm(bytes, take);
+      dsp.played += n2; dsp.t += n2 / dspBps();
+      return;
+    }
+    const n = Math.min(dsp.queued, Math.floor((now - dsp.t) * dspBps()));
+    if (n > 0) { dsp.queued -= n; dsp.played += n; dsp.t += n / dspBps(); }
+    if (!dsp.queued) dsp.t = now;
+  };
+  const toPcm = (bytes, take) => {                           // to signed 16-bit stereo for the mixer
+    const wide = dsp.fmt === 0x10, step = (wide ? 2 : 1) * dsp.ch;
+    for (let i = 0; i + step <= take; i += step) {
+      const at = (k) => wide ? ((bytes[i + k * 2] | (bytes[i + k * 2 + 1] << 8)) << 16 >> 16) : (bytes[i + k] - 128) << 8;
+      const l = at(0), r = dsp.ch > 1 ? at(1) : l;
+      dsp.pcm.push(l, r);
+    }
+    if (dsp.pcm.length > dsp.rate * 4) dsp.pcm.splice(0, dsp.pcm.length - dsp.rate * 4);   // nobody is listening
+  };
+  const dspWrite = (f, bytes) => {
+    dspDrain();
+    const take = Math.min(bytes.length, dspBuf() - dsp.queued);
+    if (take < Math.min(bytes.length, dspBuf())) return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;   // wait for room
+    toPcm(bytes, take);
+    dsp.queued += take;
+    return take;
+  };
+  machine.dsp = { drain: () => { const samples = dsp.pcm; dsp.pcm = []; return { rate: dsp.rate, samples }; } };
   /** Put stdin, stdout and stderr on the first virtual console, as for a program started there. */
   lx.consoleStdio = () => { const n = fs.get('/dev/tty1'); for (let i = 0; i < 3; i++) fds[i] = { node: n, path: '/dev/tty1', pos: 0, flags: 2 }; };
   lx.ttyIn = [];
@@ -619,6 +666,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
     if (f.node.dev === 'tty') { ttyOutput(bytes); return bytes.length; }
     if (f.node.dev === 'mouse') return bytes.length;
+    if (f.node.dev === 'dsp') return dspWrite(f, bytes);
     if (f.node.dev) return f.node.dev === 'full' ? -E.ENOSPC : bytes.length;
     if (f.node.dir) return -E.EISDIR;
     if ((f.flags & 3) === 0) return -E.EBADF;                               // O_RDONLY
@@ -770,6 +818,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // ioctl on the console: what a kernel answers on virtual terminal 1 (linux/vt.h, linux/kd.h,
   // asm/termbits.h). Pipes and files are not terminals.
   const ioctl = (f, req, arg) => {
+    if (f.node && f.node.dev === 'dsp') return dspIoctl(req >>> 0, arg);
     if (!f.node || (f.node.dev !== 'tty' && f.node.dev !== 'mouse')) return -E.ENOTTY;
     // The console's settings are the console's; a serial line (the mouse) has its own. Sharing them,
     // the mouse's 1200-baud setup (VMIN 1) became the console's, and DOOM's keyboard poll then waited.
@@ -792,6 +841,32 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       case 0x5601: for (let i = 0; i < 8; i++) wr8(arg + i, 0); return 0;  // VT_GETMODE: VT_AUTO
       case 0x5603: wr8(arg, 1); wr8(arg + 1, 0); wr8(arg + 2, 0); wr8(arg + 3, 0); wr8(arg + 4, 2); wr8(arg + 5, 0); return 0;   // VT_GETSTATE: v_active 1
       default: return 0;                                                   // VT_SETMODE, VT_ACTIVATE, VT_WAITACTIVE, KDSETLED...
+    }
+  };
+  // The OSS ioctls (linux/soundcard.h): 'P' requests, each in or out through an int (or a struct).
+  const dspIoctl = (req, arg) => {
+    const io = (v) => { wr32(arg, v); return 0; };
+    switch (req) {
+      case 0x5000: case 0x5001: case 0x5008: dspDrain(); if (req === 0x5000) { dsp.queued = 0; dsp.t = lx.mono(); } return 0;   // RESET, SYNC, POST
+      case 0xc0045002: { const r = rd32(arg); if (r >= 4000 && r <= 48000) { dspDrain(); dsp.rate = r; } return io(dsp.rate); }   // SPEED
+      case 0xc0045003: dsp.ch = rd32(arg) ? 2 : 1; return io(dsp.ch - 1);                     // STEREO
+      case 0xc0045006: { const c = rd32(arg); dsp.ch = c >= 2 ? 2 : 1; return io(dsp.ch); }   // CHANNELS
+      case 0xc0045005: { const v = rd32(arg); if (v === 8 || v === 0x10) dsp.fmt = v; return io(dsp.fmt); }   // SETFMT (AFMT_QUERY 0: the current one)
+      case 0x8004500b: return io(0x18);                                                       // GETFMTS: U8 and S16_LE
+      case 0xc0045004: return io(1 << dsp.fragShift);                                         // GETBLKSIZE
+      case 0xc004500a: { const v = rd32(arg), sh = Math.max(4, Math.min(16, v & 0xffff)), n = Math.max(2, Math.min(256, v >>> 16)); dsp.fragShift = sh; dsp.frags = n; return 0; }   // SETFRAGMENT
+      case 0xc0045009: return io(1);                                                          // SUBDIVIDE
+      case 0x8010500c: { dspDrain(); const size = 1 << dsp.fragShift, free = dspBuf() - dsp.queued;   // GETOSPACE: audio_buf_info
+        wr32(arg, Math.floor(free / size)); wr32(arg + 4, dsp.frags); wr32(arg + 8, size); wr32(arg + 12, free); return 0; }
+      // GETCAPS: version 1, TRIGGER and MMAP. Quake's snd_linux.c mmaps the buffer and mixes into it,
+      // asking GETOPTR where the card is ("sound driver too old" without MMAP — PRISM's dsp.js); the
+      // buffer is a power of two, since Quake masks its positions with samples - 1.
+      case 0x8004500f: return io(0x100 | 0x1000 | 0x2000);
+      case 0x500e: return 0;                                                                   // NONBLOCK
+      case 0x80045010: return io(2);                                                           // GETTRIGGER: output on
+      case 0x40045010: { dspDrain(); dsp.trig = (rd32(arg) & 2) !== 0; dsp.t = lx.mono(); return 0; }   // SETTRIGGER: output on or off
+      case 0x800c5012: { dspDrain(); wr32(arg, dsp.played); wr32(arg + 4, 0); wr32(arg + 8, dsp.played % dspBuf()); return 0; }   // GETOPTR
+      default: return -E.EINVAL;
     }
   };
   const select = (n, inp, outp, exp, tv) => {
@@ -949,6 +1024,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const at = (flags & 0x10) ? addr : lx.mmapNext;                      // MAP_FIXED
       if (!(flags & 0x10)) lx.mmapNext += size;
       let src = null;
+      if (!(flags & 0x20) && fds[fd] && fds[fd].node && fds[fd].node.dev === 'dsp') {   // the card's buffer
+        unmapRange(at, at + size); mapRange(at, at + size, true);
+        dsp.map = { va: at, size: Math.min(size, dspBuf()) }; dsp.trig = false; dsp.played = 0; dsp.t = lx.mono();
+        return at;
+      }
       if (!(flags & 0x20) && fds[fd] && fds[fd].node && fds[fd].node.dev === 'mem') {
         unmapRange(at, at + size); mapPhys(at, pgoff * PAGE, size, (prot & 2) !== 0); return at;
       }

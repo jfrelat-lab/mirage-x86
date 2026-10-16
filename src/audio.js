@@ -28,8 +28,9 @@ export function installAudio(machine) {
     last: clock(machine),
     // Speaker timeline: [{ t, b (port 61h bits 0-1), hz }], the state in force from t on.
     spk: [{ t: -Infinity, b: 0, hz: 0, t0: 0 }],
-    // The resampled sources: the Sound Blaster's DAC and the OPL3, each with its own fifo.
-    src: [{ name: 'sb', gain: SB, fifo: [], frac: 0, prev: [0, 0] }, { name: 'opl', gain: OPL, fifo: [], frac: 0, prev: [0, 0] }],
+    // The resampled sources: the Sound Blaster's DAC and the OPL3, and MIRAGE-LINUX's /dev/dsp.
+    src: [{ name: 'sb', gain: SB, fifo: [], frac: 0, prev: [0, 0] }, { name: 'opl', gain: OPL, fifo: [], frac: 0, prev: [0, 0] },
+      { name: 'dsp', gain: SB, fifo: [], frac: 0, prev: [0, 0] }],
     hp: [0, 0, 0, 0],                       // DC blocker state, per channel: x1, y1
     pull,
   };

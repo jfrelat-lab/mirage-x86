@@ -10,6 +10,8 @@ import { installLinux } from './linux.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
 import { VtConsole } from './vtconsole.js';
+import { installAudio } from './audio.js';
+import { AudioOut } from './audio-out.js';
 
 /** A synchronous view of the image's tree, as lx.host wants it. */
 export function oasisHost(imgName) {
@@ -40,6 +42,13 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
     try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }
   }
   const lx = installLinux(mc, { realTime: true, onOutput: (fd, b) => onOutput(new TextDecoder().decode(b)) });
+  // Sound: /dev/dsp (src/linux.js) plays on the program's clock, which is the wall clock here; the
+  // mixer takes the same one. The output starts with the first click or key, as a browser requires.
+  mc.wallClockMs = () => performance.now();
+  installAudio(mc);
+  const audio = new AudioOut(mc);
+  const wake = () => { audio.start(); window.removeEventListener('keydown', wake); window.removeEventListener('pointerdown', wake); };
+  window.addEventListener('keydown', wake); window.addEventListener('pointerdown', wake);
   lx.host = host;
   lx.epoch = Math.floor(Date.now() / 1000);
   const e = img.entry || {};
@@ -97,6 +106,7 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   const draw = () => {
     if (stopped) return;
     video.render(); frames++;
+    audio.pump();
     const now = performance.now();
     if (now - last > 1000 && !lx.done && !fault) {
       onStatus(paused ? 'paused' : `${((mc.cpu.cycles - c0) / (now - last) / 1000).toFixed(1)} M instructions/s · ${frames} fps`);
@@ -106,7 +116,7 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
   };
   draw();
   return {
-    mc, lx,
+    mc, lx, audio,
     pause(on) { paused = on; },
     stop() { stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); },
   };

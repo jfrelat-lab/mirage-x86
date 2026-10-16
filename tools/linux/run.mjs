@@ -12,7 +12,8 @@
 // calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks).
 // MIRAGE_LXSHOT=<dir> writes the screen as PNG every MIRAGE_LXSTEP guest seconds (default 10), through
 // src/video.js as the browser draws it; MIRAGE_LXSECS stops the run after that many guest seconds —
-// for programs that never exit on their own (Quake, DOOM).
+// for programs that never exit on their own (Quake, DOOM). MIRAGE_LXWAV=<file.wav> records what the
+// program played on /dev/dsp, at the rate it set — what a listener would have heard.
 import { readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { Machine } from '../../src/machine.js';
@@ -81,7 +82,18 @@ if (SHOT) {
     console.error(`mirage-linux: ${t}s ${W}x${H} -> ${SHOT}`);
   };
 }
-while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (shoot) shoot(); }
+const WAV = process.env.MIRAGE_LXWAV, played = [];
+let wavRate = 0;
+const record = () => { if (!WAV || !mc.dsp) return; const { rate, samples } = mc.dsp.drain(); if (samples.length) { wavRate = rate; for (const v of samples) played.push(v); } };
+while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (shoot) shoot(); record(); }
+if (WAV) {
+  const { writeFileSync } = await import('fs');
+  const n = played.length, b = Buffer.alloc(44 + n * 2), r = wavRate || 11025;
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(2, 22);
+  b.writeUInt32LE(r, 24); b.writeUInt32LE(r * 4, 28); b.writeUInt16LE(4, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.max(-32768, Math.min(32767, played[i])), 44 + i * 2);
+  writeFileSync(WAV, b); console.error(`mirage-linux: ${(n / 2 / r).toFixed(1)} s of sound at ${r} Hz -> ${WAV}`);
+}
 if (!lx.done && SECS) { console.error(`mirage-linux: stopped after ${SECS} guest seconds`); process.exit(0); }
 if (!lx.done) { console.error('mirage-linux: still running after', LIMIT, 'cycles'); process.exit(124); }
 if (lx.signal) {

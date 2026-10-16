@@ -2989,6 +2989,18 @@ const runLinux = (hex, argv) => {
     '800408b801000000cd805800000000000000000000000000000000');
   let got; try { got = runLinux(hex, ['/w/PIPEWAIT']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: a child waits on a pipe its parent writes later (two processes at once)', got, 88); }
+// tools/linux/dsp.asm: /dev/dsp set up as OSS programs do — rate, format, stereo, GETOSPACE's geometry,
+// a write. 31 when all hold; with no /dev/dsp the open failed and it was 0.
+{ const hex = (                                         // nasm -f bin tools/linux/dsp.asm (its file part)
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004083301000047110000070000000010000031ffb805000000bb1e810408' +
+    'b901000000cd8085c00f8898000000a333810408b9025004c0ba27810408e88d000000813d27810408112b0000750383' +
+    'cf01b9055004c0ba2b810408e86f000000833d2b81040810750383cf02b9035004c0ba2f810408e854000000b90c5010' +
+    '80ba37810408e845000000833d3b81040810750383cf04813d3f81040800100000750383cf08b8040000008b1d338104' +
+    '08b947810408ba00100000cd803d00100000750383cf1089fbb801000000cd80b8360000008b1d33810408cd80c32f64' +
+    '65762f64737000112b00001000000001000000');
+  let got; try { got = runLinux(hex, ['/w/DSP']).status; } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: /dev/dsp takes OSS rate, format, stereo, answers GETOSPACE, plays a write', got, 31); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
