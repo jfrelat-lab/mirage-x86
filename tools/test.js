@@ -3011,6 +3011,14 @@ const runLinux = (hex, argv) => {
     got = [dec(0), dec(3), dec(6)].map((x) => x.join(',')).join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: the mouse as Microsoft serial packets, a large move split', got, '5,-3,1,0,1 127,0,0,1,1 73,0,0,1,1'); }
+// ...and on /dev/input/mice as Linux's mousedev gives it to gpm and X: PS/2 packets — 08h set, buttons in
+// bits 0-1, the signs in bits 4-5, then dX and dY with Y UP.
+{ let got;
+  try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.mouseInput(5, -3, 1); lx.mouseInput(-2, 4, 2);
+    got = lx.miceIn.map((b) => b.toString(16)).join(' ');
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: /dev/input/mice as PS/2 packets, Y up', got, '9 5 3 3a fe fc'); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm

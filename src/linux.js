@@ -503,6 +503,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // takes the line settings and has nothing to say until lx.mouseIn holds its 3-byte packets.
   fs.set('/dev/mouse', { dev: 'mouse', rdev: 0x440, mtime: 0 }); fs.set('/dev/ttyS0', fs.get('/dev/mouse'));
   lx.mouseIn = [];
+  // /dev/input/mice (13:63), Linux's mousedev: every mouse as one PS/2 mouse — three bytes, bit 3 always
+  // set, the buttons, the deltas' signs, then dX and dY with Y growing UPWARD. gpm and X servers read it;
+  // a command written to it is acknowledged (FAh), and GET ID (F2h) answers 00h, a plain PS/2 mouse.
+  fs.set('/dev/input', { dir: true, mtime: 0 });
+  fs.set('/dev/input/mice', { dev: 'mice', rdev: 0xd3f, mtime: 0 }); fs.set('/dev/psaux', fs.get('/dev/input/mice'));
+  lx.miceIn = [];
   /** A move and the buttons (1 left, 2 right), as a Microsoft serial mouse reports them: three bytes
    *  per packet — 01LRYYXX with the deltas' top bits, then X's and Y's low six bits; Y grows downward.
    *  Deltas beyond -128..127 go as several packets. SVGAlib's default ("Assuming Microsoft mouse"). */
@@ -512,7 +518,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const x = Math.max(-128, Math.min(127, dx)), y = Math.max(-128, Math.min(127, dy));
       dx -= x; dy -= y;
       lx.mouseIn.push(0x40 | ((buttons & 1) << 5) | ((buttons & 2) << 3) | ((y >> 4) & 0x0c) | ((x >> 6) & 0x03), x & 0x3f, y & 0x3f);
+      const py = -y;                                         // PS/2: Y up
+      lx.miceIn.push(0x08 | (buttons & 1) | ((buttons & 2)) | (x < 0 ? 0x10 : 0) | (py < 0 ? 0x20 : 0), x & 0xff, py & 0xff);
     } while (dx || dy);
+    if (lx.miceIn.length > 3000) lx.miceIn.splice(0, lx.miceIn.length - 3000);   // nobody reading
+    if (lx.mouseIn.length > 3000) lx.mouseIn.splice(0, lx.mouseIn.length - 3000);
     machine.blocked = false;
   };
   // /dev/dsp, the OSS sound device (14:3): what a program writes is played at the rate, format and
@@ -678,6 +688,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
     if (f.node.dev === 'tty') { ttyOutput(bytes); return bytes.length; }
     if (f.node.dev === 'mouse') return bytes.length;
+    if (f.node.dev === 'mice') { for (const c of bytes) { lx.miceIn.push(0xfa); if (c === 0xf2) lx.miceIn.push(0x00); } return bytes.length; }
     if (f.node.dev === 'dsp') return dspWrite(f, bytes);
     if (f.node.dev) return f.node.dev === 'full' ? -E.ENOSPC : bytes.length;
     if (f.node.dir) return -E.EISDIR;
@@ -704,6 +715,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     } else if (f.node.dev === 'mouse') {
       if (!lx.mouseIn.length) return (f.flags & 0x800) ? -E.EAGAIN : 0;
       src = Uint8Array.from(lx.mouseIn.splice(0, n));
+    } else if (f.node.dev === 'mice') {
+      if (!lx.miceIn.length) return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;   // a device that waits for a move
+      src = Uint8Array.from(lx.miceIn.splice(0, n - (n % 3) || n));
     } else if (f.node.dev === 'tty') {
       if (!lx.ttyIn.length) {
         if (lx.tty.eof) { lx.tty.eof = false; return 0; }                // ^D on an empty line
@@ -883,9 +897,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   const select = (n, inp, outp, exp, tv) => {
     let ready = 0, waitsOnTty = false;
-    if (!tv && inp) for (let fd = 0; fd < n; fd++) if ((rd32(inp + (fd >>> 5) * 4) >>> (fd & 31)) & 1 && fds[fd] && fds[fd].node && fds[fd].node.dev === 'tty') waitsOnTty = true;
+    if (!tv && inp) for (let fd = 0; fd < n; fd++) if ((rd32(inp + (fd >>> 5) * 4) >>> (fd & 31)) & 1 && fds[fd] && fds[fd].node && (fds[fd].node.dev === 'tty' || fds[fd].node.dev === 'mice')) waitsOnTty = true;   // an input device: wait for it
     const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
-      if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0; return true; };
+      if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0;
+      if (f.node && f.node.dev === 'mice') return lx.miceIn.length > 0; return true; };
     const writes = [];
     for (const [set, test] of [[inp, has], [outp, (fd) => !!fds[fd]], [exp, () => false]]) {
       if (!set) continue;
@@ -897,7 +912,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     }
     // No timeout and nothing ready on a terminal: wait for a key — leaving the sets as they were, since
     // the call runs again from the start.
-    if (!ready && waitsOnTty && !lx.ttyIn.length) return BLOCK;
+    if (!ready && waitsOnTty && !lx.ttyIn.length && !lx.miceIn.length) return BLOCK;
     if (!ready && !tv && lx.procs.length) return BLOCK;                  // no timeout: wait while another process runs
     for (const [a, v] of writes) wr32(a, v);
     return ready;
