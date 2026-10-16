@@ -71,6 +71,10 @@
       "to": "/usr/include/errnos.h"
     },
     {
+      "file": "oasis/files/libnsl.a",
+      "to": "/usr/lib/libnsl.a"
+    },
+    {
       "links": {
         "/lib/ld-linux.so.1": "ld-linux.so.1.8.12",
         "/lib/ld.so": "ld.so.1.8.12",
@@ -99,5 +103,5 @@
     }
   },
   "output": "window",
-  "notes": "id's linuxdoom-1.10 and sndserv sources (December 1997) and Debian 1.3's gcc 2.7.2.1, binutils, make and libc5: `cd sndserv; make` builds DOOM's sound server inside MIRAGE-LINUX, and `doom` (id's 1994 binary) then plays with it. linuxdoom-1.10 itself builds too; its video is X11."
+  "notes": "id's linuxdoom-1.10 and sndserv sources (December 1997) and Debian 1.3's gcc 2.7.2.1, binutils, make and libc5. `cd sndserv; make` builds DOOM's sound server inside MIRAGE-LINUX, and `doom` (id's 1994 binary) plays with it; `cd linuxdoom-1.10; make` compiles and links id's X11 DOOM (about 18 minutes). The image supplies errnos.h and an empty libnsl.a, which libc5 no longer ships; id's sources are untouched."
 }
