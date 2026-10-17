@@ -76,12 +76,19 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `{ "dir": path }` | a directory of the repository | used where it is |
 | `{ "links": { path: target } }` | symbolic links | — |
 | `{ "mkdir": [paths] }` | empty directories | — |
+| `{ "run": command, "cwd": dir, "env": {} }` | a command run with `/bin/sh -c` on MIRAGE-LINUX over the layers before it, once — a Dockerfile's `RUN` (Linux only) | what the run made, changed or removed: files with their modes and times, links, directories, and the removed paths (`.oasis-gone`), which hide the layers below |
 
 Paths are relative to the repository. Remote layers are fetched once and unpacked into the cache,
 `$OASIS_CACHE` or `~/.cache/oasis`, one directory per layer named by a hash of its description. Tar,
 `ar` (Debian packages) and gzip are read by `tools/oasis.mjs` itself, so symbolic links, empty
 directories and long names come through as the archive has them. **Nothing a layer fetches is put
 in this repository**: an image is a recipe that points at the original archives.
+
+A `run` layer is built at `pull` (or at the first `run`) and kept in the cache under a hash of every
+layer up to it, the bytes of the repository's files included: change anything below it and it is
+built again. It is not keyed by MIRAGE's own version — delete its directory (`inspect` names it
+`built`) to build it with a newer MIRAGE. A build that fails keeps nothing. `linux/doom-x11` builds
+DOOM this way: about ten minutes once, then the game is there at every start.
 
 ## The images
 

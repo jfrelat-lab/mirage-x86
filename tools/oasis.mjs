@@ -164,14 +164,51 @@ async function pullLayer(l) {
   writeFileSync(join(dir, '.oasis-done'), JSON.stringify(l));
   return dir;
 }
-async function pull(img) { for (const l of img.layers || []) if (needsPull(l)) await pullLayer(l); }
+async function pull(img) {
+  for (const l of img.layers || []) if (needsPull(l)) await pullLayer(l);
+  if (img.world === 'linux' && (img.layers || []).some((l) => l.run)) await linuxRoot(img);   // builds its `run` layers
+}
+
+/** A `run` layer: a command run once on MIRAGE-LINUX over the layers before it, what it wrote kept as
+ *  a layer — a Dockerfile's RUN. Its cache key covers every layer up to it, local files' bytes too,
+ *  so changing anything below builds it again. */
+const chainStep = (chain, l) => {
+  const h = createHash('sha256').update(chain).update(JSON.stringify(l));
+  const src = l.file || l.gz || l.zip;
+  if (src && !isUrl(src) && existsSync(local(src))) h.update(readFileSync(local(src)));
+  return h.digest('hex');
+};
+const runDir = (chain) => join(CACHE, 'layers', 'run-' + chain.slice(0, 16));
+async function runLayer(l, root, dir) {
+  if (existsSync(join(dir, '.oasis-done'))) return dir;
+  const tmp = dir + '.part';
+  rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp, { recursive: true });
+  const spec = join(CACHE, 'run-' + process.pid + '-build.json');
+  writeFileSync(spec, JSON.stringify({ dirs: root.dirs, files: [...root.files], links: [...root.links], mkdirs: [...root.mkdirs] }));
+  process.stderr.write(`oasis: building a layer: ${l.run} (in ${l.cwd || '/'})\n`);
+  const t0 = Date.now();
+  const code = await new Promise((ok) => {
+    const p = spawn(process.execPath, [join(ROOT, 'tools', 'linux', 'run.mjs'), '/bin/sh', '-c', l.run], { stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: l.cwd || '/', MIRAGE_LXCOMMIT: tmp, MIRAGE_LXENV: JSON.stringify(l.env || {}), MIRAGE_CPU: l.cpu || '686' } });
+    p.on('exit', (c) => ok(c));
+  });
+  rmSync(spec, { force: true });
+  if (code !== 0 || !existsSync(join(tmp, '.oasis-gone'))) { rmSync(tmp, { recursive: true, force: true }); throw new Error(`oasis: the layer "${l.run}" failed (status ${code})`); }
+  writeFileSync(join(tmp, '.oasis-done'), JSON.stringify(l));
+  rmSync(dir, { recursive: true, force: true }); renameSync(tmp, dir);
+  process.stderr.write(`oasis: layer built in ${Math.round((Date.now() - t0) / 1000)} s -> ${dir}\n`);
+  return dir;
+}
 
 /** The image's file tree as an ordered list of host directories (later layers win), plus the
  *  files, links and directories laid on top — what MIRAGE-LINUX reads lazily through lx.host. */
 async function linuxRoot(img) {
   const dirs = [], files = new Map(), links = new Map(), mkdirs = new Set();
+  let chain = '';
   for (const l of img.layers || []) {
-    if (l.dir) dirs.push(local(l.dir));
+    chain = chainStep(chain, l);
+    if (l.run) dirs.push(await runLayer(l, { dirs: [...dirs], files, links, mkdirs }, runDir(chain)));
+    else if (l.dir) dirs.push(local(l.dir));
     else if (l.tar || l.deb || l.docker || l.lha || l.busybox || (l.zip && l.member)) dirs.push(await pullLayer(l));
     else if (l.gz || l.file) {
       const src = l.gz || l.file;
@@ -190,7 +227,11 @@ async function linuxRoot(img) {
 
 /** lx.host over a linuxRoot: lstat, read, list — in Node directly, and for the browser page. */
 function hostOver(root) {
-  const find = (p) => { for (let i = root.dirs.length - 1; i >= 0; i--) { const q = join(root.dirs[i], p); try { lstatSync(q); return q; } catch { /* next */ } } return null; };
+  // A `run` layer lists the paths its run removed (.oasis-gone): they, and what is under them, are
+  // not seen in the layers below it.
+  const gone = root.dirs.map((d) => { try { return new Set(JSON.parse(readFileSync(join(d, '.oasis-gone'), 'utf8'))); } catch { return null; } });
+  const hides = (i, p) => { const g = gone[i]; if (!g) return false; for (let q = p; q !== '/' && q !== '.'; q = dirname(q)) if (g.has(q)) return true; return false; };
+  const find = (p) => { for (let i = root.dirs.length - 1; i >= 0; i--) { const q = join(root.dirs[i], p); try { lstatSync(q); return q; } catch { /* next */ } if (hides(i, p)) return null; } return null; };
   const childOf = (p, k) => k !== p && k.startsWith(p === '/' ? '/' : p + '/') && !k.slice(p === '/' ? 1 : p.length + 1).includes('/');
   const parentsOf = (k) => { const out = []; let d = dirname(k); while (d !== '/' && d !== '.') { out.push(d); d = dirname(d); } return out; };
   const synthDirs = new Set([...root.mkdirs, ...[...root.files.keys(), ...root.links.keys(), ...root.mkdirs].flatMap(parentsOf)]);
@@ -208,7 +249,10 @@ function hostOver(root) {
     read(p) { const f = root.files.get(p); return new Uint8Array(readFileSync(f !== undefined ? f : find(p))); },
     list(p) {
       const names = new Set();
-      for (const d of root.dirs) { try { for (const n of readdirSync(join(d, p))) names.add(n); } catch { /* absent here */ } }
+      root.dirs.forEach((d, i) => {
+        if (gone[i]) for (const n of [...names]) if (hides(i, p === '/' ? '/' + n : p + '/' + n)) names.delete(n);
+        try { for (const n of readdirSync(join(d, p))) if (p !== '/' || !n.startsWith('.oasis-')) names.add(n); } catch { /* absent here */ }
+      });
       for (const k of [...root.files.keys(), ...root.links.keys(), ...root.mkdirs, ...synthDirs]) if (childOf(p, k)) names.add(k.slice(p === '/' ? 1 : p.length + 1));
       return [...names];
     },
@@ -351,7 +395,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const flags = rest.filter((a) => a === '--window' || a === '--terminal' || a === '--serve'), args = rest.filter((a) => !flags.includes(a));
   try {
     if (cmd === 'list') for (const n of listImages()) { const m = findImage(n); console.log(`${n.padEnd(28)} ${m.world.padEnd(6)} ${m.title || ''}`); }
-    else if (cmd === 'inspect') { const m = findImage(name); console.log(JSON.stringify(m, null, 2)); for (const l of m.layers || []) if (needsPull(l)) console.log((existsSync(join(cacheDir(l), '.oasis-done')) ? 'cached  ' : 'remote  ') + JSON.stringify(l)); }
+    else if (cmd === 'inspect') {
+      const m = findImage(name); console.log(JSON.stringify(m, null, 2));
+      let chain = '';
+      for (const l of m.layers || []) {
+        chain = chainStep(chain, l);
+        if (l.run) console.log((existsSync(join(runDir(chain), '.oasis-done')) ? 'built   ' : 'to build') + JSON.stringify(l));
+        else if (needsPull(l)) console.log((existsSync(join(cacheDir(l), '.oasis-done')) ? 'cached  ' : 'remote  ') + JSON.stringify(l));
+      }
+    }
     else if (cmd === 'pull') { await pull(findImage(name)); console.error('oasis: pulled'); }
     else if (cmd === 'index') { writeFileSync(join(ROOT, 'oasis', 'index.json'), indexText()); console.error('oasis: wrote oasis/index.json'); }
     else if (cmd === 'serve') {

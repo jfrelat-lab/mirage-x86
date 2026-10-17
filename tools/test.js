@@ -3196,6 +3196,28 @@ const runLinux = (hex, argv) => {
   lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/LSROOT']);
   for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
   eq('linux: / lists the host root merged with its own directories', lx.status, 6); }
+// lx.changes: what an OASIS `run` layer keeps of a run (tools/oasis.mjs) — tools/linux/commit.asm over a
+// host tree of /keep, /mod, /old. A file only read is the host's still; one appended to, one made, a
+// link, a directory and a removal are the run's. (/tmp is MIRAGE-LINUX's own, absent from this host.)
+{ let got; try { const hex = (                          // nasm -f bin tools/linux/commit.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040830010000400100000700000000100000b805000000bb0e81040831c9' +
+    'cd8089c3b803000000b930810408ba01000000cd80b806000000cd80b805000000bb14810408b901040000cd8089c3b8' +
+    '04000000b92d810408ba01000000cd80b806000000cd80b80a000000bb19810408cd80b805000000bb1e810408b94100' +
+    '0000baa0010000cd8089c3b804000000b92e810408ba02000000cd80b806000000cd80b853000000bb1e810408b92381' +
+    '0408cd80b827000000bb28810408b9c0010000cd80b80100000031dbcd802f6b656570002f6d6f64002f6f6c64002f6e' +
+    '6577002f6c6e6b002f64697200216869');
+  const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+  const host = { '/keep': 'kk', '/mod': 'mm', '/old': 'oo' }, enc = (x) => Uint8Array.from(x, (c) => c.charCodeAt(0));
+  lx.host = { lstat: (q) => (q === '/' ? { type: 'dir' } : host[q] ? { type: 'file', size: 2, mode: 0o100644 } : null),
+    list: (q) => (q === '/' ? Object.keys(host).map((k) => k.slice(1)) : []), read: (q) => enc(host[q]) };
+  lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/COMMIT']);
+  for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+  const c = lx.changes(), dec = (b) => String.fromCharCode(...b);
+  got = [lx.status, c.files.map((f) => `${f.path}=${dec(f.bytes)}:${(f.mode ?? 0).toString(8)}`).join(','), c.links.map((l) => `${l.path}->${l.target}`).join(','),
+    c.dirs.map((x) => `${x.path}:${(x.mode ?? 0).toString(8)}`).join(','), c.removed.join(',')].join(' ');
+  } catch (e) { got = e.message; }
+  eq('linux: a run\'s changes over the host tree, as an OASIS run layer keeps them', got, '0 /mod=mm!:644,/new=hi:640 /lnk->/new /tmp:0,/dir:700 /old'); }
 // The console's line discipline (n_tty with the default termios: ICANON ECHO ICRNL, OPOST ONLCR): a
 // line is edited — Backspace erases — and handed over at Enter, its echo on the screen.
 { const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), echoed = [];
@@ -3278,6 +3300,21 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   fsm.rmSync(tmp, { recursive: true, force: true }); if (layerDir) fsm.rmSync(layerDir, { recursive: true, force: true });
   eq('oasis: a busybox layer links each applet the binary lists', got, 'busybox cat->busybox ls->busybox'); }
+
+// ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
+// A build that deletes a file must not see it come back from the layer under it: the run layer's
+// .oasis-gone lists /x, so /x and /x/y are gone, /k stays, and the bookkeeping files are not listed.
+{ let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
+  const tmp = fsm.mkdtempSync(pm.join(osm.tmpdir(), 'oasis-gone-'));
+  try { const { hostOver } = await import('./oasis.mjs');
+    const lo = pm.join(tmp, 'lo'), hi = pm.join(tmp, 'hi');
+    fsm.mkdirSync(pm.join(lo, 'x'), { recursive: true }); fsm.writeFileSync(pm.join(lo, 'x', 'y'), 'y'); fsm.writeFileSync(pm.join(lo, 'k'), 'k');
+    fsm.mkdirSync(hi); fsm.writeFileSync(pm.join(hi, '.oasis-gone'), JSON.stringify(['/x'])); fsm.writeFileSync(pm.join(hi, '.oasis-done'), '{}');
+    const h = hostOver({ dirs: [lo, hi], files: new Map(), links: new Map(), mkdirs: new Set() });
+    got = [h.list('/').sort().join(','), h.lstat('/x'), h.lstat('/x/y'), h.lstat('/k').type].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  fsm.rmSync(tmp, { recursive: true, force: true });
+  eq('oasis: a run layer\'s removals hide what the layers below have there', got, 'k   file'); }
 
 // ---- OASIS: a DOS image's zip layer as the C: directory (tools/oasis.mjs dosDir) -----------------------
 // `oasis run dos/<image> --terminal` threw "unzip is not a function or its return value is not

@@ -13,7 +13,8 @@
 // MIRAGE_LXSHOT=<dir> writes the screen as PNG every MIRAGE_LXSTEP guest seconds (default 10), through
 // src/video.js as the browser draws it; MIRAGE_LXSECS stops the run after that many guest seconds —
 // for programs that never exit on their own (Quake, DOOM). MIRAGE_LXWAV=<file.wav> records what the
-// program played on /dev/dsp, at the rate it set — what a listener would have heard.
+// program played on /dev/dsp, at the rate it set — what a listener would have heard. MIRAGE_LXCOMMIT=<dir>
+// writes what a successful run changed in the file tree into <dir> (an OASIS `run` layer).
 import { readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { Machine } from '../../src/machine.js';
@@ -100,6 +101,20 @@ if (!lx.done) { console.error('mirage-linux: still running after', LIMIT, 'cycle
 if (lx.signal) {
   const f = lx.faultInfo;
   console.error(`mirage-linux: signal ${lx.signal}` + (f ? ` (exception ${f.n} err ${f.err} at eip ${f.eip.toString(16)}, cr2 ${f.cr2.toString(16)})` : ''));
+}
+const COMMIT = process.env.MIRAGE_LXCOMMIT;
+if (COMMIT && lx.done && !lx.signal && lx.status === 0) {      // an OASIS `run` layer: what the run changed, as a tree
+  const { mkdirSync, writeFileSync, symlinkSync, chmodSync, utimesSync, rmSync } = await import('fs');
+  const c = lx.changes(), at = (p) => join(COMMIT, p);
+  for (const d of c.dirs) { mkdirSync(at(d.path), { recursive: true }); if (d.mode !== undefined) chmodSync(at(d.path), d.mode | 0o700); }
+  for (const f of c.files) {
+    mkdirSync(dirname(at(f.path)), { recursive: true }); writeFileSync(at(f.path), f.bytes);
+    chmodSync(at(f.path), f.mode === undefined ? 0o644 : f.mode | 0o600);
+    if (f.mtime) utimesSync(at(f.path), f.mtime, f.mtime);           // make compares them: a built file stays newer than its source
+  }
+  for (const l of c.links) { mkdirSync(dirname(at(l.path)), { recursive: true }); rmSync(at(l.path), { force: true }); symlinkSync(l.target, at(l.path)); }
+  writeFileSync(join(COMMIT, '.oasis-gone'), JSON.stringify(c.removed));
+  console.error(`mirage-linux: committed ${c.files.length} files, ${c.dirs.length} directories, ${c.links.length} links, ${c.removed.length} removals -> ${COMMIT}`);
 }
 if (process.env.MIRAGE_LXTRACE && lx.unimplemented.size) console.error('unanswered system calls:', [...lx.unimplemented].map(([n, c]) => `${n}x${c}`).join(' '));
 process.exitCode = lx.status;

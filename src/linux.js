@@ -692,6 +692,27 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
+  /** What the run left that the host's tree does not have — for an OASIS `run` layer
+   *  (tools/oasis.mjs), which keeps it as a layer of its own: files and directories made or
+   *  changed, symbolic links, and the host's paths that were removed. /dev and /proc are the
+   *  system's, not the run's. */
+  lx.changes = () => {
+    const files = [], dirs = [], links = [], removed = [];
+    const same = (a, b) => { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
+    for (const [p, n] of fs) {
+      if (p === '/' || p === '/dev' || p.startsWith('/dev/') || p === '/proc' || p.startsWith('/proc/') || n.sock) continue;
+      const st = lx.host ? lx.host.lstat(p) : null, mode = n.mode === undefined ? undefined : n.mode & 0o7777;
+      const modeSame = !st || mode === undefined || st.mode === undefined || (st.mode & 0o7777) === mode;
+      if (n.dir) { if (!st || st.type !== 'dir' || !modeSame) dirs.push({ path: p, mode, mtime: n.mtime }); continue; }
+      if (n.link !== undefined) { if (!st || st.type !== 'link' || st.target !== n.link) links.push({ path: p, target: n.link }); continue; }
+      if (n.data === undefined) continue;
+      const unchanged = st && st.type === 'file' && n.host === p && modeSame
+        && (n.data === null || (n.size === st.size && same(n.data.subarray(0, n.size), lx.host.read(p))));
+      if (!unchanged) files.push({ path: p, bytes: dataOf(n).subarray(0, n.size), mode, mtime: n.mtime });
+    }
+    for (const p of gone) if (!fs.has(p) && lx.host && lx.host.lstat(p)) removed.push(p);
+    return { files, dirs, links, removed };
+  };
   lx.chdir = (path) => { lx.cwd = norm(path, '/'); };
   lx.stdin = new Uint8Array(0); lx.stdinPos = 0;
   lx.exe = '/a.out';
@@ -1236,14 +1257,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (!n) return -E.ENOENT; if (!n.dir) return -E.ENOTDIR;
       lx.cwd = p; return 0;
     },
-    39: (path) => {                                                        // mkdir
+    39: (path, mode) => {                                                  // mkdir: the mode less the umask, as open's
       const p = resolve(rdStr(path), lx.cwd, false);
       if (p === null) return -E.ENOENT;
       if (getNode(p)) return -E.EEXIST;
       if (!getNode(parent(p))) return -E.ENOENT;
-      fs.set(p, { dir: true, mtime: lx.now() }); gone.delete(p); return 0;
+      fs.set(p, { dir: true, mtime: lx.now(), mode: (mode & ~lx.umask) & 0o7777 }); gone.delete(p); return 0;
     },
-    296: (dirfd, path) => SYS[39](path),                                   // mkdirat (relative to cwd only)
+    296: (dirfd, path, mode) => SYS[39](path, mode),                                   // mkdirat (relative to cwd only)
     40: (path) => {                                                        // rmdir
       const p = resolve(rdStr(path), lx.cwd, false), n = p && getNode(p);
       if (!n) return -E.ENOENT; if (!n.dir) return -E.ENOTDIR;

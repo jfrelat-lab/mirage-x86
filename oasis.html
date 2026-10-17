@@ -88,6 +88,8 @@ const layer = (l) => {
   if (l.dir) return ['dir', src(l.dir), '/'];
   if (l.links) return ['links', Object.entries(l.links).map(([p, t]) => `${esc(p)} → ${esc(t)}`).join('<br>'), 'symbolic links'];
   if (l.mkdir) return ['mkdir', [].concat(l.mkdir).map(esc).join(' '), 'empty directories'];
+  if (l.busybox) return ['busybox', src(l.busybox), '/' + (l.into || 'bin') + ', a link per applet'];
+  if (l.run) return ['run', `<code>${esc(l.run)}</code> in ${esc(l.cwd || '/')}, on MIRAGE-LINUX, once`, 'what it made, kept in the cache'];
   return ['?', esc(JSON.stringify(l)), ''];
 };
 const runLink = (m) => {
