@@ -18,6 +18,17 @@
         "8762"
       ],
       "port": 8762
+    },
+    {
+      "name": "oasis",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "OASIS_PORT=8763",
+        "node",
+        "tools/oasis.mjs",
+        "serve"
+      ],
+      "port": 8763
     }
   ]
 }

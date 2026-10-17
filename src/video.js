@@ -84,10 +84,19 @@ export class Video {
           const r = ((p >> 11) & 31) * 255 / 31, g = ((p >> 5) & 63) * 255 / 63, b = (p & 31) * 255 / 31;
           u32[dst++] = (0xff << 24) | ((b | 0) << 16) | ((g | 0) << 8) | (r | 0);
         }
+      } else if (v.bpp === 15) {                                   // 1:5:5:5, a Cirrus's hidden DAC can choose it
+        for (let x = 0; x < W; x++, src += 2) {
+          const p = u8[src] | (u8[src + 1] << 8);
+          const r = ((p >> 10) & 31) * 255 / 31, g = ((p >> 5) & 31) * 255 / 31, b = (p & 31) * 255 / 31;
+          u32[dst++] = (0xff << 24) | ((b | 0) << 16) | ((g | 0) << 8) | (r | 0);
+        }
+      } else if (v.bpp === 24) {
+        for (let x = 0; x < W; x++, src += 3) u32[dst++] = (0xff << 24) | (u8[src] << 16) | (u8[src + 1] << 8) | u8[src + 2];
       } else {
         for (let x = 0; x < W; x++, src += 4) u32[dst++] = (0xff << 24) | (u8[src] << 16) | (u8[src + 1] << 8) | u8[src + 2];
       }
     }
+    if (v.cirrus && this.machine.cirrus) this.machine.cirrus.drawCursor(u32, W, H);   // the chip's hardware cursor (src/cirrus.js)
   }
 
   // EGA/VGA 16-colour planar: assemble each pixel's 4-bit index from the four bit-planes,

@@ -8,7 +8,7 @@
 // our stdin is the program's. With MIRAGE_LXROOT=<dir> that directory is the root file system instead
 // (a Debian i386 tree from `docker export`), read as the program asks for it, and <program> is a path
 // in it: MIRAGE_LXROOT=rootfs node tools/linux/run.mjs /bin/ls -l /etc. MIRAGE_LXCWD sets the
-// working directory there. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
+// working directory there. MIRAGE_VGA=cirrus puts a Cirrus CL-GD5446 on the VGA. MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
 // calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks).
 // MIRAGE_LXSHOT=<dir> writes the screen as PNG every MIRAGE_LXSTEP guest seconds (default 10), through
 // src/video.js as the browser draws it; MIRAGE_LXSECS stops the run after that many guest seconds —

@@ -37,7 +37,7 @@ export function oasisHost(imgName) {
 export async function startLinux({ canvas, img, host, onOutput = () => {}, onStatus = () => {} }) {
   const m = img.machine || {};
   const mc = new Machine({ memSize: (m.mem || 64) << 20, cpu: m.cpu || '686' });
-  installBIOS(mc);
+  installBIOS(mc, m.vga ? { vga: m.vga } : {});   // `machine.vga: "cirrus"`: a CL-GD5446 (src/cirrus.js)
   for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
     try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }
   }

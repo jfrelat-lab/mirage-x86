@@ -14,6 +14,7 @@ import { installIDE } from './ide.js';
 import { installPCI } from './pci.js';
 import { installUART } from './uart.js';
 import { installDISPI } from './dispi.js';
+import { installCirrus } from './cirrus.js';
 import { installRTC } from './rtc.js';
 import { installPIC } from './pic.js';
 import { installDMA } from './dma.js';
@@ -1447,6 +1448,11 @@ export function installBIOS(machine, opts = {}) {
     if (machine.intHandlers[vec] || v.seg !== 0xf000 || (v.off !== vec && v.off !== 0xff53)) continue;
     machine.hookInterrupt(vec, () => { if (machine.pic) machine.pic.eoi(irq); return true; });
   }
+
+  // A Cirrus Logic CL-GD5446 on the VGA (src/cirrus.js): `vga: 'cirrus'` or MIRAGE_VGA=cirrus. Last,
+  // because it wraps the VGA's and the DAC's ports, which are all registered by now.
+  const vgaEnv = typeof process !== 'undefined' && process.env ? process.env.MIRAGE_VGA : undefined;
+  if ((opts.vga ?? vgaEnv) === 'cirrus') installCirrus(machine);
 
   machine.bios = bios;
   return bios;

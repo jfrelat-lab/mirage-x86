@@ -7,7 +7,8 @@
   "world": "linux",
   "machine": {
     "cpu": "686",
-    "mem": 64
+    "mem": 64,
+    "vga": "cirrus"
   },
   "layers": [
     {
@@ -88,16 +89,8 @@
       "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xfntbase_3.3-4.deb"
     },
     {
-      "file": "oasis/files/XF86Config",
-      "to": "/etc/X11/XF86Config"
-    },
-    {
       "file": "oasis/files/ld.so.conf-x11",
       "to": "/etc/ld.so.conf"
-    },
-    {
-      "file": "oasis/files/twmrc-doom",
-      "to": "/root/.twmrc"
     },
     {
       "links": {
@@ -126,6 +119,14 @@
         "HOME": "/root",
         "PATH": "/usr/X11R6/bin:/usr/bin:/bin:/sbin"
       }
+    },
+    {
+      "file": "oasis/files/XF86Config-cirrus",
+      "to": "/etc/X11/XF86Config"
+    },
+    {
+      "file": "oasis/files/twmrc-doom",
+      "to": "/root/.twmrc"
     }
   ],
   "entry": {
@@ -140,5 +141,5 @@
     }
   },
   "output": "window",
-  "notes": "id's linuxdoom-1.10 built with Debian 1.3's gcc 2.7.2 and played on XFree86 3.3's server, on MIRAGE's VGA, under twm (which installs DOOM's colormap, as 1997's window managers did): the image's last layer runs ldconfig and builds DOOM and its sound server with make, once, on the first run (about 10 minutes), and keeps the result in the cache; then XF86_SVGA :0 & DISPLAY=unix:0 twm & cd /usr/games/doom; DISPLAY=unix:0 /usr/src/linuxdoom-1.10/linux/linuxxdoom -warp 1 1. The picture reaches the server through MIT-SHM (System V shared memory). DOOM 1.10 does not play the shareware WAD's demos (recorded by 1.8), so its attract loop shows the title, credits and order screens."
+  "notes": "id's linuxdoom-1.10 built with Debian 1.3's gcc 2.7.2 and played on XFree86 3.3's server, on MIRAGE's emulated Cirrus GD5446 at 800x600, under twm (which installs DOOM's colormap, as 1997's window managers did): the image's last layer runs ldconfig and builds DOOM and its sound server with make, once, on the first run (6 to 12 minutes), and keeps the result in the cache; then XF86_SVGA :0 & DISPLAY=unix:0 twm & cd /usr/games/doom; DISPLAY=unix:0 /usr/src/linuxdoom-1.10/linux/linuxxdoom -2 -warp 1 1 (-2: a 640x400 window). The picture reaches the server through MIT-SHM (System V shared memory). DOOM 1.10 does not play the shareware WAD's demos (recorded by 1.8), so its attract loop shows the title, credits and order screens."
 }

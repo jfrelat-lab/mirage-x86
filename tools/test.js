@@ -3456,6 +3456,35 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 60); }
   eq('VBE: 4F08h get answers a 6-bit DAC, 4FFFh is not a supported function', got, '4f 6 ff'); }
 
+// ---- the Cirrus Logic CL-GD5446 (src/cirrus.js) as tools/cirprobe.asm sees it --------------------------
+// The real CL-GD5436/46 BIOS 1.25 under QEMU -device cirrus-vga answers U 12 12 0F 12 1E 31 27,
+// I B8 98 04 21 2D, D 00 A1 FF, C 2A 2A 3F 11 22 33, B 5A 5A 5A: the extensions unlocked by the BIOS,
+// the 5446's part ID, the hidden DAC behind four reads of 3C6h, the cursor's colours apart from the
+// palette, the A000 window banked in 4 KiB and 16 KiB units and in two halves. Then an 800x600x8
+// mode as XFree86 3.3's clgd5446 driver programs it, which the renderer must draw at that size.
+{ let got;
+  try { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { vga: 'cirrus' }); const cpu = mc.cpu;
+    const o = (p, v) => mc.ioWrite(p, 1, v), i = (p) => mc.ioRead(p, 1), hx = (a) => a.map((x) => x.toString(16).padStart(2, '0')).join(' ');
+    const sr = (n, v) => { o(0x3c4, n); if (v !== undefined) o(0x3c5, v); return i(0x3c5); }, grw = (n, v) => { o(0x3ce, n); o(0x3cf, v); };
+    const crw = (n, v) => { o(0x3d4, n); o(0x3d5, v); };
+    cpu.ax = 0x0003; mc.intHandlers[0x10](cpu, mc);
+    const U = [sr(6), sr(6, 0x12), sr(6, 0), sr(6, 0x12)]; o(0x3c4, 0x1e); U.push(i(0x3c4)); o(0x3ce, 0x31); U.push(i(0x3ce)); o(0x3d4, 0x27); U.push(i(0x3d4));
+    const I = [i(0x3d5), sr(0x0f), sr(0x15), sr(0x17), sr(0x1f)];
+    const dac4 = () => { i(0x3c8); for (let k = 0; k < 4; k++) i(0x3c6); };
+    dac4(); const D = [i(0x3c6)]; dac4(); o(0x3c6, 0xa1); dac4(); D.push(i(0x3c6)); i(0x3c8); D.push(i(0x3c6)); dac4(); o(0x3c6, 0);
+    const s12 = sr(0x12); sr(0x12, s12 | 2); o(0x3c8, 0x0f); o(0x3c9, 0x11); o(0x3c9, 0x22); o(0x3c9, 0x33); sr(0x12, s12 & ~2);
+    o(0x3c7, 0x0f); const C = [i(0x3c9), i(0x3c9), i(0x3c9)]; sr(0x12, s12 | 2); o(0x3c7, 0x0f); C.push(i(0x3c9), i(0x3c9), i(0x3c9)); sr(0x12, s12);
+    cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc); sr(7, sr(7) | 1);
+    grw(0x0b, 0); grw(0x09, 0x10); mc.mem.w8(0xa0000, 0x5a); grw(0x09, 0x0f); const B = [mc.mem.r8(0xa1000)];
+    grw(0x0b, 0x20); grw(0x09, 0x04); B.push(mc.mem.r8(0xa0000)); grw(0x0b, 0x01); grw(0x09, 0); grw(0x0a, 0x10); B.push(mc.mem.r8(0xa8000));
+    // 800x600: 100 character clocks, 600 lines (VDE 257h: CR12 57h, CR07 bit 6 its bit 9), offset 100 (800 bytes).
+    grw(0x0b, 0); crw(0x11, 0); crw(0x01, 0x63); crw(0x12, 0x57); crw(0x07, 0x50); crw(0x13, 100); crw(0x1b, 0x02);
+    const v = mc.vbe;
+    got = [hx(U), hx(I), hx(D), hx(C), hx(B), v ? `${v.width}x${v.height}x${v.bpp}/${v.pitch}` : 'no mode'].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('Cirrus GD5446: unlock, ID, hidden DAC, cursor colours, banking, an 800x600 mode (the real BIOS\'s answers)', got,
+    '12 12 0f 12 1e 31 27 | b8 98 04 21 2d | 00 a1 ff | 2a 2a 3f 11 22 33 | 5a 5a 5a | 800x600x8/800'); }
+
 // ---- PIT channel 2 in mode 0: OUT (port 61h bit 5) low until the count runs out with GATE high ----------
 // GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
 // measured no time, and the menu countdowns of HelenOS and Sortix stood still at 8 s. 8254 datasheet,

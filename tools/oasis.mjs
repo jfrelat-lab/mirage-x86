@@ -362,7 +362,7 @@ async function run(img, args, out) {
     const spec = join(CACHE, 'run-' + process.pid + '.json');
     mkdirSync(CACHE, { recursive: true });
     writeFileSync(spec, JSON.stringify({ dirs: root.dirs, files: [...root.files], links: [...root.links], mkdirs: [...root.mkdirs] }));
-    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console ? '1' : '', MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}) }, () => rmSync(spec, { force: true }));
+    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console ? '1' : '', MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}), ...(img.machine && img.machine.vga ? { MIRAGE_VGA: img.machine.vga } : {}) }, () => rmSync(spec, { force: true }));
   }
   throw new Error(`oasis: world "${world}" cannot run yet`);
 }
