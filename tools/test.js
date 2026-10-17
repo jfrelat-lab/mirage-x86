@@ -3091,6 +3091,26 @@ const runLinux = (hex, argv) => {
     '00bb150000008b0d0f81040831d2be138104085731ffcd805fa113810408c3');
   let got; try { got = runLinux(hex, ['/w/SHM']).status; } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: System V shared memory between two processes (ipc SHMGET/SHMAT/SHMCTL)', got, 3); }
+// The translation memo (src/recompiler.js _memoGet): blocks kept across reset() under paging, reused only
+// where memory holds exactly their bytes. Two programs loaded in turn at the same address (rmw.asm, 84;
+// mprotect.asm, 42), then the first again: it reuses its blocks (memoHits), and neither gets the other's.
+// make ran cc1 once per DOOM file, retranslating it each time: building DOOM went 45% faster.
+{ let got;
+  try { const memo = new Map();
+    const A = (                                         // nasm -f bin tools/linux/rmw.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004087b0000007b0000000500000000100000b9e8030000c74424f8150000' +
+    '00d16424f88b4424f8014424f84975e98b5c24f8b801000000cd80'), B = (                                         // nasm -f bin tools/linux/mprotect.asm
+    '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000' +
+    '000000010000000000000000800408008004088a0000008a0000000500000000100000b87d000000bb00800408b9001000' +
+    '00ba07000000cd8085c07510c605768004082ab300b801000000cd80bb01000000b801000000cd80');
+    // one machine per program (a fresh exec), all sharing one memo: only the bytes can tell them apart
+    const runOne = (hex, name) => { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc); mc.rec.memo = memo;
+      lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), [name]); for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000); return [lx.status, mc.rec.stats.memoHits]; };
+    const [s1] = runOne(A, '/w/RMW'), [s2] = runOne(B, '/w/MPROTECT'), [s3, hits] = runOne(A, '/w/RMW');
+    got = [s1, s2, s3, hits > 0].join();
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('recompiler: the memo reuses a program\'s blocks after reset, never another program\'s', got, '84,42,84,true'); }
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
 { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm

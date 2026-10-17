@@ -48,6 +48,9 @@ const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.
 // Turn it back on by default once regions carry an instruction budget and the game bugs are fixed.
 const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
 const NOREALSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOREALSPEC);
+// MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
+const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOMEMO);
+const MEMO_MAX = 200000;          // blocks the memo keeps (the oldest go first)
 const EMPTY_LINES = [];   // shared placeholder for a block whose source is not retained
 const T2_HOT = 64;         // promote a block to a region after this many executions
 const T2_MAXBLK = 24;      // cap region size in blocks
@@ -197,7 +200,14 @@ export class Recompiler {
     this.pageCov = [];             // per code page, how many blocks cover each 16-byte chunk — see _cover
     this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
-    this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0, flushes: 0, derailBlocks: 0 };
+    this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0, flushes: 0, derailBlocks: 0, memoHits: 0 };
+    // The translation memo: blocks kept across reset() under paging, by where they start and in what
+    // mode, each with the bytes it was translated from. An exec drops the block cache (another program
+    // at the same addresses), but the next exec of the SAME program finds its bytes again: make runs
+    // cpp, cc1 and as once per source file, and each run translated gcc's compiler from nothing —
+    // a quarter of the host time of building DOOM in MIRAGE-LINUX. A block is reused only where
+    // memory holds exactly its bytes, in the mode it was translated for.
+    this.memo = new Map();             // key -> [{ snap, tmpl }]
     this.epoch = 0;                // bumped by each CR3 load under paging; see _revalidate (ROADMAP D8)
     // Two block caches, paging on and paging off, swapped by switchPaging rather than dropped. A DPMI
     // host that pages (CWSDPMI) returns to real mode for every interrupt and DOS call: FreeDOS running
@@ -683,7 +693,13 @@ export class Recompiler {
       this.stats.flushes++;
       if (this.cpu) this.cpu.tbudget = 0;
     }
-    const blk = this.translate(lin, ip0);
+    const memoKey = this.pagedMode && !NOMEMO && !TIER2 ? this._memoKey(lin, ip0) : null;
+    let blk = memoKey !== null ? this._memoGet(memoKey) : null;
+    if (blk === null) {
+      this._udSeen = false;
+      blk = this.translate(lin, ip0);
+      if (memoKey !== null && !blk.vol && !this._udSeen) this._memoPut(memoKey, blk);
+    }
     blk.epoch = this.epoch;
     if (this.pagedMode) { blk.ph0 = this._frame(blk.linStart); blk.ph1 = this._frame(blk.linEnd - 1); }
     if (this.banksUsed) blk.snap = this._bytes(blk.linStart, blk.linEnd);
@@ -708,6 +724,40 @@ export class Recompiler {
     this.codeBytes += blk.bodyLen || 0;
     this.stats.compiles++;
     return blk;
+  }
+
+  /** What a translation depends on besides its bytes: where it starts, the code size, real/V86 or
+   *  not, x87 precision, the self-modifying page cap (see translate). */
+  _memoKey(lin, ip0) {
+    const cpu = this.cpu;
+    const real = !TIER2 && !NOREALSPEC && (!(cpu.cr0 & 1) || (cpu.flags & 0x20000) !== 0) ? 1 : 0;
+    const smc = (this.smcPages.get(lin >>> 12) || 0) >= SMC_PAGE_HOT ? 1 : 0;
+    return lin + ':' + ip0 + ':' + cpu.csD + ':' + real + ':' + (cpu.fcw & 0x300) + ':' + smc;
+  }
+  _memoGet(key) {
+    const list = this.memo.get(key);
+    if (list === undefined) return null;
+    for (const { snap, tmpl } of list) {
+      const now = this._bytes(tmpl.linStart, tmpl.linEnd);
+      if (now === null || now.length !== snap.length) continue;
+      let same = true;
+      for (let i = 0; i < snap.length; i++) if (now[i] !== snap[i]) { same = false; break; }
+      if (!same) continue;
+      this.stats.memoHits++;
+      return { ...tmpl, hot: 0, epoch: 0, ph0: -1, ph1: -1, snap: null };   // the same shape as translate's
+    }
+    return null;
+  }
+  _memoPut(key, blk) {
+    const snap = this._bytes(blk.linStart, blk.linEnd);
+    if (snap === null) return;
+    let list = this.memo.get(key);
+    if (list === undefined) {
+      if (this.memo.size >= MEMO_MAX) this.memo.delete(this.memo.keys().next().value);
+      list = []; this.memo.set(key, list);
+    }
+    if (list.length >= 4) list.shift();             // a few programs at the same address (cpp, cc1, as)
+    list.push({ snap, tmpl: { ...blk, hot: 0, epoch: 0, ph0: -1, ph1: -1, snap: null } });
   }
 
   /** Execute exactly one instruction, uncached — used by the conformance harness
@@ -1569,7 +1619,7 @@ export class Recompiler {
         case 0x0f: { decode0F(sz); break; }
 
         default:
-          if (guestOwnsUD(mem, rec.cpu)) {   // the guest asked for #UD; give it #UD
+          if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) {   // the guest asked for #UD; give it #UD
             P(`cpu.eip=${ipStart};cpu.raise(6);`); P('return;'); ended = true; break;
           }
           throw new Error(unimplemented(op.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
@@ -2126,7 +2176,7 @@ export class Recompiler {
             const a = memAddr(o, 64);
             P(wrGuard(o.seg) + `cpu.cmpxchg8b(${a},${AM(`${a}+4`)});`); return;
           }
-          if (guestOwnsUD(mem, rec.cpu)) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
           throw new Error(unimplemented('0f 0xc7 /' + o.reg, mask(linStart - ip0 + ip - 2), mem, rec));
         }
         case 0xa0: P(sz === 16 ? `cpu.push16(cpu.seg[${FS}]);` : `cpu.push32(cpu.seg[${FS}]);`); return;   // PUSH FS
@@ -2168,7 +2218,7 @@ export class Recompiler {
           if (rec.cpu.profile && rec.cpu.profile.cpuid) { P('cpu.cpuid();'); return; }
           // No CPUID on this part. #UD if the guest can take one; otherwise say WHY, because
           // "unimplemented opcode" would read as a gap in MIRAGE and this is a deliberate absence.
-          if (guestOwnsUD(mem, rec.cpu)) {
+          if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) {
             P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;
           }
           throw new Error(`mirage: CPUID (0f a2) at linear 0x${mask(linStart - ip0 + ip - 2).toString(16)}` +
@@ -2177,7 +2227,7 @@ export class Recompiler {
         default:
           // Same as the one-byte default: `0f a6` is invalid on every CPU and Windows 3.0's loader
           // executes it on purpose, through its own INT 6 handler, to identify the processor.
-          if (guestOwnsUD(mem, rec.cpu)) {
+          if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) {
             P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;   // ip-2: the 0F
           }
           throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 2), mem, rec));
