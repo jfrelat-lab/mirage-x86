@@ -29,6 +29,18 @@
         "serve"
       ],
       "port": 8763
+    },
+    {
+      "name": "oasis-static",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "OASIS_PORT=8764",
+        "node",
+        "tools/oasis.mjs",
+        "serve",
+        "--static"
+      ],
+      "port": 8764
     }
   ]
 }

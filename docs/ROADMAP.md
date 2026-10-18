@@ -116,7 +116,7 @@ resumes a program at the instant it was taken. The name: what a mirage promises,
 | Id | Item | Effort |
 |---|---|---|
 | — | O1 and O2 are done: [OASIS.md](OASIS.md) (the manifest, the layers), `node tools/oasis.mjs list|inspect|pull|run` with a window in app mode or the terminal; `linux.html` | — |
-| O3 | Layers read on demand over HTTP in the browser (byte ranges), cached offline; a registry is any static host | M |
+| O3 | Layers in the browser — ✅ a page builds an image's tree itself (`src/oasis-layers.js`): archives through the `oasis-fetch` relay (`functions/oasis-fetch.js` on Cloudflare Pages, `oasis serve --static`), unpacked in the page, busybox and run layers run on MIRAGE-LINUX there, all kept in Cache Storage. To do: Docker images pulled from the registry through the relay (linux/mirage, debian-bookworm); `tools/oasis.mjs` on the same in-memory tree (unpacked on macOS's case-insensitive disk, xbase's `/etc/X11/Xserver` and `/etc/X11/xserver/` overwrite each other); files read on demand (byte ranges) rather than whole archives | M |
 | O4 | Output: done for a window in app mode (DOS, Linux) and the terminal; to do: ANSI in the terminal, mouse and sound for Linux, a WebView | M |
 | O5 | `commit`: done for the file tree — a `run` layer (a Dockerfile's `RUN`) keeps what a command made, cached under a hash of the layers below it (`linux/doom-x11` builds DOOM once). To do: the machine state (`tools/snapshot.mjs`), and URLs that resume or replay a run | L |
 | O6 | First images: `dos/c-dogs`, `dos/doom`, `linux/debian-bookworm`, `linux/doom-1994` exist; to do: `win/3.0`, more | M |

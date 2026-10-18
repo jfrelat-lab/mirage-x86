@@ -18,8 +18,14 @@ node tools/oasis.mjs serve --open                 every image, in machines.html 
 `machines.html` is MIRAGE's machines on one page — DOS, Linux, the bare PC — each choosing its
 programs on its own screen (the DOS shell's DIR, a shell's `ls -l`, a BIOS boot menu) and on a shelf
 of cards beside it. DOS and the PC take their titles from `examples/manifest.json` and work from any
-static host; the Linux machine reads its images from the OASIS server, so it needs `oasis serve`
-until layers can be hosted beside the page (O3).
+static host. The Linux machine takes its images from the OASIS server when there is one; on a
+static host it builds an image itself (`src/oasis-layers.js`): the manifest from `oasis/images/`,
+each archive fetched through the `oasis-fetch?url=` relay — Debian's archive and idgames' mirrors
+send no CORS headers — and unpacked in the page, `busybox` and `run` layers run there on MIRAGE-LINUX,
+archives and run layers' results kept in the browser's Cache Storage. The relay lets through only
+the hosts the images use (`src/oasis-hosts.js`): `functions/oasis-fetch.js` on Cloudflare Pages,
+`node tools/oasis.mjs serve --static` on a computer (the files and the relay only, as such a host
+serves them). Images made from a Docker export still need the server: the page has no docker.
 
 ## The window
 

@@ -7,6 +7,8 @@
 //   node tools/oasis.mjs pull <image>               fetch and unpack its remote layers into the cache
 //   node tools/oasis.mjs run <image> [args...]      run it (pulls first if needed)
 //   node tools/oasis.mjs serve [--open]             every image, for machines.html (Linux images need it)
+//   node tools/oasis.mjs serve --static             the files and the oasis-fetch relay only, as a static host
+//                                                   with functions/oasis-fetch.js serves them: pages build images themselves
 //   node tools/oasis.mjs index                      write oasis/index.json, the list oasis.html reads
 //       --window      in a window of its own: the system's Chrome or Edge in app mode, else the browser
 //       --terminal    in this terminal: its output on stdout, our stdin as its keyboard
@@ -28,7 +30,7 @@ import { fileURLToPath } from 'url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const IMAGES = join(ROOT, 'oasis', 'images');
 const CACHE = process.env.OASIS_CACHE || join(homedir(), '.cache', 'oasis');
-let SERVE_ONLY = false;
+let SERVE_ONLY = false, STATIC_ONLY = false;
 
 // ---- images ---------------------------------------------------------------------------------------
 function findImage(name) {
@@ -293,6 +295,7 @@ function serve(img, host, port = 0) {
     const srv = createServer(async (req, res) => {
       const u = new URL(req.url, 'http://x');
       const send = (code, body, type = 'application/octet-stream') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(body); };
+      if (STATIC_ONLY && (u.pathname.startsWith('/oasis-fs/') || u.pathname === '/oasis-image.json' || u.pathname === '/oasis-images.json')) return send(404, 'a static host');
       if (u.pathname.startsWith('/oasis-fs/')) {
         const p = u.searchParams.get('p') || '/', op = u.pathname.slice(10), want = u.searchParams.get('img');
         try {
@@ -303,6 +306,16 @@ function serve(img, host, port = 0) {
           if (op === 'read') return send(200, Buffer.from(h.read(p)));
         } catch (e) { return send(404, String(e.message)); }
         return send(400, 'unknown');
+      }
+      if (u.pathname === '/oasis-fetch') {                                    // the relay a page uses to build an image itself (src/oasis-web.js)
+        const { relayTarget } = await import(join(ROOT, 'src', 'oasis-hosts.js'));
+        const target = relayTarget(u.searchParams.get('url') || '');
+        if (!target) return send(403, 'oasis-fetch: not a host OASIS images use');
+        try {
+          const r = await fetch(target);
+          if (!r.ok || !relayTarget(r.url)) return send(502, `oasis-fetch: ${target}: HTTP ${r.status}`);
+          return send(200, Buffer.from(await r.arrayBuffer()));
+        } catch (e) { return send(502, `oasis-fetch: ${e.message}`); }
       }
       if (u.pathname === '/oasis-image.json') {
         const want = u.searchParams.get('img');
@@ -409,6 +422,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else if (cmd === 'index') { writeFileSync(join(ROOT, 'oasis', 'index.json'), indexText()); console.error('oasis: wrote oasis/index.json'); }
     else if (cmd === 'serve') {
       const port = Number(process.env.OASIS_PORT) || 0;
+      STATIC_ONLY = [name, ...rest].includes('--static');
       const { port: p } = await serve(null, null, port);
       const url = `http://127.0.0.1:${p}/machines.html`;
       console.log(url);

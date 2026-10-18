@@ -2,7 +2,7 @@
 //
 //   machines.html?m=dos[&run=<id>]     the DOS player's engine, its shell listing the titles
 //   machines.html?m=pc[&run=<id>]      a bare PC: a BIOS boot menu of the boot images
-//   machines.html?m=linux[&run=<img>]  MIRAGE-LINUX: the OASIS Linux images (needs `oasis serve`)
+//   machines.html?m=linux[&run=<img>]  MIRAGE-LINUX: the OASIS Linux images (from `oasis serve`, or built in the page)
 //
 // A machine is one engine for the page's lifetime; choosing another machine, or a program while one
 // runs, loads the page again with that choice — a machine is switched off and on, not reused.
@@ -198,38 +198,12 @@ async function linux() {
   // Images meant for a window; the terminal ones (a shell) run with `oasis run` in a terminal.
   try { images = (await (await fetch('/oasis-images.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { images = null; }
   over.className = 'over term'; over.hidden = false;
-  if (!images) {
-    // A static host: the images are listed (oasis/index.json) but their layers come from Debian's and
-    // idgames' servers, which a page cannot read — the OASIS server fetches them.
-    let listed = [];
-    try { listed = (await (await fetch('oasis/index.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { /* none */ }
-    setState('needs OASIS', '');
-    const needs = (m) => {
-      over.className = 'over needs'; over.hidden = false;
-      over.innerHTML = `<div class="panel">${m && m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : ''}
-        <h2>${esc(m ? m.title : 'Linux programs, from OASIS images')}</h2>
-        <p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
-        OASIS images, which bring their files from where their authors published them: Debian's archive, idgames. A page
-        cannot fetch from those servers itself, so these images run from the OASIS server, on your computer:</p>
-        <pre>node tools/oasis.mjs serve --open</pre>
-        <p class="dim">or one image in a window of its own: <code>node tools/oasis.mjs run ${esc(m ? m.name : 'linux/mirage')}</code></p>
-        <p><a href="oasis.html${m ? '#' + esc(m.name) : ''}">See ${m ? 'this image\'s' : 'each image\'s'} recipe →</a></p></div>`;
-      for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
-    };
-    const items = listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => needs(m) }));
-    shelf('OASIS Linux images', items, null);
-    needs(null);
-    status.textContent = 'served without OASIS: the images are listed, not run';
-    return;
-  }
-  const run = async (m) => {
-    if (session) { go({ m: 'linux', run: m.name }); return; }
-    over.hidden = true;
-    status.textContent = `starting ${m.title}… (the first run fetches the image's layers)`;
-    const img = await (await fetch(`/oasis-image.json?img=${encodeURIComponent(m.name)}`)).json();
+  // Start an image on the canvas from its manifest and a file tree: the OASIS server's (/oasis-fs) or
+  // one this page built itself from the layers (src/oasis-layers.js, through the oasis-fetch relay).
+  const start = async (m, img, host) => {
     let lastLine = '';
     try {
-      const s = await startLinux({ canvas, img, host: oasisHost(m.name),
+      const s = await startLinux({ canvas, img, host,
         onOutput: (t) => { lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
         onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) setState('exited', ''); } });
       session = { pause: s.pause, audio: s.audio };
@@ -237,6 +211,52 @@ async function linux() {
       setState('running');
       canvas.focus();
     } catch (e) { status.textContent = String(e.message || e); setState('failed', 'err'); }
+  };
+  if (!images) {
+    // A static host: the images are listed (oasis/index.json) and their manifests are beside the page
+    // (oasis/images/); the page builds an image's tree itself, its archives fetched through the
+    // oasis-fetch relay (Debian's and idgames' servers send no CORS headers) and kept in the browser.
+    // An image made from a Docker export needs the docker command: the OASIS server, on a computer.
+    let listed = [];
+    try { listed = (await (await fetch('oasis/index.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { /* none */ }
+    const needs = (m, why) => {
+      over.className = 'over needs'; over.hidden = false;
+      over.innerHTML = `<div class="panel">${m && m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : ''}
+        <h2>${esc(m ? m.title : 'Linux programs, from OASIS images')}</h2>
+        ${m ? `<p>${esc(why)}</p>` : `<p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
+        OASIS images, which bring their files from where their authors published them: Debian's archive, idgames. Choose an image:
+        this page fetches its layers once, keeps them in your browser, and starts it.</p>`}
+        <p class="dim">On a computer, every image, Docker ones included: <code>node tools/oasis.mjs serve --open</code></p>
+        <p><a href="oasis.html${m ? '#' + esc(m.name) : ''}">See ${m ? 'this image\'s' : 'each image\'s'} recipe →</a></p></div>`;
+      for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
+    };
+    const runHere = async (m) => {
+      if (session) { go({ m: 'linux', run: m.name }); return; }
+      for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(items[+el.dataset.i].id === m.name));
+      let img;
+      try { img = { ...(await (await fetch(`oasis/images/${m.name}.json`)).json()), name: m.name }; } catch { return needs(m, 'Its manifest could not be read.'); }
+      if ((img.layers || []).some((l) => l.docker)) return needs(m, 'This image is made from a Docker image\'s export, which takes the docker command: it runs from the OASIS server on a computer.');
+      over.hidden = true; setState('building', '');
+      const [{ buildTree }, { webIO }] = await Promise.all([import('./oasis-layers.js'), import('./oasis-web.js')]);
+      const io = webIO({ onProgress: (t) => { status.textContent = `${m.title}: ${t}…`; } });
+      io.onOutput = (t) => { const l = t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '').split('\n').filter(Boolean).pop(); if (l) hint.textContent = l.slice(-120); };
+      let tree;
+      try { tree = await buildTree(img, io); } catch (e) { setState('failed', 'err'); return needs(m, String(e.message || e)); }
+      status.textContent = `starting ${m.title}…`;
+      await start(m, img, tree.host());
+    };
+    const items = listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => runHere(m) }));
+    shelf('OASIS Linux images', items, params.get('run'));
+    const wanted = listed.find((m) => m.name === params.get('run'));
+    if (wanted) runHere(wanted); else { needs(null); setState('choose', ''); status.textContent = 'choose an image: its layers are fetched once and kept in this browser'; }
+    return;
+  }
+  const run = async (m) => {
+    if (session) { go({ m: 'linux', run: m.name }); return; }
+    over.hidden = true;
+    status.textContent = `starting ${m.title}… (the first run fetches the image's layers)`;
+    const img = await (await fetch(`/oasis-image.json?img=${encodeURIComponent(m.name)}`)).json();
+    await start(m, img, oasisHost(m.name));
   };
   const items = images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => run(m) }));
   shelf('OASIS Linux images', items, params.get('run') || 'linux/mirage');

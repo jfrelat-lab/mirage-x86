@@ -3301,6 +3301,42 @@ const runLinux = (hex, argv) => {
   fsm.rmSync(tmp, { recursive: true, force: true }); if (layerDir) fsm.rmSync(layerDir, { recursive: true, force: true });
   eq('oasis: a busybox layer links each applet the binary lists', got, 'busybox cat->busybox ls->busybox'); }
 
+// ---- OASIS in a page: the tree built from the layers with no server (src/oasis-layers.js) ------------
+// A tar (gzipped) and a .deb made here, a file, links and a directory, as buildTree reads them; then a
+// run layer's cached result that removes a file. Paths differing only in case stay apart, as on Linux:
+// unpacked on macOS's disk, xbase's /etc/X11/Xserver (a file) and /etc/X11/xserver/ (a directory)
+// overwrote each other, and XFree86 lost its SecurityPolicy.
+{ let got;
+  try { const { buildTree, tarWrite, sha256 } = await import('../src/oasis-layers.js');
+    const enc = new TextEncoder(), gz = async (u8) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+    const tar = await gz(tarWrite([{ path: 'etc/X11/Xserver', type: 'file', mode: 0o644, data: enc.encode('XF86_NONE') },
+      { path: 'etc/X11/xserver', type: 'dir', mode: 0o755 }, { path: 'etc/X11/xserver/SecurityPolicy', type: 'file', mode: 0o644, data: enc.encode('policy') },
+      { path: 'bin/tool', type: 'file', mode: 0o755, data: enc.encode('#!') }, { path: 'bin/old', type: 'file', mode: 0o644, data: enc.encode('x') }]));
+    const dataTar = await gz(tarWrite([{ path: './usr/lib/libz.so.1', type: 'file', mode: 0o644, data: enc.encode('elf') }]));
+    const ar = (name, data) => { const h = enc.encode((name.padEnd(16) + '0'.padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6) + '100644'.padEnd(8) + String(data.length).padEnd(10) + '`\n')); return [...h, ...data, ...(data.length & 1 ? [10] : [])]; };
+    const deb = Uint8Array.from([...enc.encode('!<arch>\n'), ...ar('debian-binary', enc.encode('2.0\n')), ...ar('data.tar.gz', dataTar)]);
+    const files = { 'https://archive.debian.org/x.tar.gz': tar, 'https://archive.debian.org/z.deb': deb, 'oasis/files/f': enc.encode('conf') };
+    const layers = [{ tar: 'https://archive.debian.org/x.tar.gz' }, { deb: 'https://archive.debian.org/z.deb' }, { file: 'oasis/files/f', to: '/etc/f.conf' },
+      { links: { '/usr/lib/libz.so': 'libz.so.1' } }, { mkdir: ['/tmp'] }, { run: 'rm /bin/old' }];
+    let chain = ''; for (const l of layers) chain = await sha256(chain + JSON.stringify(l));
+    const cached = { ['run-' + chain.slice(0, 16)]: tarWrite([{ path: 'built', type: 'file', mode: 0o644, data: enc.encode('made') }, { path: '.oasis-gone', type: 'file', data: enc.encode('["/bin/old"]') }]) };
+    const tree = await buildTree({ layers }, { fetchBytes: async (s) => files[s], cache: { get: async (k) => cached[k] || null, put: async () => {} } });
+    const h = tree.host(), dec = (p) => { const b = h.read(p); return b ? new TextDecoder().decode(b) : null; };
+    got = [dec('/etc/X11/Xserver'), dec('/etc/X11/xserver/SecurityPolicy'), (h.lstat('/bin/tool').mode & 0o777).toString(8), dec('/usr/lib/libz.so.1'), dec('/etc/f.conf'),
+      h.lstat('/usr/lib/libz.so').target, h.lstat('/tmp').type, dec('/built'), h.lstat('/bin/old'), h.list('/bin').join()].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis in a page: tar, deb, file, links, mkdir, a run layer, case kept apart', got, 'XF86_NONE policy 755 elf conf libz.so.1 dir made  tool'); }
+// The relay a page reads Debian's and idgames' archives through: only the hosts the images use, so it
+// is no open proxy — and those hosts are every one oasis/images/ names.
+{ let got;
+  try { const { relayTarget, OASIS_HOSTS } = await import('../src/oasis-hosts.js'); const fsm = await import('fs'), pm = await import('path');
+    const used = new Set(); const walk = (dir) => { for (const f of fsm.readdirSync(dir)) { const q = pm.join(dir, f); if (fsm.statSync(q).isDirectory()) walk(q); else if (f.endsWith('.json')) for (const m of fsm.readFileSync(q, 'utf8').matchAll(/"https?:\/\/([^/"]+)/g)) used.add(m[1]); } };
+    walk(new URL('../oasis/images', import.meta.url).pathname);
+    got = [relayTarget('http://archive.debian.org/debian/x.deb') !== null, relayTarget('https://example.com/x'), relayTarget('https://archive.debian.org:8080/x'),
+      relayTarget('https://u:p@busybox.net/x'), relayTarget('file:///etc/passwd'), [...used].every((h) => OASIS_HOSTS.includes(h))].map(String).join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis-fetch relays only the hosts the images use, and every one of them', got, 'true null null null null true'); }
+
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's
 // .oasis-gone lists /x, so /x and /x/y are gone, /k stays, and the bookkeeping files are not listed.
