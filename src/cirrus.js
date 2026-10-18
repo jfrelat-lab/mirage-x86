@@ -54,7 +54,7 @@ export function installCirrus(machine) {
   // The banks: where the A000 window's two halves (or its one 64 KiB) read and write in video memory.
   const bankOffset = (i) => {
     const o = gr[0x09 + i];
-    return (gr[0x0b] & 0x20) ? (o & 0x7f) << 14 : o << 12;
+    return (gr[0x0b] & 0x20) ? o << 14 : o << 12;            // 16 KiB units reach all 4 MB (QEMU: no mask)
   };
   const updateBanks = () => {
     const v = machine.vbe;

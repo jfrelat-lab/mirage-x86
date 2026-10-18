@@ -3521,6 +3521,18 @@ const runLinux = (hex, argv) => {
   eq('Cirrus GD5446: unlock, ID, hidden DAC, cursor colours, banking, an 800x600 mode (the real BIOS\'s answers)', got,
     '12 12 0f 12 1e 31 27 | b8 98 04 21 2d | 00 a1 ff | 2a 2a 3f 11 22 33 | 5a 5a 5a | 800x600x8/800'); }
 
+// The Cirrus's 16 KiB banks reach the whole 4 MB: XFree86 3.3 writes its hardware cursor's pattern to
+// the last 16 KiB (bank FFh at 16 KiB, GRB bit 5). A bank number masked to 7 bits (as MIRAGE had it,
+// QEMU has no mask) put it at 2 MB - 16 KiB, and the X pointer never showed.
+{ let got;
+  try { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { vga: 'cirrus' }); const cpu = mc.cpu, o = (p, v) => mc.ioWrite(p, 1, v);
+    cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
+    o(0x3c4, 7); o(0x3c5, mc.ioRead(0x3c5, 1) | 1); o(0x3ce, 0x0b); o(0x3cf, 0x20); o(0x3ce, 0x09); o(0x3cf, 0xff);
+    mc.mem.w8(0xa0000 + 0x3f00, 0xa5);
+    got = mc.mem.u8[(mc.vbeFbBase + mc.vbeFbBytes - 0x4000 + 0x3f00) >>> 0].toString(16);
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('Cirrus GD5446: a 16 KiB bank reaches the last 16 KiB of 4 MB (the hardware cursor)', got, 'a5'); }
+
 // ---- PIT channel 2 in mode 0: OUT (port 61h bit 5) low until the count runs out with GATE high ----------
 // GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
 // measured no time, and the menu countdowns of HelenOS and Sortix stood still at 8 s. 8254 datasheet,
