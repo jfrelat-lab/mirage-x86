@@ -96,7 +96,9 @@ export function installVGA(machine) {
   //   Vertical Retrace End   the next line whose LOW FOUR BITS match CRTC 11 & 0x0F
   // `beamStamp` lets the 0x3DA reader cache its cycle thresholds: that path runs 24 M times in one
   // starport run, so it cannot afford to recompute this per read.
-  vga.beam = { blank: 400 / 449, rStart: 412 / 449, rEnd: 414 / 449 };
+  // `lines` and `hDisp` give the HORIZONTAL blank too: within each of the frame's lines, the part past
+  // Horizontal Display End (CRTC 01h + 1 of CRTC 00h + 5 character clocks) has bit 0 of 3DAh set.
+  vga.beam = { blank: 400 / 449, rStart: 412 / 449, rEnd: 414 / 449, lines: 449, hDisp: 80 / 100 };
   vga.beamStamp = 0;
   // `MIRAGE_BEAM=legacy` restores the two constants this replaced (blank 0.88, retrace 0.92 to the
   // end of the frame), which made the retrace pulse 8% of a frame against the hardware's 0.45% and
@@ -116,6 +118,8 @@ export function installVGA(machine) {
     for (let k = 1; k <= 16; k++) if (((VRS + k) & 0x0f) === want) { VRE = VRS + k; break; }
     if (VRS >= VT || VDE > VT) return;          // half-programmed registers: do not publish nonsense
     vga.beam.blank = VDE / VT; vga.beam.rStart = VRS / VT; vga.beam.rEnd = Math.min(VRE / VT, 1);
+    vga.beam.lines = VT;
+    if (c[0x00] && c[0x01] < c[0x00]) vga.beam.hDisp = (c[0x01] + 1) / (c[0x00] + 5);
     vga.beamStamp++;
   };
   vga.recomputeBeam = recomputeBeam;

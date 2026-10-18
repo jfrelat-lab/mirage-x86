@@ -3533,6 +3533,20 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 60); }
   eq('Cirrus GD5446: a 16 KiB bank reaches the last 16 KiB of 4 MB (the hardware cursor)', got, 'a5'); }
 
+// ---- 3DAh bit 0 is each line's horizontal blank too, not the vertical blank alone ---------------------
+// VGA's documentation (display disabled: horizontal OR vertical blank), DOSBox (it models the line) and
+// QEMU (it toggles the bit at every read) agree. SVGAlib waits for bit 0 before each DAC write: with the
+// vertical blank alone a palette took a third of a second, DOOM's pickup flashes several seconds.
+// Over one mode-13h frame, bit 0 rises once per line shown (400 of 449: in the vertical blank it stays up).
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+    cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
+    let rises = 0, prev = mc.ioRead(0x3da, 1) & 1; const start = cpu.cycles, period = Math.round((mc.pitBase || mc.pitReload) / 3.845);
+    for (let k = 1; k <= 449 * 16; k++) { cpu.cycles = start + Math.floor(k * period / (449 * 16)); const b = mc.ioRead(0x3da, 1) & 1; if (b && !prev) rises++; prev = b; }
+    got = rises >= 398 && rises <= 402 ? 'per line' : `${rises} rises`;
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('VGA 3DAh bit 0: the horizontal blank of every line', got, 'per line'); }
+
 // ---- PIT channel 2 in mode 0: OUT (port 61h bit 5) low until the count runs out with GATE high ----------
 // GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
 // measured no time, and the menu countdowns of HelenOS and Sortix stood still at 8 s. 8254 datasheet,

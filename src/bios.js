@@ -1142,8 +1142,14 @@ export function installBIOS(machine, opts = {}) {
   // here: the retrace pulse ENDS, and where it starts follows the mode. `beamStamp` changes only on
   // a mode set or a CRTC write, so the common case is one integer compare — this reader runs 24 M
   // times in a single starport run and cannot recompute per read.
-  let bStamp = -1, fBlank = 400 / 449, fRS = 412 / 449, fRE = 414 / 449;
+  let bStamp = -1, fBlank = 400 / 449, fRS = 412 / 449, fRE = 414 / 449, lines = 449, hDisp = 0.8;
   let cBlank = Math.round(vgaPeriod * fBlank), cRS = Math.round(vgaPeriod * fRS), cRE = Math.round(vgaPeriod * fRE);
+  // Bit 0 is "display disabled": the vertical blank AND each line's horizontal blank, which comes
+  // round some 31 000 times a second (VGA's documentation; DOSBox models it, QEMU toggles the bit at
+  // every read). It was the vertical blank alone, so a program that waits for bit 0 before each DAC
+  // write — SVGAlib's palette, so DOOM's pickup flashes — waited a whole frame per colour: a palette
+  // in a third of a second, the flash of an armour taking seconds.
+  let cLine = vgaPeriod / lines, cHD = cLine * hDisp;
   const status1 = () => {
     const v = machine.vga;
     if (v) {
@@ -1151,14 +1157,16 @@ export function installBIOS(machine, opts = {}) {
       if (v.beamStamp !== bStamp) {
         bStamp = v.beamStamp; fBlank = v.beam.blank; fRS = v.beam.rStart; fRE = v.beam.rEnd;
         cBlank = Math.round(vgaPeriod * fBlank); cRS = Math.round(vgaPeriod * fRS); cRE = Math.round(vgaPeriod * fRE);
+        lines = v.beam.lines || 449; hDisp = v.beam.hDisp || 0.8; cLine = vgaPeriod / lines; cHD = cLine * hDisp;
       }
     }
     if (machine.wallClockMs) {
       const t = machine.wallClockMs() / FRAME_MS, f = t - Math.floor(t);
-      return (f >= fBlank ? 0x01 : 0) | (f >= fRS && f < fRE ? 0x08 : 0);
+      const l = f * lines;
+      return (f >= fBlank || l - Math.floor(l) >= hDisp ? 0x01 : 0) | (f >= fRS && f < fRE ? 0x08 : 0);
     }
     const pos = machine.cpu.cycles % vgaPeriod;
-    return (pos >= cBlank ? 0x01 : 0) | (pos >= cRS && pos < cRE ? 0x08 : 0);
+    return (pos >= cBlank || pos % cLine >= cHD ? 0x01 : 0) | (pos >= cRS && pos < cRE ? 0x08 : 0);
   };
   machine.onPortRead(0x3da, status1);
   // 0x3BA is the same register on the mono/MDA address (BDA 0x463 selects which a program uses).
