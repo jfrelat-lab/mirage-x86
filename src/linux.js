@@ -34,7 +34,7 @@ const MMAP_BASE = 0x40000000;
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
 const BLOCK = Symbol('block');                            // a system call that waits: int 80h runs again
-const E = { EPERM: 1, ENOENT: 2, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
+const E = { EPERM: 1, ENOENT: 2, EINTR: 4, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
   EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11, ECHILD: 10 };
 
 export function installLinux(machine, { onOutput, realTime } = {}) {
@@ -304,6 +304,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       releasePages(lx.pages);
       const parent = lx.procs.find((q) => q.pid === ppid);
       (parent ? parent.zombies : lx.orphans).set(pid, code);
+      if (parent) post(parent, 17);                                      // SIGCHLD
       switchTo(lx.procs.shift());
       return;
     }
@@ -320,6 +321,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (n === 14 && !(err & 1) && cr2 < STACK_TOP && cr2 >= STACK_TOP - STACK_MAX) { mapPage(cr2 >>> 12, true); return; }
     const sig = n === 0 ? SIG.SIGFPE : n === 6 ? SIG.SIGILL : n === 16 || n === 19 ? SIG.SIGFPE : SIG.SIGSEGV;
     lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0 };
+    const h = lx.sigHandlers[sig] || 0;
+    if (h > 1 && !blockedSig(lx.sigBlocked, sig)) { setupFrame(sig, h, r0Now()); return; }   // the program's handler (it may longjmp)
     exit(0, sig);
   };
 
@@ -338,16 +341,19 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const QUANTUM = () => 0.02 * (machine.cyclesPerSecond || 1e8);         // 20 ms of guest time
   const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
   const snapshot = () => ({
-    pid: lx.pid, ppid: lx.ppid, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext,
+    pid: lx.pid, ppid: lx.ppid, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, wake: lx.wake,
     fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
+    sigInfo: lx.sigInfo.slice(), sigBlocked: lx.sigBlocked.slice(), sigPend: new Set(lx.sigPend), sigSaved: lx.sigSaved,
+    alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames,
     reg: cpu.reg.slice(), eip: cpu.eip, flags: cpu.flags, seg: Array.from(cpu.seg),
     fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
     xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null,
     tls: mem.u8.slice(TLS_A, TLS_Z), io: mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1),
   });
   const restore = (s) => {
-    Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: s.brkStart, brk: s.brk, mmapNext: s.mmapNext,
-      cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies });
+    Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: s.brkStart, brk: s.brk, mmapNext: s.mmapNext, wake: s.wake ?? null,
+      cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
+      sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames });
     fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
     installPages(s.pages);
     mem.u8.set(s.tls, TLS_A); mem.u8.set(s.io, TSS_BASE + IOMAP);
@@ -363,7 +369,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     cpu.halted = false; lx.done = false;
   };
   /** Put the running process aside (its pages unmapped, not freed) and run `next`. */
+  lx.switches = 0;                                                       // the dispatcher sees whether a call switched
   const switchTo = (next) => {
+    lx.switches++;
     restore(next);
     lx.sliceStart = cpu.cycles;
   };
@@ -391,6 +399,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.pages = pages; installPages(pages); cpu.setCR3(cpu.cr3);
     lx.sliceStart = cpu.cycles;
     lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map();
+    lx.sigInfo = lx.sigInfo.slice(); lx.sigHandlers = lx.sigHandlers.slice(); lx.sigBlocked = lx.sigBlocked.slice();
+    lx.sigPend = new Set(); lx.sigSaved = null; lx.alarmAt = null; lx.alarmEvery = 0; lx.fpuFrames = new Map();
     if ((flags & 0x01000000) && ctid) wr32(ctid, pid);                   // CLONE_CHILD_SETTID
     return 0;
   };
@@ -422,7 +432,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     }
     if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes)) return -E.ENOEXEC;
     releasePages(lx.pages);
-    lx.pages = new Map(); lx.sigHandlers = [];
+    lx.pages = new Map(); lx.sigHandlers = lx.sigHandlers.map((h) => (h === 1 ? 1 : 0)); lx.sigInfo = []; lx.fpuFrames = new Map();
     for (const fd of lx.cloexec) delete fds[fd];                          // close-on-exec
     lx.cloexec.clear();
     const io = mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1);   // ioperm survives execve
@@ -668,11 +678,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const { iflag, lflag } = termios(), echo = (lflag & 8) !== 0;
     for (let b of bytes) {
       if (b === 13 && (iflag & 0x100)) b = 10;                           // ICRNL
+      if (b === 3 && (lflag & 1)) {                                      // ^C with ISIG: SIGINT to the processes, the line dropped
+        lx.tty.line.length = 0; if (echo) ttyOutput([0x5e, 0x43, 10]);
+        post(lx, 2); for (const q of [...lx.procs]) post(q, 2); machine.blocked = false;
+        continue;
+      }
       if (!(lflag & 2)) { lx.ttyIn.push(b); if (echo) ttyOutput([b]); continue; }   // raw
       const line = lx.tty.line;
       if (b === 0x7f || b === 8) { if (line.length) { line.pop(); if (echo) ttyOutput([8, 32, 8]); } continue; }
       if (b === 0x15) { while (line.length) { line.pop(); if (echo) ttyOutput([8, 32, 8]); } continue; }   // ^U
-      if (b === 3 && (lflag & 1)) { line.length = 0; if (echo) ttyOutput([0x5e, 0x43, 10]); continue; }   // ^C (no signal yet)
       if (b === 4) { lx.ttyIn.push(...line); line.length = 0; lx.tty.eof = !lx.ttyIn.length; continue; }   // ^D
       line.push(b);
       if (echo) ttyOutput(b < 32 && b !== 10 && b !== 9 ? [0x5e, b + 64] : [b]);
@@ -736,16 +750,122 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (size <= node.data.length) return;
     const d = new Uint8Array(Math.max(size, node.data.length * 2, 256)); d.set(node.data); node.data = d;
   };
-  // A signal sent to ourselves takes its default action: most end the process with 128+sig, a few
-  // are ignored. One with a handler installed is not delivered yet — it ends the process too, which
-  // is what a program that relies on its handler would not expect; lx.sigHandlers says which.
-  lx.sigHandlers = [];
-  const IGNORED = new Set([17, 23, 28]);                                   // SIGCHLD, SIGURG, SIGWINCH
+  // ---- signals -------------------------------------------------------------------------------------
+  // Delivered as i386 Linux delivers them (arch/x86/kernel/signal.c): at the end of a system call, or
+  // to a call that waits, which they interrupt (EINTR) or, for a handler with SA_RESTART and a call
+  // that may restart, run again after it. A handler gets a frame on the user stack — sigframe, or
+  // rt_sigframe for SA_SIGINFO — whose sigcontext sigreturn / rt_sigreturn restores; the x87 and SSE
+  // state is kept beside, by frame. Per process: the handlers (lx.sigHandlers: 0 default, 1 ignore,
+  // else the address), their flags, masks and restorers (lx.sigInfo), the blocked set
+  // (lx.sigBlocked, two words), the pending set, sigsuspend's saved mask, the alarm (alarm,
+  // setitimer ITIMER_REAL). Signals come from kill, a child's end (SIGCHLD), ^C on the console
+  // (SIGINT), the alarm, and faults with a handler. A process takes its signals at its system calls:
+  // one that computes without any is reached at its next call.
+  lx.sigHandlers = []; lx.sigInfo = []; lx.sigBlocked = [0, 0]; lx.sigPend = new Set(); lx.sigSaved = null;
+  lx.alarmAt = null; lx.alarmEvery = 0; lx.fpuFrames = new Map();
+  const DEFAULT_IGNORE = new Set([17, 18, 19, 20, 21, 22, 23, 28]);         // CHLD CONT, the stops (no job control), URG WINCH
+  const SA_NOCLDSTOP = 1, SA_SIGINFO = 4, SA_RESTORER = 0x04000000, SA_RESTART = 0x10000000, SA_NODEFER = 0x40000000, SA_RESETHAND = 0x80000000;
+  const bitOf = (s) => (s <= 32 ? [(1 << (s - 1)) >>> 0, 0] : [0, (1 << (s - 33)) >>> 0]);
+  const blockedSig = (m, s) => s !== 9 && s !== 19 && ((s <= 32 ? m[0] >>> (s - 1) : m[1] >>> (s - 33)) & 1) === 1;
+  const unblockable = (m) => [(m[0] & ~((1 << 8) | (1 << 18))) >>> 0, m[1] >>> 0];   // never SIGKILL nor SIGSTOP
+  const RESTARTABLE = new Set([3, 4, 145, 146, 114, 7, 54, 102, 5, 180, 181, 290, 291, 292, 293]);   // read write readv writev wait4 waitpid ioctl socketcall open pread pwrite sock calls
+  /** A signal to a process: `t` is lx (the one running) or one put aside in lx.procs. */
+  const post = (t, sig) => {
+    const handlers = t === lx ? lx.sigHandlers : t.sig, h = handlers[sig] || 0;
+    if (h === 1 || (h === 0 && DEFAULT_IGNORE.has(sig))) return;         // ignored
+    if (t !== lx && h === 0) { endOther(t, sig); return; }                // its default: the end
+    t.sigPend.add(sig);
+  };
+  /** Another process ends by a signal: its pages back, its status to its parent. */
+  const endOther = (q, sig) => {
+    const i = lx.procs.indexOf(q); if (i < 0) return;
+    lx.procs.splice(i, 1);
+    releasePages(q.pages);
+    const parent = q.ppid === lx.pid ? lx : lx.procs.find((x) => x.pid === q.ppid);
+    ((parent && parent.zombies) || lx.orphans).set(q.pid, sig & 0x7f);
+    if (parent) post(parent, 17);
+  };
   const raise = (sig) => {
     if (sig === 0) return 0;
     if (sig < 1 || sig > 64) return -E.EINVAL;
-    if (lx.sigHandlers[sig] === 1 || (IGNORED.has(sig) && !lx.sigHandlers[sig])) return 0;   // SIG_IGN
-    exit(0, sig); return 0;
+    post(lx, sig); return 0;
+  };
+  const r0Now = () => cpu.reg[0] >>> 0;
+  /** The lowest signal pending that the mask lets through, or 0. */
+  const deliverable = () => { let best = 0; for (const s of lx.sigPend) if (!blockedSig(lx.sigBlocked, s) && (!best || s < best)) best = s; return best; };
+  /** Build a handler's frame for `sig` and enter it; `eax` is what the interrupted code finds in EAX on return. */
+  const setupFrame = (sig, h, eax) => {
+    const info = lx.sigInfo[sig] || { flags: 0, mask: [0, 0], restorer: 0 }, rt = (info.flags & SA_SIGINFO) !== 0;
+    const old = lx.sigSaved || lx.sigBlocked; lx.sigSaved = null;
+    const r = cpu.reg, size = rt ? 268 : 108;
+    const f = (((((r[4] >>> 0) - size) + 4) & ~15) - 4) >>> 0;
+    for (let a = (f & ~0xfff) >>> 0; a < f + size; a += PAGE) if (!lx.pages.has(a >>> 12)) mapPage(a >>> 12, true);   // unsigned: a stack at BFFFxxxx
+    const seg = (i) => cpu.seg[i] & 0xffff;
+    const sc = (a) => {                                                   // struct sigcontext
+      [seg(5), seg(4), seg(0), seg(3), r[7], r[6], r[5], r[4], r[3], r[2], r[1], eax, 0, 0, cpu.eip, seg(1), cpu.flags, r[4], seg(2), 0, old[0], cpu.cr2]
+        .forEach((v, i) => wr32(a + i * 4, v >>> 0));
+    };
+    if (rt) {
+      wr32(f, info.flags & SA_RESTORER ? info.restorer : f + 260); wr32(f + 4, sig); wr32(f + 8, f + 16); wr32(f + 12, f + 144);
+      for (let i = 0; i < 128; i += 4) wr32(f + 16 + i, 0);
+      wr32(f + 16, sig);                                                  // siginfo: signo, errno, code (SI_USER)
+      for (let i = 0; i < 20; i += 4) wr32(f + 144 + i, 0); wr32(f + 152, 2);   // ucontext: flags, link, stack (SS_DISABLE)
+      sc(f + 164); wr32(f + 252, old[0]); wr32(f + 256, old[1]);
+      [0xb8, 0xad, 0, 0, 0, 0xcd, 0x80, 0].forEach((b, i) => wr8(f + 260 + i, b));   // mov $173,%eax; int $0x80
+      r[2] = f + 16; r[1] = f + 144;
+    } else {
+      wr32(f, info.flags & SA_RESTORER ? info.restorer : f + 100); wr32(f + 4, sig);
+      sc(f + 8); wr32(f + 96, old[1]);
+      [0x58, 0xb8, 0x77, 0, 0, 0, 0xcd, 0x80].forEach((b, i) => wr8(f + 100 + i, b));   // pop %eax; mov $119,%eax; int $0x80
+      r[2] = 0; r[1] = 0;
+    }
+    if (cpu.fst) lx.fpuFrames.set(f, { fst: cpu.fst.slice(), ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc.slice(), xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null });
+    r[4] = f; r[0] = sig; cpu.eip = h >>> 0;
+    cpu.flags = cpu.flags & ~0x500;                                       // DF and TF off, as the kernel clears them
+    const add = info.flags & SA_NODEFER ? [0, 0] : bitOf(sig);
+    lx.sigBlocked = unblockable([lx.sigBlocked[0] | info.mask[0] | add[0], lx.sigBlocked[1] | info.mask[1] | add[1]]);
+    if (info.flags & SA_RESETHAND) { lx.sigHandlers[sig] = 0; lx.sigInfo[sig] = undefined; }
+  };
+  /** Take the signals that can be taken now. `waiting`: the number of a call that waits (its int 80h
+   *  rewound): interrupted (EINTR), or run again after the handler (SA_RESTART on a call that may).
+   *  True when a handler was entered or the process ended. */
+  const takeSignals = (waiting) => {
+    for (let s; (s = deliverable());) {
+      lx.sigPend.delete(s);
+      const h = lx.sigHandlers[s] || 0;
+      if (h === 1 || (h === 0 && DEFAULT_IGNORE.has(s))) continue;
+      if (h === 0) { exit(0, s); return true; }
+      let eax = cpu.reg[0] >>> 0;
+      if (waiting !== undefined) {
+        lx.wake = null;
+        const info = lx.sigInfo[s] || { flags: 0 };
+        if ((info.flags & SA_RESTART) && RESTARTABLE.has(waiting)) eax = waiting;   // the call again, from its int 80h
+        else { cpu.eip = (cpu.eip + 2) >>> 0; eax = -E.EINTR >>> 0; }
+      }
+      setupFrame(s, h, eax);
+      return true;
+    }
+    return false;
+  };
+  /** The alarm: SIGALRM when its time comes (alarm, setitimer ITIMER_REAL). */
+  const checkAlarm = () => {
+    if (lx.alarmAt === null || lx.mono() < lx.alarmAt) return;
+    lx.alarmAt = lx.alarmEvery ? lx.alarmAt + lx.alarmEvery : null;
+    post(lx, 14);
+  };
+  const sigreturn = (sc, maskLo, maskHi, frame) => {
+    const r = cpu.reg, v = (i) => rd32(sc + i * 4) >>> 0;
+    r[7] = v(4); r[6] = v(5); r[5] = v(6); r[4] = v(7); r[3] = v(8); r[2] = v(9); r[1] = v(10); r[0] = v(11);
+    cpu.eip = v(14);
+    cpu.flags = (cpu.flags & ~0x50dd5) | (v(16) & 0x50dd5);              // what user code may change (the kernel's FIX_EFLAGS)
+    lx.sigBlocked = unblockable([maskLo >>> 0, maskHi >>> 0]);
+    const fp = lx.fpuFrames.get(frame);
+    if (fp && cpu.fst) { cpu.fst.set(fp.fst); cpu.ftop = fp.ftop; cpu.fsw = fp.fsw; cpu.fcw = fp.fcw; cpu.focc.set(fp.focc); if (fp.xmm) cpu.xmm.u8.set(fp.xmm); lx.fpuFrames.delete(frame); }
+  };
+  const readMask = (a, words = 2) => (a ? [rd32(a) >>> 0, words === 2 ? rd32(a + 4) >>> 0 : lx.sigBlocked[1]] : null);
+  const setMask = (how, m) => {
+    const b = lx.sigBlocked;
+    lx.sigBlocked = unblockable(how === 0 ? [b[0] | m[0], b[1] | m[1]] : how === 1 ? [b[0] & ~m[0], b[1] & ~m[1]] : m);
   };
   const out = (fd, bytes) => {
     (fd === 2 ? lx.stderr : lx.stdout).push(...bytes);
@@ -1155,13 +1275,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       res.push([a + 6, rev]);
       if (rev) ready++;
     }
-    if (!ready && timeout !== 0 && (lx.procs.length || (waitsOnInput && !lx.ttyIn.length && !lx.miceIn.length))) return BLOCK;
+    if (!ready && timeout !== 0 && (timeout < 0 || !expired(timeout / 1000))) return BLOCK;   // wait: for ever, or the timeout
     for (const [a, rev] of res) { wr8(a, rev & 0xff); wr8(a + 1, rev >> 8); }
     return ready;
   };
-  const select = (n, inp, outp, exp, tv) => {
-    let ready = 0, waitsOnTty = false;
-    if (!tv && inp) for (let fd = 0; fd < n; fd++) if ((rd32(inp + (fd >>> 5) * 4) >>> (fd & 31)) & 1 && fds[fd] && fds[fd].node && (fds[fd].node.dev === 'tty' || fds[fd].node.dev === 'mice')) waitsOnTty = true;   // an input device: wait for it
+  /** select's timeout in seconds: a timeval (select), a timespec (pselect6), or none (Infinity). */
+  const selectWait = (tv, ns) => (tv ? rd32(tv) + rd32(tv + 4) / (ns ? 1e9 : 1e6) : Infinity);
+  const select = (n, inp, outp, exp, tv, ns = false) => {
+    let ready = 0;
     const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.sk) return sockReady(f); if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
       if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0;
       if (f.node && f.node.dev === 'mice') return lx.miceIn.length > 0; return true; };
@@ -1174,10 +1295,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         writes.push([set + w * 4, keep >>> 0]);
       }
     }
-    // No timeout and nothing ready on a terminal: wait for a key — leaving the sets as they were, since
-    // the call runs again from the start.
-    if (!ready && waitsOnTty && !lx.ttyIn.length && !lx.miceIn.length) return BLOCK;
-    if (!ready && !tv && lx.procs.length) return BLOCK;                  // no timeout: wait while another process runs
+    // Nothing ready: wait — for ever with no timeout, else until it runs out (then 0, the sets
+    // emptied) — leaving the sets as they were meanwhile, since the call runs again from the start.
+    // It used to answer 0 at once whatever the timeout: XFree86's main loop, which selects with the
+    // time to its next timer, spun on it some 90 000 times a second and took its clients' time.
+    const wait = selectWait(tv, ns);
+    if (!ready && wait > 0 && (wait === Infinity || !expired(wait))) return BLOCK;
     for (const [a, v] of writes) wr32(a, v);
     return ready;
   };
@@ -1396,12 +1519,70 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     258: () => lx.pid,                                                     // set_tid_address -> tid
     311: () => 0,                                                          // set_robust_list
     20: () => lx.pid, 64: () => lx.ppid, 224: () => lx.pid,                // getpid, getppid, gettid
-    174: (sig, act) => {                                                   // rt_sigaction: remembered, not yet delivered
-      if (act) lx.sigHandlers[sig] = rd32(act);
+    174: (sig, act, oact) => {                                             // rt_sigaction: struct { handler, flags, restorer, mask[2] }
+      if (sig < 1 || sig > 64 || ((sig === 9 || sig === 19) && act)) return -E.EINVAL;
+      const i = lx.sigInfo[sig] || { flags: 0, mask: [0, 0], restorer: 0 };
+      if (oact) { wr32(oact, lx.sigHandlers[sig] || 0); wr32(oact + 4, i.flags); wr32(oact + 8, i.restorer); wr32(oact + 12, i.mask[0]); wr32(oact + 16, i.mask[1]); }
+      if (act) {
+        lx.sigHandlers[sig] = rd32(act) >>> 0;
+        lx.sigInfo[sig] = { flags: rd32(act + 4) >>> 0, restorer: rd32(act + 8) >>> 0, mask: [rd32(act + 12) >>> 0, rd32(act + 16) >>> 0] };
+        if (lx.sigHandlers[sig] === 1 || (lx.sigHandlers[sig] === 0 && DEFAULT_IGNORE.has(sig))) lx.sigPend.delete(sig);
+      }
       return 0;
     },
-    175: () => 0, 186: () => 0,                                            // rt_sigprocmask, sigaltstack
-    126: (how, set, old) => { if (old) wr32(old, 0); return 0; },           // sigprocmask (old): nothing is blocked
+    67: (sig, act, oact) => {                                              // sigaction (old): struct { handler, mask, flags, restorer }
+      if (sig < 1 || sig > 64 || ((sig === 9 || sig === 19) && act)) return -E.EINVAL;
+      const i = lx.sigInfo[sig] || { flags: 0, mask: [0, 0], restorer: 0 };
+      if (oact) { wr32(oact, lx.sigHandlers[sig] || 0); wr32(oact + 4, i.mask[0]); wr32(oact + 8, i.flags); wr32(oact + 12, i.restorer); }
+      if (act) {
+        lx.sigHandlers[sig] = rd32(act) >>> 0;
+        lx.sigInfo[sig] = { mask: [rd32(act + 4) >>> 0, 0], flags: rd32(act + 8) >>> 0, restorer: rd32(act + 12) >>> 0 };
+        if (lx.sigHandlers[sig] === 1 || (lx.sigHandlers[sig] === 0 && DEFAULT_IGNORE.has(sig))) lx.sigPend.delete(sig);
+      }
+      return 0;
+    },
+    48: (sig, h) => {                                                      // signal: one-shot and not deferred, as sys_signal makes it
+      if (sig < 1 || sig > 64 || sig === 9 || sig === 19) return -E.EINVAL;
+      const old = lx.sigHandlers[sig] || 0;
+      lx.sigHandlers[sig] = h >>> 0; lx.sigInfo[sig] = { flags: SA_RESETHAND | SA_NODEFER, mask: [0, 0], restorer: 0 };
+      return old;
+    },
+    175: (how, set, oset) => {                                             // rt_sigprocmask
+      if (oset) { wr32(oset, lx.sigBlocked[0]); wr32(oset + 4, lx.sigBlocked[1]); }
+      if (set) { if (how > 2) return -E.EINVAL; setMask(how, readMask(set)); }
+      return 0;
+    },
+    126: (how, set, oset) => {                                             // sigprocmask (old): one word
+      if (oset) wr32(oset, lx.sigBlocked[0]);
+      if (set) { if (how > 2) return -E.EINVAL; const m = [rd32(set) >>> 0, 0]; setMask(how, how === 2 ? [m[0], lx.sigBlocked[1]] : m); }
+      return 0;
+    },
+    186: () => 0,                                                          // sigaltstack: handlers run on the stack they find
+    179: (mask) => {                                                       // rt_sigsuspend: the mask given, until a signal
+      if (lx.sigSaved === null) { lx.sigSaved = lx.sigBlocked; lx.sigBlocked = unblockable(readMask(mask)); }
+      return BLOCK;
+    },
+    72: (h0, h1, mask) => {                                                // sigsuspend (old): its mask is the third argument
+      if (lx.sigSaved === null) { lx.sigSaved = lx.sigBlocked; lx.sigBlocked = unblockable([mask >>> 0, lx.sigBlocked[1]]); }
+      return BLOCK;
+    },
+    29: () => BLOCK,                                                       // pause
+    176: (set) => { let lo = 0, hi = 0; for (const s of lx.sigPend) { const b = bitOf(s); lo |= b[0]; hi |= b[1]; } wr32(set, lo >>> 0); wr32(set + 4, hi >>> 0); return 0; },   // rt_sigpending
+    73: (set) => { let lo = 0; for (const s of lx.sigPend) lo |= bitOf(s)[0]; wr32(set, lo >>> 0); return 0; },   // sigpending
+    119: () => { const sc = cpu.reg[4] >>> 0; sigreturn(sc, rd32(sc + 80), rd32(sc + 88), sc - 8); return undefined; },   // sigreturn
+    173: () => { const f = (cpu.reg[4] - 4) >>> 0; sigreturn(f + 164, rd32(f + 252), rd32(f + 256), f); return undefined; },   // rt_sigreturn
+    27: (secs) => {                                                        // alarm: what was left of the last one
+      const left = lx.alarmAt === null ? 0 : Math.max(1, Math.ceil(lx.alarmAt - lx.mono()));
+      lx.alarmAt = secs ? lx.mono() + secs : null; lx.alarmEvery = 0;
+      return left;
+    },
+    104: (which, nv, ov) => {                                              // setitimer: ITIMER_REAL (SIGALRM)
+      if (which !== 0) return 0;
+      if (ov) { const left = lx.alarmAt === null ? 0 : Math.max(0, lx.alarmAt - lx.mono()); wr32(ov, Math.floor(lx.alarmEvery)); wr32(ov + 4, Math.round((lx.alarmEvery % 1) * 1e6)); wr32(ov + 8, Math.floor(left)); wr32(ov + 12, Math.round((left % 1) * 1e6)); }
+      if (nv) { const every = rd32(nv) + rd32(nv + 4) / 1e6, first = rd32(nv + 8) + rd32(nv + 12) / 1e6; lx.alarmEvery = first ? every : 0; lx.alarmAt = first ? lx.mono() + first : null; }
+      return 0;
+    },
+    105: (which, cv) => { const left = lx.alarmAt === null ? 0 : Math.max(0, lx.alarmAt - lx.mono()); wr32(cv, Math.floor(lx.alarmEvery)); wr32(cv + 4, Math.round((lx.alarmEvery % 1) * 1e6)); wr32(cv + 8, Math.floor(left)); wr32(cv + 12, Math.round((left % 1) * 1e6)); return 0; },   // getitimer
     // ipc (117): System V shared memory, the MIT-SHM X extension's — id's X DOOM puts its picture in a
     // segment and the X server attaches the same one. A segment is physical frames of its own; each
     // shmat maps them into the process (as /dev/mem's pages: shared, never freed by an exit or a fork).
@@ -1445,15 +1626,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       }
       return -E.ENOSYS;                                                    // semaphores and message queues: not here
     },
-    37: (pid, sig) => {                                                    // kill: ourselves, or another process ends
-      if ((pid | 0) <= 0 || pid === lx.pid) return raise(sig);
-      const i = lx.procs.findIndex((q) => q.pid === pid);
-      if (i < 0) return -3;                                                // ESRCH
-      if (sig === 0) return 0;
-      const [q] = lx.procs.splice(i, 1);
-      releasePages(q.pages);
-      const parent = q.ppid === lx.pid ? lx : lx.procs.find((x) => x.pid === q.ppid);
-      ((parent && parent.zombies) || lx.orphans).set(pid, sig & 0x7f);
+    37: (pid, sig) => {                                                    // kill: a process; 0 or a group: all of them (one session here)
+      if (sig < 0 || sig > 64) return -E.EINVAL;
+      if ((pid | 0) <= 0) { if (sig) { for (const q of [...lx.procs]) post(q, sig); post(lx, sig); } return 0; }
+      if (pid === lx.pid) return raise(sig);
+      const q = lx.procs.find((x) => x.pid === pid);
+      if (!q) return -3;                                                   // ESRCH
+      if (sig) post(q, sig);
       return 0;
     },
     238: (tid, sig) => raise(sig),                                         // tkill
@@ -1468,7 +1647,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     265: (id, ts) => clock(id, ts, false),                                 // clock_gettime
     403: (id, ts) => clock(id, ts, true),                                  // clock_gettime64
     266: (id, ts) => { if (ts) putTime(ts, 0, 1e-9, 1e9, false); return 0; },   // clock_getres
-    162: () => { yieldTo(); return 0; },                                   // nanosleep: no time to wait for; the others run
+    162: (req, rem) => {                                                   // nanosleep: the others run meanwhile
+      const secs = req ? rd32(req) + rd32(req + 4) / 1e9 : 0;
+      if (secs > 0 && !expired(secs)) return BLOCK;
+      if (rem) { wr32(rem, 0); wr32(rem + 4, 0); }
+      if (secs <= 0) lx.yieldAfter = true;                               // once its 0 is returned
+      return 0;
+    },
     43: (buf) => {                                                         // times: all of it user time, in 100 Hz ticks
       const ticks = Math.floor(lx.mono() * 100);
       if (buf) { wr32(buf, ticks); wr32(buf + 4, 0); wr32(buf + 8, 0); wr32(buf + 12, 0); }
@@ -1481,7 +1666,6 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // ---- libc 4 / a.out era ----
     24: () => 0, 49: () => 0, 47: () => 0, 50: () => 0,                    // get[e]uid, get[e]gid (16-bit): root, as SVGAlib requires
     23: () => 0, 46: () => 0, 213: () => 0, 214: () => 0,                  // setuid, setgid (16- and 32-bit): root may
-    67: (sig, act, old) => { if (old) { wr32(old, 0); wr32(old + 4, 0); wr32(old + 8, 0); } return 0; },   // sigaction (old)
     101: (from, num, on) => {                                              // ioperm: the ports are the emulated card's
       if (from + num > 0x10000) return -E.EINVAL;
       for (let port = from; port < from + num; port++) {
@@ -1516,7 +1700,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     370: (fd, msg) => { const { iov, cnt } = msgIov(msg); return SYS[146](fd, iov, cnt); },
     372: (fd, msg) => { const { iov, cnt } = msgIov(msg); wr32(msg + 20, 0); return SYS[145](fd, iov, cnt); },
     373: (a, b) => NET.shutdown(a, b),
-    308: (n, inp, outp, exp, ts) => select(n, inp, outp, exp, ts),         // pselect6 (readline waits for keys with it)
+    308: (n, inp, outp, exp, ts) => select(n, inp, outp, exp, ts, true),   // pselect6 (readline waits for keys with it): a timespec
     439: (dirfd, path) => { const r = resolve(rdStr(path), atBase(dirfd)); return r && getNode(r) ? 0 : -E.ENOENT; },   // faccessat2
     // chmod, fchmod, fchmodat: the mode is kept (stat reports it; a.out and ELF run whatever it says).
     15: (path, mode) => { const p = resolve(rdStr(path)), n = p && getNode(p); if (!n) return -E.ENOENT; n.mode = mode & 0o7777; return 0; },
@@ -1530,8 +1714,25 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     },
   };
 
+  // A call that waits with a timeout (nanosleep, select, poll) runs again until what it waits for
+  // comes or its deadline passes: `lx.wake`, the process's own (kept when it is put aside), set on
+  // its first try and cleared when the call returns. While a process waits the others run; when
+  // every one waits, the time goes to the first deadline — at once on the guest's clock (headless:
+  // the run stays deterministic), in real time on the wall clock (the page gives its time back).
+  lx.wake = null;
+  const expired = (secs) => {
+    const now = lx.mono();
+    if (lx.wake === null) lx.wake = now + secs;
+    return now >= lx.wake;
+  };
+  const firstWake = () => {                                              // the first deadline: a wait's or an alarm's
+    let w = Math.min(lx.wake === null ? Infinity : lx.wake, lx.alarmAt === null ? Infinity : lx.alarmAt);
+    for (const q of lx.procs) for (const t of [q.wake, q.alarmAt]) if (t !== null && t !== undefined && t < w) w = t;
+    return w;
+  };
   lx.syscall = () => {
-    const r = cpu.reg, n = r[0] >>> 0;
+    const r = cpu.reg, n = r[0] >>> 0, sw = lx.switches;
+    checkAlarm();
     const fn = SYS[n];
     let ret;
     if (!fn) { lx.unimplemented.set(n, (lx.unimplemented.get(n) || 0) + 1); ret = -E.ENOSYS; }
@@ -1539,13 +1740,27 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       try { ret = fn(r[3] >>> 0, r[1] >>> 0, r[2] >>> 0, r[6] >>> 0, r[7] >>> 0, r[5] >>> 0); }
       catch (e) { if (typeof e === 'number') ret = -e; else throw e; }
     }
+    // The call ended this process (exit, a signal's default) and another runs now: what follows is
+    // the caller's, not the new one's — its EAX, its signals. (Writing them there gave a shell waiting
+    // in sigsuspend its SIGCHLD with its own int 80h to run again, so it waited for ever.)
+    if (lx.switches !== sw || lx.done) return;
     if (ret === BLOCK) {                                                 // int 80h again: on its next turn, or when input comes
       cpu.eip = (cpu.eip - 2) >>> 0;
+      if (takeSignals(n)) { lx.blockRun = 0; return; }                    // a signal: the wait is over (or runs again after it)
       if (lx.procs.length && ++lx.blockRun <= lx.procs.length) { yieldTo(); return; }
-      lx.blockRun = 0; machine.blocked = true; return;                   // every process waits
+      lx.blockRun = 0;                                                   // every process waits
+      const w = firstWake();
+      if (w !== Infinity && !lx.realTime) {                              // a deadline: the guest's clock goes to it
+        const cps = machine.cyclesPerSecond || 1e8, at = Math.ceil(w * cps);
+        if (cpu.cycles < at) cpu.cycles = at;
+        return;
+      }
+      machine.blocked = true; return;                                    // input, or the wall clock: give the time back
     }
-    lx.blockRun = 0;
+    lx.blockRun = 0; lx.wake = null;
     if (!lx.done && ret !== undefined) r[0] = ret | 0;
+    if (!lx.done && lx.sigPend.size) takeSignals();
+    if (lx.yieldAfter) { lx.yieldAfter = false; if (lx.procs.length && !lx.done) { yieldTo(); return; } }
     if (lx.procs.length && !lx.done && cpu.cycles - lx.sliceStart > QUANTUM()) yieldTo();
   };
 
