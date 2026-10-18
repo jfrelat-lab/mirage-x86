@@ -12,6 +12,9 @@
 //    server's own endpoints (/oasis-fs/, /oasis-image.json, /oasis-images.json) are the exception: a
 //    page asks them first and builds images itself when they are absent.
 // 5. The oasis-fetch relay is there to deploy with it (functions/oasis-fetch.js, beside the export).
+// 6. Every module a page loads is there: each relative import of a shipped script, each script a page
+//    names. A module written but not yet committed is not tracked, so not shipped: the page then got
+//    an HTML 404 for src/fetch-whole.js and refused it ("Expected a JavaScript module script").
 import { readdirSync, statSync, readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -56,6 +59,14 @@ export function check(dir, root = ROOT) {
     for (const m of text.matchAll(/\b(?:href|src)="(\/[^"]*)"/g)) bad.push(`4 ${f}: links ${m[1]} from the host's root`);
   }
   if (!existsSync(join(root, 'functions', 'oasis-fetch.js'))) bad.push('5 functions/oasis-fetch.js: the relay is missing');
+  const resolve = (from, spec) => { const parts = (dirname(from) === '.' ? [] : dirname(from).split('/')); for (const x of spec.split('?')[0].split('/')) { if (x === '..') parts.pop(); else if (x !== '.') parts.push(x); } return parts.join('/'); };
+  for (const f of files.filter((f) => f.endsWith('.js'))) {
+    const text = readFileSync(join(dir, f), 'utf8');
+    for (const m of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"](\.{1,2}\/[^'"]+)['"]/gm)) if (!have.has(resolve(f, m[1]))) bad.push(`6 ${f}: imports ${m[1]}, not in the export`);
+  }
+  for (const f of files.filter((f) => f.endsWith('.html'))) {
+    for (const m of readFileSync(join(dir, f), 'utf8').matchAll(/<script[^>]*\bsrc="([^":]+)"/g)) if (!have.has(resolve(f, m[1].replace(/^\.\//, '')))) bad.push(`6 ${f}: loads ${m[1]}, not in the export`);
+  }
   return bad;
 }
 
@@ -68,6 +79,7 @@ function selftest() {
     ['2', (d) => { spawnSync('mkdir', ['-p', join(d, 'games')]); writeFileSync(join(d, 'games', 'x.zip'), 'x'); }],
     ['3', (d) => rmSync(join(d, 'examples', 'licenses'), { recursive: true, force: true })],
     ['4', (d) => appendFileSync(join(d, 'src', 'main.js'), "\nfetch('/games/manifest.json');\n")],
+    ['6', (d) => rmSync(join(d, 'src', 'fetch-whole.js'))],
   ];
   let ok = check(site).length === 0;
   console.log(`site-check selftest: the export as built ${ok ? 'passes' : 'FAILS'}`);
