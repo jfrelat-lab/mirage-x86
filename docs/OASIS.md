@@ -84,7 +84,7 @@ Paths are relative to the repository. Remote layers are fetched once and unpacke
 directories and long names come through as the archive has them. **Nothing a layer fetches is put
 in this repository**: an image is a recipe that points at the original archives.
 
-A `run` layer is built at `pull` (or at the first `run`) and kept in the cache under a hash of every
+A `run` layer's command finds Docker's default PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) unless its `env` says otherwise. A `run` layer is built at `pull` (or at the first `run`) and kept in the cache under a hash of every
 layer up to it, the bytes of the repository's files included: change anything below it and it is
 built again. It is not keyed by MIRAGE's own version — delete its directory (`inspect` names it
 `built`) to build it with a newer MIRAGE. A build that fails keeps nothing. `linux/doom-x11` builds

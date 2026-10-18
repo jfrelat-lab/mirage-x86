@@ -1,0 +1,3 @@
+# twm for the X11 images: windows placed without asking (RandomPlacement). Otherwise twm waits for
+# the pointer to place each new window, which a script cannot do.
+RandomPlacement
