@@ -344,7 +344,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     pid: lx.pid, ppid: lx.ppid, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, wake: lx.wake,
     fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
     sigInfo: lx.sigInfo.slice(), sigBlocked: lx.sigBlocked.slice(), sigPend: new Set(lx.sigPend), sigSaved: lx.sigSaved,
-    alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames,
+    alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames, pgid: lx.pgid, sid: lx.sid, ctty: lx.ctty,
     reg: cpu.reg.slice(), eip: cpu.eip, flags: cpu.flags, seg: Array.from(cpu.seg),
     fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
     xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null,
@@ -353,7 +353,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const restore = (s) => {
     Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: s.brkStart, brk: s.brk, mmapNext: s.mmapNext, wake: s.wake ?? null,
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
-      sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames });
+      sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty });
     fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
     installPages(s.pages);
     mem.u8.set(s.tls, TLS_A); mem.u8.set(s.io, TSS_BASE + IOMAP);
@@ -527,6 +527,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   fs.set('/dev/input', { dir: true, mtime: 0 });
   fs.set('/dev/input/mice', { dev: 'mice', rdev: 0xd3f, mtime: 0 }); fs.set('/dev/psaux', fs.get('/dev/input/mice'));
   lx.miceIn = [];
+  // Pseudo-terminals: BSD pairs /dev/ptyp0-f (masters, 2:0-15) and /dev/ttyp0-f (slaves, 3:192-207),
+  // which libc5 and xterm 3.3 open by name, and Unix98's /dev/ptmx (5:2) with /dev/pts/N (136:N).
+  for (let i = 0; i < 16; i++) {
+    const h = i.toString(16);
+    fs.set('/dev/pty' + 'p' + h, { dev: 'ptm', pty: 'b' + i, rdev: 0x200 | i, mtime: 0 });
+    fs.set('/dev/tty' + 'p' + h, { dev: 'pts', pty: 'b' + i, rdev: 0x3c0 | i, mtime: 0 });
+  }
+  fs.set('/dev/ptmx', { dev: 'ptmx', rdev: 0x502, mtime: 0 });
+  fs.set('/dev/pts', { dir: true, mtime: 0 });
   /** A move and the buttons (1 left, 2 right), as a Microsoft serial mouse reports them: three bytes
    *  per packet — 01LRYYXX with the deltas' top bits, then X's and Y's low six bits; Y grows downward.
    *  Deltas beyond -128..127 go as several packets. SVGAlib's default ("Assuming Microsoft mouse"). */
@@ -703,6 +712,103 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     out(1, Uint8Array.from(o));
   };
   lx.ttyInput = ttyInput;
+
+  // ---- pseudo-terminals ------------------------------------------------------------------------------
+  // A pair: what the master writes goes through the line discipline with the pair's termios (ICRNL;
+  // ICANON's line, erase, kill, ^D; ECHO back to the master; ^C a SIGINT to the processes that have
+  // the slave open) into the slave's input; what the slave writes goes through OPOST/ONLCR to the
+  // master. A side with nobody left: the master reads EIO, the slave reads the end (0). Which
+  // processes hold a side is read from every descriptor table, as for a pipe's writers.
+  const ptys = new Map();                                                 // 'b0'-'b15' the BSD pairs, 'u0'... Unix98's: two namespaces, as Linux has
+  const PTY_TERMIOS = () => Uint8Array.from([0x00, 0x05, 0, 0, 0x05, 0x00, 0, 0, 0xbf, 0x04, 0, 0, 0x3b, 0x8a, 0, 0, 0,
+    3, 0x1c, 0x7f, 0x15, 4, 0, 1, 0, 0x11, 0x13, 0x1a, 0, 0x12, 0x0f, 0x17, 0x16, 0, 0, 0]);
+  const fdTables = () => [fds, ...lx.procs.map((q) => q.fds)];
+  const ptyHeld = (pr, master) => fdTables().some((t) => t.some((f) => f && f.pty === pr && f.ptyMaster === master));
+  const ptyFlags = (pr) => { const d = new DataView(pr.termios.buffer, pr.termios.byteOffset, 36); return { iflag: d.getUint32(0, true), oflag: d.getUint32(4, true), lflag: d.getUint32(12, true) }; };
+  const ptyOut = (pr, bytes) => {                                         // the slave's side, to the master: OPOST/ONLCR
+    const { oflag } = ptyFlags(pr);
+    for (const b of bytes) { if (b === 10 && (oflag & 1) && (oflag & 4)) pr.toMaster.push(13); pr.toMaster.push(b); }
+  };
+  /** A signal to every process that has the pair's slave open. */
+  const ptySignal = (pr, sig) => {
+    if (fds.some((f) => f && f.pty === pr && !f.ptyMaster)) post(lx, sig);
+    for (const q of [...lx.procs]) if (q.fds.some((f) => f && f.pty === pr && !f.ptyMaster)) post(q, sig);
+  };
+  const ptyIn = (pr, bytes) => {                                          // the master's side, to the slave: the line discipline
+    const { iflag, lflag } = ptyFlags(pr), echo = (lflag & 8) !== 0, vintr = pr.termios[17];
+    for (let b of bytes) {
+      if (b === 13 && (iflag & 0x100)) b = 10;                           // ICRNL
+      if (b === vintr && (lflag & 1)) { pr.line.length = 0; if (echo) ptyOut(pr, [0x5e, 0x43, 10]); ptySignal(pr, 2); continue; }   // ^C: SIGINT
+      if (!(lflag & 2)) { pr.toSlave.push(b); if (echo) ptyOut(pr, [b]); continue; }   // non-canonical
+      const line = pr.line;
+      if (b === 0x7f || b === 8) { if (line.length) { line.pop(); if (echo) ptyOut(pr, [8, 32, 8]); } continue; }
+      if (b === 0x15) { while (line.length) { line.pop(); if (echo) ptyOut(pr, [8, 32, 8]); } continue; }   // ^U
+      if (b === 4) { pr.toSlave.push(...line); line.length = 0; pr.eof = !pr.toSlave.length; continue; }   // ^D
+      line.push(b);
+      if (echo) ptyOut(pr, b < 32 && b !== 10 && b !== 9 ? [0x5e, b + 64] : [b]);
+      if (b === 10) { pr.toSlave.push(...line); line.length = 0; }
+    }
+  };
+  /** Open a side: `i` the pair's number (-1: the first free one, for /dev/ptmx). */
+  const ptyOpen = (node, f) => {
+    if (node.dev === 'ptm' || node.dev === 'ptmx') {
+      const free = (k) => !ptys.has(k) || !ptyHeld(ptys.get(k), true) && !ptyHeld(ptys.get(k), false);
+      let key = node.dev === 'ptm' ? node.pty : null, n = 0;
+      if (key === null) { for (; n < 64 && !free('u' + n); n++); if (n === 64) return -E.ENOSPC; key = 'u' + n; }
+      else if (!free(key)) return -5;                                     // EIO: in use, as Linux answers (xterm tries the next)
+      else n = +key.slice(1);
+      ptys.set(key, { i: n, toSlave: [], toMaster: [], line: [], eof: false, termios: PTY_TERMIOS(), rows: 24, cols: 80, locked: node.dev === 'ptmx' });
+      if (node.dev === 'ptmx') fs.set('/dev/pts/' + n, { dev: 'pts', pty: key, rdev: 0x8800 | n, mtime: lx.now(), mode: 0o620 });
+      f.pty = ptys.get(key); f.ptyMaster = true; return 0;
+    }
+    const pr = ptys.get(node.pty);
+    if (!pr || pr.locked || !ptyHeld(pr, true)) return -5;               // EIO: no master, or still locked (unlockpt)
+    f.pty = pr; f.ptyMaster = false; return 0;
+  };
+  const ptyRead = (f, n) => {
+    const pr = f.pty;
+    if (f.ptyMaster) {
+      if (!pr.toMaster.length) return !ptyHeld(pr, false) && pr.slaveSeen ? -5 : (f.flags & 0x800) ? -E.EAGAIN : BLOCK;   // EIO once the slave is gone
+      return Uint8Array.from(pr.toMaster.splice(0, n));
+    }
+    if (!pr.toSlave.length) {
+      if (pr.eof) { pr.eof = false; return new Uint8Array(0); }
+      if (!ptyHeld(pr, true)) return new Uint8Array(0);                  // the master is gone: the end
+      if (f.flags & 0x800) return -E.EAGAIN;
+      if (!(ptyFlags(pr).lflag & 2) && pr.termios[23] === 0) return new Uint8Array(0);   // VMIN 0
+      return BLOCK;
+    }
+    let take = n;
+    if (ptyFlags(pr).lflag & 2) { const nl = pr.toSlave.indexOf(10); if (nl >= 0) take = Math.min(n, nl + 1); }
+    return Uint8Array.from(pr.toSlave.splice(0, take));
+  };
+  const ptyReady = (f) => (f.ptyMaster ? f.pty.toMaster.length > 0 || (f.pty.slaveSeen && !ptyHeld(f.pty, false)) : f.pty.toSlave.length > 0 || f.pty.eof || !ptyHeld(f.pty, true));
+  const ptyIoctl = (f, req, arg) => {
+    const pr = f.pty;
+    switch (req) {
+      case 0x5401: wrBytes(arg, pr.termios); return 0;                     // TCGETS
+      case 0x5402: case 0x5403: case 0x5404: pr.termios = rdBytes(arg, 36); return 0;   // TCSETS(W/F)
+      case 0x5413: wr8(arg, pr.rows & 0xff); wr8(arg + 1, pr.rows >> 8); wr8(arg + 2, pr.cols & 0xff); wr8(arg + 3, pr.cols >> 8); wr32(arg + 4, 0); return 0;   // TIOCGWINSZ
+      case 0x5414: {                                                        // TIOCSWINSZ: SIGWINCH to the slave's processes
+        const rows = rd8(arg) | (rd8(arg + 1) << 8), cols = rd8(arg + 2) | (rd8(arg + 3) << 8);
+        if (rows !== pr.rows || cols !== pr.cols) { pr.rows = rows; pr.cols = cols; ptySignal(pr, 28); }
+        return 0;
+      }
+      case 0x80045430: wr32(arg, pr.i); return 0;                          // TIOCGPTN
+      case 0x40045431: pr.locked = rd32(arg) !== 0; return 0;              // TIOCSPTLCK (unlockpt)
+      case 0x541b: wr32(arg, f.ptyMaster ? pr.toMaster.length : pr.toSlave.length); return 0;   // FIONREAD
+      case 0x540b: if (arg === 0 || arg === 2) pr.toSlave.length = 0; if (arg === 1 || arg === 2) pr.toMaster.length = 0; return 0;   // TCFLSH
+      // The terminal's foreground process group: a session leader's when it takes the terminal
+      // (TIOCSCTTY), then what tcsetpgrp says. An interactive shell loops until tcgetpgrp equals its
+      // own group: answered with the caller's pid, a shell started under another (sh -c 'sh -i')
+      // looped for ever.
+      case 0x540e: pr.fg = lx.pgid; lx.ctty = pr; return 0;                 // TIOCSCTTY: our controlling terminal
+      case 0x540f: wr32(arg, pr.fg ?? lx.pgid); return 0;                   // TIOCGPGRP
+      case 0x5410: pr.fg = rd32(arg) | 0; return 0;                         // TIOCSPGRP
+      case 0x5429: wr32(arg, lx.sid); return 0;                             // TIOCGSID
+      default: return 0;                                                    // TIOCNOTTY, TIOCPKT, TCXONC, TCSBRK...
+    }
+  };
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
@@ -763,6 +869,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // one that computes without any is reached at its next call.
   lx.sigHandlers = []; lx.sigInfo = []; lx.sigBlocked = [0, 0]; lx.sigPend = new Set(); lx.sigSaved = null;
   lx.alarmAt = null; lx.alarmEvery = 0; lx.fpuFrames = new Map();
+  lx.pgid = 1; lx.sid = 1;                                                // process group and session (fork keeps them, setsid and setpgid change them)
+  lx.ctty = null;                                                         // the controlling terminal: null the console, a pty pair, undefined none (after setsid)
   const DEFAULT_IGNORE = new Set([17, 18, 19, 20, 21, 22, 23, 28]);         // CHLD CONT, the stops (no job control), URG WINCH
   const SA_NOCLDSTOP = 1, SA_SIGINFO = 4, SA_RESTORER = 0x04000000, SA_RESTART = 0x10000000, SA_NODEFER = 0x40000000, SA_RESETHAND = 0x80000000;
   const bitOf = (s) => (s <= 32 ? [(1 << (s - 1)) >>> 0, 0] : [0, (1 << (s - 33)) >>> 0]);
@@ -876,6 +984,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (f.sk) return sockWrite(f, bytes);
     if (f.pp) { if (f.rd) return -E.EBADF; for (const b of bytes) f.pp.buf.push(b); return bytes.length; }
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
+    if (f.pty) {
+      if (f.ptyMaster) { ptyIn(f.pty, bytes); machine.blocked = false; return bytes.length; }
+      if (!ptyHeld(f.pty, true)) return -5;                              // EIO: nobody reads the master
+      ptyOut(f.pty, bytes); return bytes.length;
+    }
     if (f.node.dev === 'tty') { ttyOutput(bytes); return bytes.length; }
     if (f.node.dev === 'mouse') return bytes.length;
     if (f.node.dev === 'mice') { for (const c of bytes) { lx.miceIn.push(0xfa); if (c === 0xf2) lx.miceIn.push(0x00); } return bytes.length; }
@@ -918,6 +1031,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     } else if (f.node.dev === 'mice') {
       if (!lx.miceIn.length) return (f.flags & 0x800) ? -E.EAGAIN : BLOCK;   // a device that waits for a move
       src = Uint8Array.from(lx.miceIn.splice(0, n - (n % 3) || n));
+    } else if (f.pty) {
+      const r = ptyRead(f, n);
+      if (r === BLOCK || typeof r === 'number') return r;
+      src = r;
     } else if (f.node.dev === 'tty') {
       if (!lx.ttyIn.length) {
         if (lx.tty.eof) { lx.tty.eof = false; return 0; }                // ^D on an empty line
@@ -964,7 +1081,19 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (!node.dir && !node.dev) dataOf(node);
     if ((flags & 0x10000) && !node.dir) return -E.ENOTDIR;                  // O_DIRECTORY
     if ((flags & 0x200) && !node.dir && (flags & 3)) { node.size = 0; node.mtime = lx.now(); }   // O_TRUNC
-    return newFd({ node, path: p, pos: 0, flags }, 0, (flags & 0x80000) !== 0);   // O_CLOEXEC
+    const f = { node, path: p, pos: 0, flags };
+    // /dev/tty is the process's controlling terminal: a pty's slave, or the console. An interactive
+    // shell opens it to ask whose turn the terminal is (tcgetpgrp): under xterm it asked the console.
+    if (p === '/dev/tty' && lx.ctty === undefined) return -6;               // ENXIO: no controlling terminal
+    if (p === '/dev/tty' && lx.ctty) { f.pty = lx.ctty; f.ptyMaster = false; f.path = '/dev/tty' + 'p' + lx.ctty.i.toString(16); return newFd(f, 0, (flags & 0x80000) !== 0); }
+    if (node.dev === 'ptm' || node.dev === 'ptmx' || node.dev === 'pts') {
+      const e = ptyOpen(node, f); if (e) return e;
+      if (!f.ptyMaster) {
+        f.pty.slaveSeen = true;
+        if (lx.ctty === undefined && lx.sid === lx.pid && !(flags & 0x100)) { lx.ctty = f.pty; f.pty.fg = lx.pgid; }   // a session leader takes it (no O_NOCTTY)
+      }
+    }
+    return newFd(f, 0, (flags & 0x80000) !== 0);                          // O_CLOEXEC
   };
   const atBase = (dirfd) => {                                               // the *at() calls' starting directory
     if ((dirfd | 0) === -100) return lx.cwd;                                // AT_FDCWD
@@ -1093,6 +1222,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     }
     if (req === 0x5451) { lx.cloexec.add(fd); return 0; }                // FIOCLEX
     if (req === 0x5450) { lx.cloexec.delete(fd); return 0; }             // FIONCLEX
+    if (f.pty) return ptyIoctl(f, req, arg);
     if (f.node && f.node.dev === 'dsp') return dspIoctl(req >>> 0, arg);
     if (f.node && f.node.dev === 'fb') return fbIoctl(req >>> 0, arg);
     if (!f.node || (f.node.dev !== 'tty' && f.node.dev !== 'mouse')) return -E.ENOTTY;
@@ -1107,7 +1237,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       }
       case 0x5402: case 0x5403: case 0x5404: t.termios = rdBytes(arg, 36); return 0;   // TCSETS(W/F)
       case 0x5413: wr32(arg, (25 << 0) | (80 << 16)); wr32(arg + 4, 0); return 0;     // TIOCGWINSZ: 25 rows, 80 columns
-      case 0x540f: wr32(arg, 1); return 0;                                  // TIOCGPGRP
+      case 0x540f: wr32(arg, t.fg ?? 1); return 0;                          // TIOCGPGRP: the console's foreground group (the first shell's)
+      case 0x5410: t.fg = rd32(arg) | 0; return 0;                          // TIOCSPGRP
+      case 0x5429: wr32(arg, lx.sid); return 0;                             // TIOCGSID
       case 0x4b3b: wr32(arg, t.kdMode); return 0;                          // KDGETMODE
       case 0x4b3a: t.kdMode = arg; return 0;                               // KDSETMODE: KD_TEXT 0 / KD_GRAPHICS 1
       case 0x4b44: wr32(arg, t.kbMode); return 0;                          // KDGKBMODE
@@ -1265,7 +1397,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       let rev = 0;
       if (fd >= 0 && !f) rev = 0x20;
       else if (f) {
-        const readable = f.sk ? sockReady(f) : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
+        const readable = f.sk ? sockReady(f) : f.pty ? ptyReady(f) : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
           : f.node && f.node.dev === 'tty' ? lx.ttyIn.length > 0 : f.node && f.node.dev === 'mice' ? lx.miceIn.length > 0 : f.node && f.node.dev === 'mouse' ? lx.mouseIn.length > 0 : true;
         if ((ev & 1) && readable) rev |= 1;
         if (ev & 4) rev |= 4;
@@ -1283,7 +1415,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const selectWait = (tv, ns) => (tv ? rd32(tv) + rd32(tv + 4) / (ns ? 1e9 : 1e6) : Infinity);
   const select = (n, inp, outp, exp, tv, ns = false) => {
     let ready = 0;
-    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.sk) return sockReady(f); if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
+    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.sk) return sockReady(f); if (f.pty) return ptyReady(f); if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
       if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0;
       if (f.node && f.node.dev === 'mice') return lx.miceIn.length > 0; return true; };
     const writes = [];
@@ -1313,7 +1445,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   const readlink = (path, base, buf, size) => {
     let t;
+    const fdl = /^\/proc\/(?:self|\d+)\/fd\/(\d+)$/.exec(path);
     if (path === '/proc/self/exe') t = lx.exe;
+    else if (fdl) {                                                       // what a descriptor names: ttyname() reads it (busybox's tty, xterm's shell)
+      const f = fds[+fdl[1]]; if (!f) return -E.ENOENT;
+      t = f.path || (f.sk ? 'socket:[' + (+fdl[1] + 1000) + ']' : f.pp || f.pipe !== undefined ? 'pipe:[' + (+fdl[1] + 2000) + ']' : '/dev/null');
+    }
     else { const p = resolve(path, base, false), n = p && getNode(p); if (!n) return -E.ENOENT; if (n.link === undefined) return -E.EINVAL; t = n.link; }
     const b = new TextEncoder().encode(t).subarray(0, size);
     wrBytes(buf, b); return b.length;
@@ -1626,9 +1763,18 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       }
       return -E.ENOSYS;                                                    // semaphores and message queues: not here
     },
-    37: (pid, sig) => {                                                    // kill: a process; 0 or a group: all of them (one session here)
+    37: (pid, sig) => {                                                    // kill: a process, a group (0: ours, -g: g), or -1 every other
       if (sig < 0 || sig > 64) return -E.EINVAL;
-      if ((pid | 0) <= 0) { if (sig) { for (const q of [...lx.procs]) post(q, sig); post(lx, sig); } return 0; }
+      pid |= 0;
+      if (pid <= 0) {
+        // xterm ends with kill(-<its shell's group>, SIGHUP): sent to everyone, it took the X server too.
+        const g = pid === 0 ? lx.pgid : -pid, all = pid === -1;
+        const targets = lx.procs.filter((q) => (all ? q.pid !== 1 : (q.pgid ?? q.pid) === g));
+        const me = all ? false : lx.pgid === g;
+        if (!targets.length && !me && !all) return -3;                      // ESRCH: no such group
+        if (sig) { for (const q of targets) post(q, sig); if (me) post(lx, sig); }
+        return 0;
+      }
       if (pid === lx.pid) return raise(sig);
       const q = lx.procs.find((x) => x.pid === pid);
       if (!q) return -3;                                                   // ESRCH
@@ -1638,6 +1784,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     238: (tid, sig) => raise(sig),                                         // tkill
     270: (tgid, tid, sig) => raise(sig),                                   // tgkill
     199: () => 0, 200: () => 0, 201: () => 0, 202: () => 0,                // get[e]uid32, get[e]gid32
+    // Setting identities and owners: everything runs as root here, as the reference container does,
+    // so they succeed and change nothing. xterm drops its privileges with setreuid/setregid before it
+    // runs the shell, and stopped ("seteuid(0): Function not implemented") when they were refused.
+    70: () => 0, 71: () => 0, 203: () => 0, 204: () => 0,                  // setreuid setregid (16 and 32 bits)
+    138: () => 0, 139: () => 0, 215: () => 0, 216: () => 0, 164: () => 0, 170: () => 0, 208: () => 0, 210: () => 0,   // setfsuid setfsgid setresuid setresgid
+    16: () => 0, 182: () => 0, 95: () => 0, 198: () => 0, 207: () => 0, 212: () => 0,   // lchown chown fchown (and 32)
     60: (m) => { const old = lx.umask; lx.umask = m & 0o777; return old; },  // umask
     191: (res, rl) => { wr32(rl, 0xffffffff); wr32(rl + 4, 0xffffffff); if (res === 3) { wr32(rl, 8 << 20); } return 0; },   // ugetrlimit: stack 8 MiB, the rest unlimited
     340: (pid, res, nw, old) => { if (old) { wr32(old, 0xffffffff); wr32(old + 4, 0xffffffff); wr32(old + 8, 0xffffffff); wr32(old + 12, 0xffffffff); if (res === 3) { wr32(old, 8 << 20); wr32(old + 4, 0); } } return 0; },   // prlimit64
@@ -1686,7 +1838,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     11: (path, argv, envp) => execve(rdStr(path), strings(argv), strings(envp)),   // execve
     114: (pid, st, opt) => wait(pid | 0, st, opt),                         // wait4
     7: (pid, st, opt) => wait(pid | 0, st, opt),                           // waitpid
-    57: () => 0, 65: () => lx.pid, 132: () => lx.pid, 66: () => lx.pid, 147: () => lx.pid,   // setpgid, getpgrp, getpgid, setsid, getsid
+    57: (pid, pg) => {                                                     // setpgid: ourselves or a child, into a group
+      pid = (pid | 0) || lx.pid; pg = (pg | 0) || pid;
+      if (pid === lx.pid) { lx.pgid = pg; return 0; }
+      const q = lx.procs.find((x) => x.pid === pid && x.ppid === lx.pid);
+      if (!q) return -3;
+      q.pgid = pg; return 0;
+    },
+    65: () => lx.pgid,                                                      // getpgrp
+    132: (pid) => { pid |= 0; if (!pid || pid === lx.pid) return lx.pgid; const q = lx.procs.find((x) => x.pid === pid); return q ? (q.pgid ?? q.pid) : -3; },   // getpgid
+    66: () => { lx.sid = lx.pgid = lx.pid; lx.ctty = undefined; return lx.pid; },   // setsid: a session and a group of its own, no terminal
+    147: (pid) => { pid |= 0; if (!pid || pid === lx.pid) return lx.sid; const q = lx.procs.find((x) => x.pid === pid); return q ? (q.sid ?? 1) : -3; },   // getsid
     // select: a descriptor with input waiting is ready to read, every one is ready to write; with
     // nothing ready it returns at once (there is no other process to wait for).
     142: (n, inp, outp, exp, tv) => select(n, inp, outp, exp, tv),         // _newselect

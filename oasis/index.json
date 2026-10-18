@@ -80,7 +80,7 @@
   },
   {
     "name": "linux/x11-1997",
-    "title": "X11 of 1997 — XFree86 3.3 on an emulated Cirrus GD5446, no Linux kernel",
+    "title": "X11 of 1997 — XFree86 3.3, xterm and a shell, on an emulated Cirrus GD5446",
     "world": "linux",
     "year": 1997,
     "author": "The XFree86 Project, the Debian project, busybox",
