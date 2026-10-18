@@ -56,7 +56,7 @@
   }
 
   /* The machine's window: its title strip, then its screen. */
-  #vm { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; padding: 12px; }
+  #vm { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; min-height: 0; padding: 12px; }
   .vmtop { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto; background: var(--panel);
            border: 1px solid var(--edge); border-bottom: none; border-radius: 9px 9px 0 0; padding: 7px 10px; }
   .vmtop > * { flex: none; }
@@ -78,6 +78,11 @@
   #stage:fullscreen #screen { width: 100vw; height: 100vh; }
   #under { color: var(--dim); padding: 6px 2px 0; font-size: 11px; display: flex; gap: 14px; white-space: nowrap; overflow: hidden; }
   #under #status { color: var(--ink); }
+  /* The log: what the machine is doing — an OASIS image's layers fetched and unpacked, a run layer's
+     build, the program's own output — under the screen, folded away until asked for. */
+  #log { margin-top: 6px; max-height: 9.5em; overflow: auto; background: #070a0e; border: 1px solid var(--edge); border-radius: 6px;
+         padding: 5px 8px; font: 11px/1.4 ui-monospace, Menlo, monospace; color: var(--dim); white-space: pre-wrap; word-break: break-all; }
+  #log .t { color: #4d6a60; }
 
   /* A chooser drawn over the screen, in the idiom of the machine. */
   .over { position: absolute; inset: 0; overflow: auto; }
@@ -132,10 +137,12 @@
       <span class="sep"></span>
       <button id="pause">Pause</button>
       <button id="sound" aria-pressed="true" title="Sound Blaster and speaker">Sound</button>
+      <button id="logBtn" aria-pressed="false" title="What the machine is doing: layers fetched and built, its output">Log</button>
       <button id="fullscreen" title="Fullscreen (Alt+Enter)">Fullscreen</button>
     </div>
     <div id="stage"><canvas id="screen" width="640" height="400" tabindex="0"></canvas><div id="over" class="over" hidden></div></div>
     <div id="under"><span id="status">starting…</span><span id="hint"></span></div>
+    <div id="log" hidden></div>
   </div>
   <aside>
     <div class="bar" id="shelfTitle">Programs</div>

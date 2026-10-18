@@ -203,26 +203,24 @@ const RUN_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
  */
 export async function buildTree(img, io) {
   const tree = new Tree(), say = io.onProgress || (() => {});
+  const get = async (src, what) => { const b = await io.fetchBytes(src); say(`unpacking ${what || src.split('/').pop()}`); return b; };   // fetched, then unpacked
   let chain = '';
   for (const l of img.layers || []) {
     chain = await sha256(chain + JSON.stringify(l));
     if (l.docker) throw new Error(`oasis: ${img.name || 'this image'} is a Docker image's export — it needs node tools/oasis.mjs`);
-    if (l.deb) { say(`unpacking ${l.deb.split('/').pop()}`); tree.addEntries(tarEntries(await debData(await io.fetchBytes(l.deb))), l.into || ''); }
-    else if (l.tar) { say(`unpacking ${l.tar.split('/').pop()}`); let b = await io.fetchBytes(l.tar); if (isGzip(b)) b = await gunzip(b); tree.addEntries(tarEntries(b), l.into || ''); }
+    if (l.deb) tree.addEntries(tarEntries(await debData(await get(l.deb))), l.into || '');
+    else if (l.tar) { let b = await get(l.tar); if (isGzip(b)) b = await gunzip(b); tree.addEntries(tarEntries(b), l.into || ''); }
     else if (l.zip && l.member) {
-      say(`unpacking ${l.member}`);
-      const inner = (await unzip(await io.fetchBytes(l.zip))).find((f) => f.path.toLowerCase() === l.member.toLowerCase());
+      const inner = (await unzip(await get(l.zip, l.member))).find((f) => f.path.toLowerCase() === l.member.toLowerCase());
       if (!inner) throw new Error(`oasis: ${l.member} is not in ${l.zip}`);
       tree.addEntries(tarEntries(isGzip(inner.bytes) ? await gunzip(inner.bytes) : inner.bytes), l.into || '');
     } else if (l.lha) {
-      say(`unpacking ${l.lha}`);
-      const inner = (await unzip(await io.fetchBytes(l.zip))).find((f) => f.path.toLowerCase() === l.lha.toLowerCase());
+      const inner = (await unzip(await get(l.zip, l.lha))).find((f) => f.path.toLowerCase() === l.lha.toLowerCase());
       if (!inner) throw new Error(`oasis: ${l.lha} is not in ${l.zip}`);
       for (const f of unlha(inner.bytes)) { const to = l.files ? l.files[f.path] : f.path; if (to) tree.file(norm((l.into || '') + '/' + to), f.bytes); }
     } else if (l.zip) {
-      say(`unpacking ${l.zip.split('/').pop()}`);
-      for (const f of await unzip(await io.fetchBytes(l.zip))) tree.file(norm(f.path), f.bytes);
-    } else if (l.gz) { say(`unpacking ${l.gz.split('/').pop()}`); tree.file(l.to, await gunzip(await io.fetchBytes(l.gz))); }
+      for (const f of await unzip(await get(l.zip))) tree.file(norm(f.path), f.bytes);
+    } else if (l.gz) tree.file(l.to, await gunzip(await get(l.gz)));
     else if (l.file) tree.file(l.to, await io.fetchBytes(l.file));
     else if (l.busybox) {
       const bin = norm('/' + (l.into || 'bin'));

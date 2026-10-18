@@ -43,6 +43,32 @@ $('vmSpec').textContent = machine.spec;
 document.title = `MIRAGE — ${machine.name}`;
 installFullscreen($('stage'), $('fullscreen'));
 const setState = (text, cls = 'on') => { const p = $('vmState'); p.textContent = text; p.className = 'pill ' + cls; };
+// The log under the screen (machines.html #log): a line per step, kept to its last 400.
+const logEl = $('log'), logBtn = $('logBtn');
+let logAsked = null;                                     // the visitor's own choice wins over showLog()
+const setLog = (open) => { logEl.hidden = !open; logBtn.setAttribute('aria-pressed', String(open)); if (open) logEl.scrollTop = logEl.scrollHeight; };
+logBtn.addEventListener('click', () => { logAsked = logEl.hidden; setLog(logAsked); });
+const showLog = () => { if (logAsked === null) setLog(true); };
+let logPartial = '';
+const log = (text, { stamp = true } = {}) => {
+  const atEnd = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 4;
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue;
+    const row = document.createElement('div');
+    if (stamp) { const t = document.createElement('span'); t.className = 't'; t.textContent = new Date().toTimeString().slice(0, 8) + ' '; row.append(t); }
+    row.append(line);
+    logEl.append(row);
+  }
+  while (logEl.childElementCount > 400) logEl.firstElementChild.remove();
+  if (atEnd) logEl.scrollTop = logEl.scrollHeight;
+};
+/** A program's output, which comes in pieces: whole lines go to the log, escapes and returns dropped. */
+const logOutput = (t) => {
+  logPartial += t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '');
+  const lines = logPartial.split('\n'); logPartial = lines.pop();
+  if (logPartial.length > 300) { lines.push(logPartial); logPartial = ''; }
+  if (lines.length) log(lines.join('\n'), { stamp: false });
+};
 
 function shelf(title, items, current) {
   $('shelfTitle').textContent = title;
@@ -116,6 +142,7 @@ async function pc() {
     if (session) { go({ m: 'pc', run: e.id }); return; }
     over.hidden = true;
     status.textContent = `loading ${e.file.split('/').pop()}…`;
+    log(`loading ${e.file}`);
     const res = await fetchWhole(e.file);   // in parts on a static host (src/fetch-whole.js)
     const body = /\.gz$/i.test(e.file) ? res.body.pipeThrough(new DecompressionStream('gzip')) : res.body;
     const raw = new Uint8Array(await new Response(body).arrayBuffer());
@@ -205,8 +232,8 @@ async function linux() {
     let lastLine = '';
     try {
       const s = await startLinux({ canvas, img, host,
-        onOutput: (t) => { lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
-        onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) setState('exited', ''); } });
+        onOutput: (t) => { logOutput(t); lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
+        onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) { setState('exited', ''); log(t); } } });
       session = { pause: s.pause, audio: s.audio };
       window.mirage = s;
       setState('running');
@@ -237,12 +264,15 @@ async function linux() {
       let img;
       try { img = { ...(await (await fetch(`oasis/images/${m.name}.json`)).json()), name: m.name }; } catch { return needs(m, 'Its manifest could not be read.'); }
       if ((img.layers || []).some((l) => l.docker)) return needs(m, 'This image is made from a Docker image\'s export, which takes the docker command: it runs from the OASIS server on a computer.');
-      over.hidden = true; setState('building', '');
+      over.hidden = true; setState('building', ''); showLog();
+      log(`${m.name}: ${(img.layers || []).length} layers`);
       const [{ buildTree }, { webIO }] = await Promise.all([import('./oasis-layers.js'), import('./oasis-web.js')]);
-      const io = webIO({ onProgress: (t) => { status.textContent = `${m.title}: ${t}…`; } });
-      io.onOutput = (t) => { const l = t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '').split('\n').filter(Boolean).pop(); if (l) hint.textContent = l.slice(-120); };
+      const t0 = performance.now();
+      const io = webIO({ onProgress: (t) => { status.textContent = `${m.title}: ${t}…`; log(t); } });
+      io.onOutput = (t) => { logOutput(t); const l = t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '').split('\n').filter(Boolean).pop(); if (l) hint.textContent = l.slice(-120); };
       let tree;
-      try { tree = await buildTree(img, io); } catch (e) { setState('failed', 'err'); return needs(m, String(e.message || e)); }
+      try { tree = await buildTree(img, io); } catch (e) { log(String(e.message || e)); setState('failed', 'err'); return needs(m, String(e.message || e)); }
+      log(`the tree is built (${tree.nodes.size} paths, ${((performance.now() - t0) / 1000).toFixed(1)} s); starting ${img.entry && img.entry.run}`);
       status.textContent = `starting ${m.title}…`;
       await start(m, img, tree.host());
     };
