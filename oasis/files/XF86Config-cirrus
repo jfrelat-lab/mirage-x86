@@ -7,6 +7,7 @@
 Section "Files"
     RgbPath     "/usr/X11R6/lib/X11/rgb"
     FontPath    "/usr/X11R6/lib/X11/fonts/misc/"
+    FontPath    "/usr/X11R6/lib/X11/fonts/75dpi/"    # where an image has it (xfnt75); left out otherwise
 EndSection
 
 Section "ServerFlags"

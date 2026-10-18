@@ -178,6 +178,7 @@ const chainStep = (chain, l) => {
   if (src && !isUrl(src) && existsSync(local(src))) h.update(readFileSync(local(src)));
   return h.digest('hex');
 };
+const RUN_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';   // Docker's default PATH for a RUN
 const runDir = (chain) => join(CACHE, 'layers', 'run-' + chain.slice(0, 16));
 async function runLayer(l, root, dir) {
   if (existsSync(join(dir, '.oasis-done'))) return dir;
@@ -189,7 +190,7 @@ async function runLayer(l, root, dir) {
   const t0 = Date.now();
   const code = await new Promise((ok) => {
     const p = spawn(process.execPath, [join(ROOT, 'tools', 'linux', 'run.mjs'), '/bin/sh', '-c', l.run], { stdio: ['ignore', 'inherit', 'inherit'],
-      env: { ...process.env, MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: l.cwd || '/', MIRAGE_LXCOMMIT: tmp, MIRAGE_LXENV: JSON.stringify(l.env || {}), MIRAGE_CPU: l.cpu || '686' } });
+      env: { ...process.env, MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: l.cwd || '/', MIRAGE_LXCOMMIT: tmp, MIRAGE_LXENV: JSON.stringify({ PATH: RUN_PATH, ...(l.env || {}) }), MIRAGE_CPU: l.cpu || '686' } });
     p.on('exit', (c) => ok(c));
   });
   rmSync(spec, { force: true });
