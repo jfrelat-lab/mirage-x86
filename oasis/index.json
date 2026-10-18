@@ -88,12 +88,30 @@
     "output": "window"
   },
   {
-    "name": "linux/x11-games-1997",
-    "title": "X11 games of 1997 — xboing, xbill, xjewel from Debian 1.3 on XFree86 3.3",
+    "name": "linux/xbill-1997",
+    "title": "XBill 2.0 — X11 of 1997, on XFree86 3.3",
     "world": "linux",
     "year": 1997,
-    "author": "Justin C. Kibell (xboing), Brian Wellington and Matias Duarte (xbill), David Cooper (xjewel), the XFree86 Project, the Debian project, busybox",
-    "thumb": "oasis/thumbs/linux-x11-games-1997.png",
+    "author": "Brian Wellington and Matias Duarte, the XFree86 Project, the Debian project, busybox",
+    "thumb": "oasis/thumbs/linux-xbill-1997.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/xboing-1997",
+    "title": "XBoing 2.4 — X11 of 1997, on XFree86 3.3",
+    "world": "linux",
+    "year": 1997,
+    "author": "Justin C. Kibell, the XFree86 Project, the Debian project, busybox",
+    "thumb": "oasis/thumbs/linux-xboing-1997.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/xjewel-1997",
+    "title": "XJewel 1.6 — X11 of 1997, on XFree86 3.3",
+    "world": "linux",
+    "year": 1997,
+    "author": "David Cooper, the XFree86 Project, the Debian project, busybox",
+    "thumb": "oasis/thumbs/linux-xjewel-1997.png",
     "output": "window"
   }
 ]
