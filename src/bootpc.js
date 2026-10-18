@@ -14,6 +14,7 @@
 // next tick — but the guest's clock then races (Linux booting reads x100).
 
 import { Machine } from './machine.js';
+import { fetchWhole } from './fetch-whole.js';
 import { installBIOS } from './bios.js';
 import { installMouse } from './mouse.js';
 import { Video } from './video.js';
@@ -205,7 +206,7 @@ async function bootSelected() {
   url.searchParams.set('pci', pciBox.checked ? '1' : '0'); url.searchParams.set('com1', comBox.checked ? '1' : '0');
   history.replaceState(null, '', url);
   // A .gz image (the FreeDOS disk of the home page: 64 MB, 25 MB compressed) is inflated here.
-  const res = await fetch(pick.value);
+  const res = await fetchWhole(pick.value);   // in parts on a static host (src/fetch-whole.js)
   const body = /\.gz$/i.test(pick.value) ? res.body.pipeThrough(new DecompressionStream('gzip')) : res.body;
   const bytes = new Uint8Array(await new Response(body).arrayBuffer());
   return boot(pick.value.split('/').pop().replace(/\.gz$/i, ''), bytes);

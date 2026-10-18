@@ -1,0 +1,93 @@
+// site-check.mjs — what must hold of the static export (tools/site.mjs) before it goes on a host.
+//
+//   node tools/site-check.mjs [<export dir>]      default site/
+//   node tools/site-check.mjs --selftest          each check made to fail on a damaged copy
+//
+// 1. No file over 25 MiB, the most Cloudflare Pages takes.
+// 2. Nothing but what the repository tracks and site.mjs ships (and the parts it cut, and _headers):
+//    the disks and games MIRAGE does not own — boot/, games/, intros/ — can never reach a host.
+// 3. Everything the pages list is there: each example's file, screenshot and licence, each gallery
+//    screenshot, each OASIS image's manifest and screenshot (a file in parts counts as there).
+// 4. No path from the host's root in the pages' code: an export must work under a path. The OASIS
+//    server's own endpoints (/oasis-fs/, /oasis-image.json, /oasis-images.json) are the exception: a
+//    page asks them first and builds images itself when they are absent.
+// 5. The oasis-fetch relay is there to deploy with it (functions/oasis-fetch.js, beside the export).
+import { readdirSync, statSync, readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { MAX, SHIPPED } from './site.mjs';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const SERVER_ONLY = /^\/oasis-(fs\/|image\.json|images\.json)/;
+
+function walk(dir, out = []) {
+  for (const f of readdirSync(dir)) { const p = join(dir, f); if (statSync(p).isDirectory()) walk(p, out); else out.push(p); }
+  return out;
+}
+
+/** The problems of the export in `dir`, one line each; none is a pass. */
+export function check(dir, root = ROOT) {
+  const bad = [];
+  const files = walk(dir).map((p) => relative(dir, p).split('\\').join('/'));
+  const have = new Set(files);
+  const there = (p) => have.has(p) || have.has(p + '.parts.json');
+  const tracked = new Set(spawnSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8' }).stdout.split('\0').filter(Boolean));
+  for (const f of files) {
+    const size = statSync(join(dir, f)).size;
+    if (size > MAX) bad.push(`1 ${f}: ${(size / 1048576).toFixed(1)} MiB, over 25 MiB`);
+    const base = f.replace(/\.(part\d+|parts\.json)$/, '');
+    if (f !== '_headers' && !(tracked.has(base) && SHIPPED(base))) bad.push(`2 ${f}: not a file the repository tracks and ships`);
+    if (/^(boot|games|intros)\//.test(f)) bad.push(`2 ${f}: from a directory MIRAGE does not own`);
+  }
+  const json = (p) => { try { return JSON.parse(readFileSync(join(dir, p), 'utf8')); } catch { bad.push(`3 ${p}: missing or unreadable`); return []; } };
+  for (const e of json('examples/manifest.json')) {
+    for (const p of [e.file, e.licenseFile, `examples/thumbs/${e.id}.png`, ...(e.add || [])]) if (p && !/^https?:/.test(p) && !there(p)) bad.push(`3 ${p}: listed by examples/manifest.json (${e.id}), absent`);
+  }
+  for (const g of json('examples/gallery.json')) if (g.thumb && !there(g.thumb)) bad.push(`3 ${g.thumb}: gallery screenshot absent`);
+  for (const m of json('oasis/index.json')) {
+    if (!there(`oasis/images/${m.name}.json`)) bad.push(`3 oasis/images/${m.name}.json: absent`);
+    if (m.thumb && !there(m.thumb)) bad.push(`3 ${m.thumb}: absent`);
+  }
+  for (const f of files.filter((f) => /\.(js|html)$/.test(f))) {
+    const text = readFileSync(join(dir, f), 'utf8');
+    for (const m of text.matchAll(/\b(?:fetch|open)\(\s*[`'"](\/[^`'"]*)/g)) if (!SERVER_ONLY.test(m[1])) bad.push(`4 ${f}: fetches ${m[1]} from the host's root`);
+    for (const m of text.matchAll(/\b(?:href|src)="(\/[^"]*)"/g)) bad.push(`4 ${f}: links ${m[1]} from the host's root`);
+  }
+  if (!existsSync(join(root, 'functions', 'oasis-fetch.js'))) bad.push('5 functions/oasis-fetch.js: the relay is missing');
+  return bad;
+}
+
+// Each check, made to fail: a copy of the export damaged one way at a time.
+function selftest() {
+  const site = join(ROOT, 'site');
+  if (!existsSync(site)) { console.error('site-check: build site/ first (node tools/site.mjs)'); process.exit(2); }
+  const damages = [
+    ['1', (d) => writeFileSync(join(d, 'examples', 'big.bin'), Buffer.alloc(MAX + 1))],
+    ['2', (d) => { spawnSync('mkdir', ['-p', join(d, 'games')]); writeFileSync(join(d, 'games', 'x.zip'), 'x'); }],
+    ['3', (d) => rmSync(join(d, 'examples', 'licenses'), { recursive: true, force: true })],
+    ['4', (d) => appendFileSync(join(d, 'src', 'main.js'), "\nfetch('/games/manifest.json');\n")],
+  ];
+  let ok = check(site).length === 0;
+  console.log(`site-check selftest: the export as built ${ok ? 'passes' : 'FAILS'}`);
+  for (const [n, damage] of damages) {
+    const d = mkdtempSync(join(tmpdir(), 'site-check-'));
+    spawnSync('cp', ['-Rc', site + '/.', d]);                     // APFS clones: no time, no space
+    damage(d);
+    const caught = check(d).some((l) => l.startsWith(n + ' '));
+    console.log(`  check ${n}: ${caught ? 'caught' : 'MISSED'} its damage`);
+    ok = ok && caught;
+    rmSync(d, { recursive: true, force: true });
+  }
+  process.exit(ok ? 0 : 1);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  if (process.argv.includes('--selftest')) selftest();
+  const dir = process.argv[2] || join(ROOT, 'site');
+  const bad = check(dir);
+  for (const l of bad) console.log('  ' + l);
+  console.log(`site-check: ${bad.length ? bad.length + ' problem(s)' : 'the export may go on a host'} (${relative(process.cwd(), dir) || '.'})`);
+  process.exit(bad.length ? 1 : 0);
+}

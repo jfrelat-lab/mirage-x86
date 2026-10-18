@@ -22,3 +22,7 @@ tools/sst/
 /boot
 .dbxlogs/
 tools/sst386/
+
+# the static export (tools/site.mjs): built, never committed
+/site/
+/.wrangler/

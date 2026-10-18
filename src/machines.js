@@ -9,6 +9,7 @@
 // DOS and PC titles come from examples/manifest.json (the home page's examples); Linux images from
 // the OASIS server's /oasis-images.json (tools/oasis.mjs serve).
 import { Mirage } from './ui.js';
+import { fetchWhole } from './fetch-whole.js';
 import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
 import { installMouse } from './mouse.js';
@@ -115,7 +116,7 @@ async function pc() {
     if (session) { go({ m: 'pc', run: e.id }); return; }
     over.hidden = true;
     status.textContent = `loading ${e.file.split('/').pop()}…`;
-    const res = await fetch(e.file);
+    const res = await fetchWhole(e.file);   // in parts on a static host (src/fetch-whole.js)
     const body = /\.gz$/i.test(e.file) ? res.body.pipeThrough(new DecompressionStream('gzip')) : res.body;
     const raw = new Uint8Array(await new Response(body).arrayBuffer());
     const mc = new Machine({ memSize: (e.mem || 4) << 20, cpu: String(e.cpu || 386) });
