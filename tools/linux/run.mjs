@@ -23,7 +23,10 @@ import { installBIOS } from '../../src/bios.js';
 
 const [prog, ...args] = process.argv.slice(2);
 if (!prog) { console.error('usage: node tools/linux/run.mjs <program> [args...]'); process.exit(2); }
-const mc = new Machine({ memSize: (Number(process.env.MIRAGE_LXMEM) || 64) << 20, cpu: process.env.MIRAGE_CPU || '686' });
+const lxRam = (Number(process.env.MIRAGE_LXMEM) || 64) << 20;
+// A Cirrus (MIRAGE_VGA=cirrus) has its 32 MiB aperture above the RAM, as on a PCI bus (src/bios.js):
+// the address space twice the RAM (a power of two), 64 MiB at least: the aperture is 32 MiB-aligned.
+const mc = new Machine({ memSize: process.env.MIRAGE_VGA === 'cirrus' ? Math.max(lxRam * 2, 64 << 20) : lxRam, ramSize: lxRam, cpu: process.env.MIRAGE_CPU || '686' });
 installBIOS(mc);                                   // the PC's devices: the VGA SVGAlib programs, the keyboard
 const lx = installLinux(mc, { realTime: !!process.env.MIRAGE_LXWALLCLOCK, onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });
 const mount = (dir, at) => {
@@ -63,7 +66,9 @@ const extraEnv = Object.entries(JSON.parse(process.env.MIRAGE_LXENV || '{}')).ma
 if (process.env.MIRAGE_LXHZ) lx.hz = Number(process.env.MIRAGE_LXHZ) || 0;   // a 1997 kernel's timeouts (machine.hz)
 if (process.env.MIRAGE_LXUSER) { const u = lx.setUser(process.env.MIRAGE_LXUSER); extraEnv.push(`USER=${u}`, `LOGNAME=${u}`); }   // the user's name (oasis run: the host's)
 lx.load(image, [ROOT || SPEC ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...extraEnv]);
-const SEC = 18.2065 * mc.pitBase, SECS = Number(process.env.MIRAGE_LXSECS) || 0;
+// A guest second as the guest's clock counts it (lx.mono): 18.2 PIT ticks were 3.3 million cycles,
+// a thirtieth of one — MIRAGE_LXSECS=600 stopped after 20 of the program's seconds.
+const SEC = mc.cyclesPerSecond || 1e8, SECS = Number(process.env.MIRAGE_LXSECS) || 0;
 const LIMIT = SECS ? SECS * SEC : 2e10;
 const SHOT = process.env.MIRAGE_LXSHOT, STEP = (Number(process.env.MIRAGE_LXSTEP) || 10) * SEC;
 let shoot = null;

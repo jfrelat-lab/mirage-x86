@@ -56,12 +56,12 @@ export class Machine {
     this.cpu.hiFlags = this.cpu.idFlagMask | this.cpu.acFlagMask;
     installFPU(this.cpu);                           // x87 coprocessor
     installSSE(this.cpu);                           // XMM register file + the SSE subset (src/sse.js)
-    // FLDCW changing PRECISION CONTROL invalidates every translated FPU block: the rounding is folded
-    // into the emitted code, exactly as the CPU profile's constants are. Only those: a new epoch makes
-    // each block revalidate on its next dispatch, and _revalidate drops the FPU blocks translated under
-    // another precision. Dropping the whole cache cost Kraptor (Allegro/DJGPP, which sets the
-    // precision thousands of times a second) almost all of its time in translate().
-    this.cpu.onFcwPrecChange = () => { this.rec.epoch++; this.cpu.tbudget = 0; };
+    // FLDCW changing PRECISION CONTROL costs nothing here: the few blocks whose arithmetic has single
+    // precision folded in (or out) are checked against the control word when they are dispatched
+    // (blk.fprec, src/recompiler.js), and translated again under the other — from the memo, cheaply.
+    // It used to start a new epoch (every block revalidated) and end the slice: gcc 2.x converts a
+    // float to an int between two FLDCW that set PC to single and back, so a program doing that per
+    // pixel (Mesa, XFree86 3.3.2's gamma table) spent nearly all its time revalidating.
     this.rec = new Recompiler(this.cpu);
     // Paging plumbing. Memory needs the CPU to walk CR3, and any change to the mapping invalidates
     // both the software TLB and every translated block (their emitted addresses assumed the old
@@ -1034,6 +1034,7 @@ export class Machine {
     }
     if (this.rtcPoll) this.rtcPoll();          // the RTC's periodic interrupt (src/rtc.js)
     if (this.sbPoll) this.sbPoll();            // the Sound Blaster plays what DMA has for it (src/sb.js)
+    if (this.preempt) this.preempt();          // MIRAGE-LINUX: a process that kept the CPU its quantum gives way
     return this.rec.run(this, maxBlocks);
   }
 

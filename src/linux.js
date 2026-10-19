@@ -382,6 +382,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.procs.push(me);
     switchTo(lx.procs.shift());
   };
+  // The clock's preemption: a process that computes without a system call keeps the CPU no longer
+  // than its quantum — the kernel takes it back on a timer tick. Between slices the CPU is between
+  // two instructions. (Without it, `timeout 2 sh -c 'while :; do :; done'` never ended: the watcher
+  // that kills the loop never ran.)
+  machine.preempt = () => { if (lx.procs.length && !lx.done && cpu.cycles - lx.sliceStart > QUANTUM()) { lx.blockRun = 0; yieldTo(); } };
   lx.alive = (pid) => pid === lx.pid || lx.procs.some((q) => q.pid === pid);
   const fork = (flags = 0x11, ctid = 0) => {
     if (flags & 0x100) return -E.ENOSYS;                                 // CLONE_VM: threads, not here
@@ -899,7 +904,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const endOther = (q, sig) => {
     const i = lx.procs.indexOf(q); if (i < 0) return;
     lx.procs.splice(i, 1);
-    releasePages(q.pages);
+    // Its frames only: the page directory holds the running process's mappings, not q's (clearing
+    // q's addresses there took them from the killer — busybox timeout's watcher, after its kill).
+    for (const pg of q.pages.values()) if (!pg.phys) freeFrames.push(pg.frame);
     const parent = q.ppid === lx.pid ? lx : lx.procs.find((x) => x.pid === q.ppid);
     ((parent && parent.zombies) || lx.orphans).set(q.pid, sig & 0x7f);
     if (parent) post(parent, 17);
@@ -1925,7 +1932,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // The call ended this process (exit, a signal's default) and another runs now: what follows is
     // the caller's, not the new one's — its EAX, its signals. (Writing them there gave a shell waiting
     // in sigsuspend its SIGCHLD with its own int 80h to run again, so it waited for ever.)
-    if (lx.switches !== sw || lx.done) return;
+    // ...and a call that switched did not wait (an exit): what it changed may end another's wait — a
+    // shell's wait4 for the child that just exited. Counted as one more wait, the next one to block
+    // believed everyone waited and took the clock to X's 600-second screen saver.
+    if (lx.switches !== sw || lx.done) { lx.blockRun = 0; return; }
     if (ret === BLOCK) {                                                 // int 80h again: on its next turn, or when input comes
       cpu.eip = (cpu.eip - 2) >>> 0;
       if (takeSignals(n)) { lx.blockRun = 0; return; }                    // a signal: the wait is over (or runs again after it)

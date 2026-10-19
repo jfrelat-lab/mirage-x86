@@ -75,7 +75,11 @@ export function installBIOS(machine, opts = {}) {
   // aperture where a card's is: above the RAM, 4 MiB-aligned, taking nothing from it.
   const RAM = machine.ramSize || mem.size;
   const VBE_FB_BYTES = mem.size >= (16 << 20) ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
-  const fbAbove = ((RAM + 0x3fffff) & ~0x3fffff) >>> 0;
+  // A Cirrus GD5446's aperture is its 32 MiB BAR0, aligned to its size as PCI wants (QEMU's -vga
+  // cirrus): XFree86 3.3.2's driver takes the base 16 MiB-aligned, and with the framebuffer at 60 MiB
+  // it drew at 48 MiB — into the RAM. Its machine has the address space for it above the RAM.
+  const cirrusAp = (opts.vga ?? (typeof process !== 'undefined' && process.env ? process.env.MIRAGE_VGA : undefined)) === 'cirrus';
+  const fbAbove = cirrusAp ? ((RAM + 0x1ffffff) & ~0x1ffffff) >>> 0 : ((RAM + 0x3fffff) & ~0x3fffff) >>> 0;
   // ALIGNED TO 4 MiB, as a real card's aperture always is (QEMU's is FD000000h): a kernel that has
   // PSE maps the framebuffer with 4 MiB pages, whose frame is the address rounded down to 4 MiB.
   // KolibriOS does, and with the framebuffer at size-2 MiB (62 MiB of 64) it drew 2 MiB below the
@@ -1416,12 +1420,17 @@ export function installBIOS(machine, opts = {}) {
   // A PCI bus (src/pci.js) is the difference between QEMU's -M pc and -M isapc: off unless asked for —
   // `pci: true`, or MIRAGE_PCI=1 in the tools — so the ISA machine every existing image boots on stays.
   const pciEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PCI === '1';
-  if (opts.pci ?? pciEnv) installPCI(machine);   // after installRTC: it wraps INT 1Ah for AH=B1h
+  // A Cirrus GD5446 is a PCI card (src/cirrus.js): its machine has the bus, the card on it (pci.js),
+  // since the drivers of 1998 look for it there — XFree86 3.3.2's read a null device list without one.
+  const vgaKind = opts.vga ?? (typeof process !== 'undefined' && process.env ? process.env.MIRAGE_VGA : undefined);
+  machine.vgaKind = vgaKind;
+  const pciOn = opts.pci ?? (pciEnv || vgaKind === 'cirrus');
+  if (pciOn) installPCI(machine);   // after installRTC: it wraps INT 1Ah for AH=B1h
   // The display at 02.0 is QEMU's 1234:1111, and drivers that find it program it through its DISPI
   // ports (src/dispi.js) rather than the VBE BIOS: they come with the PCI bus.
-  if (opts.pci ?? pciEnv) installDISPI(machine);
+  if (pciOn) installDISPI(machine);
   // QEMU's -M pc and v86 both fit an (empty) ATAPI CD-ROM drive as the secondary master.
-  if (opts.pci ?? pciEnv) machine.disk.fitCD();
+  if (pciOn) machine.disk.fitCD();
   // A 16550A on COM1 (src/uart.js), optional for the same reason: the equipment word has always said
   // "no serial ports", and DOS programs that probe them rely on it. `serial: true` or MIRAGE_SERIAL=1.
   const serialEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SERIAL === '1';
@@ -1459,8 +1468,7 @@ export function installBIOS(machine, opts = {}) {
 
   // A Cirrus Logic CL-GD5446 on the VGA (src/cirrus.js): `vga: 'cirrus'` or MIRAGE_VGA=cirrus. Last,
   // because it wraps the VGA's and the DAC's ports, which are all registered by now.
-  const vgaEnv = typeof process !== 'undefined' && process.env ? process.env.MIRAGE_VGA : undefined;
-  if ((opts.vga ?? vgaEnv) === 'cirrus') installCirrus(machine);
+  if (vgaKind === 'cirrus') installCirrus(machine);
 
   machine.bios = bios;
   return bios;

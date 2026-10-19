@@ -244,6 +244,13 @@ export class Recompiler {
     try { return m.walk(lin >>> 0); } finally { m.sup--; }
   }
 
+  /** A guarded block (guard != 0) that cannot run as the CPU is now: translated for real mode without
+   *  limit guards and now in protected mode, or under the other x87 precision. */
+  _unfit(blk) {
+    const cpu = this.cpu;
+    return ((blk.guard & 1) !== 0 && (cpu.cr0 & 1) !== 0 && !(cpu.flags & 0x20000))
+      || ((blk.guard & 2) !== 0 && blk.fprec !== ((cpu.fcw & 0x300) === 0 ? 2 : 1));
+  }
   /** A block translated before the last CR3 load (ROADMAP D8): still valid if its first and last
    *  pages map to the frames it was translated from. Bytes changed through the same linear pages are
    *  already caught by the SMC path; a REMAP is what a CR3 load can bring, and this is the check. */
@@ -254,9 +261,9 @@ export class Recompiler {
       const now = this._bytes(blk.linStart, blk.linEnd);
       bytesOk = now !== null && now.length === blk.snap.length && now.every((v, i) => v === blk.snap[i]);
     }
-    // An FPU block has the precision control it was translated under folded in (FPREC24): one compiled
-    // under another goes. A change of precision bumps the epoch instead of dropping the whole cache.
-    const precOk = !blk.usesFPU || blk.fprec === (this.cpu.fcw & 0x300);
+    // A block whose arithmetic has single precision folded in or out (fprec 1 or 2, see FPREC24) is
+    // kept only under that precision.
+    const precOk = blk.fprec === 0 || blk.fprec === ((this.cpu.fcw & 0x300) === 0 ? 2 : 1);
     if (framesOk && bytesOk && precOk) { blk.epoch = this.epoch; return true; }
     this._evict(blk, lin);
     this.stats.remaps = (this.stats.remaps || 0) + 1;
@@ -451,7 +458,7 @@ export class Recompiler {
    *  returns. `_n` accumulates retired instructions; cpu.tbudget bounds a runaway loop. */
   _emitRegion(order, byIp, rootLin, rootIp0) {
     const members = new Set(order);
-    let usesFPU = false;
+    let usesFPU = false, fprec = 0;
     const ranges = [];
     // Budget: check-then-decrement, matching run()'s tier-1 loop (run B blocks for budget B),
     // so a region and tier-1 stop at exactly the same block boundary — same slice boundary,
@@ -471,6 +478,7 @@ export class Recompiler {
     for (const ip of order) {
       const b = byIp.get(ip);
       if (b.usesFPU) usesFPU = true;
+      if (b.fprec) fprec = b.fprec;
       ranges.push([b.linStart, b.linEnd]);
       out.push(`case ${ip}:{`);
       if (b.term.k === 'exit') out.push(`cpu.cycles+=${b.count};`, b.bodyOut.join('\n'), 'return;');
@@ -480,7 +488,7 @@ export class Recompiler {
     out.push('default:cpu.eip=_e;return;', '}}');
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
     const body = pre + '\n' + out.join('\n');
-    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+    return { fn: new Function('cpu', 'R', body), kind: 2, ip0: rootIp0, count: 0, hot: -1, dead: 0, linStart: rootLin, linEnd: rootLin + 1, ranges, body, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec, guard: fprec ? 2 : 0 };
   }
 
   /** The region-internal edge for a static terminator: an in-region target is a local jump
@@ -537,7 +545,7 @@ export class Recompiler {
     // reached via different CS:IP (the emitted jump targets bake in ip0).
     const page = this.blockPages[lin >>> 12];
     let blk = page !== undefined ? page[(lin & 0xfff) | (this.cpu.csD << 12)] : undefined;
-    if (blk === undefined || blk.ip0 !== ip0 || (blk.real && (cpu.cr0 & 1) && !(cpu.flags & 0x20000))) blk = this._compile(lin, ip0);
+    if (blk === undefined || blk.ip0 !== ip0 || (blk.guard !== 0 && this._unfit(blk))) blk = this._compile(lin, ip0);
     if (this.profiling) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
     this.stats.exec++;
     cpu.tbudget = 1 << 20;   // a region (if one is installed) self-bounds against this
@@ -595,7 +603,10 @@ export class Recompiler {
         const page = pages[lin >>> 12];
         let blk = page !== undefined ? page[(lin & 0xfff) | (cpu.csD << 12)] : undefined;
         // A block translated without limit guards (`real`, see translate) must not run in protected mode.
-        if (blk === undefined || blk.ip0 !== ip0 || (blk.real && (cpu.cr0 & 1) && !(cpu.flags & 0x20000))) blk = this._compile(lin, ip0);
+        // ...nor, translated under one x87 precision, under the other (fprec, see FPREC24): its
+        // arithmetic is rounded for it. Only such blocks pay the test; the memo makes the switch cheap.
+        // One field (guard) says whether a block has either condition, so the others pay one test.
+        if (blk === undefined || blk.ip0 !== ip0 || (blk.guard !== 0 && this._unfit(blk))) blk = this._compile(lin, ip0);
         else if (blk.epoch !== this.epoch && !this._revalidate(blk, lin)) blk = this._compile(lin, ip0);
         if (prof) this.heat.set(lin, (this.heat.get(lin) || 0) + 1);
         this.curBlk = blk;
@@ -732,7 +743,7 @@ export class Recompiler {
     const cpu = this.cpu;
     const real = !TIER2 && !NOREALSPEC && (!(cpu.cr0 & 1) || (cpu.flags & 0x20000) !== 0) ? 1 : 0;
     const smc = (this.smcPages.get(lin >>> 12) || 0) >= SMC_PAGE_HOT ? 1 : 0;
-    return lin + ':' + ip0 + ':' + cpu.csD + ':' + real + ':' + (cpu.fcw & 0x300) + ':' + smc;
+    return lin + ':' + ip0 + ':' + cpu.csD + ':' + real + ':' + ((cpu.fcw & 0x300) === 0 ? 1 : 0) + ':' + smc;
   }
   _memoGet(key) {
     const list = this.memo.get(key);
@@ -795,6 +806,7 @@ export class Recompiler {
     const SEGIP = typeof process !== 'undefined' && process.env && process.env.MIRAGE_SEGIP
       ? (ipStart) => `cpu._segIp=${ipStart};` : () => '';
     const FPREC24 = (this.cpu.fcw & 0x300) === 0;   // x87 precision control = single (see arithE)
+    let pcDep = false;                               // the block's arithmetic depends on it (arithE)
     // A block translated in real or virtual-8086 mode carries no segment-limit guards: every one of
     // them is `(...)&&(cpu.cr0&1)&&!(cpu.flags&VM)`, false in both modes, so it was dead code that
     // still computed the offset and loaded two limits on every memory access. The block is marked
@@ -822,38 +834,38 @@ export class Recompiler {
       const idx = linStart - 0xf0600;
       const fn = new Function('cpu', `cpu.dpmiCallback(${idx});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: 'dpmi-cb', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     if (linStart === 0xf0250 && mem.u8[linStart] === 0xcb) {
       // Where a client's DPMI exception handler RETFs back to: restore the frame it leaves behind.
       const fn = new Function('cpu', 'cpu.dpmiExcReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: 'dpmi-excret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     if (linStart === 0xf0260 && mem.u8[linStart] === 0xcf) {
       // Where a client's PM hardware-interrupt handler IRETs to: off the host's locked stack.
       const fn = new Function('cpu', 'cpu.dpmiIrqReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-irqret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: 'dpmi-irqret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     if (linStart === 0xf0240 && mem.u8[linStart] === 0xcb) {
       // Where a 0302 procedure's IRET lands: reaching it means the call is over.
       const fn = new Function('cpu', 'cpu.dpmiRealCallReturn();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: 'dpmi-rmret', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     if ((linStart === 0xf0220 || linStart === 0xf0230) && mem.u8[linStart] === 0xcb) {
       const to = linStart === 0xf0220 ? 1 : 0;
       const fn = new Function('cpu', `cpu.dpmiRawSwitch(${to});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: 'dpmi-raw', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     if (linStart === 0xf0200 && mem.u8[0xf0200] === 0xcb) {
       // DPMI mode-switch entry. dpmiSwitch consumes the return address itself: coming back means
       // re-entering through a selector, which a RETF cannot express.
       const fn = new Function('cpu', 'cpu.dpmiSwitch();');
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: 'dpmi', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     if (linStart === 0xf0100 && mem.u8[0xf0100] === 0xcb) {
       // XMS driver entry (f000:0100, marked with a 0xCB=RETF stub byte). A guest FAR-CALLs it with
@@ -862,7 +874,7 @@ export class Recompiler {
       // address with real opcodes) from being hijacked.
       const fn = new Function('cpu', `cpu.xmsCall();cpu.eip=cpu.pop16();cpu.setSeg(${CS},cpu.pop16());`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: 'xms', term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     if (linStart >= 0xf0000 && linStart < 0xf0100 && mem.u8[linStart] === 0xcf) {
       // Guard on the 0xCF stub byte: a real BIOS entry still holds its IRET stub, whereas the
@@ -871,7 +883,7 @@ export class Recompiler {
       const n = linStart - 0xf0000;
       const fn = new Function('cpu', `cpu.biosCallback(${n});`);
       return { fn, linStart, linEnd: linStart + 1, ip0, ipEnd: (ip0 + 1) & 0xffff, count: 1,
-               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0 };
+               body: `cpu.biosCallback(${n});`, term: { k: 'exit' }, bodyOut: [], usesFPU: false, canFault: false, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: 0, vol: null, snap: null, fprec: 0, guard: 0 };
     }
     const out = ['var t;'];
     const P = (s) => out.push(s);
@@ -1110,6 +1122,7 @@ export class Recompiler {
     const arithE = (rg, x, y) => {
       const e = rg === 0 ? `${x}+${y}` : rg === 1 ? `${x}*${y}` : rg === 4 ? `${x}-${y}`
         : rg === 5 ? `${y}-${x}` : rg === 6 ? `cpu.fdiv(${x},${y})` : rg === 7 ? `cpu.fdiv(${y},${x})` : x;
+      if (rg !== 2 && rg !== 3) pcDep = true;
       return (FPREC24 && rg !== 2 && rg !== 3) ? `Math.fround(${e})` : e;   // 2/3 = compare (returns x)
     };
 
@@ -1701,7 +1714,10 @@ export class Recompiler {
              // epoch/ph0/ph1 (ROADMAP D8) are set by _compile under paging; declared HERE so every block
              // has one shape — adding them afterwards made the dispatch loop's blk.fn/blk.count polymorphic
              // and Windows 3.0's steady state ran at half speed with not one CR3 load or compile.
-             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: REAL ? 1 : 0, vol: VOL.length ? VOL : null, snap: null, fprec: this.cpu.fcw & 0x300 };
+             // fprec: 0 when the block's code does not depend on the precision control, else 2 when
+             // it was translated under single precision (its arithmetic rounded to float32), 1 otherwise.
+             usesFPU, canFault, hot: 0, kind: 0, epoch: 0, ph0: -1, ph1: -1, real: REAL ? 1 : 0, vol: VOL.length ? VOL : null, snap: null, fprec: pcDep ? (FPREC24 ? 2 : 1) : 0,
+               guard: (REAL ? 1 : 0) | (pcDep ? 2 : 0) };
 
     // ===================== nested emit helpers =====================
 

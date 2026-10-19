@@ -36,7 +36,10 @@ export function oasisHost(imgName) {
  */
 export async function startLinux({ canvas, img, host, user, onOutput = () => {}, onStatus = () => {} }) {
   const m = img.machine || {};
-  const mc = new Machine({ memSize: (m.mem || 64) << 20, cpu: m.cpu || '686' });
+  const ram = (m.mem || 64) << 20;
+  // A Cirrus has its 32 MiB aperture above the RAM, as on a PCI bus (src/bios.js): the address space
+  // twice the RAM (a power of two).
+  const mc = new Machine({ memSize: m.vga === 'cirrus' ? Math.max(ram * 2, 64 << 20) : ram, ramSize: ram, cpu: m.cpu || '686' });
   installBIOS(mc, m.vga ? { vga: m.vga } : {});   // `machine.vga: "cirrus"`: a CL-GD5446 (src/cirrus.js)
   for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
     try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }

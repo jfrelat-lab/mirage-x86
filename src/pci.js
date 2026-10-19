@@ -126,10 +126,15 @@ export function installPCI(machine) {
   // UART to answer it on. BAR0 is the VBE framebuffer installBIOS reserved at the top of RAM (QEMU's
   // is at FD000000h); its size (4 MiB from 16 MiB of RAM, else 2 MiB), prefetchable, size-aligned. QEMU's BAR2 (the Bochs
   // DISPI registers) has nothing behind it here and stays unimplemented.
+  // A Cirrus machine (src/cirrus.js) shows the card QEMU's -vga cirrus does: 1013:00B8, a CL-GD5446,
+  // class 0300h, its linear framebuffer at BAR0 — the same video memory as its banked window.
   const fb = (machine.vbeFbBase >>> 0) || 0, fbBytes = machine.vbeFbBytes || (2 << 20);
-  const vga = new Fn(0x10, [0x11111234, 0x00000103, 0x03000002, 0x00000000, (fb | 0x08) >>> 0, 0, 0, 0, 0, 0, 0, 0x11001af4, 0, 0, 0, 0],
-    { 0x10: 0x00, 0x11: 0x00, 0x12: (0xff << Math.log2(fbBytes >>> 16)) & 0xff, 0x13: 0xff });   // the bits above the BAR's size
-  vga.bars.push({ off: 0x10, size: fbBytes, io: false });
+  // Its BAR0 is 32 MiB, as the GD5446's (and QEMU's) is, when installBIOS could align the aperture so.
+  const cirrus = machine.vgaKind === 'cirrus', vgaId = cirrus ? 0x00b81013 : 0x11111234;
+  const barBytes = cirrus && fb && (fb & 0x1ffffff) === 0 ? 32 << 20 : fbBytes;
+  const vga = new Fn(0x10, [vgaId, 0x00000103, 0x03000002, 0x00000000, (fb | 0x08) >>> 0, 0, 0, 0, 0, 0, 0, 0x11001af4, 0, 0, 0, 0],
+    { 0x10: 0x00, 0x11: 0x00, 0x12: (0xff << Math.log2(barBytes >>> 16)) & 0xff, 0x13: 0xff });   // the bits above the BAR's size
+  vga.bars.push({ off: 0x10, size: barBytes, io: false });
   new DataView(vga.cfg.buffer).setUint32(0x10, (fb | 0x08) >>> 0, true);
 
   const fns = [host, isa, ide, vga];

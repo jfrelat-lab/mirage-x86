@@ -737,6 +737,18 @@ function eq(name, got, want) {
     eq('...and KEEN1.EXE is the shareware 1.31 executable', get('KEEN1.EXE') ? createHash('sha256').update(get('KEEN1.EXE').bytes).digest('hex').slice(0, 16) : 'missing', '8b3f829f7eeab18a');
   } }
 
+// ---- a Cirrus machine has the PCI bus, and the GD5446 on it with its 32 MiB aperture -----------------
+// XFree86 3.3.2's cirrus driver reads the PCI device list for 1013h before anything else (a null one
+// without a bus: it stopped there), and takes the linear framebuffer 16 MiB-aligned from BAR0: at 60
+// MiB, the framebuffer was drawn at 48 MiB, into the RAM. As QEMU's -vga cirrus: 1013:00B8, BAR0 a
+// prefetchable 32 MiB, size-aligned — above 60 MiB of RAM, at 64 MiB.
+{ const mc = new Machine({ memSize: 128 << 20, ramSize: 60 << 20 }); installBIOS(mc, { vga: 'cirrus' });
+  const out = (p, sz, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, sz, v); }, inp = (p, sz) => (mc.portRead[p] ? mc.portRead[p](p, sz) >>> 0 : 0xffffffff);
+  const cfg = (dev, fn, reg) => { out(0xcf8, 4, (0x80000000 | (dev << 11) | (fn << 8) | reg) >>> 0); return inp(0xcfc, 4); };
+  const id = cfg(2, 0, 0), bar = cfg(2, 0, 0x10);
+  out(0xcf8, 4, 0x80001010); out(0xcfc, 4, 0xffffffff);
+  eq('a Cirrus machine: PCI 02.0 is a GD5446 (1013:00B8), BAR0 at 64 MiB, sized 32 MiB', [id, bar, cfg(2, 0, 0x10)].map((v) => v.toString(16)).join(), 'b81013,4000008,fe000008'); }
+
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.
 { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
@@ -2632,6 +2644,21 @@ const udRun = (gated) => {
   eq('FLDCW: single precision gives 1/3 rounded to 24 bits, double to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true');
   eq('...and the loop is not retranslated on each change of precision', mc.rec.stats.compiles < 30, true); }
 
+// ---- one block under both precisions: checked when it is dispatched -----------------------------------
+// gcc 2.x converts a float to an int between two FLDCW: XFree86 3.3.2 and Mesa change the precision
+// thousands of times a second, and each change made every translated block revalidate. A block now says
+// whether its arithmetic depends on the precision (fprec), and only such blocks are checked against the
+// control word when they are dispatched: here one subroutine `fld1 / fidiv [three] / ret`, called
+// under single then double precision, must give 1/3 rounded to 24 bits, then to 53.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
+  // nasm: mov cx,20 / L: fldcw [cw24] / call third / fstp qword [r1] / fldcw [cw53] / call third / fstp qword [r2] / loop L / hlt
+  //       third: fld1 / fidiv word [three] / ret
+  mc.mem.blit(0x1000, Uint8Array.from('b91400d92e2300e81200dd1e3000d92e2500e80700dd1e3800e2e8f4d9e8de362700c37f007f0203009090909090909000000000000000000000000000000000'.match(/../g).map((x) => parseInt(x, 16))));
+  let n = 0; while (!cpu.halted && n++ < 400) mc.runSlice(1000);
+  const r1 = mc.mem.dv.getFloat64(0x1030, true), r2 = mc.mem.dv.getFloat64(0x1038, true);
+  eq('one block under both precisions: 1/3 to 24 bits, then to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true'); }
+
 // ---- an immediate the code keeps rewriting is read at run time, not retranslated ----------------------
 // DOOM's R_DrawColumn writes each column's texture step into `add ebp,imm32`: every write evicted the
 // block and the next column translated it again — 14 000 translations in 8 s of its demo, four frames
@@ -3229,6 +3256,31 @@ const runLinux = (hex, argv) => {
     '08ba0d000000cd80b80100000031dbcd800000000000a3e111736c656570733a203f3f3f3f0a00000000000000000000' +
     '0000000000000000000000000000000000000000000000000000000000000000000000000000');
   eq('linux: nanosleep, select and poll wait for their timeouts', JSON.stringify(runLinux(hex, ['/w/SLEEPS'])), JSON.stringify({ out: 'sleeps: YYYY\n', status: 0 })); }
+// tools/linux/procs.asm: one process ends another, as busybox `timeout` does — a sleeping child killed,
+// the killer's memory still its own; a child that never makes a system call preempted and killed after
+// 50 ms; a child's exit ending its parent's wait at once, another child waiting 100 s in a select.
+// Docker i386/debian: "procs: YYY". MIRAGE cleared the killed one's addresses in the running process's
+// page table, switched processes only in system calls, and counted an exit as one more wait (the
+// select's turn then took the clock to its timeout: X's screen saver, 600 s, in a shell starting twm).
+{ const hex = (                                         // nasm -f bin tools/linux/procs.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040841020000410200000700000000100000b802000000cd8085c07517b8' +
+    'a2000000bb0682040831c9cd80b80100000031dbcd80a32e820408b8250000008b1d2e820408b90f000000cd80c70532' +
+    '820408341200008b1d2e820408b8720000008d0d3282040831d231f6cd80b24ea13282040883e07f83f80f7502b25988' +
+    '153d820408b802000000cd8085c07502ebfea32e820408b8a2000000bb0e82040831c9cd80b8250000008b1d2e820408' +
+    'b909000000cd808b1d2e820408b8720000008d0d3282040831d231f6cd80b24ea13282040883e07f83f8097502b25988' +
+    '153e820408b84e000000bb1e82040831c9cd80b802000000cd8085c07516b88e00000031db31c931d231f6bf06820408' +
+    'cd80eb26a32e820408b802000000cd8085c0751fb8a2000000bb1682040831c9cd80b9404b4c004975fdb80100000031' +
+    'dbcd8089c3b8720000008d0d3282040831d231f6cd80b84e000000bb2682040831c9cd80b24ea1268204082b051e8204' +
+    '0883f80a7d02b25988153f820408b8250000008b1d2e820408b909000000cd808b1d2e820408b8720000008d0d328204' +
+    '0831d231f6cd80b804000000bb01000000b936820408ba0b000000cd80b80100000031dbcd8064000000000000000000' +
+    '000080f0fa02010000000000000000000000000000000000000000000000000000000000000070726f63733a203f3f3f' +
+    '0a');
+  const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);   // a 20 ms quantum spun: more slices than runLinux's
+  lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/PROCS']);
+  for (let i = 0; i < 4000 && !lx.done; i++) mc.runSlice(20000);
+  const out = new TextDecoder().decode(Uint8Array.from(lx.stdout)) || (lx.done ? `signal ${lx.signal}` : 'still running');
+  eq('linux: a process kills another, a sleeper or one that never makes a system call; an exit ends a wait', out, 'procs: YYY\n'); }
 // tools/linux/pty.asm: pseudo-terminals as xterm uses them — Unix98's /dev/ptmx and /dev/pts/N (Docker
 // i386/debian answers the same five), echo and ONLCR through the line discipline, the window size, EIO
 // on the master once the slave is closed; and the BSD pairs /dev/ptyp0 /dev/ttyp0 of libc5 (a real

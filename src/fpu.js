@@ -192,7 +192,7 @@ export function installFPU(cpu) {
   cpu.fldcw = (v) => {
     const before = cpu.fcw;
     cpu.fcw = v & 0xffff;
-    if (((before ^ cpu.fcw) & 0x300) && cpu.onFcwPrecChange) cpu.onFcwPrecChange();
+    if (((before ^ cpu.fcw) & 0x300) && cpu.onFcwPrecChange) cpu.onFcwPrecChange();   // none by default (see machine.js)
   };
 
   /** Division sets the zero-divide flag, which FXAM and FNSTSW report. `x/y` alone does not. */
