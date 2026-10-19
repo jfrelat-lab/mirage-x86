@@ -3267,6 +3267,25 @@ const runLinux = (hex, argv) => {
     got = n + ' | ' + new TextDecoder().decode(lx.readFile('/etc/passwd')).trim().split('\n').join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: the user\'s name, first in /etc/passwd on uid 0', got, 'maxpower | maxpower:x:0:0:maxpower:/root:/bin/sh | root:x:0:0:root:/root:/bin/sh | daemon:x:1:1::/:'); }
+// tools/linux/tick.asm: a select of 35 us sleeps as the kernel's clock allows — some 35 us on a
+// modern one (Docker i386/debian: "tick: 00", MIRAGE's default), 10 to 20 ms on Linux 2.0's ticks
+// (HZ 100, fs/select.c), which an image of 1997 asks for with machine.hz: XBoing paced its frames on
+// it and ran several times too fast without.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/tick.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004080d0100000d0100000700000000100000b84e000000bbf480040831c9' +
+    'cd80b88e00000031db31c931d231f6bfec800408cd80b84e000000bbfc80040831c9cd80a1fc8004082b05f480040869' +
+    'c040420f000305008104082b05f880040831d2b9e8030000f7f183f8637605b86300000031d2b90a000000f7f1043080' +
+    'c230a20a81040888150b810408b804000000bb01000000b904810408ba09000000cd80b80100000031dbcd8000000000' +
+    '23000000000000000000000000000000000000007469636b3a203f3f0a');
+    const run = (hz) => { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc); lx.hz = hz;
+      lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/TICK']); for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+      return new TextDecoder().decode(Uint8Array.from(lx.stdout)).trim(); };
+    const a = run(0), b = run(100), ms = +b.slice(6);
+    got = `${a} | ${ms >= 10 && ms <= 20 ? 'tick: 10-20' : b}`;
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: timeouts to the microsecond, or in 1997\'s clock ticks (machine.hz 100)', got, 'tick: 00 | tick: 10-20'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

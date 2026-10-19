@@ -61,7 +61,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | Field | Meaning |
 |---|---|
 | `world` | `dos` (MIRAGE-DOS: DOS, BIOS, XMS, EMS and DPMI in the emulator) or `linux` (MIRAGE-LINUX: Linux system calls answered in JavaScript). Planned: `win16`, `pc` (boot a disk or CD image) |
-| `machine` | `cpu` — a profile of `src/cpu-profile.js` (`386`, `586`, `pentium`, `686`, `pentiumpro`); `mem` — MiB |
+| `machine` | `cpu` — a profile of `src/cpu-profile.js` (`386`, `586`, `pentium`, `686`, `pentiumpro`); `mem` — MiB; `vga` — `cirrus` for a Cirrus Logic CL-GD5446 on the VGA; `hz` — (Linux) timeouts in clock ticks as a 1997 kernel counted them (`100`: Linux 2.0's 10 ms ticks, which period programs paced on), else to the microsecond |
 | `layers` | the file tree, bottom to top, later layers winning (below) |
 | `entry` | `run` — the program (a DOS name, or a path in the Linux tree); `args`; `env`; `cwd`; `console` — Linux stdio on a virtual console, `/dev/tty1` (SVGAlib wants one) |
 | `output` | `window` or `terminal`, when the command line does not say |

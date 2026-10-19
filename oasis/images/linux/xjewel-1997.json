@@ -7,7 +7,8 @@
   "machine": {
     "cpu": "686",
     "mem": 64,
-    "vga": "cirrus"
+    "vga": "cirrus",
+    "hz": 100
   },
   "layers": [
     {

@@ -1895,10 +1895,16 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // its first try and cleared when the call returns. While a process waits the others run; when
   // every one waits, the time goes to the first deadline — at once on the guest's clock (headless:
   // the run stays deterministic), in real time on the wall clock (the page gives its time back).
-  lx.wake = null;
+  // `lx.hz` (an image's machine.hz) gives timeouts a 1997 kernel's granularity: Linux 2.0 counted
+  // them in clock ticks (HZ 100: 10 ms) — select and poll round the time up to whole ticks and add
+  // one (fs/select.c: ROUND_UP(usec, 1000000/HZ) ... timeout += jiffies + 1), nanosleep adds one when
+  // the time is not zero (kernel/sched.c) — and a sleeper wakes on a tick. Programs of the time leaned
+  // on it: XBoing paces its frames with selects of some 35 microseconds, which slept 10 to 20 ms
+  // then; to the microsecond its game ran several times too fast. 0, a modern kernel: as asked.
+  lx.wake = null; lx.hz = 0;
   const expired = (secs) => {
     const now = lx.mono();
-    if (lx.wake === null) lx.wake = now + secs;
+    if (lx.wake === null) lx.wake = lx.hz ? (Math.floor(now * lx.hz) + Math.ceil(secs * lx.hz - 1e-9) + 1) / lx.hz : now + secs;
     return now >= lx.wake;
   };
   const firstWake = () => {                                              // the first deadline: a wait's or an alarm's

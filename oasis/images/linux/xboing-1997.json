@@ -7,7 +7,8 @@
   "machine": {
     "cpu": "686",
     "mem": 64,
-    "vga": "cirrus"
+    "vga": "cirrus",
+    "hz": 100
   },
   "layers": [
     {
@@ -83,7 +84,7 @@
       "cwd": "/"
     },
     {
-      "file": "oasis/files/XF86Config-cirrus-1024",
+      "file": "oasis/files/XF86Config-cirrus-xboing",
       "to": "/etc/X11/XF86Config"
     },
     {
@@ -115,6 +116,6 @@
     ]
   },
   "output": "window",
-  "notes": "A Breakout game for X, made in Australia. Debian 1.3's xboing on XFree86 3.3's server, MIRAGE's emulated Cirrus GD5446 at 1024x768 (its window is some 700 pixels high); while it has the focus its private colormap recolours the rest of the screen, as 8-bit X did. The image starts the X server, waits for its socket, then twm and the game \u2014 what one would type at a shell; linux/xbill-1997, xboing-1997 and xjewel-1997 have the same layers, so the cache serves the three. The X server takes a few minutes to come up (its keyboard map is compiled at start). XBoing runs with -grab, its author's remedy for the colormap flashes: the pointer stays in its window. Space starts (\"Insert coin\"), the mouse moves the paddle and its buttons fire; G switches to the keys J and L.",
+  "notes": "A Breakout game for X, made in Australia. Debian 1.3's xboing on XFree86 3.3's server, MIRAGE's emulated Cirrus GD5446, on a screen of 680x776 made for its window (centred, its top at the screen's); while it has the focus its private colormap recolours the rest of the screen, as 8-bit X did. The image starts the X server, waits for its socket, then twm and the game \u2014 what one would type at a shell; linux/xbill-1997, xboing-1997 and xjewel-1997 have the same layers, so the cache serves the three. The X server takes a few minutes to come up (its keyboard map is compiled at start). XBoing runs with -grab, its author's remedy for the colormap flashes: the pointer stays in its window. Space starts (\"Insert coin\"), the mouse moves the paddle and its buttons fire; G switches to the keys J and L.",
   "thumb": "oasis/thumbs/linux-xboing-1997.png"
 }

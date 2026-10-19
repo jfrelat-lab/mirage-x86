@@ -60,6 +60,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   }
   const env = ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`)];
   if (user) { const u = lx.setUser(user); env.push(`USER=${u}`, `LOGNAME=${u}`); }   // the visitor's name, on uid 0
+  if (m.hz) lx.hz = m.hz;                                                    // machine.hz: a 1997 kernel's timeouts, in clock ticks
   const image = lx.readFile(e.run);
   if (!image) throw new Error(`${e.run}: not in the image`);
   lx.load(image, [e.run, ...(e.args || [])], env);

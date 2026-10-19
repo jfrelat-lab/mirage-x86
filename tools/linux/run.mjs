@@ -60,6 +60,7 @@ const image = ROOT || SPEC ? lx.readFile(prog) : new Uint8Array(readFileSync(pro
 if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT || 'the image'}`); process.exit(127); }
 if (process.env.MIRAGE_LXCONSOLE) lx.consoleStdio();   // stdio on /dev/tty1, a virtual console (SVGAlib wants one)
 const extraEnv = Object.entries(JSON.parse(process.env.MIRAGE_LXENV || '{}')).map(([k, v]) => `${k}=${v}`);
+if (process.env.MIRAGE_LXHZ) lx.hz = Number(process.env.MIRAGE_LXHZ) || 0;   // a 1997 kernel's timeouts (machine.hz)
 if (process.env.MIRAGE_LXUSER) { const u = lx.setUser(process.env.MIRAGE_LXUSER); extraEnv.push(`USER=${u}`, `LOGNAME=${u}`); }   // the user's name (oasis run: the host's)
 lx.load(image, [ROOT || SPEC ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...extraEnv]);
 const SEC = 18.2065 * mc.pitBase, SECS = Number(process.env.MIRAGE_LXSECS) || 0;
