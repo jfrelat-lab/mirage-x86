@@ -34,7 +34,7 @@ export function oasisHost(imgName) {
  * Start an image's entry on `canvas`. `onOutput(text)` gets what it writes to its console or stdout,
  * `onStatus(text)` a line a second (speed) and the end. Returns { mc, lx, stop }.
  */
-export async function startLinux({ canvas, img, host, onOutput = () => {}, onStatus = () => {} }) {
+export async function startLinux({ canvas, img, host, user, onOutput = () => {}, onStatus = () => {} }) {
   const m = img.machine || {};
   const mc = new Machine({ memSize: (m.mem || 64) << 20, cpu: m.cpu || '686' });
   installBIOS(mc, m.vga ? { vga: m.vga } : {});   // `machine.vga: "cirrus"`: a CL-GD5446 (src/cirrus.js)
@@ -59,6 +59,7 @@ export async function startLinux({ canvas, img, host, onOutput = () => {}, onSta
     lx.console.clear(); lx.console.row = 0; lx.console.col = 0; lx.console.syncCursor();
   }
   const env = ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`)];
+  if (user) { const u = lx.setUser(user); env.push(`USER=${u}`, `LOGNAME=${u}`); }   // the visitor's name, on uid 0
   const image = lx.readFile(e.run);
   if (!image) throw new Error(`${e.run}: not in the image`);
   lx.load(image, [e.run, ...(e.args || [])], env);

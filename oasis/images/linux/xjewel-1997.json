@@ -81,6 +81,18 @@
     {
       "run": "ldconfig",
       "cwd": "/"
+    },
+    {
+      "file": "oasis/files/passwd",
+      "to": "/etc/passwd"
+    },
+    {
+      "file": "oasis/files/group",
+      "to": "/etc/group"
+    },
+    {
+      "file": "oasis/files/utmp",
+      "to": "/var/run/utmp"
     }
   ],
   "entry": {

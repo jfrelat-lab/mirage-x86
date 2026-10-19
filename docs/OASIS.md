@@ -65,6 +65,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `layers` | the file tree, bottom to top, later layers winning (below) |
 | `entry` | `run` — the program (a DOS name, or a path in the Linux tree); `args`; `env`; `cwd`; `console` — Linux stdio on a virtual console, `/dev/tty1` (SVGAlib wants one) |
 | `output` | `window` or `terminal`, when the command line does not say |
+| `user` | (Linux) the user's name by default, `player` without it. It is set on uid 0, first in `/etc/passwd`, with `USER` and `LOGNAME`: `oasis run` gives the computer's login (or `--user=<name>`, `$OASIS_USER`), the machines page the visitor's choice (its User button, kept in the browser) |
 | `license`, `notes` | for people: where the redistribution terms are, what the image is made of |
 
 ### Layers

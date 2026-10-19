@@ -5,7 +5,8 @@
 //   node tools/oasis.mjs list                       the images in oasis/images/
 //   node tools/oasis.mjs inspect <image>            its manifest, and which layers are cached
 //   node tools/oasis.mjs pull <image>               fetch and unpack its remote layers into the cache
-//   node tools/oasis.mjs run <image> [args...]      run it (pulls first if needed)
+//   node tools/oasis.mjs run <image> [args...]      run it (pulls first if needed); --user=<name> names the Linux user
+//                                                   (default $OASIS_USER, else this computer's login)
 //   node tools/oasis.mjs serve [--open]             every image, for machines.html (Linux images need it)
 //   node tools/oasis.mjs serve --static             the files and the oasis-fetch relay only, as a static host
 //                                                   with functions/oasis-fetch.js serves them: pages build images themselves
@@ -22,12 +23,14 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { createHash } from 'crypto';
 import { gunzipSync } from 'zlib';
 import { join, dirname, resolve, relative, basename, extname } from 'path';
-import { homedir, tmpdir, platform } from 'os';
+import { homedir, tmpdir, platform, userInfo } from 'os';
 import { spawn, spawnSync } from 'child_process';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+/** The user's name inside a Linux image: --user=<name>, else $OASIS_USER, else this computer's login. */
+const hostUser = () => { const a = process.argv.find((x) => x.startsWith('--user=')); if (a) return a.slice(7); if (process.env.OASIS_USER) return process.env.OASIS_USER; try { return userInfo().username; } catch { return 'player'; } };
 const IMAGES = join(ROOT, 'oasis', 'images');
 const CACHE = process.env.OASIS_CACHE || join(homedir(), '.cache', 'oasis');
 let SERVE_ONLY = false, STATIC_ONLY = false;
@@ -319,7 +322,7 @@ function serve(img, host, port = 0) {
       }
       if (u.pathname === '/oasis-image.json') {
         const want = u.searchParams.get('img');
-        try { return send(200, JSON.stringify(want ? { ...findImage(want), name: want } : img), 'application/json'); } catch (e) { return send(404, e.message); }
+        try { return send(200, JSON.stringify({ ...(want ? { ...findImage(want), name: want } : img), hostUser: hostUser() }), 'application/json'); } catch (e) { return send(404, e.message); }
       }
       if (u.pathname === '/oasis-images.json') return send(200, JSON.stringify(imageIndex()), 'application/json');
       let p = join(ROOT, decodeURIComponent(u.pathname));
@@ -376,7 +379,7 @@ async function run(img, args, out) {
     const spec = join(CACHE, 'run-' + process.pid + '.json');
     mkdirSync(CACHE, { recursive: true });
     writeFileSync(spec, JSON.stringify({ dirs: root.dirs, files: [...root.files], links: [...root.links], mkdirs: [...root.mkdirs] }));
-    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console ? '1' : '', MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}), ...(img.machine && img.machine.vga ? { MIRAGE_VGA: img.machine.vga } : {}) }, () => rmSync(spec, { force: true }));
+    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console ? '1' : '', MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}), MIRAGE_LXUSER: hostUser(), ...(img.machine && img.machine.vga ? { MIRAGE_VGA: img.machine.vga } : {}) }, () => rmSync(spec, { force: true }));
   }
   throw new Error(`oasis: world "${world}" cannot run yet`);
 }
@@ -406,7 +409,7 @@ const indexText = () => JSON.stringify(imageIndex(), null, 2) + '\n';
 export { findImage, listImages, linuxRoot, hostOver, untar, undeb, indexText, dosDir };
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [cmd, name, ...rest] = process.argv.slice(2);
-  const flags = rest.filter((a) => a === '--window' || a === '--terminal' || a === '--serve'), args = rest.filter((a) => !flags.includes(a));
+  const flags = rest.filter((a) => a === '--window' || a === '--terminal' || a === '--serve'), args = rest.filter((a) => !flags.includes(a) && !a.startsWith('--user='));
   try {
     if (cmd === 'list') for (const n of listImages()) { const m = findImage(n); console.log(`${n.padEnd(28)} ${m.world.padEnd(6)} ${m.title || ''}`); }
     else if (cmd === 'inspect') {

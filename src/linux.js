@@ -812,6 +812,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
+  /** The user's name, on uid 0 (everything runs as root here): first in /etc/passwd, so getpwuid(0)
+   *  answers it, the image's own entries kept after it. A page sets the visitor's choice, `oasis run`
+   *  the host's login. Returns the name as kept (lowercase letters, digits, - and _). */
+  lx.setUser = (name) => {
+    const n = String(name || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').replace(/^[^a-z_]+/, '').slice(0, 31) || 'player';
+    const had = lx.readFile('/etc/passwd');
+    const rest = had ? new TextDecoder().decode(had).split('\n').filter((l) => l && !l.startsWith(n + ':')) : ['root:x:0:0:root:/root:/bin/sh'];
+    lx.addFile('/etc/passwd', new TextEncoder().encode([`${n}:x:0:0:${n}:/root:/bin/sh`, ...rest].join('\n') + '\n'));
+    lx.user = n;
+    return n;
+  };
   /** What the run left that the host's tree does not have — for an OASIS `run` layer
    *  (tools/oasis.mjs), which keeps it as a layer of its own: files and directories made or
    *  changed, symbolic links, and the host's paths that were removed. /dev and /proc are the
@@ -1788,6 +1799,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // so they succeed and change nothing. xterm drops its privileges with setreuid/setregid before it
     // runs the shell, and stopped ("seteuid(0): Function not implemented") when they were refused.
     70: () => 0, 71: () => 0, 203: () => 0, 204: () => 0,                  // setreuid setregid (16 and 32 bits)
+    80: (n, list) => { if (n > 0) { wr8(list, 0); wr8(list + 1, 0); } return 1; },   // getgroups (16-bit): root's group alone
+    205: (n, list) => { if (n > 0) wr32(list, 0); return 1; },             // getgroups32
+    81: () => 0, 206: () => 0,                                             // setgroups (16 and 32 bits)
     138: () => 0, 139: () => 0, 215: () => 0, 216: () => 0, 164: () => 0, 170: () => 0, 208: () => 0, 210: () => 0,   // setfsuid setfsgid setresuid setresgid
     16: () => 0, 182: () => 0, 95: () => 0, 198: () => 0, 207: () => 0, 212: () => 0,   // lchown chown fchown (and 32)
     60: (m) => { const old = lx.umask; lx.umask = m & 0o777; return old; },  // umask

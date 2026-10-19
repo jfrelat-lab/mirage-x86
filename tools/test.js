@@ -3257,6 +3257,16 @@ const runLinux = (hex, argv) => {
     '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
     '00');
   eq('linux: pseudo-terminals, Unix98 and BSD', JSON.stringify(runLinux(hex, ['/w/PTY'])), JSON.stringify({ out: 'pty: YYYYYY\n', status: 0 })); }
+// The user's name inside a Linux image (lx.setUser): a page's visitor's choice, `oasis run`'s host login.
+// Cleaned to a login name, first in /etc/passwd on uid 0 (getpwuid(0) answers it: XBoing greeted
+// "Anonymous?" with no passwd at all), the image's own entries kept after it.
+{ let got;
+  try { const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' }));
+    lx.addFile('/etc/passwd', new TextEncoder().encode('root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1::/:\n'));
+    const n = lx.setUser('Max Power!');
+    got = n + ' | ' + new TextDecoder().decode(lx.readFile('/etc/passwd')).trim().split('\n').join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: the user\'s name, first in /etc/passwd on uid 0', got, 'maxpower | maxpower:x:0:0:maxpower:/root:/bin/sh | root:x:0:0:root:/root:/bin/sh | daemon:x:1:1::/:'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

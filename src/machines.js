@@ -221,7 +221,24 @@ async function pc() {
 }
 
 // ---- Linux ----------------------------------------------------------------------------------------
+// The user's name in a Linux image: the visitor's choice (kept in this browser only, sent nowhere),
+// else the OASIS server's (on a computer: its login), else the image's, else "player".
+const USER_KEY = 'mirage.linux.user';
+const savedUser = () => { try { return localStorage.getItem(USER_KEY) || ''; } catch { return ''; } };
+const linuxUser = (img) => savedUser() || (img && (img.hostUser || img.user)) || 'player';
 async function linux() {
+  const userBtn = $('userBtn');
+  userBtn.hidden = false;
+  const showUser = () => { userBtn.textContent = `User: ${savedUser() || 'player'}`; };
+  showUser();
+  userBtn.addEventListener('click', () => {
+    const n = prompt('Your name inside the Linux machine (letters, digits, - and _). It stays in this browser.', savedUser() || 'player');
+    if (n === null) return;
+    const clean = n.toLowerCase().replace(/[^a-z0-9_-]/g, '').replace(/^[^a-z_]+/, '').slice(0, 31);
+    try { if (clean) localStorage.setItem(USER_KEY, clean); else localStorage.removeItem(USER_KEY); } catch { /* storage refused */ }
+    showUser();
+    log(`user set to ${clean || 'player'}: it applies from the next start`);
+  });
   let images = [];
   // Images meant for a window; the terminal ones (a shell) run with `oasis run` in a terminal.
   try { images = (await (await fetch('/oasis-images.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { images = null; }
@@ -231,7 +248,9 @@ async function linux() {
   const start = async (m, img, host) => {
     let lastLine = '';
     try {
-      const s = await startLinux({ canvas, img, host,
+      const user = linuxUser(img);
+      log(`user: ${user}`);
+      const s = await startLinux({ canvas, img, host, user,
         onOutput: (t) => { logOutput(t); lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
         onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) { setState('exited', ''); log(t); } } });
       session = { pause: s.pause, audio: s.audio };
