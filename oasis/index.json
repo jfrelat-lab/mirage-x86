@@ -61,6 +61,15 @@
     "output": "window"
   },
   {
+    "name": "linux/mesa-1997",
+    "title": "OpenGL of 1997 — Mesa 2.2 and GLUT 3.3, their demos built in MIRAGE-LINUX, on XFree86 3.3",
+    "world": "linux",
+    "year": 1997,
+    "author": "Brian Paul (Mesa), Mark J. Kilgard (GLUT), Silicon Graphics (the demos), the XFree86 Project, the Debian project, busybox",
+    "thumb": "oasis/thumbs/linux-mesa-1997.png",
+    "output": "window"
+  },
+  {
     "name": "linux/mirage",
     "title": "Debian 12 with id's 1994 Linux DOOM — a real bash on the console",
     "world": "linux",
