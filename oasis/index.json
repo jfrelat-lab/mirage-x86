@@ -122,5 +122,14 @@
     "author": "David Cooper, the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-xjewel-1997.png",
     "output": "window"
+  },
+  {
+    "name": "linux/xscreensaver-gl-1998",
+    "title": "xscreensaver's OpenGL hacks of 1998 — Mesa 2.6 in software, on XFree86 3.3.2",
+    "world": "linux",
+    "year": 1998,
+    "author": "Jamie Zawinski and the hacks' authors (xscreensaver), Brian Paul (Mesa), the XFree86 Project, the Debian project, busybox",
+    "thumb": "oasis/thumbs/linux-xscreensaver-gl-1998.png",
+    "output": "window"
   }
 ]

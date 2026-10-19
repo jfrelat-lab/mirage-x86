@@ -1,0 +1,113 @@
+{
+  "oasis": 1,
+  "title": "xscreensaver's OpenGL hacks of 1998 — Mesa 2.6 in software, on XFree86 3.3.2",
+  "year": 1998,
+  "author": "Jamie Zawinski and the hacks' authors (xscreensaver), Brian Paul (Mesa), the XFree86 Project, the Debian project, busybox",
+  "world": "linux",
+  "machine": {
+    "cpu": "686",
+    "mem": 64,
+    "vga": "cirrus",
+    "hz": 100
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/base/libc6_2.0.7t-1.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/base/ldso_1.9.9-1.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/base/ncurses3.4_1.9.9g-8.10.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/libs/zlib1g_1.1.1-0.1.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/x11/xlib6g_3.3.2.3-2.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/x11/xext_3.3.2.3-2.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/x11/xserver-svga_3.3.2.3-2.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/x11/xbase_3.3.2.3-2.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/x11/xfntbase_3.3.2.3-2.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/x11/xfnt75_3.3.2.3-2.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/libs/mesag2_2.6-3.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/hamm/main/binary-i386/x11/xscreensaver-gl_2.16-3.deb"
+    },
+    {
+      "file": "oasis/files/XF86Config-cirrus",
+      "to": "/etc/X11/XF86Config"
+    },
+    {
+      "file": "oasis/files/ld.so.conf-x11",
+      "to": "/etc/ld.so.conf"
+    },
+    {
+      "file": "oasis/files/twmrc-auto",
+      "to": "/root/.twmrc"
+    },
+    {
+      "file": "oasis/files/passwd",
+      "to": "/etc/passwd"
+    },
+    {
+      "file": "oasis/files/group",
+      "to": "/etc/group"
+    },
+    {
+      "file": "oasis/files/utmp",
+      "to": "/var/run/utmp"
+    },
+    {
+      "links": {
+        "/sbin/ldconfig": "ldconfig.new",
+        "/lib/ld.so": "ld.so.1.9.9"
+      }
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/tmp/.X11-unix",
+        "/root"
+      ]
+    },
+    {
+      "run": "ldconfig",
+      "cwd": "/"
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "args": [
+      "-c",
+      "XF86_SVGA :0 >/tmp/X.log 2>&1 & until [ -e /tmp/.X11-unix/X0 ]; do sleep 1; done; export DISPLAY=:0; twm & while :; do for h in gears pipes moebius sproingies superquadrics morph3d rubik stairs cage; do timeout 20 /usr/X11R6/bin/$h -geometry 480x360+40+40; done; done 2>/dev/null"
+    ],
+    "cwd": "/root",
+    "console": true,
+    "env": {
+      "HOME": "/root",
+      "TERM": "linux",
+      "PATH": "/usr/X11R6/bin:/usr/bin:/bin:/sbin",
+      "PS1": "gl:\\w# "
+    }
+  },
+  "output": "window",
+  "notes": "Debian 2.0 (hamm, 1998), all of it on glibc 2.0: XFree86 3.3.2's SVGA server on MIRAGE's emulated Cirrus GD5446, twm, Mesa 2.6 in software, and xscreensaver-gl's nine OpenGL hacks — gears, pipes, moebius, sproingies, superquadrics, morph3d, rubik, stairs, cage — shown 20 seconds each (busybox timeout), each in its own window. The server draws at 8 bits per pixel, so Mesa dithers its colours as it did on the 256-colour screens of the time. Running it found three faults of MIRAGE-LINUX, all mended: gcc 2.x's FLDCW pair around each float-to-int conversion made every translated block revalidate; the server needs the Cirrus on a PCI bus with its 32 MiB aperture; and timeout's watcher lost its memory when it killed the hack.",
+  "thumb": "oasis/thumbs/linux-xscreensaver-gl-1998.png"
+}
