@@ -112,6 +112,6 @@
     ]
   },
   "output": "window",
-  "notes": "Bill's clones install a certain operating system on every computer; stop them. Debian 1.3's xbill on XFree86 3.3's server, MIRAGE's emulated Cirrus GD5446 at 800x600. The image starts the X server, waits for its socket, then twm and the game \u2014 what one would type at a shell; linux/xbill-1997, xboing-1997 and xjewel-1997 have the same layers, so the cache serves the three. The X server takes a few minutes to come up (its keyboard map is compiled at start).",
+  "notes": "Bill's clones install a certain operating system on every computer; stop them. Debian 1.3's xbill on XFree86 3.3's server, MIRAGE's emulated Cirrus GD5446 at 800x600. The image starts the X server, waits for its socket, then twm and the game \u2014 what one would type at a shell; linux/xbill-1997, xboing-1997 and xjewel-1997 have the same layers, so the cache serves the three.",
   "thumb": "oasis/thumbs/linux-xbill-1997.png"
 }
