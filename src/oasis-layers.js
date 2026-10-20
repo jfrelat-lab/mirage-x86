@@ -176,12 +176,13 @@ export class Tree {
 // ---- running a program on the tree: busybox's --list, a run layer -----------------------------------
 /** Run `argv` on MIRAGE-LINUX over `tree`, in slices (`yieldEvery` resolves between them); returns
  *  { status, out, lx }. */
-export async function runOn(tree, argv, { cwd = '/', env = [], mem = 64, cpu = '686', onOutput, yieldEvery = () => new Promise((r) => setTimeout(r, 0)) } = {}) {
+export async function runOn(tree, argv, { cwd = '/', env = [], mem = 64, cpu = '686', onOutput, onExec, yieldEvery = () => new Promise((r) => setTimeout(r, 0)) } = {}) {
   const mc = new Machine({ memSize: mem << 20, cpu });
   installBIOS(mc);
   let out = '';
   const lx = installLinux(mc, { onOutput: (fd, b) => { const t = String.fromCharCode(...b); if (fd === 1) out += t; if (onOutput) onOutput(t); } });
   lx.host = tree.host();
+  if (onExec) lx.onExec = onExec;                                     // each program the run starts (execve)
   lx.chdir(cwd);
   lx.epoch = Math.floor(Date.now() / 1000);
   const image = lx.readFile(argv[0]);
@@ -234,9 +235,16 @@ export async function buildTree(img, io) {
       const key = 'run-' + chain.slice(0, 16);
       let tar = io.cache ? await io.cache.get(key) : null;
       if (!tar) {
-        say(`building: ${l.run}`);
+        // A build says little (gcc compiles in silence, a minute or more): what it runs now, and for how
+        // long it has been running, so a visitor sees it working — "building (25 s): cc1 isosurf.c" (its options and /tmp files left out).
+        const t0 = Date.now(), short = (a) => a.filter((x) => !/^-|^\/tmp\//.test(x)).map((x) => x.split('/').pop()).join(' ').slice(0, 80);
+        let doing = 'sh', shown = 0;
+        const tell = () => { shown = Date.now(); say(`building (${Math.round((shown - t0) / 1000)} s): ${doing}`); };
+        tell();
         const env = Object.entries({ PATH: RUN_PATH, ...(l.env || {}) }).map(([k, v]) => `${k}=${v}`);
-        const r = await runOn(tree, ['/bin/sh', '-c', l.run], { cwd: l.cwd || '/', env, cpu: l.cpu || '686', onOutput: io.onOutput });
+        const r = await runOn(tree, ['/bin/sh', '-c', l.run], { cwd: l.cwd || '/', env, cpu: l.cpu || '686', onOutput: io.onOutput,
+          onExec: (argv) => { doing = short(argv); if (Date.now() - shown > 500) tell(); },
+          yieldEvery: () => { if (Date.now() - shown > 1000) tell(); return new Promise((res) => setTimeout(res, 0)); } });
         if (r.status !== 0) throw new Error(`oasis: the layer "${l.run}" failed (status ${r.status})`);
         const c = r.lx.changes(), strip = (p) => p.replace(/^\//, '');
         tar = tarWrite([

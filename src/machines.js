@@ -287,7 +287,9 @@ async function linux() {
       log(`${m.name}: ${(img.layers || []).length} layers`);
       const [{ buildTree }, { webIO }] = await Promise.all([import('./oasis-layers.js'), import('./oasis-web.js')]);
       const t0 = performance.now();
-      const io = webIO({ onProgress: (t) => { status.textContent = `${m.title}: ${t}…`; log(t); } });
+      // A build's line comes back each second with its time: the log takes each new step once.
+      let logged = '';
+      const io = webIO({ onProgress: (t) => { status.textContent = `${m.title}: ${t}…`; const step = t.replace(/^building \(\d+ s\)/, 'building'); if (step !== logged) log(logged = step); } });
       io.onOutput = (t) => { logOutput(t); const l = t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '').split('\n').filter(Boolean).pop(); if (l) hint.textContent = l.slice(-120); };
       let tree;
       try { tree = await buildTree(img, io); } catch (e) { log(String(e.message || e)); setState('failed', 'err'); return needs(m, String(e.message || e)); }

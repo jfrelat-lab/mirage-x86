@@ -442,6 +442,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.cloexec.clear();
     const io = mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1);   // ioperm survives execve
     lx.load(bytes, argv, envp);
+    if (lx.onExec) lx.onExec(argv);                                       // who watches: an OASIS build's progress
     mem.u8.set(io, TSS_BASE + IOMAP);
     lx.exe = p;
     machine.rec.reset();

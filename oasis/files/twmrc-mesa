@@ -1,0 +1,19 @@
+# twm for linux/mesa-1997: windows placed without asking (RandomPlacement), and a click on the
+# desktop opens the menu of Mesa demos; the one chosen replaces the one shown (/usr/local/bin/demo).
+RandomPlacement
+
+Button1 = : root : f.menu "mesa"
+Button3 = : root : f.menu "mesa"
+
+menu "mesa"
+{
+  "Mesa demos"  f.title
+  "gears"       f.exec "sh /usr/local/bin/demo gears &"
+  "bounce"      f.exec "sh /usr/local/bin/demo bounce &"
+  "isosurf"     f.exec "sh /usr/local/bin/demo isosurf &"
+  "reflect"     f.exec "sh /usr/local/bin/demo reflect &"
+  "texobj"      f.exec "sh /usr/local/bin/demo texobj &"
+  "atlantis"    f.exec "sh /usr/local/bin/demo atlantis &"
+  ""            f.nop
+  "xterm"       f.exec "xterm &"
+}

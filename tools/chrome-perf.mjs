@@ -79,7 +79,23 @@ const typeText = async (text) => {
     for (const type of ['keyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: k[0], key: k[1], code: k[2], text: type === 'keyDown' && k[1].length === 1 ? k[1] : undefined }); if (type === 'keyDown') await sleep(60); }
     await sleep(30); } };
 const SHOTS = (process.env.SHOTS || '').split(',').filter(Boolean).map(Number);
+// CLICKS="70:400,300|74:420,360" clicks at those page coordinates at those seconds (a menu on X's
+// desktop); STATUS=1 prints the page's status line each second (an OASIS image's build).
+// "t:x,y>x2,y2" presses at x,y, moves to x2,y2 and releases there (twm's menus: held, chosen on release);
+// SHOTPREFIX-<t>-held.png shows the screen with the button down.
+const CLICKS = (process.env.CLICKS || '').split('|').filter(Boolean).map((c) => { const [t, xy] = c.split(':'); const [a, b] = xy.split('>'); const [x, y] = a.split(',').map(Number); const to = b ? b.split(',').map(Number) : null; return { t: Number(t), x, y, to }; });
+const drag = async (c) => {
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: c.x, y: c.y, button: 'left', buttons: 1, clickCount: 1 }); await sleep(700);
+  const r = await send('Page.captureScreenshot', { format: 'png' }); (await import('fs')).writeFileSync(`${process.env.SHOTPREFIX || '/tmp/shot'}-${c.t}-held.png`, Buffer.from(r.result.data, 'base64'));
+  for (let i = 1; i <= 10; i++) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: c.x + (c.to[0] - c.x) * i / 10, y: c.y + (c.to[1] - c.y) * i / 10, button: 'left', buttons: 1 }); await sleep(60); }
+  await sleep(300); await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: c.to[0], y: c.to[1], button: 'left', buttons: 0, clickCount: 1 }); };
+const click = async (x, y) => { for (const type of ['mousePressed', 'mouseReleased']) { await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }); if (type === 'mousePressed') await sleep(150); } };
 for (let s = 1; s <= SECS; s++) {
+  // EVALS="10:<js>|12:<js>" evaluates that JavaScript in the page at those seconds (input a headless
+  // browser cannot give, such as a locked pointer's motion: window.mirage.lx.mouseInput(dx, dy, buttons)).
+  for (const e of (process.env.EVALS || '').split('|').filter(Boolean)) { const i = e.indexOf(':'); if (Number(e.slice(0, i)) === s) await evaluate(e.slice(i + 1)); }
+  for (const c of CLICKS) if (c.t === s) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: c.x, y: c.y }); await sleep(200); if (c.to) await drag(c); else await click(c.x, c.y); }
+  if (process.env.STATUS) console.log('status', s, JSON.stringify(await evaluate("(document.getElementById('status') || {}).textContent")));
   for (const k of KEYS) if (k.t === s) { if (k.key.startsWith('type=')) await typeText(k.key.slice(5)); else await press(k.key); }
   // PROBE=<s>: from that second, count port reads/writes and sample CS:IP and the mode for 5 s.
   if (Number(process.env.PROBE) === s) await evaluate(`(() => { const m = window.mirage.machine || window.mirage.mc, c = m.cpu; window.__io = new Map(); window.__ip = new Map();
