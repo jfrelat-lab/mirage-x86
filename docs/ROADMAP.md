@@ -107,10 +107,15 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | H12q | **Network games**: xpilot, Netrek — UDP and TCP between tabs or machines, the first users of N2/N3 | M |
 | H12r | **Loki's Linux demos** (Heretic II, Railroad Tycoon II, SimCity 3000, Myth II, 1999-2000): SDL and LinuxThreads — after H12d (clone, futex) | L |
 | H12s | **DOSEMU 0.66** (Debian 1.3): DOS under MIRAGE-LINUX through the `vm86` system call, on the CPU's V86 mode — DOS DOOM under DOSEMU under a Linux with no kernel | L |
-| H12t | **Wine of 1997**: Win16 freeware under MIRAGE-LINUX — `modify_ldt` and the LDT (joins K7/H14) | L |
+| H12t | **Wine of 1997**: Win16 freeware under MIRAGE-LINUX — `modify_ldt` and the LDT; later a cross oracle for MIRAGE-WIN32 (K7/H14) | L |
 | H12u | **OpenGL** — ✅ (1) Mesa in software: `linux/mesa-1997`, Mesa 2.2 and GLUT 3.3 of Debian 1.3, their demos (gears, bounce, isosurf, reflect, texobj, atlantis) built by gcc 2.7.2 in a run layer, gears at some 20 frames a second on XFree86 3.3; `linux/xscreensaver-gl-1998`, Debian 2.0's XFree86 3.3.2 and Mesa 2.6 with xscreensaver-gl's nine OpenGL hacks, 20 seconds each. Next, **with PRISM's `gl.js`** (OpenGL 1.1's fixed pipeline in JavaScript, held to Mesa by PRISM's gates; GLX, GLU, GLUT, fxMesa): (1) Mesa 3.0's software renderer and `glxgears` run in MIRAGE, their frames compared one by one with `gl.js`'s — a cross oracle, and a benchmark against Docker i386; (2) with O9, a binary's `libMesaGL`/`libGL` replaced by `gl.js`'s entry points and rasterised by WebGL2 — GLQuake, Quake II's `ref_gl` (PRISM's `fxmesa.js`), at the GPU's speed; (3) the Quake III Arena demo (1999), which needs multitexturing and vertex arrays beyond 1.1 | XL |
 | H12v | **Interpreters and big X programs as benchmarks**, each against Docker i386: Tcl/Tk 8.0 (`wish`), Perl 5.004, Python 1.5, teTeX, Emacs 19 under X, xv | M |
-| K7, H14 | User-space Win32 programs, their API answered in JavaScript | L |
+| K7, H14 | **MIRAGE-WIN32** — MIRAGE-LINUX's counterpart: a PE `.exe` run with no Windows, its API answered in JavaScript over what exists (the CPU, the recompiler, the flat user address space of `src/linux.js`, OASIS's file tree, the audio, the canvas). The real code above the system where its licence allows: Wine's PE DLLs (LGPL) such as msvcrt; JavaScript for what touches the machine (kernel32, user32, gdi32, ddraw). Oracles: the same `.exe` on Windows 98 booted in MIRAGE, screen against screen, and Wine in Docker i386. Steps W1-W5 below | XL |
+| W1 | The PE loader (sections, relocations, imports bound to JavaScript entry points, the TEB at `fs:`), kernel32 for the console, Wine's msvcrt: console tools — nasm.exe, tcc.exe compiling in the page | M |
+| W2 | Structured exception handling (SEH), threads (with H12d), files on OASIS's tree; `world: "win32"` in OASIS — an image per program, as for Linux | M |
+| W3 | user32 and gdi32 at their base: windows, the message loop, `StretchDIBits`/`BitBlt` to the canvas, timers, keyboard and mouse — freeware games and programs that draw with GDI | L |
+| W4 | DirectDraw, DirectSound, DirectInput: the scene's Win32 demos, the games of 1996-1999 | L |
+| W5 | opengl32 on PRISM's `gl.js` (with H12u): OpenGL 4k/64k intros, GLQuake for Windows | L |
 | K8 | A native window with sound — for OASIS's `oasis run` (O4) | M |
 
 ## OASIS — images for every world of the period PC
