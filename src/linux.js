@@ -573,11 +573,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // sizecoding intros of the 2020s (Outline's 256 bytes) write their pixels for one resolution only.
   fs.set('/dev/fb0', { dev: 'fb', rdev: 0x1d00, mtime: 0 }); fs.set('/dev/fb', fs.get('/dev/fb0'));
   const FB = { w: 640, h: 480, bpp: 32, mode: 0x112 };
-  const FB_MODES = { '640x480': 0x112, '800x600': 0x143, '1024x768': 0x144 };
+  const FB_MODES = { '640x480': 0x112, '800x600': 0x143, '1024x768': 0x144, '1920x1080': 0x145 };   // 1920x1080: 8 MiB of card (installBIOS vram)
   lx.fbModes = Object.keys(FB_MODES);
   lx.setFb = (w, h) => {
     const mode = FB_MODES[`${w}x${h}`];
     if (!mode) throw new Error(`mirage-linux: no ${w}x${h} framebuffer (${lx.fbModes.join(', ')} at 32 bits)`);
+    if (machine.vbeFbBytes && w * h * 4 > machine.vbeFbBytes) throw new Error(`mirage-linux: ${w}x${h} at 32 bits needs ${Math.ceil(w * h * 4 / 1048576)} MiB of card, it has ${machine.vbeFbBytes >> 20}`);
     Object.assign(FB, { w, h, mode });
   };
   const fbOn = () => {
@@ -1677,9 +1678,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         return at;
       }
       if (!(flags & 0x20) && fds[fd] && fds[fd].node && fds[fd].node.dev === 'fb') {    // the card's framebuffer itself
-        const base = fbOn(), len2 = Math.min(size, (machine.vbeFbBytes || fbLen()) - pgoff * PAGE);
+        const card = (machine.vbeFbBytes || fbLen()) - pgoff * PAGE, len2 = Math.min(size, card);
         if (len2 <= 0) return -E.EINVAL;
-        unmapRange(at, at + size); mapPhys(at, base + pgoff * PAGE, len2, (prot & 2) !== 0); return at;
+        // One page more of the card where it has one: a kernel places mmaps top-down, so the page above
+        // a new mapping is an older one, and Outline 2023's The light reads 16 bytes at its last pixel,
+        // 12 past the end of its 1920x1080 mapping — harmless there, a SIGSEGV with our bottom-up layout.
+        const base = fbOn(), slack = len2 === size && card >= size + PAGE ? PAGE : 0;
+        unmapRange(at, at + size + slack); mapPhys(at, base + pgoff * PAGE, len2 + slack, (prot & 2) !== 0); return at;
       }
       if (!(flags & 0x20) && fds[fd] && fds[fd].node && fds[fd].node.dev === 'mem') {
         unmapRange(at, at + size); mapPhys(at, pgoff * PAGE, size, (prot & 2) !== 0); return at;

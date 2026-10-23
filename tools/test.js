@@ -3417,10 +3417,14 @@ const runLinux = (hex, argv) => {
     lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/FBGRAD']);
     for (let i = 0; i < 400 && !lx.done; i++) mc.runSlice(20000);
     const px = (x, y) => (mc.mem.dv.getUint32(mc.vbeFbBase + (y * 1024 + x) * 4, true) & 0xffffff).toString(16);
-    let refused = 'accepted'; try { lx.setFb(1920, 1080); } catch { refused = 'refused'; }
+    let refused = 'accepted'; try { lx.setFb(1920, 1080); } catch { refused = 'refused'; }   // 8 MiB: this card has 4
+    const mc2 = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc2, { vram: 8 }); const lx2 = installLinux(mc2); lx2.setFb(1920, 1080);
+    lx2.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/FBGRAD']);
+    for (let i = 0; i < 4000 && !lx2.done; i++) mc2.runSlice(20000);
+    refused += ' / ' + new TextDecoder().decode(Uint8Array.from(lx2.stdout)).trim();
     got = [new TextDecoder().decode(Uint8Array.from(lx.stdout)).trim(), px(512, 1), px(1022, 766), px(0, 0), refused].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: /dev/fb0 at 1024x768 for a program that draws for it', got, 'fb: 1024x0768 | 7f0000 | fefe00 | ff | refused'); }
+  eq('linux: /dev/fb0 at 1024x768 for a program that draws for it, 1920x1080 on a card of 8 MiB', got, 'fb: 1024x0768 | 7f0000 | fefe00 | ff | refused / fb: 1920x1080'); }
 // tools/linux/timerfd.asm: a timer read as a descriptor (timerfd_create/settime/gettime, a read that
 // waits for the expiry) and pwrite64 — what Outline 2021's xorchitecture paces and draws its frames
 // with. Docker i386/debian: "tfd: YYY"; MIRAGE had neither (ENOSYS).
@@ -3455,6 +3459,25 @@ const runLinux = (hex, argv) => {
     '0e000000ebd9b801000000bb2a000000cd80b804000000bb01000000cd80c3617267633d3f0a0a');
   let r; try { r = runLinux(hex, ['/w/HELLO']).status; } catch (e) { r = e.message.slice(0, 60); }
   eq('linux: an ELF header whose class and byte order are 0 runs, as the kernel runs it', r, 42); }
+// tools/linux/avx.asm: the VEX-encoded instructions (AVX, AVX2, BMI2) the Linux 256-byte intros of
+// Outline 2021-2023 are made of — VMOVDQU on YMM, VPADDUSB, VPSHUFD, VMOVD, VPMOVZXBD, VPSRAVD, SARX —
+// and SSE2's MOVD, on known values; the expected lines are Docker i386/debian's, byte for byte.
+{ const hex = (                                         // nasm -f bin tools/linux/avx.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040828020000d80200000700000000100000c5fe6f05c0810408c5fe6f0d' +
+    'e0810408c5fddcd1c5fe7f1548820408b920000000e8f2000000c5f9dcd9c5fe7f1d48820408b920000000e8dc000000' +
+    'c5f970e01bc5fa7f2548820408b910000000e8c5000000b8efcdab89c5f96ee8c5fe7f2d48820408b920000000e8aa00' +
+    '0000c5f97ec3891d48820408b904000000e896000000660f6ef0c5fe6f35c0810408660f6ef0c5fe7f3548820408b920' +
+    '000000e874000000660f7e0548820408b904000000e862000000c4e27d313d00820408c5fe7f3d48820408b920000000' +
+    'e847000000c5fe6f0d08820408c4e27546d7c5fe7f1548820408b920000000e828000000ba34120080b924000000c4e2' +
+    '72f7f2893548820408b904000000e809000000b80100000031dbcd80be48820408bf888204080fb606c0e8048a80af81' +
+    '0408aa0fb606240f8a80af810408aa46e2e4b00aaa89fa81ea88820408b804000000bb01000000b988820408cd80c330' +
+    '31323334353637383961626364656690000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1ef0' +
+    '808080808080808080808080808080802020202020202020202020202020202000011f2004c803109cffffff9cffffff' +
+    '9cffffff9cffffffffffff7fffffffff4000000000000080');
+  let got; try { got = runLinux(hex, ['/w/AVX']).out; } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: AVX/AVX2/BMI2 under VEX, as Docker i386 computes them', got,
+    '808182838485868788898a8b8c8d8e8f303132333435363738393a3b3c3d3eff\n808182838485868788898a8b8c8d8e8f00000000000000000000000000000000\n0c0d0e0f08090a0b0405060700010203\nefcdab8900000000000000000000000000000000000000000000000000000000\n00010203\n09000000000000000000000000000000101112131415161718191a1b1c1d1ef0\n00010203\n00000000010000001f0000002000000004000000c80000000300000010000000\n9cffffffceffffffffffffffffffffffffffff07ffffffff080000000080ffff\n230100f8\n'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

@@ -12,7 +12,7 @@
 // returning. The machine loop then fetches the next block.
 
 import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
-import { SSE, XMM_SCRATCH } from './sse.js';
+import { SSE, VEX, XMM_SCRATCH } from './sse.js';
 
 // Cap on basic-block length. Overridable because block boundaries are where IRQs are sampled, so
 // moving them is how you measure what depends on that — see docs/notes/timing.md §3, where it showed only
@@ -1507,8 +1507,13 @@ export class Recompiler {
         // A REGISTER operand (mod=11) is not a far pointer: #UD. Windows NT ends every BIOS call it
         // makes in V86 with exactly that — `C4 C4 FE`, its "BOP", after the INT — and recognises it in
         // its #UD handler; we loaded ES from nowhere and ran on, into whatever the page held.
-        case 0xc4: { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, ES, sz)); break; } // LES
-        case 0xc5: { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, DS, sz)); break; } // LDS
+        // VEX (AVX/AVX2/BMI2): in protected mode, C4/C5 followed by a byte whose top two bits are set
+        // is not LES/LDS (whose register form is #UD) but a VEX prefix; real and V86 mode keep LES/LDS.
+        case 0xc4: case 0xc5: if (!REAL && (cpuNow.cr0 & 1) && !(cpuNow.flags & 0x20000) && (mem.r8(mask(linStart - ip0 + ip)) & 0xc0) === 0xc0) {
+          emitVex(op === 0xc4, ipStart); if (ended) break; break;
+        }
+        if (op === 0xc5) { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, DS, sz)); break; } // LDS
+        { const o = modrm(); if (o.isReg) { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; break; } P(SEGIP(ipStart) + loadPtr(o, ES, sz)); break; } // LES
         case 0xc6: { const o = modrm(); const i = immX(1, (v) => '' + v); P(rmW(o, 8, i)); break; }
         case 0xc7: { const o = modrm(); const i = immX(sz >> 3, (v) => '' + v); P(rmW(o, sz, i)); break; }
         // ENTER size,level. The operand size decides the WIDTH of everything it touches: at 32 bits it
@@ -1889,6 +1894,40 @@ export class Recompiler {
       }
     }
 
+    // The VEX-encoded instructions MIRAGE has (src/sse.js VEX): AVX/AVX2 on XMM and YMM, and BMI2's
+    // SARX. C5 is the two-byte form (map 0F, W 0); C4 the three-byte one (map, W). VEX.vvvv names a
+    // register in ones' complement; R, X and B are the 64-bit extensions, always set in 32-bit code.
+    function emitVex(three, ipStart) {
+      let map = 1, Wb = 0, b2;
+      if (three) { const b1 = f8(); map = b1 & 0x1f; b2 = f8(); Wb = b2 >> 7; } else b2 = f8();
+      const vv = (~b2 >> 3) & 7, L = (b2 >> 2) & 1, pp = b2 & 3;
+      const opc = f8();
+      const ud = () => { canFault = true; P(`cpu.eip=${ipStart};cpu.swInt(6);return;`); ended = true; };
+      const src = (o, len) => { if (o.isReg) return o.rm; canFault = true; P(`cpu.vexLoad(${memAddr(o)},${len});`); return XMM_SCRATCH; };
+      const op = (code, o, len, imm = 0) => { const s2 = src(o, len); P(`cpu.vex(${code},${L},${o.reg},${vv},${s2},${imm});`); };
+      if (map === 1 && pp === 2 && opc === 0x6f) { op(VEX.MOVDQU_LD, modrm(), L ? 32 : 16); return; }          // VMOVDQU x/ymm, m
+      if (map === 1 && pp === 1 && opc === 0x6f) { op(VEX.MOVDQU_LD, modrm(), L ? 32 : 16); return; }          // VMOVDQA (alignment not checked)
+      if (map === 1 && (pp === 2 || pp === 1) && opc === 0x7f) {                                                // VMOVDQU/A m, x/ymm
+        const o = modrm();
+        if (o.isReg) { P(`cpu.vex(${VEX.MOVDQU_LD},${L},${o.rm},0,${o.reg},0);`); return; }
+        canFault = true; const a = memAddr(o), t = NT(), len = L ? 32 : 16;
+        P(`var ${t}=${a};cpu.vexStore(${t},${o.reg},${len});`);
+        P(`if(cp[${t}>>>12]|cp[(${AM(`${t}+${len - 1}`)})>>>12])m._dirty(${t},${len});`);
+        return;
+      }
+      if (map === 1 && pp === 1 && opc === 0xdc) { op(VEX.PADDUSB, modrm(), L ? 32 : 16); return; }            // VPADDUSB
+      if (map === 1 && pp === 1 && opc === 0x70) { const o = modrm(); const s2 = src(o, L ? 32 : 16); const imm = f8(); P(`cpu.vex(${VEX.PSHUFD},${L},${o.reg},0,${s2},${imm});`); return; }   // VPSHUFD
+      if (map === 1 && pp === 1 && opc === 0x6e && !L) { const o = modrm(); P(`cpu.vex(${VEX.MOVD_LD},0,${o.reg},0,0,${rmR(o, 32)});`); return; }   // VMOVD xmm, r/m32
+      if (map === 1 && pp === 1 && opc === 0x7e && !L) { const o = modrm(); P(rmW(o, 32, `cpu.xmm.i32[${o.reg * 4}]`)); return; }   // VMOVD r/m32, xmm
+      if (map === 2 && pp === 1 && opc === 0x31) { op(VEX.PMOVZXBD, modrm(), L ? 8 : 4); return; }             // VPMOVZXBD
+      if (map === 2 && pp === 1 && opc === 0x46 && !Wb) { op(VEX.PSRAVD, modrm(), L ? 32 : 16); return; }      // VPSRAVD
+      if (map === 2 && pp === 2 && opc === 0xf7 && !Wb) {                                                       // SARX r32, r/m32, r32
+        const o = modrm();
+        P(rW(o.reg, 32, `((${rmR(o, 32)})|0)>>(r[${vv}]&31)`)); return;
+      }
+      ud();
+    }
+
     function emitShift(o, size, cnt) {
       const rot = o.reg;   // 0 rol,1 ror,2 rcl,3 rcr,4/6 shl,5 shr,7 sar
       if (rot === 2 || rot === 3) cur.use |= lC;   // RCL/RCR rotate through carry — read CF
@@ -2096,6 +2135,10 @@ export class Recompiler {
         if (!p66 && !pF3 && op2 === 0xc6) { withImm(SSE.SHUFPS); return; }
         if (p66 && op2 === 0x5b) { simple(SSE.CVTPS2DQ); return; }
         if (p66 && op2 === 0x76) { simple(SSE.PCMPEQD); return; }
+        // MOVD xmm, r/m32 (the rest of the XMM register zeroed, a YMM upper half left alone) and
+        // MOVD r/m32, xmm: Outline 2023's The light moves a pixel through XMM0 this way.
+        if (p66 && op2 === 0x6e) { const o = modrm(); const v = NT(); P(`var ${v}=(${rmR(o, 32)})|0;cpu.xmm.i32[${o.reg * 4}]=${v};cpu.xmm.i32[${o.reg * 4 + 1}]=0;cpu.xmm.i32[${o.reg * 4 + 2}]=0;cpu.xmm.i32[${o.reg * 4 + 3}]=0;`); return; }
+        if (p66 && op2 === 0x7e) { const o = modrm(); if (!o.isReg) canFault = true; P(rmW(o, 32, `cpu.xmm.i32[${o.reg * 4}]`)); return; }
         if (p66 && op2 === 0x67) { simple(SSE.PACKUSWB); return; }
         if (p66 && op2 === 0x6b) { simple(SSE.PACKSSDW); return; }
         if (p66 && op2 === 0xe0) { simple(SSE.PAVGB); return; }

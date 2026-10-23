@@ -20,6 +20,14 @@ export const SSE = {
   PMOVSXWD: 17, PMOVZXBD: 18, INSERTPS: 19, DPPS: 20,
 };
 
+// VEX-encoded operations (AVX, AVX2): the Linux sizecoding intros of the 2020s reach for a handful —
+// Outline 2021-2023's 256-byte intros by The Orz (VPADDUSB, VPSHUFD, VMOVD, VPSRAVD, VPMOVZXBD, VMOVDQU
+// on YMM). The YMM registers are the XMM ones and an upper half each (cpu.ymmHi): a legacy SSE
+// operation leaves that half alone, a VEX.128 one zeroes it, a VEX.256 one works on all 32 bytes.
+export const VEX = {
+  MOVDQU_LD: 0, PMOVZXBD: 1, PSRAVD: 2, PADDUSB: 3, MOVD_LD: 4, PSHUFD: 5,
+};
+
 const sat8u = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
 const sat16s = (v) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
 
@@ -40,6 +48,40 @@ export function installSSE(cpu) {
   cpu.xmmStore = (lin, reg, len) => {
     const m = cpu.mem, base = reg * 16;
     for (let k = 0; k < len; k++) m.w8((lin + k) >>> 0, u8[base + k]);
+  };
+
+  // ---- VEX: the YMM upper halves and the operations on them ----
+  const hi = new Uint8Array(16 * 9);
+  cpu.ymmHi = hi;
+  const Y = new Uint8Array(32), Yv = new Uint8Array(32), Ys = new Uint8Array(32);   // working copies
+  const yI = new Int32Array(Y.buffer), yvI = new Int32Array(Yv.buffer), ysI = new Int32Array(Ys.buffer);
+  const get = (reg, to) => { to.set(u8.subarray(reg * 16, reg * 16 + 16), 0); to.set(hi.subarray(reg * 16, reg * 16 + 16), 16); };
+  /** Up to 32 bytes of guest memory into the scratch register (low half, then upper). */
+  cpu.vexLoad = (lin, len) => {
+    const m = cpu.mem, b = XMM_SCRATCH * 16;
+    for (let k = 0; k < 32; k++) { const v = k < len ? m.r8((lin + k) >>> 0) : 0; if (k < 16) u8[b + k] = v; else hi[b + k - 16] = v; }
+  };
+  cpu.vexStore = (lin, reg, len) => {
+    const m = cpu.mem, b = reg * 16;
+    for (let k = 0; k < len; k++) m.w8((lin + k) >>> 0, k < 16 ? u8[b + k] : hi[b + k - 16]);
+  };
+  /** One VEX operation: `L` 0 for 128 bits (the upper half zeroed), 1 for 256; `d` the destination,
+   *  `v` the first source (VEX.vvvv), `s` the second (ModRM.rm, or the scratch slot), `imm` its byte. */
+  cpu.vex = (code, L, d, v, s, imm) => {
+    get(v, Yv); get(s, Ys); Y.fill(0);
+    const n = L ? 32 : 16;
+    switch (code) {
+      case VEX.MOVDQU_LD: Y.set(Ys.subarray(0, n)); break;
+      case VEX.PMOVZXBD: for (let k = 0; k < n / 4; k++) yI[k] = Ys[k]; break;          // bytes to dwords, zero-extended
+      // Each dword shifted right arithmetically by its own count; 32 or more fills it with its sign.
+      case VEX.PSRAVD: for (let k = 0; k < n / 4; k++) { const c = ysI[k] >>> 0; yI[k] = yvI[k] >> (c > 31 ? 31 : c); } break;
+      case VEX.PADDUSB: for (let k = 0; k < n; k++) Y[k] = sat8u(Yv[k] + Ys[k]); break;
+      case VEX.MOVD_LD: yI[0] = imm | 0; break;                                            // the dword comes as `imm`
+      // Within each 128-bit lane, dword k takes the source's dword (imm >> 2k) & 3 of that lane.
+      case VEX.PSHUFD: for (let k = 0; k < n / 4; k++) yI[k] = ysI[(k & ~3) + ((imm >> ((k & 3) * 2)) & 3)]; break;
+      default: throw new Error(`mirage: VEX operation ${code} not implemented`);
+    }
+    u8.set(Y.subarray(0, 16), d * 16); hi.set(Y.subarray(16, 32), d * 16);
   };
 
   /** Every operation, on two register slots. `d` and `s` are register indices; `imm` is the

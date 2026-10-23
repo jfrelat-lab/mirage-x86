@@ -74,7 +74,9 @@ export function installBIOS(machine, opts = {}) {
   // A machine whose address space reaches past its RAM (machine.ramSize, the DOS player) has the
   // aperture where a card's is: above the RAM, 4 MiB-aligned, taking nothing from it.
   const RAM = machine.ramSize || mem.size;
-  const VBE_FB_BYTES = mem.size >= (16 << 20) ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
+  // `vram` (MiB) gives the card more: the Linux machine asks 8 for a 1920x1080 framebuffer (Outline's
+  // 256-byte intros draw for that size alone). Every other machine keeps what it always had.
+  const VBE_FB_BYTES = opts.vram ? opts.vram << 20 : mem.size >= (16 << 20) ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
   // A Cirrus GD5446's aperture is its 32 MiB BAR0, aligned to its size as PCI wants (QEMU's -vga
   // cirrus): XFree86 3.3.2's driver takes the base 16 MiB-aligned, and with the framebuffer at 60 MiB
   // it drew at 48 MiB — into the RAM. Its machine has the address space for it above the RAM.
@@ -108,6 +110,9 @@ export function installBIOS(machine, opts = {}) {
     // 16-bit mode above 640x480. Appended, so the existing numbers keep their places in the list.
     [0x114, 800, 600, 16], [0x117, 1024, 768, 16], [0x143, 800, 600, 32], [0x144, 1024, 768, 32],
   ];
+  // 1920x1080 at 32 bits, where the card has the memory for it (`vram`): listed only then, so the
+  // list every other guest reads is unchanged.
+  if (VBE_FB_BYTES >= 1920 * 1080 * 4) VBE_MODES.push([0x145, 1920, 1080, 32]);
   VBE_MODES.forEach(([n], i) => mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF + i * 2) >>> 0, n));
   mem.w16(((VBE_SEG << 4) + VBE_MODES_OFF + VBE_MODES.length * 2) >>> 0, 0xffff);   // terminator
 
