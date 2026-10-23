@@ -60,6 +60,8 @@
   .vmtop { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto; background: var(--panel);
            border: 1px solid var(--edge); border-bottom: none; border-radius: 9px 9px 0 0; padding: 7px 10px; }
   .vmtop > * { flex: none; }
+  /* The machine's description gives way first (an ellipsis) when the buttons need the room. */
+  .vmtop #vmSpec { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #vmName { font-weight: 700; letter-spacing: .05em; }
   .pill { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--edge); border-radius: 99px; padding: 3px 8px; }
   .pill.on { color: var(--accent); border-color: #1d6a55; }
@@ -86,6 +88,11 @@
 
   /* A chooser drawn over the screen, in the idiom of the machine. */
   .over { position: absolute; inset: 0; overflow: auto; }
+  .over[hidden] { display: none; }   /* a chooser's display (grid) would otherwise keep it over the screen */
+  /* A file dragged over the Linux machine: where it will land. */
+  #stage.dropping::after { content: "Drop a Linux program (i386 ELF) to run it"; position: absolute; inset: 0; display: grid; place-items: center;
+    background: rgba(0, 0, 0, .75); color: var(--ink); font: 16px ui-monospace, Menlo, monospace; border: 2px dashed var(--acc, #3fd0a0); }
+  #fbSel { background: transparent; color: inherit; border: 1px solid var(--edge); border-radius: 6px; padding: 3px 4px; font: inherit; }
   .bios { background: #0000aa; color: #fff; font: 16px/1.25 "Px437 IBM VGA8", ui-monospace, Menlo, monospace; padding: 4% 6%; }
   .bios h1 { font: inherit; text-align: center; background: #aaa; color: #000; margin: 0 0 1em; padding: .15em; }
   .bios .hint { color: #aaa; margin-top: 1.2em; }
@@ -138,6 +145,9 @@
       <button id="pause">Pause</button>
       <button id="sound" aria-pressed="true" title="Sound Blaster and speaker">Sound</button>
       <button id="userBtn" hidden title="Your name inside the Linux machine (kept in this browser)">User</button>
+      <button id="openBtn" hidden title="Run a Linux program (an i386 ELF) from your computer — or drop it on the screen">Open…</button>
+      <select id="fbSel" hidden title="The framebuffer /dev/fb0 a dropped program gets: 32 bits, at this size"><option>640x480</option><option>800x600</option><option selected>1024x768</option></select>
+      <input id="openFile" type="file" hidden>
       <button id="logBtn" aria-pressed="false" title="What the machine is doing: layers fetched and built, its output">Log</button>
       <button id="fullscreen" title="Fullscreen (Alt+Enter)">Fullscreen</button>
     </div>

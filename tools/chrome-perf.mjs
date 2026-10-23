@@ -48,7 +48,7 @@ const evaluate = async (expr) => { const r = await send('Runtime.evaluate', { ex
 await send('Page.enable'); await send('Runtime.enable'); await send('Profiler.enable');
 await send('Page.navigate', { url });
 const tLoad = Date.now();
-for (let i = 0; i < 450; i++) {
+for (let i = 0; i < (process.env.NOWAIT ? 0 : 450); i++) {   // NOWAIT=1: a page that starts nothing by itself (a program given with FILES)
   await sleep(200);
   if (await evaluate('!!(window.mirage && (window.mirage.machine || window.mirage.mc))')) break;
   if (process.env.VERBOSE && i % 25 === 0) console.log('waiting:', JSON.stringify(await evaluate("location.href + ' / ' + document.title + ' / ' + ((document.getElementById('status') || {}).textContent)")));
@@ -60,9 +60,9 @@ await evaluate(`(() => { window.__frames = 0; const f = () => { window.__frames+
 await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 5, y: 5, button: 'left', clickCount: 1 });
 await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 5, y: 5, button: 'left', clickCount: 1 });
 
-const sample = () => evaluate(`(() => { const m = window.mirage.machine || window.mirage.mc; return { cyc: m.cpu.cycles, frames: window.__frames, long: window.__long,
-  cps: m.cyclesPerSecond, pit: m.pitReload, base: m.pitBase, ticks: m.ticks || 0, audio: !!(window.mirage.audioOut && window.mirage.audioOut.ctx && window.mirage.audioOut.ctx.state),
-  ctx: window.mirage.audioOut && window.mirage.audioOut.ctx ? window.mirage.audioOut.ctx.state : 'none', t: performance.now() }; })()`);
+const sample = () => evaluate(`(() => { const m = (window.mirage && (window.mirage.machine || window.mirage.mc)) || { cpu: { cycles: 0 } }; return { cyc: m.cpu.cycles, frames: window.__frames, long: window.__long,
+  cps: m.cyclesPerSecond, pit: m.pitReload, base: m.pitBase, ticks: m.ticks || 0, audio: !!(window.mirage && window.mirage.audioOut && window.mirage.audioOut.ctx && window.mirage.audioOut.ctx.state),
+  ctx: window.mirage && window.mirage.audioOut && window.mirage.audioOut.ctx ? window.mirage.audioOut.ctx.state : 'none', t: performance.now() }; })()`);
 let prev = await sample(), profiling = false;
 console.log(' s   Minstr/s  frames  longtask%  PIT Hz  audio');
 const KEYS = (process.env.KEYS || '').split((process.env.KEYS || '').includes('|') ? '|' : ',').filter(Boolean).map((k) => { const i = k.indexOf(':'); return { t: Number(k.slice(0, i)), key: k.slice(i + 1) }; });
@@ -94,6 +94,11 @@ for (let s = 1; s <= SECS; s++) {
   // EVALS="10:<js>|12:<js>" evaluates that JavaScript in the page at those seconds (input a headless
   // browser cannot give, such as a locked pointer's motion: window.mirage.lx.mouseInput(dx, dy, buttons)).
   for (const e of (process.env.EVALS || '').split('|').filter(Boolean)) { const i = e.indexOf(':'); if (Number(e.slice(0, i)) === s) await evaluate(e.slice(i + 1)); }
+  // FILES="3:#openFile:/path/PROG" gives that file to the page's <input type=file> at that second, as a
+  // visitor choosing it would (DOM.setFileInputFiles), then fires its change.
+  for (const f of (process.env.FILES || '').split('|').filter(Boolean)) { const i1 = f.indexOf(':'), i2 = f.indexOf(':', i1 + 1), t = f.slice(0, i1), sel = f.slice(i1 + 1, i2), path = f.slice(i2 + 1); if (Number(t) !== s) continue;
+    const doc = await send('DOM.getDocument'); const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: sel });
+    await send('DOM.setFileInputFiles', { nodeId: q.result.nodeId, files: [path] }); }
   for (const c of CLICKS) if (c.t === s) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: c.x, y: c.y }); await sleep(200); if (c.to) await drag(c); else await click(c.x, c.y); }
   if (process.env.STATUS) console.log('status', s, JSON.stringify(await evaluate("(document.getElementById('status') || {}).textContent")));
   for (const k of KEYS) if (k.t === s) { if (k.key.startsWith('type=')) await typeText(k.key.slice(5)); else await press(k.key); }

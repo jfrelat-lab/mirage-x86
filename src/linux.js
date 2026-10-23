@@ -566,11 +566,20 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // /dev/fb0 (29:0), the framebuffer device (linux/fb.h): the emulated card's linear framebuffer in
   // 640x480 at 32 bits (VBE mode 112h, set at the first open), truecolor, mmap'd straight onto the card —
   // what a program draws there is on the screen. busybox's fbset and fbsplash, SDL's fbcon, Xfbdev.
+  // lx.setFb(w, h) chooses another of the card's 32-bit modes before the program opens it: the Linux
+  // sizecoding intros of the 2020s (Outline's 256 bytes) write their pixels for one resolution only.
   fs.set('/dev/fb0', { dev: 'fb', rdev: 0x1d00, mtime: 0 }); fs.set('/dev/fb', fs.get('/dev/fb0'));
-  const FB = { w: 640, h: 480, bpp: 32 };
+  const FB = { w: 640, h: 480, bpp: 32, mode: 0x112 };
+  const FB_MODES = { '640x480': 0x112, '800x600': 0x143, '1024x768': 0x144 };
+  lx.fbModes = Object.keys(FB_MODES);
+  lx.setFb = (w, h) => {
+    const mode = FB_MODES[`${w}x${h}`];
+    if (!mode) throw new Error(`mirage-linux: no ${w}x${h} framebuffer (${lx.fbModes.join(', ')} at 32 bits)`);
+    Object.assign(FB, { w, h, mode });
+  };
   const fbOn = () => {
     if (!machine.vbeFbBase || !machine.setVbeMode) throw 19;    // ENODEV: no card on this machine
-    if (!machine.vbe || machine.vbe.number !== 0x112) machine.setVbeMode([0x112, FB.w, FB.h, FB.bpp], true);
+    if (!machine.vbe || machine.vbe.number !== FB.mode) machine.setVbeMode([FB.mode, FB.w, FB.h, FB.bpp], true);
     return machine.vbeFbBase >>> 0;
   };
   const fbLen = () => FB.w * FB.h * (FB.bpp >> 3);

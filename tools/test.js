@@ -3338,6 +3338,30 @@ const runLinux = (hex, argv) => {
     got = `${a} | ${ms >= 10 && ms <= 20 ? 'tick: 10-20' : b}`;
   } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: timeouts to the microsecond, or in 1997\'s clock ticks (machine.hz 100)', got, 'tick: 00 | tick: 10-20'); }
+// tools/linux/fbgrad.asm: /dev/fb0 at the size a program needs (lx.setFb, an image's machine.fb, the
+// Linux page's choice for a dropped program) — the 256-byte intros of the 2020s draw for one size,
+// 1024x768 for Outline 2021's xorchitecture. The program reads the size, maps the framebuffer and
+// paints a gradient: its corners on the card, and a size the card has no mode for refused.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/fbgrad.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408be010000620200000700000000100000b805000000bba7810408b902' +
+    '000000cd8085c00f8813010000a3be810408b8360000008b1dbe810408b900460000bac2810408cd8085c00f88ef0000' +
+    '00a1c28104080faf05c6810408c1e00289c1b8c000000031dbba03000000be010000008b3dbe8104085531edcd805d3d' +
+    '00f0ffff0f87b600000089c731db31c989c869c0ff00000031d28b35c28104084ef7f6c1e0105089d869c0ff00000031' +
+    'd28b35c68104084ef7f6c1e0085a09d085c9741a85db74168b15c28104084a39d1740b8b15c68104084a39d37505b8ff' +
+    '000000ab413b0dc281040872a3433b1dc68104087298a1c2810408bfb4810408e847000000a1c6810408bfb9810408e8' +
+    '38000000b804000000bb01000000b9b0810408ba0e000000cd80833c24017407b81d000000cd80b80100000031dbcd80' +
+    'b801000000bb01000000cd8083c703b904000000be0a00000031d2f7f680c23088174f4975f3c32f6465762f66623000' +
+    '66623a203f3f3f3f783f3f3f3f0a');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc); lx.setFb(1024, 768);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/FBGRAD']);
+    for (let i = 0; i < 400 && !lx.done; i++) mc.runSlice(20000);
+    const px = (x, y) => (mc.mem.dv.getUint32(mc.vbeFbBase + (y * 1024 + x) * 4, true) & 0xffffff).toString(16);
+    let refused = 'accepted'; try { lx.setFb(1920, 1080); } catch { refused = 'refused'; }
+    got = [new TextDecoder().decode(Uint8Array.from(lx.stdout)).trim(), px(512, 1), px(1022, 766), px(0, 0), refused].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: /dev/fb0 at 1024x768 for a program that draws for it', got, 'fb: 1024x0768 | 7f0000 | fefe00 | ff | refused'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

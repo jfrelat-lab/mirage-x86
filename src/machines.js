@@ -239,6 +239,32 @@ async function linux() {
     showUser();
     log(`user set to ${clean || 'player'}: it applies from the next start`);
   });
+  // A program of the visitor's own, dropped on the screen or opened: an i386 Linux binary run alone at
+  // /w/<name>, as tools/linux/run.mjs runs one, on a framebuffer of the size chosen beside the button
+  // (the sizecoding intros of the 2020s draw for one size). Nothing leaves the browser.
+  const fbSel = $('fbSel'), openBtn = $('openBtn'), openFile = $('openFile'), stage = $('stage');
+  fbSel.hidden = false; openBtn.hidden = false;
+  try { const f = localStorage.getItem('mirage.linux.fb'); if (f && [...fbSel.options].some((o) => o.value === f)) fbSel.value = f; } catch { /* storage refused */ }
+  fbSel.onchange = () => { try { localStorage.setItem('mirage.linux.fb', fbSel.value); } catch { /* storage refused */ } };
+  const runFile = async (file) => {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (window.mirage && window.mirage.stop) window.mirage.stop();
+    session = null;
+    const { Tree } = await import('./oasis-layers.js');
+    const name = file.name.replace(/[^\w.+-]/g, '_') || 'program';
+    const tree = new Tree(); tree.mkdir('/tmp'); tree.mkdir('/w'); tree.file('/w/' + name, bytes, 0o755);
+    const img = { title: file.name, machine: { cpu: '686', mem: 64, fb: fbSel.value }, entry: { run: '/w/' + name, cwd: '/w' } };
+    over.hidden = true; showLog();
+    for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', 'false');
+    log(`${file.name}: ${bytes.length} bytes from this computer, /dev/fb0 at ${fbSel.value}x32`);
+    status.textContent = `starting ${file.name}…`;
+    await start({ title: file.name }, img, tree.host());
+  };
+  openBtn.onclick = () => openFile.click();
+  openFile.onchange = () => { if (openFile.files[0]) runFile(openFile.files[0]); openFile.value = ''; };
+  stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.add('dropping'); });
+  stage.addEventListener('dragleave', () => stage.classList.remove('dropping'));
+  stage.addEventListener('drop', (e) => { e.preventDefault(); stage.classList.remove('dropping'); const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) runFile(f); });
   let images = [];
   // Images meant for a window; the terminal ones (a shell) run with `oasis run` in a terminal.
   try { images = (await (await fetch('/oasis-images.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { images = null; }
