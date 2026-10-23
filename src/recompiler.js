@@ -48,6 +48,7 @@ const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.
 // Turn it back on by default once regions carry an instruction budget and the game bugs are fixed.
 const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
 const NOREALSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOREALSPEC);
+const NOFLATSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFLATSPEC);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
 const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOMEMO);
 const MEMO_MAX = 200000;          // blocks the memo keeps (the oldest go first)
@@ -143,6 +144,13 @@ function unimplemented(what, lin, mem, rec) {
 export class Recompiler {
   constructor(cpu) {
     this.cpu = cpu;
+    // A block translated for flat segments found one no longer flat at its head: it goes, and the
+    // dispatch translates the address again for the segments as they are now (see FLATSPEC).
+    cpu.unflat = (lin) => {
+      const pg = this.blockPages[lin >>> 12], b = pg && (pg[lin & 0xfff] || pg[(lin & 0xfff) | 0x1000]);
+      if (b) this._evict(b, lin);
+      cpu.smcSelf = 0;
+    };
     this.mem = cpu.mem;
     this.MM = this.mem.mask;
     this.memStrategy = MEM_DEFAULT;   // switched to `paged` when the guest enables paging
@@ -743,7 +751,9 @@ export class Recompiler {
     const cpu = this.cpu;
     const real = !TIER2 && !NOREALSPEC && (!(cpu.cr0 & 1) || (cpu.flags & 0x20000) !== 0) ? 1 : 0;
     const smc = (this.smcPages.get(lin >>> 12) || 0) >= SMC_PAGE_HOT ? 1 : 0;
-    return lin + ':' + ip0 + ':' + cpu.csD + ':' + real + ':' + ((cpu.fcw & 0x300) === 0 ? 1 : 0) + ':' + smc;
+    let flat = 0;                                  // which segments a block may take as flat (FLATSPEC)
+    for (let i = 0; i < 6; i++) if (cpu.limit[i] === 0xffffffff && cpu.limLo[i] === 0) flat |= 1 << i;
+    return lin + ':' + ip0 + ':' + cpu.csD + ':' + real + ':' + ((cpu.fcw & 0x300) === 0 ? 1 : 0) + ':' + smc + ':' + flat;
   }
   _memoGet(key) {
     const list = this.memo.get(key);
@@ -887,6 +897,23 @@ export class Recompiler {
     }
     const out = ['var t;'];
     const P = (s) => out.push(s);
+    // FLAT SEGMENTS. A protected-mode segment of base-independent limit 4 GiB, expand-up (limit FFFFFFFFh,
+    // limLo 0), can never fail a limit check: Linux's, a DOS extender's flat model, Win32's. Its
+    // accesses are translated without one, and the block checks once, at its head, that the segments
+    // it relied on are still flat — a load since (Windows 9x moves between flat and 16-bit selectors)
+    // and the block evicts itself and is translated again (cpu.unflat); the memo keeps both kinds.
+    // Not after a segment load inside the block (a `cpu.setSeg(` already emitted), nor under tier 2,
+    // whose regions splice member blocks without their heads. MIRAGE_NOFLATSPEC=1 turns it off.
+    const cpuNow = this.cpu;
+    const FLATSPEC = !checked && !NOFLATSPEC && !TIER2 && (cpuNow.cr0 & 1) && !(cpuNow.flags & 0x20000);
+    const flatUsed = new Set();
+    let segScan = 0, segLoaded = false;
+    const flatSeg = (seg) => {
+      if (!FLATSPEC) return false;
+      for (; !segLoaded && segScan < out.length; segScan++) if (out[segScan].includes('setSeg(')) segLoaded = true;
+      if (segLoaded || cpuNow.limit[seg] !== 0xffffffff || cpuNow.limLo[seg] !== 0) return false;
+      flatUsed.add(seg); return true;
+    };
     let ip = ip0, ipLast = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false, stiShadow = 0;
     const NT = () => '_' + (tmp++);
 
@@ -1033,11 +1060,11 @@ export class Recompiler {
     // both guards spelled out. This caught me twice: the write guard on rmW alone left `mov [0],eax`
     // (A3) unprotected, and then the limit guard on memAddr alone left `mov eax,[0x9fffd]` (A1)
     // unprotected — each time the section under test was the one instruction the guard missed.
-    const limGuardOff = (seg, off, bytes) => SEGLIM && !REAL
+    const limGuardOff = (seg, off, bytes) => SEGLIM && !REAL && !flatSeg(seg)
       ? `if((${(off >>> 0) + bytes - 1}>cpu.limit[${seg}]||${off >>> 0}<cpu.limLo[${seg}])&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
         `cpu.eip=${curIpStart};cpu.raise(${seg === SS ? 12 : 13},0);return;}` : '';
     const limGuard = (o, bytes) => {
-      if (!SEGLIM || REAL) return '';
+      if (!SEGLIM || REAL || flatSeg(o.seg)) return '';
       const t = NT();
       return `var ${t}=((${o.off})>>>0)+${bytes - 1};if((${t}>cpu.limit[${o.seg}]||${t}-${bytes - 1}<cpu.limLo[${o.seg}])&&(cpu.cr0&1)&&!(cpu.flags&0x20000)){` +
         `cpu.eip=${curIpStart};cpu.raise(${o.seg === SS ? 12 : 13},0);return;}`;
@@ -1127,7 +1154,21 @@ export class Recompiler {
     };
 
     // ===================== main decode loop =====================
+    // The per-instruction `cpu.eip=` (pfRestart, below) only matters to an instruction that can fault
+    // or reads EIP: one that touches memory, calls a helper, or returns. One that only moves registers
+    // and sets flags (`mov eax,edi`, `and al,81h`, `shl eax,3`) cannot, and its store is dropped once
+    // the instruction is translated: Outline 2021's xorchitecture spent a share of its loop on them.
+    // The flag setters and the shift helpers neither fault nor read EIP.
+    const EIP_FREE = /cpu\.(?:set(?:Add|Sub|Logic|ShiftResult|Adc|Sbb)|shl|shr|sar|rol|ror|rcl|rcr)\(|cpu\.flags\b|cpu\.shiftMask\b/g;
+    let eipAt = -1;
+    const pruneEip = () => {
+      if (eipAt < 0) return;
+      const rest = out.slice(eipAt + 1).join('\n').replace(EIP_FREE, '');
+      if (!/cpu\.|\bm\.|u8\[|rdo\[|wro\[|\bdv\.|\bst\[|\boc\[|return|throw/.test(rest)) out[eipAt] = '';
+      eipAt = -1;
+    };
     while (!ended && count < maxOps) {
+      pruneEip();
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
       const ipStart = ip; ipLast = ip; curIpStart = ip;    // instruction start ip — fault return address (#BR etc.)
       // A #PF is raised from INSIDE a memory access, so the run loop has to know which instruction
@@ -1136,7 +1177,7 @@ export class Recompiler {
       // mode pays for it. (Instruction restart is approximate: side effects a faulting instruction
       // had already committed are not undone. Demand paging faults on the access itself, which is
       // the case that matters; a REP MOVS straddling a missing page is not.)
-      if (pfRestart) P(`cpu.eip=${ipStart};`);
+      if (pfRestart) { eipAt = out.length; P(`cpu.eip=${ipStart};`); }
       // prefixes. Bounded: x86 caps an instruction at 15 bytes, so a longer prefix run is not
       // real code — it is garbage the tier-2 region walker speculatively reached (a Jcc/JMP
       // successor that lands in data). Without this cap the loop would consume prefix bytes
@@ -1697,10 +1738,16 @@ export class Recompiler {
     // `bodyOut` is the block body WITHOUT its terminating branch (kept for the region
     // compiler, which re-emits the terminator from `term`); tier-1 then appends the
     // terminator's return form to get the standalone block function.
+    pruneEip();
     if (needChecked) return this.translate(linStart, ip0, maxOps, d, true);
     const bodyOut = out.slice();
     emitTermReturn();
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '');
+    let head = '';
+    if (flatUsed.size) {
+      const sg = [...flatUsed];
+      head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
+    }
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + head;
     const body = pre + '\n' + out.join('\n');
     const fn = new Function('cpu', body);
     // The emitted source is kept ONLY if something will read it: the region compiler splices

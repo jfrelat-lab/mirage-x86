@@ -825,6 +825,41 @@ function eq(name, got, want) {
   eq('...and a remapped code page runs the new bytes', go(), 2);
   } catch (e) { eq('D8 test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
 
+// ---- flat segments: no limit check, until a segment is no longer flat --------------------------------
+// A block whose segments are flat (limit 4 GiB, expand-up: Linux's, Win32's) is translated without
+// limit checks and checks once at its head that they still are (FLATSPEC). Here a subroutine runs with
+// DS flat, then again after DS is loaded with a 4 KiB segment: its read at 3000h must be #GP the
+// second time, the translated block notwithstanding. And under paging an instruction that only moves
+// registers stores no EIP: the #GP's EIP must still be the faulting `mov eax,[3000h]`, not the
+// `mov ebx,eax` before it.
+{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000, IDT = 0x8800, DIR = 0x10000, PT0 = 0x11000, PT1 = 0x12000, A = 0x200000;
+  m.setA20(true); mc.rec.setMask(m.mask);
+  cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff; cpu.idtr.base = IDT; cpu.idtr.limit = 0x7ff;
+  const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
+  desc(1, 0x9a); desc(2, 0x92);
+  m.w16(GDT + 0x18, 0x0fff); m.w16(GDT + 0x1a, 0); m.w8(GDT + 0x1c, 0); m.w8(GDT + 0x1d, 0x92); m.w8(GDT + 0x1e, 0x40); m.w8(GDT + 0x1f, 0);   // 18h: data, limit FFFh
+  const g = IDT + 13 * 8; m.w16(g, 0x6000); m.w16(g + 2, 0x08); m.w8(g + 4, 0); m.w8(g + 5, 0x8e); m.w16(g + 6, 0);   // #GP -> 08:6000
+  for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 3);
+  m.w32(DIR, PT0 | 3); m.w32(DIR + 4, PT1 | 3); m.w32(PT1, A | 3);
+  // nasm (bits 32, org 400000h): call sub / mov ax,18h / mov ds,ax / call sub / hlt ... 400100h:
+  //   sub: mov ebx,eax / add ebx,1 / mov eax,[3000h] / ret
+  m.blit(A, Uint8Array.from('e8fb00000066b818008ed8e8f0000000f4'.match(/../g).map((x) => parseInt(x, 16))));
+  m.blit(A + 0x100, Uint8Array.from('89c383c301a100300000c3'.match(/../g).map((x) => parseInt(x, 16))));
+  m.blit(0x6000, Uint8Array.from('8b44240436a300710000f4'.match(/../g).map((x) => parseInt(x, 16))));   // #GP: [7100h] = the pushed EIP; hlt
+  cpu.setCR3(DIR); cpu.setCR0(0x80000001); cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.setSeg(DS, 0x10); cpu.reg[4] = 0x9000; cpu.eip = 0x400000;
+  let got;
+  try { for (let i = 0; i < 50 && !cpu.halted; i++) mc.runSlice(100); got = (m.r32(0x7100) >>> 0).toString(16); } catch (e) { got = e.message.slice(0, 60); }
+  eq('flat segments: a block translated with DS flat faults once DS has a 4 KiB limit, at the faulting instruction', got, '400105');
+  // A #PF is raised from inside the access and needs the per-instruction EIP: 400200h: mov ebx,eax /
+  // add ebx,1 / mov eax,[800000h] (not mapped) / hlt; the #PF handler at 6100h keeps the pushed EIP.
+  const p = IDT + 14 * 8; m.w16(p, 0x6100); m.w16(p + 2, 0x08); m.w8(p + 4, 0); m.w8(p + 5, 0x8e); m.w16(p + 6, 0);
+  m.blit(A + 0x200, Uint8Array.from('89c383c301a100008000f4'.match(/../g).map((x) => parseInt(x, 16))));
+  m.blit(0x6100, Uint8Array.from('8b44240436a304710000f4'.match(/../g).map((x) => parseInt(x, 16))));
+  try { cpu.setSeg(DS, 0x10); cpu.reg[4] = 0x9000; cpu.eip = 0x400200; cpu.halted = false;
+    for (let i = 0; i < 50 && !cpu.halted; i++) mc.runSlice(100); got = (m.r32(0x7104) >>> 0).toString(16); } catch (e) { got = e.message.slice(0, 60); }
+  eq('...and a page fault after instructions that store no EIP reports the faulting instruction', got, '400205'); }
+
 // ---- paging off and on again keeps the blocks; code changed meanwhile is still caught -------------------
 // CWSDPMI returns to real mode for every interrupt: under FreeDOS, Kraptor toggled paging 2600 times a
 // second, each toggle dropped the whole cache, and the browser translated 128 000 blocks a second. Each
