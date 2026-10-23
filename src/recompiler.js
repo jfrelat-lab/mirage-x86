@@ -1892,35 +1892,49 @@ export class Recompiler {
     function emitShift(o, size, cnt) {
       const rot = o.reg;   // 0 rol,1 ror,2 rcl,3 rcr,4/6 shl,5 shr,7 sar
       if (rot === 2 || rot === 3) cur.use |= lC;   // RCL/RCR rotate through carry — read CF
-      // Inline the logical/arithmetic shifts with a COMPILE-TIME count (C0/C1/D0/D1) for
-      // 8/16-bit — the hot forms. Mirrors cpu.shl/shr/sar exactly; setShiftResult is a
-      // strippable PFLAG (def CF/OF/PF/ZF/SF, AF preserved). CL-count (D2/D3, runtime c==0
-      // branch), rotates, and 32-bit keep the helper call.
+      // Inline the logical/arithmetic shifts with a COMPILE-TIME count (C0/C1/D0/D1) — the hot
+      // forms. Mirrors cpu.shl/shr/sar exactly; CF and OF are computed INSIDE the strippable PFLAG
+      // with setShiftResult (def CF/OF/PF/ZF/SF, AF preserved), so a shift whose flags the next
+      // instruction overwrites is a bare JavaScript shift. 32-bit too: `shl eax,3` in a flat 32-bit
+      // program called the helper and computed every flag for an `add` to overwrite (Outline 2021's
+      // xorchitecture: 9% of its time). CL counts (runtime c==0 branch) and rotates keep the helper.
       const isShift = rot === 4 || rot === 5 || rot === 6 || rot === 7;
       // The inline fast path assumes the count is smaller than the operand — under the 8088 profile
       // it need not be, and JS's own shift operators mask to 5 bits, so a count of 32 would become 0.
       // Counts at or above the width go to the helper, which handles them explicitly.
       const litC = /^\d+$/.test(cnt) ? (Number(cnt) & SHIFT_MASK) : -1;
-      if (isShift && size !== 32 && litC >= 0 && litC < size) {
+      if (isShift && litC >= 0 && litC < size) {
         const C = litC;
         if (C === 0) return;   // shift by 0: value and flags unchanged (byte-exact no-op)
-        const mask = size === 8 ? 0xff : 0xffff, msb = size - 1;
-        const v = NT(), res = NT(), cf = NT(), of = NT();
-        if (rot === 5) {                                   // SHR
-          P(`var ${v}=(${rmR(o, size)})&${mask};var ${res}=(${v}>>>${C})&${mask};`);
-          P(rmW(o, size, res));
-          P(`var ${cf}=(${v}>>>${C - 1})&1;var ${of}=${C === 1 ? `((${v}>>>${msb})&1)` : '0'};`);
-        } else if (rot === 7) {                            // SAR
-          const sv = NT();
-          P(`var ${v}=(${rmR(o, size)})&${mask};var ${sv}=((${v}&${1 << msb})?(${v}|${~mask}):${v})|0;var ${res}=(${sv}>>${C})&${mask};`);
-          P(rmW(o, size, res));
-          P(`var ${cf}=(${sv}>>${C - 1})&1;var ${of}=0;`);
-        } else {                                           // SHL (rot 4 or 6)
-          P(`var ${v}=(${rmR(o, size)})&${mask};var ${res}=(${v}<<${C})&${mask};`);
-          P(rmW(o, size, res));
-          P(`var ${cf}=${C <= size ? `((${v}>>>${size - C})&1)` : '0'};var ${of}=${C === 1 ? `(((${res}>>>${msb})&1)^${cf})` : '0'};`);
+        const msb = size - 1, v = NT(), res = NT();
+        let cf, of;
+        if (size === 32) {
+          if (rot === 5) {                                 // SHR
+            P(`var ${v}=(${rmR(o, 32)})>>>0;var ${res}=(${v}>>>${C})>>>0;`);
+            cf = `(${v}>>>${C - 1})&1`; of = C === 1 ? `(${v}>>>31)&1` : '0';
+          } else if (rot === 7) {                          // SAR
+            P(`var ${v}=(${rmR(o, 32)})|0;var ${res}=(${v}>>${C})>>>0;`);
+            cf = `(${v}>>${C - 1})&1`; of = '0';
+          } else {                                         // SHL (rot 4 or 6)
+            P(`var ${v}=(${rmR(o, 32)})>>>0;var ${res}=(${v}<<${C})>>>0;`);
+            cf = `(${v}>>>${32 - C})&1`; of = C === 1 ? `((${res}>>>31)&1)^((${v}>>>31)&1)` : '0';
+          }
+        } else {
+          const mask = size === 8 ? 0xff : 0xffff;
+          if (rot === 5) {                                 // SHR
+            P(`var ${v}=(${rmR(o, size)})&${mask};var ${res}=(${v}>>>${C})&${mask};`);
+            cf = `(${v}>>>${C - 1})&1`; of = C === 1 ? `(${v}>>>${msb})&1` : '0';
+          } else if (rot === 7) {                          // SAR
+            const sv = NT();
+            P(`var ${v}=(${rmR(o, size)})&${mask};var ${sv}=((${v}&${1 << msb})?(${v}|${~mask}):${v})|0;var ${res}=(${sv}>>${C})&${mask};`);
+            cf = `(${sv}>>${C - 1})&1`; of = '0';
+          } else {                                         // SHL (rot 4 or 6)
+            P(`var ${v}=(${rmR(o, size)})&${mask};var ${res}=(${v}<<${C})&${mask};`);
+            cf = `(${v}>>>${size - C})&1`; of = C === 1 ? `((${res}>>>${msb})&1)^((${v}>>>${size - C})&1)` : '0';
+          }
         }
-        PFLAG(`cpu.setShiftResult(${res},${size},!!${cf},!!${of});`, lC | lP | lZ | lS | lO);
+        P(rmW(o, size, res));
+        PFLAG(`cpu.setShiftResult(${res},${size},!!(${cf}),!!(${of}));`, lC | lP | lZ | lS | lO);
         return;
       }
       const ops = ['rol', 'ror', 'rcl', 'rcr', 'shl', 'shr', 'shl', 'sar'];

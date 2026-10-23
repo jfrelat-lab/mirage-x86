@@ -860,6 +860,30 @@ function eq(name, got, want) {
     for (let i = 0; i < 50 && !cpu.halted; i++) mc.runSlice(100); got = (m.r32(0x7104) >>> 0).toString(16); } catch (e) { got = e.message.slice(0, 60); }
   eq('...and a page fault after instructions that store no EIP reports the faulting instruction', got, '400205'); }
 
+// ---- 32-bit shifts by an immediate count, translated inline: the helper's result and flags ----------
+// `shl eax,3` in a flat 32-bit program called cpu.shl and computed every flag for the next `add` to
+// overwrite; it is now a JavaScript shift, its flags in the strippable setShiftResult. Here each of
+// SHL/SHR/SAR by 1, 3, 31 on values with the top and low bits in every state: EAX, and CF PF ZF SF OF
+// read live by PUSHFD, must be what the helpers give.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const GDT = 0x8000; cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
+  const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
+  desc(1, 0x9a); desc(2, 0x92);
+  cpu.cr0 = 1; cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.setSeg(DS, 0x10);
+  const ref = new Machine({ memSize: 1 << 16 }).cpu;
+  const bad = [];
+  let at = 0x2000;
+  for (const [reg, name] of [[4, 'shl'], [5, 'shr'], [7, 'sar']]) for (const c of [1, 3, 31]) for (const v of [0x80000001, 0x40000000, 0x7fffffff, 0xc0000000, 1, 0]) {
+    // mov eax,v / shl|shr|sar eax,c / pushfd / pop ebx / hlt
+    const code = [0xb8, v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, v >>> 24, 0xc1, 0xc0 | (reg << 3), c, 0x9c, 0x5b, 0xf4];
+    m.blit(at, Uint8Array.from(code)); cpu.eip = at; cpu.halted = false; cpu.reg[4] = 0x9000; cpu.flags = 0x2;
+    for (let i = 0; i < 10 && !cpu.halted; i++) mc.runSlice(10);
+    ref.flags = 0x2; const want = ref[name](v, c, 32) >>> 0, wf = ref.flags & 0x8c5, gf = cpu.reg[3] & 0x8c5;
+    if ((cpu.reg[0] >>> 0) !== want || gf !== wf) bad.push(`${name} ${v.toString(16)},${c}: ${(cpu.reg[0] >>> 0).toString(16)}/${gf.toString(16)} want ${want.toString(16)}/${wf.toString(16)}`);
+    at += 16;
+  }
+  eq('32-bit SHL/SHR/SAR by an immediate count: the helpers\' result and flags', bad.slice(0, 3).join(' | ') || 'same', 'same'); }
+
 // ---- paging off and on again keeps the blocks; code changed meanwhile is still caught -------------------
 // CWSDPMI returns to real mode for every interrupt: under FreeDOS, Kraptor toggled paging 2600 times a
 // second, each toggle dropped the whole cache, and the browser translated 128 000 blocks a second. Each
