@@ -150,8 +150,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const elfHeader = (elf) => {
     const d = new DataView(elf.buffer, elf.byteOffset, elf.byteLength);
     if (elf.length < 52 || d.getUint32(0, false) !== 0x7f454c46) throw new Error('mirage-linux: not an ELF file');
-    if (elf[4] !== 1 || elf[5] !== 1) throw new Error('mirage-linux: not ELF32 little-endian');
+    // What the kernel checks (fs/binfmt_elf.c: the magic, e_type, elf_check_arch's EM_386, and in
+    // load_elf_phdrs a program header of 32 bytes) — not e_ident's class and byte order: sizecoded
+    // intros lay their header over those bytes (Outline 2021's xorchitecture leaves them 0).
     if (d.getUint16(18, true) !== 3) throw new Error('mirage-linux: not an i386 program');
+    if (d.getUint16(42, true) !== 32) throw new Error('mirage-linux: not ELF32 (program headers of 32 bytes)');
     const type = d.getUint16(16, true);
     if (type !== 2 && type !== 3) throw new Error('mirage-linux: neither an executable nor a shared object');
     const h = { d, type, entry: d.getUint32(24, true), phoff: d.getUint32(28, true),
@@ -1007,6 +1010,20 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     (fd === 2 ? lx.stderr : lx.stdout).push(...bytes);
     if (lx.onOutput) lx.onOutput(fd, bytes);
   };
+  // timerfd (timerfd_create, timerfd_settime, timerfd_gettime): a timer read as a descriptor — its
+  // read waits for the next expiry and answers the expirations since, as a u64. Sizecoded intros of
+  // the 2020s pace their frames on one (Outline 2021's xorchitecture: 16 ms). Times on lx.mono.
+  const tfdTake = (t) => {
+    if (!t.next || lx.mono() < t.next) return 0;
+    if (!t.interval) { t.next = 0; return 1; }
+    const k = Math.floor((lx.mono() - t.next) / t.interval);
+    t.next += (k + 1) * t.interval; return k + 1;
+  };
+  const tfdReady = (t) => t.next !== 0 && lx.mono() >= t.next;
+  const itimerspec = (a) => ({ interval: rd32(a) + rd32(a + 4) / 1e9, value: rd32(a + 8) + rd32(a + 12) / 1e9 });
+  const putItimerspec = (a, interval, left) => {
+    for (const [o, v] of [[0, interval], [8, left]]) { const sec = Math.floor(v); wr32(a + o, sec); wr32(a + o + 4, Math.round((v - sec) * 1e9)); }
+  };
   const doWrite = (fd, bytes) => {
     const f = fdOf(fd);
     if (f.sk) return sockWrite(f, bytes);
@@ -1038,6 +1055,16 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const doRead = (fd, buf, n, at) => {
     const f = fdOf(fd);
     let src;
+    if (f.tfd) {
+      if (n < 8) return -E.EINVAL;
+      const k = tfdTake(f.tfd);
+      if (!k) {
+        if (f.flags & 0x800) return -E.EAGAIN;
+        if (f.tfd.next && lx.wake === null) lx.wake = f.tfd.next;          // the clock may go to it
+        return BLOCK;
+      }
+      wr32(buf, k); wr32(buf + 4, 0); return 8;
+    }
     if (f.sk) { const r = sockRead(f, n); if (typeof r !== 'object') return r; wrBytes(buf, r); return r.length; }
     // A pipe: what its writer left. Its writer has run to its end already (one process at a time), so an
     // empty pipe is the end of it.
@@ -1425,7 +1452,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       let rev = 0;
       if (fd >= 0 && !f) rev = 0x20;
       else if (f) {
-        const readable = f.sk ? sockReady(f) : f.pty ? ptyReady(f) : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
+        const readable = f.tfd ? tfdReady(f.tfd) : f.sk ? sockReady(f) : f.pty ? ptyReady(f) : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
           : f.node && f.node.dev === 'tty' ? lx.ttyIn.length > 0 : f.node && f.node.dev === 'mice' ? lx.miceIn.length > 0 : f.node && f.node.dev === 'mouse' ? lx.mouseIn.length > 0 : true;
         if ((ev & 1) && readable) rev |= 1;
         if (ev & 4) rev |= 4;
@@ -1443,7 +1470,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const selectWait = (tv, ns) => (tv ? rd32(tv) + rd32(tv + 4) / (ns ? 1e9 : 1e6) : Infinity);
   const select = (n, inp, outp, exp, tv, ns = false) => {
     let ready = 0;
-    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.sk) return sockReady(f); if (f.pty) return ptyReady(f); if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
+    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.tfd) return tfdReady(f.tfd); if (f.sk) return sockReady(f); if (f.pty) return ptyReady(f); if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
       if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0;
       if (f.node && f.node.dev === 'mice') return lx.miceIn.length > 0; return true; };
     const writes = [];
@@ -1516,6 +1543,30 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       return total;
     },
     180: (fd, buf, n, lo, hi) => doRead(fd, buf, n, lo + hi * 4294967296),  // pread64
+    181: (fd, buf, n, lo, hi) => {                                         // pwrite64: at an offset, the file's own left as it was
+      const f = fdOf(fd), keep = f.pos;
+      if (f.pp || f.pipe !== undefined || f.sk) return -E.ESPIPE;
+      f.pos = lo + hi * 4294967296;
+      try { return doWrite(fd, rdBytes(buf, n)); } finally { f.pos = keep; }
+    },
+    322: (clock, flags) => {                                                // timerfd_create (CLOCK_REALTIME 0, MONOTONIC 1, BOOTTIME 7)
+      if (clock !== 0 && clock !== 1 && clock !== 7) return -E.EINVAL;
+      return newFd({ tfd: { clock, next: 0, interval: 0 }, node: { dev: 'timerfd' }, flags: flags & 0x800, pos: 0 }, 0, !!(flags & 0x80000));
+    },
+    325: (fd, flags, nv, ov) => {                                           // timerfd_settime
+      const f = fdOf(fd); if (!f.tfd) return -E.EINVAL;
+      const t = f.tfd, now = lx.mono();
+      if (ov) putItimerspec(ov, t.interval, t.next ? Math.max(0, t.next - now) : 0);
+      const v = itimerspec(nv);
+      t.interval = v.interval;
+      // TFD_TIMER_ABSTIME: the time is the clock's own — the realtime clock's from the epoch
+      t.next = !v.value ? 0 : !(flags & 1) ? now + v.value : t.clock === 0 ? now + (v.value - lx.now()) : v.value;
+      return 0;
+    },
+    326: (fd, cur) => {                                                     // timerfd_gettime
+      const f = fdOf(fd); if (!f.tfd) return -E.EINVAL;
+      putItimerspec(cur, f.tfd.interval, f.tfd.next ? Math.max(0, f.tfd.next - lx.mono()) : 0); return 0;
+    },
     5: (path, flags, mode) => doOpen(rdStr(path), flags, lx.cwd, mode),    // open
     8: (path, mode) => doOpen(rdStr(path), 0x241, lx.cwd, mode),           // creat: O_CREAT|O_WRONLY|O_TRUNC
     295: (dirfd, path, flags, mode) => doOpen(rdStr(path), flags, atBase(dirfd), mode),   // openat

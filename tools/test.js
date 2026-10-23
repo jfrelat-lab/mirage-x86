@@ -3362,6 +3362,40 @@ const runLinux = (hex, argv) => {
     got = [new TextDecoder().decode(Uint8Array.from(lx.stdout)).trim(), px(512, 1), px(1022, 766), px(0, 0), refused].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: /dev/fb0 at 1024x768 for a program that draws for it', got, 'fb: 1024x0768 | 7f0000 | fefe00 | ff | refused'); }
+// tools/linux/timerfd.asm: a timer read as a descriptor (timerfd_create/settime/gettime, a read that
+// waits for the expiry) and pwrite64 — what Outline 2021's xorchitecture paces and draws its frames
+// with. Docker i386/debian: "tfd: YYY"; MIRAGE had neither (ENOSYS).
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/timerfd.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040862020000620200000700000000100000b84e000000bb2d82040831c9' +
+    'cd80b842010000bb0100000031c9cd80a33d820408b8450100008b1d3d82040831c9ba0182040831f6cd80c605618204' +
+    '0859bf03000000b8030000008b1d3d820408b945820408ba08000000cd8083f8087509833d45820408017407c6056182' +
+    '04084e4f75d1b84e000000bb3582040831c9cd80a1358204082b052d82040869c040420f000305398204082b05318204' +
+    '083d60ea00007d07c605618204084ea061820408a229820408b8460100008b1d3d820408b94d820408cd80b24e833d4d' +
+    '82040800750e813d51820408002d31017502b25988152a820408b805000000bb11820408b942020000baa4010000cd80' +
+    'a341820408b8040000008b1d41820408b91e820408ba04000000cd80b8b50000008b1d41820408b922820408ba020000' +
+    '00be0200000031ffcd80b8130000008b1d4182040831c9ba01000000cd80b24e83f804752bb8b40000008b1d41820408' +
+    'b95d820408ba0400000031f631ffcd80b24e813d5d820408616258597502b25988152b820408b80a000000bb11820408' +
+    'cd80b804000000bb01000000b924820408ba09000000cd80b80100000031dbcd8000000000002d310100000000002d31' +
+    '012f746d702f7466642e747874006162636458597466643a203f3f3f0a00000000000000000000000000000000000000' +
+    '00000000000000000000000000000000000000000000000000000000000000000000');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc); lx.mkdir('/tmp');
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/TIMERFD']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = new TextDecoder().decode(Uint8Array.from(lx.stdout)) || (lx.done ? `status ${lx.status}` : 'still running');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: timerfd and pwrite64', got, 'tfd: YYY\n'); }
+// An ELF header with EI_CLASS and EI_DATA left 0, as sizecoded intros lay their header over them
+// (xorchitecture): the kernel checks the magic, e_type, EM_386 and the program header's size, not those
+// (fs/binfmt_elf.c) — hello.asm with bytes 4 and 5 cleared runs. MIRAGE refused it: "not ELF32".
+{ const hex = (                                         // nasm -f bin tools/linux/hello.asm, e_ident[4..5] = 0
+    '7f454c460000010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408b7000000b7000000070000000010000089e6ad89c50430a2b4800408' +
+    'b9af800408ba07000000e8330000004d7824ad89c131d2803c1100740342ebf7e81d000000b9b6800408ba01000000e8' +
+    '0e000000ebd9b801000000bb2a000000cd80b804000000bb01000000cd80c3617267633d3f0a0a');
+  let r; try { r = runLinux(hex, ['/w/HELLO']).status; } catch (e) { r = e.message.slice(0, 60); }
+  eq('linux: an ELF header whose class and byte order are 0 runs, as the kernel runs it', r, 42); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).
