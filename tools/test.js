@@ -3698,11 +3698,12 @@ const runLinux = (hex, argv) => {
   try { const { relayTarget, OASIS_HOSTS } = await import('../src/oasis-hosts.js'); const fsm = await import('fs'), pm = await import('path');
     const used = new Set(); const walk = (dir) => { for (const f of fsm.readdirSync(dir)) { const q = pm.join(dir, f); if (fsm.statSync(q).isDirectory()) walk(q); else if (f.endsWith('.json')) for (const m of fsm.readFileSync(q, 'utf8').matchAll(/"https?:\/\/([^/"]+)/g)) used.add(m[1]); } };
     walk(new URL('../oasis/images', import.meta.url).pathname);
-    for (const e of JSON.parse(fsm.readFileSync(new URL('../examples/manifest.json', import.meta.url), 'utf8'))) if (e.url) used.add(new URL(e.url).hostname);   // examples fetched at their source
+    const urls = JSON.parse(fsm.readFileSync(new URL('../examples/manifest.json', import.meta.url), 'utf8')).filter((e) => e.url).map((e) => e.url);   // examples fetched at their source
     got = [relayTarget('http://archive.debian.org/debian/x.deb') !== null, relayTarget('https://example.com/x'), relayTarget('https://archive.debian.org:8080/x'),
-      relayTarget('https://u:p@busybox.net/x'), relayTarget('file:///etc/passwd'), [...used].every((h) => OASIS_HOSTS.includes(h))].map(String).join(' ');
+      relayTarget('https://u:p@busybox.net/x'), relayTarget('file:///etc/passwd'), [...used].every((h) => OASIS_HOSTS.includes(h)),
+      urls.every((u) => relayTarget(u) !== null), relayTarget('https://raw.githubusercontent.com/someone/else/main/x')].map(String).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis-fetch relays only the hosts the images and examples use, and every one of them', got, 'true null null null null true'); }
+  eq('oasis-fetch relays only the hosts the images and examples use, and every one of them', got, 'true null null null null true true null'); }
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's

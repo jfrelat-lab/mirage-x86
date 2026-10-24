@@ -613,5 +613,20 @@
     "source": "https://www.pouet.net/prod.php?which=58805",
     "blurb": "127 bytes for Linux, 2012: a shimmering pattern and its sound, from six bytes left after the setup.",
     "secs": 20
+  },
+  {
+    "id": "attraction",
+    "tag": "Linux 256 bytes",
+    "kind": "linux",
+    "url": "https://raw.githubusercontent.com/dominikfhnw/demoscene_releases/main/outline2026/attraction_decay.zip",
+    "member": "attraction_decay/attraction_decay",
+    "fb": "1920x1080",
+    "title": "attraction & decay",
+    "author": "dominikr / Desire",
+    "year": 2026,
+    "license": "no licence stated: fetched from its authors’ repository",
+    "source": "https://www.pouet.net/prod.php?which=106201",
+    "blurb": "256 bytes for Linux (the party version, header not counted), Outline 2026: a Lorenz attractor drawn in the x87 FPU, double-buffered at 1920x1080, paced by a timerfd.",
+    "secs": 30
   }
 ]
