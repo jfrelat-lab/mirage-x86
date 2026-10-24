@@ -195,6 +195,7 @@
       const name = e.file.split('/').pop();
       return `dos.html?load=${encodeURIComponent(e.file)}&run=${encodeURIComponent(name.replace(/\.[^.]+$/, ''))}` + (e.mem ? `&mem=${e.mem}` : '');
     }
+    if (e.kind === 'linux') return `machines.html?m=linux&prog=${encodeURIComponent(e.id)}`;
     return `boot.html?img=${encodeURIComponent(e.file)}&cpu=${e.cpu || 386}&mem=${e.mem || 4}`;
   };
   // Systems booted to their desktop, from examples/gallery.json: a screenshot and the bare PC set up for them.
@@ -233,7 +234,7 @@
       return `<article class="card">
         <a class="shot" href="${runUrl(e)}" aria-label="Run ${esc(e.title)}"><img src="examples/thumbs/${esc(e.id)}.png" alt="${esc(e.title)}, as MIRAGE draws it" loading="lazy"></a>
         <div class="body">
-          <h3>${esc(e.title)} <span class="tag">${esc(e.tag || (e.kind === 'boot' ? 'boot sector' : e.kind === 'zip' ? 'DOS game' : 'DOS'))}</span></h3>
+          <h3>${esc(e.title)} <span class="tag">${esc(e.tag || (e.kind === 'boot' ? 'boot sector' : e.kind === 'zip' ? 'DOS game' : e.kind === 'linux' ? 'Linux' : 'DOS'))}</span></h3>
           <div class="meta">${esc(who)}</div>
           <p class="blurb">${esc(e.blurb)}</p>
           <div class="actions"><a class="run" href="${runUrl(e)}">Run</a><span class="meta">${lic}${src}</span></div>

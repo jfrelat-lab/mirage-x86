@@ -72,7 +72,7 @@ const logOutput = (t) => {
 
 function shelf(title, items, current) {
   $('shelfTitle').textContent = title;
-  $('shelf').innerHTML = items.map((x, i) => `<button class="card" data-i="${i}"${x.id === current ? ' aria-selected="true"' : ''}>
+  $('shelf').innerHTML = items.map((x, i) => `<button class="card" data-i="${i}" data-id="${esc(x.id || '')}"${x.id === current ? ' aria-selected="true"' : ''}>
     ${x.thumb ? `<img src="${esc(x.thumb)}" alt="" loading="lazy">` : '<span class="noimg">no picture</span>'}
     <span><span class="t">${esc(x.title)}</span><span class="s">${esc([x.year, x.author].filter(Boolean).join(' · '))}</span>
     <span class="s">${esc(x.note || '')}</span></span></button>`).join('') || '<span style="color:var(--dim)">nothing here yet</span>';
@@ -246,20 +246,32 @@ async function linux() {
   fbSel.hidden = false; openBtn.hidden = false;
   try { const f = localStorage.getItem('mirage.linux.fb'); if (f && [...fbSel.options].some((o) => o.value === f)) fbSel.value = f; } catch { /* storage refused */ }
   fbSel.onchange = () => { try { localStorage.setItem('mirage.linux.fb', fbSel.value); } catch { /* storage refused */ } };
-  const runFile = async (file) => {
-    const bytes = new Uint8Array(await file.arrayBuffer());
+  const runBytes = async (title, fileName, bytes, fb, from, id = null) => {
     if (window.mirage && window.mirage.stop) window.mirage.stop();
     session = null;
     const { Tree } = await import('./oasis-layers.js');
-    const name = file.name.replace(/[^\w.+-]/g, '_') || 'program';
+    const name = fileName.replace(/[^\w.+-]/g, '_') || 'program';
     const tree = new Tree(); tree.mkdir('/tmp'); tree.mkdir('/w'); tree.file('/w/' + name, bytes, 0o755);
-    const img = { title: file.name, machine: { cpu: '686', mem: 64, fb: fbSel.value }, entry: { run: '/w/' + name, cwd: '/w' } };
+    const img = { title, machine: { cpu: '686', mem: 64, fb }, entry: { run: '/w/' + name, cwd: '/w' } };
     over.hidden = true; showLog();
-    for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', 'false');
-    log(`${file.name}: ${bytes.length} bytes from this computer, /dev/fb0 at ${fbSel.value}x32`);
-    status.textContent = `starting ${file.name}…`;
-    await start({ title: file.name }, img, tree.host());
+    for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(el.dataset.id === id));
+    log(`${title}: ${bytes.length} bytes ${from}, /dev/fb0 at ${fb}x32`);
+    status.textContent = `starting ${title}…`;
+    await start({ title }, img, tree.host());
   };
+  const runFile = async (file) => runBytes(file.name, file.name, new Uint8Array(await file.arrayBuffer()), fbSel.value, 'from this computer');
+  // The Linux intros of examples/manifest.json (kind "linux"): small binaries kept here with their
+  // licence, run as a dropped program is, on the framebuffer size each was made for.
+  const intros = (await examples()).filter((e) => e.kind === 'linux');
+  const runIntro = async (e) => {
+    let bytes;
+    try { bytes = new Uint8Array(await (await fetch(e.file)).arrayBuffer()); } catch (err) { status.textContent = `${e.file}: ${err.message}`; return; }
+    if (e.fb) fbSel.value = e.fb;
+    await runBytes(e.title, e.file.split('/').pop(), bytes, e.fb || fbSel.value, `(${e.license}, ${e.author})`, e.id);
+  };
+  const introItems = intros.map((e) => ({ id: e.id, title: e.title, year: e.year, author: e.author, thumb: `examples/thumbs/${e.id}.png`,
+    note: `${e.tag || 'Linux intro'} · ${e.fb || ''}`, open: () => runIntro(e) }));
+  const wantedIntro = intros.find((e) => e.id === params.get('prog'));
   openBtn.onclick = () => openFile.click();
   openFile.onchange = () => { if (openFile.files[0]) runFile(openFile.files[0]); openFile.value = ''; };
   stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.add('dropping'); });
@@ -323,10 +335,11 @@ async function linux() {
       status.textContent = `starting ${m.title}…`;
       await start(m, img, tree.host());
     };
-    const items = listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => runHere(m) }));
-    shelf('OASIS Linux images', items, params.get('run'));
+    const items = [...introItems, ...listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => runHere(m) }))];
+    shelf('Linux intros and OASIS images', items, params.get('prog') || params.get('run'));
     const wanted = listed.find((m) => m.name === params.get('run'));
-    if (wanted) runHere(wanted); else { needs(null); setState('choose', ''); status.textContent = 'choose an image: its layers are fetched once and kept in this browser'; }
+    if (wantedIntro) runIntro(wantedIntro);
+    else if (wanted) runHere(wanted); else { needs(null); setState('choose', ''); status.textContent = 'choose an intro or an image — or drop a Linux program on the screen'; }
     return;
   }
   const run = async (m) => {
@@ -336,10 +349,11 @@ async function linux() {
     const img = await (await fetch(`/oasis-image.json?img=${encodeURIComponent(m.name)}`)).json();
     await start(m, img, oasisHost(m.name));
   };
-  const items = images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => run(m) }));
-  shelf('OASIS Linux images', items, params.get('run') || 'linux/mirage');
+  const items = [...introItems, ...images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => run(m) }))];
+  shelf('Linux intros and OASIS images', items, params.get('prog') || params.get('run') || 'linux/mirage');
   // The machine boots into a real shell: bash on tty1 of the image that has one (linux/mirage),
   // typed at as a console is; the shelf starts any image instead.
+  if (wantedIntro) { runIntro(wantedIntro); return; }
   const wanted = images.find((m) => m.name === params.get('run')) || images.find((m) => m.name === 'linux/mirage') || images[0];
   if (wanted) run(wanted);
 }

@@ -1920,6 +1920,7 @@ export class Recompiler {
       if (map === 1 && pp === 1 && opc === 0x6e && !L) { const o = modrm(); P(`cpu.vex(${VEX.MOVD_LD},0,${o.reg},0,0,${rmR(o, 32)});`); return; }   // VMOVD xmm, r/m32
       if (map === 1 && pp === 1 && opc === 0x7e && !L) { const o = modrm(); P(rmW(o, 32, `cpu.xmm.i32[${o.reg * 4}]`)); return; }   // VMOVD r/m32, xmm
       if (map === 2 && pp === 1 && opc === 0x31) { op(VEX.PMOVZXBD, modrm(), L ? 8 : 4); return; }             // VPMOVZXBD
+      if (map === 2 && pp === 1 && opc === 0x78 && !Wb) { op(VEX.PBROADCASTB, modrm(), 1); return; }           // VPBROADCASTB
       if (map === 2 && pp === 1 && opc === 0x46 && !Wb) { op(VEX.PSRAVD, modrm(), L ? 32 : 16); return; }      // VPSRAVD
       if (map === 2 && pp === 2 && opc === 0xf7 && !Wb) {                                                       // SARX r32, r/m32, r32
         const o = modrm();

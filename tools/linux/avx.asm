@@ -3,7 +3,8 @@
 ; prints the same lines (its CPU, or qemu-user's, has AVX2 and BMI2).
 ;
 ;   vmovdqu ymm from memory and back; vpaddusb (xmm and ymm, with saturation); vpshufd; vmovd both
-;   ways; movd (SSE2) both ways; vpmovzxbd ymm; vpsravd ymm (counts 0, 1, 31, 32 and above); sarx;
+;   ways; movd (SSE2) both ways; vpmovzxbd ymm; vpsravd ymm (counts 0, 1, 31, 32 and above);
+;   vpbroadcastb from memory; sarx;
 ;   and a VEX.128 operation zeroing the upper half of its YMM register.
 ;
 ; The Linux sizecoding intros of Outline 2021-2023 by The Orz (The light, Calculating Space, Campers)
@@ -58,6 +59,10 @@ _start:
         vmovdqu ymm1, [vals]
         vpsravd ymm2, ymm1, ymm7                ; counts from c: 0 1 31 32 4 200 3 16
         vmovdqu [obuf], ymm2
+        DUMP    32
+        vpbroadcastb ymm3, xmm0                 ; byte 0 of ymm0 everywhere (a's first: 0, so first a byte of b)
+        vpbroadcastb ymm3, [b + 16]
+        vmovdqu [obuf], ymm3
         DUMP    32
         mov     edx, 0x80001234
         mov     ecx, 0x24                       ; sarx counts modulo 32: 4

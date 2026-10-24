@@ -1,5 +1,6 @@
 // demo-thumbs.mjs — the screenshots on the home page: run each entry of examples/manifest.json
-// headless for its `secs` guest seconds and draw it through src/video.js, as the browser would.
+// headless for its `secs` guest seconds and draw it through src/video.js, as the browser would
+// (a `linux` entry on MIRAGE-LINUX, its framebuffer shrunk to a card's width).
 //
 //   node tools/demo-thumbs.mjs            all entries → examples/thumbs/<id>.png
 //   node tools/demo-thumbs.mjs tetros     one
@@ -52,10 +53,42 @@ const grab = (mc) => {
   return { W, H, rgb };
 };
 
+/** A picture shrunk by whole-pixel boxes: a 1920x1080 intro's framebuffer, as a card shows it. */
+const shrink = ({ W, H, rgb }, OW) => {
+  const k = Math.max(1, Math.round(W / OW)), w = Math.floor(W / k), h = Math.floor(H / k), out = new Uint8Array(w * h * 3);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) {
+    let t = 0; for (let j = 0; j < k; j++) for (let i = 0; i < k; i++) t += rgb[((y * k + j) * W + x * k + i) * 3 + c];
+    out[(y * w + x) * 3 + c] = Math.round(t / (k * k));
+  }
+  return { W: w, H: h, rgb: out };
+};
+// A Linux entry: the program alone on MIRAGE-LINUX with its framebuffer (`fb`), as the Linux page runs
+// it, for `secs` seconds of the guest's clock; those intros draw a picture that builds up.
+const linuxThumb = async (e) => {
+  const { Machine } = await import(ROOT + '/src/machine.js');
+  const { installBIOS } = await import(ROOT + '/src/bios.js');
+  const { installLinux } = await import(ROOT + '/src/linux.js');
+  const mc = new Machine({ memSize: 64 << 20, cpu: '686' });
+  installBIOS(mc, e.fb === '1920x1080' ? { vram: 8 } : {});
+  const lx = installLinux(mc);
+  if (e.fb) { const [w, h] = e.fb.split('x').map(Number); lx.setFb(w, h); }
+  lx.load(new Uint8Array(readFileSync(ROOT + '/' + e.file)), ['/w/' + e.file.split('/').pop()]);
+  let fault = null; mc.onError = (x) => { fault = x; };
+  const end = (e.secs || 10) * (mc.cyclesPerSecond || 1e8);
+  while (mc.cpu.cycles < end && !lx.done && !fault) mc.runSlice(200000);
+  return { pic: shrink(grab(mc), 480), fault: fault || (lx.signal ? new Error(`signal ${lx.signal}`) : null) };
+};
+
 const only = process.argv[2];
 const manifest = JSON.parse(readFileSync(ROOT + '/examples/manifest.json', 'utf8'));
 for (const e of manifest) {
   if (only && e.id !== only) continue;
+  if (e.kind === 'linux') {
+    const { pic, fault } = await linuxThumb(e);
+    writePNG(`${ROOT}/examples/thumbs/${e.id}.png`, pic.rgb, pic.W, pic.H, 1);
+    console.log(`${e.id.padEnd(12)} ${pic.W}x${pic.H}${fault ? '  FAULT ' + String(fault.message).slice(0, 80) : ''}`);
+    continue;
+  }
   let bytes = new Uint8Array(readFileSync(ROOT + '/' + e.file));
   // A boot entry's `mem` is the bare PC's memory, as boot.html?mem= gives it; a DOS entry's is RAM.
   const { mc, dos, vfs } = makeMachine(e.kind === 'boot' ? { dos: false, memSize: (e.mem || 16) << 20, cpu: e.cpu && String(e.cpu) } : { mem: e.mem });
