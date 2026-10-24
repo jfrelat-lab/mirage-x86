@@ -4,7 +4,7 @@
 ;
 ;   vmovdqu ymm from memory and back; vpaddusb (xmm and ymm, with saturation); vpshufd; vmovd both
 ;   ways; movd (SSE2) both ways; vpmovzxbd ymm; vpsravd ymm (counts 0, 1, 31, 32 and above);
-;   vpbroadcastb from memory; sarx;
+;   vpbroadcastb and vbroadcastss from memory; sarx;
 ;   and a VEX.128 operation zeroing the upper half of its YMM register.
 ;
 ; The Linux sizecoding intros of Outline 2021-2023 by The Orz (The light, Calculating Space, Campers)
@@ -62,6 +62,9 @@ _start:
         DUMP    32
         vpbroadcastb ymm3, xmm0                 ; byte 0 of ymm0 everywhere (a's first: 0, so first a byte of b)
         vpbroadcastb ymm3, [b + 16]
+        vmovdqu [obuf], ymm3
+        DUMP    32
+        vbroadcastss ymm3, [vals + 24]          ; one dword (40h) everywhere
         vmovdqu [obuf], ymm3
         DUMP    32
         mov     edx, 0x80001234

@@ -6,7 +6,7 @@
 // linux.html (one image) and machines.html (the Linux machine).
 import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
-import { installLinux } from './linux.js';
+import { installLinux, vramFor } from './linux.js';
 import { Video } from './video.js';
 import { Keyboard } from './keyboard.js';
 import { VtConsole } from './vtconsole.js';
@@ -40,7 +40,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   // A Cirrus has its 32 MiB aperture above the RAM, as on a PCI bus (src/bios.js): the address space
   // twice the RAM (a power of two).
   const mc = new Machine({ memSize: m.vga === 'cirrus' ? Math.max(ram * 2, 64 << 20) : ram, ramSize: ram, cpu: m.cpu || '686' });
-  installBIOS(mc, { ...(m.vga ? { vga: m.vga } : {}), ...(m.fb === '1920x1080' ? { vram: 8 } : {}) });   // 1920x1080x32: 8 MiB of card   // `machine.vga: "cirrus"`: a CL-GD5446 (src/cirrus.js)
+  installBIOS(mc, { ...(m.vga ? { vga: m.vga } : {}), ...(vramFor(m.fb) ? { vram: vramFor(m.fb) } : {}) });   // a large framebuffer: more card (vramFor)   // `machine.vga: "cirrus"`: a CL-GD5446 (src/cirrus.js)
   for (const [prop, file] of [['font', 'vga-rom-8x16.bin'], ['font8x8', 'vga-rom-8x8.bin'], ['font8x14', 'vga-rom-8x14.bin']]) {
     try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }
   }

@@ -37,6 +37,15 @@ const BLOCK = Symbol('block');                            // a system call that 
 const E = { EPERM: 1, ENOENT: 2, EINTR: 4, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
   EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11, ECHILD: 10 };
 
+/** The card memory (MiB, for installBIOS's `vram`) a framebuffer of `fb` ("WxH", 32 bits) needs, or 0
+ *  when the 4 MiB every machine has will do. */
+export const vramFor = (fb) => {
+  const [w, h] = String(fb || '').split('x').map(Number), b = (w * h * 4) || 0;
+  // 16 MiB past 4: a card with room for two frames, as real ones have — attraction & decay maps 16 MiB of
+  // /dev/fb0 for its 1920x1080 double buffer, which a card holding the one frame refuses.
+  return b <= 4 << 20 ? 0 : 16;
+};
+
 export function installLinux(machine, { onOutput, realTime } = {}) {
   const cpu = machine.cpu, mem = machine.mem;
   const lx = {
@@ -129,7 +138,19 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (mem.codePage[(va >>> 0) >>> 12]) mem._dirty(va >>> 0, 1);    // code we already translated
   };
   const wr32 = (va, v) => { for (let i = 0; i < 4; i++) wr8(va + i, (v >>> (8 * i)) & 0xff); };
-  const rdBytes = (va, n) => { const b = new Uint8Array(n); for (let i = 0; i < n; i++) b[i] = rd8(va + i); return b; };
+  // A page at a time: a write of megabytes (a frame through pwrite64, Sea of Holes' ever longer writes)
+  // copied byte by byte, each through the page map, was most of their time. `partial`: what can be read
+  // before the first unmapped page (fb_write's rule: whole pages, then what was copied, EFAULT if none).
+  const rdBytes = (va, n, partial = false) => {
+    const b = new Uint8Array(n);
+    for (let i = 0; i < n;) {
+      const a = (va + i) >>> 0, p = lx.pages.get(a >>> 12);
+      if (!p) { if (partial && i) return b.subarray(0, i); throw E.EFAULT; }
+      const take = Math.min(n - i, 0x1000 - (a & 0xfff));
+      b.set(mem.u8.subarray(p.frame + (a & 0xfff), p.frame + (a & 0xfff) + take), i); i += take;
+    }
+    return b;
+  };
   const wrBytes = (va, b) => { for (let i = 0; i < b.length; i++) wr8(va + i, b[i]); };
   const rdStr = (va) => { let s = ''; for (let c; (c = rd8(va++));) s += String.fromCharCode(c); return s; };
   lx.rdBytes = rdBytes; lx.rdStr = rdStr;
@@ -153,7 +174,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // What the kernel checks (fs/binfmt_elf.c: the magic, e_type, elf_check_arch's EM_386, and in
     // load_elf_phdrs a program header of 32 bytes) — not e_ident's class and byte order: sizecoded
     // intros lay their header over those bytes (Outline 2021's xorchitecture leaves them 0).
-    if (d.getUint16(18, true) !== 3) throw new Error('mirage-linux: not an i386 program');
+    const machineId = d.getUint16(18, true);                             // EM_386, or EM_486 (6): elf_check_arch_ia32 takes both
+    if (machineId !== 3 && machineId !== 6) throw new Error('mirage-linux: not an i386 program');
     if (d.getUint16(42, true) !== 32) throw new Error('mirage-linux: not ELF32 (program headers of 32 bytes)');
     const type = d.getUint16(16, true);
     if (type !== 2 && type !== 3) throw new Error('mirage-linux: neither an executable nor a shared object');
@@ -174,7 +196,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (ph.type !== 1) continue;                                        // PT_LOAD
       const va = (ph.va + bias) >>> 0;
       mapRange(va, va + ph.memsz, (ph.flags & 2) !== 0);
-      for (let k = 0; k < ph.filesz; k++) mem.u8[phys(va + k)] = elf[ph.off + k];
+      // As the kernel maps it (fs/binfmt_elf.c elf_map, padzero): the FILE by whole pages, from
+      // p_offset - pageoff(p_vaddr) at p_vaddr's page; bytes past the end of the file read 0, and past
+      // p_filesz the rest of its page is cleared only for a segment with a bss. Outline 2026's 64-byte
+      // Sea of Holes gives a p_offset (D44h) beyond its own end: the page holds its code all the same.
+      const po = va & 0xfff, from = ph.off - po;
+      if (from >= 0 && ph.filesz) {
+        const fileEnd = va + ph.filesz, pageEnd = Math.min(va + Math.max(ph.memsz, ph.filesz) + 0xfff, (fileEnd + 0xfff) & ~0xfff) >>> 0;
+        mapRange(va - po, pageEnd, (ph.flags & 2) !== 0);
+        for (let a = va - po, k = from; a < pageEnd; a++, k++) mem.u8[phys(a)] = k < elf.length ? elf[k] : 0;
+        if (ph.memsz > ph.filesz) for (let a = fileEnd; a < pageEnd; a++) mem.u8[phys(a)] = 0;
+      } else for (let k = 0; k < ph.filesz; k++) mem.u8[phys(va + k)] = elf[ph.off + k];
       if (!phdr && ph.off <= h.phoff && h.phoff < ph.off + ph.filesz) phdr = va + (h.phoff - ph.off);
       top = Math.max(top, va + ph.memsz);
     }
@@ -575,15 +607,18 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const FB = { w: 640, h: 480, bpp: 32, mode: 0x112 };
   const FB_MODES = { '640x480': 0x112, '800x600': 0x143, '1024x768': 0x144, '1920x1080': 0x145 };   // 1920x1080: 8 MiB of card (installBIOS vram)
   lx.fbModes = Object.keys(FB_MODES);
+  // Other sizes too: the Linux machine sets its card's mode itself, not through the VBE list, so any
+  // 32-bit size its memory holds will do — Outline 2026's Sea of Holes asks 1280x720, and YOLP's and
+  // fsqrt's intros come in eighteen sizes (1366x768, 1600x900...). They get OEM number 1FFh.
   lx.setFb = (w, h) => {
-    const mode = FB_MODES[`${w}x${h}`];
-    if (!mode) throw new Error(`mirage-linux: no ${w}x${h} framebuffer (${lx.fbModes.join(', ')} at 32 bits)`);
+    const mode = FB_MODES[`${w}x${h}`] || (w >= 320 && h >= 200 && w <= 4096 && h <= 4096 && !(w & 7) ? 0x1ff : 0);
+    if (!mode) throw new Error(`mirage-linux: no ${w}x${h} framebuffer (32 bits, a width a multiple of 8)`);
     if (machine.vbeFbBytes && w * h * 4 > machine.vbeFbBytes) throw new Error(`mirage-linux: ${w}x${h} at 32 bits needs ${Math.ceil(w * h * 4 / 1048576)} MiB of card, it has ${machine.vbeFbBytes >> 20}`);
     Object.assign(FB, { w, h, mode });
   };
   const fbOn = () => {
     if (!machine.vbeFbBase || !machine.setVbeMode) throw 19;    // ENODEV: no card on this machine
-    if (!machine.vbe || machine.vbe.number !== FB.mode) machine.setVbeMode([FB.mode, FB.w, FB.h, FB.bpp], true);
+    if (!machine.vbe || machine.vbe.number !== FB.mode || machine.vbe.width !== FB.w || machine.vbe.height !== FB.h) machine.setVbeMode([FB.mode, FB.w, FB.h, FB.bpp], true);
     return machine.vbeFbBase >>> 0;
   };
   const fbLen = () => FB.w * FB.h * (FB.bpp >> 3);
@@ -1024,6 +1059,23 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const itimerspec = (a) => ({ interval: rd32(a) + rd32(a + 4) / 1e9, value: rd32(a + 8) + rd32(a + 12) / 1e9 });
   const putItimerspec = (a, interval, left) => {
     for (const [o, v] of [[0, interval], [8, left]]) { const sec = Math.floor(v); wr32(a + o, sec); wr32(a + o + 4, Math.round((v - sec) * 1e9)); }
+  };
+  // How many bytes a write takes from its buffer, before reading it: the kernel caps every count at
+  // MAX_RW_COUNT (fs/read_write.c rw_verify_area), and fb_write (drivers/video/fbdev/core/fb_io_fops.c)
+  // at what remains of the framebuffer — Outline 2026's attraction & decay pwrite64s each frame with
+  // whatever EDX holds (BE570E00h): the frame is copied, where MIRAGE read 3 GB and answered EFAULT.
+  const isFb = (fd) => { const f = fds[fd]; return !!(f && f.node && f.node.dev === 'fb'); };
+  const wrCount = (fd, n) => {
+    n = Math.min(n >>> 0, 0x7ffff000);
+    const f = fds[fd];
+    return f && f.node && f.node.dev === 'fb' ? Math.min(n, Math.max(0, fbLen() - (f.pos || 0))) : n;
+  };
+  /** write(2) from guest memory: the count capped as the kernel caps it, nothing left at the end of the
+   *  framebuffer ENOSPC (fb_write), a buffer that runs into an unmapped page written up to it. */
+  const writeFrom = (fd, buf, n) => {
+    const c = wrCount(fd, n);
+    if (!c && n && isFb(fd)) return -E.ENOSPC;
+    return doWrite(fd, rdBytes(buf, c, isFb(fd)));
   };
   const doWrite = (fd, bytes) => {
     const f = fdOf(fd);
@@ -1527,7 +1579,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     1: (status) => { exit(status); },                                      // exit
     252: (status) => { exit(status); },                                    // exit_group
     3: (fd, buf, n) => doRead(fd, buf, n),                                 // read
-    4: (fd, buf, n) => doWrite(fd, rdBytes(buf, n)),                       // write
+    4: (fd, buf, n) => writeFrom(fd, buf, n),                              // write
     145: (fd, iov, cnt) => {                                               // readv
       let total = 0;
       for (let i = 0; i < cnt; i++) {
@@ -1548,7 +1600,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const f = fdOf(fd), keep = f.pos;
       if (f.pp || f.pipe !== undefined || f.sk) return -E.ESPIPE;
       f.pos = lo + hi * 4294967296;
-      try { return doWrite(fd, rdBytes(buf, n)); } finally { f.pos = keep; }
+      try { return writeFrom(fd, buf, n); } finally { f.pos = keep; }
     },
     322: (clock, flags) => {                                                // timerfd_create (CLOCK_REALTIME 0, MONOTONIC 1, BOOTTIME 7)
       if (clock !== 0 && clock !== 1 && clock !== 7) return -E.EINVAL;

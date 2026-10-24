@@ -67,9 +67,9 @@ const shrink = ({ W, H, rgb }, OW) => {
 const linuxThumb = async (e) => {
   const { Machine } = await import(ROOT + '/src/machine.js');
   const { installBIOS } = await import(ROOT + '/src/bios.js');
-  const { installLinux } = await import(ROOT + '/src/linux.js');
+  const { installLinux, vramFor } = await import(ROOT + '/src/linux.js');
   const mc = new Machine({ memSize: 64 << 20, cpu: '686' });
-  installBIOS(mc, e.fb === '1920x1080' ? { vram: 8 } : {});
+  installBIOS(mc, vramFor(e.fb) ? { vram: vramFor(e.fb) } : {});
   const lx = installLinux(mc);
   if (e.fb) { const [w, h] = e.fb.split('x').map(Number); lx.setFb(w, h); }
   lx.load(new Uint8Array(readFileSync(ROOT + '/' + e.file)), ['/w/' + e.file.split('/').pop()]);

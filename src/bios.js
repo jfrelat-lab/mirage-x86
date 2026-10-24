@@ -74,7 +74,7 @@ export function installBIOS(machine, opts = {}) {
   // A machine whose address space reaches past its RAM (machine.ramSize, the DOS player) has the
   // aperture where a card's is: above the RAM, 4 MiB-aligned, taking nothing from it.
   const RAM = machine.ramSize || mem.size;
-  // `vram` (MiB) gives the card more: the Linux machine asks 8 for a 1920x1080 framebuffer (Outline's
+  // `vram` (MiB) gives the card more: the Linux machine asks 16 for a framebuffer past 4 MiB, room for two frames (Outline's
   // 256-byte intros draw for that size alone). Every other machine keeps what it always had.
   const VBE_FB_BYTES = opts.vram ? opts.vram << 20 : mem.size >= (16 << 20) ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
   // A Cirrus GD5446's aperture is its 32 MiB BAR0, aligned to its size as PCI wants (QEMU's -vga

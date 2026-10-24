@@ -25,7 +25,7 @@ export const SSE = {
 // on YMM). The YMM registers are the XMM ones and an upper half each (cpu.ymmHi): a legacy SSE
 // operation leaves that half alone, a VEX.128 one zeroes it, a VEX.256 one works on all 32 bytes.
 export const VEX = {
-  MOVDQU_LD: 0, PMOVZXBD: 1, PSRAVD: 2, PADDUSB: 3, MOVD_LD: 4, PSHUFD: 5, PBROADCASTB: 6,
+  MOVDQU_LD: 0, PMOVZXBD: 1, PSRAVD: 2, PADDUSB: 3, MOVD_LD: 4, PSHUFD: 5, PBROADCASTB: 6, BROADCASTSS: 7,
 };
 
 const sat8u = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
@@ -79,7 +79,8 @@ export function installSSE(cpu) {
       case VEX.MOVD_LD: yI[0] = imm | 0; break;                                            // the dword comes as `imm`
       // Within each 128-bit lane, dword k takes the source's dword (imm >> 2k) & 3 of that lane.
       case VEX.PSHUFD: for (let k = 0; k < n / 4; k++) yI[k] = ysI[(k & ~3) + ((imm >> ((k & 3) * 2)) & 3)]; break;
-      case VEX.PBROADCASTB: Y.fill(Ys[0], 0, n); break;                                   // the source's low byte everywhere
+      case VEX.PBROADCASTB: Y.fill(Ys[0], 0, n); break;
+      case VEX.BROADCASTSS: for (let k = 0; k < n / 4; k++) yI[k] = ysI[0]; break;          // the source's low dword everywhere                                   // the source's low byte everywhere
       default: throw new Error(`mirage: VEX operation ${code} not implemented`);
     }
     u8.set(Y.subarray(0, 16), d * 16); hi.set(Y.subarray(16, 32), d * 16);

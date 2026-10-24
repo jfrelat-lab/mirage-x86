@@ -510,6 +510,21 @@
     "secs": 40
   },
   {
+    "id": "flagship",
+    "tag": "Linux 256 bytes",
+    "kind": "linux",
+    "file": "examples/linux/flagship_1920x1080x32",
+    "fb": "1920x1080",
+    "title": "Flagship",
+    "author": "The Orz",
+    "year": 2021,
+    "license": "BSD-3-Clause",
+    "licenseFile": "examples/licenses/flagship-bsd3.txt",
+    "source": "https://github.com/grz0zrg/Flagship",
+    "blurb": "256 bytes for Linux, Revision 2021 (wild): a ship of warm light, in C with AVX saturated arithmetic, on /dev/fb0 with two system calls.",
+    "secs": 30
+  },
+  {
     "id": "quasispace",
     "tag": "Linux 128 bytes",
     "kind": "linux",

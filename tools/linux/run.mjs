@@ -18,7 +18,7 @@
 import { readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { Machine } from '../../src/machine.js';
-import { installLinux } from '../../src/linux.js';
+import { installLinux, vramFor } from '../../src/linux.js';
 import { installBIOS } from '../../src/bios.js';
 
 const [prog, ...args] = process.argv.slice(2);
@@ -27,7 +27,7 @@ const lxRam = (Number(process.env.MIRAGE_LXMEM) || 64) << 20;
 // A Cirrus (MIRAGE_VGA=cirrus) has its 32 MiB aperture above the RAM, as on a PCI bus (src/bios.js):
 // the address space twice the RAM (a power of two), 64 MiB at least: the aperture is 32 MiB-aligned.
 const mc = new Machine({ memSize: process.env.MIRAGE_VGA === 'cirrus' ? Math.max(lxRam * 2, 64 << 20) : lxRam, ramSize: lxRam, cpu: process.env.MIRAGE_CPU || '686' });
-installBIOS(mc, process.env.MIRAGE_LXFB === '1920x1080' ? { vram: 8 } : {});   // the PC's devices: the VGA SVGAlib programs, the keyboard (8 MiB of card for 1920x1080)
+installBIOS(mc, vramFor(process.env.MIRAGE_LXFB) ? { vram: vramFor(process.env.MIRAGE_LXFB) } : {});   // the PC's devices: the VGA SVGAlib programs, the keyboard (more card for a large /dev/fb0)
 const lx = installLinux(mc, { realTime: !!process.env.MIRAGE_LXWALLCLOCK, onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });
 const mount = (dir, at) => {
   for (const f of readdirSync(dir)) {
