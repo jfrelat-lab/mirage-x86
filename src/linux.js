@@ -154,6 +154,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const wrBytes = (va, b) => { for (let i = 0; i < b.length; i++) wr8(va + i, b[i]); };
   const rdStr = (va) => { let s = ''; for (let c; (c = rd8(va++));) s += String.fromCharCode(c); return s; };
   lx.rdBytes = rdBytes; lx.rdStr = rdStr;
+  lx.phys = phys;                                                         // a guest address's byte in memory, or -1
+  lx.BLOCK = BLOCK;                                                       // what a call that waits answers (src/hle)
+  lx.wrBytes = (va, b) => wrBytes(va, b);
 
   // ---- descriptors -------------------------------------------------------------------------------
   const setDesc = (index, base, limit, access, flags) => {
@@ -862,6 +865,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       case 0x5429: wr32(arg, lx.sid); return 0;                             // TIOCGSID
       default: return 0;                                                    // TIOCNOTTY, TIOCPKT, TCXONC, TCSBRK...
     }
+  };
+  /** `n` bytes of zeroed guest memory, as an anonymous mmap gives them: what a JavaScript library hands
+   *  its caller (an SDL_Surface, an event, a string). */
+  lx.alloc = (n) => {
+    const size = Math.ceil(Math.max(1, n) / PAGE) * PAGE, at = lx.mmapNext;
+    lx.mmapNext += size; mapRange(at, at + size, true); cpu.setCR3(cpu.cr3);
+    return at;
   };
   lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
@@ -2040,7 +2050,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.syscall = () => {
     const r = cpu.reg, n = r[0] >>> 0, sw = lx.switches;
     checkAlarm();
-    const fn = SYS[n];
+    // Numbers from 48000000h are no system call: a library made in JavaScript (src/hle) traps here with
+    // its function's id, its arguments on the caller's stack. lx.hle answers as a system call does —
+    // a value for EAX, BLOCK to wait.
+    const fn = n >= 0x48000000 && lx.hle ? () => lx.hle(n - 0x48000000) : SYS[n];
     let ret;
     if (!fn) { lx.unimplemented.set(n, (lx.unimplemented.get(n) || 0) + 1); ret = -E.ENOSYS; }
     else {
@@ -2062,7 +2075,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const w = firstWake();
       if (w !== Infinity && !lx.realTime) {                              // a deadline: the guest's clock goes to it
         const cps = machine.cyclesPerSecond || 1e8, at = Math.ceil(w * cps);
-        if (cpu.cycles < at) cpu.cycles = at;
+        // ...and the slice ends: whoever runs the machine sees the time go by (a run's end, a screenshot
+        // due, the page's frame). Within one slice, an intro paced at sixty frames a second on its swap
+        // played its whole three minutes before tools/linux/run.mjs looked at the clock.
+        if (cpu.cycles < at) { cpu.cycles = at; cpu.tbudget = 0; }
         return;
       }
       machine.blocked = true; return;                                    // input, or the wall clock: give the time back

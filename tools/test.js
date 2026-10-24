@@ -3314,7 +3314,14 @@ const runLinux = (hex, argv) => {
     '04082b059a820408b24e833dae8204080075093d50c300007d02b259881594820408b804000000bb01000000b9898204' +
     '08ba0d000000cd80b80100000031dbcd800000000000a3e111736c656570733a203f3f3f3f0a00000000000000000000' +
     '0000000000000000000000000000000000000000000000000000000000000000000000000000');
-  eq('linux: nanosleep, select and poll wait for their timeouts', JSON.stringify(runLinux(hex, ['/w/SLEEPS'])), JSON.stringify({ out: 'sleeps: YYYY\n', status: 0 })); }
+  eq('linux: nanosleep, select and poll wait for their timeouts', JSON.stringify(runLinux(hex, ['/w/SLEEPS'])), JSON.stringify({ out: 'sleeps: YYYY\n', status: 0 }));
+  // A wait taken by moving the guest's clock ends the slice: whoever runs the machine sees the time go
+  // by. One runSlice stops after the first sleep (300 ms), where it ran all three, and a 1K intro paced
+  // at sixty frames a second played its three minutes before tools/linux/run.mjs looked at the clock.
+  const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+  lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/SLEEPS']);
+  mc.runSlice(200000);
+  eq('linux: a wait that moves the clock ends the slice', Math.round(lx.mono() * 10) / 10, 0.3); }
 // tools/linux/procs.asm: one process ends another, as busybox `timeout` does — a sleeping child killed,
 // the killer's memory still its own; a child that never makes a system call preempted and killed after
 // 50 ms; a child's exit ending its parent's wait at once, another child waiting 100 s in a select.
@@ -3548,6 +3555,38 @@ const runLinux = (hex, argv) => {
     bz[60] ^= 1; try { bunzip2(bz); got += ', a changed byte unnoticed'; } catch (e) { got += ', ' + (/CRC|Huffman|bad|ends|overflow|selector|pointer/.test(e.message) ? 'a changed byte refused' : e.message); }
   } catch (e) { got = e.message.slice(0, 80); }
   eq('bunzip2: two streams as the bzip2 command made them; a changed byte refused', got, 'same, a changed byte refused'); }
+// src/hle: libraries made in JavaScript (ROADMAP O9). makeSharedObject's library, read back as an ELF:
+// each function found by DT_HASH as ld.so finds it, and by walking DT_SYMTAB with the 1K intros' own
+// hash (h * 33 ^ c, Metatunnel 2009), at a stub that traps with its id. And tools/linux/hlecall.asm
+// calls two stubs with an int and a float, an int and a double: the JavaScript gets them, and its
+// answers come back in EAX (the exit status, 133).
+{ let got;
+  try { const { makeSharedObject, HLE_BASE } = await import('../src/hle/elfso.js');
+    const names = ['SDL_Init', 'glCreateShader', 'glColor4ubv', 'glRecti', 'SDL_GL_SwapBuffers'];
+    const so = makeSharedObject('libT.so.1', names, 10), dv = new DataView(so.buffer);
+    const dyn = {}; for (let o = dv.getUint32(32 + 52 + 4, true); dv.getInt32(o, true); o += 8) dyn[dv.getInt32(o, true)] = dv.getUint32(o + 4, true);
+    const name = (i) => { let s = '', o = dyn[5] + dv.getUint32(dyn[6] + 16 * i, true); while (so[o]) s += String.fromCharCode(so[o++]); return s; };
+    const stub = (i) => { const v = dv.getUint32(dyn[6] + 16 * i + 4, true); return so[v] === 0xb8 && so[v + 5] === 0xcd && so[v + 6] === 0x80 && so[v + 7] === 0xc3 ? dv.getUint32(v + 1, true) - HLE_BASE : -1; };
+    const sysv = (s) => { let h = 0; for (const c of s) { h = ((h << 4) + c.charCodeAt(0)) >>> 0; const g = h & 0xf0000000; if (g) h ^= g >>> 24; h &= ~g >>> 0; } return h >>> 0; };
+    const byHash = (s) => { const nb = dv.getUint32(dyn[4], true); for (let i = dv.getUint32(dyn[4] + 8 + 4 * (sysv(s) % nb), true); i; i = dv.getUint32(dyn[4] + 8 + 4 * nb + 4 * i, true)) if (name(i) === s) return i; return 0; };
+    const djb = (s) => { let h = 0; for (const c of s) h = (Math.imul(h, 33) ^ c.charCodeAt(0)) >>> 0; return h; };
+    const byWalk = (s) => { for (let i = 0; i < dv.getUint32(dyn[4] + 4, true); i++) if (djb(name(i)) === djb(s)) return i; return 0; };
+    const ok = names.every((s, k) => stub(byHash(s)) === 10 + k && stub(byWalk(s)) === 10 + k);
+    const { installHLE } = await import('../src/hle/index.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc), seen = [];
+    installHLE(lx, mc.mem, mc.cpu, [{ soname: 'libT.so.1', fns: {
+      f0: ['if', (x, i, f) => { seen.push(i, f); return i + Math.round(f * 100); }],
+      f1: ['id', (x, i, d) => { seen.push(i, d); return i + Math.round(d * 1000); }] } }], {});
+    const hex = (
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004089500000095000000050000000010000068db0f49406a07e825000000' +
+    '83c40889c668fb21094068182d44546afee81700000083c40c01f00fb6d8b801000000cd80b800000048cd80c3b80100' +
+    '0048cd80c3');
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/HLECALL']);
+    for (let i = 0; i < 50 && !lx.done; i++) mc.runSlice(20000);
+    got = [ok, lx.status, seen.map((v) => +v.toFixed(5)).join(',')].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: a library made in JavaScript, found as ld.so and the 1K intros find it, called with ints, floats and doubles', got, 'true | 133 | 7,3.14159,-2,3.14159'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

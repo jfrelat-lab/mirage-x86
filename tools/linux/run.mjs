@@ -59,6 +59,19 @@ if (SPEC) {                                    // an OASIS image's layers (tools
 // time and an older one's year); it then runs with the guest's cycles, or the wall clock.
 lx.epoch = Math.floor(Date.now() / 1000);
 if (!process.stdin.isTTY) { try { lx.stdin = new Uint8Array(readFileSync(0)); } catch { /* no stdin */ } }
+// MIRAGE_LXHLE=sdl12,gl,glu: libSDL-1.2.so.0, libGL.so.1, libGLU.so.1 made in JavaScript (src/hle) in
+// /usr/lib, on a backend that records (src/hle/trace.js); what they were asked is printed at the end.
+let hleTrace = null;
+if (process.env.MIRAGE_LXHLE) {
+  const { installHLE } = await import('../../src/hle/index.js');
+  const { traceBackend } = await import('../../src/hle/trace.js');
+  const { sdl12 } = await import('../../src/hle/sdl12.js');
+  const { gl, glu } = await import('../../src/hle/gl.js');
+  const pick = { sdl12, gl, glu };
+  hleTrace = traceBackend();
+  const libs = process.env.MIRAGE_LXHLE.split(',').map((n) => pick[n] && pick[n]()).filter(Boolean);
+  for (const f of installHLE(lx, mc.mem, mc.cpu, libs, hleTrace)) { lx.addFile(f.path, f.bytes); for (const l of f.links) lx.addFile(l, f.bytes); }
+}
 const image = ROOT || SPEC ? lx.readFile(prog) : new Uint8Array(readFileSync(prog));
 if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT || 'the image'}`); process.exit(127); }
 if (process.env.MIRAGE_LXCONSOLE) lx.consoleStdio();   // stdio on /dev/tty1, a virtual console (SVGAlib wants one)
@@ -104,6 +117,7 @@ if (WAV) {
   for (let i = 0; i < n; i++) b.writeInt16LE(Math.max(-32768, Math.min(32767, played[i])), 44 + i * 2);
   writeFileSync(WAV, b); console.error(`mirage-linux: ${(n / 2 / r).toFixed(1)} s of sound at ${r} Hz -> ${WAV}`);
 }
+if (hleTrace) { const t = hleTrace.summary(); console.error('hle:', JSON.stringify({ mode: t.mode, frames: t.frames, calls: t.calls })); for (const s of t.shaders) console.error('hle shader:\n' + s); }
 if (!lx.done && SECS) { console.error(`mirage-linux: stopped after ${SECS} guest seconds`); process.exit(0); }
 if (!lx.done) { console.error('mirage-linux: still running after', LIMIT, 'cycles'); process.exit(124); }
 if (lx.signal) {
