@@ -3517,6 +3517,37 @@ const runLinux = (hex, argv) => {
     '01000000000000000080040800800408b7000000', '01000000440d0000448d0408448d0408b7000000');
   let r; try { r = runLinux(hex, ['/w/HELLO']).status; } catch (e) { r = e.message.slice(0, 60); }
   eq('linux: a PT_LOAD whose p_offset lies past the file maps the file by pages, as the kernel does', r, 42); }
+// src/bunzip2.js: bzip2 as the bzip2 command writes it (YOLP's Linux intros are .tar.bz2 on their
+// authors' site, and a browser has no bzip2). Two streams in a row, made by `bzip2 -9` and `bzip2`:
+// "MIRAGE bzip2 " 300 times, 300 a's (the first run-length coding), every byte value three times over
+// (a full byte map), then "second stream". Held against the command's input, byte for byte; a block's
+// CRC is checked by the decoder itself.
+{ let got;
+  try { const { bunzip2 } = await import('../src/bunzip2.js');
+    const bz = Uint8Array.from((
+    '425a6839314159265359dc84ed8900048e7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' +
+    'ffffffc001ae0204bfffd55540098132698009809a6000000984c0009800000000000006801180000000001304c0264c' +
+    '00000018268930004c0004c0000000000000000000000000000000000000000000000000000000049800260002600000' +
+    '0000000000000000000000000000000000000000000000000000daaa51a069a1a0c464068d03269a341934d00320d0d0' +
+    '34c4c401a006834340c8d000d068000d0006991a0683119006990680d1a00640686809940a09070e8442bec86459177e' +
+    '08c2328d2368e23afc51e47df9240fcd21489231a46a29e540a89522a655073481095c920425561b0ab9582b2568ad8d' +
+    'a40d706f2ba3815e2be388e25808348109588b18e4399641d0b28d43a9662ce5a0b496a2d63ea4084ada5b8761dc7948' +
+    '1095c0b88f09021278181731e920425751e4702e8da0842576190bb9782f230481095e87a190bd8f63e0fa3497c1f87f' +
+    '200be97e2fe3a0cecf3e580186049fa4084b0460cc2102614a110a90212c3988312628c598c31a4100212c718f320644' +
+    '833243b99332832a4084a10ca99632e660cc90a5348633466c87338674cf19f6398f64191649936519565900cbb30ccb' +
+    '34cdb38ceb3ccfbfa7f6d0342d1346d234ad334ed4352d5356d635ad735ed8362d9366da36adb36edc372dd376de37ad' +
+    'f37ee0382e1386e238ae338ee4392ff1ca72dcc735ce7fae7ba0e8ba4e9ba8eabacff9d7761ffbb2ed3b6ee3baef3bef' +
+    '03c2f13c6f23caf33cef43d2f53d6f63daf73def83e2f93e6fa3ea814120d0108857d90cfb8bb9229c28486e4276c480' +
+    '425a6839314159265359f09397fb000005118040002e039c0020003100d34d0401a3255b0e20f24878bb9229c2848784' +
+    '9cbfd8').match(/../g), (x) => parseInt(x, 16));
+    const want = [...new TextEncoder().encode('MIRAGE bzip2 '.repeat(300) + 'a'.repeat(300))];
+    for (let r = 0; r < 3; r++) for (let i = 0; i < 256; i++) want.push((i * 7 + r) & 255);
+    want.push(...new TextEncoder().encode('second stream'));
+    const out = bunzip2(bz);
+    got = out.length === want.length && out.every((b, i) => b === want[i]) ? 'same' : `${out.length} bytes, want ${want.length}`;
+    bz[60] ^= 1; try { bunzip2(bz); got += ', a changed byte unnoticed'; } catch (e) { got += ', ' + (/CRC|Huffman|bad|ends|overflow|selector|pointer/.test(e.message) ? 'a changed byte refused' : e.message); }
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('bunzip2: two streams as the bzip2 command made them; a changed byte refused', got, 'same, a changed byte refused'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).
@@ -3667,10 +3698,11 @@ const runLinux = (hex, argv) => {
   try { const { relayTarget, OASIS_HOSTS } = await import('../src/oasis-hosts.js'); const fsm = await import('fs'), pm = await import('path');
     const used = new Set(); const walk = (dir) => { for (const f of fsm.readdirSync(dir)) { const q = pm.join(dir, f); if (fsm.statSync(q).isDirectory()) walk(q); else if (f.endsWith('.json')) for (const m of fsm.readFileSync(q, 'utf8').matchAll(/"https?:\/\/([^/"]+)/g)) used.add(m[1]); } };
     walk(new URL('../oasis/images', import.meta.url).pathname);
+    for (const e of JSON.parse(fsm.readFileSync(new URL('../examples/manifest.json', import.meta.url), 'utf8'))) if (e.url) used.add(new URL(e.url).hostname);   // examples fetched at their source
     got = [relayTarget('http://archive.debian.org/debian/x.deb') !== null, relayTarget('https://example.com/x'), relayTarget('https://archive.debian.org:8080/x'),
       relayTarget('https://u:p@busybox.net/x'), relayTarget('file:///etc/passwd'), [...used].every((h) => OASIS_HOSTS.includes(h))].map(String).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis-fetch relays only the hosts the images use, and every one of them', got, 'true null null null null true'); }
+  eq('oasis-fetch relays only the hosts the images and examples use, and every one of them', got, 'true null null null null true'); }
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's

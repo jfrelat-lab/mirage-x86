@@ -72,7 +72,12 @@ const linuxThumb = async (e) => {
   installBIOS(mc, vramFor(e.fb) ? { vram: vramFor(e.fb) } : {});
   const lx = installLinux(mc);
   if (e.fb) { const [w, h] = e.fb.split('x').map(Number); lx.setFb(w, h); }
-  lx.load(new Uint8Array(readFileSync(ROOT + '/' + e.file)), ['/w/' + e.file.split('/').pop()]);
+  let bytes;
+  if (e.url) {                                       // fetched from its authors' site, as the page fetches it
+    const { archiveMember } = await import(ROOT + '/src/archive-member.js');
+    bytes = await archiveMember(new Uint8Array(await (await fetch(e.url)).arrayBuffer()), e.url, e.member);
+  } else bytes = new Uint8Array(readFileSync(ROOT + '/' + e.file));
+  lx.load(bytes, ['/w/' + (e.member || e.file).split('/').pop()]);
   let fault = null; mc.onError = (x) => { fault = x; };
   const end = (e.secs || 10) * (mc.cyclesPerSecond || 1e8);
   while (mc.cpu.cycles < end && !lx.done && !fault) mc.runSlice(200000);

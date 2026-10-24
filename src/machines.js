@@ -263,11 +263,21 @@ async function linux() {
   // The Linux intros of examples/manifest.json (kind "linux"): small binaries kept here with their
   // licence, run as a dropped program is, on the framebuffer size each was made for.
   const intros = (await examples()).filter((e) => e.kind === 'linux');
+  // An intro kept here has `file`; one whose authors state no licence has `url` (their archive, fetched
+  // through the oasis-fetch relay and kept in this browser's Cache Storage) and `member` (the binary in it).
   const runIntro = async (e) => {
     let bytes;
-    try { bytes = new Uint8Array(await (await fetch(e.file)).arrayBuffer()); } catch (err) { status.textContent = `${e.file}: ${err.message}`; return; }
+    try {
+      if (e.url) {
+        status.textContent = `${e.title}: fetching ${e.url.split('/').pop()} from its authors' site…`; showLog();
+        const [{ webIO }, { archiveMember }] = await Promise.all([import('./oasis-web.js'), import('./archive-member.js')]);
+        const archive = await webIO({ onProgress: (t) => log(t) }).fetchBytes(e.url);
+        bytes = await archiveMember(archive, e.url, e.member);
+        log(`${e.member}: ${bytes.length} bytes, from ${e.url}`);
+      } else bytes = new Uint8Array(await (await fetch(e.file)).arrayBuffer());
+    } catch (err) { status.textContent = `${e.title}: ${err.message}`; log(String(err.message || err)); return; }
     if (e.fb) fbSel.value = e.fb;
-    await runBytes(e.title, e.file.split('/').pop(), bytes, e.fb || fbSel.value, `(${e.license}, ${e.author})`, e.id);
+    await runBytes(e.title, (e.member || e.file).split('/').pop(), bytes, e.fb || fbSel.value, `(${e.license}, ${e.author})`, e.id);
   };
   const introItems = intros.map((e) => ({ id: e.id, title: e.title, year: e.year, author: e.author, thumb: `examples/thumbs/${e.id}.png`,
     note: `${e.tag || 'Linux intro'} · ${e.fb || ''}`, open: () => runIntro(e) }));

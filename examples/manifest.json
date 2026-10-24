@@ -583,5 +583,35 @@
     "source": "https://github.com/grz0zrg/codegolfing/tree/main/Linux/Zeta",
     "blurb": "64 bytes for Linux, Lovebyte 2022: 64 bytes of code (and 50 of ELF header): coloured patterns seeded by where the stack lies.",
     "secs": 30
+  },
+  {
+    "id": "blinelfom",
+    "tag": "Linux 256 bytes",
+    "kind": "linux",
+    "url": "https://yolp.omgwtf.ru/yolp_-_blin_elfom.tar.bz2",
+    "member": "yolp_-_blin_elfom/yo03_1024x768x32",
+    "fb": "1024x768",
+    "title": "Blin Elfom",
+    "author": "Ye Olde Laptops Posse (w23, korvin)",
+    "year": 2011,
+    "license": "no licence stated: fetched from its authors’ site",
+    "source": "https://www.pouet.net/prod.php?which=57976",
+    "blurb": "197 bytes for Linux, Alternative Party 2011: a tiling of green and blue squares, and its own sound on /dev/dsp.",
+    "secs": 20
+  },
+  {
+    "id": "pattern",
+    "tag": "Linux 128 bytes",
+    "kind": "linux",
+    "url": "https://yolp.omgwtf.ru/yolp_-_pattern.tar.bz2",
+    "member": "yolp_-_pattern/yo05_1024x768x32",
+    "fb": "1024x768",
+    "title": "pattern",
+    "author": "Ye Olde Laptops Posse (w23)",
+    "year": 2012,
+    "license": "no licence stated: fetched from its authors’ site",
+    "source": "https://www.pouet.net/prod.php?which=58805",
+    "blurb": "127 bytes for Linux, 2012: a shimmering pattern and its sound, from six bytes left after the setup.",
+    "secs": 20
   }
 ]
