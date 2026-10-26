@@ -3504,27 +3504,50 @@ const runLinux = (hex, argv) => {
   let got; try { got = runLinux(hex, ['/w/CVT']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: CVTTSS2SI, CVTSS2SI and CVTSI2SS, as Docker i386 computes them', got,
     '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); }
-// tools/linux/x87mem.asm: x87 arithmetic on memory operands under paging (every Linux and Win32 program
-// is paged), a thousand times round a loop that pushes and pops -- 55, Docker i386's exit status --
-// with no cpu.fpuMem call (the paged inline forms: a third of Valleyball's synthesizer went there), no
-// page walk for the stack (the helpers probe the fast tables first: a fifth went there), its push and
-// pop inline (no cpu.push32/pop32: the flat 32-bit stack), and the block directory dense from the
-// start (grown on demand it fell into V8's dictionary elements: a hash lookup per dispatch).
+// tools/linux/x87mem.asm: what a 4K intro's synthesizer does, under paging (every Linux and Win32
+// program is paged) -- x87 on memory operands, push and pop, lodsb, a call through a pointer, a push from
+// memory, then a block that branches back to itself a thousand times: 55, Docker i386's exit status --
+// and none of the slow paths the recompiler now avoids for Valleyball (Bluflame, 2009): no cpu.fpuMem
+// call (x87 on memory inline under paging), no cpu.push32/pop32 and no memory helper read for its stack,
+// its lodsb and its indirect call (a flat 32-bit stack inline; the helpers probe the fast tables first),
+// the self-looping block dispatched a few times rather than a thousand, and the block directory dense
+// (grown on demand it fell into V8's dictionary elements: a hash lookup per dispatch).
 { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/x87mem.asm
     '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
-    '000000000080040800800408a8000000081000000700000000100000b9e803000051d90594800408dc0d98800408da05a0800408d91d0090' +
-    '0408d90500900408d80da4800408db1d0490040859e2d28b1d04900408b801000000cd800000c03f00000000000004400a00000000008040');
+    '000000000080040800800408c8000000081000000700000000100000b9e803000051beb8800408acff15b0800408ff35c080040858d905b4' +
+    '800408dc0db8800408da05c0800408d91d00900408d90500900408d80dc4800408db1d0490040859e2bfb9e80300004975fd8b1d04900408' +
+    'b801000000cd80c3af8004080000c03f00000000000004400a00000000008040');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
-    let fpuMem = 0, walks = 0, stack = 0;
+    let fpuMem = 0, walks = 0, stack = 0, reads = 0;
     const fm = mc.cpu.fpuMem; mc.cpu.fpuMem = (...a) => { fpuMem++; return fm(...a); };
     for (const k of ['push32', 'pop32']) { const f = mc.cpu[k].bind(mc.cpu); mc.cpu[k] = (...a) => { stack++; return f(...a); }; }
     lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/X87MEM']);
     const xl = mc.mem.xlat.bind(mc.mem); mc.mem.xlat = (...a) => { walks++; return xl(...a); };   // a few fill the tables
+    mc.rec.profiling = true;
+    let compiling = 0;                                                  // the recompiler reads the code itself
+    const cmp = mc.rec._compile.bind(mc.rec); mc.rec._compile = (...a) => { compiling++; try { return cmp(...a); } finally { compiling--; } };
+    for (const k of ['r8', 'r32']) { const f = mc.mem[k].bind(mc.mem); mc.mem[k] = (...a) => { if (!compiling) reads++; return f(...a); }; }
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
-    got = [lx.done && lx.status, fpuMem, walks < 50, stack, mc.rec.blockPages.length === 1 << 20].join(' ');
+    got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, mc.rec.heat.get(0x0804809f) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: x87 on memory under paging inline, the stack through the fast tables (55, as Docker i386)', got, '55 0 true 0 true'); }
+  eq('linux: a synthesizer\'s loops under paging with no slow path (55, as Docker i386)', got, '55 0 true 0 true true true'); }
+// The branch-free 32-bit flag setters (cpu.setAdd32, setSub32, setLogic32, setInc32, setDec32) against
+// the generic ones at 32 bits, on edge values and random ones, the flags they start from random too.
+{ const { CPU } = await import('../src/cpu.js');
+  const c = new CPU({ u8: new Uint8Array(16) }), g = new CPU({ u8: new Uint8Array(16) });
+  const edge = [0, 1, 2, 0x0f, 0x10, 0x7f, 0x80, 0xff, 0x7fffffff, 0x80000000, 0x80000001, 0xfffffffe, 0xffffffff];
+  let seed = 12345; const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed % 3 === 0 ? edge[seed % edge.length] : (Math.imul(seed, 2654435761) >>> 0); };
+  let bad = 0;
+  for (let i = 0; i < 200000; i++) {
+    const a = rnd(), b = rnd(), f0 = rnd() & 0xffff, same = (k, x, y) => { if (c.flags !== g.flags && bad++ < 3) console.log(k, x, y, c.flags.toString(16), g.flags.toString(16)); };
+    c.flags = g.flags = f0; g.setAdd(a, b, (a + b) >>> 0, 32); c.setAdd32(a, b, (a + b) >>> 0); same('add', a, b);
+    c.flags = g.flags = f0; g.setSub(a, b, (a - b) >>> 0, 32); c.setSub32(a, b, (a - b) >>> 0); same('sub', a, b);
+    c.flags = g.flags = f0; g.setLogic((a & b) >>> 0, 32); c.setLogic32((a & b) >>> 0); same('logic', a, b);
+    c.flags = g.flags = f0; g.setAdd(a, 1, (a + 1) >>> 0, 32, false); c.setInc32(a, (a + 1) >>> 0); same('inc', a, 1);
+    c.flags = g.flags = f0; g.setSub(a, 1, (a - 1) >>> 0, 32, false); c.setDec32(a, (a - 1) >>> 0); same('dec', a, 1);
+  }
+  eq('cpu: the 32-bit flag setters give the generic ones\' flags', bad, 0); }
 // tools/linux/fbwrite.asm: writes to /dev/fb0 as fb_write takes them, on a 1280x720 framebuffer (any
 // 32-bit size the card holds: Outline 2026's Sea of Holes asks for it) — a count of BE570E00h answered
 // with the frame's size (attraction & decay's pwrite64), a buffer running into an unmapped page written

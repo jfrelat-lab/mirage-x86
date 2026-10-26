@@ -21,6 +21,7 @@ export const ES = 0, CS = 1, SS = 2, DS = 3, FS = 4, GS = 5;
 const PARITY = (() => { const t = new Uint8Array(256);
   for (let i = 0; i < 256; i++) { let p = 1, x = i; while (x) { p ^= 1; x &= x - 1; } t[i] = p; }
   return t; })();
+const PF4 = PARITY.map((p) => p * 4);   // PF's own bit (4), for the branch-free setters below
 
 export class CPU {
   constructor(mem) {
@@ -949,6 +950,36 @@ export class CPU {
     if ((a ^ b ^ r) & 0x10) f |= AF;
     if (PARITY[r & 0xff]) f |= PF;
     this.flags = f;
+  }
+  /*
+   * The 32-bit forms, for the code a recompiled 32-bit program runs most: the same flags as setAdd,
+   * setSub and setLogic at 32 bits with the carry, each taken from its bit with no branch but the
+   * zero test. Generic, with the width and the carry as arguments, these were an eighth of
+   * Valleyball's synthesizer in Chrome, whose V8 inlined them less than Node's.
+   * Bits: CF 1, PF 4, AF 10h, ZF 40h, SF 80h, OF 800h (8D5h together).
+   */
+  setAdd32(a, b, r) {
+    a >>>= 0; b >>>= 0; r >>>= 0;
+    this.flags = (this.flags & ~0x8d5) | (a + b > 0xffffffff ? 1 : 0) | PF4[r & 0xff] | ((a ^ b ^ r) & 0x10)
+      | (r === 0 ? 0x40 : 0) | ((r >>> 24) & 0x80) | (((~(a ^ b) & (a ^ r)) >>> 20) & 0x800);
+  }
+  setSub32(a, b, r) {
+    a >>>= 0; b >>>= 0; r >>>= 0;
+    this.flags = (this.flags & ~0x8d5) | (a < b ? 1 : 0) | PF4[r & 0xff] | ((a ^ b ^ r) & 0x10)
+      | (r === 0 ? 0x40 : 0) | ((r >>> 24) & 0x80) | ((((a ^ b) & (a ^ r)) >>> 20) & 0x800);
+  }
+  // INC and DEC: ADD and SUB of 1 with CF left as it was.
+  setInc32(a, r) {
+    a >>>= 0; r >>>= 0;
+    this.flags = (this.flags & ~0x8d4) | PF4[r & 0xff] | ((a ^ 1 ^ r) & 0x10) | (r === 0 ? 0x40 : 0) | ((r >>> 24) & 0x80) | (r === 0x80000000 ? 0x800 : 0);
+  }
+  setDec32(a, r) {
+    a >>>= 0; r >>>= 0;
+    this.flags = (this.flags & ~0x8d4) | PF4[r & 0xff] | ((a ^ 1 ^ r) & 0x10) | (r === 0 ? 0x40 : 0) | ((r >>> 24) & 0x80) | (r === 0x7fffffff ? 0x800 : 0);
+  }
+  setLogic32(r) {
+    r >>>= 0;
+    this.flags = (this.flags & ~0x8d5) | PF4[r & 0xff] | (r === 0 ? 0x40 : 0) | ((r >>> 24) & 0x80);
   }
   setLogic(r, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = 1 << (bits - 1);

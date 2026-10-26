@@ -1,8 +1,9 @@
-; x87mem.asm — x87 arithmetic on memory operands, as a 4K intro's synthesizer does it, under paging
-; (every Linux program is paged): fld/fmul/fadd/fstp on floats and doubles, fild/fistp on ints, in a
-; loop that also pushes and pops. 1.5 * 2.5 + 10 (an int) = 13.75, times 4 stored as an int: 55, the
-; exit status. tools/test.js also holds that it ran with no cpu.fpuMem call and no page walk for its
-; stack: the paged inline forms and the helpers' fast-table probe.
+; x87mem.asm — what a 4K intro's synthesizer does, under paging (every Linux and Win32 program is
+; paged): x87 arithmetic on memory operands (fld/fmul/fadd/fstp on floats and doubles, fild/fistp on
+; ints) in a loop that also pushes and pops, reads a byte with lodsb, calls through a pointer and pushes
+; from memory; then a block that branches back to itself a thousand times. 1.5 * 2.5 + 10 (an int) =
+; 13.75, times 4 stored as an int: 55, the exit status, as Docker i386 exits. tools/test.js also holds
+; that it ran with none of the slow paths the recompiler now avoids there.
 ;
 ;   nasm -f bin tools/linux/x87mem.asm -o X87MEM
         bits    32
@@ -18,6 +19,11 @@ phsize  equ     $ - phdr
 
 _start: mov     ecx, 1000
 .loop:  push    ecx
+        mov     esi, vb
+        lodsb                                   ; 0 (the low byte of 2.5 as a double)
+        call    [fnptr]                         ; an indirect call, as an interpreter's dispatch
+        push    dword [vten]
+        pop     eax                             ; 10
         fld     dword [va]                       ; 1.5
         fmul    qword [vb]                       ; * 2.5
         fiadd   dword [vten]                     ; + 10
@@ -27,9 +33,14 @@ _start: mov     ecx, 1000
         fistp   dword [vout]                     ; 55
         pop     ecx
         loop    .loop
+        mov     ecx, 1000                       ; a block that branches back to itself
+.spin:  dec     ecx
+        jnz     .spin
         mov     ebx, [vout]
         mov     eax, 1
         int     0x80
+fn:     ret
+fnptr:  dd      fn
 va:     dd      1.5
 vb:     dq      2.5
 vten:   dd      10

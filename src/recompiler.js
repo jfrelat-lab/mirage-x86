@@ -49,6 +49,8 @@ const NOSTRIP = typeof process !== 'undefined' && !!(process.env && process.env.
 const TIER2 = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_TIER2);
 const NOREALSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOREALSPEC);
 const NOFLATSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFLATSPEC);
+// MIRAGE_NOSELFLOOP=1: a block that branches back to itself returns to the dispatcher at each turn.
+const NOSELFLOOP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSELFLOOP);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
 const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOMEMO);
 const MEMO_MAX = 200000;          // blocks the memo keeps (the oldest go first)
@@ -1118,13 +1120,14 @@ export class Recompiler {
       const a = NT(), b = NT(), rr = NT();
       P(`var ${a}=(${dRead})${M(sz)},${b}=(${src})${M(sz)};`);
       switch (op) {
-        case 'add': P(`var ${rr}=(${a}+${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setAdd(${a},${b},${rr},${sz});`, lALL); break;
-        case 'or': P(`var ${rr}=(${a}|${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
-        case 'and': P(`var ${rr}=(${a}&${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
-        case 'xor': P(`var ${rr}=(${a}^${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
-        case 'sub': P(`var ${rr}=(${a}-${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
-        case 'cmp': P(`var ${rr}=(${a}-${b})${M(sz)};`); PFLAG(`cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
-        case 'test': P(`var ${rr}=(${a}&${b})${M(sz)};`); PFLAG(`cpu.setLogic(${rr},${sz});`, lALL); break;
+        // 32-bit: the branch-free setters (cpu.setAdd32 and kin), the same flags.
+        case 'add': P(`var ${rr}=(${a}+${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setAdd32(${a},${b},${rr});` : `cpu.setAdd(${a},${b},${rr},${sz});`, lALL); break;
+        case 'or': P(`var ${rr}=(${a}|${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
+        case 'and': P(`var ${rr}=(${a}&${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
+        case 'xor': P(`var ${rr}=(${a}^${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
+        case 'sub': P(`var ${rr}=(${a}-${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setSub32(${a},${b},${rr});` : `cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
+        case 'cmp': P(`var ${rr}=(${a}-${b})${M(sz)};`); PFLAG(sz === 32 ? `cpu.setSub32(${a},${b},${rr});` : `cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
+        case 'test': P(`var ${rr}=(${a}&${b})${M(sz)};`); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
         case 'adc': { cur.use |= lC; const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}+${b}+${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setAdc(${a},${b},${c},${rr},${sz});`, lALL); break; }
         case 'sbb': { cur.use |= lC; const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}-${b}-${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setSbb(${a},${b},${c},${rr},${sz});`, lALL); break; }
       }
@@ -1136,20 +1139,37 @@ export class Recompiler {
     const endJcc = (cc, target, next) => { term = { k: 'jcc', cc, t: +target, n: +next }; ended = true; };
     // Emit the tier-1 return form of the recorded terminator (byte-identical to the old
     // inline emission). The region compiler emits its own edge form from the same `term`.
+    // The condition under which a conditional terminator goes to term.t.
+    const termCond = () => {
+      if (term.k === 'jcc') return condExpr(term.cc);
+      if (term.k === 'jcxz') return `(${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'}===0)`;
+      const cx = term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)';                      // LOOP: ECX under 0x67
+      return term.v === 0xe0 ? `(${cx}!==0&&!(cpu.flags&${ZF}))` : term.v === 0xe1 ? `(${cx}!==0&&(cpu.flags&${ZF}))` : `(${cx}!==0)`;
+    };
     const emitTermReturn = () => {
       // term.t is already reduced to the code segment's width at decode time (see ipAdd), so the
       // old runtime `&0xffff` was redundant in 16-bit code and destructive in 32-bit code — it threw
       // away the top half of every branch target above 0xFFFF.
       if (term.k === 'jmp') P(`cpu.eip=${term.t};`);
-      else if (term.k === 'jcc') P(`cpu.eip=${condExpr(term.cc)}?${term.t}:${term.n};`);
-      else if (term.k === 'jcxz') P(`cpu.eip=(${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'}===0)?${term.t}:${term.n};`);
-      else if (term.k === 'loop') {
-        const cx = term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)';                    // ECX under 0x67
-        const c = term.v === 0xe0 ? `${cx}!==0&&!(cpu.flags&${ZF})`
-          : term.v === 0xe1 ? `${cx}!==0&&(cpu.flags&${ZF})` : `${cx}!==0`;
-        P(`cpu.eip=(${c})?${term.t}:${term.n};`);
-      } else return;   // 'exit' — the block emitted its own return
+      else if (term.k === 'jcc' || term.k === 'jcxz' || term.k === 'loop') P(`cpu.eip=${termCond()}?${term.t}:${term.n};`);
+      else return;   // 'exit' — the block emitted its own return
       P('return;');
+    };
+    /*
+     * A BLOCK THAT BRANCHES BACK TO ITSELF (a tight loop: Valleyball's synthesizer converts a sample a
+     * turn, `lodsb; push; fild; fmul; fstp; pop; inc; cmp; jl` to its own head) turns inside its function
+     * instead of returning to the dispatcher at each turn. It keeps the dispatcher's accounting -- the
+     * cycles and the slice's block budget, a turn each -- and leaves to it when the loop ends, when the
+     * budget is down to its last block, or when interrupts are enabled (the dispatcher delivers them
+     * between blocks). A fault, an SMC abort, any `return` in the body leaves as it did. Under paging
+     * only: the systems that page (Linux's and Win32's programs, Windows 9x) are where it was measured.
+     */
+    let selfLoop = false;
+    const emitSelfLoop = () => {
+      const c = termCond(), stay = term.t === ip0 ? c : `!${c}`, exit = term.t === ip0 ? term.n : term.t;
+      P(`if(!(${stay})){cpu.eip=${exit};return;}`);
+      P(`if((cpu.flags&${IF})||cpu.tbudget<=1){cpu.eip=${ip0};return;}`);
+      P(`cpu.cycles+=${count};cpu.tbudget--;`);
     };
 
     // ---- x87 stack-expression helpers (used by emitFPUReg/emitFPUMem below) ----
@@ -1178,7 +1198,7 @@ export class Recompiler {
     // and sets flags (`mov eax,edi`, `and al,81h`, `shl eax,3`) cannot, and its store is dropped once
     // the instruction is translated: Outline 2021's xorchitecture spent a share of its loop on them.
     // The flag setters and the shift helpers neither fault nor read EIP.
-    const EIP_FREE = /cpu\.(?:set(?:Add|Sub|Logic|ShiftResult|Adc|Sbb)|shl|shr|sar|rol|ror|rcl|rcr)\(|cpu\.flags\b|cpu\.shiftMask\b/g;
+    const EIP_FREE = /cpu\.(?:set(?:Add|Sub|Logic|ShiftResult|Adc|Sbb|Inc|Dec)(?:32)?|shl|shr|sar|rol|ror|rcl|rcr)\(|cpu\.flags\b|cpu\.shiftMask\b/g;
     let eipAt = -1;
     const pruneEip = () => {
       if (eipAt < 0) return;
@@ -1294,11 +1314,11 @@ export class Recompiler {
         // ---- INC/DEC reg16 ----
         case 0x40: case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: {
           const i = op & 7, a = NT(), rr = NT();
-          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}+1)${M(sz)};${rW(i, sz, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break;
+          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}+1)${M(sz)};${rW(i, sz, rr)}`); PFLAG(sz === 32 ? `cpu.setInc32(${a},${rr});` : `cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break;
         }
         case 0x48: case 0x49: case 0x4a: case 0x4b: case 0x4c: case 0x4d: case 0x4e: case 0x4f: {
           const i = op & 7, a = NT(), rr = NT();
-          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}-1)${M(sz)};${rW(i, sz, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break;
+          P(`var ${a}=${rR(i, sz)};var ${rr}=(${a}-1)${M(sz)};${rW(i, sz, rr)}`); PFLAG(sz === 32 ? `cpu.setDec32(${a},${rr});` : `cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break;
         }
 
         // ---- PUSH/POP reg ----
@@ -1772,14 +1792,16 @@ export class Recompiler {
     pruneEip();
     if (needChecked) return this.translate(linStart, ip0, maxOps, d, true);
     const bodyOut = out.slice();
-    emitTermReturn();
+    selfLoop = !NOSELFLOOP && !TIER2 && pfRestart && (term.k === 'jcc' || term.k === 'jcxz' || term.k === 'loop')
+      && (term.t === ip0) !== (term.n === ip0);
+    if (selfLoop) emitSelfLoop(); else emitTermReturn();
     let head = '';
     if (flatUsed.size) {
       const sg = [...flatUsed];
       head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0${ssB32 ? '||!cpu.ssB' : ''}){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
     }
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + head;
-    const body = pre + '\n' + out.join('\n');
+    const body = pre + '\n' + (selfLoop ? `for(;;){\n${out.join('\n')}\n}` : out.join('\n'));
     const fn = new Function('cpu', body);
     // The emitted source is kept ONLY if something will read it: the region compiler splices
     // bodyOut, and tools/trace.js prints body. Tier 2 is opt-in, so by default neither is, and
@@ -2089,11 +2111,13 @@ export class Recompiler {
     function emitGroup5(sz, ipStart) {
       const o = modrm();
       switch (o.reg) {
-        case 0: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}+1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break; }
-        case 1: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}-1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(`cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break; }
+        case 0: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}+1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(sz === 32 ? `cpu.setInc32(${a},${rr});` : `cpu.setAdd(${a},1,${rr},${sz},false);`, lNOC); break; }
+        case 1: { const a = NT(), rr = NT(); P(`var ${a}=${rmR(o, sz)};var ${rr}=(${a}-1)${M(sz)};${rmW(o, sz, rr)}`); PFLAG(sz === 32 ? `cpu.setDec32(${a},${rr});` : `cpu.setSub(${a},1,${rr},${sz},false);`, lNOC); break; }
         // Same 0x66 rule as CALL rel: the pushed return address is a dword and the target operand is
         // read at the prefixed size. `o32 call ebx` is test386's POST-5 %%rm32 case.
-        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};${sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
+        case 2: { const tg = NT(); P(`var ${tg}=${rmR(o, sz)};`);
+          if (inlineStack(sz)) { canFault = true; P(pushS(SEQ())); P(`cpu.eip=${tg}>>>0;`); P('return;'); ended = true; break; }   // the flat stack: the interpreters' call [table+eax*4]
+          P(`${sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`}cpu.eip=${sz === 16 ? `${tg}&0xffff` : `${tg}>>>0`};`); P('return;'); ended = true; break; } // CALL Ev
         // CALLF under 0x66 pushes CS and a 32-bit return offset, and reads a 48-bit far pointer.
         // The INDIRECT far forms go through cpu.farCall/farJmp exactly as the direct ones at 0x9a
         // and 0xea do. They used to load CS themselves, which meant a CALL GATE was not honoured
@@ -2117,7 +2141,8 @@ export class Recompiler {
           P(sz === 16 ? `var ${to}=m.r16(${a}),${ts}=m.r16(${AM(`${a}+2`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to},${ipStart},${SEQ()});`
                       : `var ${to}=m.r32(${a})>>>0,${ts}=m.r16(${AM(`${a}+4`)});cpu.eip=${ipStart};cpu.farJmp(${ts},${to}>>>0,${ipStart},${SEQ()});`);
           P('return;'); ended = true; break; } // JMPF
-        case 6: P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
+        case 6: if (inlineStack(sz)) { canFault = true; P(pushS(rmR(o, 32))); break; }
+          P(sz === 32 ? `cpu.push32(${rmR(o, 32)}>>>0);` : `cpu.push16(${rmR(o, 16)});`); break; // PUSH Ev (honour the operand-size prefix: 66 → push a dword)
       }
     }
 
@@ -2155,6 +2180,14 @@ export class Recompiler {
       const adv = iAdv(6) + iAdv(7);
       const advDI = iAdv(7);
       const advSI = iAdv(6);
+      // A single LODS or STOS under paging: the paged probe, as a MOV through ESI or EDI would have it
+      // (Valleyball's synthesizer reads its bytecode with lodsb).
+      if (!rep && pagedRW && (kind === 'lods' || kind === 'stos')) {
+        const a = NT();
+        if (kind === 'lods') { P(`var ${a}=${SI};`); P(rW(0, size, memRead(a, size)) + advSI); }
+        else { P(`var ${a}=${DI};`); P(memW(a, size, rR(0, size)) + advDI); }
+        return;
+      }
       if (kind === 'movs') loop(`m.${ww}(${DI},m.${w}(${SI}));${adv}`);
       else if (kind === 'stos') loop(`m.${ww}(${DI},${rR(0, size)});${advDI}`);
       else if (kind === 'lods') loop(`${rW(0, size, `m.${w}(${SI})`)}${advSI}`);
