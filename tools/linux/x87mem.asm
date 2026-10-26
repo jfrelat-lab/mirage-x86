@@ -1,6 +1,6 @@
 ; x87mem.asm — what a 4K intro's synthesizer does, under paging (every Linux and Win32 program is
 ; paged): x87 arithmetic on memory operands (fld/fmul/fadd/fstp on floats and doubles, fild/fistp on
-; ints) in a loop that also pushes and pops, reads a byte with lodsb, calls through a pointer and pushes
+; ints) in a loop that also pushes and pops (pushad and popad too), reads a byte with lodsb, calls through a pointer and pushes
 ; from memory; then a block that branches back to itself a thousand times. 1.5 * 2.5 + 10 (an int) =
 ; 13.75, times 4 stored as an int: 55, the exit status, as Docker i386 exits. tools/test.js also holds
 ; that it ran with none of the slow paths the recompiler now avoids there.
@@ -22,6 +22,8 @@ _start: mov     ecx, 1000
         mov     esi, vb
         lodsb                                   ; 0 (the low byte of 2.5 as a double)
         call    [fnptr]                         ; an indirect call, as an interpreter's dispatch
+        pushad                                  ; an opcode's registers kept, as Valleyball's machine keeps them
+        popad
         push    dword [vten]
         pop     eax                             ; 10
         fld     dword [va]                       ; 1.5

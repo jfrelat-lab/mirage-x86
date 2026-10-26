@@ -46,7 +46,7 @@ export function resolveMemStrategy(opts = {}) {
 export function memPrologue(strategy) {
   const parts = [];
   parts.push('var _smc=0;');   // set by the inline write marker, tested at the instruction boundary
-  if (strategy.read === 'paged' || strategy.write === 'paged') parts.push('var _po=0,_pw=0;');
+  if (strategy.read === 'paged' || strategy.write === 'paged') parts.push('var _po=0,_pw=0,_dv=m.dv;');
   if (strategy.read === 'paged') parts.push('var rdo=m.rdOfs;');
   if (strategy.write === 'paged') parts.push('var wro=m.wrOfs;');
   return parts.join('');
@@ -77,7 +77,7 @@ const READ = {
   // wraps modulo 2^32 the way the linear address does.
   paged: (MM) => (a, sz) => sz === 8 ? `((_po=rdo[${a}>>>12])!==-1?u8[(_po+${a})>>>0]:m.r8(${a}))`
     : sz === 16 ? `(((${a}&4095)<4095&&(_po=rdo[${a}>>>12])!==-1)?(_po=(_po+${a})>>>0,u8[_po]|(u8[_po+1]<<8)):m.r16(${a}))`
-      : `(((${a}&4095)<4093&&(_po=rdo[${a}>>>12])!==-1)?(_po=(_po+${a})>>>0,(u8[_po]|(u8[_po+1]<<8)|(u8[_po+2]<<16)|(u8[_po+3]<<24))>>>0):m.r32(${a}))`,
+      : `(((${a}&4095)<4093&&(_po=rdo[${a}>>>12])!==-1)?_dv.getUint32((_po+${a})>>>0,true):m.r32(${a}))`,
 
   // No test at all. Correct only because vga.js mirrors the planar window into u8[] (see its
   // "linear read shadow" section) — the whole cost moves off the access path and onto planar
@@ -113,6 +113,6 @@ const WRITE = {
     const t = NT();
     if (sz === 8) return `if((_pw=wro[${a}>>>12])!==-1){var ${t}=(${v});u8[(_pw+${a})>>>0]=${t};}else m.w8(${a},(${v}));`;
     if (sz === 16) return `if((${a}&4095)<4095&&(_pw=wro[${a}>>>12])!==-1){var ${t}=(${v});_pw=(_pw+${a})>>>0;u8[_pw]=${t};u8[_pw+1]=${t}>>>8;}else m.w16(${a},(${v}));`;
-    return `if((${a}&4095)<4093&&(_pw=wro[${a}>>>12])!==-1){var ${t}=(${v});_pw=(_pw+${a})>>>0;u8[_pw]=${t};u8[_pw+1]=${t}>>>8;u8[_pw+2]=${t}>>>16;u8[_pw+3]=${t}>>>24;}else m.w32(${a},(${v}));`;
+    return `if((${a}&4095)<4093&&(_pw=wro[${a}>>>12])!==-1){_dv.setUint32((_pw+${a})>>>0,(${v}),true);}else m.w32(${a},(${v}));`;
   },
 };

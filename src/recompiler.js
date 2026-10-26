@@ -1338,23 +1338,40 @@ export class Recompiler {
           P(rW(op & 7, sz, t0)); break;
         }
 
-        case 0x60: // PUSHA / PUSHAD (66) — pushes the ORIGINAL SP/ESP, not the decremented one
-          P(sz === 32
+        case 0x60: { // PUSHA / PUSHAD (66) — pushes the ORIGINAL SP/ESP, not the decremented one
+          const slow = (sz === 32
             // The pushed eSP is the ORIGINAL one, at the OPERAND width — SS.B chooses where the
             // pushes go, never what the value is. test386 POST 9 asserts exactly this.
             ? `var _sp=cpu.reg[4]>>>0;${pfRestart ? 'try{' : ''}cpu.push32(r[0]);cpu.push32(r[1]);cpu.push32(r[2]);cpu.push32(r[3]);cpu.push32(_sp);cpu.push32(r[5]);cpu.push32(r[6]);cpu.push32(r[7]);${pfRestart ? '}catch(_e){r[4]=_sp;throw _e;}' : ''}`
-            : `var _sp=cpu.sp,_sv=r[4];${pfRestart ? 'try{' : ''}cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);${pfRestart ? '}catch(_e){r[4]=_sv;throw _e;}' : ''}`); break;   // PUSHA: 8 stores, one restart point
-        // POPA / POPAD. "The pushed SP/ESP slot is discarded" is the effect, not the mechanism, and the
-        // difference shows under a 32-bit operand on a 16-bit stack: the slot IS loaded into ESP, and
-        // the stack-pointer adjustment then rewrites SP at the STACK's width, leaving the popped value's
-        // HIGH half behind. Verified on the 80386EX vectors — the final ESP's high half is the discarded
-        // slot's high half in every case, its low half is SP+32. Discarding the slot outright loses it.
+            : `var _sp=cpu.sp,_sv=r[4];${pfRestart ? 'try{' : ''}cpu.push16(r[0]);cpu.push16(r[1]);cpu.push16(r[2]);cpu.push16(r[3]);cpu.push16(_sp);cpu.push16(r[5]);cpu.push16(r[6]);cpu.push16(r[7]);${pfRestart ? '}catch(_e){r[4]=_sv;throw _e;}' : ''}`);
+          // The flat 32-bit stack (inlineStack): the eight dwords in one go when they lie in one plain
+          // page -- Valleyball's synthesizer brackets every opcode of its stack machine with pushad and
+          // popad -- else the pushes above, one restart point.
+          if (inlineStack(sz)) {
+            canFault = true; const a = NT(), q = NT();
+            P(`var _sp=r[4]>>>0,${a}=(_sp-32)>>>0;if((${a}&4095)<=4064&&(_pw=wro[${a}>>>12])!==-1){var ${q}=(_pw+${a})>>>0,_v=m.dv;`
+              + `_v.setUint32(${q},r[7],true);_v.setUint32(${q}+4,r[6],true);_v.setUint32(${q}+8,r[5],true);_v.setUint32(${q}+12,_sp,true);`
+              + `_v.setUint32(${q}+16,r[3],true);_v.setUint32(${q}+20,r[2],true);_v.setUint32(${q}+24,r[1],true);_v.setUint32(${q}+28,r[0],true);r[4]=${a};}else{${slow}}`);
+          } else P(slow);
+          break;
+        }
         case 0x61: {
+          // POPAD on the flat 32-bit stack: the eight dwords in one go from one plain page (ESP's slot
+          // skipped), else the pops below.
+          const fast = inlineStack(sz);
+          if (fast) {
+            canFault = true; const a = NT(), q = NT();
+            P(`var ${a}=r[4]>>>0;if((${a}&4095)<=4064&&(_po=rdo[${a}>>>12])!==-1){var ${q}=(_po+${a})>>>0,_v=m.dv;`
+              + `r[7]=_v.getUint32(${q},true);r[6]=_v.getUint32(${q}+4,true);r[5]=_v.getUint32(${q}+8,true);`
+              + `r[3]=_v.getUint32(${q}+16,true);r[2]=_v.getUint32(${q}+20,true);r[1]=_v.getUint32(${q}+24,true);r[0]=_v.getUint32(${q}+28,true);`
+              + `r[4]=(${a}+32)>>>0;}else{`);
+          }
           const pops = (i) => rW(i, sz, `cpu.pop${sz}()`);
           P(`${pops(7)}${pops(6)}${pops(5)}`);
           P(`var _sp=cpu.stackPtr;${rW(4, sz, `cpu.pop${sz}()`)}`);      // ESP is loaded, then restored
           P(`if(cpu.ssB){r[4]=(_sp+${sz / 8})>>>0;}else{r[4]=(r[4]&~0xffff)|((_sp+${sz / 8})&0xffff);}`);
           P(`${pops(3)}${pops(2)}${pops(1)}${pops(0)}`);
+          if (fast) P('}');
           break;
         }
         case 0x62: {                                                                   // BOUND Gv,Ma → #BR (INT 5) if index ∉ [lower,upper] (signed)

@@ -3506,7 +3506,7 @@ const runLinux = (hex, argv) => {
     '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); }
 // tools/linux/x87mem.asm: what a 4K intro's synthesizer does, under paging (every Linux and Win32
 // program is paged) -- x87 on memory operands, push and pop, lodsb, a call through a pointer, a push from
-// memory, then a block that branches back to itself a thousand times: 55, Docker i386's exit status --
+// memory, pushad and popad, then a block that branches back to itself a thousand times: 55, Docker i386's exit status --
 // and none of the slow paths the recompiler now avoids for Valleyball (Bluflame, 2009): no cpu.fpuMem
 // call (x87 on memory inline under paging), no cpu.push32/pop32 and no memory helper read for its stack,
 // its lodsb and its indirect call (a flat 32-bit stack inline; the helpers probe the fast tables first),
@@ -3515,9 +3515,9 @@ const runLinux = (hex, argv) => {
 { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/x87mem.asm
     '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
-    '000000000080040800800408c8000000081000000700000000100000b9e803000051beb8800408acff15b0800408ff35c080040858d905b4' +
-    '800408dc0db8800408da05c0800408d91d00900408d90500900408d80dc4800408db1d0490040859e2bfb9e80300004975fd8b1d04900408' +
-    'b801000000cd80c3af8004080000c03f00000000000004400a00000000008040');
+    '000000000080040800800408ca000000081000000700000000100000b9e803000051beba800408acff15b28004086061ff35c280040858d9' +
+    '05b6800408dc0dba800408da05c2800408d91d00900408d90500900408d80dc6800408db1d0490040859e2bdb9e80300004975fd8b1d0490' +
+    '0408b801000000cd80c3b18004080000c03f00000000000004400a00000000008040');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     let fpuMem = 0, walks = 0, stack = 0, reads = 0;
     const fm = mc.cpu.fpuMem; mc.cpu.fpuMem = (...a) => { fpuMem++; return fm(...a); };
@@ -3529,7 +3529,7 @@ const runLinux = (hex, argv) => {
     const cmp = mc.rec._compile.bind(mc.rec); mc.rec._compile = (...a) => { compiling++; try { return cmp(...a); } finally { compiling--; } };
     for (const k of ['r8', 'r32']) { const f = mc.mem[k].bind(mc.mem); mc.mem[k] = (...a) => { if (!compiling) reads++; return f(...a); }; }
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
-    got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, mc.rec.heat.get(0x0804809f) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
+    got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, mc.rec.heat.get(0x080480a1) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a synthesizer\'s loops under paging with no slow path (55, as Docker i386)', got, '55 0 true 0 true true true'); }
 // The branch-free 32-bit flag setters (cpu.setAdd32, setSub32, setLogic32, setInc32, setDec32) against
