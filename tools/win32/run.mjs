@@ -4,6 +4,7 @@
 //   node tools/win32/run.mjs <program.exe>
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
 //   MIRAGE_W32TRACE=1               every API call as it is made
+//   MIRAGE_W32WAV=<file.wav>        what waveOut played
 import { readFileSync } from 'fs';
 import { basename } from 'path';
 import { Machine } from '../../src/machine.js';
@@ -25,7 +26,19 @@ if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (na
 loadPE(lx, mc.mem, mc.cpu, exe, { path: `C:\\${basename(prog)}`, apis: win32Apis(), backend });
 const SEC = mc.cyclesPerSecond || 1e8, SECS = Number(process.env.MIRAGE_W32SECS) || 0;
 const LIMIT = SECS ? SECS * SEC : 2e10;
-while (!lx.done && mc.cpu.cycles < LIMIT) mc.runSlice(200000);
+// MIRAGE_W32WAV=<file.wav>: what waveOut played, recorded.
+const WAV = process.env.MIRAGE_W32WAV, heard = [];
+let wavRate = 44100;
+const record = () => { if (!WAV || !mc.dsp) return; const { rate, samples } = mc.dsp.drain(); if (samples.length) { wavRate = rate; for (const v of samples) heard.push(v); } };
+while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); record(); }
+if (WAV) {
+  const { writeFileSync } = await import('fs');
+  const n = heard.length, b = Buffer.alloc(44 + n * 2);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(2, 22);
+  b.writeUInt32LE(wavRate, 24); b.writeUInt32LE(wavRate * 4, 28); b.writeUInt16LE(4, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.max(-32768, Math.min(32767, heard[i])), 44 + i * 2);
+  writeFileSync(WAV, b); console.error(`mirage-win32: ${(n / 2 / wavRate).toFixed(1)} s of sound -> ${WAV}`);
+}
 const t = backend.summary();
 console.error('w32:', JSON.stringify({ mode: t.mode, frames: t.frames, calls: t.calls }));
 for (const s of t.shaders) console.error('w32 shader:\n' + s);

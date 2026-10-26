@@ -19,6 +19,6 @@
     "run": "/intro/TITS_FRq_Retrospection_640x480.exe"
   },
   "output": "window",
-  "notes": "Breakpoint 2010, 4K intro, the Windows original: three raymarched scenes, its shaders put together with sprintf, the camera through gluLookAt; packed by Crinkler. Its music thread does not run yet. Run as Windows XP would run it, with no Windows: MIRAGE-WIN32 maps the .exe as XP's loader does and lays out the process as XP does (the PEB, its module lists, FS at the TEB), which is what Crinkler's header walks to resolve every import by hashing names; kernel32, user32, gdi32, winmm and msvcrt are made in JavaScript, opengl32 (its 368 ordinals as XP's) hands GL and GLSL to PRISM's gl.js, drawn by WebGL2.",
+  "notes": "Breakpoint 2010, 4K intro, the Windows original: three raymarched scenes, its shaders put together with sprintf, the camera through gluLookAt; packed by Crinkler. Run as Windows XP would run it, with no Windows: MIRAGE-WIN32 maps the .exe as XP's loader does and lays out the process as XP does (the PEB, its module lists, FS at the TEB), which is what Crinkler's header walks to resolve every import by hashing names; kernel32, user32, gdi32, winmm and msvcrt are made in JavaScript, opengl32 (its 368 ordinals as XP's) hands GL and GLSL to PRISM's gl.js, drawn by WebGL2.",
   "thumb": "oasis/thumbs/win32-retrospection-2010.png"
 }

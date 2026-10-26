@@ -102,10 +102,11 @@ export function win32Apis({ gl, glu } = {}) {
       return r;
     }],
     GetModuleHandleA: ['p', (x, name) => { if (!name) return x.win.base; const m = x.win.modules.get(x.str(name).toLowerCase().replace(/^.*\\/, '')); return m ? m.base : 0; }],
-    ExitProcess: ['u', (x, code) => { x.lx.exit(code); return 0; }],
-    ExitThread: ['u', (x, code) => { x.lx.exit(code); return 0; }],
+    ExitProcess: ['u', (x, code) => { x.lx.exitProcess(code); return 0; }],
+    ExitThread: ['u', (x, code) => { x.lx.exitThread(code); return 0; }],
     GetTickCount: ['', (x) => ms(x)],
-    Sleep: ['u', (x, n) => x.sleep(n / 1000)],
+    // Sleep(0) gives the CPU to another thread, as Windows' does.
+    Sleep: ['u', (x, n) => { if (n === 0) { x.lx.yieldAfter = true; return 0; } return x.sleep(n / 1000); }],
     QueryPerformanceFrequency: ['p', (x, p) => { x.w32(p, 3579545); x.w32(p + 4, 0); return 1; }],   // XP's ACPI PM timer
     QueryPerformanceCounter: ['p', (x, p) => { const t = Math.floor(x.lx.mono() * 3579545); x.w32(p, t >>> 0); x.w32(p + 4, Math.floor(t / 4294967296)); return 1; }],
     VirtualAlloc: ['puuu', (x, addr, size) => { const p = addr || vaNext; if (!addr) vaNext += Math.ceil(size / 0x10000) * 0x10000; x.lx.lazy.push([p, p + size]); return p; }],
@@ -117,8 +118,22 @@ export function win32Apis({ gl, glu } = {}) {
     GlobalAlloc: ['uu', (x, flags, n) => x.win.heapAlloc(n)],
     LocalAlloc: ['uu', (x, flags, n) => x.win.heapAlloc(n)],
     GlobalFree: ['p', () => 0], LocalFree: ['p', () => 0],
-    // Threads do not run yet (ROADMAP W2): the handle comes back, the thread's function never starts.
-    CreateThread: ['puppup', (x, attr, stack, fn) => { x.lx.onOutput && x.lx.onOutput(2, new TextEncoder().encode(`mirage-win32: CreateThread(${fn.toString(16)}): threads do not run yet\n`)); return 0x2001; }],
+    // Threads run in turn with the main one (src/linux.js's queue: a switch at a call that waits, or
+    // after 20 ms of the guest's time). A thread's handle is its id plus 2000h; it is signalled when it ends.
+    CreateThread: ['pupupp', (x, attr, stack, fn, param, flags, pid) => {
+      const tid = x.win.createThread(fn, param);
+      if (pid) x.w32(pid, tid);
+      return 0x2000 + tid;
+    }],
+    WaitForSingleObject: ['pu', (x, h, ms) => {
+      if (h < 0x2000 || h >= 0x3000) return 0;
+      if (x.lx.threadExits.has(h - 0x2000)) return 0;                 // WAIT_OBJECT_0
+      if (ms === 0) return 0x102;                                     // WAIT_TIMEOUT
+      return x.waitUntil(x.lx.mono() + 0.001);                        // waits, a millisecond at a time, the others running
+    }],
+    GetExitCodeThread: ['pp', (x, h, p) => { const c = x.lx.threadExits.get(h - 0x2000); x.w32(p, c === undefined ? 259 : c); return 1; }],   // STILL_ACTIVE
+    TerminateThread: ['pu', () => 1], ResumeThread: ['p', () => 1], SuspendThread: ['p', () => 0],
+    GetCurrentThreadId: ['', (x) => x.lx.pid], GetCurrentProcessId: ['', () => 0x100],
     SetThreadPriority: ['pi', () => 1], SetPriorityClass: ['pu', () => 1], GetCurrentThread: ['', () => 0xfffffffe], GetCurrentProcess: ['', () => 0xffffffff],
     GetCommandLineA: ['', (x) => (st.cmd ||= (() => { const p = x.win.heapAlloc(x.win.path.length + 3); x.write(p, new TextEncoder().encode(`"${x.win.path}"\0`)); return p; })())],
     GetVersion: ['', () => 0x0a280105],                                 // 5.1, build 2600: Windows XP
@@ -173,12 +188,81 @@ export function win32Apis({ gl, glu } = {}) {
   });
   const glu32 = { ...(glu || gluTable().fns) };
   // ---- winmm -----------------------------------------------------------------------------------------
+  // ---- winmm: the clock, and waveOut -------------------------------------------------------------------
+  /*
+   * waveOut plays the buffers a program writes, from guest memory as the play position reaches them:
+   * a 4K intro writes one buffer as long as its song and has a thread fill it while it plays, so the
+   * bytes are read when they are heard, not when written. The position is the guest's clock since the
+   * first write, at the format's rate, never past what was written; the mixer (src/audio.js) pulls
+   * the samples through the card's place (lx.setSoundSource). Valleyball times its pictures by
+   * waveOutGetPosition.
+   */
+  const wave = { fmt: null, queue: [], total: 0, consumed: 0, t0: null, x: null };
+  const bps = () => wave.fmt.rate * wave.fmt.align;
+  const played = (now) => (wave.t0 === null ? 0 : Math.min(wave.total, Math.floor((now - wave.t0) * wave.fmt.rate) * wave.fmt.align));
+  const retire = (x, upTo) => {                                         // headers played to their end: WHDR_DONE
+    while (wave.queue.length && wave.queue[0].end <= upTo) {
+      const h = wave.queue.shift();
+      x.w32(h.hdr + 16, (x.r32(h.hdr + 16) | 1) & ~0x10);
+    }
+  };
+  const drain = () => {
+    const x = wave.x;
+    if (!x || !wave.fmt) return { rate: 44100, samples: [] };
+    const now = played(x.lx.mono()), samples = [], f = wave.fmt;
+    let pos = Math.max(wave.consumed, now - bps());                    // a second at most, should nobody listen
+    for (const h of wave.queue) {
+      if (h.end <= pos) continue;
+      if (h.start >= now) break;
+      const a = Math.max(pos, h.start), b = Math.min(now, h.end), bytes = x.bytes(h.ptr + (a - h.start), b - a);
+      const dv = new DataView(bytes.buffer), step = f.align;
+      for (let o = 0; o + step <= bytes.length; o += step) {
+        const at = (c) => (f.tag === 3 ? Math.round(Math.max(-1, Math.min(1, dv.getFloat32(o + c * 4, true))) * 32767)
+          : f.bits === 16 ? dv.getInt16(o + c * 2, true) : (bytes[o + c] - 128) << 8);
+        const l = at(0); samples.push(l, f.ch > 1 ? at(1) : l);
+      }
+      pos = b;
+    }
+    wave.consumed = now;
+    retire(x, now);
+    return { rate: f.rate, samples };
+  };
   const winmm = {
     timeGetTime: ['', (x) => ms(x)], timeBeginPeriod: ['u', () => 0], timeEndPeriod: ['u', () => 0],
-    waveOutOpen: ['ppppuu', (x, ph) => { x.w32(ph, 0x5001); return 0; }],
-    waveOutPrepareHeader: ['ppu', () => 0], waveOutWrite: ['ppu', () => 0], waveOutUnprepareHeader: ['ppu', () => 0],
-    waveOutGetPosition: ['ppu', (x, h, mmt) => { x.w32(mmt, 4); x.w32(mmt + 4, Math.floor(x.lx.mono() * 44100 * 4)); return 0; }],   // TIME_BYTES, 44.1 kHz stereo 16-bit
-    waveOutReset: ['p', () => 0], waveOutClose: ['p', () => 0],
+    waveOutGetNumDevs: ['', () => 1],
+    // waveOutOpen(&hwo, device, WAVEFORMATEX*, callback, instance, flags): PCM 8/16 bits or float, 1-2 channels.
+    waveOutOpen: ['ppppuu', (x, ph, dev, wfx, cb, inst, flags) => {
+      const tag = x.r16(wfx), ch = x.r16(wfx + 2), rate = x.r32(wfx + 4), align = x.r16(wfx + 12), bits = x.r16(wfx + 14);
+      if (!(tag === 1 && (bits === 8 || bits === 16)) && !(tag === 3 && bits === 32) || ch < 1 || ch > 2) return 32;   // WAVERR_BADFORMAT
+      if (flags & 1) return 0;                                         // WAVE_FORMAT_QUERY
+      Object.assign(wave, { fmt: { tag, ch, rate, bits, align: align || ch * bits / 8 }, queue: [], total: 0, consumed: 0, t0: null, x });
+      x.lx.setSoundSource(drain);
+      if (ph) x.w32(ph, 0x5001);
+      return 0;
+    }],
+    waveOutPrepareHeader: ['ppu', (x, h, hdr) => { x.w32(hdr + 16, x.r32(hdr + 16) | 2); return 0; }],                 // WHDR_PREPARED
+    waveOutUnprepareHeader: ['ppu', (x, h, hdr) => { x.w32(hdr + 16, x.r32(hdr + 16) & ~2); return 0; }],
+    waveOutWrite: ['ppu', (x, h, hdr) => {
+      const now = x.lx.mono(), ptr = x.r32(hdr), len = x.r32(hdr + 4);
+      if (wave.t0 === null) wave.t0 = now;
+      else if (played(now) >= wave.total) wave.t0 = now - wave.total / bps();   // the queue had run dry: play on from here
+      wave.queue.push({ hdr, ptr, start: wave.total, end: wave.total + len });
+      wave.total += len;
+      x.w32(hdr + 16, (x.r32(hdr + 16) | 0x10) & ~1);                 // WHDR_INQUEUE
+      return 0;
+    }],
+    // waveOutGetPosition(hwo, MMTIME*, size): TIME_SAMPLES or TIME_MS when asked, else TIME_BYTES.
+    waveOutGetPosition: ['ppu', (x, h, mmt) => {
+      if (!wave.fmt) return 5;                                         // MMSYSERR_INVALHANDLE
+      const pos = played(x.lx.mono()), type = x.r32(mmt);
+      retire(x, pos);
+      if (type === 2) x.w32(mmt + 4, pos / wave.fmt.align);
+      else if (type === 1) x.w32(mmt + 4, Math.floor(pos / bps() * 1000));
+      else { x.w32(mmt, 4); x.w32(mmt + 4, pos); }
+      return 0;
+    }],
+    waveOutReset: ['p', (x) => { retire(x, Infinity); wave.queue = []; wave.total = wave.consumed = played(x.lx.mono()); return 0; }],
+    waveOutClose: ['p', () => 0], waveOutSetVolume: ['pu', () => 0], waveOutPause: ['p', () => 0], waveOutRestart: ['p', () => 0],
   };
   // ---- msvcrt: the C runtime (cdecl), what an intro reaches for -------------------------------------
   let seed = 1;

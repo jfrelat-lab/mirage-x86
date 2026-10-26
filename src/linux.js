@@ -360,6 +360,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
 
   // ---- ending ------------------------------------------------------------------------------------
   const exit = (status, signal = 0) => {
+    // A thread with others in its address space: exit ends it alone (the pages are theirs too); a
+    // signal that kills it kills them all, as a thread group dies on Linux.
+    if (lx.procs.some((q) => q.vm === lx.vm)) {
+      if (!signal) { lx.exitThread(status); return; }
+      for (let i = lx.procs.length - 1; i >= 0; i--) if (lx.procs[i].vm === lx.vm) { if (lx.procs[i].pid === lx.rootPid) lx.rootPid = lx.pid; lx.procs.splice(i, 1); }
+    }
     if (lx.pid !== lx.rootPid && lx.procs.length) {                      // not the first process: another runs
       const pid = lx.pid, ppid = lx.ppid, code = signal ? signal & 0x7f : (status & 0xff) << 8;
       closeAll();
@@ -402,11 +408,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // writes, both running; until this one process ran at a time, a pipeline's left side to its end
   // before its right side started.
   lx.pid = 1; lx.ppid = 0; lx.nextPid = 100; lx.zombies = new Map();
+  lx.vm = 1; let nextVm = 2;                                             // an address space's id: a process's, its threads'
   lx.rootPid = 1; lx.procs = []; lx.orphans = new Map(); lx.sliceStart = 0; lx.blockRun = 0;
   const QUANTUM = () => 0.02 * (machine.cyclesPerSecond || 1e8);         // 20 ms of guest time
   const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
   const snapshot = () => ({
-    pid: lx.pid, ppid: lx.ppid, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, wake: lx.wake,
+    pid: lx.pid, ppid: lx.ppid, vm: lx.vm, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, wake: lx.wake,
     fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
     sigInfo: lx.sigInfo.slice(), sigBlocked: lx.sigBlocked.slice(), sigPend: new Set(lx.sigPend), sigSaved: lx.sigSaved,
     alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames, pgid: lx.pgid, sid: lx.sid, ctty: lx.ctty,
@@ -416,7 +423,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     tls: mem.u8.slice(TLS_A, TLS_Z), io: mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1),
   });
   const restore = (s) => {
-    Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: s.brkStart, brk: s.brk, mmapNext: s.mmapNext, wake: s.wake ?? null,
+    // Threads share their process's address space (the same lx.vm): its page map is the same object,
+    // and where the next mapping goes is the process's, not the thread's.
+    const shared = s.vm === lx.vm;
+    Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: shared ? lx.brkStart : s.brkStart, brk: shared ? lx.brk : s.brk,
+      mmapNext: shared ? lx.mmapNext : s.mmapNext, wake: s.wake ?? null, vm: s.vm,
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
       sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty });
     fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
@@ -453,6 +464,41 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // that kills the loop never ran.)
   machine.preempt = () => { if (lx.procs.length && !lx.done && cpu.cycles - lx.sliceStart > QUANTUM()) { lx.blockRun = 0; yieldTo(); } };
   lx.alive = (pid) => pid === lx.pid || lx.procs.some((q) => q.pid === pid);
+  /**
+   * A thread of the running process (src/win32's CreateThread, SDL's threads): it shares the address space (lx.vm),
+   * starts at `eip` with its stack at `esp`, and its FS descriptor (GDT entry `fsIndex`, the TLS slots a
+   * switch saves and restores) based at `fsBase` -- Win32's TEB, a thread's own behind one selector.
+   * It waits in the queue; the caller goes on. Returns its id.
+   */
+  lx.spawnThread = ({ eip, esp, fsIndex, fsBase }) => {
+    const me = snapshot(), tid = lx.nextPid++;
+    const t = { ...me, pid: tid, ppid: lx.pid, reg: new Uint32Array(8), eip: eip >>> 0, flags: 0x0002, wake: null,
+      fst: me.fst ? new Float64Array(me.fst.length) : null, ftop: 0, fsw: 0, fcw: 0x037f, focc: me.focc ? new Uint8Array(me.focc.length) : null,
+      xmm: me.xmm ? new Uint8Array(me.xmm.length) : null, tls: me.tls.slice() };
+    t.reg[4] = esp >>> 0;
+    if (fsIndex !== undefined) {                                          // its own descriptor in its copy of the TLS slots
+      const a = (fsIndex - TLS_MIN) * 8, lim = 0xfff;
+      t.tls[a] = lim & 0xff; t.tls[a + 1] = (lim >>> 8) & 0xff; t.tls[a + 2] = fsBase & 0xff; t.tls[a + 3] = (fsBase >>> 8) & 0xff;
+      t.tls[a + 4] = (fsBase >>> 16) & 0xff; t.tls[a + 5] = 0xf2; t.tls[a + 6] = 0x40; t.tls[a + 7] = (fsBase >>> 24) & 0xff;
+    }
+    lx.procs.push(t);
+    return tid;
+  };
+  /** The running thread ends (ExitThread): the next one runs, the address space stays; the last one
+   *  ends the process. Its code stays for whoever waits for it (lx.threadExits). */
+  lx.threadExits = new Map();
+  lx.exitThread = (code) => {
+    lx.threadExits.set(lx.pid, code >>> 0);
+    const next = lx.procs.findIndex((q) => q.vm === lx.vm);
+    if (next < 0) { exit(code); return; }                                // the last thread: the process ends
+    lx.switches++;
+    restore(lx.procs.splice(next, 1)[0]);
+    lx.sliceStart = cpu.cycles;
+  };
+  /** A thread taken out of the queue unfinished (SDL_KillThread, TerminateThread). */
+  lx.killThread = (tid) => { const i = lx.procs.findIndex((q) => q.pid === tid); if (i >= 0) lx.procs.splice(i, 1); lx.threadExits.set(tid, 0); };
+  /** The whole process ends (ExitProcess), whichever thread asks: its threads with it. */
+  lx.exitProcess = (code) => { lx.procs.length = 0; lx.rootPid = lx.pid; exit(code); };
   const fork = (flags = 0x11, ctid = 0) => {
     if (flags & 0x100) return -E.ENOSYS;                                 // CLONE_VM: threads, not here
     const parent = snapshot(), pid = lx.nextPid++;
@@ -467,6 +513,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     releasePages(lx.pages, false);
     lx.procs.push(parent);
     lx.pages = pages; installPages(pages); cpu.setCR3(cpu.cr3);
+    lx.vm = nextVm++;                                                    // the child's own address space
     lx.sliceStart = cpu.cycles;
     lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map();
     lx.sigInfo = lx.sigInfo.slice(); lx.sigHandlers = lx.sigHandlers.slice(); lx.sigBlocked = lx.sigBlocked.slice();
@@ -717,6 +764,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     return take;
   };
   machine.dsp = { drain: () => { const samples = dsp.pcm; dsp.pcm = []; return { rate: dsp.rate, samples }; } };
+  // Another sound device in the card's place (src/win32's waveOut): the mixer pulls from `drain`.
+  lx.setSoundSource = (drain) => { machine.dsp = { drain }; };
   // The same card for a library made in JavaScript (src/hle/asound.js): its format, then samples
   // written as to /dev/dsp — bytes taken, or BLOCK while the buffer is full.
   lx.dspFormat = (rate, fmt, ch) => { dspDrain(); Object.assign(dsp, { rate, fmt, ch }); };

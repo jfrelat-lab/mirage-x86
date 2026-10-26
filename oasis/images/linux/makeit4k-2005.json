@@ -1,0 +1,54 @@
+{
+  "oasis": 1,
+  "title": "Make It 4K — Fit & Bandwagon, 4K for Linux",
+  "year": 2005,
+  "author": "Fit & Bandwagon, the Debian project, busybox, PRISM",
+  "world": "linux",
+  "machine": {
+    "cpu": "686",
+    "mem": 64,
+    "hle": [
+      "sdl12",
+      "gl",
+      "glu",
+      "asound"
+    ]
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/g/glibc/libc6_2.7-18lenny7_i386.deb"
+    },
+    {
+      "tar": "https://ftp.scene.org/pub/parties/2005/assembly05/in4k/make_it_4k_by_fit___bandwagon_1.tgz",
+      "into": "intro"
+    },
+    {
+      "links": {
+        "/usr/lib/libm.so": "/lib/libm.so.6"
+      }
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/root"
+      ]
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "args": [
+      "/intro/makeit4k/makeit4k"
+    ],
+    "cwd": "/root",
+    "env": {
+      "PATH": "/bin:/usr/bin",
+      "HOME": "/root"
+    }
+  },
+  "output": "window",
+  "notes": "Assembly 2005, 4K intro: a soft synth in SDL's audio callback, whose samples draw the lines and whose beat runs the script; each frame copied back into a texture (glCopyTexSubImage2D) and drawn zoomed over the next. The intro runs as it was distributed: its dropper, a shell script, unpacks the compressed ELF to /tmp and starts it (busybox's sh, tail, zcat or lzcat), on Debian lenny's libc and dynamic loader (2009). Its libGL, libGLU, libSDL and libasound are made in JavaScript: the OpenGL calls and the GLSL go to PRISM's gl.js (vendor/prism), drawn by WebGL2; /usr/lib/libm.so is libc6-dev's link, the name it opens with dlopen.",
+  "thumb": "oasis/thumbs/linux-makeit4k-2005.png"
+}

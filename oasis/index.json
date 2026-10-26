@@ -79,6 +79,15 @@
     "output": "window"
   },
   {
+    "name": "linux/makeit4k-2005",
+    "title": "Make It 4K — Fit & Bandwagon, 4K for Linux",
+    "world": "linux",
+    "year": 2005,
+    "author": "Fit & Bandwagon, the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-makeit4k-2005.png",
+    "output": "window"
+  },
+  {
     "name": "linux/mesa-1997",
     "title": "OpenGL of 1997 — Mesa 2.2 and GLUT 3.3, their demos built in MIRAGE-LINUX, on XFree86 3.3",
     "world": "linux",

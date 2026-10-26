@@ -22,6 +22,7 @@ import { hleDispatch, argBytes } from '../hle/index.js';
 const PAGE = 0x1000;
 const TEB = 0x7ffde000, PEB = 0x7ffdf000, FS_SEL = 0x3b;           // GDT entry 7, RPL 3: XP's FS
 const STACK_TOP = 0x130000, STACK_RESERVE = 0x100000;
+const THREAD_STACKS = 0x02000000;                                  // the other threads' stacks, 1 MB each
 const HEAP = 0x00140000, HEAP_SIZE = 0x01000000;                   // the process heap: the loader's lists, HeapAlloc
 export const BASES = { 'ntdll.dll': 0x7c900000, 'kernel32.dll': 0x7c800000, 'user32.dll': 0x7e410000, 'gdi32.dll': 0x77f10000,
   'opengl32.dll': 0x5ed00000, 'glu32.dll': 0x68b20000, 'winmm.dll': 0x76b40000, 'lz32.dll': 0x71b20000, 'msvcrt.dll': 0x77c10000,
@@ -170,8 +171,24 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', apis = [], b
   if (unresolved.length) throw new Error(`mirage-win32: unresolved imports: ${unresolved.join(', ')}`);
 
   // ---- the API's context, and the stack at the entry point -----------------------------------------
+  // ---- threads: each its TEB (below the first, as XP places them) and its stack, on lx.spawnThread --------
+  let threads = 0;
+  const createThread = (start, param) => {
+    const n = ++threads, teb = TEB - n * PAGE, top = THREAD_STACKS + n * STACK_RESERVE;
+    lx.mapRange(teb, teb + PAGE, true);
+    lx.lazy.push([top - STACK_RESERVE, top]);
+    w32(teb + 0x00, 0xffffffff); w32(teb + 0x04, top); w32(teb + 0x08, top - 0x3000);
+    w32(teb + 0x18, teb); w32(teb + 0x20, 0x100); w32(teb + 0x30, PEB);
+    // The thread's first frame: its parameter, and a return into ExitThread with what it returns.
+    const exitT = modules.get('kernel32.dll').exports.get('ExitThread') || 0;
+    let sp = top - 16;
+    w32(sp, exitT); w32(sp + 4, param >>> 0); w32(sp + 8, 0);
+    const tid = lx.spawnThread({ eip: start, esp: sp, fsIndex: FS_SEL >> 3, fsBase: teb });
+    w32(teb + 0x24, tid);
+    return tid;
+  };
   const win = {
-    base, path, modules, load, heapAlloc, peb: PEB, teb: TEB,
+    base, path, modules, load, heapAlloc, peb: PEB, teb: TEB, createThread,
     /** GetProcAddress: an export by name or ordinal, 0 when there is none. */
     proc: (mod, name) => (typeof name === 'number' ? mod.byOrdinal.get(name) : mod.exports.get(name)) || 0,
     moduleAt: (b) => [...modules.values(), exeMod].find((m) => m.base === b >>> 0) || null,

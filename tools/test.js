@@ -3491,6 +3491,19 @@ const runLinux = (hex, argv) => {
   let got; try { got = runLinux(hex, ['/w/AVX']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: AVX/AVX2/BMI2 under VEX, as Docker i386 computes them', got,
     '808182838485868788898a8b8c8d8e8f303132333435363738393a3b3c3d3eff\n808182838485868788898a8b8c8d8e8f00000000000000000000000000000000\n0c0d0e0f08090a0b0405060700010203\nefcdab8900000000000000000000000000000000000000000000000000000000\n00010203\n09000000000000000000000000000000101112131415161718191a1b1c1d1ef0\n00010203\n00000000010000001f0000002000000004000000c80000000300000010000000\n9cffffffceffffffffffffffffffffffffffff07ffffffff080000000080ffff\n2020202020202020202020202020202020202020202020202020202020202020\n4000000040000000400000004000000040000000400000004000000040000000\n230100f8\n'); }
+// tools/linux/cvt.asm: SSE's CVTTSS2SI (truncated), CVTSS2SI (to nearest even) and CVTSI2SS, the
+// integer indefinite for 1e10 and a NaN — Retrospection's Linux port (2010) converts its samples so; the
+// expected lines are Docker i386/debian's.
+{ const hex = (                                         // nasm -f bin tools/linux/cvt.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408f2000000020100000700000000100000beca800408bf06000000f30f' +
+    '2c06e82a000000f30f2d06e82100000083c6044f75e8b8f9fffffff30f2ac0660f7ec0e809000000b80100000031dbcd' +
+    '8060bff2800408b908000000c1c00489c283e20f8a92e2800408881747e2edc6070ab804000000bb01000000b9f28004' +
+    '08ba09000000cd8061c300002040000020c000006040cdcc6cc0f90215500000c07f3031323334353637383961626364' +
+    '6566');
+  let got; try { got = runLinux(hex, ['/w/CVT']).out; } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: CVTTSS2SI, CVTSS2SI and CVTSI2SS, as Docker i386 computes them', got,
+    '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); }
 // tools/linux/fbwrite.asm: writes to /dev/fb0 as fb_write takes them, on a 1280x720 framebuffer (any
 // 32-bit size the card holds: Outline 2026's Sea of Holes asks for it) — a count of BE570E00h answered
 // with the frame's size (attraction & decay's pwrite64), a buffer running into an unmapped page written
@@ -3649,6 +3662,56 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, ord('GlmfBeginGlsBlock'), ord('glAccum'), ord('glViewport'), ord('wglCreateContext'), ord('wglUseFontOutlinesW'), cos.st0].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a PE walks the PEB to kernel32\'s exports as Crinkler does; opengl32\'s ordinals as XP\'s; a double returned in ST0', got, '42 1 7 343 346 368 -1'); }
+// tools/linux/thread.asm: two threads of one address space (lx.spawnThread: SDL_CreateThread's, Win32's
+// CreateThread's). The main thread spins on a flag with no system call -- the clock's preemption gives
+// the thread its turn --, the thread sets it to 42 and exit(0)s alone (freeing the shared pages would
+// fault the spin), the main thread exits with the flag.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/thread.asm
+    '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
+    '000000000080040800800408790000007d1000000700000000100000a17980040885c074f789c3b801000000cd80c705798004082a000000' +
+    'b80100000031dbcd80');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/THREAD']);
+    const tid = lx.spawnThread({ eip: 0x08048066, esp: 0x08049070 });
+    for (let i = 0; i < 400 && !lx.done; i++) mc.runSlice(20000);
+    got = [lx.done && lx.status, lx.signal, lx.threadExits.get(tid)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: a thread shares its process\'s memory, is preempted to, and exits alone', got, '42 0 0'); }
+// Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
+// fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
+// at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a
+// few instructions that fill the buffer with 1234h, and its samples reach the card.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    const pe = [0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1]; exe.set(pe, 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis }), wm = apis.find((d) => d.dll === 'winmm.dll').fns;
+    const wfx = x.win.heapAlloc(18), ph = x.win.heapAlloc(4), hdr = x.win.heapAlloc(32), data = x.win.heapAlloc(44100 * 4), mmt = x.win.heapAlloc(12);
+    x.w16(wfx, 1); x.w16(wfx + 2, 2); x.w32(wfx + 4, 44100); x.w32(wfx + 8, 44100 * 4); x.w16(wfx + 12, 4); x.w16(wfx + 14, 16);
+    x.w32(hdr, data); x.w32(hdr + 4, 44100 * 4);
+    wm.waveOutOpen[1](x, ph, 0xffffffff, wfx, 0, 0, 0); wm.waveOutPrepareHeader[1](x, x.r32(ph), hdr, 32); wm.waveOutWrite[1](x, x.r32(ph), hdr, 32);
+    for (let i = 0; i < 44100 * 2; i++) x.w16(data + i * 2, 1000);   // filled after the write
+    mc.cpu.cycles += (mc.cyclesPerSecond || 1e8) / 2;                // half a second of the guest's clock
+    x.w32(mmt, 4); wm.waveOutGetPosition[1](x, x.r32(ph), mmt, 12);
+    const w = mc.dsp.drain();
+    const wave = [x.r32(mmt + 4), w.samples.length, w.samples.every((v) => v === 1000)].join(' ');
+    // SDL: a callback of x86 (mov edi,[esp+8]; mov ecx,[esp+12]; shr ecx,1; mov ax,1234h; rep stosw; ret)
+    const { sdl12 } = await import('../src/hle/sdl12.js'), { hleDispatch } = await import('../src/hle/index.js');
+    const mc2 = new Machine({ memSize: 16 << 20, cpu: '686' }), lx2 = installLinux(mc2);
+    lx2.load(Uint8Array.from('7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000000000000080040800800408790000007d1000000700000000100000a17980040885c074f789c3b801000000cd80c705798004082a000000b80100000031dbcd80'.match(/../g), (v) => parseInt(v, 16)), ['/THREAD']);
+    const lib = sdl12(), x2 = hleDispatch(lx2, mc2.mem, mc2.cpu, Object.entries(lib.fns).map(([name, [sig, fn]]) => ({ name, sig, fn })), {});
+    const cb = x2.alloc(32), spec = x2.alloc(24);
+    x2.write(cb, Uint8Array.of(0x8b, 0x7c, 0x24, 0x08, 0x8b, 0x4c, 0x24, 0x0c, 0xd1, 0xe9, 0x66, 0xb8, 0x34, 0x12, 0xf3, 0x66, 0xab, 0xc3));
+    x2.w32(spec, 22050); x2.w16(spec + 4, 0x8010); x2.w8(spec + 6, 1); x2.w16(spec + 8, 256); x2.w32(spec + 16, cb);
+    lib.fns.SDL_OpenAudio[1](x2, spec, 0); lib.fns.SDL_PauseAudio[1](x2, 0);
+    for (let i = 0; i < 100; i++) mc2.runSlice(20000);
+    const s = mc2.dsp.drain();
+    got = [wave, s.rate, s.samples.length > 0 && s.samples.slice(512).every((v) => v === 0x1234)].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('sound from a thread: waveOut plays a buffer filled after its write; SDL\'s audio loop calls the callback', got, '88200 44100 true | 22050 | true'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

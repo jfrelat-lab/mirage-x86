@@ -48,6 +48,8 @@ export function hleDispatch(lx, mem, cpu, table, backend) {
     sleep: (s) => { if (ctx.until === undefined) ctx.until = lx.mono() + s; const r = x.waitUntil(ctx.until); if (r !== BLOCK) ctx.until = undefined; return r; },
     // The entry point of a function by name, where the program can call it: glXGetProcAddress.
     entry: (name) => (byName.has(name) && x.entries ? x.entries(byName.get(name)) : 0),
+    // A function's id, for code made here that traps into it (sdl12.js's audio and thread loops).
+    idOf: (name) => byName.get(name),
   };
   ctx = {};
   lx.hle = (id) => {

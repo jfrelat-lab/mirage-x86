@@ -2128,6 +2128,18 @@ export class Recompiler {
         if (!p66 && !pF3 && op2 === 0x29) { const o = modrm(); if (o.isReg) P(`cpu.sse(${SSE.MOVAPS_ST},${o.rm},${o.reg},0);`); else xmmStore(o, o.reg, 16); return; }
         if (pF3 && op2 === 0x10) { const o = modrm(); P(`cpu.sse(${o.isReg ? SSE.MOVSS_LD : SSE.MOVSS_LD_M},${o.reg},${xmmSrc(o, 4)},0);`); return; }
         if (pF3 && op2 === 0x11) { const o = modrm(); if (o.isReg) P(`cpu.sse(${SSE.MOVSS_ST},${o.rm},${o.reg},0);`); else xmmStore(o, o.reg, 4); return; }
+        // CVTTSS2SI / CVTSS2SI r32, xmm/m32 (truncated; rounded to nearest even, MXCSR's default) and
+        // CVTSI2SS xmm, r/m32 (the low float only): Retrospection's Linux port (2010) converts its
+        // synthesizer's samples so. Out of range or NaN gives 80000000h, the integer indefinite.
+        if (pF3 && (op2 === 0x2c || op2 === 0x2d)) {
+          const o = modrm(), src = xmmSrc(o, 4), v = NT(), t = NT();
+          P(`var ${v}=cpu.xmm.f[${src * 4}];`);
+          P(op2 === 0x2c ? `var ${t}=Math.trunc(${v});`
+            : `var ${t}=Math.floor(${v});if(${v}-${t}>0.5||(${v}-${t}===0.5&&(${t}%2)!==0))${t}++;`);
+          P(`r[${o.reg}]=(${t}!==${t}||${t}>2147483647||${t}<-2147483648)?0x80000000:(${t}>>>0);`);
+          return;
+        }
+        if (pF3 && op2 === 0x2a) { const o = modrm(); P(`cpu.xmm.f[${o.reg * 4}]=Math.fround(${rmR(o, 32)}|0);`); return; }
         if (!p66 && !pF3 && op2 === 0x58) { simple(SSE.ADDPS); return; }
         if (!p66 && !pF3 && op2 === 0x59) { simple(SSE.MULPS); return; }
         if (!p66 && !pF3 && op2 === 0x5c) { simple(SSE.SUBPS); return; }
