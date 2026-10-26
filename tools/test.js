@@ -3506,22 +3506,25 @@ const runLinux = (hex, argv) => {
     '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); }
 // tools/linux/x87mem.asm: x87 arithmetic on memory operands under paging (every Linux and Win32 program
 // is paged), a thousand times round a loop that pushes and pops -- 55, Docker i386's exit status --
-// with no cpu.fpuMem call (the paged inline forms: a third of Valleyball's synthesizer went there) and
-// no page walk for the stack (the helpers probe the fast tables first: a fifth went there).
+// with no cpu.fpuMem call (the paged inline forms: a third of Valleyball's synthesizer went there), no
+// page walk for the stack (the helpers probe the fast tables first: a fifth went there), its push and
+// pop inline (no cpu.push32/pop32: the flat 32-bit stack), and the block directory dense from the
+// start (grown on demand it fell into V8's dictionary elements: a hash lookup per dispatch).
 { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/x87mem.asm
     '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
     '000000000080040800800408a8000000081000000700000000100000b9e803000051d90594800408dc0d98800408da05a0800408d91d0090' +
     '0408d90500900408d80da4800408db1d0490040859e2d28b1d04900408b801000000cd800000c03f00000000000004400a00000000008040');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
-    let fpuMem = 0, walks = 0;
+    let fpuMem = 0, walks = 0, stack = 0;
     const fm = mc.cpu.fpuMem; mc.cpu.fpuMem = (...a) => { fpuMem++; return fm(...a); };
+    for (const k of ['push32', 'pop32']) { const f = mc.cpu[k].bind(mc.cpu); mc.cpu[k] = (...a) => { stack++; return f(...a); }; }
     lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/X87MEM']);
     const xl = mc.mem.xlat.bind(mc.mem); mc.mem.xlat = (...a) => { walks++; return xl(...a); };   // a few fill the tables
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
-    got = [lx.done && lx.status, fpuMem, walks < 50].join(' ');
+    got = [lx.done && lx.status, fpuMem, walks < 50, stack, mc.rec.blockPages.length === 1 << 20].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: x87 on memory under paging inline, the stack through the fast tables (55, as Docker i386)', got, '55 0 true'); }
+  eq('linux: x87 on memory under paging inline, the stack through the fast tables (55, as Docker i386)', got, '55 0 true 0 true'); }
 // tools/linux/fbwrite.asm: writes to /dev/fb0 as fb_write takes them, on a 1280x720 framebuffer (any
 // 32-bit size the card holds: Outline 2026's Sea of Holes asks for it) — a count of BE570E00h answered
 // with the frame's size (attraction & decay's pwrite64), a buffer running into an unmapped page written

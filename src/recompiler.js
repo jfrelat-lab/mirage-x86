@@ -54,6 +54,12 @@ const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.M
 const MEMO_MAX = 200000;          // blocks the memo keeps (the oldest go first)
 const EMPTY_LINES = [];   // shared placeholder for a block whose source is not retained
 const T2_HOT = 64;         // promote a block to a region after this many executions
+// The block directory: one slot per 4 KiB page of the 4 GiB linear space, dense from the start. Grown
+// on demand, the array went to V8's dictionary elements as soon as a guest's pages were far apart
+// (a Win32 program at 400000h, its DLLs at 7C800000h): every dispatch was a hash lookup.
+// It is allocated once per bank and keeps the pages it was given (`used`), which reset() empties.
+const pageDirectory = () => Object.assign(Array.from({ length: 1 << 20 }), { used: [] });
+const clearDirectory = (dir) => { for (const p of dir.used) dir[p] = undefined; dir.used.length = 0; return dir; };
 const T2_MAXBLK = 24;      // cap region size in blocks
 const T2_MAXINS = 384;     // cap region size in instructions
 // Opt-in: end the slice when the guest is found executing empty memory. Off by default because a
@@ -171,7 +177,7 @@ export class Recompiler {
     this.recentCs = new Int32Array(16).fill(-1);
     this.recentIp = new Int32Array(16);
     this.recentI = 0;
-    this.blockPages = [];          // page -> Array(8192) of block | undefined
+    this.blockPages = pageDirectory();   // page -> Array(8192) of block | undefined
     // The code cache is bounded by the SOURCE IT HAS EMITTED, not by its block count. A block keeps
     // a compiled Function and the text it was built from, and V8 charges roughly eight times the
     // source for the pair — so the cost is proportional to bytes, not to blocks. That distinction
@@ -382,7 +388,7 @@ export class Recompiler {
     // reset(), so this stays in sync.
     this.pagedMode = !!(this.cpu && this.cpu.pagingOn);
     if (!this.codeCapEnv) this.codeCap = this.pagedMode ? (64 << 20) : (16 << 20);
-    this.blockPages = []; this.pageBlocks.clear(); this.heat.clear(); this.pageBounds = []; this.pageCov = []; this.t2evict.clear(); this.t2blacklist.clear();
+    this.blockPages = clearDirectory(this.blockPages); this.pageBlocks.clear(); this.heat.clear(); this.pageBounds = []; this.pageCov = []; this.t2evict.clear(); this.t2blacklist.clear();
     this.blockCount = 0; this.codeBytes = 0;
     if (this.banks) this.banks = [null, null]; }
 
@@ -410,7 +416,7 @@ export class Recompiler {
       for (const p of this.pageBlocks.keys()) this.mem.markCodePage(p);   // the other cache may have cleared them
       this.epoch++; this.restoreEpoch = this.epoch;
     } else {
-      this.blockPages = []; this.pageBlocks = new Map(); this.heat = new Map(); this.pageBounds = []; this.pageCov = [];
+      this.blockPages = pageDirectory(); this.pageBlocks = new Map(); this.heat = new Map(); this.pageBounds = []; this.pageCov = [];
       this.t2evict = new Map(); this.t2blacklist = new Set(); this.blockCount = 0; this.codeBytes = 0;
     }
   }
@@ -514,7 +520,7 @@ export class Recompiler {
 
   _installRegion(region, rootLin) {
     const pg = rootLin >>> 12;
-    let page = this.blockPages[pg]; if (page === undefined) page = this.blockPages[pg] = new Array(8192);
+    let page = this.blockPages[pg]; if (page === undefined) { page = this.blockPages[pg] = new Array(8192); this.blockPages.used.push(pg); }
     page[(rootLin & 0xfff) | (this.cpu.csD << 12)] = region;    // replace the root's tier-1 block; constituents stay tier-1
     const pages = new Set();
     for (const [s, e] of region.ranges) for (let p = s >>> 12; p <= (e - 1) >>> 12; p++) pages.add(p);
@@ -728,7 +734,7 @@ export class Recompiler {
     if (blk.count >= 64) this._checkDerail(lin, blk);
     const pg = lin >>> 12;
     let page = this.blockPages[pg];
-    if (page === undefined) page = this.blockPages[pg] = new Array(8192);
+    if (page === undefined) { page = this.blockPages[pg] = new Array(8192); this.blockPages.used.push(pg); }
     page[(lin & 0xfff) | (this.cpu.csD << 12)] = blk;
     const first = blk.linStart >>> 12, last = (blk.linEnd - 1) >>> 12;
     for (let p = first; p <= last; p++) {
@@ -914,6 +920,16 @@ export class Recompiler {
       if (segLoaded || cpuNow.limit[seg] !== 0xffffffff || cpuNow.limLo[seg] !== 0) return false;
       flatUsed.add(seg); return true;
     };
+    /*
+     * A FLAT 32-BIT STACK UNDER PAGING (Linux's, Win32's): push, pop, call and ret move it inline --
+     * the paged probe, the store before ESP moves (a fault leaves ESP as it was, as on a 386) --
+     * instead of cpu.push32/pop32 and the memory helpers behind them, a seventh of Valleyball's
+     * synthesizer (a stack machine). Only while SS is flat (flatSeg) and its B bit set when the block
+     * is translated; the head checks B again beside the flat test. The emitters are set further down.
+     */
+    let ssB32 = false;
+    const pagedRW = this.memStrategy.read === 'paged' && this.memStrategy.write === 'paged';
+    const inlineStack = (sz) => sz === 32 && pagedRW && cpuNow.ssB && flatSeg(SS) && (ssB32 = true);
     let ip = ip0, ipLast = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false, stiShadow = 0;
     const NT = () => '_' + (tmp++);
 
@@ -1084,6 +1100,9 @@ export class Recompiler {
     // u8[] path even while planar. `m.planar` is false for text/mode-13h/demos → short-circuit.
     const { memRead, memW } = memEmitters(this.memStrategy, MM, NT);
     const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o, sz), sz);
+    // The flat stack's push and pop (see inlineStack): a statement, and a statement and its value.
+    const pushS = (v) => { const a = NT(), t = NT(); return `var ${t}=(${v})>>>0,${a}=(r[4]-4)>>>0;${memW(a, 32, t)}r[4]=${a};`; };
+    const popS = () => { const a = NT(), t = NT(); return [`var ${a}=r[4]>>>0,${t}=${memRead(a, 32)};r[4]=(${a}+4)>>>0;`, t]; };
     // The write-protection check: a store through a segment whose W bit is clear (or through a code
     // segment) is #GP(0). `cpu.segRO` is precomputed at segment-load time, so this is one typed-array
     // load and a predictable branch — not a call. ON BY DEFAULT since the bench said what it costs:
@@ -1287,11 +1306,13 @@ export class Recompiler {
           // PUSH SP is the classic CPU-detection probe: an 8086/88 pushes SP *after* the decrement,
           // a 286+ pushes the value it had on entry. Every other register is unaffected.
           if ((op & 7) === 4 && sz === 16 && !PROF.pushSPOriginal) { P('cpu.push16((cpu.reg[4]-2)&0xffff);'); break; }
+          if (inlineStack(sz)) { canFault = true; P(pushS(rR(op & 7, 32))); break; }
           P(sz === 32 ? `cpu.push32(${rR(op & 7, 32)});` : `cpu.push16(${rR(op & 7, 16)});`); break;
         case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f: {
           // Pop into a temp FIRST: a 16-bit write emits `r[n]=(r[n]&~0xffff)|(expr&0xffff)` and JS
           // evaluates the left operand before expr, so `o16 pop sp` would merge into the pre-pop ESP.
           // Sequencing also gives POP its defined behaviour of reading ESP after the increment.
+          if (inlineStack(sz)) { canFault = true; const [st, v] = popS(); P(st); P(rW(op & 7, 32, v)); break; }
           const t0 = NT();
           P(`var ${t0}=${sz === 32 ? 'cpu.pop32()' : 'cpu.pop16()'};`);
           P(rW(op & 7, sz, t0)); break;
@@ -1324,8 +1345,8 @@ export class Recompiler {
           P(`if(${idx}<${lo}||${idx}>${hi}){cpu.eip=${ipStart};cpu.swInt(5);return;}`); break;
         }
 
-        case 0x68: { const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); P(sz === 32 ? `cpu.push32(${i});` : `cpu.push16(${i & 0xffff});`); break; } // PUSH Iz
-        case 0x6a: { const v = fs8(); P(sz === 32 ? `cpu.push32(${v >>> 0});` : `cpu.push16(${v & 0xffff});`); break; } // PUSH Ib (sign-extended to opsize)
+        case 0x68: { const i = sz === 16 ? f16() : ((f16() | (f16() << 16)) >>> 0); if (inlineStack(sz)) { canFault = true; P(pushS(i)); break; } P(sz === 32 ? `cpu.push32(${i});` : `cpu.push16(${i & 0xffff});`); break; } // PUSH Iz
+        case 0x6a: { const v = fs8(); if (inlineStack(sz)) { canFault = true; P(pushS(v >>> 0)); break; } P(sz === 32 ? `cpu.push32(${v >>> 0});` : `cpu.push16(${v & 0xffff});`); break; } // PUSH Ib (sign-extended to opsize)
         case 0x69: { const o = modrm(); const s = rmR(o, sz); const i = sz === 16 ? f16() : (f16() | (f16() << 16)); P(`cpu.imul16x(${s},${i},${sz});`); P(rW(o.reg, sz, 'cpu._mr')); break; }
         case 0x6b: { const o = modrm(); const s = rmR(o, sz); const i = fs8(); P(`cpu.imul16x(${s},${i},${sz});`); P(rW(o.reg, sz, 'cpu._mr')); break; }
         case 0x6c: emitStr('ins', 8); break;                                            // INSB
@@ -1499,8 +1520,12 @@ export class Recompiler {
 
         // RET pops what CALL pushed: 4 bytes under a 0x66 prefix, 2 without. The immediate form's
         // SP adjustment stays a 16-bit count either way.
-        case 0xc2: { const n = f16(); P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};cpu.spAdd(${n});`); P('return;'); ended = true; break; } // RET imm
-        case 0xc3: P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};`); P('return;'); ended = true; break;        // RET
+        case 0xc2: { const n = f16();
+          if (inlineStack(sz)) { canFault = true; const [st, v] = popS(); P(st); P(`cpu.eip=${v};r[4]=(r[4]+${n})>>>0;`); P('return;'); ended = true; break; }
+          P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};cpu.spAdd(${n});`); P('return;'); ended = true; break; } // RET imm
+        case 0xc3:
+          if (inlineStack(sz)) { canFault = true; const [st, v] = popS(); P(st); P(`cpu.eip=${v};`); P('return;'); ended = true; break; }
+          P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};`); P('return;'); ended = true; break;        // RET
         // LDS/LES/LSS/LFS/LGS all load an offset followed by a 16-bit selector. Under 0x66 the offset
         // is a DWORD, so the selector sits at +4, not +2 — reading it at +2 loaded half the offset as
         // the segment. test386's POST-6 `o32 lss ebx,[es:di]` caught it; last of the T0.3 family.
@@ -1644,6 +1669,7 @@ export class Recompiler {
         case 0xe8: {
           const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16));
           const tgt = ipAdd(ip, rel);
+          if (inlineStack(sz)) { canFault = true; P(pushS(SEQ())); P(`cpu.eip=${tgt};`); P('return;'); ended = true; break; }
           P(sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`);
           P(`cpu.eip=${tgt};`); P('return;'); ended = true; break;
         }
@@ -1750,7 +1776,7 @@ export class Recompiler {
     let head = '';
     if (flatUsed.size) {
       const sg = [...flatUsed];
-      head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
+      head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0${ssB32 ? '||!cpu.ssB' : ''}){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
     }
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + head;
     const body = pre + '\n' + out.join('\n');
