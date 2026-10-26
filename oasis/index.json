@@ -185,5 +185,32 @@
     "author": "Fit & Bandwagon (Marq, NF), the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-yellowrose-2003.png",
     "output": "window"
+  },
+  {
+    "name": "win32/flow2-2007",
+    "title": "Flow2 — auld, 1K for Windows",
+    "world": "win32",
+    "year": 2007,
+    "author": "auld, PRISM",
+    "thumb": "oasis/thumbs/win32-flow2-2007.png",
+    "output": "window"
+  },
+  {
+    "name": "win32/retrospection-2010",
+    "title": "Retrospection — Trolls in the Shadows & FRequency, 4K for Windows",
+    "world": "win32",
+    "year": 2010,
+    "author": "Trolls in the Shadows & FRequency, PRISM",
+    "thumb": "oasis/thumbs/win32-retrospection-2010.png",
+    "output": "window"
+  },
+  {
+    "name": "win32/ribbon-2009",
+    "title": "To the Road of Ribbon — FRequency, 1K for Windows",
+    "world": "win32",
+    "year": 2009,
+    "author": "FRequency, PRISM",
+    "thumb": "oasis/thumbs/win32-ribbon-2009.png",
+    "output": "window"
   }
 ]

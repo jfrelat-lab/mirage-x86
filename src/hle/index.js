@@ -16,19 +16,33 @@ const SIZE = { i: 4, u: 4, p: 4, f: 4, d: 8 };
 
 /** Install `libs` on `lx` with `backend`; returns the files to put in the tree ({ path, bytes, links }). */
 export function installHLE(lx, mem, cpu, libs, backend, { dir = '/usr/lib' } = {}) {
-  const m = guestMemory(lx, mem);
   const table = [];                                        // id -> { name, sig, fn, lib }
   const files = [];
-  const byName = new Map();
   for (const lib of libs) {
     const names = Object.keys(lib.fns), first = table.length;
-    for (const name of names) { const [sig, fn] = lib.fns[name]; table.push({ name, sig, fn, lib }); byName.set(name, table.length - 1); }
+    for (const name of names) { const [sig, fn] = lib.fns[name]; table.push({ name, sig, fn, lib }); }
     files.push({ path: `${dir}/${lib.soname}`, bytes: makeSharedObject(lib.soname, names, first), links: (lib.links || []).map((l) => `${dir}/${l}`) });
   }
+  hleDispatch(lx, mem, cpu, table, backend);
+  return files;
+}
+
+/**
+ * Answer the stubs' traps on `lx` from `table` (id -> { name, sig, fn }): lx.hle(id) decodes the
+ * arguments from the caller's stack by the signature and calls fn(x, ...args). Shared by the ELF
+ * libraries above and Win32's DLLs (src/win32), whose stubs trap the same way. Returns the context x.
+ */
+export function hleDispatch(lx, mem, cpu, table, backend) {
+  const m = guestMemory(lx, mem);
+  const byName = new Map(table.map((f, id) => [f.name, id]));
   const BLOCK = lx.BLOCK;
   let ctx;
   const x = {
-    ...m, lx, backend,
+    ...m, lx, backend, cpu,
+    // The x87's top, for the functions that return a double there (cdecl's rule: sin, cos, pow) or take
+    // one there (msvcrt's _CIsin, _ftol).
+    st0: () => cpu.fst[cpu.ftop],
+    fpop: () => { const v = cpu.fst[cpu.ftop]; cpu.focc[cpu.ftop] = 0; cpu.ftop = (cpu.ftop + 1) & 7; return v; },
     // Wait as a system call waits: until the guest's clock reaches `t` (seconds, lx.mono).
     waitUntil: (t) => { if (lx.mono() >= t) return 0; if (lx.wake === null) lx.wake = t; return BLOCK; },
     sleep: (s) => { if (ctx.until === undefined) ctx.until = lx.mono() + s; const r = x.waitUntil(ctx.until); if (r !== BLOCK) ctx.until = undefined; return r; },
@@ -48,10 +62,19 @@ export function installHLE(lx, mem, cpu, libs, backend, { dir = '/usr/lib' } = {
     }
     if (backend.trace) backend.trace(f.name, args);
     const r = f.fn(x, ...args);
+    if (r && typeof r === 'object' && 'st0' in r) {          // a double, returned on the x87 stack
+      cpu.ftop = (cpu.ftop - 1) & 7; cpu.fst[cpu.ftop] = r.st0; cpu.focc[cpu.ftop] = 1;
+      if ('edx' in r) cpu.reg[2] = r.edx >>> 0;
+      return r.eax === undefined ? HLE_BASE + id : r.eax;
+    }
+    if (r && typeof r === 'object' && 'edx' in r) { cpu.reg[2] = r.edx >>> 0; return r.eax >>> 0; }   // a 64-bit result: EDX:EAX
     // A void function leaves EAX as the stub set it, nonzero as a real library's scratch value is: the
     // 1K intros read it back -- Metatunnel draws glRecti(-eax, -eax, eax, eax) after glColor4ubv.
     return r === undefined ? HLE_BASE + id : r;
   };
   lx.hleTable = table;
-  return files;
+  return x;
 }
+
+/** The bytes a signature's arguments take on the stack: what a stdcall function pops. */
+export const argBytes = (sig) => [...sig].reduce((n, c) => n + SIZE[c], 0);

@@ -1,0 +1,24 @@
+{
+  "oasis": 1,
+  "title": "Flow2 — auld, 1K for Windows",
+  "year": 2007,
+  "author": "auld, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.scene.org/pub/demos/artists/auld/flow2.zip",
+      "files": {
+        "flow.exe": "/intro/flow.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/flow.exe"
+  },
+  "output": "window",
+  "notes": "A 1K intro of 2007: a fractal flow in one GLSL fragment shader, its C source in the archive. Run as Windows XP would run it, with no Windows: MIRAGE-WIN32 maps the .exe as XP's loader does and lays out the process as XP does (the PEB, its module lists, FS at the TEB), which is what Crinkler's header walks to resolve every import by hashing names; kernel32, user32, gdi32, winmm and msvcrt are made in JavaScript, opengl32 (its 368 ordinals as XP's) hands GL and GLSL to PRISM's gl.js, drawn by WebGL2.",
+  "thumb": "oasis/thumbs/win32-flow2-2007.png"
+}

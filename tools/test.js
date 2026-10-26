@@ -3617,6 +3617,38 @@ const runLinux = (hex, argv) => {
     got = [open, h !== 0, set, card, n16, s16, nf, sf, typeof e, x.r8(e)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: libasound plays S16 and float frames on the /dev/dsp card; SDL_GetError is a pointer to ""', got, '0 true 0 22050/16/2 2 1000,-1000,32767,-32768 2 16384,16384,-32767,-32767 number 0'); }
+// MIRAGE-WIN32 (src/win32): tools/win32/pebwalk.asm finds ExitProcess as Crinkler's header finds what it
+// imports -- fs:[30h] to the PEB, its loader data, the load-order list (exe, ntdll, kernel32), kernel32's
+// export directory -- and calls it with 42; the loader has bound its import of lz32.dll's ordinal 4.
+// opengl32.dll's ordinals are XP's (Crinkler's /RANGE imports by them: Stripped, 2009); msvcrt's cos
+// returns its double on the x87 stack, as cdecl does.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const hex = (
+    '4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '00000000000000000000000040000000504500004c010100000000000000000000000000e00002010b01000000020000' +
+    '000000000000000000100000001000000000000000004000001000000002000004000000000000000400000000000000' +
+    '002000000002000000000000030000000000100000100000000010000010000000000000100000000000000000000000' +
+    '6a1000002800000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '0000000000000000000000000000000000000000000000002e7465787400000000100000001000000002000000020000' +
+    '000000000000000000000000200000e00000000000000000000000000000000000000000000000000000000000000000' +
+    '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '000000000000000000000000000000000000000000000000000000000000000064a1300000008b400c8b400c8b008b00' +
+    '8b58188b433c8b54037801da8b4a188b6a2001dd4978368b748d0001debf5e10400051b90c000000f3a65975e78b4224' +
+    '01d80fb704488b721c01de8b048601d8833d9a1040000074046a2affd0cc4578697450726f6365737300921000000000' +
+    '000000000000a21000009a10000000000000000000000000000000000000000000000400008000000000040000800000' +
+    '00006c7a33322e646c6c');
+    const exe = new Uint8Array(1024); exe.set(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)));
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: traceBackend() });
+    for (let i = 0; i < 50 && !lx.done; i++) mc.runSlice(20000);
+    const ogl = apis.find((d) => d.dll === 'opengl32.dll').fns, ord = (n) => (ogl[n][2] || {}).ordinal;
+    const cos = apis.find((d) => d.dll === 'msvcrt.dll').fns.cos[1](x, Math.PI), top = mc.cpu.fst[mc.cpu.ftop];
+    got = [lx.done && lx.status, ord('GlmfBeginGlsBlock'), ord('glAccum'), ord('glViewport'), ord('wglCreateContext'), ord('wglUseFontOutlinesW'), cos.st0].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a PE walks the PEB to kernel32\'s exports as Crinkler does; opengl32\'s ordinals as XP\'s; a double returned in ST0', got, '42 1 7 343 346 368 -1'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

@@ -129,11 +129,21 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
 
   // ---- the program's memory, as the kernel sees it -------------------------------------------------
   // Physical addresses through our own map: no CPU translation, no fault in the kernel.
-  const phys = (va) => { const p = lx.pages.get(va >>> 12); return p ? p.frame + (va & 0xfff) : -1; };
+  // A page of a reserved range (lx.lazy: Win32's SizeOfImage, its heap) is committed when first touched,
+  // by the kernel as by the CPU.
+  const page = (vpn) => {
+    const p = lx.pages.get(vpn);
+    if (p || !lx.lazy || !lx.lazy.length) return p;
+    const va = vpn * PAGE;
+    if (!lx.lazy.some(([a, b]) => va >= a && va < b)) return p;
+    mapPage(vpn, true); cpu.setCR3(cpu.cr3);
+    return lx.pages.get(vpn);
+  };
+  const phys = (va) => { const p = page(va >>> 12); return p ? p.frame + (va & 0xfff) : -1; };
   const rd8 = (va) => { const a = phys(va >>> 0); if (a < 0) throw E.EFAULT; return mem.u8[a]; };
   const rd32 = (va) => (rd8(va) | (rd8(va + 1) << 8) | (rd8(va + 2) << 16) | (rd8(va + 3) << 24)) >>> 0;
   const wr8 = (va, v) => {
-    const p = lx.pages.get((va >>> 0) >>> 12); if (!p) throw E.EFAULT;
+    const p = page((va >>> 0) >>> 12); if (!p) throw E.EFAULT;
     mem.u8[p.frame + (va & 0xfff)] = v;
     if (mem.codePage[(va >>> 0) >>> 12]) mem._dirty(va >>> 0, 1);    // code we already translated
   };
@@ -144,7 +154,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const rdBytes = (va, n, partial = false) => {
     const b = new Uint8Array(n);
     for (let i = 0; i < n;) {
-      const a = (va + i) >>> 0, p = lx.pages.get(a >>> 12);
+      const a = (va + i) >>> 0, p = page(a >>> 12);
       if (!p) { if (partial && i) return b.subarray(0, i); throw E.EFAULT; }
       const take = Math.min(n - i, 0x1000 - (a & 0xfff));
       b.set(mem.u8.subarray(p.frame + (a & 0xfff), p.frame + (a & 0xfff) + take), i); i += take;
@@ -259,14 +269,44 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
    * vector, then the strings. A dynamic program's interpreter (/lib/ld-linux.so.2) is read from our
    * file system and started instead; it finds the program through AT_PHDR and AT_ENTRY.
    */
-  lx.load = (elf, argv = ['a.out'], envp = []) => {
+  /** An empty address space: the page directory, the GDT and the TSS mapped for the CPU. */
+  const prepareSpace = () => {
     mem.u8.fill(0, PD_BASE, PD_BASE + PAGE);
     // The GDT is read through paging like any other linear address: identity-mapped, supervisor only.
     setPte(GDT_LIN >>> 12, GDT_BASE, true, false);
     for (let i = 0; i < 3; i++) setPte((TSS_LIN >>> 12) + i, TSS_BASE + i * PAGE, true, false);
     mem.u8.fill(0, TSS_BASE, TSS_BASE + IOMAP); mem.u8.fill(0xff, TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1);   // every port closed
     dv.setUint16(TSS_BASE + 0x66, IOMAP, true);
+    mem.u8.fill(0, GDT_BASE, GDT_BASE + GDT_ENTRIES * 8);
     lx.mmapNext = MMAP_BASE;
+    lx.lazy = [];
+  };
+  /** Into ring 3 at `eip` with the stack at `sp`: flat segments, paging on. `fs`: a selector of its own
+   *  (Win32's TEB) instead of the flat data one. */
+  const enterUser = (eip, sp, { fs = USER_DS } = {}) => {
+    setDesc(USER_CS >> 3, 0, 0xfffff, 0xfa, 0xc0);                       // code, DPL 3, 4 GiB, 32-bit
+    setDesc(USER_DS >> 3, 0, 0xfffff, 0xf2, 0xc0);                       // data, DPL 3
+    cpu.tr.sel = 0x80; cpu.tr.base = TSS_LIN; cpu.tr.limit = TSS_LIMIT;
+    cpu.gdtr.base = GDT_LIN; cpu.gdtr.limit = GDT_ENTRIES * 8 - 1;
+    cpu.idtr.base = 0; cpu.idtr.limit = 0;                               // INT 80h and faults never reach it
+    mem.setA20(true); machine.rec.setMask(mem.mask);
+    cpu.setCR3(PD_BASE);
+    cpu.setCR0((cpu.cr0 | 0x80000001) >>> 0);                            // PE + PG
+    machine.rec.reset();
+    cpu._cpl = 3;
+    for (const s of [0, 2, 3, 5]) cpu.setSeg(s, USER_DS);                 // ES SS DS GS
+    cpu.setSeg(4, fs);
+    cpu.setSeg(1, USER_CS);
+    cpu.reg.fill(0); cpu.reg[4] = sp >>> 0;
+    cpu.eip = eip >>> 0;
+    cpu.flags = 0x0002;                     // IF clear: no device interrupts reach a program here
+    lx.done = false; lx.status = 0; lx.signal = 0;
+  };
+  // For the other personalities on this process machinery (src/win32): the address space, by hand.
+  Object.assign(lx, { prepareSpace, enterUser, mapRange, setDesc, PAGE, USER_DS });
+
+  lx.load = (elf, argv = ['a.out'], envp = []) => {
+    prepareSpace();
     const ah = aoutHeader(elf);
     const h = ah ? null : elfHeader(elf);
     const bias = h && h.type === 3 ? PIE_BASE : 0;
@@ -314,23 +354,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     for (let i = 0; i < words.length; i++) dv.setUint32(phys(sp + i * 4), words[i] >>> 0, true);
 
     // Flat segments, paging, ring 3.
-    mem.u8.fill(0, GDT_BASE, GDT_BASE + GDT_ENTRIES * 8);
-    setDesc(USER_CS >> 3, 0, 0xfffff, 0xfa, 0xc0);                       // code, DPL 3, 4 GiB, 32-bit
-    setDesc(USER_DS >> 3, 0, 0xfffff, 0xf2, 0xc0);                       // data, DPL 3
-    cpu.tr.sel = 0x80; cpu.tr.base = TSS_LIN; cpu.tr.limit = TSS_LIMIT;
-    cpu.gdtr.base = GDT_LIN; cpu.gdtr.limit = GDT_ENTRIES * 8 - 1;
-    cpu.idtr.base = 0; cpu.idtr.limit = 0;                               // INT 80h and faults never reach it
-    mem.setA20(true); machine.rec.setMask(mem.mask);
-    cpu.setCR3(PD_BASE);
-    cpu.setCR0((cpu.cr0 | 0x80000001) >>> 0);                            // PE + PG
-    machine.rec.reset();
-    cpu._cpl = 3;
-    for (const s of [0, 2, 3, 4, 5]) cpu.setSeg(s, USER_DS);              // ES SS DS FS GS
-    cpu.setSeg(1, USER_CS);
-    cpu.reg.fill(0); cpu.reg[4] = sp >>> 0;
-    cpu.eip = start >>> 0;
-    cpu.flags = 0x0002;                     // IF clear: no device interrupts reach a program here
-    lx.done = false; lx.status = 0; lx.signal = 0;
+    enterUser(start, sp);
     lx.exe = norm(argv[0] || '/a.out');
   };
 
@@ -352,11 +376,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     cpu.halted = true;
     machine.rec.stop && machine.rec.stop();
   };
+  lx.exit = (status) => exit(status);                                    // ExitProcess (src/win32)
   lx.fault = (n, err) => {
     // The stack grows on demand, as a kernel grows it: a page fault anywhere in its 8 MiB maps the
     // page and the instruction runs again. gcc's memcpy-1 keeps two 1 MiB arrays there.
     const cr2 = cpu.cr2 >>> 0;
     if (n === 14 && !(err & 1) && cr2 < STACK_TOP && cr2 >= STACK_TOP - STACK_MAX) { mapPage(cr2 >>> 12, true); return; }
+    // Memory reserved and committed on first touch (src/win32: an image's SizeOfImage, a stack).
+    if (n === 14 && !(err & 1) && lx.lazy && lx.lazy.some(([a, b]) => cr2 >= a && cr2 < b)) { mapPage(cr2 >>> 12, true); return; }
     const sig = n === 0 ? SIG.SIGFPE : n === 6 ? SIG.SIGILL : n === 16 || n === 19 ? SIG.SIGFPE : SIG.SIGSEGV;
     lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0 };
     const h = lx.sigHandlers[sig] || 0;

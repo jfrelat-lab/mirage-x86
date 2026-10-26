@@ -117,7 +117,7 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | W3 | **Win16**: the NE loader (segments as LDT selectors, relocations, imports by ordinal), KERNEL's tasks, global and local heaps, resources, its INT 21h through the HLE DOS; `world: "win16"` in OASIS — Windows 3.x programs with no Windows 3.x | L |
 | W4 | USER and GDI, shared by Win16 and Win32: windows, the message loop, dialogs and controls, fonts, `BitBlt`/`StretchDIBits` to the canvas, timers, keyboard and mouse — the freeware and shareware of Windows 3.1 and 95 | L |
 | W5 | DirectDraw, DirectSound, DirectInput: the scene's Win32 demos, the games of 1996-1999 | L |
-| W6 | opengl32 on PRISM's `gl.js` (with H12u): OpenGL 4k/64k intros, GLQuake for Windows | L |
+| W6 | opengl32 on PRISM's `gl.js` (with H12u): OpenGL 4k/64k intros, GLQuake for Windows — ✅ first: the scene's Crinkler-packed OpenGL intros of 2007-2010 run on the **Windows** machine (`machines.html?m=win32`): the PE mapped as XP maps it, the PEB/TEB and loader lists XP's (what Crinkler walks to import by hash), opengl32's 368 ordinals XP's (its /RANGE imports), kernel32/user32/gdi32/winmm/msvcrt/glu32 in JavaScript — To the Road of Ribbon, Flow2, Retrospection (`oasis/images/win32/`). To do: threads (W2) for the intros whose music, and pictures, a thread makes (Valleyball, Stripped), waveOut's sound | L |
 | K8 | A native window with sound — for OASIS's `oasis run` (O4) | M |
 
 ## OASIS — images for every world of the period PC

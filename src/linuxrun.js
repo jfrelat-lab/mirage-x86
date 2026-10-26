@@ -36,7 +36,13 @@ export function oasisHost(imgName) {
  */
 export async function startLinux({ canvas, img, host, user, onOutput = () => {}, onStatus = () => {} }) {
   const m = img.machine || {};
-  const ram = (m.mem || 64) << 20;
+  // world "win32": the entry is a PE .exe, run by MIRAGE-WIN32 (src/win32) on the same machinery; its
+  // RAM is what its image reserves, which a Crinkler intro touches much of.
+  const win32 = img.world === 'win32';
+  const exe = win32 ? host.read((img.entry || {}).run) : null;
+  if (win32 && !exe) throw new Error(`${(img.entry || {}).run}: not in the image`);
+  const win32Mod = win32 ? await import('./win32/index.js') : null;
+  const ram = win32 ? win32Mod.win32Memory(exe) : (m.mem || 64) << 20;
   // A Cirrus has its 32 MiB aperture above the RAM, as on a PCI bus (src/bios.js): the address space
   // twice the RAM (a power of two).
   const mc = new Machine({ memSize: m.vga === 'cirrus' ? Math.max(ram * 2, 64 << 20) : ram, ramSize: ram, cpu: m.cpu || '686' });
@@ -56,7 +62,12 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   // machine.hle: libraries made in JavaScript in /usr/lib — ["sdl12", "gl", "glu", "asound"], the GL ones
   // PRISM's (src/hle/prism-gl.js) — for the Linux OpenGL intros of 2003-2010.
   let hle = null;
-  if (m.hle) {
+  if (win32) {
+    const [{ prismLibraries }, { win32Apis }] = await Promise.all([import('./hle/prism-gl.js'), import('./win32/api.js')]);
+    hle = await prismLibraries(lx, mc.mem, ['gl', 'glu']);
+    const [glLib, gluLib] = hle.libs;
+    win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), apis: win32Apis({ gl: glLib.fns, glu: gluLib.fns }), backend: hle.backend });
+  } else if (m.hle) {
     const [{ installHLE }, { prismLibraries }] = await Promise.all([import('./hle/index.js'), import('./hle/prism-gl.js')]);
     hle = await prismLibraries(lx, mc.mem, m.hle);
     for (const f of installHLE(lx, mc.mem, mc.cpu, hle.libs, hle.backend)) { lx.addFile(f.path, f.bytes); for (const l of f.links) lx.addFile(l, f.bytes); }
@@ -73,9 +84,11 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   if (user) { const u = lx.setUser(user); env.push(`USER=${u}`, `LOGNAME=${u}`); }   // the visitor's name, on uid 0
   if (m.fb) { const [w, h] = String(m.fb).split('x').map(Number); lx.setFb(w, h); }   // machine.fb: /dev/fb0's size, "1024x768"
   if (m.hz) lx.hz = m.hz;                                                    // machine.hz: a 1997 kernel's timeouts, in clock ticks
-  const image = lx.readFile(e.run);
-  if (!image) throw new Error(`${e.run}: not in the image`);
-  lx.load(image, [e.run, ...(e.args || [])], env);
+  if (!win32) {
+    const image = lx.readFile(e.run);
+    if (!image) throw new Error(`${e.run}: not in the image`);
+    lx.load(image, [e.run, ...(e.args || [])], env);
+  }
 
   const video = new Video(mc, canvas); video.font = mc.font;
   // The page's keys reach the console two ways (src/keyboard.js gives both). In K_XLATE — a shell,

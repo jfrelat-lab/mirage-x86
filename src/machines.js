@@ -3,6 +3,7 @@
 //   machines.html?m=dos[&run=<id>]     the DOS player's engine, its shell listing the titles
 //   machines.html?m=pc[&run=<id>]      a bare PC: a BIOS boot menu of the boot images
 //   machines.html?m=linux[&run=<img>]  MIRAGE-LINUX: the OASIS Linux images (from `oasis serve`, or built in the page)
+//   machines.html?m=win32[&run=<img>]  MIRAGE-WIN32: the OASIS Win32 images, on the same page as Linux's (src/win32)
 //
 // A machine is one engine for the page's lifetime; choosing another machine, or a program while one
 // runs, loads the page again with that choice — a machine is switched off and on, not reused.
@@ -30,6 +31,7 @@ const MACHINES = [
   { id: 'dos', name: 'DOS', sub: 'built-in DOS · no image', spec: '586 · 16 MB · VGA · SB16 · XMS · EMS · DPMI' },
   { id: 'linux', name: 'Linux', sub: 'system calls in JS · no kernel', spec: 'i686 · 64 MB · tty1 · VGA · ELF and a.out' },
   { id: 'pc', name: 'PC', sub: 'bare metal · BIOS', spec: 'BIOS · VGA/VBE · floppy · IDE · CD-ROM' },
+  { id: 'win32', name: 'Windows', sub: 'Win32 API in JS · no Windows', spec: 'i686 · PE · user32 · gdi32 · opengl32 on WebGL2' },
 ];
 const mid = MACHINES.some((m) => m.id === params.get('m')) ? params.get('m') : 'dos';
 const machine = MACHINES.find((m) => m.id === mid);
@@ -226,9 +228,13 @@ async function pc() {
 const USER_KEY = 'mirage.linux.user';
 const savedUser = () => { try { return localStorage.getItem(USER_KEY) || ''; } catch { return ''; } };
 const linuxUser = (img) => savedUser() || (img && (img.hostUser || img.user)) || 'player';
-async function linux() {
+// `world`: 'linux', or 'win32' — MIRAGE-WIN32's images, run the same way (src/linuxrun.js loads a PE),
+// without what is Linux's own: the examples' intros, the user's name, a program of one's own.
+async function linux(world = 'linux') {
+  const isLinux = world === 'linux';
+  const shelfTitle = isLinux ? 'Linux intros and OASIS images' : 'Win32 intros (OASIS images)';
   const userBtn = $('userBtn');
-  userBtn.hidden = false;
+  userBtn.hidden = !isLinux;
   const showUser = () => { userBtn.textContent = `User: ${savedUser() || 'player'}`; };
   showUser();
   userBtn.addEventListener('click', () => {
@@ -243,7 +249,7 @@ async function linux() {
   // /w/<name>, as tools/linux/run.mjs runs one, on a framebuffer of the size chosen beside the button
   // (the sizecoding intros of the 2020s draw for one size). Nothing leaves the browser.
   const fbSel = $('fbSel'), openBtn = $('openBtn'), openFile = $('openFile'), stage = $('stage');
-  fbSel.hidden = false; openBtn.hidden = false;
+  fbSel.hidden = !isLinux; openBtn.hidden = !isLinux;
   try { const f = localStorage.getItem('mirage.linux.fb'); if (f && [...fbSel.options].some((o) => o.value === f)) fbSel.value = f; } catch { /* storage refused */ }
   fbSel.onchange = () => { try { localStorage.setItem('mirage.linux.fb', fbSel.value); } catch { /* storage refused */ } };
   const runBytes = async (title, fileName, bytes, fb, from, id = null) => {
@@ -262,7 +268,7 @@ async function linux() {
   const runFile = async (file) => runBytes(file.name, file.name, new Uint8Array(await file.arrayBuffer()), fbSel.value, 'from this computer');
   // The Linux intros of examples/manifest.json (kind "linux"): small binaries kept here with their
   // licence, run as a dropped program is, on the framebuffer size each was made for.
-  const intros = (await examples()).filter((e) => e.kind === 'linux');
+  const intros = isLinux ? (await examples()).filter((e) => e.kind === 'linux') : [];
   // An intro kept here has `file`; one whose authors state no licence has `url` (their archive, fetched
   // through the oasis-fetch relay and kept in this browser's Cache Storage) and `member` (the binary in it).
   const runIntro = async (e) => {
@@ -288,24 +294,25 @@ async function linux() {
   stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.add('dropping'); });
   stage.addEventListener('dragleave', () => stage.classList.remove('dropping'));
   stage.addEventListener('drop', (e) => { e.preventDefault(); stage.classList.remove('dropping'); const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) runFile(f); });
-  // Another program from the shelf replaces the running one in place: the page, its log and the
-  // shelf's scroll stay; the address names the new one, so a reload starts it again.
+  // Another program from the shelf replaces the running one in place: the page and the shelf's
+  // scroll stay, the log starts afresh; the address names the new one, so a reload starts it again.
   const replace = (q) => {
     if (window.mirage && window.mirage.stop) window.mirage.stop();
     session = null;
+    logEl.replaceChildren(); logPartial = '';                          // the log is the new program's
     history.replaceState(null, '', '?' + new URLSearchParams(q).toString());
   };
   let images = [];
   // Images meant for a window; the terminal ones (a shell) run with `oasis run` in a terminal.
-  try { images = (await (await fetch('/oasis-images.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { images = null; }
+  try { images = (await (await fetch('/oasis-images.json')).json()).filter((m) => m.world === world && m.output === 'window'); } catch { images = null; }
   over.className = 'over term'; over.hidden = false;
   // Start an image on the canvas from its manifest and a file tree: the OASIS server's (/oasis-fs) or
   // one this page built itself from the layers (src/oasis-layers.js, through the oasis-fetch relay).
   const start = async (m, img, host) => {
     let lastLine = '';
     try {
-      const user = linuxUser(img);
-      log(`user: ${user}`);
+      const user = isLinux ? linuxUser(img) : null;              // a Linux account; Win32 has none
+      if (user) log(`user: ${user}`);
       const s = await startLinux({ canvas, img, host, user,
         onOutput: (t) => { logOutput(t); lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
         onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) { setState('exited', ''); log(t); } } });
@@ -321,7 +328,7 @@ async function linux() {
     // oasis-fetch relay (Debian's and idgames' servers send no CORS headers) and kept in the browser.
     // An image made from a Docker export needs the docker command: the OASIS server, on a computer.
     let listed = [];
-    try { listed = (await (await fetch('oasis/index.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { /* none */ }
+    try { listed = (await (await fetch('oasis/index.json')).json()).filter((m) => m.world === world && m.output === 'window'); } catch { /* none */ }
     const needs = (m, why) => {
       over.className = 'over needs'; over.hidden = false;
       over.innerHTML = `<div class="panel">${m && m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : ''}
@@ -334,7 +341,7 @@ async function linux() {
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
     };
     const runHere = async (m) => {
-      replace({ m: 'linux', run: m.name });
+      replace({ m: world, run: m.name });
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(items[+el.dataset.i].id === m.name));
       let img;
       try { img = { ...(await (await fetch(`oasis/images/${m.name}.json`)).json()), name: m.name }; } catch { return needs(m, 'Its manifest could not be read.'); }
@@ -354,14 +361,14 @@ async function linux() {
       await start(m, img, tree.host());
     };
     const items = [...introItems, ...listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => runHere(m) }))];
-    shelf('Linux intros and OASIS images', items, params.get('prog') || params.get('run'));
+    shelf(shelfTitle, items, params.get('prog') || params.get('run'));
     const wanted = listed.find((m) => m.name === params.get('run'));
     if (wantedIntro) runIntro(wantedIntro);
     else if (wanted) runHere(wanted); else { needs(null); setState('choose', ''); status.textContent = 'choose an intro or an image — or drop a Linux program on the screen'; }
     return;
   }
   const run = async (m) => {
-    replace({ m: 'linux', run: m.name });
+    replace({ m: world, run: m.name });
     for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(el.dataset.id === m.name));
     over.hidden = true;
     status.textContent = `starting ${m.title}… (the first run fetches the image's layers)`;
@@ -369,12 +376,12 @@ async function linux() {
     await start(m, img, oasisHost(m.name));
   };
   const items = [...introItems, ...images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => run(m) }))];
-  shelf('Linux intros and OASIS images', items, params.get('prog') || params.get('run') || 'linux/mirage');
+  shelf(shelfTitle, items, params.get('prog') || params.get('run') || 'linux/mirage');
   // The machine boots into a real shell: bash on tty1 of the image that has one (linux/mirage),
   // typed at as a console is; the shelf starts any image instead.
   if (wantedIntro) { runIntro(wantedIntro); return; }
-  const wanted = images.find((m) => m.name === params.get('run')) || images.find((m) => m.name === 'linux/mirage') || images[0];
+  const wanted = images.find((m) => m.name === params.get('run')) || images.find((m) => m.name === 'linux/mirage') || images[0];   // linux/mirage: Linux's shell
   if (wanted) run(wanted);
 }
 
-({ dos, pc, linux })[mid]().catch((e) => { status.textContent = String(e.message || e); setState('failed', 'err'); console.error(e); });
+({ dos, pc, linux, win32: () => linux('win32') })[mid]().catch((e) => { status.textContent = String(e.message || e); setState('failed', 'err'); console.error(e); });
