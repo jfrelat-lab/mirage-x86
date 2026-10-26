@@ -690,6 +690,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     return take;
   };
   machine.dsp = { drain: () => { const samples = dsp.pcm; dsp.pcm = []; return { rate: dsp.rate, samples }; } };
+  // The same card for a library made in JavaScript (src/hle/asound.js): its format, then samples
+  // written as to /dev/dsp — bytes taken, or BLOCK while the buffer is full.
+  lx.dspFormat = (rate, fmt, ch) => { dspDrain(); Object.assign(dsp, { rate, fmt, ch }); };
+  lx.dspPlay = (bytes) => dspWrite({ flags: 0 }, bytes);
   /** Put stdin, stdout and stderr on the first virtual console, as for a program started there. */
   lx.consoleStdio = () => { const n = fs.get('/dev/tty1'); for (let i = 0; i < 3; i++) fds[i] = { node: n, path: '/dev/tty1', pos: 0, flags: 2 }; };
   lx.ttyIn = [];

@@ -59,7 +59,7 @@ if (SPEC) {                                    // an OASIS image's layers (tools
 // time and an older one's year); it then runs with the guest's cycles, or the wall clock.
 lx.epoch = Math.floor(Date.now() / 1000);
 if (!process.stdin.isTTY) { try { lx.stdin = new Uint8Array(readFileSync(0)); } catch { /* no stdin */ } }
-// MIRAGE_LXHLE=sdl12,gl,glu: libSDL-1.2.so.0, libGL.so.1, libGLU.so.1 made in JavaScript (src/hle) in
+// MIRAGE_LXHLE=sdl12,gl,glu,asound: libSDL-1.2.so.0, libGL.so.1, libGLU.so.1, libasound.so.2 made in JavaScript (src/hle) in
 // /usr/lib, on a backend that records (src/hle/trace.js); what they were asked is printed at the end.
 let hleTrace = null;
 if (process.env.MIRAGE_LXHLE) {
@@ -67,7 +67,8 @@ if (process.env.MIRAGE_LXHLE) {
   const { traceBackend } = await import('../../src/hle/trace.js');
   const { sdl12 } = await import('../../src/hle/sdl12.js');
   const { gl, glu } = await import('../../src/hle/gl.js');
-  const pick = { sdl12, gl, glu };
+  const { asound } = await import('../../src/hle/asound.js');
+  const pick = { sdl12, gl, glu, asound };
   hleTrace = traceBackend();
   const libs = process.env.MIRAGE_LXHLE.split(',').map((n) => pick[n] && pick[n]()).filter(Boolean);
   for (const f of installHLE(lx, mc.mem, mc.cpu, libs, hleTrace)) { lx.addFile(f.path, f.bytes); for (const l of f.links) lx.addFile(l, f.bytes); }

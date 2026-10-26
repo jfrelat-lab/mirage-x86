@@ -19,7 +19,7 @@ export function sdl12() {
       SDL_InitSubSystem: ['u', () => 0],
       SDL_Quit: ['', (x) => { x.backend.quit && x.backend.quit(); return 0; }],
       SDL_WasInit: ['u', (x, f) => f],
-      SDL_GetError: ['', (x) => x.str('')],
+      SDL_GetError: ['', (x) => (st.error ||= x.alloc(1))],          // "": a pointer to it, not the string
       // An SDL_Surface: flags, format, w, h, pitch (Uint16), pixels... — enough for a program that reads
       // its size back; the drawing is OpenGL's.
       SDL_SetVideoMode: ['iiiu', (x, w, h, bpp, flags) => {

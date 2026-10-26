@@ -3597,6 +3597,26 @@ const runLinux = (hex, argv) => {
     got = [lx.hle(0), lx.hle(1) === HLE_BASE + 1].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: a void function leaves EAX nonzero, a function with a value returns it', got, '5 true'); }
+// src/hle/asound.js: libasound's simple PCM playback onto the /dev/dsp card (Retrospection 2009 plays
+// through it): snd_pcm_open hands a handle, snd_pcm_set_params sets the card's rate, format and channels,
+// snd_pcm_writei plays frames -- 16-bit as they are, floats as 16 bits. And SDL_GetError is a pointer to
+// "", not a string (it returned the JavaScript string itself).
+{ let got;
+  try { const { asound } = await import('../src/hle/asound.js'), { sdl12 } = await import('../src/hle/sdl12.js'), { guestMemory } = await import('../src/hle/memory.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
+    const x = { ...guestMemory(lx, mc.mem), lx }, f = asound().fns, pp = lx.alloc(4), buf = lx.alloc(32);
+    const open = f.snd_pcm_open[1](x, pp, 0, 0, 0), h = x.r32(pp);
+    const set = f.snd_pcm_set_params[1](x, h, 2, 3, 2, 22050, 1, 500000), card = `${lx.dsp.rate}/${lx.dsp.fmt}/${lx.dsp.ch}`;
+    [1000, -1000, 32767, -32768].forEach((v, i) => x.w16(buf + 2 * i, v));
+    const n16 = f.snd_pcm_writei[1](x, h, buf, 2), s16 = mc.dsp.drain().samples.join(',');
+    f.snd_pcm_set_params[1](x, h, 14, 3, 1, 8000, 1, 500000);
+    const fv = new DataView(new ArrayBuffer(8)); fv.setFloat32(0, 0.5, true); fv.setFloat32(4, -2, true); x.write(buf, new Uint8Array(fv.buffer));
+    const nf = f.snd_pcm_writei[1](x, h, buf, 2), sf = mc.dsp.drain().samples.join(',');
+    const e = sdl12().fns.SDL_GetError[1](x);
+    got = [open, h !== 0, set, card, n16, s16, nf, sf, typeof e, x.r8(e)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: libasound plays S16 and float frames on the /dev/dsp card; SDL_GetError is a pointer to ""', got, '0 true 0 22050/16/2 2 1000,-1000,32767,-32768 2 16384,16384,-32767,-32767 number 0'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).
