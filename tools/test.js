@@ -3587,6 +3587,16 @@ const runLinux = (hex, argv) => {
     got = [ok, lx.status, seen.map((v) => +v.toFixed(5)).join(',')].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: a library made in JavaScript, found as ld.so and the 1K intros find it, called with ints, floats and doubles', got, 'true | 133 | 7,3.14159,-2,3.14159'); }
+// A void function returns what the stub left in EAX, nonzero, as lenny's libgl1-mesa-glx 7.0.3 leaves a
+// context pointer there after glColor4ubv: Metatunnel draws glRecti(-eax, -eax, eax, eax) with it, and
+// with 0 (libgl1-mesa-swx11's) draws nothing. A function that returns a value returns it.
+{ let got;
+  try { const { installHLE } = await import('../src/hle/index.js'), { HLE_BASE } = await import('../src/hle/elfso.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    installHLE(lx, mc.mem, mc.cpu, [{ soname: 'libT.so.1', fns: { n: ['', () => 5], v: ['', () => {}] } }], {});
+    got = [lx.hle(0), lx.hle(1) === HLE_BASE + 1].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: a void function leaves EAX nonzero, a function with a value returns it', got, '5 true'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

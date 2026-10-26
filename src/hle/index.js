@@ -9,7 +9,7 @@
 // Which JavaScript answers a call is the library's business: today a tracer, which records the calls
 // for the tests (src/hle/sdl12.js, gl.js); then PRISM's environment modules (sdl12, gl, glu), the same
 // code PRISM's programs call, on MIRAGE's memory.
-import { makeSharedObject } from './elfso.js';
+import { makeSharedObject, HLE_BASE } from './elfso.js';
 import { guestMemory } from './memory.js';
 
 const SIZE = { i: 4, u: 4, p: 4, f: 4, d: 8 };
@@ -48,7 +48,9 @@ export function installHLE(lx, mem, cpu, libs, backend, { dir = '/usr/lib' } = {
     }
     if (backend.trace) backend.trace(f.name, args);
     const r = f.fn(x, ...args);
-    return r === undefined ? 0 : r;
+    // A void function leaves EAX as the stub set it, nonzero as a real library's scratch value is: the
+    // 1K intros read it back -- Metatunnel draws glRecti(-eax, -eax, eax, eax) after glColor4ubv.
+    return r === undefined ? HLE_BASE + id : r;
   };
   lx.hleTable = table;
   return files;
