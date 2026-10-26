@@ -3765,14 +3765,53 @@ const runLinux = (hex, argv) => {
 // is no open proxy — and those hosts are every one oasis/images/ names.
 { let got;
   try { const { relayTarget, OASIS_HOSTS } = await import('../src/oasis-hosts.js'); const fsm = await import('fs'), pm = await import('path');
-    const used = new Set(); const walk = (dir) => { for (const f of fsm.readdirSync(dir)) { const q = pm.join(dir, f); if (fsm.statSync(q).isDirectory()) walk(q); else if (f.endsWith('.json')) for (const m of fsm.readFileSync(q, 'utf8').matchAll(/"https?:\/\/([^/"]+)/g)) used.add(m[1]); } };
+    const used = new Set(); const walk = (dir) => { for (const f of fsm.readdirSync(dir)) { const q = pm.join(dir, f); if (fsm.statSync(q).isDirectory()) walk(q); else if (f.endsWith('.json')) for (const m of fsm.readFileSync(q, 'utf8').matchAll(/"(https?:\/\/[^"]+)"/g)) used.add(m[1]); } };
     walk(new URL('../oasis/images', import.meta.url).pathname);
     const urls = JSON.parse(fsm.readFileSync(new URL('../examples/manifest.json', import.meta.url), 'utf8')).filter((e) => e.url).map((e) => e.url);   // examples fetched at their source
     got = [relayTarget('http://archive.debian.org/debian/x.deb') !== null, relayTarget('https://example.com/x'), relayTarget('https://archive.debian.org:8080/x'),
-      relayTarget('https://u:p@busybox.net/x'), relayTarget('file:///etc/passwd'), [...used].every((h) => OASIS_HOSTS.includes(h)),
-      urls.every((u) => relayTarget(u) !== null), relayTarget('https://raw.githubusercontent.com/someone/else/main/x')].map(String).join(' ');
+      relayTarget('https://u:p@busybox.net/x'), relayTarget('file:///etc/passwd'), [...used].every((u) => relayTarget(u) !== null),
+      urls.every((u) => relayTarget(u) !== null), relayTarget('https://raw.githubusercontent.com/someone/else/main/x'),
+      relayTarget('https://ftp.scene.org/elsewhere/x'), OASIS_HOSTS.every((h) => [...used, ...urls].some((u) => (u.split('://')[1] || '').startsWith(h)))].map(String).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis-fetch relays only the hosts the images and examples use, and every one of them', got, 'true null null null null true true null'); }
+  eq('oasis-fetch relays only the hosts the images and examples use, and every one of them', got, 'true null null null null true true null null true'); }
+// A `zip` layer with `files`: the members it names, each put where it says (an intro's dropper out of
+// its party archive, oasis/images/linux/ribbon-2009.json); a member that is not there is said so.
+{ let got;
+  try { const { buildTree } = await import('../src/oasis-layers.js'), enc = new TextEncoder();
+    const zipOf = (entries) => {                                    // stored entries, a central directory, its end
+      const loc = [], cen = []; let off = 0;
+      for (const [name, data] of entries) {
+        const n = enc.encode(name), h = new Uint8Array(30 + n.length), d = new DataView(h.buffer);
+        d.setUint32(0, 0x04034b50, true); d.setUint32(18, data.length, true); d.setUint32(22, data.length, true); d.setUint16(26, n.length, true); h.set(n, 30);
+        const c = new Uint8Array(46 + n.length), e = new DataView(c.buffer);
+        e.setUint32(0, 0x02014b50, true); e.setUint32(20, data.length, true); e.setUint32(24, data.length, true); e.setUint16(28, n.length, true); e.setUint32(42, off, true); c.set(n, 46);
+        loc.push(h, data); cen.push(c); off += h.length + data.length;
+      }
+      const cs = cen.reduce((a, c) => a + c.length, 0), end = new Uint8Array(22), v = new DataView(end.buffer);
+      v.setUint32(0, 0x06054b50, true); v.setUint16(8, entries.length, true); v.setUint16(10, entries.length, true); v.setUint32(12, cs, true); v.setUint32(16, off, true);
+      const out = new Uint8Array(off + cs + 22); let p = 0; for (const b of [...loc, ...cen, end]) { out.set(b, p); p += b.length; } return out;
+    };
+    const zip = zipOf([['party/linux/intro_640x480.i386', enc.encode('a=/tmp/I')], ['party/windows/intro.exe', enc.encode('MZ')]]);
+    const io = { fetchBytes: async () => zip };
+    const h = (await buildTree({ layers: [{ zip: 'https://ftp.scene.org/pub/x.zip', files: { 'party/linux/intro_640x480.i386': '/intro/intro.i386' } }] }, io)).host();
+    let missing = 'none'; try { await buildTree({ layers: [{ zip: 'https://ftp.scene.org/pub/x.zip', files: { 'party/nope': '/x' } }] }, io); } catch (e) { missing = e.message; }
+    got = [new TextDecoder().decode(h.read('/intro/intro.i386')), h.list('/').join(), missing].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis in a page: a zip layer with files takes the members it names, to where it says', got, 'a=/tmp/I | intro | oasis: party/nope is not in https://ftp.scene.org/pub/x.zip'); }
+// src/hle/prism-gl.js: the M PRISM's gl.js reads guest memory through -- u8 by index across a page
+// boundary, slice and set, the DataView-like dv in both byte orders' worth of types, cstr and intern.
+{ let got;
+  try { const { prismM } = await import('../src/hle/prism-gl.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
+    const M = prismM(lx, mc.mem), p = lx.alloc(0x3000), edge = ((p + 0x1000) & ~0xfff) - 2;
+    M.u8.set([1, 2, 3, 4], edge); M.u8[edge + 8] = 5;
+    M.mod.dv.setFloat64(edge, 1.5, true); const f64 = M.mod.dv.getFloat64(edge, true);
+    M.mod.dv.setInt16(p, -2, true); M.mod.dv.setFloat32(p + 4, 0.25, true);
+    const s = M.mod.intern([...new TextEncoder().encode('gl'), 0]);
+    got = [Array.from(M.u8.slice(edge + 8, edge + 9)), f64, M.mod.dv.getInt16(p, true), M.mod.dv.getUint16(p, true), M.mod.dv.getFloat32(p + 4, true), M.cstr(s), M.rt.malloc(8) > 0].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true'); }
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's

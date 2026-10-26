@@ -143,6 +143,16 @@ async function pullLayer(l) {
       try { symlinkSync('busybox', join(bin, a)); } catch { /* already there */ }
     }
   }
+  else if (l.zip && l.files && !l.lha) { // files of a ZIP, each put where `files` says (an intro's dropper from its party archive)
+    const { unzip } = await import(join(ROOT, 'src', 'zip.js'));
+    const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
+    const entries = await unzip(new Uint8Array(zb));
+    for (const [from, to] of Object.entries(l.files)) {
+      const f = entries.find((e) => e.path === from);
+      if (!f) throw new Error(`oasis: ${from} is not in ${l.zip}`);
+      mkdirSync(dirname(join(dir, to)), { recursive: true }); writeFileSync(join(dir, to), f.bytes);
+    }
+  }
   else if (l.zip && l.member) {         // a tar inside a ZIP (id's doomsrc.zip holds linuxdoom-1.10.src.tgz)
     const { unzip } = await import(join(ROOT, 'src', 'zip.js'));
     const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
@@ -215,7 +225,7 @@ async function linuxRoot(img) {
     chain = chainStep(chain, l);
     if (l.run) dirs.push(await runLayer(l, { dirs: [...dirs], files, links, mkdirs }, runDir(chain)));
     else if (l.dir) dirs.push(local(l.dir));
-    else if (l.tar || l.deb || l.docker || l.lha || l.busybox || (l.zip && l.member)) dirs.push(await pullLayer(l));
+    else if (l.tar || l.deb || l.docker || l.lha || l.busybox || (l.zip && (l.member || l.files))) dirs.push(await pullLayer(l));
     else if (l.gz || l.file) {
       const src = l.gz || l.file;
       let host = needsPull(l) ? join(await pullLayer(l), basename(src.split('?')[0]).replace(/\.gz$/, '')) : local(src);

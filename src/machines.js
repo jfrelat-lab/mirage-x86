@@ -277,6 +277,7 @@ async function linux() {
       } else bytes = new Uint8Array(await (await fetch(e.file)).arrayBuffer());
     } catch (err) { status.textContent = `${e.title}: ${err.message}`; log(String(err.message || err)); return; }
     if (e.fb) fbSel.value = e.fb;
+    replace({ m: 'linux', prog: e.id });
     await runBytes(e.title, (e.member || e.file).split('/').pop(), bytes, e.fb || fbSel.value, `(${e.license}, ${e.author})`, e.id);
   };
   const introItems = intros.map((e) => ({ id: e.id, title: e.title, year: e.year, author: e.author, thumb: `examples/thumbs/${e.id}.png`,
@@ -287,6 +288,13 @@ async function linux() {
   stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.add('dropping'); });
   stage.addEventListener('dragleave', () => stage.classList.remove('dropping'));
   stage.addEventListener('drop', (e) => { e.preventDefault(); stage.classList.remove('dropping'); const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) runFile(f); });
+  // Another program from the shelf replaces the running one in place: the page, its log and the
+  // shelf's scroll stay; the address names the new one, so a reload starts it again.
+  const replace = (q) => {
+    if (window.mirage && window.mirage.stop) window.mirage.stop();
+    session = null;
+    history.replaceState(null, '', '?' + new URLSearchParams(q).toString());
+  };
   let images = [];
   // Images meant for a window; the terminal ones (a shell) run with `oasis run` in a terminal.
   try { images = (await (await fetch('/oasis-images.json')).json()).filter((m) => m.world === 'linux' && m.output === 'window'); } catch { images = null; }
@@ -326,7 +334,7 @@ async function linux() {
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
     };
     const runHere = async (m) => {
-      if (session) { go({ m: 'linux', run: m.name }); return; }
+      replace({ m: 'linux', run: m.name });
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(items[+el.dataset.i].id === m.name));
       let img;
       try { img = { ...(await (await fetch(`oasis/images/${m.name}.json`)).json()), name: m.name }; } catch { return needs(m, 'Its manifest could not be read.'); }
@@ -353,7 +361,8 @@ async function linux() {
     return;
   }
   const run = async (m) => {
-    if (session) { go({ m: 'linux', run: m.name }); return; }
+    replace({ m: 'linux', run: m.name });
+    for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(el.dataset.id === m.name));
     over.hidden = true;
     status.textContent = `starting ${m.title}… (the first run fetches the image's layers)`;
     const img = await (await fetch(`/oasis-image.json?img=${encodeURIComponent(m.name)}`)).json();

@@ -211,7 +211,14 @@ export async function buildTree(img, io) {
     if (l.docker) throw new Error(`oasis: ${img.name || 'this image'} is a Docker image's export — it needs node tools/oasis.mjs`);
     if (l.deb) tree.addEntries(tarEntries(await debData(await get(l.deb))), l.into || '');
     else if (l.tar) { let b = await get(l.tar); if (isGzip(b)) b = await gunzip(b); tree.addEntries(tarEntries(b), l.into || ''); }
-    else if (l.zip && l.member) {
+    else if (l.zip && l.files && !l.lha) {        // files of a ZIP, each put where `files` says
+      const entries = await unzip(await get(l.zip));
+      for (const [from, to] of Object.entries(l.files)) {
+        const f = entries.find((e) => e.path === from);
+        if (!f) throw new Error(`oasis: ${from} is not in ${l.zip}`);
+        tree.file(norm(to), f.bytes);
+      }
+    } else if (l.zip && l.member) {
       const inner = (await unzip(await get(l.zip, l.member))).find((f) => f.path.toLowerCase() === l.member.toLowerCase());
       if (!inner) throw new Error(`oasis: ${l.member} is not in ${l.zip}`);
       tree.addEntries(tarEntries(isGzip(inner.bytes) ? await gunzip(inner.bytes) : inner.bytes), l.into || '');

@@ -8,8 +8,10 @@
 // licence and so are fetched from their authors' site rather than kept here. An entry with a path is a
 // host AND a path prefix: Desire's releases (attraction & decay, Outline 2026) are on GitHub, and the
 // whole of raw.githubusercontent.com would make the relay a proxy for every repository there.
+// ftp.scene.org/pub/ and ftp.untergrund.net/users/parapete/: the party archives of the Linux OpenGL
+// intros of 2003-2010 (oasis/images/linux/*-20xx.json), fetched as scene.org keeps them.
 export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.net', 'yolp.omgwtf.ru',
-  'raw.githubusercontent.com/dominikfhnw/demoscene_releases/'];
+  'raw.githubusercontent.com/dominikfhnw/demoscene_releases/', 'ftp.scene.org/pub/', 'ftp.untergrund.net/users/parapete/'];
 
 /** The URL to fetch for `?url=`, or null when the relay must refuse it. */
 export function relayTarget(raw) {

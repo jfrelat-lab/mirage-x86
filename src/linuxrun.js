@@ -53,6 +53,14 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   const wake = () => { audio.start(); window.removeEventListener('keydown', wake); window.removeEventListener('pointerdown', wake); };
   window.addEventListener('keydown', wake); window.addEventListener('pointerdown', wake);
   lx.host = host;
+  // machine.hle: libraries made in JavaScript in /usr/lib — ["sdl12", "gl", "glu", "asound"], the GL ones
+  // PRISM's (src/hle/prism-gl.js) — for the Linux OpenGL intros of 2003-2010.
+  let hle = null;
+  if (m.hle) {
+    const [{ installHLE }, { prismLibraries }] = await Promise.all([import('./hle/index.js'), import('./hle/prism-gl.js')]);
+    hle = await prismLibraries(lx, mc.mem, m.hle);
+    for (const f of installHLE(lx, mc.mem, mc.cpu, hle.libs, hle.backend)) { lx.addFile(f.path, f.bytes); for (const l of f.links) lx.addFile(l, f.bytes); }
+  }
   lx.epoch = Math.floor(Date.now() / 1000);
   const e = img.entry || {};
   lx.chdir(e.cwd || '/');
@@ -123,7 +131,12 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   let frames = 0, last = performance.now(), c0 = 0, raf = 0;
   const draw = () => {
     if (stopped) return;
-    video.render(); frames++;
+    const glFrame = hle && hle.frame();
+    if (glFrame) {                                                       // an SDL OpenGL window: PRISM's picture
+      if (canvas.width !== glFrame.width || canvas.height !== glFrame.height) { canvas.width = glFrame.width; canvas.height = glFrame.height; }
+      canvas.getContext('2d').drawImage(glFrame, 0, 0);
+    } else video.render();
+    frames++;
     audio.pump();
     const now = performance.now();
     if (now - last > 1000 && !lx.done && !fault) {
@@ -134,8 +147,11 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   };
   draw();
   return {
-    mc, lx, audio,
+    mc, lx, audio, hle,
     pause(on) { paused = on; },
-    stop() { stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove); },
+    stop() {
+      stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('keydown', wake); window.removeEventListener('pointerdown', wake); audio.close();
+    },
   };
 }

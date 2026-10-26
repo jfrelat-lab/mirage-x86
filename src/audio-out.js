@@ -73,4 +73,6 @@ export class AudioOut {
     if (m && this.node) this.node.port.postMessage('flush');
   }
   get running() { return !!(this.ctx && this.ctx.state === 'running'); }
+  /** Let the context go: a page that starts another machine makes another (browsers allow a few). */
+  close() { if (this.ctx) this.ctx.close().catch(() => {}); this.ctx = null; this.node = null; this.starting = null; }
 }

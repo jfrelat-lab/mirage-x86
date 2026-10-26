@@ -18,6 +18,15 @@
     "output": "window"
   },
   {
+    "name": "linux/clod-2008",
+    "title": "You Massive Clod — Fearmoths, 1K for Linux",
+    "world": "linux",
+    "year": 2008,
+    "author": "Fearmoths, the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-clod-2008.png",
+    "output": "window"
+  },
+  {
     "name": "linux/debian-bookworm",
     "title": "Debian 12 (bookworm), i386, from Docker's image",
     "world": "linux",
@@ -61,12 +70,30 @@
     "output": "window"
   },
   {
+    "name": "linux/laminator-2009",
+    "title": "Four Dollar Plastic Laminator — SVatG, 1K for Linux",
+    "world": "linux",
+    "year": 2009,
+    "author": "Saint Vincent and the Grenadines (halcy, WAHa_06x36), the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-laminator-2009.png",
+    "output": "window"
+  },
+  {
     "name": "linux/mesa-1997",
     "title": "OpenGL of 1997 — Mesa 2.2 and GLUT 3.3, their demos built in MIRAGE-LINUX, on XFree86 3.3",
     "world": "linux",
     "year": 1997,
     "author": "Brian Paul (Mesa), Mark J. Kilgard (GLUT), Silicon Graphics (the demos), the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-mesa-1997.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/metatunnel-2009",
+    "title": "Metatunnel — FRequency, 1K for Linux",
+    "world": "linux",
+    "year": 2009,
+    "author": "FRequency, the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-metatunnel-2009.png",
     "output": "window"
   },
   {
@@ -85,6 +112,24 @@
     "year": 1997,
     "author": "id Software, port by Dave 'Zoid' Kirsch",
     "thumb": "oasis/thumbs/linux-quake-1997.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/retrospection-2010",
+    "title": "Retrospection — Trolls in the Shadows & FRequency, 4K for Linux",
+    "world": "linux",
+    "year": 2010,
+    "author": "Trolls in the Shadows & FRequency, the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-retrospection-2010.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/ribbon-2009",
+    "title": "To the Road of Ribbon — FRequency, 1K for Linux",
+    "world": "linux",
+    "year": 2009,
+    "author": "FRequency, the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-ribbon-2009.png",
     "output": "window"
   },
   {
@@ -130,6 +175,15 @@
     "year": 1998,
     "author": "Jamie Zawinski and the hacks' authors (xscreensaver), Brian Paul (Mesa), the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-xscreensaver-gl-1998.png",
+    "output": "window"
+  },
+  {
+    "name": "linux/yellowrose-2003",
+    "title": "Yellow Rose of Texas — Fit & Bandwagon, 4K for Linux",
+    "world": "linux",
+    "year": 2003,
+    "author": "Fit & Bandwagon (Marq, NF), the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-yellowrose-2003.png",
     "output": "window"
   }
 ]

@@ -1,0 +1,56 @@
+{
+  "oasis": 1,
+  "title": "Four Dollar Plastic Laminator — SVatG, 1K for Linux",
+  "year": 2009,
+  "author": "Saint Vincent and the Grenadines (halcy, WAHa_06x36), the Debian project, busybox, PRISM",
+  "world": "linux",
+  "machine": {
+    "cpu": "686",
+    "mem": 64,
+    "hle": [
+      "sdl12",
+      "gl",
+      "glu",
+      "asound"
+    ]
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/g/glibc/libc6_2.7-18lenny7_i386.deb"
+    },
+    {
+      "zip": "https://ftp.scene.org/pub/parties/2009/tum09/in4k/svatg_fourdollarplasticlaminator.zip",
+      "files": {
+        "FourDollarPlasticLaminator/fdpl": "/intro/fdpl"
+      }
+    },
+    {
+      "links": {
+        "/usr/lib/libm.so": "/lib/libm.so.6"
+      }
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/root"
+      ]
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "args": [
+      "/intro/fdpl"
+    ],
+    "cwd": "/root",
+    "env": {
+      "PATH": "/bin:/usr/bin",
+      "HOME": "/root"
+    }
+  },
+  "output": "window",
+  "notes": "TUM 2009, 1K intro: a GLSL fragment shader of interference patterns. The intro runs as it was distributed: its dropper, a shell script, unpacks the compressed ELF to /tmp and starts it (busybox's sh, tail, zcat or lzcat), on Debian lenny's libc and dynamic loader (2009). Its libGL, libGLU, libSDL and libasound are made in JavaScript: the OpenGL calls and the GLSL go to PRISM's gl.js (vendor/prism), drawn by WebGL2; /usr/lib/libm.so is libc6-dev's link, the name it opens with dlopen.",
+  "thumb": "oasis/thumbs/linux-laminator-2009.png"
+}

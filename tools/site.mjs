@@ -13,7 +13,7 @@
 // <file>.parts.json) that the page joins back (src/fetch-whole.js): the FreeDOS disk, 25.2 MB gzipped.
 // functions/ (the oasis-fetch relay) is not copied: wrangler takes it from the directory it runs in
 // (tools/deploy.mjs runs it from the repository). site/ is never committed (.gitignore).
-import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -28,11 +28,31 @@ export const PART = 24 * 1024 * 1024;
 export const SHIPPED = (p) => /^[^/]+\.(html|css)$/.test(p) || p === 'LICENSE'
   || /^(src|examples|demos|assets|oasis)\//.test(p) && !/\.md$/i.test(p);   // the demos' .asm: their cards' source links
 
+/*
+ * PRISM's environment modules, from the vendor/prism submodule (src/hle/prism-gl.js imports them): the
+ * modules gl.js and glu.js import, followed through their static imports, and PRISM's licence (MIT). A
+ * submodule's files are not the repository's own (git ls-files lists the submodule, not them), so they
+ * are named here; a module PRISM adds to that closure is shipped without a change here.
+ */
+const PRISM = 'vendor/prism', PRISM_ENTRIES = ['src/env/gl.js', 'src/env/glu.js'];
+export function prismShipped(root = ROOT) {
+  const out = new Set(['LICENSE']), todo = [...PRISM_ENTRIES];
+  while (todo.length) {
+    const f = todo.pop();
+    if (out.has(f)) continue;
+    out.add(f);
+    const text = readFileSync(join(root, PRISM, f), 'utf8');
+    for (const m of text.matchAll(/^import[^'"]*['"](\.{1,2}\/[^'"]+)['"]/gm)) todo.push(join(dirname(f), m[1]));
+  }
+  return [...out].sort().map((f) => `${PRISM}/${f}`);
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) build();
 
 function build() {
   const tracked = spawnSync('git', ['-C', ROOT, 'ls-files', '-z'], { encoding: 'utf8' }).stdout.split('\0').filter(Boolean);
-  const files = tracked.filter(SHIPPED);
+  if (!existsSync(join(ROOT, PRISM, PRISM_ENTRIES[0]))) throw new Error(`site: ${PRISM} is empty -- git submodule update --init`);
+  const files = [...tracked.filter(SHIPPED), ...prismShipped()];
   rmSync(OUT, { recursive: true, force: true });
   let bytes = 0, split = 0;
   const write = (rel, data) => { const to = join(OUT, rel); mkdirSync(dirname(to), { recursive: true }); writeFileSync(to, data); bytes += data.length; };

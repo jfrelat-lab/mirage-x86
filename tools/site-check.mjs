@@ -20,7 +20,7 @@ import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { MAX, SHIPPED } from './site.mjs';
+import { MAX, SHIPPED, prismShipped } from './site.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SERVER_ONLY = /^\/oasis-(fs\/|image\.json|images\.json)/;
@@ -37,11 +37,12 @@ export function check(dir, root = ROOT) {
   const have = new Set(files);
   const there = (p) => have.has(p) || have.has(p + '.parts.json');
   const tracked = new Set(spawnSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8' }).stdout.split('\0').filter(Boolean));
+  const prism = new Set(prismShipped(root));            // the submodule's modules the pages import (site.mjs)
   for (const f of files) {
     const size = statSync(join(dir, f)).size;
     if (size > MAX) bad.push(`1 ${f}: ${(size / 1048576).toFixed(1)} MiB, over 25 MiB`);
     const base = f.replace(/\.(part\d+|parts\.json)$/, '');
-    if (f !== '_headers' && !(tracked.has(base) && SHIPPED(base))) bad.push(`2 ${f}: not a file the repository tracks and ships`);
+    if (f !== '_headers' && !(tracked.has(base) && SHIPPED(base)) && !prism.has(base)) bad.push(`2 ${f}: not a file the repository tracks and ships`);
     if (/^(boot|games|intros)\//.test(f)) bad.push(`2 ${f}: from a directory MIRAGE does not own`);
   }
   const json = (p) => { try { return JSON.parse(readFileSync(join(dir, p), 'utf8')); } catch { bad.push(`3 ${p}: missing or unreadable`); return []; } };
