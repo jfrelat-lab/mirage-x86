@@ -289,6 +289,9 @@ export function installFPU(cpu) {
   // round-to-integer (banker's rounding) and compare/condition-code helpers. Keeping
   // them as monomorphic functions lets V8 inline them while the emitted blocks stay small.
   cpu.f2i = toInt;
+  // The memory operands' slow path for the recompiler's inline x87 under paging (emitFPUMemPaged):
+  // a page the fast table does not cover, a straddling access, a page holding translated code.
+  cpu.fRd32 = f32l; cpu.fRd64 = f64l; cpu.fWr32 = f32s; cpu.fWr64 = f64s;
   cpu.fcmp = setcc;
 
   // ---- memory-operand forms (op = D8..DF, reg = modrm.reg field) -----------

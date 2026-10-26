@@ -297,7 +297,16 @@ export class Memory {
   // In a planar EGA/VGA mode, A000 reads go through the plane logic (and load the latches);
   // everything else is a direct typed-array read. `planar` is false for text/mode-13h/demos
   // so the check is a single predicted branch on the common path.
+  /*
+   * THE FAST TABLES FIRST, under paging: a helper access (a stack push, a string instruction, a
+   * library made in JavaScript) to a page the compiled code would reach through rdOfs/wrOfs takes the
+   * same entry -- physical minus linear, -1 when the page is not plain RAM, holds translated code, or
+   * is not yet dirty for a write -- so the same rule decides, without a walk or a TLB probe. Under
+   * MIRAGE-WIN32 a 4K intro's synthesizer thread pushed and popped its stack through xlat: a fifth of
+   * its time.
+   */
   r8(a)  {
+    if (this.paged) { const o = this.rdOfs[a >>> PAGE_BITS]; if (o !== -1) return this.u8[(o + a) >>> 0]; }
     // Under paging the translated address is what decides device or RAM. The planar/VBE window was
     // only routed on the unpaged path, so a DPMI client (xcom144 under HDPMI32, VBE 111h banked)
     // drew into the raw RAM behind A000 and the framebuffer stayed black.
@@ -316,10 +325,10 @@ export class Memory {
     if (t >= 0) this._afterAccess(a >>> PAGE_BITS);
     return (t < 0 || (this.planar && t >= 0xa0000 && t < 0xb0000)) ? -1 : t;
   }
-  r16(a) { if (this.paged) { if ((a & 0xfff) !== 0xfff) { const t = this._px(a, false); if (t >= 0) return this.u8[t] | (this.u8[t + 1] << 8); } return this.r8(a) | (this.r8(a + 1) << 8); }
+  r16(a) { if (this.paged) { if ((a & 0xfff) !== 0xfff) { const o = this.rdOfs[a >>> PAGE_BITS]; if (o !== -1) { const q = (o + a) >>> 0; return this.u8[q] | (this.u8[q + 1] << 8); } const t = this._px(a, false); if (t >= 0) return this.u8[t] | (this.u8[t + 1] << 8); } return this.r8(a) | (this.r8(a + 1) << 8); }
     a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return this.r8(a) | (this.r8((a + 1) & this.mask) << 8);
     return this.u8[a] | (this.u8[(a + 1) & this.mask] << 8); }
-  r32(a) { if (this.paged) { if ((a & 0xfff) <= 0xffc) { const t = this._px(a, false); if (t >= 0) return (this.u8[t] | (this.u8[t + 1] << 8) | (this.u8[t + 2] << 16) | (this.u8[t + 3] << 24)) >>> 0; } return (this.r8(a) | (this.r8(a + 1) << 8) | (this.r8(a + 2) << 16) | (this.r8(a + 3) << 24)) >>> 0; }
+  r32(a) { if (this.paged) { if ((a & 0xfff) <= 0xffc) { const o = this.rdOfs[a >>> PAGE_BITS]; if (o !== -1) { const q = (o + a) >>> 0; return (this.u8[q] | (this.u8[q + 1] << 8) | (this.u8[q + 2] << 16) | (this.u8[q + 3] << 24)) >>> 0; } const t = this._px(a, false); if (t >= 0) return (this.u8[t] | (this.u8[t + 1] << 8) | (this.u8[t + 2] << 16) | (this.u8[t + 3] << 24)) >>> 0; } return (this.r8(a) | (this.r8(a + 1) << 8) | (this.r8(a + 2) << 16) | (this.r8(a + 3) << 24)) >>> 0; }
     a &= this.mask; if (this.planar && a >= 0xa0000 && a < 0xb0000) return (this.r8(a) | (this.r8((a + 1) & this.mask) << 8) | (this.r8((a + 2) & this.mask) << 16) | (this.r8((a + 3) & this.mask) << 24)) >>> 0;
     return (this.u8[a] | (this.u8[(a + 1) & this.mask] << 8) | (this.u8[(a + 2) & this.mask] << 16) | (this.u8[(a + 3) & this.mask] << 24)) >>> 0; }
 
@@ -330,6 +339,8 @@ export class Memory {
     // and reported the wrong one — every self-modifying write under paging missed its invalidation,
     // which is exactly what an OS relocating code does.
     if (this.paged) {
+      const o = this.wrOfs[a >>> PAGE_BITS];
+      if (o !== -1) { this.u8[(o + a) >>> 0] = v; return; }
       const t = this.xlat(a, true);
       if (t >= 0) {
         this._afterAccess(a >>> PAGE_BITS);
@@ -345,7 +356,8 @@ export class Memory {
   }
   w16(a, v) {
     if (this.paged) {
-      if ((a & 0xfff) !== 0xfff) { const t = this._px(a, true); if (t >= 0) { this.u8[t] = v; this.u8[t + 1] = v >> 8; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 2); return; } }
+      if ((a & 0xfff) !== 0xfff) { const o = this.wrOfs[a >>> PAGE_BITS]; if (o !== -1) { const q = (o + a) >>> 0; this.u8[q] = v; this.u8[q + 1] = v >> 8; return; }
+        const t = this._px(a, true); if (t >= 0) { this.u8[t] = v; this.u8[t + 1] = v >> 8; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 2); return; } }
       this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff); return;
     }
     a &= this.mask;
@@ -355,7 +367,8 @@ export class Memory {
   }
   w32(a, v) {
     if (this.paged) {
-      if ((a & 0xfff) <= 0xffc) { const t = this._px(a, true); if (t >= 0) { this.u8[t] = v; this.u8[t + 1] = v >> 8; this.u8[t + 2] = v >> 16; this.u8[t + 3] = v >>> 24; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 4); return; } }
+      if ((a & 0xfff) <= 0xffc) { const o = this.wrOfs[a >>> PAGE_BITS]; if (o !== -1) { const q = (o + a) >>> 0; this.u8[q] = v; this.u8[q + 1] = v >> 8; this.u8[q + 2] = v >> 16; this.u8[q + 3] = v >>> 24; return; }
+        const t = this._px(a, true); if (t >= 0) { this.u8[t] = v; this.u8[t + 1] = v >> 8; this.u8[t + 2] = v >> 16; this.u8[t + 3] = v >>> 24; if (this.codePage[a >>> PAGE_BITS]) this._dirty(a, 4); return; } }
       this.w8(a, v & 0xff); this.w8(a + 1, (v >> 8) & 0xff);
       this.w8(a + 2, (v >> 16) & 0xff); this.w8(a + 3, (v >>> 24) & 0xff); return;
     }

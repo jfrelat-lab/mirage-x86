@@ -431,9 +431,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
       sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty });
     fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
-    installPages(s.pages);
+    // Another thread of the same address space: the page tables, the TLB and the translated code are
+    // its own already -- remapping a Crinkler intro's 51,000 pages at each switch was 3% of its time.
+    if (!shared) installPages(s.pages);
     mem.u8.set(s.tls, TLS_A); mem.u8.set(s.io, TSS_BASE + IOMAP);
-    cpu.setCR3(cpu.cr3);
+    if (!shared) cpu.setCR3(cpu.cr3);
     // No machine.rec.reset(): the CR3 load above starts a new epoch, and a translated block is checked
     // against the frames it was built from before it runs again (ROADMAP D8) — another process's code
     // at the same addresses is retranslated, the rest is kept. Dropping everything at each switch made
@@ -454,7 +456,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const yieldTo = () => {
     if (!lx.procs.length) return;
     const me = snapshot();
-    releasePages(lx.pages, false);
+    if (lx.procs[0].vm !== lx.vm) releasePages(lx.pages, false);      // a thread of the same process keeps them
     lx.procs.push(me);
     switchTo(lx.procs.shift());
   };

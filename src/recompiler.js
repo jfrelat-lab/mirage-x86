@@ -1786,9 +1786,9 @@ export class Recompiler {
       const a = memAddr(o);
       const fb = () => P(`cpu.fpuMem(${op},${reg},${a});`);
       const smc = (len) => `if(cp[${a}>>>12]|cp[(${AM(`${a}+${len - 1}`)})>>>12])m._dirty(${a},${len});`;
-      // The inline forms index the physical DataView with the address; under paging it is LINEAR.
-      // cpu.fpuMem translates (src/fpu.js), so the paged strategy always takes it.
-      if (pfRestart) return fb();
+      // The inline forms index the physical DataView with the address; under paging it is LINEAR, and
+      // the paged forms below translate it as the paged integer accesses do.
+      if (pfRestart) return emitFPUMemPaged(op, reg, a, fb);
       switch (op) {
         case 0xd9:                                                   // f32 load/store + control
           if (reg === 0) return fpush(`dv.getFloat32(${a},true)`);           // FLD m32
@@ -1819,6 +1819,54 @@ export class Recompiler {
       // arithmetic with a memory source: D8=f32, DC=f64, DA=i32, DE=i16
       const vexpr = op === 0xd8 ? `dv.getFloat32(${a},true)` : op === 0xdc ? `dv.getFloat64(${a},true)`
         : op === 0xda ? `dv.getInt32(${a},true)` : `dv.getInt16(${a},true)`;
+      const vt = NT(), xt = NT();
+      P(`var ${vt}=${vexpr},${xt}=st[cpu.ftop];`);
+      if (reg === 2) return P(`cpu.fcmp(${xt},${vt});`);                     // FCOM
+      if (reg === 3) return P(`cpu.fcmp(${xt},${vt});${FPOP}`);             // FCOMP
+      return P(setSTe(0, arithE(reg, xt, vt)));                             // FADD/FMUL/FSUB/FSUBR/FDIV/FDIVR
+    }
+
+    /*
+     * x87 MEMORY OPERANDS UNDER PAGING, inline: the paged strategy's one probe (rdOfs/wrOfs, a biased
+     * physical-minus-linear offset per page, -1 when the page is not plain RAM or holds translated
+     * code), then the DataView at the physical address; else src/fpu.js's helpers, which translate,
+     * fault and keep the SMC bookkeeping as cpu.fpuMem did. Every load and store of a float went
+     * through cpu.fpuMem under paging -- a third of Valleyball's synthesizer (2009, a 4K intro whose
+     * music is x87 arithmetic on memory) was that path. The environment and control forms stay there.
+     */
+    function emitFPUMemPaged(op, reg, a0, fb) {
+      const a = NT();
+      P(`var ${a}=${a0};`);
+      const rf = (len, get, slow) => `(((${a}&4095)<${4097 - len}&&(_po=rdo[${a}>>>12])!==-1)?dv.${get}((_po+${a})>>>0,true):cpu.${slow}(${a}))`;
+      const wf = (len, set, slow, v) => `if((${a}&4095)<${4097 - len}&&(_pw=wro[${a}>>>12])!==-1)dv.${set}((_pw+${a})>>>0,${v},true);else cpu.${slow}(${a},${v});`;
+      const f32 = rf(4, 'getFloat32', 'fRd32'), f64 = rf(8, 'getFloat64', 'fRd64');
+      const i32 = `(${memRead(a, 32)}|0)`, i16 = `(${memRead(a, 16)}<<16>>16)`;
+      switch (op) {
+        case 0xd9:
+          if (reg === 0) return fpush(f32);                                           // FLD m32
+          if (reg === 2) return P(wf(4, 'setFloat32', 'fWr32', 'st[cpu.ftop]'));       // FST m32
+          if (reg === 3) return P(wf(4, 'setFloat32', 'fWr32', 'st[cpu.ftop]') + FPOP);  // FSTP m32
+          if (reg === 5) return P(`cpu.fldcw(${memRead(a, 16)});`);                   // FLDCW
+          if (reg === 7) return P(memW(a, 16, 'cpu.fcw'));                             // FNSTCW
+          return fb();
+        case 0xdd:
+          if (reg === 0) return fpush(f64);                                           // FLD m64
+          if (reg === 2) return P(wf(8, 'setFloat64', 'fWr64', 'st[cpu.ftop]'));       // FST m64
+          if (reg === 3) return P(wf(8, 'setFloat64', 'fWr64', 'st[cpu.ftop]') + FPOP);  // FSTP m64
+          if (reg === 7) return P(memW(a, 16, '((cpu.fsw&0x47ff)|((cpu.ftop&7)<<11))'));   // FNSTSW m16
+          return fb();
+        case 0xdb:
+          if (reg === 0) return fpush(i32);                                           // FILD m32
+          if (reg === 2) return P(memW(a, 32, 'cpu.f2i(st[cpu.ftop])>>>0'));          // FIST m32
+          if (reg === 3) return P(memW(a, 32, 'cpu.f2i(st[cpu.ftop])>>>0') + FPOP);   // FISTP m32
+          return fb();
+        case 0xdf:
+          if (reg === 0) return fpush(i16);                                           // FILD m16
+          if (reg === 2) return P(memW(a, 16, 'cpu.f2i(st[cpu.ftop])&0xffff'));       // FIST m16
+          if (reg === 3) return P(memW(a, 16, 'cpu.f2i(st[cpu.ftop])&0xffff') + FPOP);   // FISTP m16
+          return fb();
+      }
+      const vexpr = op === 0xd8 ? f32 : op === 0xdc ? f64 : op === 0xda ? i32 : i16;
       const vt = NT(), xt = NT();
       P(`var ${vt}=${vexpr},${xt}=st[cpu.ftop];`);
       if (reg === 2) return P(`cpu.fcmp(${xt},${vt});`);                     // FCOM
