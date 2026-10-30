@@ -1148,6 +1148,14 @@ export class Recompiler {
      * than it reads. At most four, so that a block stays a block.
      */
     let lo = ip0, hi = ip0, follows = 0;
+    const calls = [];                                    // the return addresses of the calls followed
+    // RET in a call followed: it goes on at the return address when the stack holds it, the usual
+    // case; any other leaves as a side exit to where the stack says.
+    const retFollowed = (v) => {
+      const back = calls.pop();
+      P(`if(${v}!==${back}){cpu.eip=${v};cpu.cycles-=/*REM${count}*/0;return;}`);
+      if (!follow(back)) { P(`cpu.eip=${back};`); P('return;'); ended = true; }
+    };
     const follow = (t) => {
       if (!(pfRestart && !TIER2 && !NOSIDEEXIT && !NOFOLLOW && d) || follows >= 4 || starts.has(t)) return false;
       if (((linStart - ip0 + t) >>> 12) !== (linStart >>> 12)) return false;
@@ -1615,10 +1623,12 @@ export class Recompiler {
         // RET pops what CALL pushed: 4 bytes under a 0x66 prefix, 2 without. The immediate form's
         // SP adjustment stays a 16-bit count either way.
         case 0xc2: { const n = f16();
-          if (inlineStack(sz)) { canFault = true; const [st, v] = popS(); P(st); P(`cpu.eip=${v};r[4]=(r[4]+${n})>>>0;`); P('return;'); ended = true; break; }
+          if (inlineStack(sz)) { canFault = true; const [st, v] = popS(); P(st);
+            if (calls.length) { P(`r[4]=(r[4]+${n})>>>0;`); retFollowed(v); break; }
+            P(`cpu.eip=${v};r[4]=(r[4]+${n})>>>0;`); P('return;'); ended = true; break; }
           P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};cpu.spAdd(${n});`); P('return;'); ended = true; break; } // RET imm
         case 0xc3:
-          if (inlineStack(sz)) { canFault = true; const [st, v] = popS(); P(st); P(`cpu.eip=${v};`); P('return;'); ended = true; break; }
+          if (inlineStack(sz)) { canFault = true; const [st, v] = popS(); P(st); if (calls.length) { retFollowed(v); break; } P(`cpu.eip=${v};`); P('return;'); ended = true; break; }
           P(`cpu.eip=${sz === 16 ? 'cpu.pop16()' : 'cpu.pop32()>>>0'};`); P('return;'); ended = true; break;        // RET
         // LDS/LES/LSS/LFS/LGS all load an offset followed by a 16-bit selector. Under 0x66 the offset
         // is a DWORD, so the selector sits at +4, not +2 — reading it at +2 loaded half the offset as
@@ -1763,7 +1773,7 @@ export class Recompiler {
         case 0xe8: {
           const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16));
           const tgt = ipAdd(ip, rel);
-          if (inlineStack(sz)) { canFault = true; P(pushS(SEQ())); if (follow(tgt)) break; P(`cpu.eip=${tgt};`); P('return;'); ended = true; break; }
+          if (inlineStack(sz)) { canFault = true; const back = SEQ(); P(pushS(back)); if (follow(tgt)) { calls.push(back); break; } P(`cpu.eip=${tgt};`); P('return;'); ended = true; break; }
           P(sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`);
           P(`cpu.eip=${tgt};`); P('return;'); ended = true; break;
         }
