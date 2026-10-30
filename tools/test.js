@@ -3586,6 +3586,23 @@ const runLinux = (hex, argv) => {
     got = lx.done && lx.status;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a page fault in a block reports its own instruction (37, as Docker i386)', got, 37); }
+// tools/linux/fxcache.asm: the x87 stack as a block keeps it, its top and the values it holds -- a
+// loop one push deeper each turn that reads what was there before it, one that reads nothing from
+// before it, FXCH, FINCSTP/FDECSTP, and an FCMOV through src/fpu.js between held values: 253, as
+// Docker i386 exits.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/fxcache.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408cd0000000810000007000000001000009bdbe3d9e8d9eeb904000000' +
+    'd8c1d9c04975f9dec1dec1dec1dec1dec1db1d00900408b903000000d9e84975fbdec1dec1db1d08900408db05c58004' +
+    '08db05c9800408d9c9d9f7d9f6f9dac1d8c1ddd9db1d04900408a1009004086bd80a031d04900408031d08900408b801' +
+    '000000cd800300000005000000');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/FXCACHE']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = lx.done && lx.status;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: the x87 stack kept in the block, its loops and helpers (253, as Docker i386)', got, 253); }
 // tools/linux/repstr.asm: REP STOS and REP MOVS under paging -- bytes, words, dwords, across page
 // boundaries, at an odd address, backwards, copies overlapping either way -- give Docker i386's
 // checksum, and the forward ones run a page at a time, not through a memory helper an element

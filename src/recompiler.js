@@ -53,6 +53,7 @@ const NOFLATSPEC = typeof process !== 'undefined' && !!(process.env && process.e
 const NOSELFLOOP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSELFLOOP);
 // MIRAGE_NOSIDEEXIT=1: every conditional branch ends its block, as before side exits.
 const LAZYEIP = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_NOLAZYEIP);
+const NOFXCACHE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFXCACHE);
 const NOFOLLOW = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFOLLOW);
 const NOSIDEEXIT = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSIDEEXIT);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
@@ -1185,9 +1186,10 @@ export class Recompiler {
     const sideExits = pfRestart && !TIER2 && !NOSIDEEXIT;
     const endJcc = (cc, target, next) => {
       const at = starts.get(+target);
-      if (sideExits && at !== undefined && +target !== ip0 && at[0] > loopFloor) {
+      if (sideExits && at !== undefined && +target !== ip0 && at[0] > loopFloor && !fReads.some(([ri, di]) => ri >= at[0] && di < at[0])) {
         cur.use |= lALL;
-        loops.push(at[0]);
+        loops.push([at[0], at[2]]);
+        for (const [r, c] of fcache) if (c.def < at[0]) fcache.delete(r);   // F moves at the loop's head
         P(`if(!(${condExpr(cc)}))break;`);
         P(`if((cpu.flags&${IF})||cpu.tbudget<=1){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
         P(`cpu.cycles+=${count - at[1]};cpu.tbudget--;}`);
@@ -1237,14 +1239,45 @@ export class Recompiler {
     };
 
     // ---- x87 stack-expression helpers (used by emitFPUReg/emitFPUMem below) ----
-    // ST(i) as an lvalue/rvalue string; fpush/FPOP mutate cpu.ftop directly (no mirror).
-    const STe = (i) => i === 0 ? 'st[cpu.ftop]' : `st[(cpu.ftop+${i})&7]`;
-    const setSTe = (i, v) => i === 0 ? `st[cpu.ftop]=${v};` : `st[(cpu.ftop+${i})&7]=${v};`;
+    /*
+     * THE x87 STACK IN THE BLOCK. The top's place is F, read from cpu.ftop where the block starts, plus
+     * a depth the translation follows (fd): ST(i) is st[(F+k)&7] with k a constant, no cpu.ftop read.
+     * And a register's value, once a block has loaded or written it, is kept in a local the next reads
+     * take (fcache). Writes go to both (write-through), and pushes and pops still store cpu.ftop, so a
+     * fault, a side exit or a helper finds st[] and the top as they are. A helper that moves the
+     * stack (the fpu.js fallbacks, FLDENV, FXTRACT) ends what the block knows: F is read again.
+     * Each loop opened in the block reads F again at its head; one whose body would read a value kept
+     * from before it is not opened (see endJcc). MIRAGE_NOFXCACHE=1: cpu.ftop as before.
+     */
+    const FXC = !TIER2 && !NOFXCACHE;
+    let fd = 0;
+    const fcache = new Map(), fReads = [];               // slot -> { v, def }; [read at, defined at]
+    const stIdx = (r) => (r === 0 ? 'F' : `(F+${r})&7`);
+    const STe = (i) => {
+      if (!FXC) return i === 0 ? 'st[cpu.ftop]' : `st[(cpu.ftop+${i})&7]`;
+      const r = (fd + i) & 7, c = fcache.get(r);
+      if (c) { fReads.push([out.length, c.def]); return c.v; }
+      return `st[${stIdx(r)}]`;
+    };
+    const setSTe = (i, v) => {
+      if (!FXC) return i === 0 ? `st[cpu.ftop]=${v};` : `st[(cpu.ftop+${i})&7]=${v};`;
+      const r = (fd + i) & 7, t = NT();
+      fcache.set(r, { v: t, def: out.length });
+      return `var ${t}=${v};st[${stIdx(r)}]=${t};`;
+    };
+    const fsync = () => { if (FXC) { P('F=cpu.ftop;'); fd = 0; fcache.clear(); } };
     // `cpu.focc` tracks which physical registers hold a value — the tag word FNSTENV publishes is
     // derived from it (see fpu.js). Maintaining it HERE and only here is what makes that possible:
     // stack motion happens in these two emissions, while st[] is written inline all over.
-    const fpush = (v) => { const t = NT(), q = NT(); P(`var ${t}=${v};var ${q}=(cpu.ftop-1)&7;cpu.ftop=${q};st[${q}]=${t};oc[${q}]=1;`); };
-    const FPOP = 'var _fp=cpu.ftop;oc[_fp]=0;cpu.ftop=(_fp+1)&7;';
+    const fpush = (v) => {
+      if (!FXC) { const t = NT(), q = NT(); P(`var ${t}=${v};var ${q}=(cpu.ftop-1)&7;cpu.ftop=${q};st[${q}]=${t};oc[${q}]=1;`); return; }
+      const t = NT(); fd = (fd - 1) & 7; fcache.set(fd, { v: t, def: out.length });
+      P(`var ${t}=${v};cpu.ftop=${stIdx(fd)};st[${stIdx(fd)}]=${t};oc[${stIdx(fd)}]=1;`);
+    };
+    const FPOP = () => {
+      if (!FXC) return 'var _fp=cpu.ftop;oc[_fp]=0;cpu.ftop=(_fp+1)&7;';
+      const s0 = `oc[${stIdx(fd)}]=0;cpu.ftop=${stIdx((fd + 1) & 7)};`; fd = (fd + 1) & 7; return s0;
+    };
     // Precision control is a TRANSLATION-time constant: PC=single is rare, and reading the control
     // word per operation would tax every FPU block for it. `cpu.fldcw` resets the cache when the
     // field moves, the same way a paging change does. Division goes through a helper because it
@@ -1298,7 +1331,7 @@ export class Recompiler {
       if (follows && starts.has(ip)) break;                // a followed jump ran into code already here
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
       const ipStart = ip; ipLast = ip; curIpStart = ip;    // instruction start ip — fault return address (#BR etc.)
-      starts.set(ipStart, [out.length, count]);
+      starts.set(ipStart, [out.length, count, fd]);
       // A #PF is raised from INSIDE a memory access, so the run loop has to know which instruction
       // to restart — and only this store knows. It is emitted per instruction ONLY under the paged
       // strategy, which the machine selects exactly when paging is on, so nothing outside protected
@@ -1913,7 +1946,9 @@ export class Recompiler {
       head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0${ssB32 ? '||!cpu.ssB' : ''}){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
     }
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + head;
-    for (const at of loops) out[at] = 'for(;;){\n' + out[at];
+    const fx = FXC && usesFPU;
+    for (const [at, dt] of loops) out[at] = 'for(;;){\n' + (fx ? `F=(cpu.ftop-${dt}+8)&7;\n` : '') + out[at];
+    if (fx) out.unshift('var F=cpu.ftop;');
     const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k));   // side exits: what they did not run
     const body = pre + '\n' + (selfLoop ? `for(;;){\n${code}\n}` : code);
     const fn = new Function('cpu', body);
@@ -1947,7 +1982,7 @@ export class Recompiler {
     // STe/setSTe/fpush/FPOP/arithE are defined before the decode loop.)
     function emitFPUMem(op, reg, o) {
       const a = memAddr(o);
-      const fb = () => P(`cpu.fpuMem(${op},${reg},${a});`);
+      const fb = () => { P(`cpu.fpuMem(${op},${reg},${a});`); fsync(); };
       const smc = (len) => `if(cp[${a}>>>12]|cp[(${AM(`${a}+${len - 1}`)})>>>12])m._dirty(${a},${len});`;
       // The inline forms index the physical DataView with the address; under paging it is LINEAR, and
       // the paged forms below translate it as the paged integer accesses do.
@@ -1955,37 +1990,37 @@ export class Recompiler {
       switch (op) {
         case 0xd9:                                                   // f32 load/store + control
           if (reg === 0) return fpush(`dv.getFloat32(${a},true)`);           // FLD m32
-          if (reg === 2) return P(`dv.setFloat32(${a},st[cpu.ftop],true);${smc(4)}`);        // FST m32
-          if (reg === 3) return P(`dv.setFloat32(${a},st[cpu.ftop],true);${smc(4)}${FPOP}`); // FSTP m32
-          if (reg === 4) return P(`cpu.fldenv(${a});`);                      // FLDENV
+          if (reg === 2) return P(`dv.setFloat32(${a},${STe(0)},true);${smc(4)}`);        // FST m32
+          if (reg === 3) return P(`dv.setFloat32(${a},${STe(0)},true);${smc(4)}${FPOP()}`); // FSTP m32
+          if (reg === 4) { P(`cpu.fldenv(${a});`); return fsync(); }                      // FLDENV
           if (reg === 5) return P(`cpu.fldcw(m.r16(${a}));`);                // FLDCW
           if (reg === 6) return P(`cpu.fnstenv(${a});`);                     // FNSTENV
           if (reg === 7) return P(`m.w16(${a},cpu.fcw);`);                   // FNSTCW (w16 does SMC)
           return fb();
         case 0xdd:                                                   // f64 load/store
           if (reg === 0) return fpush(`dv.getFloat64(${a},true)`);           // FLD m64
-          if (reg === 2) return P(`dv.setFloat64(${a},st[cpu.ftop],true);${smc(8)}`);        // FST m64
-          if (reg === 3) return P(`dv.setFloat64(${a},st[cpu.ftop],true);${smc(8)}${FPOP}`); // FSTP m64
+          if (reg === 2) return P(`dv.setFloat64(${a},${STe(0)},true);${smc(8)}`);        // FST m64
+          if (reg === 3) return P(`dv.setFloat64(${a},${STe(0)},true);${smc(8)}${FPOP()}`); // FSTP m64
           if (reg === 7) return P(`m.w16(${a},((cpu.fsw&0x47ff)|((cpu.ftop&7)<<11)));`);      // FNSTSW m16
           return fb();
         case 0xdb:                                                   // i32 load/store
           if (reg === 0) return fpush(`dv.getInt32(${a},true)`);             // FILD m32
-          if (reg === 2) return P(`m.w32(${a},cpu.f2i(st[cpu.ftop])>>>0);`);            // FIST m32
-          if (reg === 3) return P(`m.w32(${a},cpu.f2i(st[cpu.ftop])>>>0);${FPOP}`);     // FISTP m32
+          if (reg === 2) return P(`m.w32(${a},cpu.f2i(${STe(0)})>>>0);`);            // FIST m32
+          if (reg === 3) return P(`m.w32(${a},cpu.f2i(${STe(0)})>>>0);${FPOP()}`);     // FISTP m32
           return fb();
         case 0xdf:                                                   // i16 load/store
           if (reg === 0) return fpush(`dv.getInt16(${a},true)`);             // FILD m16
-          if (reg === 2) return P(`m.w16(${a},cpu.f2i(st[cpu.ftop])&0xffff);`);         // FIST m16
-          if (reg === 3) return P(`m.w16(${a},cpu.f2i(st[cpu.ftop])&0xffff);${FPOP}`);  // FISTP m16
+          if (reg === 2) return P(`m.w16(${a},cpu.f2i(${STe(0)})&0xffff);`);         // FIST m16
+          if (reg === 3) return P(`m.w16(${a},cpu.f2i(${STe(0)})&0xffff);${FPOP()}`);  // FISTP m16
           return fb();
       }
       // arithmetic with a memory source: D8=f32, DC=f64, DA=i32, DE=i16
       const vexpr = op === 0xd8 ? `dv.getFloat32(${a},true)` : op === 0xdc ? `dv.getFloat64(${a},true)`
         : op === 0xda ? `dv.getInt32(${a},true)` : `dv.getInt16(${a},true)`;
       const vt = NT(), xt = NT();
-      P(`var ${vt}=${vexpr},${xt}=st[cpu.ftop];`);
+      P(`var ${vt}=${vexpr},${xt}=${STe(0)};`);
       if (reg === 2) return P(`cpu.fcmp(${xt},${vt});`);                     // FCOM
-      if (reg === 3) return P(`cpu.fcmp(${xt},${vt});${FPOP}`);             // FCOMP
+      if (reg === 3) return P(`cpu.fcmp(${xt},${vt});${FPOP()}`);             // FCOMP
       return P(setSTe(0, arithE(reg, xt, vt)));                             // FADD/FMUL/FSUB/FSUBR/FDIV/FDIVR
     }
 
@@ -2007,46 +2042,46 @@ export class Recompiler {
       switch (op) {
         case 0xd9:
           if (reg === 0) return fpush(f32);                                           // FLD m32
-          if (reg === 2) return P(wf(4, 'setFloat32', 'fWr32', 'st[cpu.ftop]'));       // FST m32
-          if (reg === 3) return P(wf(4, 'setFloat32', 'fWr32', 'st[cpu.ftop]') + FPOP);  // FSTP m32
+          if (reg === 2) return P(wf(4, 'setFloat32', 'fWr32', `${STe(0)}`));       // FST m32
+          if (reg === 3) return P(wf(4, 'setFloat32', 'fWr32', `${STe(0)}`) + FPOP());  // FSTP m32
           if (reg === 5) return P(`cpu.fldcw(${memRead(a, 16)});`);                   // FLDCW
           if (reg === 7) return P(memW(a, 16, 'cpu.fcw'));                             // FNSTCW
           return fb();
         case 0xdd:
           if (reg === 0) return fpush(f64);                                           // FLD m64
-          if (reg === 2) return P(wf(8, 'setFloat64', 'fWr64', 'st[cpu.ftop]'));       // FST m64
-          if (reg === 3) return P(wf(8, 'setFloat64', 'fWr64', 'st[cpu.ftop]') + FPOP);  // FSTP m64
+          if (reg === 2) return P(wf(8, 'setFloat64', 'fWr64', `${STe(0)}`));       // FST m64
+          if (reg === 3) return P(wf(8, 'setFloat64', 'fWr64', `${STe(0)}`) + FPOP());  // FSTP m64
           if (reg === 7) return P(memW(a, 16, '((cpu.fsw&0x47ff)|((cpu.ftop&7)<<11))'));   // FNSTSW m16
           return fb();
         case 0xdb:
           if (reg === 0) return fpush(i32);                                           // FILD m32
-          if (reg === 2) return P(memW(a, 32, 'cpu.f2i(st[cpu.ftop])>>>0'));          // FIST m32
-          if (reg === 3) return P(memW(a, 32, 'cpu.f2i(st[cpu.ftop])>>>0') + FPOP);   // FISTP m32
+          if (reg === 2) return P(memW(a, 32, `cpu.f2i(${STe(0)})>>>0`));          // FIST m32
+          if (reg === 3) return P(memW(a, 32, `cpu.f2i(${STe(0)})>>>0`) + FPOP());   // FISTP m32
           return fb();
         case 0xdf:
           if (reg === 0) return fpush(i16);                                           // FILD m16
-          if (reg === 2) return P(memW(a, 16, 'cpu.f2i(st[cpu.ftop])&0xffff'));       // FIST m16
-          if (reg === 3) return P(memW(a, 16, 'cpu.f2i(st[cpu.ftop])&0xffff') + FPOP);   // FISTP m16
+          if (reg === 2) return P(memW(a, 16, `cpu.f2i(${STe(0)})&0xffff`));       // FIST m16
+          if (reg === 3) return P(memW(a, 16, `cpu.f2i(${STe(0)})&0xffff`) + FPOP());   // FISTP m16
           return fb();
       }
       const vexpr = op === 0xd8 ? f32 : op === 0xdc ? f64 : op === 0xda ? i32 : i16;
       const vt = NT(), xt = NT();
-      P(`var ${vt}=${vexpr},${xt}=st[cpu.ftop];`);
+      P(`var ${vt}=${vexpr},${xt}=${STe(0)};`);
       if (reg === 2) return P(`cpu.fcmp(${xt},${vt});`);                     // FCOM
-      if (reg === 3) return P(`cpu.fcmp(${xt},${vt});${FPOP}`);             // FCOMP
+      if (reg === 3) return P(`cpu.fcmp(${xt},${vt});${FPOP()}`);             // FCOMP
       return P(setSTe(0, arithE(reg, xt, vt)));                             // FADD/FMUL/FSUB/FSUBR/FDIV/FDIVR
     }
 
     function emitFPUReg(op, reg, rm) {
       const b = 0xc0 | (reg << 3) | rm;
-      const fb = () => P(`cpu.fpuReg(${op},${reg},${rm});`);
+      const fb = () => { P(`cpu.fpuReg(${op},${reg},${rm});`); fsync(); };
       switch (op) {
         case 0xd9:
           if (b < 0xc8) return fpush(STe(rm));                              // FLD ST(i) (pre-push read)
-          if (b < 0xd0) { const t = NT(); P(`var ${t}=st[cpu.ftop];${setSTe(0, STe(rm))}${setSTe(rm, t)}`); return; } // FXCH
+          if (b < 0xd0) { const t = NT(); P(`var ${t}=${STe(0)};${setSTe(0, STe(rm))}${setSTe(rm, t)}`); return; } // FXCH
           switch (b) {
-            case 0xe0: return P(setSTe(0, '-st[cpu.ftop]'));                // FCHS
-            case 0xe1: return P(setSTe(0, 'Math.abs(st[cpu.ftop])'));       // FABS
+            case 0xe0: return P(setSTe(0, `-${STe(0)}`));                // FCHS
+            case 0xe1: return P(setSTe(0, `Math.abs(${STe(0)})`));       // FABS
             case 0xe4: return P('cpu.ftst();');                            // FTST
             case 0xe5: return P('cpu.fxam();');                            // FXAM
             case 0xe8: return fpush('1');                                  // FLD1
@@ -2056,43 +2091,43 @@ export class Recompiler {
             case 0xec: return fpush('Math.log10(2)');                      // FLDLG2
             case 0xed: return fpush('Math.LN2');                           // FLDLN2
             case 0xee: return fpush('0');                                  // FLDZ
-            case 0xf0: return P(setSTe(0, 'Math.pow(2,st[cpu.ftop])-1'));   // F2XM1
-            case 0xf1: P(setSTe(1, `${STe(1)}*Math.log2(st[cpu.ftop])`)); return P(FPOP); // FYL2X
-            case 0xf2: P(setSTe(0, 'Math.tan(st[cpu.ftop])')); return fpush('1');         // FPTAN
-            case 0xf3: P(setSTe(1, `Math.atan2(${STe(1)},st[cpu.ftop])`)); return P(FPOP); // FPATAN
-            case 0xf4: return P('cpu.fxtract();');                          // FXTRACT (exponent, then push significand)
-            case 0xf5: return P(setSTe(0, `cpu.frem1(st[cpu.ftop],${STe(1)})`));   // FPREM1 (IEEE remainder)
-            case 0xf8: return P(setSTe(0, `st[cpu.ftop]%${STe(1)}`));       // FPREM (truncating quotient)
-            case 0xf9: P(setSTe(1, `${STe(1)}*cpu.flog2p1(st[cpu.ftop])`)); return P(FPOP);   // FYL2XP1
-            case 0xfa: return P(setSTe(0, 'Math.sqrt(st[cpu.ftop])'));      // FSQRT
-            case 0xfb: { const x = NT(); P(`var ${x}=st[cpu.ftop];${setSTe(0, `Math.sin(${x})`)}`); return fpush(`Math.cos(${x})`); } // FSINCOS
-            case 0xf6: return P('cpu.ftop=(cpu.ftop-1)&7;');                // FDECSTP (tags untouched)
-            case 0xf7: return P('cpu.ftop=(cpu.ftop+1)&7;');                // FINCSTP
-            case 0xfc: return P(setSTe(0, 'cpu.f2i(st[cpu.ftop])'));        // FRNDINT
-            case 0xfd: return P(setSTe(0, `st[cpu.ftop]*Math.pow(2,Math.trunc(${STe(1)}))`)); // FSCALE
-            case 0xfe: return P(setSTe(0, 'Math.sin(st[cpu.ftop])'));       // FSIN
-            case 0xff: return P(setSTe(0, 'Math.cos(st[cpu.ftop])'));       // FCOS
+            case 0xf0: return P(setSTe(0, `Math.pow(2,${STe(0)})-1`));   // F2XM1
+            case 0xf1: P(setSTe(1, `${STe(1)}*Math.log2(${STe(0)})`)); return P(FPOP()); // FYL2X
+            case 0xf2: P(setSTe(0, `Math.tan(${STe(0)})`)); return fpush('1');         // FPTAN
+            case 0xf3: P(setSTe(1, `Math.atan2(${STe(1)},${STe(0)})`)); return P(FPOP()); // FPATAN
+            case 0xf4: P('cpu.fxtract();'); return fsync();                          // FXTRACT (exponent, then push significand)
+            case 0xf5: return P(setSTe(0, `cpu.frem1(${STe(0)},${STe(1)})`));   // FPREM1 (IEEE remainder)
+            case 0xf8: return P(setSTe(0, `${STe(0)}%${STe(1)}`));       // FPREM (truncating quotient)
+            case 0xf9: P(setSTe(1, `${STe(1)}*cpu.flog2p1(${STe(0)})`)); return P(FPOP());   // FYL2XP1
+            case 0xfa: return P(setSTe(0, `Math.sqrt(${STe(0)})`));      // FSQRT
+            case 0xfb: { const x = NT(); P(`var ${x}=${STe(0)};${setSTe(0, `Math.sin(${x})`)}`); return fpush(`Math.cos(${x})`); } // FSINCOS
+            case 0xf6: if (FXC) { fd = (fd - 1) & 7; return P(`cpu.ftop=${stIdx(fd)};`); } return P('cpu.ftop=(cpu.ftop-1)&7;');                // FDECSTP (tags untouched)
+            case 0xf7: if (FXC) { fd = (fd + 1) & 7; return P(`cpu.ftop=${stIdx(fd)};`); } return P('cpu.ftop=(cpu.ftop+1)&7;');                // FINCSTP
+            case 0xfc: return P(setSTe(0, `cpu.f2i(${STe(0)})`));        // FRNDINT
+            case 0xfd: return P(setSTe(0, `${STe(0)}*Math.pow(2,Math.trunc(${STe(1)}))`)); // FSCALE
+            case 0xfe: return P(setSTe(0, `Math.sin(${STe(0)})`));       // FSIN
+            case 0xff: return P(setSTe(0, `Math.cos(${STe(0)})`));       // FCOS
           }
           return fb();
         case 0xd8: {                                                       // arith with ST(i), result to ST(0)
           const xt = NT(), yt = NT();
-          P(`var ${xt}=st[cpu.ftop],${yt}=${STe(rm)};`);
+          P(`var ${xt}=${STe(0)},${yt}=${STe(rm)};`);
           P(setSTe(0, arithE(reg, xt, yt)));
           if (reg === 2 || reg === 3) P(`cpu.fcmp(${xt},${yt});`);
-          if (reg === 3) P(FPOP);
+          if (reg === 3) P(FPOP());
           return;
         }
         case 0xdc:                                                         // arith to ST(i) (reversed quirk)
-          if (reg === 2 || reg === 3) { P(`cpu.fcmp(st[cpu.ftop],${STe(rm)});`); if (reg === 3) P(FPOP); return; }
-          return P(setSTe(rm, arithE(reg, 'st[cpu.ftop]', STe(rm))));
+          if (reg === 2 || reg === 3) { P(`cpu.fcmp(${STe(0)},${STe(rm)});`); if (reg === 3) P(FPOP()); return; }
+          return P(setSTe(rm, arithE(reg, `${STe(0)}`, STe(rm))));
         case 0xde:                                                         // arith to ST(i) + pop (faddp etc.)
-          if (b === 0xd9) { P(`cpu.fcmp(st[cpu.ftop],${STe(1)});`); P(FPOP); return P(FPOP); } // FCOMPP
-          P(setSTe(rm, arithE(reg, 'st[cpu.ftop]', STe(rm)))); return P(FPOP);
+          if (b === 0xd9) { P(`cpu.fcmp(${STe(0)},${STe(1)});`); P(FPOP()); return P(FPOP()); } // FCOMPP
+          P(setSTe(rm, arithE(reg, `${STe(0)}`, STe(rm)))); return P(FPOP());
         case 0xdd:
           if (b < 0xc8) return P(`cpu.ffree(${rm});`);                     // FFREE ST(i)
-          if (b < 0xd8) return P(setSTe(rm, 'st[cpu.ftop]'));              // FST ST(i)
-          if (b < 0xe0) { P(setSTe(rm, 'st[cpu.ftop]')); return P(FPOP); } // FSTP ST(i)
-          P(`cpu.fcmp(st[cpu.ftop],${STe(rm)});`); if (b >= 0xe8) P(FPOP); return; // FUCOM/FUCOMP
+          if (b < 0xd8) return P(setSTe(rm, `${STe(0)}`));              // FST ST(i)
+          if (b < 0xe0) { P(setSTe(rm, `${STe(0)}`)); return P(FPOP()); } // FSTP ST(i)
+          P(`cpu.fcmp(${STe(0)},${STe(rm)});`); if (b >= 0xe8) P(FPOP()); return; // FUCOM/FUCOMP
         case 0xdf:
           if (b === 0xe0) return P(`r[0]=(r[0]&~0xffff)|(((cpu.fsw&0x47ff)|((cpu.ftop&7)<<11))&0xffff);`); // FNSTSW AX
           return fb();
