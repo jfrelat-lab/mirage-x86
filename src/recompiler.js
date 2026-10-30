@@ -51,6 +51,8 @@ const NOREALSPEC = typeof process !== 'undefined' && !!(process.env && process.e
 const NOFLATSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFLATSPEC);
 // MIRAGE_NOSELFLOOP=1: a block that branches back to itself returns to the dispatcher at each turn.
 const NOSELFLOOP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSELFLOOP);
+// MIRAGE_NOSIDEEXIT=1: every conditional branch ends its block, as before side exits.
+const NOSIDEEXIT = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSIDEEXIT);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
 const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOMEMO);
 const MEMO_MAX = 200000;          // blocks the memo keeps (the oldest go first)
@@ -1136,7 +1138,25 @@ export class Recompiler {
 
     // ---- block terminators ----
     const endJmp = (target) => { term = { k: 'jmp', t: +target }; ended = true; };
-    const endJcc = (cc, target, next) => { term = { k: 'jcc', cc, t: +target, n: +next }; ended = true; };
+    /*
+     * SIDE EXITS. Under paging a FORWARD conditional branch does not end its block: it leaves when
+     * taken (`if(cond){cpu.eip=T;...;return;}`) and the block goes on with the instructions after it,
+     * still one contiguous range of bytes, so the self-modification and coverage bookkeeping is the
+     * same. An interpreter's dispatch (Valleyball's stack machine: movzx, inc, test, jz, call) was four
+     * blocks of two to four instructions, each through the dispatcher. A BACKWARD branch into the block
+     * (a loop) still ends it, so a loop stays the block's own (the self-loop above). Taken, the exit
+     * takes back the instructions it did not run from the cycles the dispatcher adds, and every flag is
+     * live there (the block's successor may read any). MIRAGE_NOSIDEEXIT=1 turns it off.
+     */
+    const sideExits = pfRestart && !TIER2 && !NOSIDEEXIT;
+    const endJcc = (cc, target, next) => {
+      if (sideExits && !(+target >= ip0 && +target <= curIpStart)) {
+        cur.use |= lALL;
+        P(`if(${condExpr(cc)}){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
+        return;
+      }
+      term = { k: 'jcc', cc, t: +target, n: +next }; ended = true;
+    };
     // Emit the tier-1 return form of the recorded terminator (byte-identical to the old
     // inline emission). The region compiler emits its own edge form from the same `term`.
     // The condition under which a conditional terminator goes to term.t.
@@ -1818,7 +1838,8 @@ export class Recompiler {
       head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0${ssB32 ? '||!cpu.ssB' : ''}){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
     }
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + head;
-    const body = pre + '\n' + (selfLoop ? `for(;;){\n${out.join('\n')}\n}` : out.join('\n'));
+    const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k));   // side exits: what they did not run
+    const body = pre + '\n' + (selfLoop ? `for(;;){\n${code}\n}` : code);
     const fn = new Function('cpu', body);
     // The emitted source is kept ONLY if something will read it: the region compiler splices
     // bodyOut, and tools/trace.js prints body. Tier 2 is opt-in, so by default neither is, and

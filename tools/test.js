@@ -3532,6 +3532,23 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, mc.rec.heat.get(0x080480a1) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a synthesizer\'s loops under paging with no slow path (55, as Docker i386)', got, '55 0 true 0 true true true'); }
+// tools/linux/sideexit.asm: a loop whose body branches forward past one instruction. Under paging the
+// fall-through stays in the loop's block (no block begins at it) and a taken branch leaves by a side
+// exit, which gives back the instructions it skipped: 190 as Docker i386 exits, after 2 + 750 * 5 +
+// 250 * 6 + 3 = 5255 instructions.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/sideexit.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004087000000070000000050000000010000031d2b9e8030000f6c1037503' +
+    '83c207424975f489d3b801000000cd80');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/SIDEEXIT']);
+    mc.rec.profiling = true;
+    const c0 = mc.cpu.cycles;
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.has(0x08048060)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: a forward branch leaves its block by a side exit (190, as Docker i386)', got, '190 5255 false'); }
 // The branch-free 32-bit flag setters (cpu.setAdd32, setSub32, setLogic32, setInc32, setDec32) against
 // the generic ones at 32 bits, on edge values and random ones, the flags they start from random too.
 { const { CPU } = await import('../src/cpu.js');
