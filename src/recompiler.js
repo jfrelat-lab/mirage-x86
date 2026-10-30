@@ -2247,6 +2247,35 @@ export class Recompiler {
         else { P(`var ${a}=${DI};`); P(memW(a, size, rR(0, size)) + advDI); }
         return;
       }
+      /*
+       * REP STOS and REP MOVS under paging, 32-bit pointers, forwards: a page at a time. The address is
+       * translated once per page (the fast tables, which hold no code page: those stay on the helpers
+       * and their self-modification check), and the elements that lie whole within the page, and the
+       * source's, are moved there directly, one by one as the CPU moves them (an overlapping MOVS
+       * repeats its pattern, as it must). An element across a page, or a page off the tables, goes
+       * through the helper, which faults as it did. Valleyball's synthesizer clears its buffers with
+       * `rep stosw`: a helper call a word, a sixth of its time.
+       */
+      const ACC = { 8: ['getUint8', 'setUint8'], 16: ['getUint16', 'setUint16'], 32: ['getUint32', 'setUint32'] }[size];
+      const LE = size === 8 ? '' : ',true';
+      if (rep && pagedRW && addr32 && kind === 'stos') {
+        // A value whose bytes are all one (zero, mostly) is a fill of bytes, whatever the size.
+        const v = NT(), same = NT();
+        P(`var ${v}=${rR(0, size)},${same}=${size === 8 ? 'true' : size === 16 ? `(${v}&255)===(${v}>>>8)` : `${v}===(Math.imul(${v}&255,0x01010101)>>>0)`};`);
+        loop(`var _a=${DI},_o=wro[_a>>>12],_n=_d>0?Math.min(_c,((4096-(_a&4095))/${step})|0):0;` +
+          `if(_o===-1||_n<=0){m.${ww}(_a,${v});${advDI}}` +
+          `else{var _p=(_o+_a)>>>0;if(${same})u8.fill(${v}&255,_p,_p+${step}*_n);else for(var _i=0;_i<_n;_i++){_dv.${ACC[1]}(_p,${v}${LE});_p+=${step};}r[7]=(r[7]+${step}*_n)>>>0;_c-=_n-1;}`);
+        return;
+      }
+      if (rep && pagedRW && addr32 && kind === 'movs') {
+        loop(`var _a=${DI},_s=${SI},_o=wro[_a>>>12],_q=rdo[_s>>>12],_n=_d>0?Math.min(_c,((4096-(_a&4095))/${step})|0,((4096-(_s&4095))/${step})|0):0;` +
+          `if(_o===-1||_q===-1||_n<=0){m.${ww}(_a,m.${w}(_s));${adv}}` +
+          // Forwards, a copy is memmove's unless the destination starts inside the source past its
+          // start: then each element reads one just written, a repeated pattern, element by element.
+          `else{var _p=(_o+_a)>>>0,_r=(_q+_s)>>>0,_e=${step}*_n;if(_p<=_r||_p>=_r+_e)u8.copyWithin(_p,_r,_r+_e);else for(var _i=0;_i<_n;_i++){_dv.${ACC[1]}(_p,_dv.${ACC[0]}(_r${LE})${LE});_p+=${step};_r+=${step};}` +
+          `r[6]=(r[6]+${step}*_n)>>>0;r[7]=(r[7]+${step}*_n)>>>0;_c-=_n-1;}`);
+        return;
+      }
       if (kind === 'movs') loop(`m.${ww}(${DI},m.${w}(${SI}));${adv}`);
       else if (kind === 'stos') loop(`m.${ww}(${DI},${rR(0, size)});${advDI}`);
       else if (kind === 'lods') loop(`${rW(0, size, `m.${w}(${SI})`)}${advSI}`);

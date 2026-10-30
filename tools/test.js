@@ -3551,6 +3551,28 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.get(0x08048054), mc.rec.heat.has(0x0804805b), mc.rec.heat.has(0x0804806b)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: loops inside a block, a forward branch leaving it by a side exit (118, as Docker i386)', got, '118 8256 1 false false'); }
+// tools/linux/repstr.asm: REP STOS and REP MOVS under paging -- bytes, words, dwords, across page
+// boundaries, at an odd address, backwards, copies overlapping either way -- give Docker i386's
+// checksum, and the forward ones run a page at a time, not through a memory helper an element
+// (Valleyball's synthesizer clears its buffers with `rep stosw`: a sixth of its time went there).
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/repstr.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040848010000004000000700000000100000fcbff19f0408b834120000b9' +
+    '2c01000066f3abbf0094040831c0b9c8000000f3abbf00af0408b05ab903020000f3aabf10b00408b8efcdab89b94d00' +
+    '0000f3abfdbf10a80408b847470000b92800000066f3abfcbef09f0408bf00b80408b941000000f3a5be10b00408bf13' +
+    'b00408b901010000f3a4be10af0408bf08af0408b99000000066f3a5be00900408b9000c000031dbad6bdb1f01c3e2f8' +
+    'bf3f810408b908000000c1c30489d883e00f8a802f810408880747e2edc6070ab804000000bb01000000b93f810408ba' +
+    '09000000cd80b80100000031dbcd8030313233343536373839616263646566000000000000000000');
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/REPSTR']);
+    let helper = 0;
+    for (const k of ['w8', 'w16', 'w32']) { const f = mc.mem[k].bind(mc.mem); mc.mem[k] = (...a) => { helper++; return f(...a); }; }
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = [out.trim(), lx.done && lx.status, helper < 200].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: REP STOS and REP MOVS under paging, a page at a time (Docker i386\'s checksum)', got, 'c294c573 0 true'); }
 // The branch-free 32-bit flag setters (cpu.setAdd32, setSub32, setLogic32, setInc32, setDec32) against
 // the generic ones at 32 bits, on edge values and random ones, the flags they start from random too.
 { const { CPU } = await import('../src/cpu.js');
