@@ -4069,8 +4069,9 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true'); }
 // MIRAGE's GL table to PRISM's gl.js: the framebuffer objects (Hartverdrahtet renders to a texture) and
-// every immediate-mode spelling (Paradistance's glTexCoord3iv) have their signatures here and their
-// implementations there, and nothing here is missing there but the accumulation buffer.
+// every immediate-mode spelling (Paradistance's glTexCoord3iv), the uniform vectors and matrices
+// (kindernoiser's glUniform4fv) have their signatures here and their implementations there, and
+// nothing here is missing there but the accumulation buffer.
 { let got;
   try { const { prismM } = await import('../src/hle/prism-gl.js'), { gl } = await import('../src/hle/gl.js');
     const { installGL } = await import('../vendor/prism/src/env/gl.js');
@@ -4080,11 +4081,12 @@ const runLinux = (hex, argv) => {
     const fns = gl().fns, names = [];
     for (const ext of ['', 'EXT']) for (const f of ['GenFramebuffers', 'DeleteFramebuffers', 'BindFramebuffer', 'FramebufferTexture2D', 'CheckFramebufferStatus',
       'GenRenderbuffers', 'DeleteRenderbuffers', 'BindRenderbuffer', 'RenderbufferStorage', 'FramebufferRenderbuffer', 'GenerateMipmap', 'BlitFramebuffer']) names.push(`gl${f}${ext}`);
-    names.push('glTexCoord3iv', 'glVertex4dv', 'glNormal3b', 'glMultiTexCoord2fARB', 'glMultiTexCoord4sv', 'glClientActiveTexture');
+    names.push('glTexCoord3iv', 'glVertex4dv', 'glNormal3b', 'glMultiTexCoord2fARB', 'glMultiTexCoord4sv', 'glClientActiveTexture',
+      'glUniform4fv', 'glUniform2iARB', 'glUniformMatrix4fv', 'glGetString', 'glGetIntegerv');
     got = [names.filter((n) => !fns[n] || !M.rt[n]).join(' ') || 'all',
       Object.keys(fns).filter((n) => !M.rt[n] && !n.startsWith('glX')).join(' ')].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects and every immediate-mode spelling; nothing else missing but the accumulation buffer', got, 'all | glAccum glClearAccum'); }
+  eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects, every immediate-mode spelling, the uniform vectors; nothing else missing but the accumulation buffer', got, 'all | glAccum glClearAccum'); }
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's

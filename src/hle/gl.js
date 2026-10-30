@@ -56,6 +56,22 @@ export function gl() {
     if (!fns[`glMultiTexCoord${n}${t}v${arb}`]) fns[`glMultiTexCoord${n}${t}v${arb}`] = ['up', (x, ...a) => x.backend.gl(`glMultiTexCoord${n}${t}v${arb}`, a)];
   }
   if (!fns.glClientActiveTexture) fns.glClientActiveTexture = ['u', (x, ...a) => x.backend.gl('glClientActiveTexture', a)];
+  // Uniforms by vector and matrix, and the ARB integer forms (kindernoiser, Rgba 2007, asks for
+  // glUniform4fv and leaves when it is not there): PRISM reads the vectors through the pointer.
+  const put = (name, sig) => { if (!fns[name]) fns[name] = [sig, (x, ...a) => x.backend.gl(name, a)]; };
+  for (const arb of ['', 'ARB']) {
+    for (const n of [1, 2, 3, 4]) { put(`glUniform${n}fv${arb}`, 'iip'); put(`glUniform${n}iv${arb}`, 'iip'); put(`glUniform${n}i${arb}`, 'i'.repeat(n + 1)); put(`glUniform${n}f${arb}`, 'i' + 'f'.repeat(n)); }
+  }
+  put('glUniformMatrix3fv', 'iiup'); put('glUniformMatrix4fv', 'iiup'); put('glUniformMatrix4fvARB', 'iiup');
+  put('glGetIntegerv', 'up');
+  // glGetString: a recorder's answer is a driver's of the time; PRISM's gl.js answers its own.
+  const strs = new Map();
+  fns.glGetString = ['u', (x, name) => {
+    const s0 = { 0x1f00: 'PRISM', 0x1f01: 'PRISM', 0x1f02: '2.1', 0x1f03: '' }[name];
+    if (s0 === undefined) return 0;
+    if (!strs.has(name)) { const p = x.alloc(s0.length + 1); x.write(p, new TextEncoder().encode(s0 + '\0')); strs.set(name, p); }
+    return strs.get(name);
+  }];
   // glColor{3,4}{b,ub,s,us,i,ui,f,d}v: the components read from memory, then as glColor3ub and the rest.
   // Metatunnel (2009) hands glColor4ubv the address of its tick count: its shader reads the time back
   // from gl_Color.
