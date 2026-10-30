@@ -214,6 +214,15 @@
     "output": "window"
   },
   {
+    "name": "win32/hartverdrahtet-2012",
+    "title": "Hartverdrahtet — Akronyme Analogiker, 4K for Windows",
+    "world": "win32",
+    "year": 2012,
+    "author": "Akronyme Analogiker, PRISM",
+    "thumb": "oasis/thumbs/win32-hartverdrahtet-2012.png",
+    "output": "window"
+  },
+  {
     "name": "win32/retrospection-2010",
     "title": "Retrospection — Trolls in the Shadows & FRequency, 4K for Windows",
     "world": "win32",
