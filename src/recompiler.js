@@ -52,6 +52,7 @@ const NOFLATSPEC = typeof process !== 'undefined' && !!(process.env && process.e
 // MIRAGE_NOSELFLOOP=1: a block that branches back to itself returns to the dispatcher at each turn.
 const NOSELFLOOP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSELFLOOP);
 // MIRAGE_NOSIDEEXIT=1: every conditional branch ends its block, as before side exits.
+const NOFOLLOW = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFOLLOW);
 const NOSIDEEXIT = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSIDEEXIT);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
 const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOMEMO);
@@ -1138,7 +1139,22 @@ export class Recompiler {
     const ALUNAMES = ['add', 'or', 'adc', 'sbb', 'and', 'sub', 'xor', 'cmp'];
 
     // ---- block terminators ----
-    const endJmp = (target) => { term = { k: 'jmp', t: +target }; ended = true; };
+    /*
+     * A DIRECT JMP OR CALL FOLLOWED. Under paging (as the side exits below), in 32-bit code, a jump
+     * or call whose target lies on the head's page and was not decoded already goes on in the same
+     * block at its target (a call having pushed its return address): Valleyball's interpreter
+     * returns to `add ebp,20h; jmp next` and its dispatch, two blocks that are one. The block's bytes
+     * are then the span of what it decoded, lo..hi: a write anywhere in it evicts it, a little more
+     * than it reads. At most four, so that a block stays a block.
+     */
+    let lo = ip0, hi = ip0, follows = 0;
+    const follow = (t) => {
+      if (!(pfRestart && !TIER2 && !NOSIDEEXIT && !NOFOLLOW && d) || follows >= 4 || starts.has(t)) return false;
+      if (((linStart - ip0 + t) >>> 12) !== (linStart >>> 12)) return false;
+      follows++; hi = Math.max(hi, ip); lo = Math.min(lo, t); ip = t;
+      return true;
+    };
+    const endJmp = (target) => { if (follow(+target)) return; term = { k: 'jmp', t: +target }; ended = true; };
     /*
      * SIDE EXITS. Under paging a FORWARD conditional branch does not end its block: it leaves when
      * taken (`if(cond){cpu.eip=T;...;return;}`) and the block goes on with the instructions after it,
@@ -1156,17 +1172,17 @@ export class Recompiler {
      * (`pop ecx; ret 4`): one dispatch where there were three. A loop may not begin inside an earlier
      * one (the two would cross); a branch to the head is still the self-loop.
      */
-    let loopFloor = ip0;
+    let loopFloor = -1;                                          // an out index: loops follow the code as it runs
     const sideExits = pfRestart && !TIER2 && !NOSIDEEXIT;
     const endJcc = (cc, target, next) => {
       const at = starts.get(+target);
-      if (sideExits && +target > loopFloor && +target <= curIpStart && at !== undefined) {
+      if (sideExits && at !== undefined && +target !== ip0 && at[0] > loopFloor) {
         cur.use |= lALL;
         loops.push(at[0]);
         P(`if(!(${condExpr(cc)}))break;`);
         P(`if((cpu.flags&${IF})||cpu.tbudget<=1){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
         P(`cpu.cycles+=${count - at[1]};cpu.tbudget--;}`);
-        loopFloor = curIpStart;
+        loopFloor = out.length;
         return;
       }
       if (sideExits && !(+target >= ip0 && +target <= curIpStart)) {
@@ -1247,6 +1263,7 @@ export class Recompiler {
     };
     while (!ended && count < maxOps) {
       pruneEip();
+      if (follows && starts.has(ip)) break;                // a followed jump ran into code already here
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
       const ipStart = ip; ipLast = ip; curIpStart = ip;    // instruction start ip — fault return address (#BR etc.)
       starts.set(ipStart, [out.length, count]);
@@ -1746,7 +1763,7 @@ export class Recompiler {
         case 0xe8: {
           const rel = sz === 16 ? (f16() << 16 >> 16) : (f16() | (f16() << 16));
           const tgt = ipAdd(ip, rel);
-          if (inlineStack(sz)) { canFault = true; P(pushS(SEQ())); P(`cpu.eip=${tgt};`); P('return;'); ended = true; break; }
+          if (inlineStack(sz)) { canFault = true; P(pushS(SEQ())); if (follow(tgt)) break; P(`cpu.eip=${tgt};`); P('return;'); ended = true; break; }
           P(sz === 16 ? `cpu.push16(${SEQ()});` : `cpu.push32(${SEQ()});`);
           P(`cpu.eip=${tgt};`); P('return;'); ended = true; break;
         }
@@ -1797,7 +1814,11 @@ export class Recompiler {
       // have been missed by one. `ip` here is the NEXT instruction, which is where re-dispatch must
       // resume, and that is why the check cannot live inside the write emitter.
       if (!ended) {
-        const abort = `if(cpu.smcSelf){cpu.smcSelf=0;cpu.eip=${SEQ()};return;}`;
+        // ...and under paging it gives back the instructions after this one, as a side exit does: the
+        // dispatcher adds the whole block's count. (Real and protected mode keep the old count, which
+        // two of the DOS golden intros' frames are timed by: crevenge, qblove.)
+        const giveBack = pfRestart ? `cpu.cycles-=/*REM${count}*/0;` : '';
+        const abort = `if(cpu.smcSelf){cpu.smcSelf=0;cpu.eip=${SEQ()};${giveBack}return;}`;
         let helperWrite = false, inlineMark = false;
         for (let i = outMark; i < out.length; i++) {
           // The inline write emitter leaves a marker INSIDE its code-page branch. It must only RECORD
@@ -1814,7 +1835,7 @@ export class Recompiler {
           // instruction. They are rare enough on a hot path not to matter.
           else if (out[i].includes('m.w8(') || out[i].includes('m.w16(') || out[i].includes('m.w32(')) helperWrite = true;
         }
-        if (inlineMark) P(`if(_smc){_smc=0;cpu.smcSelf=0;cpu.eip=${SEQ()};return;}`);
+        if (inlineMark) P(`if(_smc){_smc=0;cpu.smcSelf=0;cpu.eip=${SEQ()};${giveBack}return;}`);
         else if (helperWrite) P(abort);
       }
       // STI opens the interrupt window one instruction LATE — and closes nowhere: the block must end
@@ -1868,7 +1889,8 @@ export class Recompiler {
     // array of lines it was joined from. bodyLen survives either way, because the cache is bounded
     // by emitted bytes.
     const keep = rec.keepSource;
-    return { fn, linStart, linEnd: mask(linStart - ip0 + ip), ip0, ipEnd: ip, count,
+    hi = Math.max(hi, ip);
+    return { fn, linStart: mask(linStart - ip0 + lo), linEnd: mask(linStart - ip0 + hi), ip0, ipEnd: ip, count,
              body: keep ? body : '', bodyLen: body.length, term, bodyOut: keep ? bodyOut : EMPTY_LINES,
              // epoch/ph0/ph1 (ROADMAP D8) are set by _compile under paging; declared HERE so every block
              // has one shape — adding them afterwards made the dispatch loop's blk.fn/blk.count polymorphic

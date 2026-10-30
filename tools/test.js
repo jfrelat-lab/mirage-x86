@@ -3551,6 +3551,24 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.get(0x08048054), mc.rec.heat.has(0x0804805b), mc.rec.heat.has(0x0804806b)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: loops inside a block, a forward branch leaving it by a side exit (118, as Docker i386)', got, '118 8256 1 false false'); }
+// tools/linux/follow.asm: a loop that calls a subroutine and jumps over an instruction. Under paging
+// a direct CALL or JMP to the head's page goes on in the same block, so neither the subroutine nor
+// the jump's target begins one; the subroutine rewritten, the blocks that followed into it go (16, as
+// Docker i386 exits), and a block that rewrote itself gives back what it did not run: 12016
+// instructions, as many as without following.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/follow.asm
+    '7f454c460101010000000000000000000200030001000000588004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004088f0000008f000000070000000010000083c203c331d231f6b9e80300' +
+    '00e8eeffffffeb0681c2e80300004975f04683fe027409c6055680040807ebdc89d381e3ff000000b801000000cd80');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/FOLLOW']);
+    mc.rec.profiling = true;
+    const c0 = mc.cpu.cycles;
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.has(0x0804806e), mc.rec.heat.has(0x08048054)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: a direct CALL and JMP followed in their block, rewritten code evicted (16, as Docker i386)', got, '16 12016 false false'); }
 // tools/linux/repstr.asm: REP STOS and REP MOVS under paging -- bytes, words, dwords, across page
 // boundaries, at an odd address, backwards, copies overlapping either way -- give Docker i386's
 // checksum, and the forward ones run a page at a time, not through a memory helper an element
