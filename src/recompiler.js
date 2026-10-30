@@ -52,6 +52,7 @@ const NOFLATSPEC = typeof process !== 'undefined' && !!(process.env && process.e
 // MIRAGE_NOSELFLOOP=1: a block that branches back to itself returns to the dispatcher at each turn.
 const NOSELFLOOP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSELFLOOP);
 // MIRAGE_NOSIDEEXIT=1: every conditional branch ends its block, as before side exits.
+const LAZYEIP = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_NOLAZYEIP);
 const NOFOLLOW = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFOLLOW);
 const NOSIDEEXIT = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSIDEEXIT);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
@@ -1267,7 +1268,30 @@ export class Recompiler {
       if (eipAt < 0) return;
       const rest = out.slice(eipAt + 1).join('\n').replace(EIP_FREE, '');
       if (!/cpu\.|\bm\.|u8\[|rdo\[|wro\[|\bdv\.|\bst\[|\boc\[|return|throw/.test(rest)) out[eipAt] = '';
+      else if (pfRestart && LAZYEIP) lazyEip();
       eipAt = -1;
+    };
+    /*
+     * ...and under paging, one that touches memory only through the paged probes stores EIP on the
+     * probe's slow path alone: the fast path reads or writes the page directly and cannot fault, and
+     * the helpers (m.r8..w32, the x87's cpu.fRd/fWr) are where a #PF comes from. Each helper call
+     * takes the store with it, `(cpu.eip=X,m).r32(a)`. Exits that set EIP before they return (a side
+     * exit, the self-modification abort, a loop's budget) do not need it. Anything else that might
+     * read EIP keeps the store. MIRAGE_NOLAZYEIP=1 turns it off.
+     */
+    const lazyEip = () => {
+      const m0 = /^cpu\.eip=(\d+);$/.exec(out[eipAt]);
+      if (!m0) return;
+      const X = m0[1], lines = out.slice(eipAt + 1);
+      const moved = lines.map((l) => l.replace(/\bm\.(r8|r16|r32|w8|w16|w32)\(/g, `(cpu.eip=${X},m).$1(`)
+        .replace(/cpu\.(fRd32|fRd64|fWr32|fWr64)\(/g, `(cpu.eip=${X},cpu).$1(`));
+      const left = moved.join('\n').replace(EIP_FREE, '')
+        .replace(/\(cpu\.eip=\d+,(?:m|cpu)\)\.\w+\(/g, '')
+        .replace(/\{(?:cpu\.smcSelf=0;|_smc=0;)*cpu\.eip=[^;{}]+;(?:cpu\.cycles-=[^;{}]+;)?return;\}/g, '{}')
+        .replace(/\bif\(cpu\.smcSelf\)/g, 'if()').replace(/\bcpu\.ftop\b/g, '');
+      if (/cpu\.|\bm\.|return|throw/.test(left)) return;
+      for (let i = 0; i < moved.length; i++) out[eipAt + 1 + i] = moved[i];
+      out[eipAt] = '';
     };
     while (!ended && count < maxOps) {
       pruneEip();

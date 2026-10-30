@@ -3571,6 +3571,21 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.has(0x08048073), mc.rec.heat.has(0x08048054), mc.rec.heat.has(0x0804806b)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a direct CALL and JMP followed in their block, RET back into it, rewritten code evicted (16, as Docker i386)', got, '16 18016 false false false'); }
+// tools/linux/faulteip.asm: the EIP a page fault reports from the middle of a block whose other
+// accesses took the paged fast path (where the store of EIP moved to the helpers' slow path): the
+// SIGSEGV handler exits with the faulting instruction's distance from _start, 37, as Docker i386.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/faulteip.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408ab000000002000000700000000100000b8ae000000bb0b000000b997' +
+    '80040831d2be08000000cd80be009004088b0689460483c0018b1d10000000b801000000cd808b5c244081eb54800408' +
+    'b801000000cd808680040800000000000000000000000000000000');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/FAULTEIP']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = lx.done && lx.status;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: a page fault in a block reports its own instruction (37, as Docker i386)', got, 37); }
 // tools/linux/repstr.asm: REP STOS and REP MOVS under paging -- bytes, words, dwords, across page
 // boundaries, at an odd address, backwards, copies overlapping either way -- give Docker i386's
 // checksum, and the forward ones run a page at a time, not through a memory helper an element
