@@ -317,6 +317,7 @@ async function linux(world = 'linux') {
         onOutput: (t) => { logOutput(t); lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
         onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) { setState('exited', ''); log(t); } } });
       session = { pause: s.pause, audio: s.audio };
+      syncSound();                                                    // chosen from the list: the click came before
       window.mirage = s;
       setState('running');
       canvas.focus();

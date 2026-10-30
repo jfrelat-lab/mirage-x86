@@ -3744,7 +3744,8 @@ const runLinux = (hex, argv) => {
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a
-// few instructions that fill the buffer with 1234h, and its samples reach the card.
+// few instructions that fill the buffer with 1234h, and its samples reach the card. A header still
+// playing is not unprepared: Retrospection's thread waits on that, and wrote four times too fast.
 { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
@@ -3760,7 +3761,11 @@ const runLinux = (hex, argv) => {
     mc.cpu.cycles += (mc.cyclesPerSecond || 1e8) / 2;                // half a second of the guest's clock
     x.w32(mmt, 4); wm.waveOutGetPosition[1](x, x.r32(ph), mmt, 12);
     const w = mc.dsp.drain();
-    const wave = [x.r32(mmt + 4), w.samples.length, w.samples.every((v) => v === 1000)].join(' ');
+    // Unprepared while it plays, it is refused (WAVERR_STILLPLAYING, 33); played out, let go.
+    const busy = wm.waveOutUnprepareHeader[1](x, x.r32(ph), hdr, 32);
+    mc.cpu.cycles += (mc.cyclesPerSecond || 1e8) * 0.6;
+    const freed = wm.waveOutUnprepareHeader[1](x, x.r32(ph), hdr, 32);
+    const wave = [x.r32(mmt + 4), w.samples.length, w.samples.every((v) => v === 1000), busy, freed].join(' ');
     // SDL: a callback of x86 (mov edi,[esp+8]; mov ecx,[esp+12]; shr ecx,1; mov ax,1234h; rep stosw; ret)
     const { sdl12 } = await import('../src/hle/sdl12.js'), { hleDispatch } = await import('../src/hle/index.js');
     const mc2 = new Machine({ memSize: 16 << 20, cpu: '686' }), lx2 = installLinux(mc2);
@@ -3774,7 +3779,7 @@ const runLinux = (hex, argv) => {
     const s = mc2.dsp.drain();
     got = [wave, s.rate, s.samples.length > 0 && s.samples.slice(512).every((v) => v === 0x1234)].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('sound from a thread: waveOut plays a buffer filled after its write; SDL\'s audio loop calls the callback', got, '88200 44100 true | 22050 | true'); }
+  eq('sound from a thread: waveOut plays a buffer filled after its write; SDL\'s audio loop calls the callback', got, '88200 44100 true 33 0 | 22050 | true'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

@@ -241,7 +241,13 @@ export function win32Apis({ gl, glu } = {}) {
       return 0;
     }],
     waveOutPrepareHeader: ['ppu', (x, h, hdr) => { x.w32(hdr + 16, x.r32(hdr + 16) | 2); return 0; }],                 // WHDR_PREPARED
-    waveOutUnprepareHeader: ['ppu', (x, h, hdr) => { x.w32(hdr + 16, x.r32(hdr + 16) & ~2); return 0; }],
+    // A header still queued is not let go: WAVERR_STILLPLAYING (as Wine's winmm), which is how a
+    // synthesizer's thread waits for its buffer to come back (Retrospection unprepares until it may).
+    waveOutUnprepareHeader: ['ppu', (x, h, hdr) => {
+      if (wave.fmt) retire(x, played(x.lx.mono()));
+      if (x.r32(hdr + 16) & 0x10) return 33;
+      x.w32(hdr + 16, x.r32(hdr + 16) & ~2); return 0;
+    }],
     waveOutWrite: ['ppu', (x, h, hdr) => {
       const now = x.lx.mono(), ptr = x.r32(hdr), len = x.r32(hdr + 4);
       if (wave.t0 === null) wave.t0 = now;

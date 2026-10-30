@@ -47,7 +47,8 @@ export class AudioOut {
   }
   /** Create the context and the worklet. Must run inside a user gesture the first time. */
   start() {
-    if (this.starting) return this.starting;
+    // Made before any gesture, the context waits suspended: the next gesture's call resumes it.
+    if (this.starting) { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {}); return this.starting; }
     const Ctx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
     if (!Ctx) return Promise.resolve(false);
     this.ctx = new Ctx({ latencyHint: 'interactive' });
