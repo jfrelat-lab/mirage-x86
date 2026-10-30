@@ -3533,24 +3533,25 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, (mc.rec.heat.get(0x080480a1) || 0) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a synthesizer\'s loops under paging with no slow path (55, as Docker i386)', got, '55 0 true 0 true true true'); }
-// tools/linux/sideexit.asm: two loops in one block, the first starting past the block's head, the
-// second branching forward past one instruction. Under paging each turns inside the block, opened at
-// its target, and a taken forward branch leaves by a side exit, which gives back the instructions it
-// skipped: 118 as Docker i386 exits, after 2 + 3 * 1000 + 1 + 750 * 5 + 250 * 6 + 3 = 8256
-// instructions, the block dispatched once and neither the first loop nor the fall-through a block.
+// tools/linux/sideexit.asm: three loops in one block, the first starting past the block's head, the
+// next closed by LOOP, the last branching forward past one instruction. Under paging each turns
+// inside the block, opened at its target, and a taken forward branch leaves by a side exit, which
+// gives back the instructions it skipped: 218 as Docker i386 exits, after 2 + 3 * 1000 + 1 + 50 * 2
+// + 1 + 750 * 5 + 250 * 6 + 3 = 8357 instructions, the block dispatched once and neither the first
+// two loops nor the fall-through a block.
 { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/sideexit.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
-    '00000000010000000000000000800408008004087b0000007b000000050000000010000031d2b9e803000083c2034975' +
-    'fab9e8030000f6c103750383c207424975f489d3b801000000cd80');
+    '00000000010000000000000000800408008004088500000085000000050000000010000031d2b9e803000083c2034975' +
+    'fab93200000083c202e2fbb9e8030000f6c103750383c207424975f489d3b801000000cd80');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/SIDEEXIT']);
     mc.rec.profiling = true;
     const c0 = mc.cpu.cycles;
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
-    got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.get(0x08048054), mc.rec.heat.has(0x0804805b), mc.rec.heat.has(0x0804806b)].join(' ');
+    got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.get(0x08048054), mc.rec.heat.has(0x0804805b), mc.rec.heat.has(0x08048066), mc.rec.heat.has(0x08048075)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: loops inside a block, a forward branch leaving it by a side exit (118, as Docker i386)', got, '118 8256 1 false false'); }
+  eq('linux: loops inside a block, one closed by LOOP, a forward branch leaving it by a side exit (218, as Docker i386)', got, '218 8357 1 false false false'); }
 // tools/linux/follow.asm: a loop that calls a subroutine and jumps over an instruction. Under paging
 // a direct CALL or JMP to the head's page goes on in the same block, so neither the subroutine nor
 // the jump's target begins one, nor the return address its RET goes back to (unless the subroutine

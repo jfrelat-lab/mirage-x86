@@ -1184,13 +1184,16 @@ export class Recompiler {
      */
     let loopFloor = -1;                                          // an out index: loops follow the code as it runs
     const sideExits = pfRestart && !TIER2 && !NOSIDEEXIT;
-    const endJcc = (cc, target, next) => {
+    // A conditional branch -- Jcc, and LOOP/LOOPE/LOOPNE/JCXZ, `cond` their condition as JavaScript,
+    // `tm` the terminator they end the block with otherwise.
+    const endJcc = (cc, target, next) => branch(condExpr(cc), target, { k: 'jcc', cc, t: +target, n: +next });
+    const branch = (cond, target, tm) => {
       const at = starts.get(+target);
       if (sideExits && at !== undefined && +target !== ip0 && at[0] > loopFloor && !fReads.some(([ri, di]) => ri >= at[0] && di < at[0])) {
         cur.use |= lALL;
         loops.push([at[0], at[2]]);
         for (const [r, c] of fcache) if (c.def < at[0]) fcache.delete(r);   // F moves at the loop's head
-        P(`if(!(${condExpr(cc)}))break;`);
+        P(`if(!(${cond}))break;`);
         P(`if((cpu.flags&${IF})||cpu.tbudget<=1){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
         P(`cpu.cycles+=${count - at[1]};cpu.tbudget--;}`);
         loopFloor = out.length;
@@ -1198,20 +1201,21 @@ export class Recompiler {
       }
       if (sideExits && !(+target >= ip0 && +target <= curIpStart)) {
         cur.use |= lALL;
-        P(`if(${condExpr(cc)}){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
+        P(`if(${cond}){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
         return;
       }
-      term = { k: 'jcc', cc, t: +target, n: +next }; ended = true;
+      term = tm; ended = true;
     };
     // Emit the tier-1 return form of the recorded terminator (byte-identical to the old
     // inline emission). The region compiler emits its own edge form from the same `term`.
     // The condition under which a conditional terminator goes to term.t.
-    const termCond = () => {
-      if (term.k === 'jcc') return condExpr(term.cc);
-      if (term.k === 'jcxz') return `(${term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'}===0)`;
-      const cx = term.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)';                      // LOOP: ECX under 0x67
-      return term.v === 0xe0 ? `(${cx}!==0&&!(cpu.flags&${ZF}))` : term.v === 0xe1 ? `(${cx}!==0&&(cpu.flags&${ZF}))` : `(${cx}!==0)`;
+    const termCond = (tm = term) => {
+      if (tm.k === 'jcc') return condExpr(tm.cc);
+      if (tm.k === 'jcxz') return `(${tm.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)'}===0)`;
+      const cx = tm.a32 ? '(r[1]>>>0)' : '(r[1]&0xffff)';                      // LOOP: ECX under 0x67
+      return tm.v === 0xe0 ? `(${cx}!==0&&!(cpu.flags&${ZF}))` : tm.v === 0xe1 ? `(${cx}!==0&&(cpu.flags&${ZF}))` : `(${cx}!==0)`;
     };
+    const endLoop = (tm) => { if (tm.v !== 0xe2) cur.use |= lZ; branch(termCond(tm), tm.t, tm); };
     const emitTermReturn = () => {
       // term.t is already reduced to the code segment's width at decode time (see ipAdd), so the
       // old runtime `&0xffff` was redundant in 16-bit code and destructive in 32-bit code — it threw
@@ -1803,10 +1807,10 @@ export class Recompiler {
         }
 
         // ---- LOOP / JCXZ ----
-        case 0xe0: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe0, t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
-        case 0xe1: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe1, t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
-        case 0xe2: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); term = { k: 'loop', v: 0xe2, t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
-        case 0xe3: { const rel = fs8(); term = { k: 'jcxz', t: ipAdd(ip, rel), n: ip, a32: addr32 }; ended = true; break; }
+        case 0xe0: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); endLoop({ k: 'loop', v: 0xe0, t: ipAdd(ip, rel), n: ip, a32: addr32 }); break; }
+        case 0xe1: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); endLoop({ k: 'loop', v: 0xe1, t: ipAdd(ip, rel), n: ip, a32: addr32 }); break; }
+        case 0xe2: { const rel = fs8(); P(addr32 ? 'r[1]=(r[1]-1)>>>0;' : 'r[1]=(r[1]&~0xffff)|((r[1]-1)&0xffff);'); endLoop({ k: 'loop', v: 0xe2, t: ipAdd(ip, rel), n: ip, a32: addr32 }); break; }
+        case 0xe3: { const rel = fs8(); const tm = { k: 'jcxz', t: ipAdd(ip, rel), n: ip, a32: addr32 }; branch(termCond(tm), tm.t, tm); break; }
 
         // ---- IN / OUT ----
         // IN/OUT are IOPL-sensitive: at CPL > IOPL they raise #GP(0) unless the TSS's I/O permission
