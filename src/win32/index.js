@@ -71,8 +71,12 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', apis = [], b
   const base = h.base >>> 0;
   lx.lazy.push([base, base + h.sizeImage]);
   const mapBytes = (va, bytes) => { lx.mapRange(va & ~0xfff, va + Math.max(bytes.length, 1), true); wr(va, bytes); };
-  mapBytes(base, exe.subarray(0, Math.min(exe.length, h.sizeHeaders)));
-  for (const sec of h.sections) {
+  // A section alignment below the page's (Crinkler's /TINYHEADER: no section at all, code in the
+  // headers) is one flat image: the whole file at the base, file offset = RVA, the rest of SizeOfImage
+  // zero (ReactOS's ExeFmtpCreateImageSection, the SectionAlignment < PAGE_SIZE case).
+  if (h.salign < PAGE) mapBytes(base, exe.subarray(0, Math.min(exe.length, h.sizeImage)));
+  else mapBytes(base, exe.subarray(0, Math.min(exe.length, h.sizeHeaders)));
+  for (const sec of h.salign < PAGE ? [] : h.sections) {
     const raw = sec.raw & ~0x1ff, len = Math.min(Math.ceil((sec.rsize + (sec.raw & 0x1ff)) / 0x200) * 0x200, Math.max(0, exe.length - raw));
     if (len > 0 && sec.rsize) mapBytes(base + sec.va, exe.subarray(raw, raw + len));
   }

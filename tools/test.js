@@ -3800,6 +3800,24 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, ord('GlmfBeginGlsBlock'), ord('glAccum'), ord('glViewport'), ord('wglCreateContext'), ord('wglUseFontOutlinesW'), cos.st0].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a PE walks the PEB to kernel32\'s exports as Crinkler does; opengl32\'s ordinals as XP\'s; a double returned in ST0', got, '42 1 7 343 346 368 -1'); }
+// tools/win32/tinyhdr.asm: a PE as Crinkler's /TINYHEADER lays one out -- no section, alignment 4, the
+// code in the headers, SizeOfImage past the file -- is mapped flat, as Windows maps an image whose
+// section alignment is below the page's: it reads a byte past SizeOfHeaders (42) and one past the
+// file (0) and exits with their sum. Absolute Territory (Prismbeings, 2017) is such an image.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const exe = Uint8Array.from((                       // nasm -f bin tools/win32/tinyhdr.asm
+    '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
+    '000000000000000000004000040000000400000004000000000000000400000000000000000001004000000000000000' +
+    '0300000000001000001000000000100000100000000000000000000064a1300000008b400c8b400c8b008b008b58188b' +
+    '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
+    '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (x) => parseInt(x, 16));
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    loadPE(lx, mc.mem, mc.cpu, exe, { apis: win32Apis(), backend: traceBackend() });
+    for (let i = 0; i < 50 && !lx.done; i++) mc.runSlice(20000);
+    got = [lx.done, lx.signal ? 'fault' : lx.status].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a /TINYHEADER image is mapped flat, the whole file at its base', got, 'true 42'); }
 // tools/linux/thread.asm: two threads of one address space (lx.spawnThread: SDL_CreateThread's, Win32's
 // CreateThread's). The main thread spins on a flag with no system call -- the clock's preemption gives
 // the thread its turn --, the thread sets it to 42 and exit(0)s alone (freeing the shared pages would
@@ -4050,8 +4068,9 @@ const runLinux = (hex, argv) => {
     got = [Array.from(M.u8.slice(edge + 8, edge + 9)), f64, M.mod.dv.getInt16(p, true), M.mod.dv.getUint16(p, true), M.mod.dv.getFloat32(p + 4, true), M.cstr(s), M.rt.malloc(8) > 0].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true'); }
-// Framebuffer objects through MIRAGE's GL table to PRISM's gl.js (Hartverdrahtet renders to a texture):
-// each entry point, core and EXT, has its signature here and its implementation there.
+// MIRAGE's GL table to PRISM's gl.js: the framebuffer objects (Hartverdrahtet renders to a texture) and
+// every immediate-mode spelling (Paradistance's glTexCoord3iv) have their signatures here and their
+// implementations there, and nothing here is missing there but the accumulation buffer.
 { let got;
   try { const { prismM } = await import('../src/hle/prism-gl.js'), { gl } = await import('../src/hle/gl.js');
     const { installGL } = await import('../vendor/prism/src/env/gl.js');
@@ -4061,9 +4080,11 @@ const runLinux = (hex, argv) => {
     const fns = gl().fns, names = [];
     for (const ext of ['', 'EXT']) for (const f of ['GenFramebuffers', 'DeleteFramebuffers', 'BindFramebuffer', 'FramebufferTexture2D', 'CheckFramebufferStatus',
       'GenRenderbuffers', 'DeleteRenderbuffers', 'BindRenderbuffer', 'RenderbufferStorage', 'FramebufferRenderbuffer', 'GenerateMipmap', 'BlitFramebuffer']) names.push(`gl${f}${ext}`);
-    got = names.filter((n) => !fns[n] || !M.rt[n]).join(' ') || 'all';
+    names.push('glTexCoord3iv', 'glVertex4dv', 'glNormal3b', 'glMultiTexCoord2fARB', 'glMultiTexCoord4sv', 'glClientActiveTexture');
+    got = [names.filter((n) => !fns[n] || !M.rt[n]).join(' ') || 'all',
+      Object.keys(fns).filter((n) => !M.rt[n] && !n.startsWith('glX')).join(' ')].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: framebuffer objects, core and EXT, from MIRAGE\'s GL table to PRISM\'s', got, 'all'); }
+  eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects and every immediate-mode spelling; nothing else missing but the accumulation buffer', got, 'all | glAccum glClearAccum'); }
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's

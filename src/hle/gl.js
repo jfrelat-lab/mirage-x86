@@ -38,6 +38,24 @@ export function gl() {
     if (name) fns[name] = [sig, (x, ...a) => x.backend.gl(name, a)];
   }
   for (const [name, n] of Object.entries(VECTORS)) fns[name] = ['p', (x, p) => x.backend.gl(name, [n > 0 ? x.floats(p, n) : x.doubles(p, -n)])];
+  // Every other immediate-mode spelling (glVertex{2,3,4}, glTexCoord{1..4}, glNormal3, glColor{3,4},
+  // glMultiTexCoord{1..4} with and without ARB, each type, scalar and v): PRISM's gl.js reads a v form's
+  // pointer itself; a recorder gets the arguments as they come. Paradistance (Titan, 2009) calls
+  // glTexCoord3iv.
+  const SIG = { b: 'i', s: 'i', i: 'i', f: 'f', d: 'd', ub: 'u', us: 'u', ui: 'u' };
+  const imm = (name, n, types) => { for (const t of types) {
+    if (!fns[`${name}${n}${t}`]) fns[`${name}${n}${t}`] = [SIG[t].repeat(n), (x, ...a) => x.backend.gl(`${name}${n}${t}`, a)];
+    if (!fns[`${name}${n}${t}v`]) fns[`${name}${n}${t}v`] = ['p', (x, ...a) => x.backend.gl(`${name}${n}${t}v`, a)];
+  } };
+  for (const n of [2, 3, 4]) imm('glVertex', n, ['s', 'i', 'f', 'd']);
+  for (const n of [1, 2, 3, 4]) imm('glTexCoord', n, ['s', 'i', 'f', 'd']);
+  imm('glNormal', 3, ['b', 's', 'i', 'f', 'd']);
+  for (const n of [1, 2, 3, 4]) for (const t of ['s', 'i', 'f', 'd']) for (const arb of ['', 'ARB']) {
+    const nm = `glMultiTexCoord${n}${t}${arb}`;
+    if (!fns[nm]) fns[nm] = ['u' + SIG[t].repeat(n), (x, ...a) => x.backend.gl(nm, a)];
+    if (!fns[`glMultiTexCoord${n}${t}v${arb}`]) fns[`glMultiTexCoord${n}${t}v${arb}`] = ['up', (x, ...a) => x.backend.gl(`glMultiTexCoord${n}${t}v${arb}`, a)];
+  }
+  if (!fns.glClientActiveTexture) fns.glClientActiveTexture = ['u', (x, ...a) => x.backend.gl('glClientActiveTexture', a)];
   // glColor{3,4}{b,ub,s,us,i,ui,f,d}v: the components read from memory, then as glColor3ub and the rest.
   // Metatunnel (2009) hands glColor4ubv the address of its tick count: its shader reads the time back
   // from gl_Color.
