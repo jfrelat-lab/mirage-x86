@@ -1,8 +1,10 @@
-; sideexit.asm — a loop whose body branches forward past one instruction, as a synthesizer's clipping
-; or an interpreter's opcode tests do: under paging the recompiler runs the fall-through in the same
-; block and leaves it by a side exit when the branch is taken. 1000 + 7 * 250 = 2750: 190 (2750 & 255),
-; the exit status, as Docker i386 exits. tools/test.js also holds the instructions it counted, and that
-; the fall-through began no block of its own.
+; sideexit.asm — two loops in one block, as a synthesizer's and an interpreter's: the first starts two
+; instructions past the block's head, the second branches forward past one instruction in its body,
+; as clipping or an opcode test does. Under paging the recompiler turns each in a loop inside the
+; block, opened at its target, and leaves the second by a side exit when its branch is taken.
+; 3000 + 1000 + 7 * 250 = 5750: 118 (5750 & 255), the exit status, as Docker i386 exits. tools/test.js
+; also holds the instructions it counted, and that neither loop's head nor the fall-through began a
+; block of its own.
 ;
 ;   nasm -f bin tools/linux/sideexit.asm -o SIDEEXIT
         bits    32
@@ -18,9 +20,13 @@ phsize  equ     $ - phdr
 
 _start: xor     edx, edx
         mov     ecx, 1000
+.inner: add     edx, 3                          ; the first loop, inside the block
+        dec     ecx
+        jnz     .inner
+        mov     ecx, 1000
 .loop:  test    cl, 3
         jnz     .odd                            ; taken three times in four: the side exit
-        add     edx, 7                          ; the fall-through, in the loop's block
+        add     edx, 7                          ; the fall-through, in the loop
 .odd:   inc     edx
         dec     ecx
         jnz     .loop

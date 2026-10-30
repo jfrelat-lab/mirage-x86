@@ -3510,7 +3510,8 @@ const runLinux = (hex, argv) => {
 // and none of the slow paths the recompiler now avoids for Valleyball (Bluflame, 2009): no cpu.fpuMem
 // call (x87 on memory inline under paging), no cpu.push32/pop32 and no memory helper read for its stack,
 // its lodsb and its indirect call (a flat 32-bit stack inline; the helpers probe the fast tables first),
-// the self-looping block dispatched a few times rather than a thousand, and the block directory dense
+// the loop that branches to itself dispatched a few times rather than a thousand (now an inner loop of
+// the block before it, not dispatched at all), and the block directory dense
 // (grown on demand it fell into V8's dictionary elements: a hash lookup per dispatch).
 { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/x87mem.asm
@@ -3529,26 +3530,27 @@ const runLinux = (hex, argv) => {
     const cmp = mc.rec._compile.bind(mc.rec); mc.rec._compile = (...a) => { compiling++; try { return cmp(...a); } finally { compiling--; } };
     for (const k of ['r8', 'r32']) { const f = mc.mem[k].bind(mc.mem); mc.mem[k] = (...a) => { if (!compiling) reads++; return f(...a); }; }
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
-    got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, mc.rec.heat.get(0x080480a1) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
+    got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, (mc.rec.heat.get(0x080480a1) || 0) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a synthesizer\'s loops under paging with no slow path (55, as Docker i386)', got, '55 0 true 0 true true true'); }
-// tools/linux/sideexit.asm: a loop whose body branches forward past one instruction. Under paging the
-// fall-through stays in the loop's block (no block begins at it) and a taken branch leaves by a side
-// exit, which gives back the instructions it skipped: 190 as Docker i386 exits, after 2 + 750 * 5 +
-// 250 * 6 + 3 = 5255 instructions.
+// tools/linux/sideexit.asm: two loops in one block, the first starting past the block's head, the
+// second branching forward past one instruction. Under paging each turns inside the block, opened at
+// its target, and a taken forward branch leaves by a side exit, which gives back the instructions it
+// skipped: 118 as Docker i386 exits, after 2 + 3 * 1000 + 1 + 750 * 5 + 250 * 6 + 3 = 8256
+// instructions, the block dispatched once and neither the first loop nor the fall-through a block.
 { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/sideexit.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
-    '00000000010000000000000000800408008004087000000070000000050000000010000031d2b9e8030000f6c1037503' +
-    '83c207424975f489d3b801000000cd80');
+    '00000000010000000000000000800408008004087b0000007b000000050000000010000031d2b9e803000083c2034975' +
+    'fab9e8030000f6c103750383c207424975f489d3b801000000cd80');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/SIDEEXIT']);
     mc.rec.profiling = true;
     const c0 = mc.cpu.cycles;
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
-    got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.has(0x08048060)].join(' ');
+    got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.get(0x08048054), mc.rec.heat.has(0x0804805b), mc.rec.heat.has(0x0804806b)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: a forward branch leaves its block by a side exit (190, as Docker i386)', got, '190 5255 false'); }
+  eq('linux: loops inside a block, a forward branch leaving it by a side exit (118, as Docker i386)', got, '118 8256 1 false false'); }
 // The branch-free 32-bit flag setters (cpu.setAdd32, setSub32, setLogic32, setInc32, setDec32) against
 // the generic ones at 32 bits, on edge values and random ones, the flags they start from random too.
 { const { CPU } = await import('../src/cpu.js');

@@ -952,6 +952,7 @@ export class Recompiler {
     // a forgotten reader is the one unsafe case, so the golden A/B gate covers it.
     const instrs = [];
     let cur = { flagIdx: -1, def: 0, use: 0 };
+    const starts = new Map(), loops = [];   // inner loops: each instruction's [out index, count before it]
     const PFLAG = (stmt, def) => { cur.flagIdx = out.length; cur.def |= def; out.push(stmt); };
 
     // EIP is a full 32-bit offset in a 32-bit code segment; only a 16-bit one wraps at 0xFFFF. `d` is
@@ -1148,8 +1149,26 @@ export class Recompiler {
      * takes back the instructions it did not run from the cycles the dispatcher adds, and every flag is
      * live there (the block's successor may read any). MIRAGE_NOSIDEEXIT=1 turns it off.
      */
+    /*
+     * A backward branch to an instruction INSIDE the block, past its head (Valleyball's synthesizer:
+     * `push ecx; xor ecx,ecx; xor eax,eax; mov edx,..` and then its loop), is an inner loop: it turns in
+     * a `for(;;)` opened at its target, with the self-loop's accounting, and the block goes on after it
+     * (`pop ecx; ret 4`): one dispatch where there were three. A loop may not begin inside an earlier
+     * one (the two would cross); a branch to the head is still the self-loop.
+     */
+    let loopFloor = ip0;
     const sideExits = pfRestart && !TIER2 && !NOSIDEEXIT;
     const endJcc = (cc, target, next) => {
+      const at = starts.get(+target);
+      if (sideExits && +target > loopFloor && +target <= curIpStart && at !== undefined) {
+        cur.use |= lALL;
+        loops.push(at[0]);
+        P(`if(!(${condExpr(cc)}))break;`);
+        P(`if((cpu.flags&${IF})||cpu.tbudget<=1){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
+        P(`cpu.cycles+=${count - at[1]};cpu.tbudget--;}`);
+        loopFloor = curIpStart;
+        return;
+      }
       if (sideExits && !(+target >= ip0 && +target <= curIpStart)) {
         cur.use |= lALL;
         P(`if(${condExpr(cc)}){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
@@ -1230,6 +1249,7 @@ export class Recompiler {
       pruneEip();
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
       const ipStart = ip; ipLast = ip; curIpStart = ip;    // instruction start ip — fault return address (#BR etc.)
+      starts.set(ipStart, [out.length, count]);
       // A #PF is raised from INSIDE a memory access, so the run loop has to know which instruction
       // to restart — and only this store knows. It is emitted per instruction ONLY under the paged
       // strategy, which the machine selects exactly when paging is on, so nothing outside protected
@@ -1838,6 +1858,7 @@ export class Recompiler {
       head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0${ssB32 ? '||!cpu.ssB' : ''}){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
     }
     const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + head;
+    for (const at of loops) out[at] = 'for(;;){\n' + out[at];
     const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k));   // side exits: what they did not run
     const body = pre + '\n' + (selfLoop ? `for(;;){\n${code}\n}` : code);
     const fn = new Function('cpu', body);
