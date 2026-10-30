@@ -20,6 +20,10 @@ glCreateShader u; glCompileShader u; glCreateProgram ; glAttachShader uu; glLink
 glUniform1f if; glUniform2f iff; glUniform3f ifff; glUniform4f iffff; glUniform1i ii; glUniform2i iii;
 glCreateShaderObjectARB u; glCompileShaderARB u; glCreateProgramObjectARB ; glAttachObjectARB uu; glLinkProgramARB u; glUseProgramObjectARB u;
 glUniform1fARB if; glUniform2fARB iff; glUniform3fARB ifff; glUniform4fARB iffff; glUniform1iARB ii;
+glBindFramebuffer uu; glFramebufferTexture2D uuuui; glCheckFramebufferStatus u; glBindRenderbuffer uu; glRenderbufferStorage uuii;
+glFramebufferRenderbuffer uuuu; glGenerateMipmap u; glBlitFramebuffer iiiiiiiiuu; glIsFramebuffer u; glIsRenderbuffer u;
+glBindFramebufferEXT uu; glFramebufferTexture2DEXT uuuui; glCheckFramebufferStatusEXT u; glBindRenderbufferEXT uu; glRenderbufferStorageEXT uuii;
+glFramebufferRenderbufferEXT uuuu; glGenerateMipmapEXT u; glBlitFramebufferEXT iiiiiiiiuu; glIsFramebufferEXT u; glIsRenderbufferEXT u;
 glFogi ui; glFogf uf; glAccum uf; glClearAccum ffff; glStencilFunc uiu; glStencilOp uuu; glColorMask uuuu; glDrawBuffer u; glReadBuffer u; glCallList u; glEndList ; glNewList uu;
 `;
 
@@ -72,6 +76,14 @@ export function gl() {
   fns.glGetError = ['', () => 0];
   fns.glGenTextures = ['ip', (x, n, p) => { for (let i = 0; i < n; i++) x.w32(p + 4 * i, x.backend.gl('glGenTexture', [])); return 0; }];
   fns.glGenLists = ['i', (x, n) => x.backend.gl('glGenLists', [n])];
+  // Framebuffer objects (GL 3.0, ARB_ and EXT_framebuffer_object, Hartverdrahtet's render to texture):
+  // names made as glGenTextures makes them; a recorder says every framebuffer is complete.
+  let fbNames = 0;
+  for (const k of ['Framebuffers', 'Renderbuffers']) for (const ext of ['', 'EXT']) {
+    fns[`glGen${k}${ext}`] = ['ip', (x, n, p) => { for (let i = 0; i < n; i++) x.w32(p + 4 * i, ++fbNames); return 0; }];
+    fns[`glDelete${k}${ext}`] = ['ip', () => 0];
+  }
+  for (const ext of ['', 'EXT']) fns[`glCheckFramebufferStatus${ext}`] = ['u', () => 0x8cd5];   // GL_FRAMEBUFFER_COMPLETE
   // glTexImage2D/3D: the pixels read as the format and type say (RGBA/RGB/LUMINANCE, bytes or floats)
   const texBytes = (fmt, type, w, h, d) => {
     const comps = { 0x1908: 4, 0x1907: 3, 0x1909: 1, 0x190a: 2, 0x1903: 1, 0x1906: 1 }[fmt] || 4;

@@ -4015,6 +4015,20 @@ const runLinux = (hex, argv) => {
     got = [Array.from(M.u8.slice(edge + 8, edge + 9)), f64, M.mod.dv.getInt16(p, true), M.mod.dv.getUint16(p, true), M.mod.dv.getFloat32(p + 4, true), M.cstr(s), M.rt.malloc(8) > 0].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true'); }
+// Framebuffer objects through MIRAGE's GL table to PRISM's gl.js (Hartverdrahtet renders to a texture):
+// each entry point, core and EXT, has its signature here and its implementation there.
+{ let got;
+  try { const { prismM } = await import('../src/hle/prism-gl.js'), { gl } = await import('../src/hle/gl.js');
+    const { installGL } = await import('../vendor/prism/src/env/gl.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
+    const M = prismM(lx, mc.mem); installGL(M);
+    const fns = gl().fns, names = [];
+    for (const ext of ['', 'EXT']) for (const f of ['GenFramebuffers', 'DeleteFramebuffers', 'BindFramebuffer', 'FramebufferTexture2D', 'CheckFramebufferStatus',
+      'GenRenderbuffers', 'DeleteRenderbuffers', 'BindRenderbuffer', 'RenderbufferStorage', 'FramebufferRenderbuffer', 'GenerateMipmap', 'BlitFramebuffer']) names.push(`gl${f}${ext}`);
+    got = names.filter((n) => !fns[n] || !M.rt[n]).join(' ') || 'all';
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: framebuffer objects, core and EXT, from MIRAGE\'s GL table to PRISM\'s', got, 'all'); }
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's
