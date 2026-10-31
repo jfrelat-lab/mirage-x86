@@ -13,6 +13,7 @@ import { CPU, CS, CF, IF, TF, NT, RF, VM } from './cpu.js';
 import { Recompiler } from './recompiler.js';
 import { installFPU } from './fpu.js';
 import { installSSE } from './sse.js';
+import { installMMX } from './mmx.js';
 import { resolveProfile } from './cpu-profile.js';
 import { resolveMemStrategy } from './mem-strategy.js';
 import { EMS_SEG } from './ems.js';
@@ -55,6 +56,7 @@ export class Machine {
     this.cpu.acFlagMask = this.cpu.profile.cpuid ? 0x40000 : 0;
     this.cpu.hiFlags = this.cpu.idFlagMask | this.cpu.acFlagMask;
     installFPU(this.cpu);                           // x87 coprocessor
+    installMMX(this.cpu);                           // MMX register file (src/mmx.js)
     installSSE(this.cpu);                           // XMM register file + the SSE subset (src/sse.js)
     // FLDCW changing PRECISION CONTROL costs nothing here: the few blocks whose arithmetic has single
     // precision folded in (or out) are checked against the control word when they are dispatched

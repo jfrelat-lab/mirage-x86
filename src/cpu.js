@@ -343,8 +343,9 @@ export class CPU {
    * 'pentiumpro') add what a Pentium Pro adds and MIRAGE has: MSR (RDMSR/WRMSR below) and CMOV
    * (CMOVcc, FCMOVcc, FCOMI). Nothing else. In particular SSE is NOT claimed although src/sse.js
    * exists: it implements the sixteen instructions one 1K intro uses, and a guest that read an SSE
-   * bit here would be entitled to the whole extension. No MMX (the Pentium Pro has none), no SEP,
-   * no PGE, no MTRR, no APIC.
+   * bit here would be entitled to the whole extension. MMX (23) on the 'pentiummmx' profile only,
+   * whose whole instruction set src/mmx.js has (the Pentium Pro has none). No SEP, no PGE, no MTRR,
+   * no APIC.
    *
    * The vendor string is not a copy of anyone's. Claiming GenuineIntel would route a guest down a
    * path chosen for a chip we are not, and an unknown vendor is a truthful answer that software is
@@ -369,7 +370,7 @@ export class CPU {
       this.reg[3] = 0;                                   // EBX: no brand index, no CLFLUSH line
       this.reg[1] = 0;                                   // ECX: none of the later extensions
       // EDX: FPU (0), PSE (3), TSC (4), CX8 (8); on a P6 also MSR (5) and CMOV (15).
-      this.reg[2] = (1 << 0) | (1 << 3) | (1 << 4) | (1 << 8) | (P.p6 ? (1 << 5) | (1 << 15) : 0);
+      this.reg[2] = (1 << 0) | (1 << 3) | (1 << 4) | (1 << 8) | (P.p6 ? (1 << 5) | (1 << 15) : 0) | (P.mmx ? 1 << 23 : 0);
       return;
     }
     if (leaf === 2 && P.p6) {                            // cache and TLB descriptors, a Pentium Pro's:

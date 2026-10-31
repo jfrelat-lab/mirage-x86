@@ -446,6 +446,14 @@ export function installDPMI(machine) {
         return ok();
       }
 
+      // 0800 — Physical Address Mapping: in BX:CX the physical address, SI:DI the size; out BX:CX the
+      // linear address that reaches it. This host does not page, so the linear address IS the
+      // physical one, and BX:CX comes back as it went. tools/dpmiphys.asm, CWSDPMI under DOSBox-X:
+      // the mapping succeeds and a dword written through it reads back, below 1 MiB too.
+      // Heaven Seven's DOS version maps its linear framebuffer so; 8001h made it say "VESA error".
+      case 0x0800:
+        return ok();
+
       // 0600-0603 lock/unlock, 0702/0703 paging hints. MIRAGE never swaps, so every page really is
       // resident: success is accurate here, not a stub.
       case 0x0600: case 0x0601: case 0x0602: case 0x0603:

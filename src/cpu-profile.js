@@ -86,6 +86,19 @@ export const PROFILES = {
     vendor: 'GenuineIntel',
     signature: 0x0520,
   },
+  // '586' with MMX, which src/mmx.js implements whole: family 5 model 4, a Pentium MMX (P55C), the
+  // first part with it. CPUID says so (EDX bit 23); the vendor stays ours, as '586'. Heaven Seven
+  // (Exceed, 2000) says "MMX instruction set required!" on anything else. MIRAGE_CPU=pentiummmx.
+  pentiummmx: {
+    name: 'pentiummmx',
+    shiftCountMask: 0x1f,
+    pushSPOriginal: true,
+    pushfSetsReserved: false,
+    bcdAdjustsAX: true,
+    cpuid: true,
+    mmx: true,
+    signature: 0x0543,
+  },
   // A P6-class part: '586' plus what a Pentium Pro adds and MIRAGE implements — CMOVcc, FCMOVcc and
   // FCOMI, RDMSR/WRMSR, CPUID leaf 2 — which CPUID then reports (CMOV, MSR), family 6. This is the
   // generation Windows 2000/XP, ReactOS, Haiku and i686 Linux are built for (docs/notes/roadmap-log.md, H14-1).

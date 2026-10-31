@@ -13,6 +13,7 @@
 
 import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
 import { SSE, VEX, XMM_SCRATCH } from './sse.js';
+import { MMX, MMX_OPS, MM_SCRATCH } from './mmx.js';
 
 // Cap on basic-block length. Overridable because block boundaries are where IRQs are sampled, so
 // moving them is how you measure what depends on that — see docs/notes/timing.md §3, where it showed only
@@ -2390,6 +2391,36 @@ export class Recompiler {
       if (op2 >= 0x90 && op2 <= 0x9f) { cur.use |= lALL; const o = modrm(); P(rmW(o, 8, `${condExpr(op2 & 0xf)}?1:0`)); return; }
       // BSWAP r32 (0F C8+r): reverse the byte order of a 32-bit register (486+); flags untouched
       if (op2 >= 0xc8 && op2 <= 0xcf) { const r = op2 - 0xc8, b = NT(); P(`var ${b}=r[${r}]>>>0;r[${r}]=((${b}<<24)|((${b}&0xff00)<<8)|((${b}>>>8)&0xff00)|(${b}>>>24))>>>0;`); return; }
+      // ---- MMX (src/mmx.js): the forms with no mandatory prefix ---------------------------------
+      // After each, what the block knows of the x87 stack is read again (fsync): MMX moves its top.
+      if (!(d ? sz === 16 : sz === 32) && rep === 0 &&
+          (MMX_OPS.has(op2) || op2 === 0x6e || op2 === 0x7e || op2 === 0x7f || op2 === 0x77 || (op2 >= 0x71 && op2 <= 0x73))) {
+        usesFPU = true;
+        if (op2 === 0x77) { P('cpu.emms();'); fsync(); return; }                                   // EMMS
+        const o = modrm();
+        if (op2 === 0x6e) { P(`cpu.mmMovdIn(${o.reg},${rmR(o, 32)});`); fsync(); return; }          // MOVD mm, r/m32
+        if (op2 === 0x7e) { if (!o.isReg) canFault = true; P(rmW(o, 32, `cpu.mmMovdOut(${o.reg})`)); fsync(); return; }   // MOVD r/m32, mm
+        if (op2 === 0x7f) {                                                                          // MOVQ mm/m64, mm
+          if (o.isReg) P(`cpu.mmx(${MMX.MOVQ},${o.rm},${o.reg},-1);`);
+          else {
+            canFault = true; const a = memAddr(o), t = NT();
+            P(`var ${t}=${a};cpu.mmStore(${t},${o.reg});`);
+            P(`if(cp[${t}>>>12]|cp[(${AM(`${t}+7`)})>>>12])m._dirty(${t},8);`);
+          }
+          fsync(); return;
+        }
+        if (op2 >= 0x71 && op2 <= 0x73) {                                                            // shifts by an immediate
+          const imm = f8();
+          const code = { 0x71: { 2: MMX.PSRLW, 4: MMX.PSRAW, 6: MMX.PSLLW }, 0x72: { 2: MMX.PSRLD, 4: MMX.PSRAD, 6: MMX.PSLLD },
+            0x73: { 2: MMX.PSRLQ, 6: MMX.PSLLQ } }[op2][o.reg];
+          if (code === undefined || !o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          P(`cpu.mmx(${code},${o.rm},0,${imm});`); fsync(); return;
+        }
+        // mm, mm/m64 -- the low unpacks read only 32 bits of memory
+        let s = o.rm;
+        if (!o.isReg) { canFault = true; P(`cpu.mmLoad(${memAddr(o)},${op2 >= 0x60 && op2 <= 0x62 ? 4 : 8});`); s = MM_SCRATCH; }
+        P(`cpu.mmx(${op2},${o.reg},${s},-1);`); fsync(); return;
+      }
       // ---- SSE / SSE2 / SSE4.1 on XMM ----------------------------------------------------------
       // The set real DOS software reaches for, not the whole ISA — see src/sse.js. The mandatory
       // prefixes select the instruction here rather than the operand size, so `0x66` is read back off
