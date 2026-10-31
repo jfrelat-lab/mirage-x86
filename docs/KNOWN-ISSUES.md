@@ -13,7 +13,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 | ACPI | ReactOS (installed for an ACPI machine) stops in its kernel: "did NOT find RSDT". |
 | A floppy *controller* | The BIOS serves drive A:, but a system that drives the controller itself cannot read a floppy. |
 | IDE bus-master DMA | The registers exist and move no data; disks and the CD-ROM are PIO only. |
-| MMX, SSE as a feature, 64-bit mode | The CPU is a Pentium Pro. A few SSE instructions exist for one intro and are not advertised. |
+| SSE3 and later, FXSAVE, 64-bit mode | The profiles stop at a Pentium 4: MMX, SSE and SSE2 (`pentiummmx`, `pentium3`, `pentium4`). |
 | An 80-bit x87 | Floating point is IEEE double. Programs that depend on extended precision differ. |
 | USB, a local APIC, more than one processor | — |
 
@@ -59,6 +59,16 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Second Reality | derails to 0000:0000 at start |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |
+
+## Windows programs (MIRAGE-WIN32)
+
+| Missing | Consequence |
+|---|---|
+| DirectDraw, DirectSound, DirectInput | Programs that need them stop; luxo4k shows a message box and exits for want of DirectSound. |
+| Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test, `Reset` and reading a surface back are not there yet. Several render targets at once (Photon Race 2) are being added. |
+| D3DX beyond HLSL | `D3DXCompileShader` hands HLSL on to PRISM; texture shaders (`tx_1_0`, Ergon), shader assembly (`D3DXAssembleShader`, Stiletto) and D3DX meshes are not done. |
+| One emulated core | Threads take turns on one CPU at about 200 M instructions a second: Darwinism (180 M x87 instructions a frame) draws a frame a second, Valleyball's synthesizer falls behind, Stripped's precalculation lasts minutes. |
+| Win16 | No NE loader yet. |
 
 ## The tools
 

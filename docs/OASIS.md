@@ -1,7 +1,7 @@
 # OASIS — images of the period PC
 
 OASIS runs **images** on MIRAGE the way Docker runs them on Linux: a manifest says which world a
-program needs (DOS, Linux user space; Win16 and a bootable PC to come), the machine it runs on and
+program needs (DOS, Linux user space, Win32; Win16 and a bootable PC to come), the machine it runs on and
 where its files come from; `oasis run` puts it on the screen, in a window of its own or in the
 terminal. What a mirage promises, an oasis is. Plan: [ROADMAP](ROADMAP.md), section OASIS.
 
@@ -60,13 +60,14 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 
 | Field | Meaning |
 |---|---|
-| `world` | `dos` (MIRAGE-DOS: DOS, BIOS, XMS, EMS and DPMI in the emulator) or `linux` (MIRAGE-LINUX: Linux system calls answered in JavaScript). Planned: `win16`, `pc` (boot a disk or CD image) |
-| `machine` | `cpu` — a profile of `src/cpu-profile.js` (`386`, `586`, `pentium`, `686`, `pentiumpro`); `mem` — MiB; `vga` — `cirrus` for a Cirrus Logic CL-GD5446 on the VGA; `hz` — (Linux) timeouts in clock ticks as a 1997 kernel counted them (`100`: Linux 2.0's 10 ms ticks, which period programs paced on), else to the microsecond |
+| `world` | `dos` (MIRAGE-DOS: DOS, BIOS, XMS, EMS and DPMI in the emulator), `linux` (MIRAGE-LINUX: Linux system calls answered in JavaScript) or `win32` (MIRAGE-WIN32: a PE `.exe`, every DLL in JavaScript; in `machines.html?m=win32` through `serve`, not yet by `oasis run`). Planned: `win16`, `pc` (boot a disk or CD image) |
+| `machine` | `cpu` — a profile of `src/cpu-profile.js` (`386`, `586`, `pentium`, `pentiummmx`, `686`, `pentiumpro`, `pentium3`, `pentium4` — the Direct3D 9 intros want SSE or SSE2); `mem` — MiB; `vga` — `cirrus` for a Cirrus Logic CL-GD5446 on the VGA; `hz` — (Linux) timeouts in clock ticks as a 1997 kernel counted them (`100`: Linux 2.0's 10 ms ticks, which period programs paced on), else to the microsecond |
 | `layers` | the file tree, bottom to top, later layers winning (below) |
 | `entry` | `run` — the program (a DOS name, or a path in the Linux tree); `args`; `env`; `cwd`; `console` — Linux stdio on a virtual console, `/dev/tty1` (SVGAlib wants one) |
 | `output` | `window` or `terminal`, when the command line does not say |
 | `user` | (Linux) the user's name by default, `player` without it. It is set on uid 0, first in `/etc/passwd`, with `USER` and `LOGNAME`: `oasis run` gives the computer's login (or `--user=<name>`, `$OASIS_USER`), the machines page the visitor's choice (its User button, kept in the browser) |
 | `license`, `notes` | for people: where the redistribution terms are, what the image is made of |
+| `year`, `author`, `thumb` | for the shelf: the card's date, its credits, a 320x200 picture under `oasis/thumbs/` |
 
 ### Layers
 
@@ -113,11 +114,14 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 | `linux/doom-mini` | linux | a Linux with no distribution: busybox 1.35 (static, musl, 1 MB, 402 applets), the three a.out libraries linuxsdoom needs, the binary and its WAD — about 4 MB. A busybox shell on the console; `doom` starts the game |
 | `linux/quake-1997` | linux | `squake` 1.1, id's svgalib Quake of August 1997 — an ELF binary on libc5 and svgalib from Debian 1.3, the shareware `pak0.pak` from id's own `quake106.zip` (its LHA self-extractor read by `src/lha.js`). It plays its demos with sound — /dev/dsp in mmap mode, as Quake's snd_linux.c uses it; run with `-noudp` (no network yet) |
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
+| `linux/clod-2008`, `laminator-2009`, `makeit4k-2005`, `metatunnel-2009`, `retrospection-2010`, `ribbon-2009`, `yellowrose-2003` | linux | the scene's Linux OpenGL intros of 2003-2010, their libSDL, libGL and libGLU made in JavaScript, drawn by PRISM's `gl.js` |
+| `win32/ribbon-2009`, `flow2-2007`, `chocolux-2008`, `retrospection-2010`, `paradistance-2009`, `hartverdrahtet-2012`, `absoluteterritory-2017` | win32 | the scene's Windows OpenGL intros, packed by Crinkler: the process laid out as Windows XP lays it out, opengl32 on PRISM's `gl.js`, the music through waveOut |
+| `win32/cdak-2010` | win32 | Quite & Orange's Direct3D 9 intro: d3d9.dll and d3dx9 in JavaScript, HLSL translated and drawn by PRISM's `d3d9.js` |
 
 ## What is not there yet
 
 - O3: layers fetched over HTTP by the browser itself, so an image runs from a static host with no
   `oasis` command at all; and the cache offline.
 - O5: `commit` — saving the whole machine, CPU included — and URLs that resume a run.
-- The `win16` and `pc` worlds; DOS images other than one ZIP plus files in a window; sound for
+- The `win16` and `pc` worlds; `oasis run` for `win32` images (they run in the page only); DOS images other than one ZIP plus files in a window; sound for
   Linux programs (DOOM's `sndserver` runs beside it, which needs two processes at once).

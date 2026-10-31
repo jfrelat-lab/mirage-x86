@@ -62,7 +62,7 @@ Each line is one capability, so that it can be checked on its own.
 | DOS extenders (DOS/4GW, CWSDPMI, DJGPP) | ❌ | 🟡 under a booted DOS | ✅ | 🟡 under a booted DOS | ✅ |
 | Linux programs, current (static and dynamic ELF) | ✅ | ✅ `qemu-user` | ❌ | ❌ | ✅ Debian 12 i386 binaries (ls, bash, perl, sort…) as Docker prints them |
 | Win16 programs | ❌ | 🟡 under a booted Windows | 🟡 under a booted Windows | 🟡 under a booted Windows | 🟡 under a booted Windows 3.0; without Windows on a branch (above) |
-| Win32 programs | 🟡 Windows containers, on a Windows host | 🟡 under a booted Windows | 🟡 under a booted Windows 9x | 🟡 under a booted Windows | 🟡 under a booted Windows 9x; without Windows planned (ROADMAP H14) |
+| Win32 programs | 🟡 Windows containers, on a Windows host | 🟡 under a booted Windows | 🟡 under a booted Windows 9x | 🟡 under a booted Windows | 🟡 under a booted Windows 9x; ✅ without Windows for the scene's OpenGL and Direct3D 9 intros (MIRAGE-WIN32) |
 | Windows 3.x | ❌ | ✅ | ✅ | ✅ | ✅ 3.0 to the Program Manager |
 | Windows 95, 98, ME | ❌ | ✅ | ✅ | ✅ | ✅ the desktop |
 | Windows NT, 2000, XP | ❌ | ✅ | 🟡 ❔ | ✅ ❔ | ❌ NT 3.51 stops after the graphical switch; 2000 stays on its boot screen |
@@ -73,12 +73,12 @@ Each line is one capability, so that it can be checked on its own.
 
 | | Docker | QEMU | DOSBox-X | v86 | MIRAGE |
 |---|---|---|---|---|---|
-| 8086 to Pentium Pro instruction sets | ➖ (the host's CPU) | ✅ | ✅ (to Pentium Pro / II ❔) | ✅ | ✅ profiles `386`, `586`, `pentium`, `686`, `pentiumpro` |
+| 8086 to Pentium Pro instruction sets | ➖ (the host's CPU) | ✅ | ✅ (to Pentium Pro / II ❔) | ✅ | ✅ profiles `386`, `586`, `pentium`, `pentiummmx`, `686`, `pentiumpro`, `pentium3`, `pentium4` |
 | Real mode, 16/32-bit protected mode, virtual-8086 | ➖ | ✅ | ✅ | ✅ | ✅ |
 | Paging, write protection, 4 MiB pages, hardware task switching | ➖ | ✅ | ✅ | ✅ | ✅ |
 | x87 FPU with 80-bit precision | ➖ | ✅ (softfloat) | 🟡 host-dependent ❔ | ✅ ❔ | 🟡 64-bit doubles: musl's `printf("%f")` rounds its last digit differently; gcc's `pr39228` fails |
-| MMX | ➖ | ✅ | ✅ ❔ | ✅ ❔ | ❌ |
-| SSE, SSE2 | ➖ | ✅ (and later) | 🟡 ❔ | ✅ ❔ | 🟡 implemented, not advertised by CPUID |
+| MMX | ➖ | ✅ | ✅ ❔ | ✅ ❔ | ✅ `pentiummmx` and up, against Docker i386 |
+| SSE, SSE2 | ➖ | ✅ (and later) | 🟡 ❔ | ✅ ❔ | ✅ `pentium3` (SSE) and `pentium4` (SSE2), against Docker i386 |
 | PAE, APIC, SMP | ➖ | ✅ | ❌ | 🟡 APIC ❔ | ❌ |
 
 ## Machine and devices
@@ -162,5 +162,5 @@ world — DOS, Linux user space, Win16, a bootable PC — a machine profile, an 
 fetched on demand) run with `oasis run <image>` in a terminal, a native window or the browser, with
 a commit that saves the whole machine so that a URL resumes a program where it was.
 
-What MIRAGE does not do (yet): 64-bit, NT-family Windows, networking, USB, ACPI, MMX, an 80-bit x87,
+What MIRAGE does not do (yet): 64-bit, NT-family Windows, networking, USB, ACPI, an 80-bit x87,
 and speed close to native-code emulators.

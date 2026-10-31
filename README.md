@@ -10,13 +10,18 @@ No WebAssembly, no build step, no dependencies. It runs in a browser and in Node
                      (per basic block, cached by linear address, aware of self-modifying code)
 ```
 
-MIRAGE is two things sharing one CPU:
+MIRAGE is four machines sharing one CPU:
 
 - **A DOS player** (`dos.html`). DOS, the BIOS, XMS, EMS and a DPMI host are implemented in
   JavaScript, so there is no DOS image to boot: a program starts at once.
 - **A bare PC** (`boot.html`). A BIOS, an 8259/8254/RTC chipset, VGA and VBE, IDE disks, an ATAPI
   CD-ROM, and optionally a PCI bus and a 16550 serial port: enough to boot unmodified operating
   systems from a disk image or an El Torito CD.
+- **MIRAGE-LINUX** (`linux.html`, `machines.html`). i386 Linux programs with no Linux: the kernel's
+  system calls in JavaScript, Debian's own binaries and libraries, from bash to X and Quake.
+- **MIRAGE-WIN32** (`machines.html?m=win32`). Windows programs with no Windows: the `.exe` mapped as
+  Windows XP maps it, every DLL it imports written in JavaScript, OpenGL and Direct3D 9 drawn by
+  [PRISM](https://github.com/jfrelat-lab/prism)'s WebGL2 renderer.
 
 ## What runs today
 
@@ -31,11 +36,14 @@ None of that software is in this repository — see [Third-party software](#thir
 | Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell; runlevel 5 |
 | FreeDOS 1.3 (from its CD), MS-DOS 6.22 | the installer; the prompt |
 | QNX 4.05 demo disk, KolibriOS, OpenBSD | the desktop; the desktop; `login:` |
+| Linux programs (MIRAGE-LINUX) | Debian 12's bash, XFree86 3.3 and its clients, DOOM and Quake for Linux, Mesa's demos, the scene's Linux intros — the images in [docs/OASIS.md](docs/OASIS.md) |
+| Windows intros (MIRAGE-WIN32) | seven OpenGL intros of 2007-2017 and cdak, a Direct3D 9 intro of 2010 — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) |
 
 **What does not work yet**, so nobody has to find out the hard way: Windows NT 3.51 (dies after the
 graphical switch), Windows 2000 (stays on its boot screen), ReactOS (needs ACPI, which MIRAGE does
 not have), BeOS 5 (stays on its splash screen), Plan 9. There is no Gravis Ultrasound, no network card,
-no USB, no 64-bit mode. The CPU is a Pentium Pro without MMX.
+no USB, no 64-bit mode. The CPU profiles go up to a Pentium 4 (MMX, SSE, SSE2).
+MIRAGE-WIN32 has OpenGL and Direct3D 9 but not yet DirectDraw, DirectSound, DirectInput or Win16.
 
 ## How fast
 

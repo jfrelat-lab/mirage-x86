@@ -149,6 +149,30 @@ by the golden test. Of pouët's top ten MS-DOS 4K intros, nine rendered (2026-08
 | Difúze (Řrřola) | Renders | the reaction–diffusion patterns, after a few hundred frames; identical to Unicorn for 300 frames ([notes/2026-10-10-difuze.md](notes/2026-10-10-difuze.md)) | 2026-10-10 |
 | oktaeder | Fails | not a MIRAGE defect — see above | 2026-08-22 |
 
+## Windows programs (MIRAGE-WIN32, `machines.html?m=win32`)
+
+The scene's Windows intros of 2007-2017, run with no Windows: the `.exe` mapped as Windows XP maps it,
+every DLL in JavaScript, the graphics drawn by PRISM's `gl.js` (OpenGL) or `d3d9.js` (Direct3D 9).
+The ones that render are OASIS images (`oasis/images/win32/`). "Headless" is a run in Node on the
+recording device model, which says how far the program gets but not what it draws.
+
+| Title | API | Status | Notes | Updated |
+|---|---|---|---|---|
+| To the Road of Ribbon, Flow2, Chocolux (1K) | OpenGL | Renders | one GLSL fragment shader each | 2026-10 |
+| Retrospection, Paradistance (4K) | OpenGL | Renders | with their music through waveOut | 2026-10 |
+| Hartverdrahtet (4K, Revision 2012) | OpenGL | Renders | framebuffer objects; music from a thread | 2026-10 |
+| Absolute Territory (4K, Revision 2017) | OpenGL | Renders | 38 ms of fragment shader a frame on an M1 | 2026-10 |
+| cdak (4K, Chaos Constructions 2010) | Direct3D 9 | Renders | 60 frames a second in Chrome: HLSL pixel shaders, render targets ping-ponged, a looped waveOut buffer | 2026-10-31 |
+| yes we can (4K) | Direct3D 9 | Starts | presents headless: pixel shaders on one pre-transformed triangle, a float16 render target; not yet tried in the page | 2026-10-31 |
+| Photon Race 2 (4K) | Direct3D 9 | Starts | presents headless; needs four render targets at once (MRT) in float16, which PRISM's `d3d9.js` is adding | 2026-10-31 |
+| Darwinism | Direct3D 9 | Starts | presents headless at about one frame a second: some 180 M x87 instructions a frame on one emulated core | 2026-10-31 |
+| Wishful Twisting | Direct3D 9 | Starts | still precomputing after 1.5 G instructions, before its first frame | 2026-10-31 |
+| Ergon | Direct3D 9 | Fails | `D3DXCompileShader` for a `tx_1_0` texture shader (`D3DXFillTextureTX`) | 2026-10-31 |
+| Stiletto | Direct3D 9 | Fails | `D3DXAssembleShader` (shader assembly) and `D3DXCreateMeshFVF` | 2026-10-31 |
+| luxo4k | Direct3D 9 | Fails | shows a message box and exits: it needs DirectSound | 2026-10-31 |
+| Polystreptikum, Synchroplastikum | Direct3D 9 | Fails | a page fault before the device is created; cause not looked at | 2026-10-31 |
+| Valleyball, Stripped | OpenGL | Starts | too slow: Valleyball's synthesizer renders at a third of real time, Stripped precomputes for minutes | 2026-10 |
+
 ## The CPU
 
 | Check | Result | Updated |

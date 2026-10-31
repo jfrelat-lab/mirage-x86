@@ -1,8 +1,10 @@
 # MIRAGE — Architecture
 
-MIRAGE is an **x86 → JavaScript dynamic recompiler** with two machines built on it: a **DOS player**
-whose DOS and BIOS are written in JavaScript, and a **bare PC** that boots unmodified operating
-systems from disk and CD images. It runs in the browser and, headless, in Node. There is **no
+MIRAGE is an **x86 → JavaScript dynamic recompiler** with the machines built on it: a **DOS player**
+whose DOS and BIOS are written in JavaScript, a **bare PC** that boots unmodified operating
+systems from disk and CD images, and two **user-space worlds** with no operating system at all —
+**MIRAGE-LINUX** (i386 Linux programs, the kernel's system calls in JavaScript) and **MIRAGE-WIN32**
+(Windows programs, every DLL they import in JavaScript). It runs in the browser and, headless, in Node. There is **no
 WebAssembly**: the design bet is that readable emitted JavaScript, handed to the engine's own JIT,
 is a fast enough back end.
 
@@ -19,12 +21,12 @@ same machine state, cycle for cycle.
 Guest memory is one flat `Uint8Array`. The recompiler translates a **basic block** of x86, starting
 at the current `CS:EIP`, into the source of a JavaScript function, compiles it with `new Function`,
 caches it by linear address and runs it. Blocks read and write the register file and the memory
-array directly. The CPU is a 386-class processor up to a Pentium Pro, chosen by a profile: real
-mode, 16- and 32-bit protected mode, virtual-8086 mode, paging. A software interrupt either traps
+array directly. The CPU is a 386-class processor up to a Pentium 4 (MMX, SSE, SSE2), chosen by a
+profile: real mode, 16- and 32-bit protected mode, virtual-8086 mode, paging. A software interrupt either traps
 into a JavaScript service (the BIOS, DOS) or enters the guest's own handler; hardware interrupts go
 through an 8259 pair and are delivered between blocks. Time is counted in retired instructions.
 
-## The two machines
+## The machines
 
 | | DOS player (`dos.html`) | Bare PC (`boot.html`) |
 |---|---|---|
@@ -38,7 +40,25 @@ Both are the same `Machine`: `new Machine({ memSize, cpu })`, then `installBIOS(
 then for the DOS player `installDOS(machine, vfs)`. `tools/harness.mjs` builds either one for the
 headless tools, composed as the browser composes it.
 
-## File map (`src/`, about 13,000 lines)
+The user-space worlds are the same `Machine` too, with `installLinux(machine, options)` in place of
+DOS: a paged, flat 32-bit address space in ring 3, and every `int 0x80` answered in JavaScript.
+
+| | MIRAGE-LINUX (`world: "linux"`) | MIRAGE-WIN32 (`world: "win32"`) |
+|---|---|---|
+| Entry | `linuxrun.js` (`linux.html`, `machines.html`), `tools/oasis.mjs run` | `machines.html?m=win32` (images through `tools/oasis.mjs serve`) |
+| Loads | a static or dynamic ELF, or an a.out, from an OASIS image's file tree | a PE `.exe`, mapped as Windows XP's loader maps it (`win32/index.js`) |
+| The system | `linux.js`: the i386 system calls, processes, threads, signals, ttys, /dev | `linux.js`'s process machinery, plus a PEB, a TEB at `fs:` and XP's loader lists |
+| Libraries | the image's own, or made in JavaScript (`hle/`: libSDL 1.2, libGL, libGLU, libasound) | all made in JavaScript (`win32/`): kernel32, user32, gdi32, winmm, msvcrt, opengl32, glu32, d3d9, d3dx9 |
+| Graphics | the VGA, /dev/fb0, X on the VGA, or OpenGL on PRISM's `gl.js` | OpenGL on PRISM's `gl.js`, Direct3D 9 on PRISM's `d3d9.js` |
+| Oracle | the same binary under Docker i386 | Windows XP's structures as Wine and ReactOS document them; Wine in Docker i386 |
+
+A library made in JavaScript is a real shared object (`hle/elfso.js`) or a real PE DLL (`win32/dll.js`)
+whose exports are stubs, `mov eax, id; int 80h; ret`: the program links and calls them as it would
+the real ones, and the trap lands in the JavaScript function. The graphics themselves are
+[PRISM](https://github.com/jfrelat-lab/prism)'s (`vendor/prism`, a submodule): its `gl.js` (OpenGL
+and GLSL) and `d3d9.js` (Direct3D 9's device model, HLSL translated to GLSL ES), drawn by WebGL2.
+
+## File map (`src/`, about 22,000 lines)
 
 **The engine** — no DOM, identical in Node and in the browser.
 
@@ -46,10 +66,10 @@ headless tools, composed as the browser composes it.
 |---|---|
 | `recompiler.js` | **The dynamic recompiler**: the x86 → JavaScript emitter, the block cache, the dispatch loop, invalidation on self-modifying code, the page-fault restart. See [RECOMPILER.md](RECOMPILER.md). |
 | `cpu.js` | Architectural state and everything too rare to emit inline: flag helpers, segment loads and descriptor checks, privilege transitions, far calls and returns, task switches, control registers, CPUID, MSRs, CMPXCHG8B. |
-| `cpu-profile.js` | Which processor MIRAGE claims to be: `386` (the default), `586`, `pentium`, `686`, `pentiumpro`. A profile fixes the generation-specific behaviours and what CPUID reports. |
+| `cpu-profile.js` | Which processor MIRAGE claims to be: `386` (the default), `586`, `pentium`, `pentiummmx`, `686`, `pentiumpro`, `pentium3`, `pentium4`. A profile fixes the generation-specific behaviours and what CPUID reports (MMX from `pentiummmx`, SSE from `pentium3`, SSE2 from `pentium4`). |
 | `memory.js` | Guest RAM, the A20 gate, paging (the page walk, two software TLBs, `PageFault`), and the per-page tracking of compiled code. |
 | `mem-strategy.js` | How a memory access is emitted (inline typed-array access, or calls), kept pluggable so alternatives can be measured. |
-| `fpu.js`, `sse.js` | The x87 coprocessor; the XMM registers and the handful of SSE instructions implemented (not advertised by CPUID). |
+| `fpu.js`, `mmx.js`, `sse.js` | The x87 coprocessor; the MMX registers and instructions; the XMM registers and the SSE and SSE2 operations compiled code uses (advertised by the `pentium3` and `pentium4` profiles). |
 | `machine.js` | Wires CPU, memory and recompiler; owns `runSlice`, the I/O-port and interrupt tables, interrupt delivery in every mode, the PIT, VBE mode state. |
 | `derail.js` | Says *what* the guest is executing when it is no longer executing code (a run of zero bytes, data, text), and how it got there. |
 
@@ -73,6 +93,17 @@ headless tools, composed as the browser composes it.
 | `xms.js`, `ems.js`, `dpmi.js` | Extended memory, expanded memory, and a DPMI 0.9 host for DOS extenders. |
 | `mouse.js` | The INT 33h mouse driver. |
 | `shell.js`, `samples.js` | A `COMMAND.COM`-style prompt and the small programs bundled on C:. |
+
+**The user-space worlds** — no BIOS services, no DOS.
+
+| File | Role |
+|---|---|
+| `linux.js` | MIRAGE-LINUX: the ELF and a.out loaders, the i386 system calls, processes and threads, signals, ttys and the console, the file system over an image's tree, /dev (fb0, dsp and audio, the mouse, ptys). |
+| `linuxrun.js`, `vtconsole.js` | A Linux image in the page: its file tree from the OASIS server, the canvas, the keys; the VGA text console. |
+| `hle/` | Libraries made in JavaScript for Linux programs (`elfso.js` builds the shared object, `index.js` dispatches): `sdl12.js`, `asound.js`, `gl.js` (the GL and GLU tables), `prism-gl.js` (PRISM's `gl.js` and `d3d9.js` on guest memory, and the window they draw in), `trace.js` (the headless backend that records). |
+| `win32/index.js`, `win32/dll.js` | MIRAGE-WIN32: the PE loader, the process laid out as Windows XP lays it out, threads and their TEBs; a DLL made as a real PE image whose exports trap into JavaScript. |
+| `win32/api.js` | kernel32, user32, gdi32, winmm (waveOut), msvcrt, lz32, ntdll, opengl32 (XP's 368 ordinals) and glu32. |
+| `win32/d3d9.js` | d3d9.dll and d3dx9_24..43.dll: the COM objects and their vtables in guest memory, each method reading what it points to and handing it to the device model (PRISM's `d3d9.js` in a page, `recordD3D9()` headless). |
 
 **The browser** — the only files that touch the DOM.
 

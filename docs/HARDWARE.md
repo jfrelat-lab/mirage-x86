@@ -31,9 +31,11 @@ Chosen by profile (`src/cpu-profile.js`). A feature is reported by CPUID only if
 | `386` (default) | no CPUID | test386 to its last POST code; SingleStepTests 8088 vectors for the common subset |
 | `586`, `pentium` | CPUID, family 5: FPU, TSC, PSE (4 MiB pages), CMPXCHG8B. `pentium` says GenuineIntel | `tools/cx8probe.asm` against QEMU `-cpu pentium` |
 | `686`, `pentiumpro` | family 6: adds CMOV, FCMOV, FCOMI, RDMSR/WRMSR, CPUID leaf 2. `pentiumpro` says GenuineIntel | Linux 2.2 identifies it as a Pentium Pro |
+| `pentiummmx` | `586` with MMX (family 5 model 4, a P55C) | `tools/linux/mmx.asm`: every MMX instruction against Docker i386 |
+| `pentium3`, `pentium4` | `686` with MMX and SSE (a Pentium III); with SSE2 too (family 15, a Pentium 4) | `tools/linux/sse.asm`: SSE and SSE2 against Docker i386 |
 
 Modes: real, 16- and 32-bit protected, virtual-8086, paging with write protection, hardware task
-switching. Not present: MMX, SSE as an advertised feature, PAE, global pages, SYSENTER, 64-bit mode.
+switching. Not present: SSE3 and later, FXSAVE/FXRSTOR, PAE, global pages, SYSENTER, 64-bit mode.
 The x87 computes in IEEE double, not 80-bit extended.
 
 ## BIOS
