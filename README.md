@@ -63,7 +63,7 @@ readable generated code, and runs that are reproducible to the cycle.
 ## Quick start
 
 ```bash
-python3 tools/serve.py 8761      # any static file server works
+python3 tools/serve.py 8761      # with the oasis-fetch relay OASIS images are fetched through; any static server runs the rest
 # http://localhost:8761/            the home page, with the examples
 # http://localhost:8761/machines.html  DOS, Linux and the bare PC on one page (Linux: `node tools/oasis.mjs serve --open`)
 # http://localhost:8761/dos.html    the DOS player: drop a .COM, .EXE or a folder

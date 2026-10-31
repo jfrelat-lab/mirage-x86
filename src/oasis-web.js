@@ -35,7 +35,7 @@ export function webIO({ relay = 'oasis-fetch', onProgress = () => {} } = {}) {
     const url = remote ? `${relay}?url=${encodeURIComponent(src)}` : src;
     if (remote) onProgress(`fetching ${src.split('/').pop()}`);
     const r = await fetch(url);
-    if (!r.ok) throw new Error(`oasis: ${src}: HTTP ${r.status}${remote && r.status === 404 ? ' (no relay here: oasis-fetch)' : ''}`);
+    if (!r.ok) throw new Error(`oasis: ${src}: HTTP ${r.status}${remote && r.status === 404 ? ' (this server has no oasis-fetch relay: serve with python3 tools/serve.py or node tools/oasis.mjs serve)' : ''}`);
     const b = new Uint8Array(await r.arrayBuffer());
     if (remote) await put('url:' + src, b);
     return b;
