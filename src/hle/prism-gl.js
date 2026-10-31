@@ -26,7 +26,7 @@ export function prismM(lx, mem) {
   });
   const tmp = new DataView(new ArrayBuffer(8));
   const dv = {
-    getUint8: (p) => m.r8(p), setUint8: (p, v) => m.w8(p, v),
+    getUint8: (p) => m.r8(p), getInt8: (p) => (m.r8(p) << 24) >> 24, setUint8: (p, v) => m.w8(p, v), setInt8: (p, v) => m.w8(p, v),
     getUint16: (p) => m.r16(p), getInt16: (p) => (m.r16(p) << 16) >> 16, setUint16: (p, v) => m.w16(p, v), setInt16: (p, v) => m.w16(p, v),
     getUint32: (p) => m.r32(p), getInt32: (p) => m.r32(p) | 0, setUint32: (p, v) => m.w32(p, v), setInt32: (p, v) => m.w32(p, v),
     getFloat32: (p) => m.f32(p), getFloat64: (p) => m.f64(p),

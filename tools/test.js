@@ -4135,7 +4135,7 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis in a page: a zip layer with files takes the members it names, to where it says', got, 'a=/tmp/I | intro | oasis: party/nope is not in https://ftp.scene.org/pub/x.zip'); }
 // src/hle/prism-gl.js: the M PRISM's gl.js reads guest memory through -- u8 by index across a page
-// boundary, slice and set, the DataView-like dv in both byte orders' worth of types, cstr and intern.
+// boundary, slice and set, the DataView-like dv in every width (glCallLists reads GL_BYTE names with getInt8), cstr and intern.
 { let got;
   try { const { prismM } = await import('../src/hle/prism-gl.js');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
@@ -4145,13 +4145,14 @@ const runLinux = (hex, argv) => {
     M.mod.dv.setFloat64(edge, 1.5, true); const f64 = M.mod.dv.getFloat64(edge, true);
     M.mod.dv.setInt16(p, -2, true); M.mod.dv.setFloat32(p + 4, 0.25, true);
     const s = M.mod.intern([...new TextEncoder().encode('gl'), 0]);
-    got = [Array.from(M.u8.slice(edge + 8, edge + 9)), f64, M.mod.dv.getInt16(p, true), M.mod.dv.getUint16(p, true), M.mod.dv.getFloat32(p + 4, true), M.cstr(s), M.rt.malloc(8) > 0].join(' ');
+    got = [Array.from(M.u8.slice(edge + 8, edge + 9)), f64, M.mod.dv.getInt16(p, true), M.mod.dv.getUint16(p, true), M.mod.dv.getFloat32(p + 4, true), M.cstr(s), M.rt.malloc(8) > 0, (M.mod.dv.setInt8(p + 8, -3), M.mod.dv.getInt8(p + 8))].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true'); }
+  eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true -3'); }
 // MIRAGE's GL table to PRISM's gl.js: the framebuffer objects (Hartverdrahtet renders to a texture) and
 // every immediate-mode spelling (Paradistance's glTexCoord3iv), the uniform vectors and matrices
-// (kindernoiser's glUniform4fv) have their signatures here and their implementations there, and
-// nothing here is missing there but the accumulation buffer.
+// (kindernoiser's glUniform4fv), Waillee's glCreateShaderProgramv and D-Four's raster position, display
+// lists, glGetFloatv and vertex arrays have their signatures here and their implementations there, and
+// nothing here is missing there.
 { let got;
   try { const { prismM } = await import('../src/hle/prism-gl.js'), { gl } = await import('../src/hle/gl.js');
     const { installGL } = await import('../vendor/prism/src/env/gl.js');
@@ -4162,11 +4163,12 @@ const runLinux = (hex, argv) => {
     for (const ext of ['', 'EXT']) for (const f of ['GenFramebuffers', 'DeleteFramebuffers', 'BindFramebuffer', 'FramebufferTexture2D', 'CheckFramebufferStatus',
       'GenRenderbuffers', 'DeleteRenderbuffers', 'BindRenderbuffer', 'RenderbufferStorage', 'FramebufferRenderbuffer', 'GenerateMipmap', 'BlitFramebuffer']) names.push(`gl${f}${ext}`);
     names.push('glTexCoord3iv', 'glVertex4dv', 'glNormal3b', 'glMultiTexCoord2fARB', 'glMultiTexCoord4sv', 'glClientActiveTexture',
-      'glUniform4fv', 'glUniform2iARB', 'glUniformMatrix4fv', 'glGetString', 'glGetIntegerv');
+      'glUniform4fv', 'glUniform2iARB', 'glUniformMatrix4fv', 'glGetString', 'glGetIntegerv',
+      'glCreateShaderProgramv', 'glRasterPos2f', 'glRasterPos4dv', 'glListBase', 'glCallLists', 'glGetFloatv', 'glEnableClientState', 'glVertexPointer', 'glDrawElements');
     got = [names.filter((n) => !fns[n] || !M.rt[n]).join(' ') || 'all',
-      Object.keys(fns).filter((n) => !M.rt[n] && !n.startsWith('glX')).join(' ')].join(' | ');
+      Object.keys(fns).filter((n) => !M.rt[n] && !n.startsWith('glX')).join(' ') || 'none'].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects, every immediate-mode spelling, the uniform vectors; nothing else missing but the accumulation buffer', got, 'all | glAccum glClearAccum'); }
+  eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects, every immediate-mode spelling, the uniform vectors; nothing missing', got, 'all | none'); }
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's

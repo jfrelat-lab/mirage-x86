@@ -50,6 +50,8 @@ export function gl() {
   for (const n of [2, 3, 4]) imm('glVertex', n, ['s', 'i', 'f', 'd']);
   for (const n of [1, 2, 3, 4]) imm('glTexCoord', n, ['s', 'i', 'f', 'd']);
   imm('glNormal', 3, ['b', 's', 'i', 'f', 'd']);
+  // The raster position (D-Four, Cat 2010, places its text with glRasterPos2f).
+  for (const n of [2, 3, 4]) imm('glRasterPos', n, ['s', 'i', 'f', 'd']);
   for (const n of [1, 2, 3, 4]) for (const t of ['s', 'i', 'f', 'd']) for (const arb of ['', 'ARB']) {
     const nm = `glMultiTexCoord${n}${t}${arb}`;
     if (!fns[nm]) fns[nm] = ['u' + SIG[t].repeat(n), (x, ...a) => x.backend.gl(nm, a)];
@@ -64,6 +66,10 @@ export function gl() {
   }
   put('glUniformMatrix3fv', 'iiup'); put('glUniformMatrix4fv', 'iiup'); put('glUniformMatrix4fvARB', 'iiup');
   put('glGetIntegerv', 'up');
+  put('glListBase', 'u'); put('glCallLists', 'iup'); put('glGetFloatv', 'up'); put('glGetDoublev', 'up'); put('glGetBooleanv', 'up');
+  // Vertex arrays (D-Four): PRISM reads the arrays at the draw.
+  put('glEnableClientState', 'u'); put('glDisableClientState', 'u'); put('glVertexPointer', 'iuip'); put('glColorPointer', 'iuip');
+  put('glTexCoordPointer', 'iuip'); put('glNormalPointer', 'uip'); put('glDrawArrays', 'uii'); put('glDrawElements', 'uiup');
   // glGetString: a recorder's answer is a driver's of the time; PRISM's gl.js answers its own.
   const strs = new Map();
   fns.glGetString = ['u', (x, name) => {
@@ -98,6 +104,9 @@ export function gl() {
   };
   fns.glShaderSource = ['uipp', source];
   fns.glShaderSourceARB = ['uipp', source];
+  // glCreateShaderProgramv(type, count, strings) (GL 4.1, Waillee 2017): PRISM makes the program from
+  // the strings; a recorder gets the source as glShaderSource gives it, and no program.
+  fns.glCreateShaderProgramv = ['uip', (x, type, count, strings) => { source(x, 0, count, strings, 0); return 0; }];
   fns.glGetUniformLocation = ['up', (x, prog, name) => x.backend.gl('glGetUniformLocation', [prog, x.str(name)])];
   fns.glGetUniformLocationARB = ['up', (x, prog, name) => x.backend.gl('glGetUniformLocation', [prog, x.str(name)])];
   // The queries a careful intro makes: compiled, linked — always, here; an empty log.
