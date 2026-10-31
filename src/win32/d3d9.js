@@ -54,6 +54,11 @@ const VTABLES = {
     GetConstantByName:2 GetConstantElement:2 SetDefaults:1 SetValue:4 SetBool:3 SetBoolArray:4 SetInt:3 SetIntArray:4 SetFloat:ppf
     SetFloatArray:4 SetVector:3 SetVectorArray:4 SetMatrix:3 SetMatrixArray:4 SetMatrixPointerArray:4 SetMatrixTranspose:3
     SetMatrixTransposeArray:4 SetMatrixTransposePointerArray:4`,
+  ID3DXMesh: `${UNK} DrawSubset:1 GetNumFaces:0 GetNumVertices:0 GetFVF:0 GetDeclaration:1 GetNumBytesPerVertex:0 GetOptions:0
+    GetDevice:1 CloneMeshFVF:4 CloneMesh:4 GetVertexBuffer:1 GetIndexBuffer:1 LockVertexBuffer:2 UnlockVertexBuffer:0
+    LockIndexBuffer:2 UnlockIndexBuffer:0 GetAttributeTable:2 ConvertPointRepsToAdjacency:2 ConvertAdjacencyToPointReps:2
+    GenerateAdjacency:fp UpdateSemantics:1 LockAttributeBuffer:2 UnlockAttributeBuffer:0 Optimize:6 OptimizeInplace:5
+    SetAttributeTable:2`,
 };
 const sigOf = (s) => 'p' + (/^\d+$/.test(s) ? 'u'.repeat(+s) : s);
 const METHODS = Object.fromEntries(Object.entries(VTABLES).map(([i, s]) => [i, s.trim().split(/\s+/).map((t) => t.split(':'))]));
@@ -61,6 +66,50 @@ const METHODS = Object.fromEntries(Object.entries(VTABLES).map(([i, s]) => [i, s
 // Bytes a pixel of a D3DFORMAT takes (d3d9types.h's numbers).
 const BPP = { 20: 3, 21: 4, 22: 4, 23: 2, 24: 2, 25: 2, 26: 2, 28: 1, 31: 4, 32: 4, 33: 4, 34: 4, 35: 4, 36: 8, 50: 1, 51: 2,
   111: 2, 112: 4, 113: 8, 114: 4, 115: 8, 116: 16 };
+// Bytes a vertex of an FVF takes (D3DXGetFVFVertexSize): the position (XYZ, XYZRHW, XYZB1..5, XYZW), a
+// normal, a point size, two colours, then each texture coordinate set's 1 to 4 floats.
+export function fvfSize(fvf) {
+  return fvfParts(fvf).reduce((n, [, size]) => n + size, 0);
+}
+/** An FVF's vertex as [name, bytes, offset] parts, in the order they are laid out. */
+function fvfParts(fvf) {
+  const out = [], add = (name, size) => out.push([name, size, out.reduce((n, [, s]) => n + s, 0)]);
+  const pos = { 2: 12, 4: 16, 6: 16, 8: 20, 0xa: 24, 0xc: 28, 0xe: 32, 0x4002: 16 }[fvf & 0x400e];
+  if (pos) add(`pos${fvf & 0x400e}`, pos);
+  if (fvf & 0x10) add('normal', 12);
+  if (fvf & 0x20) add('psize', 4);
+  if (fvf & 0x40) add('diffuse', 4);
+  if (fvf & 0x80) add('specular', 4);
+  for (let i = 0; i < ((fvf >> 8) & 0xf); i++) add(`tex${i}`, 4 * [2, 3, 4, 1][(fvf >>> (16 + 2 * i)) & 3]);
+  return out;
+}
+// A texel as a D3DFORMAT stores it, from four floats (r, g, b, a): unsigned normalized formats clamped
+// and rounded, D3DCOLOR's bytes B, G, R, A; float16 and float32 as they are.
+const half = (f) => {
+  const b = new DataView(new ArrayBuffer(4)); b.setFloat32(0, f, true); const x = b.getUint32(0, true);
+  const s = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (((x >>> 23) & 0xff) === 0xff) return s | 0x7c00 | (m ? 0x200 : 0);
+  if (e >= 31) return s | 0x7c00;
+  if (e <= 0) return e < -10 ? s : s | Math.round((m | 0x800000) / 2 ** (14 - e));
+  const r = (e << 10) | (m >>> 13), rest = m & 0x1fff;
+  return s | (r + (rest > 0x1000 || (rest === 0x1000 && (r & 1)) ? 1 : 0));
+};
+const unorm = (f, max) => Math.round(Math.min(1, Math.max(0, f)) * max);
+export function texel(format, [r, g, b, a], dv, off) {
+  switch (format) {
+    case 21: case 22: dv.setUint32(off, ((format === 22 ? 255 : unorm(a, 255)) << 24 | unorm(r, 255) << 16 | unorm(g, 255) << 8 | unorm(b, 255)) >>> 0, true); return;
+    case 32: dv.setUint32(off, (unorm(a, 255) << 24 | unorm(b, 255) << 16 | unorm(g, 255) << 8 | unorm(r, 255)) >>> 0, true); return;
+    case 28: dv.setUint8(off, unorm(a, 255)); return;
+    case 50: dv.setUint8(off, unorm(r, 255)); return;
+    case 111: dv.setUint16(off, half(r), true); return;
+    case 112: dv.setUint16(off, half(r), true); dv.setUint16(off + 2, half(g), true); return;
+    case 113: [r, g, b, a].forEach((v, i) => dv.setUint16(off + 2 * i, half(v), true)); return;
+    case 114: dv.setFloat32(off, r, true); return;
+    case 115: dv.setFloat32(off, r, true); dv.setFloat32(off + 4, g, true); return;
+    case 116: [r, g, b, a].forEach((v, i) => dv.setFloat32(off + 4 * i, v, true)); return;
+    default: throw new Error(`mirage-win32: a texel of D3DFORMAT ${format} is not made`);
+  }
+}
 // Vertices a primitive count takes: D3DPRIMITIVETYPE 1 points .. 6 fan.
 const VERTS = [0, (n) => n, (n) => 2 * n, (n) => n + 1, (n) => 3 * n, (n) => n + 2, (n) => n + 2];
 
@@ -424,9 +473,209 @@ export function d3d9Apis(st) {
     }
     return S_OK;
   };
+  // ID3DXMesh (d3dx9mesh.h; Wine's d3dx9_36/mesh.c as the oracle): a vertex buffer, an index buffer (16-bit
+  // unless D3DXMESH_32BIT) and an attribute a face, all on the device. DrawSubset draws each run of faces
+  // with that attribute as an indexed triangle list. Wine sets the vertex declaration made from the FVF;
+  // here the FVF itself, which declares the same vertex to PRISM's device.
+  const meshFVF = (x, faces, verts, options, fvf, devPtr) => {
+    const stride = fvfSize(fvf), i32 = options & 1, d = D(devPtr), ilen = faces * 3 * (i32 ? 4 : 2);
+    const vb = res(x, devPtr, 'IDirect3DVertexBuffer9', d.createVertexBuffer(verts * stride, 0, fvf, 1), { length: verts * stride, usage: 0, fvf, pool: 1, format: 100 });
+    const ib = res(x, devPtr, 'IDirect3DIndexBuffer9', d.createIndexBuffer(ilen, 0, i32 ? 102 : 101, 1), { length: ilen, usage: 0, pool: 1, format: i32 ? 102 : 101 });
+    const attr = galloc(x, faces * 4); x.write(attr, new Uint8Array(faces * 4));
+    o(devPtr).ref++;
+    return make(x, 'ID3DXMesh', { devPtr, faces, verts, options, fvf, stride, vb, ib, attr });
+  };
+  const ref = (x, p, pp) => { o(p).ref++; x.w32(pp, p); return S_OK; };
+  const mesh = {
+    DrawSubset: (x, self, id) => {
+      const m = o(self), d = D(m.devPtr);
+      d.setFVF(m.fvf); d.setStreamSource(0, h(m.vb), 0, m.stride); d.setIndices(h(m.ib));
+      for (let f = 0; f < m.faces;) {
+        if (x.r32(m.attr + 4 * f) !== id) { f++; continue; }
+        let e = f + 1;
+        while (e < m.faces && x.r32(m.attr + 4 * e) === id) e++;
+        d.drawIndexedPrimitive(4, 0, 0, m.verts, 3 * f, e - f);
+        f = e;
+      }
+      return S_OK;
+    },
+    GetNumFaces: (x, self) => o(self).faces, GetNumVertices: (x, self) => o(self).verts, GetFVF: (x, self) => o(self).fvf,
+    GetNumBytesPerVertex: (x, self) => o(self).stride, GetOptions: (x, self) => o(self).options,
+    GetDevice: resource.GetDevice,
+    GetVertexBuffer: (x, self, pp) => ref(x, o(self).vb, pp), GetIndexBuffer: (x, self, pp) => ref(x, o(self).ib, pp),
+    LockVertexBuffer: (x, self, flags, pp) => buffer.Lock(x, o(self).vb, 0, 0, pp, flags), UnlockVertexBuffer: (x, self) => buffer.Unlock(x, o(self).vb),
+    LockIndexBuffer: (x, self, flags, pp) => buffer.Lock(x, o(self).ib, 0, 0, pp, flags), UnlockIndexBuffer: (x, self) => buffer.Unlock(x, o(self).ib),
+    LockAttributeBuffer: (x, self, flags, pp) => { x.w32(pp, o(self).attr); return S_OK; }, UnlockAttributeBuffer: () => S_OK,
+    GetAttributeTable: (x, self, p, pN) => { if (pN) x.w32(pN, 0); return S_OK; },          // none until Optimize makes one
+    // A copy with another FVF, index size or device, as Wine's CloneMesh: what both vertices have is
+    // copied (a texture coordinate set as far as the shorter), the rest starts at zero; indices widened or
+    // narrowed, attributes kept.
+    CloneMeshFVF: (x, self, options, fvf, dev, pp) => {
+      const m = o(self), c = meshFVF(x, m.faces, m.verts, options, fvf, dev || m.devPtr), n = o(c), pl = x.win.heapAlloc(4);
+      const from = fvfParts(m.fvf), to = fvfParts(fvf);
+      mesh.LockVertexBuffer(x, self, 0, pl); const src = x.bytes(x.r32(pl), m.verts * m.stride);
+      const dst = new Uint8Array(m.verts * n.stride);
+      for (const [name, size, off] of to) {
+        const f = from.find((e) => e[0] === name); if (!f) continue;
+        for (let v = 0; v < m.verts; v++) dst.set(src.subarray(v * m.stride + f[2], v * m.stride + f[2] + Math.min(size, f[1])), v * n.stride + off);
+      }
+      mesh.LockVertexBuffer(x, c, 0, pl); x.write(x.r32(pl), dst); mesh.UnlockVertexBuffer(x, c);
+      const k = 3 * m.faces, w1 = m.options & 1 ? 4 : 2, w2 = options & 1 ? 4 : 2;
+      mesh.LockIndexBuffer(x, self, 0, pl); const ia = x.r32(pl);
+      const idx = Array.from({ length: k }, (_, i) => (w1 === 4 ? x.r32(ia + 4 * i) : x.r16(ia + 2 * i)));
+      mesh.LockIndexBuffer(x, c, 0, pl); const ib = x.r32(pl);
+      idx.forEach((v, i) => (w2 === 4 ? x.w32(ib + 4 * i, v) : x.w16(ib + 2 * i, v))); mesh.UnlockIndexBuffer(x, c);
+      x.write(n.attr, x.bytes(m.attr, 4 * m.faces));
+      x.w32(pp, c); return S_OK;
+    },
+  };
+  // D3DXCreatePolygon as Wine's: the centre and `sides` corners on a circle in z = 0, the first at +y, each
+  // side `length` long, normals +z; face i is (0, i+1, i+2), the last closing on corner 1. Its adjacency:
+  // the faces before and after across the spokes, none across the rim.
+  const createPolygon = (x, devPtr, length, sides, ppMesh, ppAdj) => {
+    if (!devPtr || length < 0 || sides < 3 || !ppMesh) return D3DERR_INVALIDCALL;
+    const m = meshFVF(x, sides, sides + 1, 0x10 /* D3DXMESH_MANAGED */, 0x12 /* XYZ | NORMAL */, devPtr), ob = o(m);
+    const v = new Float32Array(6 * (sides + 1)), scale = 0.5 * length / Math.sin(Math.PI / sides);
+    let angle = Math.PI / 2;
+    v[5] = 1;
+    for (let i = 1; i <= sides; i++, angle += 2 * Math.PI / sides) v.set([Math.cos(angle) * scale, Math.sin(angle) * scale, 0, 0, 0, 1], 6 * i);
+    const idx = new Uint16Array(3 * sides);
+    for (let i = 0; i < sides; i++) idx.set([0, i + 1, i + 2], 3 * i);
+    idx[3 * sides - 1] = 1;
+    const pp = x.win.heapAlloc(4);
+    mesh.LockVertexBuffer(x, m, 0, pp); x.write(x.r32(pp), new Uint8Array(v.buffer)); mesh.UnlockVertexBuffer(x, m);
+    mesh.LockIndexBuffer(x, m, 0, pp); x.write(x.r32(pp), new Uint8Array(idx.buffer)); mesh.UnlockIndexBuffer(x, m);
+    if (ppAdj) {
+      const adj = new Uint32Array(3 * sides);
+      for (let i = 0; i < sides; i++) adj.set([(i + sides - 1) % sides, 0xffffffff, (i + 1) % sides], 3 * i);
+      x.w32(ppAdj, blobObj(x, new Uint8Array(adj.buffer)));
+    }
+    ob.ref = 1; x.w32(ppMesh, m);
+    return S_OK;
+  };
+  // D3DXTessellateNPatches: each triangle cut into segs x segs, its points on the PN triangle (Vlachos,
+  // Peters, Boyd, Mitchell, "Curved PN Triangles", 2001) its corners' positions and normals make — the
+  // position cubic, the normal linear (or quadratic), the other parts of the vertex linear. A face's
+  // pieces keep its winding and its attribute. Wine leaves this function a stub; Elevated (2009) cuts a
+  // quad into 512 segments an edge, flat since its normals are the plane's, for its vertex shader to raise.
+  const tessellate = (x, self, pAdjIn, segs, quadNormals, ppOut, ppAdjOut) => {
+    const m = o(self), n = Math.max(1, Math.round(segs)), parts = fvfParts(m.fvf), S = m.stride;
+    if (ppAdjOut) throw new Error('mirage-win32: D3DXTessellateNPatches: the adjacency out is not made');
+    const hasN = parts.find((e) => e[0] === 'normal'), nOff = hasN ? hasN[2] : -1;
+    const per = (n + 1) * (n + 2) / 2, verts = m.faces * per, faces = m.faces * n * n;
+    if (!(m.options & 1) && verts > 0x10000) return D3DERR_INVALIDCALL;
+    const pl = x.win.heapAlloc(4), i32 = m.options & 1;
+    mesh.LockVertexBuffer(x, self, 0, pl); const src = x.bytes(x.r32(pl), m.verts * S), sf = new Float32Array(src.slice().buffer);
+    mesh.LockIndexBuffer(x, self, 0, pl); const ia = x.r32(pl), idx = (k) => (i32 ? x.r32(ia + 4 * k) : x.r16(ia + 2 * k));
+    const out = meshFVF(x, faces, verts, m.options, m.fvf, m.devPtr), ob = o(out);
+    const vb = new Uint8Array(verts * S), vf = new Float32Array(vb.buffer), ib = i32 ? new Uint32Array(3 * faces) : new Uint16Array(3 * faces);
+    const attrs = new Uint32Array(faces), sub = (a, b) => a.map((v, i) => v - b[i]), dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
+    let vo = 0, io = 0, fo = 0;
+    for (let f = 0; f < m.faces; f++) {
+      const c = [idx(3 * f), idx(3 * f + 1), idx(3 * f + 2)];
+      const P = c.map((v) => Array.from(sf.subarray(v * S / 4, v * S / 4 + 3)));
+      const N = c.map((v) => (hasN ? Array.from(sf.subarray((v * S + nOff) / 4, (v * S + nOff) / 4 + 3)) : [0, 0, 0]));
+      // the cubic's control points: b[i][j] the one two thirds of the way from corner i towards corner j
+      const b = [0, 1, 2].map((i) => [0, 1, 2].map((j) => (i === j ? P[i] : P[i].map((p, k) => (2 * p + P[j][k] - dot(sub(P[j], P[i]), N[i]) * N[i][k]) / 3))));
+      const E = [0, 1, 2].map((k) => (b[0][1][k] + b[1][0][k] + b[1][2][k] + b[2][1][k] + b[2][0][k] + b[0][2][k]) / 6);
+      const V = [0, 1, 2].map((k) => (P[0][k] + P[1][k] + P[2][k]) / 3), b111 = E.map((e, k) => e + (e - V[k]) / 2);
+      const nm = [0, 1, 2].map((i) => [0, 1, 2].map((j) => { if (i === j) return N[i]; const d = sub(P[j], P[i]), s2 = N[i].map((v, k) => v + N[j][k]);
+        const t = dot(d, d) ? 2 * dot(d, s2) / dot(d, d) : 0; return norm(s2.map((v, k) => v - t * d[k])); }));
+      const first = vo / S;
+      for (let i = 0; i <= n; i++) for (let j = 0; j <= n - i; j++) {
+        const w = [1 - (i + j) / n, i / n, j / n], at = vo;
+        // every part linear first, then position and normal as the patch says
+        for (const [name, size, off] of parts) {
+          if (name === 'diffuse' || name === 'specular') { for (let k = 0; k < 4; k++) vb[at + off + k] = Math.round(w[0] * src[c[0] * S + off + k] + w[1] * src[c[1] * S + off + k] + w[2] * src[c[2] * S + off + k]); continue; }
+          for (let k = off; k < off + size; k += 4) for (let q = 0; q < 3; q++) vf[(at + k) / 4] += w[q] * sf[(c[q] * S + k) / 4];
+        }
+        for (let k = 0; k < 3; k++) {
+          const [a, u, v] = w;
+          vf[at / 4 + k] = P[0][k] * a ** 3 + P[1][k] * u ** 3 + P[2][k] * v ** 3 + 3 * (b[0][1][k] * a * a * u + b[1][0][k] * a * u * u + b[0][2][k] * a * a * v
+            + b[1][2][k] * u * u * v + b[2][0][k] * a * v * v + b[2][1][k] * u * v * v) + 6 * b111[k] * a * u * v;
+        }
+        if (hasN) {
+          const [a, u, v] = w, nn = quadNormals
+            ? [0, 1, 2].map((k) => N[0][k] * a * a + N[1][k] * u * u + N[2][k] * v * v + nm[0][1][k] * a * u + nm[1][2][k] * u * v + nm[0][2][k] * a * v)
+            : [0, 1, 2].map((k) => N[0][k] * a + N[1][k] * u + N[2][k] * v);
+          vf.set(norm(nn), (at + nOff) / 4);
+        }
+        vo += S;
+      }
+      const at = (i, j) => first + i * (n + 1) - (i * (i - 1)) / 2 + j;          // the point (i, j) of row i
+      for (let i = 0; i < n; i++) for (let j = 0; j < n - i; j++) {
+        ib.set([at(i, j), at(i + 1, j), at(i, j + 1)], io); io += 3; attrs[fo++] = x.r32(m.attr + 4 * f);
+        if (j < n - i - 1) { ib.set([at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)], io); io += 3; attrs[fo++] = x.r32(m.attr + 4 * f); }
+      }
+    }
+    mesh.LockVertexBuffer(x, out, 0, pl); x.write(x.r32(pl), vb); mesh.UnlockVertexBuffer(x, out);
+    mesh.LockIndexBuffer(x, out, 0, pl); x.write(x.r32(pl), new Uint8Array(ib.buffer)); mesh.UnlockIndexBuffer(x, out);
+    x.write(ob.attr, new Uint8Array(attrs.buffer));
+    x.w32(ppOut, out); return S_OK;
+  };
+  // D3DXFillTexture(texture, function, data): the program's function called for each texel of each level,
+  // (D3DXVECTOR4 *out, const D3DXVECTOR2 *coord, const D3DXVECTOR2 *texelSize, void *data), stdcall, the
+  // coordinate the texel's centre (Wine's d3dx9_36/texture.c). A function of the program is called by
+  // code made here: D3DXFillTexture's return address becomes a loop that traps into
+  // MIRAGE_FillTextureNext (store what the last call wrote, place the next texel; 0 when there is none),
+  // calls the function, and at the end traps into MIRAGE_FillTextureDone (S_OK) and returns to the caller.
+  let fill = null;
+  const fillTexture = (x, pTex, fn, data) => {
+    const t = o(pTex), esp = x.cpu.reg[4] >>> 0, ret = x.r32(esp);
+    const mem = galloc(x, 128), out = mem + 64, coord = mem + 80, size = mem + 88, code = mem;
+    const b32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, v >>> 24];
+    const trap = (name) => { const m = [...x.win.modules.values()].find((d) => d.exports.has(name)); return x.r32(m.exports.get(name) + 1); };   // its stub's MOV EAX
+    const next = trap('MIRAGE_FillTextureNext'), done = trap('MIRAGE_FillTextureDone');
+    x.write(code, Uint8Array.from([
+      0xb8, ...b32(next), 0xcd, 0x80, 0x85, 0xc0, 0x74, 29,                      // loop: next; jz done
+      0x68, ...b32(data), 0x68, ...b32(size), 0x68, ...b32(coord), 0x68, ...b32(out),
+      0xb8, ...b32(fn), 0xff, 0xd0, 0xeb, 0xd8,                                 //   call the function; jmp loop
+      0xb8, ...b32(done), 0xcd, 0x80, 0x68, ...b32(ret), 0xc3,                  // done: S_OK, back to the caller
+    ]));
+    fill = { t, level: 0, i: -1, out, coord, size, bytes: null };
+    x.w32(esp, code);
+    return S_OK;
+  };
+  const fillNext = (x) => {
+    const f = fill, t = f.t;
+    for (;;) {
+      const [w, hh] = levelSize(t, f.level), bpp = BPP[t.format] || 4;
+      if (!f.bytes) f.bytes = new DataView(new ArrayBuffer(w * hh * bpp));
+      if (f.i >= 0) texel(t.format, [0, 4, 8, 12].map((k) => x.f32(f.out + k)), f.bytes, f.i * bpp);
+      if (++f.i < w * hh) {
+        const fl = (p, a, b) => { const v = new DataView(new ArrayBuffer(8)); v.setFloat32(0, a, true); v.setFloat32(4, b, true); x.w32(p, v.getUint32(0, true)); x.w32(p + 4, v.getUint32(4, true)); };
+        fl(f.coord, ((f.i % w) + 0.5) / w, (Math.floor(f.i / w) + 0.5) / hh); fl(f.size, 1 / w, 1 / hh);
+        x.write(f.out, new Uint8Array(16));
+        return 1;
+      }
+      t.dev.textureWrite(t.h, f.level, null, new Uint8Array(f.bytes.buffer), w * bpp);
+      if (++f.level >= t.levels) return 0;
+      f.i = -1; f.bytes = null;
+    }
+  };
+  // D3DX functions not made yet, exported by name: a packer resolving by a hash of the name (Crinkler)
+  // finds them and stops with the name, rather than missing them and calling whatever its walk ends on.
+  const notYet = Object.fromEntries(`D3DXCreateMesh D3DXCreateBox D3DXCreateSphere D3DXCreateCylinder D3DXCreateTorus D3DXCreateTeapot
+    D3DXCreateTextA D3DXCreateTextW D3DXCreateFontA D3DXCreateFontW D3DXCreateSprite D3DXCreateTexture D3DXFillTextureTX
+    D3DXCreateTextureShader D3DXAssembleShader D3DXCreateEffect D3DXLoadMeshFromXInMemory D3DXComputeNormals D3DXComputeTangent
+    D3DXCreateTextureFromFileA D3DXCreateTextureFromFileInMemory D3DXDeclaratorFromFVF D3DXCleanMesh D3DXWeldVertices
+    D3DXCreateNPatchMesh D3DXSimplifyMesh D3DXGenerateOutputDecl D3DXCreatePMeshFromStream`.trim().split(/\s+/)
+    .map((n) => [n, ['', NOT('d3dx9', n)]]));
   const prof = (s) => (x) => { const p = x.win.heapAlloc(8); x.write(p, new TextEncoder().encode(s + '\0')); return p; };
   const d3dx = {
+    ...notYet,
     D3DXCompileShader: ['puppppuppp', d3dxCompile],
+    D3DXCreateMeshFVF: ['uuuupp', (x, faces, verts, options, fvf, dev, pp) => {
+      if (!faces || !verts || !dev || !pp || (!(options & 1) && verts > 0x10000)) return D3DERR_INVALIDCALL;
+      x.w32(pp, meshFVF(x, faces, verts, options, fvf, dev)); return S_OK;
+    }],
+    D3DXCreatePolygon: ['pfupp', createPolygon],
+    D3DXTessellateNPatches: ['ppfupp', tessellate],
+    D3DXFillTexture: ['ppp', fillTexture],
+    MIRAGE_FillTextureNext: ['', fillNext],
+    MIRAGE_FillTextureDone: ['', () => { fill = null; return S_OK; }],
+    D3DXGetFVFVertexSize: ['u', (x, fvf) => fvfSize(fvf)],
     D3DXGetPixelShaderProfile: ['p', prof('ps_3_0')], D3DXGetVertexShaderProfile: ['p', prof('vs_3_0')],
     D3DXGetShaderVersion: ['p', (x, p) => x.r32(p)],
     ...d3dxMath(),
@@ -437,7 +686,7 @@ export function d3d9Apis(st) {
     IDirect3D9: d3d9, IDirect3DDevice9: device, IDirect3DTexture9: { ...resource, ...texture }, IDirect3DSurface9: { ...resource, ...surface },
     IDirect3DVertexBuffer9: { ...resource, ...buffer }, IDirect3DIndexBuffer9: { ...resource, ...buffer },
     IDirect3DVertexShader9: shaderObj, IDirect3DPixelShader9: shaderObj, IDirect3DVertexDeclaration9: shaderObj, IDirect3DQuery9: query,
-    ID3DXBuffer: xbuffer, ID3DXConstantTable: ctab,
+    ID3DXBuffer: xbuffer, ID3DXConstantTable: ctab, ID3DXMesh: mesh,
   };
   const fns = {
     Direct3DCreate9: ['u', (x, sdk) => make(x, 'IDirect3D9')],

@@ -65,8 +65,8 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Missing | Consequence |
 |---|---|
 | DirectDraw, DirectSound, DirectInput | Programs that need them stop; luxo4k shows a message box and exits for want of DirectSound. |
-| Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test, `Reset` and reading a surface back are not there yet. |
-| D3DX beyond HLSL | `D3DXCompileShader` hands HLSL on to PRISM; texture shaders (`tx_1_0`, Ergon), shader assembly (`D3DXAssembleShader`, Stiletto) and D3DX meshes (`D3DXCreatePolygon`, Elevated) are not done. |
+| Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test, `Reset` and reading a surface back (Elevated's camera) are not there yet. |
+| D3DX beyond HLSL | `D3DXCompileShader` hands HLSL on to PRISM; texture shaders (`tx_1_0`, Ergon), shader assembly (`D3DXAssembleShader`, Stiletto) and most of D3DX's meshes are not done: ID3DXMesh, `D3DXCreateMeshFVF`, `D3DXCreatePolygon`, `D3DXTessellateNPatches` and `D3DXFillTexture` are. |
 | One emulated core | Threads take turns on one CPU at about 200 M instructions a second: Darwinism (180 M x87 instructions a frame) draws a frame a second, Valleyball's synthesizer falls behind, Stripped's precalculation lasts minutes. |
 | Win16 | No NE loader yet. |
 

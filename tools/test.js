@@ -4004,6 +4004,49 @@ const runLinux = (hex, argv) => {
     got = [wired, size, blob, off, bytes.join(''), tex, [0, 5, 10, 11, 14].map((i) => +x.f32(m + 4 * i).toFixed(3)).join(' ')].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: Direct3D 9 objects, D3DXCompileShader\'s blob, a vertex buffer\'s lock, D3DX\'s perspective', got, 'true | 640x480 | ffff0200,4d535250,true,ffff | 16 | 12345678 | 3 3 256 8192 256 | 0.5 1 1.5 1 -1.5'); }
+// D3DX's meshes (src/win32/d3d9.js; Wine's d3dx9_36 as the oracle), as Elevated (2009) makes its terrain:
+// D3DXCreatePolygon's square (side 2: corners at sqrt 2 from the centre, the first at +y; faces fanned from
+// the centre; adjacency across the spokes), cloned to 32-bit indices, cut by D3DXTessellateNPatches into
+// 2 segments an edge (16 faces of 6 points each, flat, the normal kept), drawn by DrawSubset as one
+// indexed triangle list; D3DXFillTexture calling a function of the program for each texel's centre — here
+// one that returns its x, so a 2x2 R16F texture holds 0.25 and 0.75 as float16.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const be = traceBackend(), apis = win32Apis(), { x, win } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: be });
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1], d9 = (n) => fn('d3d9.dll', n), dx = (n) => fn('d3dx9_33.dll', n);
+    const pp = x.win.heapAlloc(56), pp4 = () => x.win.heapAlloc(4); x.write(pp, new Uint8Array(56)); x.w32(pp + 32, 1);
+    const ppDev = pp4(); d9('IDirect3D9::CreateDevice')(x, d9('Direct3DCreate9')(x, 32), 0, 1, 0, 0x40, pp, ppDev);
+    const dev = x.r32(ppDev), ppM = pp4(), ppAdj = pp4(), pl = pp4();
+    dx('D3DXCreatePolygon')(x, dev, 2, 4, ppM, ppAdj);
+    const m = x.r32(ppM); d9('ID3DXMesh::LockVertexBuffer')(x, m, 0, pl);
+    const v = (p, i, k) => +x.f32(x.r32(p) + 24 * i + 4 * k).toFixed(3) + 0;
+    const poly = [v(pl, 1, 0), v(pl, 1, 1), v(pl, 2, 0), v(pl, 2, 1), v(pl, 3, 5)].join(' ');
+    d9('ID3DXMesh::LockIndexBuffer')(x, m, 0, pl); const idx = Array.from({ length: 12 }, (_, i) => x.r16(x.r32(pl) + 2 * i)).join('');
+    const adj = d9('ID3DXBuffer::GetBufferPointer')(x, x.r32(ppAdj)), adjs = Array.from({ length: 6 }, (_, i) => x.r32(adj + 4 * i) | 0).join(' ');
+    d9('ID3DXMesh::CloneMeshFVF')(x, m, 1, 0x12, dev, ppM);
+    const c = x.r32(ppM); d9('ID3DXMesh::LockIndexBuffer')(x, c, 0, pl); const wide = x.r32(x.r32(pl) + 4 * 11);
+    dx('D3DXTessellateNPatches')(x, c, 0, 2, 0, ppM, 0);
+    const t = x.r32(ppM); d9('ID3DXMesh::LockVertexBuffer')(x, t, 0, pl);
+    const tess = [d9('ID3DXMesh::GetNumFaces')(x, t), d9('ID3DXMesh::GetNumVertices')(x, t), v(pl, 1, 0), v(pl, 1, 1), v(pl, 1, 5)].join(' ');
+    d9('ID3DXMesh::DrawSubset')(x, t, 0);
+    const draw = be.d3d.device.last.drawIndexedPrimitive.join(' ');
+    const ppTex = pp4(); d9('IDirect3DDevice9::CreateTexture')(x, dev, 2, 2, 1, 0, 111, 1, ppTex, 0);
+    // the program: D3DXFillTexture(tex, f, 0), then exit with what it returned; f(out, coord, size, data): out.x = coord.x
+    const code = x.win.heapAlloc(64), f = code + 32, fill = win.load('d3dx9_33.dll').exports.get('D3DXFillTexture');
+    const b32 = (n) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, n >>> 24];
+    x.write(code, Uint8Array.from([0x6a, 0, 0x68, ...b32(f), 0x68, ...b32(x.r32(ppTex)), 0xb8, ...b32(fill), 0xff, 0xd0, 0x89, 0xc3, 0xb8, 1, 0, 0, 0, 0xcd, 0x80]));
+    x.write(f, Uint8Array.from([0x8b, 0x44, 0x24, 0x04, 0x8b, 0x4c, 0x24, 0x08, 0x8b, 0x11, 0x89, 0x10, 0xc2, 0x10, 0x00]));
+    mc.cpu.eip = code;
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    const tw = be.d3d.device.last.textureWrite, texels = [lx.done && lx.status, [...tw[3]].map((b) => b.toString(16)).join(' '), tw[4]].join(' ');
+    got = [poly, idx, adjs, wide, tess, draw, texels].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: D3DX meshes — a polygon, a 32-bit clone, N-patches, DrawSubset; D3DXFillTexture calling the program', got,
+    '0 1.414 -1.414 0 1 | 012023034041 | 3 -1 1 0 -1 2 | 1 | 16 24 -0.707 0 1 | 4 0 0 24 0 16 | 0 0 34 0 3a 0 34 0 3a 4'); }
 // SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
 // the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
 // one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.
