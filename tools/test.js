@@ -3914,6 +3914,24 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, lx.signal, lx.threadExits.get(tid)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a thread shares its process\'s memory, is preempted to, and exits alone', got, '42 0 0'); }
+// SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
+// the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
+// one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    let swaps = 0, ready = false;
+    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: { swap() { swaps++; }, swapReady: () => ready } });
+    const swap = apis.find((d) => d.dll === 'gdi32.dll').fns.SwapBuffers[1];
+    mc.cpu.cycles += mc.cyclesPerSecond || 1e8;                      // a second in: past any sixtieth
+    const held = swap(x, 0) === lx.BLOCK, n0 = swaps;
+    ready = true; const r = swap(x, 0);
+    got = [held, n0, r, swaps].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SwapBuffers waits while the page has not taken the last frame, then presents', got, 'true 0 1 1'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

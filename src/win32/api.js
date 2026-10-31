@@ -166,10 +166,12 @@ export function win32Apis({ gl, glu } = {}) {
   const gdi32 = {
     ChoosePixelFormat: ['pp', () => 1], SetPixelFormat: ['pip', () => 1],
     DescribePixelFormat: ['piup', () => 1],
-    // The frame: presented at most sixty times a second of the guest's clock, as a vsynced swap.
+    // The frame: presented at most sixty times a second of the guest's clock, as a vsynced swap, and
+    // not before the page has taken the last one (backend.swapReady: one frame in flight).
     SwapBuffers: ['p', (x) => {
       const now = x.lx.mono();
       if (now < st.lastSwap + 1 / 60) return x.waitUntil(st.lastSwap + 1 / 60);
+      if (x.backend.swapReady && !x.backend.swapReady()) return x.waitUntil(now + 0.002);
       st.lastSwap = now; x.backend.swap(); return 1;
     }],
     GetStockObject: ['i', () => 0x01900010], SelectObject: ['pp', () => 0x01900010], DeleteObject: ['p', () => 1],

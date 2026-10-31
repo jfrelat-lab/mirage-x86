@@ -43,7 +43,7 @@ export function prismM(lx, mem) {
  * The libraries an image's `machine.hle` names (sdl12, gl, glu, asound) for linuxrun.js: libGL.so.1 and
  * libGLU.so.1 whose entry points hand their raw arguments (pointers as guest addresses) to PRISM's
  * gl.js and glu.js, libSDL-1.2.so.0 whose OpenGL window is gl.js's framebuffer, libasound.so.2.
- * `frame()` gives the last picture SDL_GL_SwapBuffers presented (an ImageBitmap), or null.
+ * `frame()` gives the last picture SDL_GL_SwapBuffers presented (an ImageBitmap), or null, and lets the next swap go.
  */
 export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'asound']) {
   const { installGL } = await import('../../vendor/prism/src/env/gl.js');
@@ -51,10 +51,15 @@ export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'as
   const M = prismM(lx, mem);
   const gl = installGL(M, { backend: 'webgl' });
   installGlu(M);
-  let frame = null, size = null;
+  // `shown`: the page has taken the last frame. A swap chain with one frame in flight: the program's
+  // next swap waits for it, so a frame the GPU takes longer to draw than the guest to issue (Absolute
+  // Territory, 2017: one rectangle, 38 ms of fragment shader on an M1) does not queue without end and
+  // starve the page's requestAnimationFrame, as a driver's swap blocks on its queue.
+  let frame = null, size = null, shown = true;
   const backend = {
     setVideoMode(w, h) { gl.resize(w, h); M.rt.glViewport(0, 0, w, h); size = { w, h }; },
-    swap() { const b = gl.present(); if (b) { if (frame && frame.close) frame.close(); frame = b; } },
+    swap() { const b = gl.present(); if (b) { if (frame && frame.close) frame.close(); frame = b; shown = false; } },
+    swapReady() { return shown; },
     nextEvent() { return null; },
     gl() { return 0; },
   };
@@ -75,5 +80,5 @@ export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'as
   const make = { sdl12, gl: () => viaPrism(glTable()), glu: () => viaPrism(gluTable()), asound };
   const unknown = names.find((n) => !make[n]);
   if (unknown) throw new Error(`machine.hle: no library '${unknown}' (sdl12, gl, glu, asound)`);
-  return { libs: names.map((n) => make[n]()), backend, frame: () => frame, size: () => size, gl, M };
+  return { libs: names.map((n) => make[n]()), backend, frame: () => { shown = true; return frame; }, size: () => size, gl, M };
 }

@@ -196,6 +196,15 @@
     "output": "window"
   },
   {
+    "name": "win32/absoluteterritory-2017",
+    "title": "Absolute Territory — Prismbeings, 4K for Windows",
+    "world": "win32",
+    "year": 2017,
+    "author": "Prismbeings, PRISM",
+    "thumb": "oasis/thumbs/win32-absoluteterritory-2017.png",
+    "output": "window"
+  },
+  {
     "name": "win32/chocolux-2008",
     "title": "Chocolux — auld, 1K for Windows",
     "world": "win32",
