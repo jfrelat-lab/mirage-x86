@@ -369,8 +369,9 @@ export class CPU {
       this.reg[0] = P.signature || 0x0500;               // family 5, model 0 (or the profile's)
       this.reg[3] = 0;                                   // EBX: no brand index, no CLFLUSH line
       this.reg[1] = 0;                                   // ECX: none of the later extensions
-      // EDX: FPU (0), PSE (3), TSC (4), CX8 (8); on a P6 also MSR (5) and CMOV (15).
-      this.reg[2] = (1 << 0) | (1 << 3) | (1 << 4) | (1 << 8) | (P.p6 ? (1 << 5) | (1 << 15) : 0) | (P.mmx ? 1 << 23 : 0);
+      // EDX: FPU (0), PSE (3), TSC (4), CX8 (8); on a P6 also MSR (5) and CMOV (15); MMX (23), SSE (25),
+      // SSE2 (26) as the profile has them.
+      this.reg[2] = (1 << 0) | (1 << 3) | (1 << 4) | (1 << 8) | (P.p6 ? (1 << 5) | (1 << 15) : 0) | (P.mmx ? 1 << 23 : 0) | (P.sse ? 1 << 25 : 0) | (P.sse2 ? 1 << 26 : 0);
       return;
     }
     if (leaf === 2 && P.p6) {                            // cache and TLB descriptors, a Pentium Pro's:

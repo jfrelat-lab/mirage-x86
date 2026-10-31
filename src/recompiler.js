@@ -12,7 +12,7 @@
 // returning. The machine loop then fetches the next block.
 
 import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
-import { SSE, VEX, XMM_SCRATCH } from './sse.js';
+import { SSE, SSE_TABLE, VEX, XMM_SCRATCH } from './sse.js';
 import { MMX, MMX_OPS, MM_SCRATCH } from './mmx.js';
 
 // Cap on basic-block length. Overridable because block boundaries are where IRQs are sampled, so
@@ -2440,11 +2440,64 @@ export class Recompiler {
           P(`var ${t}=${a};cpu.xmmStore(${t},${reg},${len});`);
           P(`if(cp[${t}>>>12]|cp[(${AM(`${t}+${len - 1}`)})>>>12])m._dirty(${t},${len});`);
         };
-        const simple = (code, len = 16) => { const o = modrm(); P(`cpu.sse(${code},${o.reg},${xmmSrc(o, len)},0);`); };
+        // cpu.sse for the first twenty-one operations (Chrome Revenge's), cpu.xmm.op for the rest.
+        const fx = (code) => (code >= SSE.ADDSS ? 'cpu.xmm.op' : 'cpu.sse');
+        const simple = (code, len = 16) => { const o = modrm(); P(`${fx(code)}(${code},${o.reg},${xmmSrc(o, len)},0);`); };
         const withImm = (code, len = 16) => {
           const o = modrm(); const src = xmmSrc(o, len); const imm = f8();
-          P(`cpu.sse(${code},${o.reg},${src},${imm});`);
+          P(`${fx(code)}(${code},${o.reg},${src},${imm});`);
         };
+        // The table of src/sse.js's later operations: [prefix, opcode] -> [operation, bytes a memory
+        // source has, 'i' when an immediate follows]. Prefixes: '' none, 66, F3, F2.
+        const pF2 = rep === 0xf2, pfx = p66 ? '66' : pF3 ? 'F3' : pF2 ? 'F2' : '';
+        // 0F AE: LDMXCSR and STMXCSR (MXCSR is kept and read back; the operations here round to
+        // nearest whatever it says), LFENCE / MFENCE / SFENCE (nothing to order).
+        if (pfx === '' && op2 === 0xae) {
+          const o = modrm();
+          if (o.isReg && o.reg >= 5) return;
+          if (!o.isReg && o.reg === 2) { canFault = true; P(`cpu.xmm.mxcsr=(${rmR(o, 32)})&0xffff;`); return; }
+          if (!o.isReg && o.reg === 3) { canFault = true; P(rmW(o, 32, 'cpu.xmm.mxcsr')); return; }
+          throw new Error(unimplemented(`0f ae /` + o.reg, mask(linStart - ip0 + ip - 1), mem, rec));
+        }
+        const T = SSE_TABLE[pfx + op2.toString(16).padStart(2, '0')];
+        if (T) { if (T[2]) withImm(T[0], T[1]); else simple(T[0], T[1]); return; }
+        // Loads whose register and memory forms differ, stores, and the half-register moves.
+        const store = (o, reg, len, hi) => { if (hi) { P(`cpu.xmm.op(${SSE.HI2LO},${XMM_SCRATCH},${reg},0);`); xmmStore(o, XMM_SCRATCH, len); } else xmmStore(o, reg, len); };
+        const k = pfx + op2.toString(16).padStart(2, '0');
+        if (k === '10' || k === '6610' || k === '6628' || k === '666f' || k === 'F36f') { simple(SSE.MOVAPS_LD); return; }      // MOVUPS, MOVUPD, MOVAPD, MOVDQA, MOVDQU
+        if (k === '11' || k === '6611' || k === '6629' || k === '2b' || k === '662b' || k === '667f' || k === 'F37f' || k === '66e7') {
+          const o = modrm(); if (o.isReg) P(`cpu.sse(${SSE.MOVAPS_ST},${o.rm},${o.reg},0);`); else store(o, o.reg, 16); return;
+        }
+        if (k === 'F210') { const o = modrm(); P(`cpu.xmm.op(${o.isReg ? SSE.MOVSD_LD : SSE.MOVSD_LD_M},${o.reg},${xmmSrc(o, 8)},0);`); return; }
+        if (k === 'F211') { const o = modrm(); if (o.isReg) P(`cpu.xmm.op(${SSE.MOVSD_LD},${o.rm},${o.reg},0);`); else store(o, o.reg, 8); return; }
+        if (k === 'F37e') { const o = modrm(); P(`cpu.xmm.op(${SSE.MOVQ_LD},${o.reg},${xmmSrc(o, 8)},0);`); return; }
+        if (k === '66d6') { const o = modrm(); if (o.isReg) P(`cpu.xmm.op(${SSE.MOVQ_LD},${o.rm},${o.reg},0);`); else store(o, o.reg, 8); return; }
+        if (k === '12' || k === '6612') { const o = modrm(); P(`cpu.xmm.op(${o.isReg ? SSE.MOVHLPS : SSE.MOVLO},${o.reg},${xmmSrc(o, 8)},0);`); return; }   // MOVLPS / MOVHLPS
+        if (k === '16' || k === '6616') { const o = modrm(); P(`cpu.xmm.op(${o.isReg ? SSE.MOVLHPS : SSE.MOVHI},${o.reg},${xmmSrc(o, 8)},0);`); return; }  // MOVHPS / MOVLHPS
+        if (k === '13' || k === '6613' || k === '17' || k === '6617') { const o = modrm(); if (o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; } store(o, o.reg, 8, op2 === 0x17); return; }
+        // COMISS / UCOMISS / COMISD / UCOMISD: ZF PF CF from the compare, OF SF AF cleared.
+        if (k === '2e' || k === '2f' || k === '662e' || k === '662f') {
+          const o = modrm(), src = xmmSrc(o, p66 ? 8 : 4);
+          P(`cpu.flags=(cpu.flags&~0x8d5)|cpu.xmm.comi(${o.reg},${src},${p66 ? 1 : 0});`); return;
+        }
+        // CVTSI2SD, CVTTSD2SI, CVTSD2SI: as their single-precision twins below, on the low double.
+        if (k === 'F22a') { const o = modrm(); P(`cpu.xmm.d[${o.reg * 2}]=${rmR(o, 32)}|0;`); return; }
+        if (k === 'F22c' || k === 'F22d') {
+          const o = modrm(), src = xmmSrc(o, 8), v = NT(), t = NT();
+          P(`var ${v}=cpu.xmm.d[${src * 2}];`);
+          P(op2 === 0x2c ? `var ${t}=Math.trunc(${v});`
+            : `var ${t}=Math.floor(${v});if(${v}-${t}>0.5||(${v}-${t}===0.5&&(${t}%2)!==0))${t}++;`);
+          P(`r[${o.reg}]=(${t}!==${t}||${t}>2147483647||${t}<-2147483648)?0x80000000:(${t}>>>0);`);
+          return;
+        }
+        // Shifts of XMM by an immediate: 66 0F 71/72/73 /n ib.
+        if (p66 && (op2 === 0x71 || op2 === 0x72 || op2 === 0x73)) {
+          const o = modrm(), imm = f8();
+          const code = { 0x71: { 2: SSE.PSRLW, 4: SSE.PSRAW, 6: SSE.PSLLW }, 0x72: { 2: SSE.PSRLD, 4: SSE.PSRAD, 6: SSE.PSLLD },
+            0x73: { 2: SSE.PSRLQ, 3: SSE.PSRLDQ, 6: SSE.PSLLQ, 7: SSE.PSLLDQ } }[op2][o.reg];
+          if (code === undefined || !o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          P(`cpu.xmm.op(${code},${o.rm},-1,${imm});`); return;
+        }
         if (!p66 && !pF3 && op2 === 0x28) { simple(SSE.MOVAPS_LD); return; }
         if (!p66 && !pF3 && op2 === 0x29) { const o = modrm(); if (o.isReg) P(`cpu.sse(${SSE.MOVAPS_ST},${o.rm},${o.reg},0);`); else xmmStore(o, o.reg, 16); return; }
         if (pF3 && op2 === 0x10) { const o = modrm(); P(`cpu.sse(${o.isReg ? SSE.MOVSS_LD : SSE.MOVSS_LD_M},${o.reg},${xmmSrc(o, 4)},0);`); return; }

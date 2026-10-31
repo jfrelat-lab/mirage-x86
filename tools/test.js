@@ -3684,6 +3684,53 @@ const runLinux = (hex, argv) => {
     got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex'), bit('pentiummmx'), bit('686'), bit('586')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('MMX: every instruction as Docker i386 computes it; CPUID says MMX on pentiummmx alone', got, '103 36e93d3e88184161fd64b5679a9fb01f 1 0 0'); }
+// tools/linux/sse.asm: SSE and SSE2 on fixed operands -- arithmetic, logic, compares, conversions,
+// shuffles, unpacks, shifts and moves in single and double precision and on integers, with NaNs
+// (propagated quiet, the default one negative), signed zeros, ties to even and the integer
+// indefinite, infinity times zero -- then COMISS and its kin's flags and MXCSR: 327 lines, which Docker i386 prints
+// identically (their MD5). CPUID says SSE on 'pentium3' and 'pentium4', SSE2 on 'pentium4' alone.
+// yes we can (Still, 2009) is compiled for SSE: MULSS was the first it reached.
+{ let got;
+  try { const b64 = (                                  // nasm -f bin tools/linux/sse.asm, deflated
+    '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');
+    const { inflateRawSync } = await import('zlib');
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: 'pentium4' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    lx.load(new Uint8Array(inflateRawSync(Buffer.from(b64, 'base64'))), ['/SSE']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    const { createHash } = await import('crypto');
+    const bits = (cpu) => { const c = new Machine({ memSize: 1 << 20, cpu }).cpu; c.reg[0] = 1; c.cpuid(); return ((c.reg[2] >>> 25) & 3).toString(2).padStart(2, '0'); };
+    got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex'), bits('pentium4'), bits('pentium3'), bits('686')].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('SSE: every instruction as Docker i386 computes it; CPUID says SSE on pentium3 and 4, SSE2 on pentium4', got, '327 1b56ec01dd414cd0ebc0eb572a890e1b 11 01 00'); }
 // tools/linux/repstr.asm: REP STOS and REP MOVS under paging -- bytes, words, dwords, across page
 // boundaries, at an odd address, backwards, copies overlapping either way -- give Docker i386's
 // checksum, and the forward ones run a page at a time, not through a memory helper an element

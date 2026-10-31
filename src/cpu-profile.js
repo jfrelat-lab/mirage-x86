@@ -113,6 +113,36 @@ export const PROFILES = {
     p6: true,
     signature: 0x0619,
   },
+  // '686' with MMX and SSE (src/mmx.js, src/sse.js): family 6 model 7, a Pentium III (Katmai). CPUID
+  // says MMX (EDX bit 23) and SSE (25); not FXSR, which MIRAGE does not do. The Direct3D 9 intros of
+  // 2008-2010 are compiled for SSE (MSVC's /arch:SSE: yes we can's MULSS). MIRAGE_CPU=pentium3.
+  pentium3: {
+    name: 'pentium3',
+    shiftCountMask: 0x1f,
+    pushSPOriginal: true,
+    pushfSetsReserved: false,
+    bcdAdjustsAX: true,
+    cpuid: true,
+    p6: true,
+    mmx: true,
+    sse: true,
+    signature: 0x0673,
+  },
+  // 'pentium3' with SSE2 (EDX bit 26): family 15 model 2, a Pentium 4 (Northwood), what /arch:SSE2
+  // code wants. MIRAGE_CPU=pentium4.
+  pentium4: {
+    name: 'pentium4',
+    shiftCountMask: 0x1f,
+    pushSPOriginal: true,
+    pushfSetsReserved: false,
+    bcdAdjustsAX: true,
+    cpuid: true,
+    p6: true,
+    mmx: true,
+    sse: true,
+    sse2: true,
+    signature: 0x0f24,
+  },
   // '686' with an Intel identity: GenuineIntel, family 6 model 1 stepping 9, a Pentium Pro.
   pentiumpro: {
     name: 'pentiumpro',
