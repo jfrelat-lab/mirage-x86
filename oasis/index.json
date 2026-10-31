@@ -205,6 +205,15 @@
     "output": "window"
   },
   {
+    "name": "win32/cdak-2010",
+    "title": "cdak — Quite & Orange, 4K for Windows",
+    "world": "win32",
+    "year": 2010,
+    "author": "Quite & Orange, PRISM",
+    "thumb": "oasis/thumbs/win32-cdak-2010.png",
+    "output": "window"
+  },
+  {
     "name": "win32/chocolux-2008",
     "title": "Chocolux — auld, 1K for Windows",
     "world": "win32",

@@ -48,6 +48,7 @@ export function prismM(lx, mem) {
 export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'asound']) {
   const { installGL } = await import('../../vendor/prism/src/env/gl.js');
   const { installGlu } = await import('../../vendor/prism/src/env/glu.js');
+  const { createD3D9 } = await import('../../vendor/prism/src/env/d3d9.js');
   const M = prismM(lx, mem);
   const gl = installGL(M, { backend: 'webgl' });
   installGlu(M);
@@ -56,12 +57,30 @@ export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'as
   // Territory, 2017: one rectangle, 38 ms of fragment shader on an M1) does not queue without end and
   // starve the page's requestAnimationFrame, as a driver's swap blocks on its queue.
   let frame = null, size = null, shown = true;
+  // Direct3D 9 (src/win32/d3d9.js's COM objects): PRISM's device model on a WebGL2 canvas of its own,
+  // the back buffer's size; its Present blits to the canvas, the swap hands the canvas over.
+  let d3d = null, d3dCanvas = null;
   const backend = {
-    setVideoMode(w, h) { gl.resize(w, h); M.rt.glViewport(0, 0, w, h); size = { w, h }; },
-    swap() { const b = gl.present(); if (b) { if (frame && frame.close) frame.close(); frame = b; shown = false; } },
+    setVideoMode(w, h) {
+      gl.resize(w, h); M.rt.glViewport(0, 0, w, h); size = { w, h };
+      if (d3dCanvas) { d3dCanvas.width = w; d3dCanvas.height = h; }
+    },
+    swap() {
+      const b = d3dCanvas ? d3dCanvas.transferToImageBitmap() : gl.present();
+      if (b) { if (frame && frame.close) frame.close(); frame = b; shown = false; }
+    },
     swapReady() { return shown; },
     nextEvent() { return null; },
     gl() { return 0; },
+    d3d9() {
+      if (!d3d) {
+        d3dCanvas = new OffscreenCanvas(size ? size.w : 640, size ? size.h : 480);
+        const g = d3dCanvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: false, preserveDrawingBuffer: true });
+        if (!g) throw new Error('d3d9: this browser has no WebGL2 for an OffscreenCanvas');
+        d3d = createD3D9({ gl: g });
+      }
+      return d3d;
+    },
   };
   // The GL and GLU entry points: MIRAGE's tables for the signatures (how to read the stack), PRISM's
   // gl.js and glu.js for the work.

@@ -185,7 +185,7 @@ export function d3d9Apis(st) {
     SetLOD: () => 0, GetLOD: () => 0, GetLevelCount: (x, self) => o(self).levels,
     SetAutoGenFilterType: () => S_OK, GetAutoGenFilterType: () => 2, GenerateMipSubLevels: () => 0,
   };
-  const levelSize = (t, l) => [Math.max(1, t.w >> l), Math.max(1, t.h >> l)];
+  const levelSize = (t, l) => [Math.max(1, t.w >> l), Math.max(1, t.h2 >> l)];
   // A lock: guest memory the program writes into, handed to the model at the unlock.
   const lockRect = (x, ob, pLocked, pRect) => {
     const bpp = BPP[ob.format] || 4;
@@ -301,7 +301,7 @@ export function d3d9Apis(st) {
     GetBackBuffer: (x, self, sw, i, type, pp) => { const q = o(self).params; x.w32(pp, byHandle(x, D(self), D(self).getBackBuffer(sw, i), 'IDirect3DSurface9', { devPtr: self, w: q.width, h2: q.height, format: q.backBufferFormat, usage: 1 })); return S_OK; },
     CreateTexture: (x, self, w, hh, levels, usage, fmt, pool, pp) => {
       let n = levels; if (!n) { n = 1; while ((w >> n) || (hh >> n)) n++; }
-      x.w32(pp, res(x, self, 'IDirect3DTexture9', D(self).createTexture(w, hh, levels, usage, fmt, pool), { w, h: hh, levels: n, usage, format: fmt, pool })); return S_OK;
+      x.w32(pp, res(x, self, 'IDirect3DTexture9', D(self).createTexture(w, hh, levels, usage, fmt, pool), { w, h2: hh, levels: n, usage, format: fmt, pool })); return S_OK;
     },
     CreateVertexBuffer: (x, self, len, usage, fvf, pool, pp) => { x.w32(pp, res(x, self, 'IDirect3DVertexBuffer9', D(self).createVertexBuffer(len, usage, fvf, pool), { length: len, usage, fvf, pool, format: 100 })); return S_OK; },
     CreateIndexBuffer: (x, self, len, usage, fmt, pool, pp) => { x.w32(pp, res(x, self, 'IDirect3DIndexBuffer9', D(self).createIndexBuffer(len, usage, fmt, pool), { length: len, usage, pool, format: fmt })); return S_OK; },

@@ -3965,7 +3965,9 @@ const runLinux = (hex, argv) => {
 // order (CreateDevice the 17th); a windowed device of size 0 takes its window's and says so in the
 // parameters; D3DXCompileShader's bytecode is PRISM's blob (ps_2_0's version token, a comment holding
 // 'PRSM', the end token), handed whole to CreatePixelShader; a vertex buffer's locked bytes reach the
-// model at the unlock; D3DXMatrixPerspectiveFovLH is d3dx9math.h's.
+// model at the unlock; a texture is its handle to the model, not its height (cdak, 2010: a 1280x720
+// render target handed on as handle 720), and its locked level reaches the model whole at the unlock;
+// D3DXMatrixPerspectiveFovLH is d3dx9math.h's.
 { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
@@ -3992,10 +3994,16 @@ const runLinux = (hex, argv) => {
     x.write(x.r32(ppData), Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8));
     fn('d3d9.dll', 'IDirect3DVertexBuffer9::Unlock')(x, x.r32(ppVB));
     const [, off, bytes] = be.d3d.device.last.bufferWrite;
+    const ppTex = x.win.heapAlloc(4), lr = x.win.heapAlloc(8);
+    fn('d3d9.dll', 'IDirect3DDevice9::CreateTexture')(x, dev, 64, 32, 1, 0, 21, 1, ppTex, 0);
+    fn('d3d9.dll', 'IDirect3DDevice9::SetTexture')(x, dev, 0, x.r32(ppTex));
+    fn('d3d9.dll', 'IDirect3DTexture9::LockRect')(x, x.r32(ppTex), 0, lr, 0, 0);
+    fn('d3d9.dll', 'IDirect3DTexture9::UnlockRect')(x, x.r32(ppTex), 0);
+    const tw = be.d3d.device.last.textureWrite, tex = [be.d3d.device.last.setTexture[1], tw[0], x.r32(lr), tw[3].length, tw[4]].join(' ');
     const m = x.win.heapAlloc(64); fn('d3dx9_37.dll', 'D3DXMatrixPerspectiveFovLH')(x, m, Math.PI / 2, 2, 1, 3);
-    got = [wired, size, blob, off, bytes.join(''), [0, 5, 10, 11, 14].map((i) => +x.f32(m + 4 * i).toFixed(3)).join(' ')].join(' | ');
+    got = [wired, size, blob, off, bytes.join(''), tex, [0, 5, 10, 11, 14].map((i) => +x.f32(m + 4 * i).toFixed(3)).join(' ')].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: Direct3D 9 objects, D3DXCompileShader\'s blob, a vertex buffer\'s lock, D3DX\'s perspective', got, 'true | 640x480 | ffff0200,4d535250,true,ffff | 16 | 12345678 | 0.5 1 1.5 1 -1.5'); }
+  eq('win32: Direct3D 9 objects, D3DXCompileShader\'s blob, a vertex buffer\'s lock, D3DX\'s perspective', got, 'true | 640x480 | ffff0200,4d535250,true,ffff | 16 | 12345678 | 3 3 256 8192 256 | 0.5 1 1.5 1 -1.5'); }
 // SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
 // the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
 // one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.
@@ -4053,6 +4061,28 @@ const runLinux = (hex, argv) => {
     got = [wave, s.rate, s.samples.length > 0 && s.samples.slice(512).every((v) => v === 0x1234)].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('sound from a thread: waveOut plays a buffer filled after its write; SDL\'s audio loop calls the callback', got, '88200 44100 true 33 0 | 22050 | true'); }
+// A looped waveOut header (WHDR_BEGINLOOP | WHDR_ENDLOOP, dwLoops): its bytes play again and again and
+// the position goes on through the loops, as Wine's winmm. cdak (2010) streams its music through a
+// 32 KiB ring looped 0xFFFFFFFF times and times its pictures by the position: capped at the ring's
+// end, its clock stopped a fifth of a second in.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis }), wm = apis.find((d) => d.dll === 'winmm.dll').fns;
+    const wfx = x.win.heapAlloc(18), ph = x.win.heapAlloc(4), hdr = x.win.heapAlloc(32), data = x.win.heapAlloc(8), mmt = x.win.heapAlloc(12);
+    x.w16(wfx, 1); x.w16(wfx + 2, 2); x.w32(wfx + 4, 44100); x.w32(wfx + 8, 44100 * 4); x.w16(wfx + 12, 4); x.w16(wfx + 14, 16);
+    [100, 100, 200, 200].forEach((v, i) => x.w16(data + 2 * i, v));    // two stereo frames
+    x.w32(hdr, data); x.w32(hdr + 4, 8); x.w32(hdr + 16, 0xc); x.w32(hdr + 20, 0xffffffff);
+    wm.waveOutOpen[1](x, ph, 0xffffffff, wfx, 0, 0, 0); wm.waveOutPrepareHeader[1](x, x.r32(ph), hdr, 32); wm.waveOutWrite[1](x, x.r32(ph), hdr, 32);
+    mc.cpu.cycles += (mc.cyclesPerSecond || 1e8) / 2;
+    x.w32(mmt, 4); wm.waveOutGetPosition[1](x, x.r32(ph), mmt, 12);
+    const w = mc.dsp.drain();
+    got = [x.r32(mmt + 4), w.samples.length, w.samples.every((v, i) => v === ((i >> 1) & 1 ? 200 : 100)), x.r32(hdr + 16) & 1].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a looped waveOut header plays its bytes over and the position counts through the loops', got, '88200 44100 true 0'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

@@ -198,7 +198,9 @@ export function win32Apis({ gl, glu } = {}) {
    * bytes are read when they are heard, not when written. The position is the guest's clock since the
    * first write, at the format's rate, never past what was written; the mixer (src/audio.js) pulls
    * the samples through the card's place (lx.setSoundSource). Valleyball times its pictures by
-   * waveOutGetPosition.
+   * waveOutGetPosition. A header flagged WHDR_BEGINLOOP and WHDR_ENDLOOP plays dwLoops times over
+   * (cdak, 2010: a 32 KiB ring its thread refills, looped 0xFFFFFFFF times), and the position goes on
+   * counting through the loops, as Wine's winmm.
    */
   const wave = { fmt: null, queue: [], total: 0, consumed: 0, t0: null, x: null };
   const bps = () => wave.fmt.rate * wave.fmt.align;
@@ -217,7 +219,11 @@ export function win32Apis({ gl, glu } = {}) {
     for (const h of wave.queue) {
       if (h.end <= pos) continue;
       if (h.start >= now) break;
-      const a = Math.max(pos, h.start), b = Math.min(now, h.end), bytes = x.bytes(h.ptr + (a - h.start), b - a);
+      const a = Math.max(pos, h.start), b = Math.min(now, h.end), bytes = new Uint8Array(b - a);
+      for (let o = a; o < b;) {                                         // a looped header: its bytes again and again
+        const at = (o - h.start) % h.len, n = Math.min(b - o, h.len - at);
+        bytes.set(x.bytes(h.ptr + at, n), o - a); o += n;
+      }
       const dv = new DataView(bytes.buffer), step = f.align;
       for (let o = 0; o + step <= bytes.length; o += step) {
         const at = (c) => (f.tag === 3 ? Math.round(Math.max(-1, Math.min(1, dv.getFloat32(o + c * 4, true))) * 32767)
@@ -252,11 +258,12 @@ export function win32Apis({ gl, glu } = {}) {
       x.w32(hdr + 16, x.r32(hdr + 16) & ~2); return 0;
     }],
     waveOutWrite: ['ppu', (x, h, hdr) => {
-      const now = x.lx.mono(), ptr = x.r32(hdr), len = x.r32(hdr + 4);
+      const now = x.lx.mono(), ptr = x.r32(hdr), len = x.r32(hdr + 4), flags = x.r32(hdr + 16);
+      const loops = (flags & 0xc) === 0xc ? Math.max(1, x.r32(hdr + 20)) : 1;   // WHDR_BEGINLOOP | WHDR_ENDLOOP
       if (wave.t0 === null) wave.t0 = now;
       else if (played(now) >= wave.total) wave.t0 = now - wave.total / bps();   // the queue had run dry: play on from here
-      wave.queue.push({ hdr, ptr, start: wave.total, end: wave.total + len });
-      wave.total += len;
+      wave.queue.push({ hdr, ptr, len, start: wave.total, end: wave.total + len * loops });
+      wave.total += len * loops;
       x.w32(hdr + 16, (x.r32(hdr + 16) | 0x10) & ~1);                 // WHDR_INQUEUE
       return 0;
     }],
