@@ -3914,6 +3914,41 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, lx.signal, lx.threadExits.get(tid)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: a thread shares its process\'s memory, is preempted to, and exits alone', got, '42 0 0'); }
+// Direct3D 9 (src/win32/d3d9.js): Direct3DCreate9's object is a vtable of d3d9.dll's stubs in IDirect3D9's
+// order (CreateDevice the 17th); a windowed device of size 0 takes its window's and says so in the
+// parameters; D3DXCompileShader's bytecode is PRISM's blob (ps_2_0's version token, a comment holding
+// 'PRSM', the end token), handed whole to CreatePixelShader; a vertex buffer's locked bytes reach the
+// model at the unlock; D3DXMatrixPerspectiveFovLH is d3dx9math.h's.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const be = traceBackend(), apis = win32Apis(), { x, win } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: be });
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1];
+    const d3d = fn('d3d9.dll', 'Direct3DCreate9')(x, 32), mod = win.modules.get('d3d9.dll');
+    const wired = x.r32(x.r32(d3d) + 16 * 4) === mod.exports.get('IDirect3D9::CreateDevice');
+    const pp = x.win.heapAlloc(56), ppDev = x.win.heapAlloc(4); x.write(pp, new Uint8Array(56)); x.w32(pp + 32, 1);
+    fn('d3d9.dll', 'IDirect3D9::CreateDevice')(x, d3d, 0, 1, 0, 0x40, pp, ppDev);
+    const dev = x.r32(ppDev), size = `${x.r32(pp)}x${x.r32(pp + 4)}`;
+    const src = 'float4 main():COLOR{return 1;}', ps = x.win.heapAlloc(64), prof = x.win.heapAlloc(16), ent = x.win.heapAlloc(8), ppBuf = x.win.heapAlloc(4), ppPS = x.win.heapAlloc(4);
+    x.write(ps, new TextEncoder().encode(src)); x.write(prof, new TextEncoder().encode('ps_2_0\0')); x.write(ent, new TextEncoder().encode('main\0'));
+    fn('d3dx9_37.dll', 'D3DXCompileShader')(x, ps, src.length, 0, 0, ent, prof, 0, ppBuf, 0, 0);
+    const code = fn('d3d9.dll', 'ID3DXBuffer::GetBufferPointer')(x, x.r32(ppBuf));
+    fn('d3d9.dll', 'IDirect3DDevice9::CreatePixelShader')(x, dev, code, ppPS);
+    const toks = be.d3d.device.last.createPixelShader[0], size4 = fn('d3d9.dll', 'ID3DXBuffer::GetBufferSize')(x, x.r32(ppBuf)) / 4;
+    const blob = [x.r32(code).toString(16), x.r32(code + 8).toString(16), toks.length === size4, toks[toks.length - 1].toString(16)].join(',');
+    const ppVB = x.win.heapAlloc(4), ppData = x.win.heapAlloc(4);
+    fn('d3d9.dll', 'IDirect3DDevice9::CreateVertexBuffer')(x, dev, 64, 0, 0x44, 0, ppVB, 0);
+    fn('d3d9.dll', 'IDirect3DVertexBuffer9::Lock')(x, x.r32(ppVB), 16, 8, ppData, 0);
+    x.write(x.r32(ppData), Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8));
+    fn('d3d9.dll', 'IDirect3DVertexBuffer9::Unlock')(x, x.r32(ppVB));
+    const [, off, bytes] = be.d3d.device.last.bufferWrite;
+    const m = x.win.heapAlloc(64); fn('d3dx9_37.dll', 'D3DXMatrixPerspectiveFovLH')(x, m, Math.PI / 2, 2, 1, 3);
+    got = [wired, size, blob, off, bytes.join(''), [0, 5, 10, 11, 14].map((i) => +x.f32(m + 4 * i).toFixed(3)).join(' ')].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Direct3D 9 objects, D3DXCompileShader\'s blob, a vertex buffer\'s lock, D3DX\'s perspective', got, 'true | 640x480 | ffff0200,4d535250,true,ffff | 16 | 12345678 | 0.5 1 1.5 1 -1.5'); }
 // SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
 // the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
 // one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.

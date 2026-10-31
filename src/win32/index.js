@@ -26,7 +26,7 @@ const THREAD_STACKS = 0x02000000;                                  // the other 
 const HEAP = 0x00140000, HEAP_SIZE = 0x01000000;                   // the process heap: the loader's lists, HeapAlloc
 export const BASES = { 'ntdll.dll': 0x7c900000, 'kernel32.dll': 0x7c800000, 'user32.dll': 0x7e410000, 'gdi32.dll': 0x77f10000,
   'opengl32.dll': 0x5ed00000, 'glu32.dll': 0x68b20000, 'winmm.dll': 0x76b40000, 'lz32.dll': 0x71b20000, 'msvcrt.dll': 0x77c10000,
-  'advapi32.dll': 0x77dd0000, 'dsound.dll': 0x73f10000, 'shell32.dll': 0x7c9c0000, 'ole32.dll': 0x774e0000 };
+  'advapi32.dll': 0x77dd0000, 'd3d9.dll': 0x4fdd0000, 'dsound.dll': 0x73f10000, 'shell32.dll': 0x7c9c0000, 'ole32.dll': 0x774e0000 };
 
 /** The RAM a machine needs for `exe`: 64 MiB and its whole SizeOfImage, which a Crinkler intro touches
  *  much of (its decompressor's hash tables live there), as a power of two. */

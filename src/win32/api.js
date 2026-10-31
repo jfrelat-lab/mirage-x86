@@ -7,6 +7,7 @@
 // A name exported but not answered says so when called (NOT): the packers resolve every name by hash
 // before running, so a missing name is a crash with no name, a present one a message that names it.
 import { gl as glTable, glu as gluTable } from '../hle/gl.js';
+import { d3d9Apis } from './d3d9.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
 
@@ -336,5 +337,6 @@ export function win32Apis({ gl, glu } = {}) {
     { dll: 'opengl32.dll', fns: numbered(opengl32) },
     { dll: 'glu32.dll', fns: glu32 },
     { dll: 'winmm.dll', fns: winmm },
+    ...d3d9Apis(st),
   ];
 }
