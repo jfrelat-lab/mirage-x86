@@ -1,0 +1,24 @@
+{
+  "oasis": 1,
+  "title": "Photon Race 2 — Archee, 4K for Windows",
+  "year": 2008,
+  "author": "Archee, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium4"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.scene.org/pub/parties/2008/nvscene08/4k/photon_race21.zip",
+      "files": {
+        "medium_1280_720.exe": "/intro/medium_1280_720.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/medium_1280_720.exe"
+  },
+  "output": "window",
+  "notes": "NVScene 2008, 4K intro: ray and photon tracing with caustics and constructive solid geometry, all in HLSL shader model 3.0 — 192 full-screen passes a frame into four float16 render targets at once, summed by additive blending, after a precalculation of some two thousand passes; packed by Crinkler. MIRAGE-WIN32 makes d3d9.dll and d3dx9 in JavaScript; PRISM's d3d9.js translates the HLSL vertex and pixel shaders to GLSL ES and draws them with WebGL2.",
+  "thumb": "oasis/thumbs/win32-photonrace2-2008.png"
+}

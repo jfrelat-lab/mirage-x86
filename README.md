@@ -37,7 +37,7 @@ None of that software is in this repository — see [Third-party software](#thir
 | FreeDOS 1.3 (from its CD), MS-DOS 6.22 | the installer; the prompt |
 | QNX 4.05 demo disk, KolibriOS, OpenBSD | the desktop; the desktop; `login:` |
 | Linux programs (MIRAGE-LINUX) | Debian 12's bash, XFree86 3.3 and its clients, DOOM and Quake for Linux, Mesa's demos, the scene's Linux intros — the images in [docs/OASIS.md](docs/OASIS.md) |
-| Windows intros (MIRAGE-WIN32) | seven OpenGL intros of 2007-2017 and cdak, a Direct3D 9 intro of 2010 — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) |
+| Windows intros (MIRAGE-WIN32) | seven OpenGL intros of 2007-2017 and three Direct3D 9 intros of 2008-2010 — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) |
 
 **What does not work yet**, so nobody has to find out the hard way: Windows NT 3.51 (dies after the
 graphical switch), Windows 2000 (stays on its boot screen), ReactOS (needs ACPI, which MIRAGE does

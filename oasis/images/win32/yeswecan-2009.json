@@ -1,0 +1,24 @@
+{
+  "oasis": 1,
+  "title": "yes we can — Quite, 4K for Windows",
+  "year": 2009,
+  "author": "Quite, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium3"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.scene.org/pub/parties/2009/chaosconstructions09/in4k/yes_we_can.zip",
+      "files": {
+        "yes_we_can_1280x720.exe": "/intro/yes_we_can_1280x720.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/yes_we_can_1280x720.exe"
+  },
+  "output": "window",
+  "notes": "Chaos Constructions 2009, 4K intro, first place: raymarched in HLSL pixel shaders on one pre-transformed triangle, through a float16 render target, its music by 4klang through waveOut; compiled for SSE, packed by Crinkler. MIRAGE-WIN32 makes d3d9.dll and d3dx9_37.dll in JavaScript; PRISM's d3d9.js translates the HLSL to GLSL ES and draws it with WebGL2.",
+  "thumb": "oasis/thumbs/win32-yeswecan-2009.png"
+}

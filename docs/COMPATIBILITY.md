@@ -163,8 +163,10 @@ recording device model, which says how far the program gets but not what it draw
 | Hartverdrahtet (4K, Revision 2012) | OpenGL | Renders | framebuffer objects; music from a thread | 2026-10 |
 | Absolute Territory (4K, Revision 2017) | OpenGL | Renders | 38 ms of fragment shader a frame on an M1 | 2026-10 |
 | cdak (4K, Chaos Constructions 2010) | Direct3D 9 | Renders | 60 frames a second in Chrome: HLSL pixel shaders, render targets ping-ponged, a looped waveOut buffer | 2026-10-31 |
-| yes we can (4K) | Direct3D 9 | Starts | presents headless: pixel shaders on one pre-transformed triangle, a float16 render target; not yet tried in the page | 2026-10-31 |
-| Photon Race 2 (4K) | Direct3D 9 | Starts | presents headless; needs four render targets at once (MRT) in float16, which PRISM's `d3d9.js` is adding | 2026-10-31 |
+| yes we can (4K, Chaos Constructions 2009) | Direct3D 9 | Renders | 60 frames a second in Chrome: pixel shaders on one pre-transformed triangle, a float16 render target | 2026-10-31 |
+| Photon Race 2 (4K, NVScene 2008) | Direct3D 9 | Renders | in Chrome after a few seconds of precalculation: HLSL vertex and pixel shaders, four float16 render targets at once, 192 passes a frame | 2026-10-31 |
+| Elevated (4K, Breakpoint 2009) | Direct3D 9 | Fails | `D3DXCreatePolygon` (an ID3DXMesh) is not made: Crinkler's lookup by hash lands on another export | 2026-10-31 |
+| Atrium (4K, Breakpoint 2008) | Direct3D 9 | Starts | still precomputing after 3 G instructions, its device created | 2026-10-31 |
 | Darwinism | Direct3D 9 | Starts | presents headless at about one frame a second: some 180 M x87 instructions a frame on one emulated core | 2026-10-31 |
 | Wishful Twisting | Direct3D 9 | Starts | still precomputing after 1.5 G instructions, before its first frame | 2026-10-31 |
 | Ergon | Direct3D 9 | Fails | `D3DXCompileShader` for a `tx_1_0` texture shader (`D3DXFillTextureTX`) | 2026-10-31 |

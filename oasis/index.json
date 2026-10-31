@@ -250,6 +250,15 @@
     "output": "window"
   },
   {
+    "name": "win32/photonrace2-2008",
+    "title": "Photon Race 2 — Archee, 4K for Windows",
+    "world": "win32",
+    "year": 2008,
+    "author": "Archee, PRISM",
+    "thumb": "oasis/thumbs/win32-photonrace2-2008.png",
+    "output": "window"
+  },
+  {
     "name": "win32/retrospection-2010",
     "title": "Retrospection — Trolls in the Shadows & FRequency, 4K for Windows",
     "world": "win32",
@@ -265,6 +274,15 @@
     "year": 2009,
     "author": "FRequency, PRISM",
     "thumb": "oasis/thumbs/win32-ribbon-2009.png",
+    "output": "window"
+  },
+  {
+    "name": "win32/yeswecan-2009",
+    "title": "yes we can — Quite, 4K for Windows",
+    "world": "win32",
+    "year": 2009,
+    "author": "Quite, PRISM",
+    "thumb": "oasis/thumbs/win32-yeswecan-2009.png",
     "output": "window"
   }
 ]
