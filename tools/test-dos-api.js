@@ -525,6 +525,17 @@ function asciiz(mc, cpu, off, str) {
   int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });   // shrink to 0x200 paras
   eq('PSP:0002 does NOT follow a shrink', c.mc.mem.r16((c.dos.psp << 4) + 2), 0x9fff);
 }
+{ // The environment is a memory block with its MCB in front, as tools/envmcb.asm reads it under
+  // DOSBox-X: TYPE=M OWNER=PSP FITS=Y -- type 'M', owned by the program, long enough for the strings,
+  // the double NUL, the count word and the program's path. DOS/4GW makes the environment a selector of
+  // that length; with no MCB, Heaven Seven's DOS4GW.EXE took a General Protection Fault scanning it.
+  const c = mk(), m = c.mc.mem, env = m.r16((c.dos.psp << 4) + 0x2c), mcb = (env - 1) << 4;
+  let p = env << 4;
+  while (m.r8(p)) { while (m.r8(p)) p++; p++; }
+  p += 3; while (m.r8(p)) p++; p++;
+  eq('the environment\'s MCB: type, owner, length (DOSBox-X: M PSP Y)',
+     [String.fromCharCode(m.r8(mcb)), m.r16(mcb + 1) === c.dos.psp ? 'PSP' : 'NOT', p - (env << 4) <= m.r16(mcb + 3) * 16 ? 'Y' : 'N'].join(' '), 'M PSP Y');
+}
 { // AH=49h accepted any segment, so a double free looked fine and left the allocator wrong
   const c = mk();
   int21(c, 0x4a, (cpu) => { cpu.setSeg(0, c.dos.psp); cpu.reg[3] = 0x200; });

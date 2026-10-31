@@ -115,6 +115,16 @@ export function installDOS(machine, vfs) {
     mem.w16(p, 1); p += 2;                                // count of following strings
     for (let i = 0; i < path.length; i++) mem.w8(p++, path.charCodeAt(i));
     mem.w8(p, 0);
+    // The block is a DOS memory block like any other, an MCB in the paragraph before it saying how
+    // long it is: DOS/4GW makes the environment a selector of that length and scans it a word at a
+    // time for the double NUL. With no MCB the length read was nothing, the scan ran past the
+    // selector's limit, and Heaven Seven (Exceed, 2000) stopped on "General Protection Fault in
+    // DOS4GW.EXE". The paragraph before ours is free (the SFT ends at 0B8Ch).
+    if (envSeg === ENV_SEG) {
+      const b = (envSeg - 1) << 4, paras = Math.ceil((p + 1 - (envSeg << 4)) / 16);
+      mem.w8(b, 0x4d); mem.w16(b + 1, PSP_SEG); mem.w16(b + 3, paras);
+      for (let i = 5; i < 16; i++) mem.w8(b + i, 0);
+    }
   }
 
   function buildPSP(seg, tail) {
