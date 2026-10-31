@@ -1,0 +1,24 @@
+{
+  "oasis": 1,
+  "title": "Paradistance — Titan, 4K for Windows",
+  "year": 2009,
+  "author": "Titan, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.scene.org/pub/parties/2009/evoke09/in4k/titan_paradistance.zip",
+      "files": {
+        "titan_paradistance/paradistance_fullscreen_16_9_compo.exe": "/intro/paradistance_fullscreen_16_9_compo.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/paradistance_fullscreen_16_9_compo.exe"
+  },
+  "output": "window",
+  "notes": "Evoke 2009, 4K intro: GLSL scenes, its music synthesized and played through waveOut, packed by Crinkler. Run as Windows XP would run it, with no Windows: MIRAGE-WIN32 maps the .exe as XP's loader does and lays out the process as XP does (the PEB, its module lists, FS at the TEB), which is what Crinkler's header walks to resolve every import by hashing names; kernel32, user32, gdi32, winmm and msvcrt are made in JavaScript, opengl32 (its 368 ordinals as XP's) hands GL and GLSL to PRISM's gl.js, drawn by WebGL2.",
+  "thumb": "oasis/thumbs/win32-paradistance-2009.png"
+}
