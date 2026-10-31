@@ -30,11 +30,11 @@ export const SHIPPED = (p) => /^[^/]+\.(html|css)$/.test(p) || p === 'LICENSE'
 
 /*
  * PRISM's environment modules, from the vendor/prism submodule (src/hle/prism-gl.js imports them): the
- * modules gl.js and glu.js import, followed through their static imports, and PRISM's licence (MIT). A
+ * modules gl.js, glu.js and d3d9.js import, followed through their static imports, and PRISM's licence (MIT). A
  * submodule's files are not the repository's own (git ls-files lists the submodule, not them), so they
  * are named here; a module PRISM adds to that closure is shipped without a change here.
  */
-const PRISM = 'vendor/prism', PRISM_ENTRIES = ['src/env/gl.js', 'src/env/glu.js'];
+const PRISM = 'vendor/prism', PRISM_ENTRIES = ['src/env/gl.js', 'src/env/glu.js', 'src/env/d3d9.js'];
 export function prismShipped(root = ROOT) {
   const out = new Set(['LICENSE']), todo = [...PRISM_ENTRIES];
   while (todo.length) {
