@@ -57,6 +57,8 @@ const LAZYEIP = !(typeof process !== 'undefined' && process.env && process.env.M
 const NOFXCACHE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFXCACHE);
 const NOFOLLOW = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFOLLOW);
 const NOSIDEEXIT = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSIDEEXIT);
+// MIRAGE_NOSKIP=1: a short forward branch leaves its block as a side exit, as before skips.
+const NOSKIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSKIP);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
 const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOMEMO);
 const MEMO_MAX = 200000;          // blocks the memo keeps (the oldest go first)
@@ -809,7 +811,7 @@ export class Recompiler {
   }
 
   // -------------------------------------------------------------------------
-  translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD, checked = false) {
+  translate(linStart, ip0, maxOps = MAXOPS, d = this.cpu.csD, checked = false, noSkip = false) {
     const mem = this.mem, MM = this.MM;
     if ((this.smcPages.get(linStart >>> 12) || 0) >= SMC_PAGE_HOT && maxOps > SMC_SHORT_OPS) maxOps = SMC_SHORT_OPS;
     const rec = this;                    // the decoders below are nested closures, where `this` is not us
@@ -1160,7 +1162,7 @@ export class Recompiler {
       if (!follow(back)) { P(`cpu.eip=${back};`); P('return;'); ended = true; }
     };
     const follow = (t) => {
-      if (!(pfRestart && !TIER2 && !NOSIDEEXIT && !NOFOLLOW && d) || follows >= 4 || starts.has(t)) return false;
+      if (!(pfRestart && !TIER2 && !NOSIDEEXIT && !NOFOLLOW && d) || follows >= 4 || starts.has(t) || skips.length) return false;
       if (((linStart - ip0 + t) >>> 12) !== (linStart >>> 12)) return false;
       follows++; hi = Math.max(hi, ip); lo = Math.min(lo, t); ip = t;
       return true;
@@ -1185,12 +1187,24 @@ export class Recompiler {
      */
     let loopFloor = -1;                                          // an out index: loops follow the code as it runs
     const sideExits = pfRestart && !TIER2 && !NOSIDEEXIT;
+    /*
+     * SKIPS. A short FORWARD conditional branch, taken, jumps over a few instructions the block then
+     * decodes anyway: `if(cond){..}else{` the instructions `}`, closed where the branch lands, and the
+     * block goes on. Elevated's synthesizer picks an oscillator's waveform and an operator's x87
+     * operation by `dec eax; jnz next` chains: each taken branch was a side exit, then a block of one
+     * or two instructions, then the dispatcher again -- six instructions a dispatch. Taken, the skip
+     * gives back the instructions it jumps over; where the two paths meet the x87 top is read again
+     * (one path may have popped). A skip may nest in another, ending at or before it; a block that
+     * ends, or follows a jump, inside one is translated again without skips. MIRAGE_NOSKIP=1.
+     */
+    const skips = [], skipped = [];                              // open: { t, at (out index), n (count) }; closed: [at, end]
+    const skipsOn = sideExits && !NOSKIP && !noSkip && d;
     // A conditional branch -- Jcc, and LOOP/LOOPE/LOOPNE/JCXZ, `cond` their condition as JavaScript,
     // `tm` the terminator they end the block with otherwise.
     const endJcc = (cc, target, next) => branch(condExpr(cc), target, { k: 'jcc', cc, t: +target, n: +next });
     const branch = (cond, target, tm) => {
       const at = starts.get(+target);
-      if (sideExits && at !== undefined && +target !== ip0 && at[0] > loopFloor && !fReads.some(([ri, di]) => ri >= at[0] && di < at[0])) {
+      if (sideExits && at !== undefined && +target !== ip0 && at[0] > loopFloor && (!skips.length || at[0] > skips[skips.length - 1].at) && !skipped.some(([a, e]) => at[0] > a && at[0] <= e) && !fReads.some(([ri, di]) => ri >= at[0] && di < at[0])) {
         cur.use |= lALL;
         loops.push([at[0], at[2]]);
         for (const [r, c] of fcache) if (c.def < at[0]) fcache.delete(r);   // F moves at the loop's head
@@ -1198,6 +1212,13 @@ export class Recompiler {
         P(`if((cpu.flags&${IF})||cpu.tbudget<=1){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
         P(`cpu.cycles+=${count - at[1]};cpu.tbudget--;}`);
         loopFloor = out.length;
+        return;
+      }
+      if (skipsOn && tm.k === 'jcc' && +target >= ip && +target - ip <= 64 && !starts.has(+target)
+          && (!skips.length || +target <= skips[skips.length - 1].t)) {
+        cur.use |= lALL;
+        skips.push({ t: +target, at: out.length, n: count });
+        P(`if(${cond}){cpu.cycles-=/*SKIP*/0;}else{`);
         return;
       }
       if (sideExits && !(+target >= ip0 && +target <= curIpStart)) {
@@ -1334,6 +1355,16 @@ export class Recompiler {
     while (!ended && count < maxOps) {
       pruneEip();
       if (follows && starts.has(ip)) break;                // a followed jump ran into code already here
+      while (skips.length && skips[skips.length - 1].t <= ip) {
+        const k = skips[skips.length - 1];
+        if (k.t < ip) break;                                // landed inside an instruction: retranslated below
+        skips.pop();
+        out[k.at] = out[k.at].replace('/*SKIP*/0', String(count - k.n));
+        P('}'); P('/*FSYNC*/');
+        if (FXC) { fd = 0; fcache.clear(); }
+        skipped.push([k.at, out.length - 1]);                 // a loop may hold the skip, not begin in it
+      }
+      if (skips.length && skips[skips.length - 1].t < ip) break;
       opsize = d ? 32 : 16; segOv = -1; rep = 0; addr32 = !!d;   // CS.D sets the defaults
       const ipStart = ip; ipLast = ip; curIpStart = ip;    // instruction start ip — fault return address (#BR etc.)
       starts.set(ipStart, [out.length, count, fd]);
@@ -1940,7 +1971,8 @@ export class Recompiler {
     // compiler, which re-emits the terminator from `term`); tier-1 then appends the
     // terminator's return form to get the standalone block function.
     pruneEip();
-    if (needChecked) return this.translate(linStart, ip0, maxOps, d, true);
+    if (skips.length) return this.translate(linStart, ip0, maxOps, d, checked, true);
+    if (needChecked) return this.translate(linStart, ip0, maxOps, d, true, noSkip);
     const bodyOut = out.slice();
     selfLoop = !NOSELFLOOP && !TIER2 && pfRestart && (term.k === 'jcc' || term.k === 'jcxz' || term.k === 'loop')
       && (term.t === ip0) !== (term.n === ip0);
@@ -1954,7 +1986,7 @@ export class Recompiler {
     const fx = FXC && usesFPU;
     for (const [at, dt] of loops) out[at] = 'for(;;){\n' + (fx ? `F=(cpu.ftop-${dt}+8)&7;\n` : '') + out[at];
     if (fx) out.unshift('var F=cpu.ftop;');
-    const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k));   // side exits: what they did not run
+    const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k)).replace(/\/\*FSYNC\*\//g, fx ? 'F=cpu.ftop;' : '');   // side exits: what they did not run
     const body = pre + '\n' + (selfLoop ? `for(;;){\n${code}\n}` : code);
     const fn = new Function('cpu', body);
     // The emitted source is kept ONLY if something will read it: the region compiler splices

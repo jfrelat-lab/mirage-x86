@@ -3569,6 +3569,25 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.get(0x08048054), mc.rec.heat.has(0x0804805b), mc.rec.heat.has(0x08048066), mc.rec.heat.has(0x08048075)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: loops inside a block, one closed by LOOP, a forward branch leaving it by a side exit (218, as Docker i386)', got, '218 8357 1 false false false'); }
+// tools/linux/skip.asm: Elevated's synthesizer (RGBA & TBC, 2009), an operator's x87 operation and an
+// oscillator's waveform picked by `dec eax; jnz next` chains whose skipped instructions pop the stack, two
+// of them to one target. Under paging each skipped run stays inside the block, `if(taken){..}else{..}`,
+// the x87 top read again where the paths meet, and the loop around them too: 41 as Docker i386 exits,
+// 762 instructions (taken, a skip gives back those it jumped over), the whole program one dispatch.
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/skip.asm
+    '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
+    '000000000080040800800408ad000000ad0000000500000000100000d9e8b92000000089c883e00340d905a9800408487502ddd8487502de' +
+    'c1487502dee9487502dec989c883e00140d9c048750cd9eedff1ddd8d9e87202d9e0dec1e2c550db1c245b89d8c1e81031c3b801000000cd' +
+    '8000004040');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/SKIP']);
+    mc.rec.profiling = true;
+    const c0 = mc.cpu.cycles;
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.size].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: x87 operations picked by forward branches, skipped inside the block (41, as Docker i386)', got, '41 762 1'); }
 // tools/linux/follow.asm: a loop that calls a subroutine and jumps over an instruction. Under paging
 // a direct CALL or JMP to the head's page goes on in the same block, so neither the subroutine nor
 // the jump's target begins one, nor the return address its RET goes back to (unless the subroutine
