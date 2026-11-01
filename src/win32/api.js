@@ -8,6 +8,7 @@
 // before running, so a missing name is a crash with no name, a present one a message that names it.
 import { gl as glTable, glu as gluTable } from '../hle/gl.js';
 import { d3d9Apis } from './d3d9.js';
+import { parseTrueType } from './truetype.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
 
@@ -78,14 +79,31 @@ const numbered = (fns) => {
 };
 
 /** The process's window and its GL context, as the APIs below share them. */
-function windowState() {
-  return { hwnd: 0x10010, hdc: 0x1001, hglrc: 0x10000, w: 640, h: 480, mode: null, lastSwap: 0, keys: new Set(), msgs: [] };
+function windowState(fonts = {}) {
+  const st = { hwnd: 0x10010, hdc: 0x1001, hglrc: 0x10000, w: 640, h: 480, mode: null, lastSwap: 0, keys: new Set(), msgs: [] };
+  // GDI's objects (fonts, DCs) by handle; the font selected into each DC.
+  st.gdi = new Map(); st.dcFonts = new Map();
+  let next = 0x0a0a0001;
+  st.newHandle = (kind, props) => { const hnd = next++; st.gdi.set(hnd, { kind, ...props }); return hnd; };
+  // The outlines of the font selected into `hdc` (src/win32/truetype.js), or null: `fonts` holds a face's
+  // .ttf under its lower-case name ("tahoma", "tahoma:bold" for a weight of 600 or more).
+  const parsed = new Map();
+  st.dcFont = (hdc) => {
+    const f = st.gdi.get(st.dcFonts.get(hdc));
+    if (!f) return null;
+    const face = f.face.toLowerCase(), key = [f.weight >= 600 ? `${face}:bold` : null, face].find((k) => k && fonts[k]);
+    if (!key) return null;
+    if (!parsed.has(key)) parsed.set(key, parseTrueType(fonts[key]));
+    return parsed.get(key);
+  };
+  return st;
 }
 
 /** The DLLs' tables. `gl`, `glu`: the GL and GLU entry points to use instead of the tracer's (in a page,
- *  src/hle/prism-gl.js's, on PRISM's gl.js) — the same signatures. */
-export function win32Apis({ gl, glu } = {}) {
-  const st = windowState();
+ *  src/hle/prism-gl.js's, on PRISM's gl.js) — the same signatures. `fonts`: the TrueType fonts a program
+ *  may select, { "tahoma": bytes, "tahoma:bold": bytes } (src/win32/fonts.js finds them in a page). */
+export function win32Apis({ gl, glu, fonts } = {}) {
+  const st = windowState(fonts);
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
   let vaNext = 0x10000000;
@@ -175,8 +193,19 @@ export function win32Apis({ gl, glu } = {}) {
       if (x.backend.swapReady && !x.backend.swapReady()) return x.waitUntil(now + 0.002);
       st.lastSwap = now; x.backend.swap(); return 1;
     }],
-    GetStockObject: ['i', () => 0x01900010], SelectObject: ['pp', () => 0x01900010], DeleteObject: ['p', () => 1],
-    CreateFontA: ['iiiiiuuuuuuuup', () => 0x0a0a0001],
+    // Fonts and device contexts: what a font names and the DC it is selected into, for D3DXCreateText
+    // (st.dcFont) to find its outlines among the fonts the page handed over.
+    GetStockObject: ['i', () => 0x01900010], DeleteObject: ['p', () => 1],
+    SelectObject: ['pp', (x, hdc, obj) => {
+      if (!st.gdi.has(obj) || st.gdi.get(obj).kind !== 'font') return 0x01900010;
+      const prev = st.dcFonts.get(hdc) || 0x018a0021;                 // the DC's first font: SYSTEM_FONT's
+      st.dcFonts.set(hdc, obj); return prev;
+    }],
+    CreateCompatibleDC: ['p', () => st.newHandle('dc', {})], DeleteDC: ['p', () => 1],
+    CreateFontA: ['iiiiiuuuuuuuup', (x, h, w, esc, orient, weight, italic, underline, strike, charset, outPrec, clipPrec, quality, pitch, face) =>
+      st.newHandle('font', { height: h, weight, face: x.str(face, 32) })],
+    // LOGFONTA: lfHeight at 0, lfWeight at 16, lfFaceName at 28.
+    CreateFontIndirectA: ['p', (x, p) => st.newHandle('font', { height: x.r32(p) | 0, weight: x.r32(p + 16), face: x.str(p + 28, 32) })],
   };
   // ---- opengl32 and glu32: src/hle/gl.js's GL, stdcall; wgl ------------------------------------------
   const opengl32 = { ...(gl || glTable().fns) };

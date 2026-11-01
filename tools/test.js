@@ -4082,6 +4082,73 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: d3dx9 exports numbered as Microsoft\'s; GenerateAdjacency, D3DXComputeNormals, a skin\'s UpdateSkinnedMesh as Wine\'s', got,
     '84 87 86 1 26 | true | 0,0,1 | 1,3.414,3,0,0,1 | 0,0,0,0,0,0 | 1'); }
+// D3DXCreateText (src/win32/textmesh.js, Wine's algorithm) from a font gdi32 selects, read by truetype.js:
+// a TrueType font made here, an em of 1000 and a cell of 1000 (so a pixel an em unit). 'A' a 600-unit
+// square with a 200-unit square hole: two outlines of four corners, eight triangles between them, each
+// corner twice on the sides; its face covers 0.36 - 0.04 em². 'B' a square of quadratic splines that
+// starts off the curve (it starts at its last point): GGO_NATIVE's line-free contour of four splines; cut
+// to a deviation of 0.05 em, each is two halves whose control points Wine keeps, the points between on
+// straight runs merged away: an octagon of 0.36 - 4 x 0.01125 em². The glyph metrics in ems; Direct3D's
+// default light (white, +z), enabled (128, as Wine's wined3d).
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const { parseTrueType } = await import('../src/win32/truetype.js');
+    const glyf = (contours) => {                                     // a simple glyph: flags and coordinates as words
+      const pts = contours.flat(), b = [];
+      const w16 = (v) => b.push((v >> 8) & 255, v & 255);
+      w16(contours.length); [0, 0, 600, 600].forEach(w16);
+      let e = -1; for (const c of contours) w16(e += c.length);
+      w16(0); for (const q of pts) b.push(q[2] ? 1 : 0);
+      for (const k of [0, 1]) { let last = 0; for (const q of pts) { w16(q[k] - last); last = q[k]; } }
+      if (b.length & 1) b.push(0);
+      return b;
+    };
+    const gA = glyf([[[0, 0, 1], [0, 600, 1], [600, 600, 1], [600, 0, 1]], [[200, 200, 1], [400, 200, 1], [400, 400, 1], [200, 400, 1]]]);
+    const gB = glyf([[[0, 0, 0], [0, 300, 1], [0, 600, 0], [300, 600, 1], [600, 600, 0], [600, 300, 1], [600, 0, 0], [300, 0, 1]]]);
+    const be16 = (...v) => v.flatMap((n) => [(n >> 8) & 255, n & 255]);
+    const head = new Array(54).fill(0); head.splice(18, 2, ...be16(1000));
+    const os2 = new Array(78).fill(0); os2.splice(74, 4, ...be16(800, 200));
+    const hhea = new Array(36).fill(0); hhea.splice(34, 2, ...be16(3));
+    const tables = { head, maxp: [0, 0, 0x50, 0, ...be16(3)], hhea, 'OS/2': os2, hmtx: be16(500, 0, 700, 0, 650, 0),
+      cmap: [...be16(0, 1, 3, 1, 0, 12), ...be16(4, 32, 0, 4, 0, 0, 0, 0x42, 0xffff, 0, 0x41, 0xffff, (1 - 0x41) & 0xffff, 1, 0, 0)],
+      loca: be16(0, 0, gA.length / 2, (gA.length + gB.length) / 2), glyf: [...gA, ...gB] };
+    const names = Object.keys(tables), ttf = [...be16(1, 0, names.length, 0, 0, 0)];
+    let at = 12 + 16 * names.length;
+    for (const n of names) { ttf.push(...[...n].map((c) => c.charCodeAt(0)), 0, 0, 0, 0, ...be16(at >>> 16, at & 0xffff, 0, tables[n].length)); at += tables[n].length; }
+    for (const n of names) ttf.push(...tables[n]);
+    const font = Uint8Array.from(ttf), B = parseTrueType(font).glyph(0x42, 1000);
+    const native = B.contours.map((c) => c.start.join(',') + ' ' + c.curves.map((cv) => (cv.spline ? 'q' : 'l') + cv.pts.length).join('')).join(' ');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const be = traceBackend(), apis = win32Apis({ fonts: { tiny: font } }), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: be });
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1], d9 = (n) => fn('d3d9.dll', n), gdi = (n) => fn('gdi32.dll', n);
+    const pp = x.win.heapAlloc(56), pp4 = () => x.win.heapAlloc(4); x.write(pp, new Uint8Array(56)); x.w32(pp + 32, 1);
+    const ppDev = pp4(); d9('IDirect3D9::CreateDevice')(x, d9('Direct3DCreate9')(x, 32), 0, 1, 0, 0x40, pp, ppDev);
+    const dev = x.r32(ppDev), lf = x.win.heapAlloc(60), text = x.win.heapAlloc(4), ppM = pp4(), gm = x.win.heapAlloc(48), pl = pp4();
+    x.write(lf, new Uint8Array(60)); x.write(lf + 28, new TextEncoder().encode('TINY\0')); x.write(text, new TextEncoder().encode('AB\0'));
+    const dc = gdi('CreateCompatibleDC')(x, 0); gdi('SelectObject')(x, dc, gdi('CreateFontIndirectA')(x, lf));
+    fn('d3dx9_33.dll', 'D3DXCreateTextA')(x, dev, dc, text, 0.05, 0, ppM, 0, gm);
+    const m = x.r32(ppM), nf = d9('ID3DXMesh::GetNumFaces')(x, m), nv = d9('ID3DXMesh::GetNumVertices')(x, m);
+    d9('ID3DXMesh::LockVertexBuffer')(x, m, 0, pl); const vb = x.r32(pl);
+    d9('ID3DXMesh::LockIndexBuffer')(x, m, 0, pl); const ib = x.r32(pl);
+    // the area of the faces facing +z at z = 0 left of x = 0.65 ('A'), and right of it ('B')
+    let aA = 0, aB = 0;
+    for (let f = 0; f < nf; f++) {
+      const P = [0, 1, 2].map((k) => { const v = vb + 24 * x.r16(ib + 6 * f + 2 * k); return [x.f32(v), x.f32(v + 4), x.f32(v + 8), x.f32(v + 20)]; });
+      if (P.some((q) => q[3] !== 1 || q[2] !== 0)) continue;
+      const a = ((P[1][0] - P[0][0]) * (P[2][1] - P[0][1]) - (P[2][0] - P[0][0]) * (P[1][1] - P[0][1])) / 2;
+      if (P[0][0] < 0.65) aA += a; else aB += a;
+    }
+    const metrics = [0, 1, 2, 3, 4, 6, 10].map((k) => +x.f32(gm + 4 * k).toFixed(3)).join(',');
+    const light = x.win.heapAlloc(104), on = pp4();
+    d9('IDirect3DDevice9::LightEnable')(x, dev, 3, 1); d9('IDirect3DDevice9::GetLight')(x, dev, 3, light); d9('IDirect3DDevice9::GetLightEnable')(x, dev, 3, on);
+    const def = [x.r32(light), x.f32(light + 4), x.f32(light + 72), x.r32(on)].join(',');
+    got = [native, nv, nf, +aA.toFixed(4) / 2, +aB.toFixed(3) / 2, metrics, def].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: D3DXCreateText from a TrueType font gdi32 selects: GGO_NATIVE\'s contours, Wine\'s outlines, triangles and sides', got,
+    '300,0 q2q2q2q2 | 82 | 60 | 0.32 | 0.315 | 0.6,0.6,0,0.6,0.7,0.6,0.65 | 3,1,1,128'); }
 // SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
 // the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
 // one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.

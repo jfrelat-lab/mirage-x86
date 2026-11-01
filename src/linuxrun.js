@@ -66,7 +66,9 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     const [{ prismLibraries }, { win32Apis }] = await Promise.all([import('./hle/prism-gl.js'), import('./win32/api.js')]);
     hle = await prismLibraries(lx, mc.mem, ['gl', 'glu']);
     const [glLib, gluLib] = hle.libs;
-    win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), apis: win32Apis({ gl: glLib.fns, glu: gluLib.fns }), backend: hle.backend });
+    // machine.fonts: the TrueType fonts it selects (D3DXCreateText), the visitor's or free ones (src/win32/fonts.js)
+    const fonts = m.fonts ? await (await import('./win32/fonts.js')).pageFonts(m.fonts, (t) => onOutput(t + '\n')) : undefined;
+    win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), apis: win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts }), backend: hle.backend });
   } else if (m.hle) {
     const [{ installHLE }, { prismLibraries }] = await Promise.all([import('./hle/index.js'), import('./hle/prism-gl.js')]);
     hle = await prismLibraries(lx, mc.mem, m.hle);

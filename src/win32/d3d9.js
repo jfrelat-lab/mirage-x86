@@ -11,6 +11,9 @@
 // comment holding 'PRSM', the entry point and the HLSL source, the end token — which PRISM's
 // createPixelShader translates from the source.
 
+import { textMesh } from './textmesh.js';
+import { ppemForHeight } from './truetype.js';
+
 const S_OK = 0, E_NOINTERFACE = 0x80004002, E_FAIL = 0x80004005, D3DERR_INVALIDCALL = 0x8876086c, D3DERR_NOTAVAILABLE = 0x8876086a;
 
 // The vtables: each method's name and the signature of its arguments after `this` (a digit: that many
@@ -471,6 +474,36 @@ export function d3d9Apis(st) {
       return D(self).clear(rects, flags, color >>> 0, z, stencil) || S_OK;
     },
     SetTransform: (x, self, st2, p) => D(self).setTransform(st2, floats(x, p, 16)) || S_OK,
+    // The fixed function's lights and material: D3DLIGHT9 (type; diffuse, specular, ambient; position,
+    // direction; range, falloff, attenuation 0-2, theta, phi) and D3DMATERIAL9 (diffuse, ambient,
+    // specular, emissive; power), kept here for the Gets and handed to the device model.
+    SetLight: (x, self, i, p) => {
+      if (!p) return D3DERR_INVALIDCALL;
+      const f = floats(x, p + 4, 25), L = { type: x.r32(p), diffuse: f.slice(0, 4), specular: f.slice(4, 8), ambient: f.slice(8, 12),
+        position: f.slice(12, 15), direction: f.slice(15, 18), range: f[18], falloff: f[19], attenuation: f.slice(20, 23), theta: f[23], phi: f[24] };
+      const dev = o(self); (dev.lights || (dev.lights = new Map())).set(i, { bytes: x.bytes(p, 104).slice(), on: dev.lights.has(i) && dev.lights.get(i).on });
+      return (D(self).setLight && D(self).setLight(i, L)) || S_OK;
+    },
+    GetLight: (x, self, i, p) => { const l = o(self).lights && o(self).lights.get(i); if (!l) return D3DERR_INVALIDCALL; x.write(p, l.bytes); return S_OK; },
+    LightEnable: (x, self, i, on) => {
+      const dev = o(self), lights = dev.lights || (dev.lights = new Map());
+      if (!lights.has(i)) {                                             // a light never set: Direct3D's default, white, along +z
+        const d = new Float32Array(26); d.set([1, 1, 1], 1); d[18] = 1; new Uint32Array(d.buffer)[0] = 3;
+        lights.set(i, { bytes: new Uint8Array(d.buffer), on: false });
+        if (D(self).setLight) D(self).setLight(i, { type: 3, diffuse: [1, 1, 1, 0], specular: [0, 0, 0, 0], ambient: [0, 0, 0, 0], position: [0, 0, 0],
+          direction: [0, 0, 1], range: 0, falloff: 0, attenuation: [0, 0, 0], theta: 0, phi: 0 });
+      }
+      lights.get(i).on = !!on;
+      return (D(self).lightEnable && D(self).lightEnable(i, !!on)) || S_OK;
+    },
+    GetLightEnable: (x, self, i, p) => { const l = o(self).lights && o(self).lights.get(i); if (!l) return D3DERR_INVALIDCALL; x.w32(p, l.on ? 128 : 0); return S_OK; },
+    SetMaterial: (x, self, p) => {
+      if (!p) return D3DERR_INVALIDCALL;
+      const f = floats(x, p, 17);
+      o(self).material = x.bytes(p, 68).slice();
+      return (D(self).setMaterial && D(self).setMaterial({ diffuse: f.slice(0, 4), ambient: f.slice(4, 8), specular: f.slice(8, 12), emissive: f.slice(12, 16), power: f[16] })) || S_OK;
+    },
+    GetMaterial: (x, self, p) => { x.write(p, o(self).material || new Uint8Array(68)); return S_OK; },
     SetViewport: (x, self, p) => D(self).setViewport({ x: x.r32(p), y: x.r32(p + 4), width: x.r32(p + 8), height: x.r32(p + 12), minZ: x.f32(p + 16), maxZ: x.f32(p + 20) }) || S_OK,
     GetViewport: (x, self, p) => { const v = D(self).getViewport ? D(self).getViewport() : null, q = o(self).params;
       const r = v || { x: 0, y: 0, width: q.width, height: q.height, minZ: 0, maxZ: 1 };
@@ -818,6 +851,28 @@ export function d3d9Apis(st) {
     ob.ref = 1; x.w32(ppMesh, m);
     return S_OK;
   };
+  // D3DXCreateText: the text in the font selected into `hdc`, a mesh of XYZ | NORMAL in ems
+  // (src/win32/textmesh.js, Wine's algorithm), its glyphs' metrics in ems if asked. As Wine: no adjacency.
+  const createText = (x, devPtr, hdc, text, deviation, extrusion, ppMesh, ppAdj, pGM) => {
+    if (!devPtr || !hdc || !text || deviation < 0 || extrusion < 0 || !ppMesh) return D3DERR_INVALIDCALL;
+    if (ppAdj) throw new Error('mirage-win32: D3DXCreateText: the adjacency out is not made');
+    const font = st.dcFont(hdc);
+    if (!font) {
+      const f = st.gdi.get(st.dcFonts.get(hdc));
+      throw new Error(`mirage-win32: D3DXCreateText: no font '${f ? f.face : '?'}' here (the page hands over Tahoma or DejaVu Sans when the image lists it in machine.fonts)`);
+    }
+    const tm = textMesh(font, ppemForHeight(font, font.em), text, deviation, extrusion);
+    if (!tm || tm.nVerts > 0x10000) return D3DERR_INVALIDCALL;
+    const m = meshFVF(x, tm.nFaces, tm.nVerts, 0x10 /* D3DXMESH_MANAGED */, 0x12 /* XYZ | NORMAL */, devPtr), pp = x.win.heapAlloc(4);
+    mesh.LockVertexBuffer(x, m, 0, pp); x.write(x.r32(pp), new Uint8Array(tm.verts.buffer)); mesh.UnlockVertexBuffer(x, m);
+    mesh.LockIndexBuffer(x, m, 0, pp); x.write(x.r32(pp), new Uint8Array(tm.faces.buffer)); mesh.UnlockIndexBuffer(x, m);
+    // GLYPHMETRICSFLOAT: black box x, y, origin x, y, cell increment x, y
+    if (pGM) tm.metrics.forEach((g, i) => x.write(pGM + 24 * i, new Uint8Array(new Float32Array([g.blackBoxX, g.blackBoxY, g.originX, g.originY, g.cellIncX, 0]).buffer)));
+    o(m).ref = 1; x.w32(ppMesh, m);
+    return S_OK;
+  };
+  const latin1 = (x, p) => { let s = ''; for (let c; (c = x.r8(p)); p++) s += String.fromCharCode(c); return s; };
+  const utf16 = (x, p) => { let s = ''; for (let c; (c = x.r16(p)); p += 2) s += String.fromCharCode(c); return s; };
   // D3DXTessellateNPatches: each triangle cut into segs x segs, its points on the PN triangle (Vlachos,
   // Peters, Boyd, Mitchell, "Curved PN Triangles", 2001) its corners' positions and normals make — the
   // position cubic, the normal linear (or quadratic), the other parts of the vertex linear. A face's
@@ -927,6 +982,8 @@ export function d3d9Apis(st) {
       x.w32(pp, meshFVF(x, faces, verts, options, fvf, dev)); return S_OK;
     }],
     D3DXCreatePolygon: ['pfupp', createPolygon],
+    D3DXCreateTextA: ['pppffppp', (x, dev, hdc, p, ...r) => createText(x, dev, hdc, p && latin1(x, p), ...r)],
+    D3DXCreateTextW: ['pppffppp', (x, dev, hdc, p, ...r) => createText(x, dev, hdc, p && utf16(x, p), ...r)],
     D3DXCreateSkinInfoFVF: ['uuup', createSkinInfoFVF],
     D3DXComputeNormals: ['pp', computeNormals],
     D3DXCreateTextureShader: ['pp', createTextureShader],

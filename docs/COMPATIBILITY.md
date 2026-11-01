@@ -170,7 +170,7 @@ recording device model, which says how far the program gets but not what it draw
 | Darwinism | Direct3D 9 | Starts | presents headless at about one frame a second: some 180 M x87 instructions a frame on one emulated core | 2026-10-31 |
 | Wishful Twisting | Direct3D 9 | Starts | still precomputing after 1.5 G instructions, before its first frame | 2026-10-31 |
 | Ergon | Direct3D 9 | Starts | presents headless; its `tx_1_0` texture shader (HLSL's `noise()`) is handed to PRISM's `d3d9.js`, which does not evaluate texture shaders yet | 2026-11-01 |
-| Stiletto | Direct3D 9 | Fails | its skinned mesh is made; it stops at `D3DXCreateTextA` (a 3D mesh of a Tahoma text, from TrueType outlines) and calls gdi32 by XP's ordinals, which MIRAGE's gdi32 does not have | 2026-11-01 |
+| Stiletto | Direct3D 9 | Starts | its skinned mesh and its nine Tahoma words (`D3DXCreateTextA`, from the visitor's Tahoma or DejaVu Sans) are made and it presents headless; it draws with the fixed function (lights, material, no shader), which PRISM's `d3d9.js` does not have yet | 2026-11-01 |
 | luxo4k | Direct3D 9 | Fails | shows a message box and exits: it needs DirectSound | 2026-10-31 |
 | Polystreptikum, Synchroplastikum | Direct3D 9 | Fails | a page fault before the device is created; cause not looked at | 2026-10-31 |
 | Valleyball, Stripped | OpenGL | Starts | too slow: Valleyball's synthesizer renders at a third of real time, Stripped precomputes for minutes | 2026-10 |

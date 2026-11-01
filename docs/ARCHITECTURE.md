@@ -104,6 +104,7 @@ and GLSL) and `d3d9.js` (Direct3D 9's device model, HLSL translated to GLSL ES),
 | `win32/index.js`, `win32/dll.js` | MIRAGE-WIN32: the PE loader, the process laid out as Windows XP lays it out, threads and their TEBs; a DLL made as a real PE image whose exports trap into JavaScript. |
 | `win32/api.js` | kernel32, user32, gdi32, winmm (waveOut), msvcrt, lz32, ntdll, opengl32 (XP's 368 ordinals) and glu32. |
 | `win32/d3d9.js` | d3d9.dll and d3dx9_24..43.dll: the COM objects and their vtables in guest memory, each method reading what it points to and handing it to the device model (PRISM's `d3d9.js` in a page, `recordD3D9()` headless). |
+| `win32/truetype.js`, `win32/textmesh.js`, `win32/fonts.js` | A TrueType font's outlines as GDI's `GGO_NATIVE` gives them; D3DXCreateText's mesh from them (Wine's algorithm); the fonts an image names, found in the page (the visitor's, or DejaVu Sans). |
 
 **The browser** — the only files that touch the DOM.
 
