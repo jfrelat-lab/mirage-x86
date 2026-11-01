@@ -59,8 +59,105 @@ const VTABLES = {
     LockIndexBuffer:2 UnlockIndexBuffer:0 GetAttributeTable:2 ConvertPointRepsToAdjacency:2 ConvertAdjacencyToPointReps:2
     GenerateAdjacency:fp UpdateSemantics:1 LockAttributeBuffer:2 UnlockAttributeBuffer:0 Optimize:6 OptimizeInplace:5
     SetAttributeTable:2`,
+  ID3DXTextureShader: `${UNK} GetFunction:1 GetConstantBuffer:1 GetDesc:1 GetConstantDesc:3 GetConstant:2 GetConstantByName:2
+    GetConstantElement:2 SetDefaults:0 SetValue:3 SetBool:2 SetBoolArray:3 SetInt:2 SetIntArray:3 SetFloat:pf SetFloatArray:3
+    SetVector:2 SetVectorArray:3 SetMatrix:2 SetMatrixArray:3 SetMatrixPointerArray:3 SetMatrixTranspose:2
+    SetMatrixTransposeArray:3 SetMatrixTransposePointerArray:3`,
+  ID3DXSkinInfo: `${UNK} SetBoneInfluence:4 SetBoneVertexInfluence:uuf GetNumBoneInfluences:1 GetBoneInfluence:3
+    GetBoneVertexInfluence:4 GetMaxVertexInfluences:1 GetNumBones:0 FindBoneVertexInfluenceIndex:3 GetMaxFaceInfluences:3
+    SetMinBoneInfluence:f GetMinBoneInfluence:0 SetBoneName:2 GetBoneName:1 SetBoneOffsetMatrix:2 GetBoneOffsetMatrix:1
+    Clone:1 Remap:2 SetFVF:1 SetDeclaration:1 GetFVF:0 GetDeclaration:1 UpdateSkinnedMesh:4 ConvertToBlendedMesh:10
+    ConvertToIndexedBlendedMesh:11`,
 };
 const sigOf = (s) => 'p' + (/^\d+$/.test(s) ? 'u'.repeat(+s) : s);
+/*
+ * D3DX9_24..43.DLL'S EXPORTS, in the order that numbers them: each version exports its names with
+ * ordinals 1 to N in ASCII order. Crinkler's /RANGE imports a range of a DLL by ordinal after the first
+ * name, so the numbering is part of the interface: Stiletto (2009) called D3DXAssembleShader where it
+ * meant D3DXCreateSkinInfoFVF while the ordinals were ours. The names, without their "D3DX", are Wine's
+ * dlls/d3dx9_NN/d3dx9_NN.spec (stubs included): every version's, and the versions a name is not in all of.
+ */
+const D3DX_NAMES = `
+  AssembleShader AssembleShaderFromFileA AssembleShaderFromFileW AssembleShaderFromResourceA
+  AssembleShaderFromResourceW BoxBoundProbe CheckCubeTextureRequirements CheckTextureRequirements CheckVersion
+  CheckVolumeTextureRequirements CleanMesh ColorAdjustContrast ColorAdjustSaturation CompileShader
+  CompileShaderFromFileA CompileShaderFromFileW CompileShaderFromResourceA CompileShaderFromResourceW
+  ComputeBoundingBox ComputeBoundingSphere ComputeIMTFromPerTexelSignal ComputeIMTFromPerVertexSignal
+  ComputeIMTFromSignal ComputeIMTFromTexture ComputeNormalMap ComputeNormals ComputeTangent ComputeTangentFrame
+  ComputeTangentFrameEx ConcatenateMeshes ConvertMeshSubsetToSingleStrip ConvertMeshSubsetToStrips CpuOptimizations
+  CreateAnimationController CreateBox CreateBuffer CreateCompressedAnimationSet CreateCubeTexture
+  CreateCubeTextureFromFileA CreateCubeTextureFromFileExA CreateCubeTextureFromFileExW
+  CreateCubeTextureFromFileInMemory CreateCubeTextureFromFileInMemoryEx CreateCubeTextureFromFileW
+  CreateCubeTextureFromResourceA CreateCubeTextureFromResourceExA CreateCubeTextureFromResourceExW
+  CreateCubeTextureFromResourceW CreateCylinder CreateEffect CreateEffectCompiler CreateEffectCompilerFromFileA
+  CreateEffectCompilerFromFileW CreateEffectCompilerFromResourceA CreateEffectCompilerFromResourceW CreateEffectEx
+  CreateEffectFromFileA CreateEffectFromFileExA CreateEffectFromFileExW CreateEffectFromFileW
+  CreateEffectFromResourceA CreateEffectFromResourceExA CreateEffectFromResourceExW CreateEffectFromResourceW
+  CreateEffectPool CreateFontA CreateFontIndirectA CreateFontIndirectW CreateFontW CreateFragmentLinker
+  CreateFragmentLinkerEx CreateKeyframedAnimationSet CreateLine CreateMatrixStack CreateMesh CreateMeshFVF
+  CreateNPatchMesh CreatePMeshFromStream CreatePRTBuffer CreatePRTBufferTex CreatePRTCompBuffer CreatePRTEngine
+  CreatePatchMesh CreatePolygon CreateRenderToEnvMap CreateRenderToSurface CreateSPMesh CreateSkinInfo
+  CreateSkinInfoFVF CreateSkinInfoFromBlendedMesh CreateSphere CreateSprite CreateTeapot CreateTextA CreateTextW
+  CreateTexture CreateTextureFromFileA CreateTextureFromFileExA CreateTextureFromFileExW
+  CreateTextureFromFileInMemory CreateTextureFromFileInMemoryEx CreateTextureFromFileW CreateTextureFromResourceA
+  CreateTextureFromResourceExA CreateTextureFromResourceExW CreateTextureFromResourceW CreateTextureGutterHelper
+  CreateTextureShader CreateTorus CreateVolumeTexture CreateVolumeTextureFromFileA CreateVolumeTextureFromFileExA
+  CreateVolumeTextureFromFileExW CreateVolumeTextureFromFileInMemory CreateVolumeTextureFromFileInMemoryEx
+  CreateVolumeTextureFromFileW CreateVolumeTextureFromResourceA CreateVolumeTextureFromResourceExA
+  CreateVolumeTextureFromResourceExW CreateVolumeTextureFromResourceW DebugMute DeclaratorFromFVF DisassembleEffect
+  DisassembleShader FVFFromDeclarator FileCreate FillCubeTexture FillCubeTextureTX FillTexture FillTextureTX
+  FillVolumeTexture FillVolumeTextureTX FilterTexture FindShaderComment Float16To32Array Float32To16Array
+  FrameAppendChild FrameCalculateBoundingSphere FrameDestroy FrameFind FrameNumNamedMatrices
+  FrameRegisterNamedMatrices FresnelTerm GatherFragments GatherFragmentsFromFileA GatherFragmentsFromFileW
+  GatherFragmentsFromResourceA GatherFragmentsFromResourceW GenerateOutputDecl GeneratePMesh GetDeclLength
+  GetDeclVertexSize GetDriverLevel GetFVFVertexSize GetImageInfoFromFileA GetImageInfoFromFileInMemory
+  GetImageInfoFromFileW GetImageInfoFromResourceA GetImageInfoFromResourceW GetPixelShaderProfile
+  GetShaderConstantTable GetShaderConstantTableEx GetShaderInputSemantics GetShaderOutputSemantics GetShaderSamplers
+  GetShaderSize GetShaderVersion GetTargetDescByName GetTargetDescByVersion GetVertexShaderProfile Intersect
+  IntersectSubset IntersectTri LoadMeshFromXA LoadMeshFromXInMemory LoadMeshFromXResource LoadMeshFromXW
+  LoadMeshFromXof LoadMeshHierarchyFromXA LoadMeshHierarchyFromXInMemory LoadMeshHierarchyFromXW
+  LoadPRTBufferFromFileA LoadPRTBufferFromFileW LoadPRTCompBufferFromFileA LoadPRTCompBufferFromFileW
+  LoadPatchMeshFromXof LoadSkinMeshFromXof LoadSurfaceFromFileA LoadSurfaceFromFileInMemory LoadSurfaceFromFileW
+  LoadSurfaceFromMemory LoadSurfaceFromResourceA LoadSurfaceFromResourceW LoadSurfaceFromSurface LoadVolumeFromFileA
+  LoadVolumeFromFileInMemory LoadVolumeFromFileW LoadVolumeFromMemory LoadVolumeFromResourceA
+  LoadVolumeFromResourceW LoadVolumeFromVolume MatrixAffineTransformation MatrixAffineTransformation2D
+  MatrixDecompose MatrixDeterminant MatrixInverse MatrixLookAtLH MatrixLookAtRH MatrixMultiply
+  MatrixMultiplyTranspose MatrixOrthoLH MatrixOrthoOffCenterLH MatrixOrthoOffCenterRH MatrixOrthoRH
+  MatrixPerspectiveFovLH MatrixPerspectiveFovRH MatrixPerspectiveLH MatrixPerspectiveOffCenterLH
+  MatrixPerspectiveOffCenterRH MatrixPerspectiveRH MatrixReflect MatrixRotationAxis MatrixRotationQuaternion
+  MatrixRotationX MatrixRotationY MatrixRotationYawPitchRoll MatrixRotationZ MatrixScaling MatrixShadow
+  MatrixTransformation MatrixTransformation2D MatrixTranslation MatrixTranspose OptimizeFaces OptimizeVertices
+  PlaneFromPointNormal PlaneFromPoints PlaneIntersectLine PlaneNormalize PlaneTransform PlaneTransformArray
+  PreprocessShader PreprocessShaderFromFileA PreprocessShaderFromFileW PreprocessShaderFromResourceA
+  PreprocessShaderFromResourceW QuaternionBaryCentric QuaternionExp QuaternionInverse QuaternionLn
+  QuaternionMultiply QuaternionNormalize QuaternionRotationAxis QuaternionRotationMatrix
+  QuaternionRotationYawPitchRoll QuaternionSlerp QuaternionSquad QuaternionSquadSetup QuaternionToAxisAngle
+  RectPatchSize SHAdd SHDot SHEvalConeLight SHEvalDirection SHEvalDirectionalLight SHEvalHemisphereLight
+  SHEvalSphericalLight SHMultiply2 SHMultiply3 SHMultiply4 SHMultiply5 SHMultiply6 SHPRTCompSplitMeshSC
+  SHPRTCompSuperCluster SHProjectCubeMap SHRotate SHRotateZ SHScale SaveMeshHierarchyToFileA
+  SaveMeshHierarchyToFileW SaveMeshToXA SaveMeshToXW SavePRTBufferToFileA SavePRTBufferToFileW
+  SavePRTCompBufferToFileA SavePRTCompBufferToFileW SaveSurfaceToFileA SaveSurfaceToFileInMemory SaveSurfaceToFileW
+  SaveTextureToFileA SaveTextureToFileInMemory SaveTextureToFileW SaveVolumeToFileA SaveVolumeToFileInMemory
+  SaveVolumeToFileW SimplifyMesh SphereBoundProbe SplitMesh TessellateNPatches TessellateRectPatch
+  TessellateTriPatch TriPatchSize UVAtlasCreate UVAtlasPack UVAtlasPartition ValidMesh ValidPatchMesh
+  Vec2BaryCentric Vec2CatmullRom Vec2Hermite Vec2Normalize Vec2Transform Vec2TransformArray Vec2TransformCoord
+  Vec2TransformCoordArray Vec2TransformNormal Vec2TransformNormalArray Vec3BaryCentric Vec3CatmullRom Vec3Hermite
+  Vec3Normalize Vec3Project Vec3ProjectArray Vec3Transform Vec3TransformArray Vec3TransformCoord
+  Vec3TransformCoordArray Vec3TransformNormal Vec3TransformNormalArray Vec3Unproject Vec3UnprojectArray
+  Vec4BaryCentric Vec4CatmullRom Vec4Cross Vec4Hermite Vec4Normalize Vec4Transform Vec4TransformArray WeldVertices`;
+const D3DX_SPAN = {
+  ComputeIMTFromPerTexelSignal: [26, 43], ComputeIMTFromPerVertexSignal: [26, 43], ComputeIMTFromSignal: [26, 43],
+  ComputeIMTFromTexture: [26, 43], CpuOptimizations: [24, 30], CreateFragmentLinker: [24, 41],
+  CreateFragmentLinkerEx: [36, 41], GatherFragments: [24, 41], GatherFragmentsFromFileA: [24, 41],
+  GatherFragmentsFromFileW: [24, 41], GatherFragmentsFromResourceA: [24, 41],
+  GatherFragmentsFromResourceW: [24, 41], GetShaderConstantTableEx: [36, 43], GetTargetDescByName: [24, 30],
+  GetTargetDescByVersion: [24, 30], PreprocessShader: [28, 43], PreprocessShaderFromFileA: [28, 43],
+  PreprocessShaderFromFileW: [28, 43], PreprocessShaderFromResourceA: [28, 43],
+  PreprocessShaderFromResourceW: [28, 43], SHMultiply2: [32, 43], SHMultiply3: [32, 43], SHMultiply4: [32, 43],
+  SHMultiply5: [32, 43], SHMultiply6: [32, 43], UVAtlasCreate: [25, 43], UVAtlasPack: [25, 43],
+  UVAtlasPartition: [25, 43],
+};
+
 const METHODS = Object.fromEntries(Object.entries(VTABLES).map(([i, s]) => [i, s.trim().split(/\s+/).map((t) => t.split(':'))]));
 
 // Bytes a pixel of a D3DFORMAT takes (d3d9types.h's numbers).
@@ -150,11 +247,14 @@ export function recordD3D9() {
   };
 }
 
-/** PRISM's HLSL blob (see the top): the profile's version token, 'PRSM', entry and source, the end. */
+/**
+ * PRISM's HLSL blob (see the top): the profile's version token, 'PRSM', entry and source, the end. A
+ * texture shader (tx_1_0, for D3DXFillTextureTX) has D3DX's 'TX' token, 0x5458 and its version.
+ */
 export function hlslBlob(profile, entry, source) {
-  const m = /^(ps|vs)_(\d)_(\d)/.exec(profile);
+  const m = /^(ps|vs|tx)_(\d)_(\d)/.exec(profile);
   if (!m) throw new Error(`mirage-win32: D3DXCompileShader: profile ${profile}`);
-  const ver = (m[1] === 'ps' ? 0xffff0000 : 0xfffe0000) | (+m[2] << 8) | +m[3];
+  const ver = ({ ps: 0xffff0000, vs: 0xfffe0000, tx: 0x54580000 })[m[1]] | (+m[2] << 8) | +m[3];
   const text = new TextEncoder().encode(`${entry}\0${source}\0`), n = 1 + Math.ceil(text.length / 4);
   const u = new Uint32Array(n + 3);
   u[0] = ver >>> 0; u[1] = (0xfffe | (n << 16)) >>> 0; u[2] = 0x4d535250;
@@ -507,6 +607,61 @@ export function d3d9Apis(st) {
     LockIndexBuffer: (x, self, flags, pp) => buffer.Lock(x, o(self).ib, 0, 0, pp, flags), UnlockIndexBuffer: (x, self) => buffer.Unlock(x, o(self).ib),
     LockAttributeBuffer: (x, self, flags, pp) => { x.w32(pp, o(self).attr); return S_OK; }, UnlockAttributeBuffer: () => S_OK,
     GetAttributeTable: (x, self, p, pN) => { if (pN) x.w32(pN, 0); return S_OK; },          // none until Optimize makes one
+    // ConvertAdjacencyToPointReps as Wine's: each vertex represented by the lowest index its shared edges
+    // carry over, propagated across the faces forwards, then backwards.
+    ConvertAdjacencyToPointReps: (x, self, pAdj, pReps) => {
+      if (!pAdj || !pReps) return D3DERR_INVALIDCALL;
+      const m = o(self), reps = pointReps(x, self, u32s(x, pAdj, 3 * m.faces));
+      if (!reps) return D3DERR_INVALIDCALL;
+      x.write(pReps, new Uint8Array(reps.buffer)); return S_OK;
+    },
+    // GenerateAdjacency as Wine's d3dx9_mesh_GenerateAdjacency: the vertices sorted by x + y + z to find
+    // the ones within epsilon of each other; two faces are adjacent across an edge whose ends are the
+    // same vertices or coincide, each edge taking the first such face.
+    GenerateAdjacency: (x, self, eps, pAdj) => {
+      if (!pAdj) return D3DERR_INVALIDCALL;
+      const m = o(self), S = m.stride / 4, nf = m.faces, nv = m.verts, pl = x.win.heapAlloc(4), F = Math.fround;
+      mesh.LockVertexBuffer(x, self, 0, pl); const vf = new Float32Array(x.bytes(x.r32(pl), nv * m.stride).slice().buffer);
+      mesh.LockIndexBuffer(x, self, 0, pl); const ia = x.r32(pl);
+      const idx = Uint32Array.from({ length: 3 * nf }, (_, i) => (m.options & 1 ? x.r32(ia + 4 * i) : x.r16(ia + 2 * i)));
+      const key = Float32Array.from({ length: nv }, (_, v) => F(F(vf[v * S] + vf[v * S + 1]) + vf[v * S + 2]));
+      const first = new Int32Array(nv).fill(-1), shared = new Int32Array(3 * nf), adj = new Int32Array(3 * nf).fill(-1);
+      for (let i = 0; i < 3 * nf; i++) { shared[i] = first[idx[i]]; first[idx[i]] = i; }
+      const order = Array.from({ length: nv }, (_, i) => i).sort((a, c) => key[a] - key[c]), eps2 = F(eps * eps);
+      const d2 = (a, c) => { let s2 = 0; for (let k = 0; k < 3; k++) { const d = F(vf[a * S + k] - vf[c * S + k]); s2 = F(s2 + F(d * d)); } return s2; };
+      for (let i = 0; i < nv; i++) {
+        const va = order[i];
+        for (let sa = first[va]; sa !== -1; sa = first[va]) {
+          let j = i, sb = shared[sa], vb = va;
+          for (;;) {
+            for (; sb !== -1; sb = shared[sb]) {
+              const ba = sa - (sa % 3), bb = sb - (sb % 3);
+              let adjacent = false;
+              for (let k = 0; k < 3; k++) if (adj[bb + k] === ba / 3) { adjacent = true; break; }
+              if (adjacent) continue;
+              for (let k = 1; k <= 2; k++) {
+                const a2 = ba + (sa + k) % 3, b2 = bb + (sb + 3 - k) % 3;
+                adjacent = idx[a2] === idx[b2];
+                if (!adjacent && eps >= 0) { const l = d2(idx[a2], idx[b2]); adjacent = eps === 0 ? l === 0 : l < eps2; }
+                if (adjacent) {
+                  const aa = ba + 2 - (a2 + sa + 1) % 3, ab = bb + 2 - (b2 + sb + 1) % 3;
+                  if (adj[aa] === -1 && adj[ab] === -1) { adj[aa] = bb / 3; adj[ab] = ba / 3; break; }
+                }
+              }
+            }
+            while (++j < nv) {
+              vb = order[j];
+              if (key[vb] - key[va] > eps * 3) { j = nv; break; }
+              if ([0, 1, 2].every((k) => Math.abs(vf[va * S + k] - vf[vb * S + k]) <= eps)) break;
+            }
+            if (j >= nv) break;
+            sb = first[vb];
+          }
+          first[va] = shared[first[va]];
+        }
+      }
+      x.write(pAdj, new Uint8Array(adj.buffer)); return S_OK;
+    },
     // A copy with another FVF, index size or device, as Wine's CloneMesh: what both vertices have is
     // copied (a texture coordinate set as far as the shorter), the rest starts at zero; indices widened or
     // narrowed, attributes kept.
@@ -528,6 +683,116 @@ export function d3d9Apis(st) {
       x.write(n.attr, x.bytes(m.attr, 4 * m.faces));
       x.w32(pp, c); return S_OK;
     },
+  };
+  const meshIndices = (x, self) => {
+    const m = o(self), pl = x.win.heapAlloc(4); mesh.LockIndexBuffer(x, self, 0, pl); const ia = x.r32(pl);
+    return Uint32Array.from({ length: 3 * m.faces }, (_, i) => (m.options & 1 ? x.r32(ia + 4 * i) : x.r16(ia + 2 * i)));
+  };
+  const pointReps = (x, self, adj) => {
+    const m = o(self), idx = meshIndices(x, self), nw = idx.slice(), reps = Uint32Array.from({ length: m.verts }, (_, i) => i);
+    const face = (f) => {
+      for (let e = 0; e < 3; e++) {
+        const g = adj[3 * f + e]; if (g === 0xffffffff) continue;
+        if (g >= m.faces) return false;
+        let oe = 0; while (oe < 3 && adj[3 * g + oe] !== f) oe++;
+        for (let i = 0; i < 2; i++) {
+          const from = 3 * f + (e + 1 - i) % 3, to = 3 * g + (oe + i) % 3;
+          if (nw[to] > nw[from]) { nw[to] = nw[from]; reps[idx[to]] = nw[from]; }
+        }
+      }
+      return true;
+    };
+    for (let f = 0; f < m.faces; f++) if (!face(f)) return null;
+    for (let f = m.faces - 1; f >= 0; f--) if (!face(f)) return null;
+    return reps;
+  };
+  // D3DXComputeNormals as Wine's (D3DXComputeTangentFrameEx computing normals in place): each face's
+  // normal, weighted by its angle at each corner, summed on the corner's point representative, normalized
+  // there and copied to the vertices it represents.
+  const computeNormals = (x, self, pAdj) => {
+    const m = o(self); if (!m || m.iface !== 'ID3DXMesh') return D3DERR_INVALIDCALL;
+    const parts = fvfParts(m.fvf), pos = parts.find((e) => /^pos/.test(e[0])), nrm = parts.find((e) => e[0] === 'normal');
+    if (!pos || !nrm) return D3DERR_INVALIDCALL;
+    const reps = pAdj ? pointReps(x, self, u32s(x, pAdj, 3 * m.faces)) : Uint32Array.from({ length: m.verts }, (_, i) => i);
+    if (!reps) return D3DERR_INVALIDCALL;
+    const idx = meshIndices(x, self), S = m.stride / 4, F = Math.fround, pl = x.win.heapAlloc(4);
+    mesh.LockVertexBuffer(x, self, 0, pl); const at = x.r32(pl), vf = new Float32Array(x.bytes(at, m.verts * m.stride).slice().buffer);
+    const P = (v) => [0, 1, 2].map((k) => vf[v * S + pos[2] / 4 + k]), N = (v) => v * S + nrm[2] / 4;
+    const sub = (a, b) => a.map((c, k) => F(c - b[k])), len = (a) => F(Math.hypot(...a)), dot = (a, b) => F(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+    for (let v = 0; v < m.verts; v++) vf.set([0, 0, 0], N(v));
+    const angle = (a, b) => { const d = F(len(a) * len(b)); return d ? F(Math.acos(F(dot(a, b) / d))) : 0; };
+    for (let f = 0; f < m.faces; f++) {
+      const c = [idx[3 * f], idx[3 * f + 1], idx[3 * f + 2]], [v0, v1, v2] = c.map(P);
+      const a = sub(v0, v1), b = sub(v0, v2), cr = [F(a[1] * b[2] - a[2] * b[1]), F(a[2] * b[0] - a[0] * b[2]), F(a[0] * b[1] - a[1] * b[0])];
+      const w = [angle(a, b), angle(sub(v1, v0), sub(v1, v2)), angle(sub(v2, v0), sub(v2, v1))], l = len(cr), fn = l ? cr.map((q) => F(q / l)) : [0, 0, 0];
+      for (let j = 0; j < 3; j++) { const r = N(reps[c[j]]); for (let k = 0; k < 3; k++) vf[r + k] = F(vf[r + k] + F(fn[k] * w[j])); }
+    }
+    for (let v = 0; v < m.verts; v++) {
+      const r = reps[v];
+      if (r === v) { const n = Array.from(vf.subarray(N(v), N(v) + 3)), l = len(n); if (l) vf.set(n.map((q) => F(q / l)), N(v)); }
+      else vf.set(vf.subarray(N(r), N(r) + 3), N(v));
+    }
+    x.write(at, new Uint8Array(vf.buffer)); mesh.UnlockVertexBuffer(x, self); return S_OK;
+  };
+  // ID3DXTextureShader (d3dx9shader.h): a compiled tx_1_0 function, for D3DXFillTextureTX to evaluate at
+  // each texel of each level of a texture — its centre as POSITION, the texel's size as PSIZE, as
+  // D3DXFillTexture's function is called. The evaluation is the device model's (PRISM's d3d9.js draws it
+  // on the GPU, HLSL's tx-only noise() included); Wine leaves D3DXFillTextureTX a stub.
+  const textureShader = {
+    GetFunction: (x, self, pp) => { x.w32(pp, blobObj(x, new Uint8Array(o(self).tokens.buffer))); return S_OK; },
+    SetDefaults: () => S_OK,
+  };
+  const createTextureShader = (x, pFn, pp) => {
+    if (!pFn || !pp) return D3DERR_INVALIDCALL;
+    x.w32(pp, make(x, 'ID3DXTextureShader', { tokens: shaderTokens(x, pFn) })); return S_OK;
+  };
+  const fillTextureTX = (x, pTex, pTs) => {
+    const t = o(pTex), ts = o(pTs); if (!t || !ts) return D3DERR_INVALIDCALL;
+    return t.dev.fillTextureTX(t.h, ts.tokens) || S_OK;
+  };
+  // ID3DXSkinInfo (Wine's d3dx9_36/skin.c): each bone's influences (vertices and weights), its name and
+  // offset matrix, kept here; UpdateSkinnedMesh writes each vertex as the weighted sum of its position
+  // and normal transformed by its bones' matrices (the normal by the inverse transposes when given), the
+  // rest of the vertex copied — the offset matrices are the program's to fold into those it passes.
+  const skin = {
+    SetBoneInfluence: (x, self, bone, n, pV, pW) => {
+      const sk = o(self); if (bone >= sk.bones.length) return D3DERR_INVALIDCALL;
+      sk.bones[bone].v = u32s(x, pV, n); sk.bones[bone].w = floats(x, pW, n); return S_OK;
+    },
+    GetNumBoneInfluences: (x, self, bone) => o(self).bones[bone]?.v.length ?? 0,
+    GetBoneInfluence: (x, self, bone, pV, pW) => {
+      const b = o(self).bones[bone]; if (!b) return D3DERR_INVALIDCALL;
+      b.v.forEach((v, i) => { x.w32(pV + 4 * i, v); x.write(pW + 4 * i, new Uint8Array(Float32Array.of(b.w[i]).buffer)); }); return S_OK;
+    },
+    GetNumBones: (x, self) => o(self).bones.length,
+    SetBoneName: (x, self, bone, p) => { const b = o(self).bones[bone]; if (!b) return D3DERR_INVALIDCALL; const t = x.str(p); b.name = galloc(x, t.length + 1); x.write(b.name, new TextEncoder().encode(t + '\0')); return S_OK; },
+    GetBoneName: (x, self, bone) => o(self).bones[bone]?.name ?? 0,
+    SetBoneOffsetMatrix: (x, self, bone, p) => { const b = o(self).bones[bone]; if (!b) return D3DERR_INVALIDCALL; x.write(b.offset, x.bytes(p, 64)); return S_OK; },
+    GetBoneOffsetMatrix: (x, self, bone) => o(self).bones[bone]?.offset ?? 0,
+    SetFVF: (x, self, fvf) => { o(self).fvf = fvf; return S_OK; }, GetFVF: (x, self) => o(self).fvf,
+    UpdateSkinnedMesh: (x, self, pM, pInvT, pSrc, pDst) => {
+      const sk = o(self), S = fvfSize(sk.fvf), parts = fvfParts(sk.fvf), n = sk.verts;
+      const src = new Float32Array(x.bytes(pSrc, n * S).slice().buffer), dst = new Uint8Array(src.buffer.slice(0)), df = new Float32Array(dst.buffer);
+      const pos = parts.find((e) => e[0] === 'pos2'), nrm = parts.find((e) => e[0] === 'normal');
+      for (const e of [pos, nrm]) if (e) for (let v = 0; v < n; v++) df.fill(0, (v * S + e[2]) / 4, (v * S + e[2]) / 4 + 3);
+      sk.bones.forEach((b, i) => {
+        const m = floats(x, pM + 64 * i, 16), mi = pInvT ? floats(x, pInvT + 64 * i, 16) : m;
+        b.v.forEach((v, j) => {
+          const w = b.w[j];
+          if (pos) { const k = (v * S + pos[2]) / 4, [a, c, d] = src.subarray(k, k + 3), h = a * m[3] + c * m[7] + d * m[11] + m[15];
+            for (let q = 0; q < 3; q++) df[k + q] += w * (a * m[q] + c * m[4 + q] + d * m[8 + q] + m[12 + q]) / h; }
+          if (nrm) { const k = (v * S + nrm[2]) / 4, [a, c, d] = src.subarray(k, k + 3);
+            for (let q = 0; q < 3; q++) df[k + q] += w * (a * mi[q] + c * mi[4 + q] + d * mi[8 + q]); }
+        });
+      });
+      x.write(pDst, dst); return S_OK;
+    },
+  };
+  const createSkinInfoFVF = (x, verts, fvf, nBones, pp) => {
+    if (!pp) return D3DERR_INVALIDCALL;
+    const offsets = galloc(x, 64 * Math.max(1, nBones)), id = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    const bones = Array.from({ length: nBones }, (_, i) => { x.write(offsets + 64 * i, new Uint8Array(id.buffer)); return { v: new Uint32Array(0), w: new Float32Array(0), name: 0, offset: offsets + 64 * i }; });
+    x.w32(pp, make(x, 'ID3DXSkinInfo', { verts, fvf, bones })); return S_OK;
   };
   // D3DXCreatePolygon as Wine's: the centre and `sides` corners on a circle in z = 0, the first at +y, each
   // side `length` long, normals +z; face i is (0, i+1, i+2), the last closing on corner 1. Its adjacency:
@@ -654,23 +919,18 @@ export function d3d9Apis(st) {
       f.i = -1; f.bytes = null;
     }
   };
-  // D3DX functions not made yet, exported by name: a packer resolving by a hash of the name (Crinkler)
-  // finds them and stops with the name, rather than missing them and calling whatever its walk ends on.
-  const notYet = Object.fromEntries(`D3DXCreateMesh D3DXCreateBox D3DXCreateSphere D3DXCreateCylinder D3DXCreateTorus D3DXCreateTeapot
-    D3DXCreateTextA D3DXCreateTextW D3DXCreateFontA D3DXCreateFontW D3DXCreateSprite D3DXCreateTexture D3DXFillTextureTX
-    D3DXCreateTextureShader D3DXAssembleShader D3DXCreateEffect D3DXLoadMeshFromXInMemory D3DXComputeNormals D3DXComputeTangent
-    D3DXCreateTextureFromFileA D3DXCreateTextureFromFileInMemory D3DXDeclaratorFromFVF D3DXCleanMesh D3DXWeldVertices
-    D3DXCreateNPatchMesh D3DXSimplifyMesh D3DXGenerateOutputDecl D3DXCreatePMeshFromStream`.trim().split(/\s+/)
-    .map((n) => [n, ['', NOT('d3dx9', n)]]));
   const prof = (s) => (x) => { const p = x.win.heapAlloc(8); x.write(p, new TextEncoder().encode(s + '\0')); return p; };
   const d3dx = {
-    ...notYet,
     D3DXCompileShader: ['puppppuppp', d3dxCompile],
     D3DXCreateMeshFVF: ['uuuupp', (x, faces, verts, options, fvf, dev, pp) => {
       if (!faces || !verts || !dev || !pp || (!(options & 1) && verts > 0x10000)) return D3DERR_INVALIDCALL;
       x.w32(pp, meshFVF(x, faces, verts, options, fvf, dev)); return S_OK;
     }],
     D3DXCreatePolygon: ['pfupp', createPolygon],
+    D3DXCreateSkinInfoFVF: ['uuup', createSkinInfoFVF],
+    D3DXComputeNormals: ['pp', computeNormals],
+    D3DXCreateTextureShader: ['pp', createTextureShader],
+    D3DXFillTextureTX: ['pp', fillTextureTX],
     D3DXTessellateNPatches: ['ppfupp', tessellate],
     D3DXFillTexture: ['ppp', fillTexture],
     MIRAGE_FillTextureNext: ['', fillNext],
@@ -686,7 +946,7 @@ export function d3d9Apis(st) {
     IDirect3D9: d3d9, IDirect3DDevice9: device, IDirect3DTexture9: { ...resource, ...texture }, IDirect3DSurface9: { ...resource, ...surface },
     IDirect3DVertexBuffer9: { ...resource, ...buffer }, IDirect3DIndexBuffer9: { ...resource, ...buffer },
     IDirect3DVertexShader9: shaderObj, IDirect3DPixelShader9: shaderObj, IDirect3DVertexDeclaration9: shaderObj, IDirect3DQuery9: query,
-    ID3DXBuffer: xbuffer, ID3DXConstantTable: ctab, ID3DXMesh: mesh,
+    ID3DXBuffer: xbuffer, ID3DXConstantTable: ctab, ID3DXMesh: mesh, ID3DXSkinInfo: skin, ID3DXTextureShader: textureShader,
   };
   const fns = {
     Direct3DCreate9: ['u', (x, sdk) => make(x, 'IDirect3D9')],
@@ -699,8 +959,17 @@ export function d3d9Apis(st) {
     fns[`${iface}::${n}`] = [sigOf(s), f, { ordinal: ord++ }];
   }
   const out = [{ dll: 'd3d9.dll', fns }];
-  for (let v = 24; v <= 43; v++) out.push({ dll: `d3dx9_${v}.dll`, fns: d3dx });
+  for (let v = 24; v <= 43; v++) out.push({ dll: `d3dx9_${v}.dll`, fns: d3dxExports(v, d3dx, NOT) });
   return out;
+}
+
+/** d3dx9_`v`.dll's exports: its names numbered as Microsoft's, `impl`'s functions or NOT; ours after them. */
+function d3dxExports(v, impl, NOT) {
+  const names = D3DX_NAMES.trim().split(/\s+/).filter((n) => { const r = D3DX_SPAN[n]; return !r || (v >= r[0] && v <= r[1]); }).map((n) => `D3DX${n}`);
+  const fns = {}, add = (n, ord) => { const f = impl[n] || ['', NOT('d3dx9', n)]; fns[n] = [f[0], f[1], { ...(f[2] || {}), ordinal: ord }]; };
+  names.forEach((n, i) => add(n, i + 1));
+  Object.keys(impl).filter((n) => !fns[n]).forEach((n, i) => add(n, names.length + 1 + i));
+  return fns;
 }
 
 /** D3DX's math, as d3dx9math.h defines it: row vectors, row-major matrices, left- and right-handed. */

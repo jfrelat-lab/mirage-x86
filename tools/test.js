@@ -4047,6 +4047,41 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: D3DX meshes — a polygon, a 32-bit clone, N-patches, DrawSubset; D3DXFillTexture calling the program', got,
     '0 1.414 -1.414 0 1 | 012023034041 | 3 -1 1 0 -1 2 | 1 | 16 24 -0.707 0 1 | 4 0 0 24 0 16 | 0 0 34 0 3a 0 34 0 3a 4'); }
+// d3dx9_NN.dll numbers its exports as Microsoft's does, its version's names in ASCII order from 1 (Wine's
+// .spec lists): Crinkler's /RANGE imports by ordinal, and Stiletto (2009) called D3DXAssembleShader where it
+// meant D3DXCreateSkinInfoFVF. And D3DX's mesh tools as Wine's: GenerateAdjacency finds D3DXCreatePolygon's
+// own adjacency, D3DXComputeNormals the square's +z, UpdateSkinnedMesh moves a vertex by its bone's matrix
+// (weight 1, translated by (1, 2, 3)) and leaves one no bone holds at zero.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const be = traceBackend(), apis = win32Apis(), { x, win } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: be });
+    const ord = (v, n) => { const d = win.load(`d3dx9_${v}.dll`); return [...d.byOrdinal].find(([, a]) => a === d.exports.get(n))[0]; };
+    const ords = [[24, 'D3DXCreateSkinInfoFVF'], [33, 'D3DXCreateSkinInfoFVF'], [42, 'D3DXCreateSkinInfoFVF'], [33, 'D3DXAssembleShader'], [33, 'D3DXComputeNormals']].map(([v, n]) => ord(v, n)).join(' ');
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1], d9 = (n) => fn('d3d9.dll', n), dx = (n) => fn('d3dx9_33.dll', n);
+    const pp = x.win.heapAlloc(56), pp4 = () => x.win.heapAlloc(4); x.write(pp, new Uint8Array(56)); x.w32(pp + 32, 1);
+    const ppDev = pp4(); d9('IDirect3D9::CreateDevice')(x, d9('Direct3DCreate9')(x, 32), 0, 1, 0, 0x40, pp, ppDev);
+    const dev = x.r32(ppDev), ppM = pp4(), ppAdj = pp4(), pl = pp4(), adj = x.win.heapAlloc(48);
+    dx('D3DXCreatePolygon')(x, dev, 2, 4, ppM, ppAdj);
+    const m = x.r32(ppM); d9('ID3DXMesh::GenerateAdjacency')(x, m, 0, adj);
+    const same = Array.from({ length: 12 }, (_, i) => x.r32(adj + 4 * i) === x.r32(d9('ID3DXBuffer::GetBufferPointer')(x, x.r32(ppAdj)) + 4 * i)).every(Boolean);
+    d9('ID3DXMesh::LockVertexBuffer')(x, m, 0, pl); const vb = x.r32(pl);
+    for (let v = 0; v < 5; v++) x.write(vb + 24 * v + 12, new Uint8Array(12));
+    dx('D3DXComputeNormals')(x, m, adj);
+    const nz = [x.f32(vb + 24 * 2 + 12), x.f32(vb + 24 * 2 + 16), x.f32(vb + 24 * 2 + 20)].map((v) => +v.toFixed(3) + 0).join(',');
+    const ppS = pp4(), vs = x.win.heapAlloc(4), ws = x.win.heapAlloc(4), mat = x.win.heapAlloc(64), dst = x.win.heapAlloc(5 * 24);
+    dx('D3DXCreateSkinInfoFVF')(x, 5, 0x12, 1, ppS); const sk = x.r32(ppS);
+    x.w32(vs, 1); x.write(ws, new Uint8Array(Float32Array.of(1).buffer)); d9('ID3DXSkinInfo::SetBoneInfluence')(x, sk, 0, 1, vs, ws);
+    x.write(mat, new Uint8Array(Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1).buffer));
+    d9('ID3DXSkinInfo::UpdateSkinnedMesh')(x, sk, mat, 0, vb, dst);
+    const sv = (v) => [0, 1, 2, 3, 4, 5].map((k) => +x.f32(dst + 24 * v + 4 * k).toFixed(3) + 0).join(',');
+    got = [ords, same, nz, sv(1), sv(0), d9('ID3DXSkinInfo::GetNumBones')(x, sk)].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: d3dx9 exports numbered as Microsoft\'s; GenerateAdjacency, D3DXComputeNormals, a skin\'s UpdateSkinnedMesh as Wine\'s', got,
+    '84 87 86 1 26 | true | 0,0,1 | 1,3.414,3,0,0,1 | 0,0,0,0,0,0 | 1'); }
 // SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
 // the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
 // one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.
