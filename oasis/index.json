@@ -223,6 +223,15 @@
     "output": "window"
   },
   {
+    "name": "win32/elevated-2009",
+    "title": "Elevated — RGBA & TBC, 4K for Windows",
+    "world": "win32",
+    "year": 2009,
+    "author": "RGBA & TBC, PRISM",
+    "thumb": "oasis/thumbs/win32-elevated-2009.png",
+    "output": "window"
+  },
+  {
     "name": "win32/flow2-2007",
     "title": "Flow2 — auld, 1K for Windows",
     "world": "win32",

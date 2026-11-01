@@ -65,9 +65,10 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Missing | Consequence |
 |---|---|
 | DirectDraw, DirectSound, DirectInput | Programs that need them stop; luxo4k shows a message box and exits for want of DirectSound. |
-| Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test, `Reset` and reading a surface back (Elevated's camera) are not there yet. |
-| D3DX beyond HLSL | `D3DXCompileShader` hands HLSL on to PRISM; texture shaders (`tx_1_0`, Ergon), shader assembly (`D3DXAssembleShader`, Stiletto) and most of D3DX's meshes are not done: ID3DXMesh, `D3DXCreateMeshFVF`, `D3DXCreatePolygon`, `D3DXTessellateNPatches` and `D3DXFillTexture` are. |
+| Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test and `Reset` are not there yet. |
+| D3DX beyond HLSL | Shader assembly, fonts and text meshes (`D3DXCreateTextA`, Stiletto), effects and sprites are not done; texture shaders (`D3DXFillTextureTX`, Ergon) wait on PRISM. Meshes, skins, N-patches, normals, adjacency and `D3DXFillTexture` are. |
 | One emulated core | Threads take turns on one CPU at about 200 M instructions a second: Darwinism (180 M x87 instructions a frame) draws a frame a second, Valleyball's synthesizer falls behind, Stripped's precalculation lasts minutes. |
+| gdi32's ordinals | Crinkler's /RANGE imports by ordinal; MIRAGE's gdi32 does not number its exports as Windows XP's (Stiletto). opengl32's and d3dx9's are numbered as Microsoft's. |
 | Win16 | No NE loader yet. |
 
 ## The tools

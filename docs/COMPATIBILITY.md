@@ -165,12 +165,12 @@ recording device model, which says how far the program gets but not what it draw
 | cdak (4K, Chaos Constructions 2010) | Direct3D 9 | Renders | 60 frames a second in Chrome: HLSL pixel shaders, render targets ping-ponged, a looped waveOut buffer | 2026-10-31 |
 | yes we can (4K, Chaos Constructions 2009) | Direct3D 9 | Renders | 60 frames a second in Chrome: pixel shaders on one pre-transformed triangle, a float16 render target | 2026-10-31 |
 | Photon Race 2 (4K, NVScene 2008) | Direct3D 9 | Renders | in Chrome after a few seconds of precalculation: HLSL vertex and pixel shaders, four float16 render targets at once, 192 passes a frame | 2026-10-31 |
-| Elevated (4K, Breakpoint 2009) | Direct3D 9 | Starts | presents headless after 24 G instructions of precalculation (its height map through `D3DXFillTexture`, then its music): a quad cut by `D3DXTessellateNPatches` into a million triangles, raised by a vertex shader. Its camera is read back from a render target each frame, which PRISM's `d3d9.js` does not do yet | 2026-10-31 |
+| Elevated (4K, Breakpoint 2009) | Direct3D 9 | Renders | the mountains in Chrome after 2½ minutes of precalculation (24 G instructions: its height map through `D3DXFillTexture`, then its music): a quad cut by `D3DXTessellateNPatches` into a million triangles raised by a vertex shader, the camera read back from a render target each frame | 2026-11-01 |
 | Atrium (4K, Breakpoint 2008) | Direct3D 9 | Starts | still precomputing after 3 G instructions, its device created | 2026-10-31 |
 | Darwinism | Direct3D 9 | Starts | presents headless at about one frame a second: some 180 M x87 instructions a frame on one emulated core | 2026-10-31 |
 | Wishful Twisting | Direct3D 9 | Starts | still precomputing after 1.5 G instructions, before its first frame | 2026-10-31 |
-| Ergon | Direct3D 9 | Fails | `D3DXCompileShader` for a `tx_1_0` texture shader (`D3DXFillTextureTX`) | 2026-10-31 |
-| Stiletto | Direct3D 9 | Fails | `D3DXAssembleShader` (shader assembly) and `D3DXCreateMeshFVF` | 2026-10-31 |
+| Ergon | Direct3D 9 | Starts | presents headless; its `tx_1_0` texture shader (HLSL's `noise()`) is handed to PRISM's `d3d9.js`, which does not evaluate texture shaders yet | 2026-11-01 |
+| Stiletto | Direct3D 9 | Fails | its skinned mesh is made; it stops at `D3DXCreateTextA` (a 3D mesh of a Tahoma text, from TrueType outlines) and calls gdi32 by XP's ordinals, which MIRAGE's gdi32 does not have | 2026-11-01 |
 | luxo4k | Direct3D 9 | Fails | shows a message box and exits: it needs DirectSound | 2026-10-31 |
 | Polystreptikum, Synchroplastikum | Direct3D 9 | Fails | a page fault before the device is created; cause not looked at | 2026-10-31 |
 | Valleyball, Stripped | OpenGL | Starts | too slow: Valleyball's synthesizer renders at a third of real time, Stripped precomputes for minutes | 2026-10 |

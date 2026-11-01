@@ -116,7 +116,7 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
 | `linux/clod-2008`, `laminator-2009`, `makeit4k-2005`, `metatunnel-2009`, `retrospection-2010`, `ribbon-2009`, `yellowrose-2003` | linux | the scene's Linux OpenGL intros of 2003-2010, their libSDL, libGL and libGLU made in JavaScript, drawn by PRISM's `gl.js` |
 | `win32/ribbon-2009`, `flow2-2007`, `chocolux-2008`, `retrospection-2010`, `paradistance-2009`, `hartverdrahtet-2012`, `absoluteterritory-2017` | win32 | the scene's Windows OpenGL intros, packed by Crinkler: the process laid out as Windows XP lays it out, opengl32 on PRISM's `gl.js`, the music through waveOut |
-| `win32/cdak-2010`, `yeswecan-2009`, `photonrace2-2008` | win32 | the scene's Direct3D 9 intros: d3d9.dll and d3dx9 in JavaScript, HLSL translated and drawn by PRISM's `d3d9.js` |
+| `win32/cdak-2010`, `yeswecan-2009`, `photonrace2-2008`, `elevated-2009` | win32 | the scene's Direct3D 9 intros: d3d9.dll and d3dx9 in JavaScript, HLSL translated and drawn by PRISM's `d3d9.js` |
 
 ## What is not there yet
 

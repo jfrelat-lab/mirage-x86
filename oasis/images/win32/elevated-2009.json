@@ -1,0 +1,24 @@
+{
+  "oasis": 1,
+  "title": "Elevated — RGBA & TBC, 4K for Windows",
+  "year": 2009,
+  "author": "RGBA & TBC, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium4"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.scene.org/pub/parties/2009/breakpoint09/in4k/rgba_tbc_elevated.zip",
+      "files": {
+        "elevated_1280x720.exe": "/intro/elevated_1280x720.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/elevated_1280x720.exe"
+  },
+  "output": "window",
+  "notes": "Breakpoint 2009, 4K intro, first place: mountains flown over at sunset, their height map made by the program's own function through D3DXFillTexture, a D3DX square cut by N-patches into a million triangles that a vertex shader raises, the camera computed on the GPU and read back each frame, music by Puryx synthesized before the first frame; packed by Crinkler. MIRAGE-WIN32 makes d3d9.dll and d3dx9_33.dll in JavaScript, its meshes included; PRISM's d3d9.js translates the HLSL to GLSL ES and draws it with WebGL2. The precalculation takes some 24 billion instructions: about two and a half minutes of black screen before the mountains.",
+  "thumb": "oasis/thumbs/win32-elevated-2009.png"
+}
