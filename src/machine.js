@@ -176,6 +176,7 @@ export class Machine {
       }
       this.setPitReload(reload === 0 ? 0x10000 : reload);       // 0 == 65536
       this._pitTicks = reload === 0 ? 0x10000 : reload; this._pitLoad = this.cpu.cycles;
+      if (this.wallClockMs) this._pitLoadMs = this.wallClockMs();
     });
     // Reading counter 0 (0x40) returns the LIVE countdown value. Games poll it for fine timing /
     // delays / entropy — Alley Cat's gameplay loop spins on it — so a constant reply freezes them.
@@ -184,13 +185,18 @@ export class Machine {
     // count back, and with a phase that ignored the write it read 2A09h, believed the CPU ran at a
     // fraction of its speed, and spent two minutes in a delay meant to last a second. Before any
     // write the BIOS's 65536 runs from cycle 0. MIRAGE_PITOLD=1 restores the cycle-unit count.
-    this._pitTicks = 0x10000; this._pitLoad = 0;
+    // In the browser (wallClockMs) the count runs in real time, as the 0x3DA beam and the INT 8s do:
+    // counted in cycles of an unthrottled CPU, a 70 Hz frame was far past 16 bits. Unreal (Future Crew,
+    // 1992) times the frame between two retraces with this counter, twice, wants the two within 32
+    // clocks, and after 32 tries set its timer to 65536: its frames came at 18 Hz, not 70.
+    this._pitTicks = 0x10000; this._pitLoad = 0; this._pitLoadMs = 0;
     const pitOld = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PITOLD === '1';
     this.onPortRead(0x40, () => {
       let count;
       if (pitOld) count = (this.pitReload - (this.cpu.cycles % this.pitReload)) & 0xffff;
       else {
-        const el = Math.floor((this.cpu.cycles - this._pitLoad) * 65536 / this.pitBase);
+        const el = this.wallClockMs ? Math.floor((this.wallClockMs() - this._pitLoadMs) * 1193.182)
+          : Math.floor((this.cpu.cycles - this._pitLoad) * 65536 / this.pitBase);
         count = (this._pitTicks - (el % this._pitTicks)) & 0xffff;
       }
       if (this._pitAccess === 1) return count & 0xff;

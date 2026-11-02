@@ -1159,6 +1159,7 @@ export function installBIOS(machine, opts = {}) {
   // write — SVGAlib's palette, so DOOM's pickup flashes — waited a whole frame per colour: a palette
   // in a third of a second, the flash of an armour taking seconds.
   let cLine = vgaPeriod / lines, cHD = cLine * hDisp;
+  let vrSeen = -1;                                   // the last wall-clock retrace a read reported
   const status1 = () => {
     const v = machine.vga;
     if (v) {
@@ -1172,7 +1173,17 @@ export function installBIOS(machine, opts = {}) {
     if (machine.wallClockMs) {
       const t = machine.wallClockMs() / FRAME_MS, f = t - Math.floor(t);
       const l = f * lines;
-      return (f >= fBlank || l - Math.floor(l) >= hDisp ? 0x01 : 0) | (f >= fRS && f < fRE ? 0x08 : 0);
+      // The retrace pulse is two lines, 64 µs, and a page's clock moves in steps of 100 µs (Chrome
+      // coarsens performance.now() unless the page is cross-origin isolated); the machine also runs
+      // only part of each animation frame: a program that waits for every retrace (Unreal, Future
+      // Crew, 1992) missed those that fell between two steps or while the page had the CPU. A retrace
+      // begun since the last read and not yet seen is reported on this read, once, as a short pulse is
+      // on a real card to a loop that polls faster than it lasts.
+      const k = Math.floor(t - fRS);                 // the latest retrace to have begun
+      let vr = f >= fRS && f < fRE;
+      if (vr) vrSeen = k;
+      else if (k > vrSeen) { if (vrSeen >= 0) vr = true; vrSeen = k; }
+      return (vr || f >= fBlank || l - Math.floor(l) >= hDisp ? 0x01 : 0) | (vr ? 0x08 : 0);
     }
     const pos = machine.cpu.cycles % vgaPeriod;
     return (pos >= cBlank || pos % cLine >= cHD ? 0x01 : 0) | (pos >= cRS && pos < cRE ? 0x08 : 0);

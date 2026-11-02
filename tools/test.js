@@ -4820,6 +4820,35 @@ const runLinux = (hex, argv) => {
   const sha = createHash('sha256').update(Buffer.from(buf.buffer)).digest('hex').slice(0, 16);
   eq('OPL3: tools/oplnotes.asm renders bit for bit as Nuked-OPL3 does', sha, '02264c24e625b726'); }
 
+// The browser's clock (machine.wallClockMs): performance.now() moves in 100 µs steps there, and the
+// machine runs part of each animation frame only. Unreal (Future Crew, 1992) times a frame with PIT
+// counter 0 between two retraces, twice, and wants the two within 32 clocks, or it sets its timer to
+// 65536 and runs at 18 frames a second; and its frames wait on retraces it must not miss. With a clock
+// of 100 µs steps, 2 µs a port read (100 cycles at 50 M a second), and the machine idle 4 ms of each
+// 16: the count a frame takes (17045 clocks, 1193182 / 70) twice alike within Unreal's 32 tries, and the
+// 70 retraces of a second.
+{ let got;
+  const pn = performance.now;
+  try {
+    const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+    let us = 0;
+    performance.now = () => Math.floor(us / 100) / 10;
+    mc.timerAuto = false; mc.wallClockMs = () => performance.now();
+    const rd = (p) => { us += 2; mc.cpu.cycles += 100; if (us % 16000 >= 12000) us += 4000; return mc.ioRead(p, 1); };
+    const calib = () => {
+      mc.ioWrite(0x43, 1, 0x30); mc.ioWrite(0x40, 1, 0xff); mc.ioWrite(0x40, 1, 0xff);
+      while (rd(0x3da) & 8);
+      while (!(rd(0x3da) & 8));
+      mc.ioWrite(0x43, 1, 0); const lo = rd(0x40); return 0xffff - ((rd(0x40) << 8) | lo);
+    };
+    let a = 0, b = 0, tries = 0;                        // as Unreal: up to 32 tries
+    do { a = calib(); b = calib(); } while (Math.abs(a - b) > 32 && ++tries < 32);
+    let edges = 0, last = 0; const end = us + 1e6;
+    while (us < end) { const v = rd(0x3da) & 8; if (v && !last) edges++; last = v; }
+    got = [tries < 32, Math.abs(a - 17045) < 40 ? 'ok' : a, edges >= 70 && edges <= 71].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); } finally { performance.now = pn; }
+  eq('browser clock: a frame timed by PIT counter 0 between retraces, and every retrace seen (Unreal)', got, 'true ok true'); }
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');
