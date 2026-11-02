@@ -20,5 +20,7 @@
   },
   "output": "window",
   "notes": "Chaos Constructions 2009, 4K intro, first place: raymarched in HLSL pixel shaders on one pre-transformed triangle, through a float16 render target, its music by 4klang through waveOut; compiled for SSE, packed by Crinkler. MIRAGE-WIN32 makes d3d9.dll and d3dx9_37.dll in JavaScript; PRISM's d3d9.js translates the HLSL to GLSL ES and draws it with WebGL2.",
-  "thumb": "oasis/thumbs/win32-yeswecan-2009.png"
+  "thumb": "oasis/thumbs/win32-yeswecan-2009.png",
+  "tags": ["4K intro", "Direct3D 9", "HLSL"],
+  "sound": true
 }

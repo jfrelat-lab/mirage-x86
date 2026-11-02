@@ -22,3 +22,6 @@ What changed for someone using MIRAGE, newest first. The commit history has ever
 - **Sources and licences**: the FreeDOS disk's source is served beside it (`sources/freedos/`, and a
   GitHub release); each OASIS image has a *source & licence* dialog — its terms, and where every layer
   comes from — with a caution where the terms are not free (Quake's shareware licence).
+- **The home page**: four shelves (DOS, Linux, Windows, Boot), the Windows intros on it at last, each
+  card tagged with what it uses and 🔊 where its sound was heard playing in MIRAGE; MIRAGE's own test
+  programs and the weaker intros left to the Machines page.

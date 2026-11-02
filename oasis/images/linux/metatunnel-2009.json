@@ -50,5 +50,6 @@
   },
   "output": "window",
   "notes": "Numerica 2009, 1K intro: one GLSL fragment shader raymarching a metaball tunnel, passed the time through glColor4ubv. The intro runs as it was distributed: its dropper, a shell script, unpacks the compressed ELF to /tmp and starts it (busybox's sh, tail, zcat or lzcat), on Debian lenny's libc and dynamic loader (2009). Its libGL, libGLU, libSDL and libasound are made in JavaScript: the OpenGL calls and the GLSL go to PRISM's gl.js (vendor/prism), drawn by WebGL2; /usr/lib/libm.so is libc6-dev's link, the name it opens with dlopen.",
-  "thumb": "oasis/thumbs/linux-metatunnel-2009.png"
+  "thumb": "oasis/thumbs/linux-metatunnel-2009.png",
+  "tags": ["1K intro", "OpenGL", "GLSL"]
 }

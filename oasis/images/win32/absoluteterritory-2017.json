@@ -20,5 +20,7 @@
   },
   "output": "window",
   "notes": "Revision 2017, 4K intro, second place: raymarched GLSL with 4klang's music through waveOut, packed by Crinkler 2.0 with its tiny header -- no section, the code in the PE headers, an image Windows maps flat. Run as Windows XP would run it, with no Windows: MIRAGE-WIN32 maps the .exe as XP's loader does and lays out the process as XP does (the PEB, its module lists, FS at the TEB), which is what Crinkler's header walks to resolve every import by hashing names; kernel32, user32, gdi32, winmm and msvcrt are made in JavaScript, opengl32 (its 368 ordinals as XP's) hands GL and GLSL to PRISM's gl.js, drawn by WebGL2.",
-  "thumb": "oasis/thumbs/win32-absoluteterritory-2017.png"
+  "thumb": "oasis/thumbs/win32-absoluteterritory-2017.png",
+  "tags": ["4K intro", "OpenGL", "GLSL"],
+  "sound": true
 }

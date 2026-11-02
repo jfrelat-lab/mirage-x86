@@ -60,5 +60,7 @@
   "thumb": "oasis/thumbs/linux-quake-1997.png",
   "license": "oasis/licenses/quake-shareware.txt",
   "licenseName": "id Software's shareware licence (SLICNSE.TXT, June 1996), as quake106.zip carries it",
-  "caution": "Quake's shareware episode is id Software's, under its shareware licence, not a free one: it may be played and passed on whole and free of charge, with the licence, and not used commercially or displayed publicly. MIRAGE never copies it: the page fetches quake106.zip from idgames, unchanged, the licence inside it."
+  "caution": "Quake's shareware episode is id Software's, under its shareware licence, not a free one: it may be played and passed on whole and free of charge, with the licence, and not used commercially or displayed publicly. MIRAGE never copies it: the page fetches quake106.zip from idgames, unchanged, the licence inside it.",
+  "tags": ["game", "SVGAlib"],
+  "sound": true
 }

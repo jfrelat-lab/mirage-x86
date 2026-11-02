@@ -6,7 +6,8 @@
     "year": 1999,
     "author": "Ronny Wester",
     "thumb": "examples/thumbs/cdogs.png",
-    "output": "window"
+    "output": "window",
+    "shelf": false
   },
   {
     "name": "dos/doom",
@@ -15,7 +16,8 @@
     "year": 1993,
     "author": "id Software",
     "thumb": "examples/thumbs/doom.png",
-    "output": "window"
+    "output": "window",
+    "shelf": false
   },
   {
     "name": "linux/clod-2008",
@@ -24,7 +26,12 @@
     "year": 2008,
     "author": "Fearmoths, the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-clod-2008.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "1K intro",
+      "OpenGL",
+      "GLSL"
+    ]
   },
   {
     "name": "linux/debian-bookworm",
@@ -41,7 +48,8 @@
     "year": 1994,
     "author": "id Software, port by Dave Taylor",
     "thumb": "oasis/thumbs/linux-doom-1994.png",
-    "output": "window"
+    "output": "window",
+    "shelf": false
   },
   {
     "name": "linux/doom-build",
@@ -58,7 +66,8 @@
     "year": 1994,
     "author": "id Software, port by Dave Taylor; busybox 1.35",
     "thumb": "oasis/thumbs/linux-doom-1994.png",
-    "output": "window"
+    "output": "window",
+    "shelf": false
   },
   {
     "name": "linux/doom-x11",
@@ -67,7 +76,12 @@
     "year": 1997,
     "author": "id Software, the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-doom-x11.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "game",
+      "X11",
+      "gcc 2.7.2"
+    ]
   },
   {
     "name": "linux/laminator-2009",
@@ -76,7 +90,12 @@
     "year": 2009,
     "author": "Saint Vincent and the Grenadines (halcy, WAHa_06x36), the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-laminator-2009.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "1K intro",
+      "OpenGL",
+      "GLSL"
+    ]
   },
   {
     "name": "linux/makeit4k-2005",
@@ -85,7 +104,13 @@
     "year": 2005,
     "author": "Fit & Bandwagon, the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-makeit4k-2005.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "SDL audio"
+    ],
+    "sound": true
   },
   {
     "name": "linux/mesa-1997",
@@ -94,7 +119,12 @@
     "year": 1997,
     "author": "Brian Paul (Mesa), Mark J. Kilgard (GLUT), Silicon Graphics (the demos), the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-mesa-1997.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "OpenGL",
+      "Mesa",
+      "X11"
+    ]
   },
   {
     "name": "linux/metatunnel-2009",
@@ -103,7 +133,12 @@
     "year": 2009,
     "author": "FRequency, the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-metatunnel-2009.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "1K intro",
+      "OpenGL",
+      "GLSL"
+    ]
   },
   {
     "name": "linux/mirage",
@@ -112,7 +147,12 @@
     "year": 2023,
     "author": "Debian; id Software",
     "thumb": "oasis/thumbs/linux-mirage.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "game",
+      "Debian 12",
+      "SVGAlib"
+    ]
   },
   {
     "name": "linux/quake-1997",
@@ -122,7 +162,12 @@
     "author": "id Software, port by Dave 'Zoid' Kirsch",
     "thumb": "oasis/thumbs/linux-quake-1997.png",
     "output": "window",
-    "caution": true
+    "caution": true,
+    "tags": [
+      "game",
+      "SVGAlib"
+    ],
+    "sound": true
   },
   {
     "name": "linux/retrospection-2010",
@@ -131,7 +176,13 @@
     "year": 2010,
     "author": "Trolls in the Shadows & FRequency, the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-retrospection-2010.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "GLSL"
+    ],
+    "sound": true
   },
   {
     "name": "linux/ribbon-2009",
@@ -140,7 +191,12 @@
     "year": 2009,
     "author": "FRequency, the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-ribbon-2009.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "1K intro",
+      "OpenGL",
+      "GLSL"
+    ]
   },
   {
     "name": "linux/x11-1997",
@@ -149,7 +205,8 @@
     "year": 1997,
     "author": "The XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-x11-1997.png",
-    "output": "window"
+    "output": "window",
+    "shelf": false
   },
   {
     "name": "linux/xbill-1997",
@@ -158,7 +215,8 @@
     "year": 1997,
     "author": "Brian Wellington and Matias Duarte, the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-xbill-1997.png",
-    "output": "window"
+    "output": "window",
+    "shelf": false
   },
   {
     "name": "linux/xboing-1997",
@@ -167,7 +225,13 @@
     "year": 1997,
     "author": "Justin C. Kibell, the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-xboing-1997.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "game",
+      "X11",
+      "/dev/dsp"
+    ],
+    "sound": true
   },
   {
     "name": "linux/xjewel-1997",
@@ -176,7 +240,8 @@
     "year": 1997,
     "author": "David Cooper, the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-xjewel-1997.png",
-    "output": "window"
+    "output": "window",
+    "shelf": false
   },
   {
     "name": "linux/xscreensaver-gl-1998",
@@ -185,7 +250,12 @@
     "year": 1998,
     "author": "Jamie Zawinski and the hacks' authors (xscreensaver), Brian Paul (Mesa), the XFree86 Project, the Debian project, busybox",
     "thumb": "oasis/thumbs/linux-xscreensaver-gl-1998.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "OpenGL",
+      "Mesa",
+      "X11"
+    ]
   },
   {
     "name": "linux/yellowrose-2003",
@@ -194,7 +264,13 @@
     "year": 2003,
     "author": "Fit & Bandwagon (Marq, NF), the Debian project, busybox, PRISM",
     "thumb": "oasis/thumbs/linux-yellowrose-2003.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "SDL audio"
+    ],
+    "sound": true
   },
   {
     "name": "win32/absoluteterritory-2017",
@@ -203,7 +279,13 @@
     "year": 2017,
     "author": "Prismbeings, PRISM",
     "thumb": "oasis/thumbs/win32-absoluteterritory-2017.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "GLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/cdak-2010",
@@ -212,7 +294,13 @@
     "year": 2010,
     "author": "Quite & Orange, PRISM",
     "thumb": "oasis/thumbs/win32-cdak-2010.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "Direct3D 9",
+      "HLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/chocolux-2008",
@@ -221,7 +309,12 @@
     "year": 2008,
     "author": "auld, PRISM",
     "thumb": "oasis/thumbs/win32-chocolux-2008.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "1K intro",
+      "OpenGL",
+      "GLSL"
+    ]
   },
   {
     "name": "win32/elevated-2009",
@@ -230,7 +323,13 @@
     "year": 2009,
     "author": "RGBA & TBC, PRISM",
     "thumb": "oasis/thumbs/win32-elevated-2009.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "Direct3D 9",
+      "HLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/ergon-2010",
@@ -239,7 +338,13 @@
     "year": 2010,
     "author": "Frequency, PRISM",
     "thumb": "oasis/thumbs/win32-ergon-2010.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "Direct3D 9",
+      "HLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/flow2-2007",
@@ -248,7 +353,12 @@
     "year": 2007,
     "author": "auld, PRISM",
     "thumb": "oasis/thumbs/win32-flow2-2007.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "1K intro",
+      "OpenGL",
+      "GLSL"
+    ]
   },
   {
     "name": "win32/hartverdrahtet-2012",
@@ -257,7 +367,13 @@
     "year": 2012,
     "author": "Akronyme Analogiker, PRISM",
     "thumb": "oasis/thumbs/win32-hartverdrahtet-2012.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "GLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/paradistance-2009",
@@ -266,7 +382,13 @@
     "year": 2009,
     "author": "Titan, PRISM",
     "thumb": "oasis/thumbs/win32-paradistance-2009.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "GLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/photonrace2-2008",
@@ -275,7 +397,12 @@
     "year": 2008,
     "author": "Archee, PRISM",
     "thumb": "oasis/thumbs/win32-photonrace2-2008.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "Direct3D 9",
+      "HLSL"
+    ]
   },
   {
     "name": "win32/retrospection-2010",
@@ -284,7 +411,13 @@
     "year": 2010,
     "author": "Trolls in the Shadows & FRequency, PRISM",
     "thumb": "oasis/thumbs/win32-retrospection-2010.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "GLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/ribbon-2009",
@@ -293,7 +426,12 @@
     "year": 2009,
     "author": "FRequency, PRISM",
     "thumb": "oasis/thumbs/win32-ribbon-2009.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "1K intro",
+      "OpenGL",
+      "GLSL"
+    ]
   },
   {
     "name": "win32/yeswecan-2009",
@@ -302,6 +440,12 @@
     "year": 2009,
     "author": "Quite, PRISM",
     "thumb": "oasis/thumbs/win32-yeswecan-2009.png",
-    "output": "window"
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "Direct3D 9",
+      "HLSL"
+    ],
+    "sound": true
   }
 ]

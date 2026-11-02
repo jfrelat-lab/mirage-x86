@@ -20,5 +20,6 @@
     "run": "DOOM.EXE"
   },
   "output": "window",
-  "license": "examples/licenses/doom.txt"
+  "license": "examples/licenses/doom.txt",
+  "shelf": false
 }

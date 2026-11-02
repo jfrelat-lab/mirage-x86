@@ -20,5 +20,6 @@
     "run": "CDOGS.EXE"
   },
   "output": "window",
-  "license": "examples/licenses/cdogs.txt"
+  "license": "examples/licenses/cdogs.txt",
+  "shelf": false
 }

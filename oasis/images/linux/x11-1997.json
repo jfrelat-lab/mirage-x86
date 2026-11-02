@@ -101,5 +101,6 @@
   },
   "output": "window",
   "notes": "XFree86 3.3's SVGA server (Debian 1.3, 1997) with its clgd5446 driver, driving MIRAGE's emulated Cirrus Logic CL-GD5446 (machine.vga \"cirrus\") at 800x600 in 256 colours: the chip's clock, extended CRTC, banked window and hardware cursor. The image starts the server, oclock, xclock, an xterm and twm itself; the xterm runs a shell on a pseudo-terminal (/dev/ttyp0), with the line discipline, ^C and window sizes.",
-  "thumb": "oasis/thumbs/linux-x11-1997.png"
+  "thumb": "oasis/thumbs/linux-x11-1997.png",
+  "shelf": false
 }

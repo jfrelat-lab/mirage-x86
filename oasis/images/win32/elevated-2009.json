@@ -20,5 +20,7 @@
   },
   "output": "window",
   "notes": "Breakpoint 2009, 4K intro, first place: mountains flown over at sunset, their height map made by the program's own function through D3DXFillTexture, a D3DX square cut by N-patches into a million triangles that a vertex shader raises, the camera computed on the GPU and read back each frame, music by Puryx synthesized before the first frame; packed by Crinkler. MIRAGE-WIN32 makes d3d9.dll and d3dx9_33.dll in JavaScript, its meshes included; PRISM's d3d9.js translates the HLSL to GLSL ES and draws it with WebGL2. The precalculation takes some 24 billion instructions: about a minute and a half of black screen before the mountains.",
-  "thumb": "oasis/thumbs/win32-elevated-2009.png"
+  "thumb": "oasis/thumbs/win32-elevated-2009.png",
+  "tags": ["4K intro", "Direct3D 9", "HLSL"],
+  "sound": true
 }

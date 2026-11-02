@@ -52,5 +52,6 @@
     }
   },
   "output": "window",
-  "notes": "The binary, its WAD and the a.out libraries are fetched from their original archives (idgames, archive.debian.org); nothing of them is in this repository."
+  "notes": "The binary, its WAD and the a.out libraries are fetched from their original archives (idgames, archive.debian.org); nothing of them is in this repository.",
+  "shelf": false
 }

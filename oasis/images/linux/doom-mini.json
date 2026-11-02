@@ -59,5 +59,6 @@
     }
   },
   "output": "window",
-  "notes": "A Linux with no distribution: one static busybox (its applets linked as busybox --install makes them), the three a.out libraries linuxsdoom needs, the binary and its WAD — about 4 MB, against Debian's tens. Type doom at the prompt."
+  "notes": "A Linux with no distribution: one static busybox (its applets linked as busybox --install makes them), the three a.out libraries linuxsdoom needs, the binary and its WAD — about 4 MB, against Debian's tens. Type doom at the prompt.",
+  "shelf": false
 }

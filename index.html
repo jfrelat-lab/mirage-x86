@@ -54,6 +54,10 @@
   .card .run:hover { text-decoration: none; filter: brightness(1.12); }
   .tag { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px;
          font-size: 11px; letter-spacing: .5px; color: var(--dim); text-transform: uppercase; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .chip { display: inline-block; padding: 1px 7px; border: 1px solid var(--line); border-radius: 99px; font-size: 11px; color: var(--dim); }
+  .chip.sound { border-color: var(--accent); color: var(--accent); }
+  .sub { grid-column: 1 / -1; margin: 10px 0 -4px; font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
   .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
   .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
   .box h3 { margin: 0 0 8px; font-size: 16px; color: #e6eef4; }
@@ -61,7 +65,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: top; }
   td:first-child { color: #e6eef4; white-space: nowrap; }
-  .three { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 18px 0 16px; }
+  .three { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 18px 0 16px; }
   .mach { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; color: var(--ink); }
   .mach:hover { border-color: var(--accent); text-decoration: none; }
   .mach b { display: block; color: var(--accent); font: 700 15px ui-monospace, Menlo, monospace; margin-bottom: 6px; }
@@ -95,6 +99,8 @@
         DPMI host: drop a <code>.COM</code> or an <code>.EXE</code> on it and it runs at once. DOOM, Heretic, Wolfenstein 3D.</span></a>
       <a class="mach" href="machines.html?m=linux"><b>Linux</b><span>Linux's system calls answered in JavaScript — no kernel:
         a real <code>bash</code> from Debian 12, id's DOOM and Quake on SVGAlib, XFree86 3.3 on an emulated Cirrus card.</span></a>
+      <a class="mach" href="machines.html?m=win32"><b>Windows</b><span>The Win32 API in JavaScript — no Windows: the
+        demoscene's 4K intros on OpenGL and Direct3D 9, Elevated and Ergon among them, drawn through WebGL2.</span></a>
       <a class="mach" href="machines.html?m=pc"><b>Bare PC</b><span>BIOS, VGA, disks and CD: boots unmodified operating
         systems from an image — Windows 95 and 98, Linux, the BSDs, FreeDOS.</span></a>
     </div>
@@ -102,7 +108,8 @@
       their authors published them, and say which machine it needs — like a Docker image, for the PC of 1990.</p>
     <div class="cta">
       <a class="btn primary" href="machines.html">Choose a machine</a>
-      <a class="btn" href="#examples">Try an example</a>
+      <a class="btn" href="#windows">Windows intros</a>
+      <a class="btn" href="#dos">DOS games and demos</a>
       <a class="btn" href="oasis.html">OASIS images</a>
       <a class="btn" href="boot.html">Boot your own disk image</a>
     </div>
@@ -114,22 +121,35 @@
     <p class="more"><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPARISON.md">How MIRAGE compares with QEMU, DOSBox-X, v86, PCjs and Docker →</a></p>
   </section>
 
-  <section id="examples">
-    <h2>Examples</h2>
-    <p class="lead">Everything here may be redistributed: demos written for MIRAGE, and intros and
-      boot-sector programs that their authors publish under free licences. Each card links to the licence and
-      the source. The screenshots were taken by MIRAGE itself.</p>
-    <div class="grid" id="grid"><p class="lead">Loading the examples…</p></div>
+  <section id="dos">
+    <h2>DOS</h2>
+    <p class="lead">Games and demos on MIRAGE's own DOS — a BIOS, XMS, EMS and a DPMI host written in JavaScript, no DOS
+      image. Everything here may be redistributed; each card links to its licence and its source. The screenshots
+      were taken by MIRAGE itself, and <span class="chip sound">🔊 sound</span> marks the ones heard playing.</p>
+    <div class="grid" id="dosgrid"><p class="lead">Loading…</p></div>
   </section>
 
   <section id="linux">
-    <h2>Linux of the nineties, with no kernel</h2>
-    <p class="lead">OASIS images of Linux programs as they shipped: Debian 1.3's libraries and X server, id's games,
-      fetched from Debian's and idgames' own archives when the image is first run — nothing of theirs is copied here.
-      Linux's system calls are answered in JavaScript; the programs are the original binaries, or built from their
-      sources by the compiler of the time. The page fetches those archives through a small relay of its host, as
-      <code>node tools/oasis.mjs serve</code> does at home. <a href="oasis.html">Every image's recipe →</a></p>
+    <h2>Linux, with no kernel</h2>
+    <p class="lead">Linux programs as they shipped — id's games on SVGAlib, XFree86 3.3 and Mesa of 1997 — and the
+      demoscene's Linux intros, from 1K to 256 bytes. Linux's system calls are answered in JavaScript. OASIS images
+      fetch their files from Debian's, idgames' and scene.org's own archives, through a small relay of this site;
+      nothing of theirs is copied here. <a href="oasis.html">Every image's recipe →</a></p>
     <div class="grid" id="linuxgrid"></div>
+  </section>
+
+  <section id="windows">
+    <h2>Windows intros, with no Windows</h2>
+    <p class="lead">4K and 1K intros of the demoscene, their Win32 API, OpenGL and Direct3D 9 written in JavaScript —
+      no Windows, no Microsoft DLL. Their shaders go to WebGL2 through <a href="https://github.com/jfrelat-lab/prism">PRISM</a>.
+      Each one is fetched from scene.org when first run.</p>
+    <div class="grid" id="wingrid"></div>
+  </section>
+
+  <section id="boot">
+    <h2>Boot</h2>
+    <p class="lead">Boot sectors of 512 bytes and a whole FreeDOS disk, started by MIRAGE's bare PC from its BIOS.</p>
+    <div class="grid" id="bootgrid"></div>
   </section>
 
   <section id="booted">
@@ -223,35 +243,47 @@
         </div></article>`;
     }).join('');
   }).catch(() => { document.getElementById('booted').hidden = true; });
-  // The Linux OASIS images with a screenshot, from oasis/index.json (what oasis.html lists).
-  fetch('oasis/index.json').then((r) => r.json()).then((list) => {
-    const shown = list.filter((m) => m.world === 'linux' && m.thumb);
-    document.getElementById('linuxgrid').innerHTML = shown.map((m) => {
-      const href = `machines.html?m=linux&run=${encodeURIComponent(m.name)}`;
-      return `<article class="card">
-        <a class="shot" href="${href}" aria-label="Run ${esc(m.title)}"><img src="${esc(m.thumb)}" alt="${esc(m.title)}, as MIRAGE draws it" loading="lazy"></a>
-        <div class="body">
-          <h3>${esc(m.title)} <span class="tag">OASIS image</span></h3>
-          <div class="meta">${esc(m.author || '')}${m.year ? ', ' + esc(m.year) : ''}</div>
-          <div class="actions"><a class="run" href="${href}">Run</a><span class="meta"><a href="oasis.html?lic=${encodeURIComponent(m.name)}">${m.caution ? '⚠️ ' : ''}source &amp; licence</a></span></div>
-        </div></article>`;
-    }).join('');
-  }).catch(() => { document.getElementById('linux').hidden = true; });
-  fetch('examples/manifest.json').then((r) => r.json()).then((list) => {
-    document.getElementById('grid').innerHTML = list.map((e) => {
-      const who = e.author + (e.year ? ', ' + e.year : '');
-      const lic = e.licenseFile ? `<a href="${esc(e.licenseFile)}">${esc(e.license)}</a>` : esc(e.license);
-      const src = e.source ? ` · <a href="${esc(e.source)}">source</a>` : '';
-      return `<article class="card">
+  // The shelf: examples/manifest.json and oasis/index.json, without what is marked "shelf": false; the
+  // tags and the sound mark come from them too (sound only where it was heard playing in MIRAGE).
+  const chips = (x) => (x.tags?.length || x.sound) ? `<ul class="chips">${x.sound ? '<li class="chip sound">🔊 sound</li>' : ''}${(x.tags || []).map((t) => `<li class="chip">${esc(t)}</li>`).join('')}</ul>` : '';
+  const exampleCard = (e) => {
+    const who = e.author + (e.year ? ', ' + e.year : '');
+    const lic = e.licenseFile ? `<a href="${esc(e.licenseFile)}">${esc(e.license)}</a>` : esc(e.license);
+    const src = e.source ? ` · <a href="${esc(e.source)}">source</a>` : '';
+    return `<article class="card">
         <a class="shot" href="${runUrl(e)}" aria-label="Run ${esc(e.title)}"><img src="examples/thumbs/${esc(e.id)}.png" alt="${esc(e.title)}, as MIRAGE draws it" loading="lazy"></a>
         <div class="body">
-          <h3>${esc(e.title)} <span class="tag">${esc(e.tag || (e.kind === 'boot' ? 'boot sector' : e.kind === 'zip' ? 'DOS game' : e.kind === 'linux' ? 'Linux' : 'DOS'))}</span></h3>
+          <h3>${esc(e.title)}</h3>
           <div class="meta">${esc(who)}</div>
+          ${chips(e)}
           <p class="blurb">${esc(e.blurb)}</p>
           <div class="actions"><a class="run" href="${runUrl(e)}">Run</a><span class="meta">${lic}${src}</span></div>
         </div></article>`;
-    }).join('');
-  }).catch(() => { document.getElementById('grid').innerHTML = '<p class="lead">The examples could not be loaded.</p>'; });
+  };
+  const imageCard = (m) => {
+    const href = `machines.html?m=${m.world === 'win32' ? 'win32' : 'linux'}&run=${encodeURIComponent(m.name)}`;
+    const [title, sub] = m.title.split(' — ');
+    return `<article class="card">
+        <a class="shot" href="${href}" aria-label="Run ${esc(m.title)}"><img src="${esc(m.thumb)}" alt="${esc(m.title)}, as MIRAGE draws it" loading="lazy"></a>
+        <div class="body">
+          <h3>${esc(title)}</h3>
+          <div class="meta">${esc(sub || m.author || '')}${m.year ? ', ' + esc(m.year) : ''}</div>
+          ${chips(m)}
+          <div class="actions"><a class="run" href="${href}">Run</a><span class="meta"><a href="oasis.html?lic=${encodeURIComponent(m.name)}">${m.caution ? '⚠️ ' : ''}source &amp; licence</a></span></div>
+        </div></article>`;
+  };
+  const sub = (t) => `<h3 class="sub">${esc(t)}</h3>`;
+  Promise.all([fetch('examples/manifest.json').then((r) => r.json()), fetch('oasis/index.json').then((r) => r.json())]).then(([ex, imgs]) => {
+    const on = (x) => x.shelf !== false;
+    ex = ex.filter(on); imgs = imgs.filter((m) => on(m) && m.thumb);
+    const intro = (m) => /intro/.test((m.tags || []).join(' '));
+    document.getElementById('dosgrid').innerHTML = ex.filter((e) => e.kind === 'zip' || e.kind === 'dos').map(exampleCard).join('');
+    const lx = imgs.filter((m) => m.world === 'linux');
+    document.getElementById('linuxgrid').innerHTML = sub('Programs') + lx.filter((m) => !intro(m)).sort((a, b) => a.year - b.year).map(imageCard).join('')
+      + sub('Demoscene intros') + [...lx.filter(intro).sort((a, b) => a.year - b.year).map(imageCard), ...ex.filter((e) => e.kind === 'linux').map(exampleCard)].join('');
+    document.getElementById('wingrid').innerHTML = imgs.filter((m) => m.world === 'win32').sort((a, b) => (b.sound ? 1 : 0) - (a.sound ? 1 : 0) || a.year - b.year).map(imageCard).join('');
+    document.getElementById('bootgrid').innerHTML = ex.filter((e) => e.kind === 'boot').map(exampleCard).join('');
+  }).catch(() => { document.getElementById('dosgrid').innerHTML = '<p class="lead">The examples could not be loaded.</p>'; });
 </script>
 </body>
 </html>

@@ -20,5 +20,6 @@
   },
   "output": "window",
   "notes": "NVScene 2008, 4K intro: ray and photon tracing with caustics and constructive solid geometry, all in HLSL shader model 3.0 — 192 full-screen passes a frame into four float16 render targets at once, summed by additive blending, after a precalculation of some two thousand passes; packed by Crinkler. MIRAGE-WIN32 makes d3d9.dll and d3dx9 in JavaScript; PRISM's d3d9.js translates the HLSL vertex and pixel shaders to GLSL ES and draws them with WebGL2.",
-  "thumb": "oasis/thumbs/win32-photonrace2-2008.png"
+  "thumb": "oasis/thumbs/win32-photonrace2-2008.png",
+  "tags": ["4K intro", "Direct3D 9", "HLSL"]
 }

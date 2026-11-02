@@ -20,5 +20,7 @@
   },
   "output": "window",
   "notes": "Breakpoint 2010, 4K intro: a march through a landscape of noise, its height map a 1024x1024 float16 texture filled once by a texture shader of its own (tx_1_0, Perlin's noise()) through D3DXFillTextureTX, then raymarched in an HLSL pixel shader drawn through Direct3D 9, with synthesized music through waveOut; packed by Crinkler. MIRAGE-WIN32 makes d3d9.dll and d3dx9_42.dll in JavaScript; PRISM's d3d9.js evaluates the texture shader, its noise() as D3DX computes it, and translates the HLSL to GLSL ES for WebGL2.",
-  "thumb": "oasis/thumbs/win32-ergon-2010.png"
+  "thumb": "oasis/thumbs/win32-ergon-2010.png",
+  "tags": ["4K intro", "Direct3D 9", "HLSL"],
+  "sound": true
 }

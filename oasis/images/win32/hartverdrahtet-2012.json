@@ -20,5 +20,7 @@
   },
   "output": "window",
   "notes": "Revision 2012, 4K intro, first place: a 2012 interpretation of Crystal Dream 2's Hardwired, raymarched fractals rendered to a texture through framebuffer objects, its music from a thread through waveOut; the final version, packed by Crinkler. Run as Windows XP would run it, with no Windows: MIRAGE-WIN32 maps the .exe as XP's loader does and lays out the process as XP does (the PEB, its module lists, FS at the TEB), which is what Crinkler's header walks to resolve every import by hashing names; kernel32, user32, gdi32, winmm and msvcrt are made in JavaScript, opengl32 (its 368 ordinals as XP's) hands GL and GLSL to PRISM's gl.js, drawn by WebGL2.",
-  "thumb": "oasis/thumbs/win32-hartverdrahtet-2012.png"
+  "thumb": "oasis/thumbs/win32-hartverdrahtet-2012.png",
+  "tags": ["4K intro", "OpenGL", "GLSL"],
+  "sound": true
 }

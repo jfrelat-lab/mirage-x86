@@ -20,5 +20,7 @@
   },
   "output": "window",
   "notes": "Evoke 2009, 4K intro: GLSL scenes, its music synthesized and played through waveOut, packed by Crinkler. Run as Windows XP would run it, with no Windows: MIRAGE-WIN32 maps the .exe as XP's loader does and lays out the process as XP does (the PEB, its module lists, FS at the TEB), which is what Crinkler's header walks to resolve every import by hashing names; kernel32, user32, gdi32, winmm and msvcrt are made in JavaScript, opengl32 (its 368 ordinals as XP's) hands GL and GLSL to PRISM's gl.js, drawn by WebGL2.",
-  "thumb": "oasis/thumbs/win32-paradistance-2009.png"
+  "thumb": "oasis/thumbs/win32-paradistance-2009.png",
+  "tags": ["4K intro", "OpenGL", "GLSL"],
+  "sound": true
 }
