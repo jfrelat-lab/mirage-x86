@@ -66,7 +66,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `entry` | `run` — the program (a DOS name, or a path in the Linux tree); `args`; `env`; `cwd`; `console` — Linux stdio on a virtual console, `/dev/tty1` (SVGAlib wants one) |
 | `output` | `window` or `terminal`, when the command line does not say |
 | `user` | (Linux) the user's name by default, `player` without it. It is set on uid 0, first in `/etc/passwd`, with `USER` and `LOGNAME`: `oasis run` gives the computer's login (or `--user=<name>`, `$OASIS_USER`), the machines page the visitor's choice (its User button, kept in the browser) |
-| `license`, `notes` | for people: where the redistribution terms are, what the image is made of |
+| `license`, `licenseName`, `caution`, `notes` | for people: where the redistribution terms are (a URL or a file of this repository) and what they are called; a note shown first where the terms are not a free licence (Quake's shareware); what the image is made of. oasis.html shows them, with each layer's origin, under the image's *source & licence* |
 | `year`, `author`, `thumb` | for the shelf: the card's date, its credits, a 320x200 picture under `oasis/thumbs/` |
 
 ### Layers

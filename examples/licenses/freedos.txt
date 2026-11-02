@@ -2,9 +2,12 @@ FreeDOS 1.4 — examples/boot/freedos.img.gz (sha256 473b6d4d…4c4f92), a 64 MB
 tools/mkfreedos.mjs from the FreeDOS project's 1.4 packages, unmodified:
 https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/
 
-Each package is copied without its SOURCE directory; the package zips at that address hold the
-source code of every program on the disk, and the disk's C:\SOURCES.TXT lists them with their
-SHA-256. The licence of each program is its package's APPINFO/*.LSM, copied to C:\FREEDOS\APPINFO:
+Each package is copied without its SOURCE directory. The source goes with the disk: the package
+zips themselves, whole and unmodified, each holding its programs' source code, are served beside it
+at sources/freedos/ on MIRAGE's site, and are the assets of the release freedos-1.4-sources of
+https://github.com/jfrelat-lab/mirage-x86 (tools/freedos-sources.mjs). The disk's C:\SOURCES.TXT
+lists them with their SHA-256. The licence of each program is its package's APPINFO/*.LSM, copied
+to C:\FREEDOS\APPINFO:
 
   kernel    The FreeDOS Kernel — GNU General Public License, Version 2
   freecom   FreeCom — GNU General Public License, Version 2 (GPL)

@@ -15,6 +15,12 @@ never committed.
 
 - A file over 25 MiB, the most Cloudflare Pages takes, goes in parts (`<file>.part0`, `.part1`, …
   and `<file>.parts.json`), joined back in the page by `src/fetch-whole.js`: the FreeDOS disk.
+- The FreeDOS disk goes with its source (GPL v2, section 3): `sources/freedos/` holds the 25 FreeDOS
+  1.4 packages it is built from, whole and unmodified (each with its programs' `SOURCE/`), their
+  `SHA256SUMS` and a page listing them. They are not the repository's: `tools/freedos-sources.mjs`
+  fetches them once into `dist/freedos-sources/` and checks each against its SHA-256; with
+  `--release` it also publishes them as the release `freedos-1.4-sources` of the repository, which
+  serves the disk too.
 - `404.html` is what a missing path answers. Without it Cloudflare Pages answers every missing path
   with `index.html` and a 200, which `fetch-whole.js` would take for the file.
 - `robots.txt` and `sitemap.xml` are written for `--origin` (`https://mirage-x86.pages.dev` by
@@ -28,7 +34,8 @@ never committed.
 the repository does not track and ship (so `boot/`, `games/` and `intros/` can never reach a host);
 every example's file, screenshot and licence, every OASIS image's manifest and screenshot present;
 no path from the host's root in the pages' code, so an export works under any path; the relay
-present; every module a page loads present; a `404.html`. `--selftest` damages a copy once per
+present; every module a page loads present; a `404.html`; the FreeDOS packages in `sources/freedos/`,
+with their checksums, and nothing else there. `--selftest` damages a copy once per
 check and expects each check to catch it.
 
 ## The OASIS relay

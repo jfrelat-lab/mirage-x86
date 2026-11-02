@@ -19,3 +19,6 @@ What changed for someone using MIRAGE, newest first. The commit history has ever
   interrupts it drives: Linux 2.2 boots again (it found a 1193 kHz processor and a "lost" timer).
 - **x87**: FIST/FISTP store the integer indefinite on overflow and raise IE; FNCLEX clears the
   exception flags.
+- **Sources and licences**: the FreeDOS disk's source is served beside it (`sources/freedos/`, and a
+  GitHub release); each OASIS image has a *source & licence* dialog — its terms, and where every layer
+  comes from — with a caution where the terms are not free (Quake's shareware licence).

@@ -9,14 +9,18 @@
 // repository keeps out — boot/, games/, intros/, other people's disks and games — can reach a host.
 // The tools, the documentation and the tests stay in the repository (the pages link to them there).
 //
+// The FreeDOS disk goes with its source: the packages it is built from, whole (sources/freedos/,
+// tools/freedos-sources.mjs, fetched into dist/ once and checked against their SHA-256).
+//
 // A file over 25 MiB, the most Cloudflare Pages takes, goes in parts (<file>.part0, .part1, ... and
 // <file>.parts.json) that the page joins back (src/fetch-whole.js): the FreeDOS disk, 25.2 MB gzipped.
 // functions/ (the oasis-fetch relay) is not copied: wrangler takes it from the directory it runs in
 // (tools/deploy.mjs runs it from the repository). site/ is never committed (.gitignore).
 import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { fetchSources, sums, readme, PACKAGES, UPSTREAM, RELEASE } from './freedos-sources.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
@@ -48,9 +52,9 @@ export function prismShipped(root = ROOT) {
   return [...out].sort().map((f) => `${PRISM}/${f}`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) build();
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await build();
 
-function build() {
+async function build() {
   const tracked = spawnSync('git', ['-C', ROOT, 'ls-files', '-z'], { encoding: 'utf8' }).stdout.split('\0').filter(Boolean);
   if (!existsSync(join(ROOT, PRISM, PRISM_ENTRIES[0]))) throw new Error(`site: ${PRISM} is empty -- git submodule update --init`);
   const files = [...tracked.filter(SHIPPED), ...prismShipped()];
@@ -65,6 +69,13 @@ function build() {
     write(`${f}.parts.json`, Buffer.from(JSON.stringify({ parts, size: data.length }) + '\n'));
     split++;
   }
+  // The FreeDOS disk's source, beside it: its packages whole, as the FreeDOS project publishes them
+  // (tools/freedos-sources.mjs). Not the repository's, so fetched, and checked against their SHA-256.
+  const zips = await fetchSources();
+  for (const z of zips) write(`sources/freedos/${basename(z)}`, readFileSync(z));
+  write('sources/freedos/SHA256SUMS', Buffer.from(sums()));
+  write('sources/freedos/README.txt', Buffer.from(readme()));
+  write('sources/freedos/index.html', Buffer.from(sourcesPage(zips)));
   // No COOP/COEP: MIRAGE uses no SharedArrayBuffer. Pages and scripts revalidate (a deploy changes
   // them); nothing is indexed from a preview, which Cloudflare Access closes anyway.
   write('_headers', Buffer.from(`/*
@@ -80,4 +91,46 @@ function build() {
   write('sitemap.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
     + pages.map((f) => `  <url><loc>${origin}/${f === 'index.html' ? '' : f}</loc></url>\n`).join('') + '</urlset>\n'));
   console.log(`site: ${files.length} files (${split} in parts), ${(bytes / 1e6).toFixed(1)} MB -> ${OUT}`);
+}
+
+/** sources/freedos/index.html: the packages to download, what they are, where they come from. */
+function sourcesPage(zips) {
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const rows = zips.map((z) => { const n = basename(z, '.zip'), mb = (readFileSync(z).length / 1048576).toFixed(1);
+    return `<tr><td><a href="${n}.zip" download>${n}.zip</a></td><td>${mb} MB</td><td class="h">${PACKAGES[n]}</td></tr>`; }).join('\n');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FreeDOS 1.4 sources — MIRAGE</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #0a0e12; --ink: #b8c8d4; --dim: #6a8090; --accent: #00d0a0; }
+  html { background: var(--bg); }
+  body { margin: 0; color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px; }
+  h1 { margin: 0 0 12px; font: 600 24px ui-monospace, "SF Mono", Menlo, monospace; color: #e6eef4; }
+  p { color: var(--dim); } a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; font: 13px ui-monospace, "SF Mono", Menlo, monospace; }
+  td { padding: 3px 12px 3px 0; white-space: nowrap; } td.h { color: var(--dim); overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 100%; }
+</style>
+</head>
+<body>
+<main>
+  <h1>FreeDOS 1.4 — the disk's source</h1>
+  <p>MIRAGE's FreeDOS disk (<a href="../../examples/boot/freedos.img.gz">freedos.img.gz</a>) holds the programs
+    of these packages without their <code>SOURCE</code> directories. Here are the packages whole, unmodified, as the
+    FreeDOS project publishes them at <a href="${esc(UPSTREAM)}">ibiblio</a>: each holds its programs' source code
+    and its licence (<code>APPINFO/*.LSM</code>). Most are under the GNU GPL, version 2;
+    <a href="../../examples/licenses/freedos.txt">the disk's licence notes</a> list each one.</p>
+  <table>
+${rows}
+  </table>
+  <p><a href="SHA256SUMS">SHA256SUMS</a> · <a href="README.txt">README.txt</a> · the same files as
+    <a href="https://github.com/${RELEASE.repo}/releases/tag/${RELEASE.tag}">a release on GitHub</a> ·
+    <a href="../../">MIRAGE's home page</a></p>
+</main>
+</body>
+</html>
+`;
 }

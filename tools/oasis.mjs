@@ -411,7 +411,7 @@ async function window(img, page, host) {
 /** What a listing of the images needs, without their layers: the server's /oasis-images.json, and
  *  oasis/index.json for a static host, which cannot list a directory. */
 function imageIndex() {
-  return listImages().map((n) => { const m = findImage(n); return { name: n, title: m.title, world: m.world, year: m.year, author: m.author, thumb: m.thumb, output: m.output }; });
+  return listImages().map((n) => { const m = findImage(n); return { name: n, title: m.title, world: m.world, year: m.year, author: m.author, thumb: m.thumb, output: m.output, caution: m.caution ? true : undefined }; });
 }
 const indexText = () => JSON.stringify(imageIndex(), null, 2) + '\n';
 

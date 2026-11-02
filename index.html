@@ -233,7 +233,7 @@
         <div class="body">
           <h3>${esc(m.title)} <span class="tag">OASIS image</span></h3>
           <div class="meta">${esc(m.author || '')}${m.year ? ', ' + esc(m.year) : ''}</div>
-          <div class="actions"><a class="run" href="${href}">Run</a><span class="meta"><code>${esc(m.name)}</code></span></div>
+          <div class="actions"><a class="run" href="${href}">Run</a><span class="meta"><a href="oasis.html?lic=${encodeURIComponent(m.name)}">${m.caution ? '⚠️ ' : ''}source &amp; licence</a></span></div>
         </div></article>`;
     }).join('');
   }).catch(() => { document.getElementById('linux').hidden = true; });

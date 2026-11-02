@@ -66,6 +66,15 @@
   .entry { margin: 10px 0 0; }
   .entry code { color: #e6f0f6; }
   details { margin-top: 10px; } summary { cursor: pointer; color: var(--dim); }
+  .btn.warn { border-color: #6b5a1e; color: var(--warn); }
+  dialog { max-width: min(680px, calc(100vw - 32px)); background: var(--panel); color: var(--ink); border: 1px solid var(--edge); border-radius: 10px; padding: 16px 18px; }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  dialog h2 { font-size: 16px; margin: 0 0 10px; color: #e6f0f6; }
+  dialog p { margin: 0 0 10px; } dialog .k { color: var(--dim); }
+  dialog .caution { color: var(--warn); border: 1px solid #6b5a1e; border-radius: 7px; padding: 8px 10px; }
+  dialog ul { margin: 0 0 10px; padding-left: 18px; overflow-wrap: anywhere; }
+  dialog a { color: #8fd3ff; text-decoration: none; } dialog a:hover { text-decoration: underline; }
+  dialog form { text-align: right; margin: 0; }
   details pre { background: #05080b; border: 1px solid var(--edge); border-radius: 7px; padding: 10px; overflow-x: auto; color: #cfe3d8; max-height: 420px; }
 </style>
 </head>
@@ -86,6 +95,11 @@
 <b>node tools/oasis.mjs pull</b> linux/doom-1994       fetch its layers into ~/.cache/oasis</pre>
   <div id="list">loading…</div>
 </main>
+<dialog id="licdlg" aria-labelledby="licdlg-title">
+  <h2 id="licdlg-title"></h2>
+  <div id="licdlg-body"></div>
+  <form method="dialog"><button class="btn ghost" type="submit">Close</button></form>
+</dialog>
 <script type="module">
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const REPO = 'https://github.com/jfrelat-lab/mirage-x86/blob/main/';
@@ -135,7 +149,7 @@ try {
           <div class="actions">
             ${run ? `<a class="btn" href="${run.href}">Run</a>` : ''}
             <a class="btn ghost" href="${esc(REPO + 'oasis/images/' + m.name + '.json')}">Manifest on GitHub</a>
-            ${m.license ? `<a class="btn ghost" href="${esc(m.license)}">Licence</a>` : ''}
+            <button class="btn ghost${m.caution ? ' warn' : ''}" type="button" data-lic="${esc(m.name)}">${m.caution ? '⚠️ ' : ''}source &amp; licence</button>
             ${run && run.note ? `<span class="needs">${run.note}</span>` : ''}
           </div>
         </div>
@@ -150,6 +164,29 @@ try {
     </section>`;
   }).join('');
   if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+  /*
+   * SOURCE & LICENCE, one dialog for the page, as PRISM's shelf has it: a caution where the terms are
+   * not a free licence (Quake's shareware), the terms themselves, and where every layer comes from —
+   * the image is built from those publishers' files, unchanged. ?lic=<image> opens it (the home page's cards).
+   */
+  const byName = new Map(images.map((m) => [m.name, m]));
+  const dlg = document.getElementById('licdlg');
+  const openLic = (m) => {
+    const from = (m.layers || []).map((l) => l.deb || l.tar || l.zip || l.gz || l.file || l.dir || l.busybox || l.docker).filter(Boolean);
+    document.getElementById('licdlg-title').textContent = m.title;
+    document.getElementById('licdlg-body').innerHTML = [
+      m.caution ? `<p class="caution"><span aria-hidden="true">⚠️</span> ${esc(m.caution)}</p>` : '',
+      m.license ? `<p><span class="k">Licence</span> <a href="${esc(m.license)}">${esc(m.licenseName || m.license)}</a></p>`
+        : '<p><span class="k">Licence</span> each layer\'s own, as its publisher gives it</p>',
+      from.length ? `<p class="k">Built from, unchanged</p><ul>${from.map((s) => `<li>${src(s)}</li>`).join('')}</ul>` : '',
+      `<p><span class="k">Recipe</span> <a href="${esc(REPO + 'oasis/images/' + m.name + '.json')}">oasis/images/${esc(m.name)}.json</a> (MIT)</p>`,
+    ].join('');
+    dlg.showModal();
+  };
+  list.addEventListener('click', (ev) => { const b = ev.target.closest('[data-lic]'); if (b) openLic(byName.get(b.dataset.lic)); });
+  dlg.addEventListener('click', (ev) => { if (ev.target === dlg) dlg.close(); });
+  const want = new URLSearchParams(location.search).get('lic');
+  if (want && byName.has(want)) { document.getElementById(want)?.scrollIntoView(); openLic(byName.get(want)); }
 } catch (e) { list.textContent = 'could not read oasis/index.json: ' + (e.message || e); }
 </script>
 </body>

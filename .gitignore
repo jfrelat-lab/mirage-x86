@@ -26,3 +26,6 @@ tools/sst386/
 # the static export (tools/site.mjs): built, never committed
 /site/
 /.wrangler/
+
+# fetched for the static export (tools/freedos-sources.mjs), never committed
+/dist/

@@ -4,7 +4,8 @@
 //   node tools/site-check.mjs --selftest          each check made to fail on a damaged copy
 //
 // 1. No file over 25 MiB, the most Cloudflare Pages takes.
-// 2. Nothing but what the repository tracks and site.mjs ships (and the parts it cut, _headers, robots.txt and sitemap.xml):
+// 2. Nothing but what the repository tracks and site.mjs ships (and the parts it cut, _headers, robots.txt,
+//    sitemap.xml and sources/freedos/, check 8):
 //    the disks and games MIRAGE does not own — boot/, games/, intros/ — can never reach a host.
 // 3. Everything the pages list is there: each example's file, screenshot and licence, each gallery
 //    screenshot, each OASIS image's manifest and screenshot (a file in parts counts as there).
@@ -17,12 +18,16 @@
 //    an HTML 404 for src/fetch-whole.js and refused it ("Expected a JavaScript module script").
 // 7. A 404.html: without one Cloudflare Pages takes the site for a single-page app and answers a
 //    missing path with index.html and a 200, which src/fetch-whole.js would take for the file.
+// 8. The FreeDOS disk's source beside it (GPL v2, section 3): in sources/freedos/, every package the
+//    disk is built from, whole, with the SHA-256 the disk's C:\SOURCES.TXT lists — and nothing else there.
 import { readdirSync, statSync, readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { MAX, SHIPPED, prismShipped } from './site.mjs';
+import { PACKAGES } from './freedos-sources.mjs';
+import { createHash } from 'node:crypto';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SERVER_ONLY = /^\/oasis-(fs\/|image\.json|images\.json)/;
@@ -44,6 +49,7 @@ export function check(dir, root = ROOT) {
     const size = statSync(join(dir, f)).size;
     if (size > MAX) bad.push(`1 ${f}: ${(size / 1048576).toFixed(1)} MiB, over 25 MiB`);
     const base = f.replace(/\.(part\d+|parts\.json)$/, '');
+    if (f.startsWith('sources/freedos/')) continue;      // check 8
     if (!['_headers', 'robots.txt', 'sitemap.xml'].includes(f) && !(tracked.has(base) && SHIPPED(base)) && !prism.has(base)) bad.push(`2 ${f}: not a file the repository tracks and ships`);
     if (/^(boot|games|intros)\//.test(f)) bad.push(`2 ${f}: from a directory MIRAGE does not own`);
   }
@@ -63,6 +69,13 @@ export function check(dir, root = ROOT) {
   }
   if (!existsSync(join(root, 'functions', 'oasis-fetch.js'))) bad.push('5 functions/oasis-fetch.js: the relay is missing');
   if (!existsSync(join(dir, '404.html'))) bad.push('7 404.html: without it Cloudflare Pages answers a missing path with index.html and a 200');
+  const SRC = 'sources/freedos/', extra = new Set(['index.html', 'README.txt', 'SHA256SUMS']);
+  for (const [n, sha] of Object.entries(PACKAGES)) {
+    const p = `${SRC}${n}.zip`;
+    if (!have.has(p)) bad.push(`8 ${p}: the source of the FreeDOS disk's ${n} package is absent`);
+    else if (createHash('sha256').update(readFileSync(join(dir, p))).digest('hex') !== sha) bad.push(`8 ${p}: not the package the disk is built from`);
+  }
+  for (const f of files.filter((f) => f.startsWith(SRC))) if (!extra.has(f.slice(SRC.length)) && !(f.endsWith('.zip') && Object.hasOwn(PACKAGES, f.slice(SRC.length, -4)))) bad.push(`8 ${f}: not a package of the FreeDOS disk`);
   const resolve = (from, spec) => { const parts = (dirname(from) === '.' ? [] : dirname(from).split('/')); for (const x of spec.split('?')[0].split('/')) { if (x === '..') parts.pop(); else if (x !== '.') parts.push(x); } return parts.join('/'); };
   for (const f of files.filter((f) => f.endsWith('.js'))) {
     const text = readFileSync(join(dir, f), 'utf8');
@@ -85,6 +98,7 @@ function selftest() {
     ['4', (d) => appendFileSync(join(d, 'src', 'main.js'), "\nfetch('/games/manifest.json');\n")],
     ['6', (d) => rmSync(join(d, 'src', 'fetch-whole.js'))],
     ['7', (d) => rmSync(join(d, '404.html'))],
+    ['8', (d) => rmSync(join(d, 'sources', 'freedos', 'kernel.zip'))],
   ];
   let ok = check(site).length === 0;
   console.log(`site-check selftest: the export as built ${ok ? 'passes' : 'FAILS'}`);

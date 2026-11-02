@@ -121,7 +121,8 @@
     "year": 1997,
     "author": "id Software, port by Dave 'Zoid' Kirsch",
     "thumb": "oasis/thumbs/linux-quake-1997.png",
-    "output": "window"
+    "output": "window",
+    "caution": true
   },
   {
     "name": "linux/retrospection-2010",

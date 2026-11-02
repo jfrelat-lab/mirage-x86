@@ -58,5 +58,7 @@
   "output": "window",
   "notes": "id's svgalib Quake and Debian 1.3's libc5 and svgalib, fetched from their original archives. pak0.pak is the shareware episode of quake106.zip (an LHA self-extractor inside).",
   "thumb": "oasis/thumbs/linux-quake-1997.png",
-  "license": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/quake/quake106.zip"
+  "license": "oasis/licenses/quake-shareware.txt",
+  "licenseName": "id Software's shareware licence (SLICNSE.TXT, June 1996), as quake106.zip carries it",
+  "caution": "Quake's shareware episode is id Software's, under its shareware licence, not a free one: it may be played and passed on whole and free of charge, with the licence, and not used commercially or displayed publicly. MIRAGE never copies it: the page fetches quake106.zip from idgames, unchanged, the licence inside it."
 }
