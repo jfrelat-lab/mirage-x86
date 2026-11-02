@@ -4697,17 +4697,38 @@ const runLinux = (hex, argv) => {
 // GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
 // measured no time, and the menu countdowns of HelenOS and Sortix stood still at 8 s. 8254 datasheet,
 // QEMU's i8254.c: mode 0's OUT goes low with the control word and high at terminal count; a low GATE
-// pauses the count.
+// pauses the count. The count runs at counter 0's clock, pitBase cycles to 65536 ticks: 100 ticks are
+// some 279 cycles (at one tick a cycle Linux 2.2 measured a 1193 kHz processor; see counter 0 below).
 { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const o = (p, v) => mc.ioWrite(p, 1, v), b5 = () => (mc.ioRead(0x61, 1) >> 5) & 1;
+    const tick = mc.pitBase / 65536;
     mc.cpu.cycles = 1000;
     o(0x61, 0); o(0x43, 0xb0); o(0x42, 100); o(0x42, 0);        // GATE low, ch2 mode 0 LSB/MSB, count 100
     mc.cpu.cycles += 500; const paused = b5();                  // GATE low: no counting
     o(0x61, 1); const atStart = b5();
-    mc.cpu.cycles += 60; const mid = b5();
-    mc.cpu.cycles += 60; got = [paused, atStart, mid, b5()];
+    mc.cpu.cycles += Math.round(60 * tick); const mid = b5();   // 60 ticks: not yet
+    mc.cpu.cycles += Math.round(60 * tick); got = [paused, atStart, mid, b5()];
   } catch (e) { got = e.message.slice(0, 60); }
   eq('PIT channel 2, mode 0: OUT low, held by GATE, high at terminal count', JSON.stringify(got), '[0,0,0,1]'); }
+
+// ---- PIT counter 0 read back in phase with the INT 8 it drives -----------------------------------------
+// Linux 2.2's timer interrupt latches counter 0 at once and takes a count of LATCH or more for a lost
+// configuration ("probable hardware bug: clock timer configuration lost - probably a VIA686a"). Counted
+// from the write in exact ticks, the count drifted from the ticks, which are scheduled in whole cycles:
+// after 2000 periods of LATCH = 11932 (100 Hz) it read some 40 ticks off, at LATCH or not yet reloaded,
+// and BasicLinux's console filled with the message. Headless the count follows the schedule: just
+// after a tick it is a little under LATCH, just before the next a little over 0.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const o = (p, v) => mc.ioWrite(p, 1, v);
+    const rd = () => { o(0x43, 0x00); const lo = mc.ioRead(0x40, 1); return lo | (mc.ioRead(0x40, 1) << 8); };
+    o(0x43, 0x34); o(0x40, 11932 & 0xff); o(0x40, 11932 >> 8);
+    for (let k = 0; k < 2000; k++) mc.nextTimerCycle += mc.pitReload;   // what serviceTimer does at each tick
+    const tick = mc.nextTimerCycle - mc.pitReload;
+    mc.cpu.cycles = tick + 30; const after = rd();
+    mc.cpu.cycles = mc.nextTimerCycle - 1; const before = rd();
+    got = [after >= 11932 - 12 && after <= 11931, before >= 1 && before <= 3].join(' ');
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('PIT counter 0: read back in phase with its INT 8 schedule (Linux 2.2\'s timer check)', got, 'true true'); }
 
 // ---- an IRQ nobody claimed is acknowledged by the BIOS, as SeaBIOS's default handler does --------
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;

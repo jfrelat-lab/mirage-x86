@@ -1306,7 +1306,14 @@ export function installBIOS(machine, opts = {}) {
   // datasheet's behaviour, as QEMU's i8254.c and DOSBox model it. Before any control word: the old
   // free-running square wave, which programs that only read bit 5 or 42h rely on.
   const ch2 = { set: false, mode: 3, access: 3, loaded: false, accum: 0, start: 0, trig: false };
-  const gate = () => ppi.portB & 1, now = () => machine.cpu.cycles;
+  // The count runs at the 8254's clock, as counter 0's does (src/machine.js): pitBase cycles to 65536
+  // ticks headless, 1.193 MHz of the host's clock in the browser. It ran at one tick a cycle, 2.79 times
+  // counter 0's rate, and a kernel that calibrates its TSC on counter 2 and checks counter 0 in its timer
+  // interrupt saw two clocks: Linux 2.2 found a 1193 kHz processor, its delays came out 2.79 times too
+  // short, and its console filled with "clock timer configuration lost" (BasicLinux 3.5).
+  const gate = () => ppi.portB & 1;
+  const now = () => (machine.wallClockMs ? Math.floor(machine.wallClockMs() * 1193.182)
+    : Math.floor(machine.cpu.cycles * 65536 / (machine.pitBase || 0x10000)));
   const elapsed = () => ch2.accum + (ch2.loaded && (gate() || ch2.mode === 1) ? now() - ch2.start : 0);
   const out2 = () => {
     if (!ch2.set) { const half = ppi.ch2Reload >> 1; return half > 0 && (now() % ppi.ch2Reload) < half ? 1 : 0; }
@@ -1355,7 +1362,7 @@ export function installBIOS(machine, opts = {}) {
   });
   machine.onPortRead(0x42, () => {                            // live countdown, same shape as ch0
     const r = ppi.ch2Reload;
-    const count = (ch2.set ? (ch2.mode === 0 || ch2.mode === 1 ? r - elapsed() : r - (elapsed() % r)) : r - (machine.cpu.cycles % r)) & 0xffff;
+    const count = (ch2.set ? (ch2.mode === 0 || ch2.mode === 1 ? r - elapsed() : r - (elapsed() % r)) : r - (now() % r)) & 0xffff;
     if (ch2.set && ch2.access === 1) return count & 0xff;
     if (ch2.set && ch2.access === 2) return (count >> 8) & 0xff;
     const b = ppi._hiNext ? (count >> 8) & 0xff : count & 0xff;

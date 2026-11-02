@@ -35,8 +35,11 @@ per tick as DOSBox-X at `cycles=fixed 20000` (see [notes/timing.md](notes/timing
   (`MIRAGE_PITFLOOR` lowers the cap). Every mode is treated as periodic.
 - **Reading** port 40h returns the live count in 1.193 MHz ticks, counted from the moment the
   reload value was written, as an 8254 does (`MIRAGE_PITOLD=1` restores an older approximation).
-  Headless the ticks are derived from `cpu.cycles`; in the browser from the host's clock, as the
-  interrupts and the VGA retrace are there (Unreal times a frame with it).
+  Headless the count follows the interrupt schedule (N when the tick is due, down to 1 just before
+  the next), so a timer interrupt that reads it at once finds it just under N, as Linux 2.2 checks; in
+  the browser it counts the host's clock, as the interrupts and the VGA retrace do there (Unreal times
+  a frame with it). Counter 2 counts at the same clock, so a TSC calibrated on it agrees with the
+  timer.
 - **Delivery.** `serviceTimer` runs when `cpu.cycles` reaches `nextTimerCycle`: it bumps the BIOS
   tick count and delivers IRQ 0. `machine.timerAuto` is on headless (the clock is the cycle count,
   deterministic); in the browser `ui.js` turns it off and paces ticks to wall-clock time.

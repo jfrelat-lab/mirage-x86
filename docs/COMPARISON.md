@@ -118,17 +118,21 @@ clock follows guest cycles); the others report their own score. n.m. = not measu
 
 | Benchmark | Docker (`qemu-user` on M1) | DOSBox-X (dynamic core, `cycles=max`) | v86 | MIRAGE-DOS (DJGPP) | MIRAGE-LINUX (musl) |
 |---|---|---|---|---|---|
-| Dhrystone 2.1, per second | 🏆 4,550,000–4,680,000 | 1,111,000 | n.m. | 169,000 | 830,000–875,000 |
-| CoreMark, iterations per second | 🏆 8,175–8,240 | n.m. | n.m. | 210 | 940–990 |
-| Guest instructions per second | ➖ | ➖ | ➖ | 82 M | 420–450 M (Dhrystone), 305–325 M (CoreMark) |
+| Dhrystone 2.1, per second | 🏆 4,550,000–4,680,000 | 1,111,000 | n.m. | 313,000–316,000 | 830,000–875,000 |
+| CoreMark, iterations per second | 🏆 8,175–8,240 | n.m. | n.m. | 417 | 940–990 |
+| Guest instructions per second | ➖ | ➖ | ➖ | 152–154 M (Dhrystone), 148 M (CoreMark) | 420–450 M (Dhrystone), 305–325 M (CoreMark) |
 
-Measured 2026-11-02 (Docker, MIRAGE-LINUX) and 2026-10-13 (DOSBox-X, MIRAGE-DOS, the DJGPP build).
+Measured 2026-11-02, DOSBox-X 2026-10-13.
 MIRAGE-LINUX runs paged, where blocks go on through branches, loops and calls
 ([RECOMPILER.md](RECOMPILER.md#longer-blocks-under-paging)); MIRAGE-DOS runs in a DPMI host without
 paging, where they do not. How to reproduce the Linux column: Dhrystone 2.1 (netlib's `dhry-c`, built
 with `musl-gcc -static -O2 -march=pentiumpro -DTIMES -DHZ=100`) and CoreMark 1.01 (`-DPERFORMANCE_RUN=1
 -DITERATIONS=0`), then `MIRAGE_LXWALLCLOCK=1 MIRAGE_LXSTATS=1 node tools/linux/run.mjs <binary>`;
-`MIRAGE_LXSTATS` prints the instructions run, the host time and the instructions a dispatch.
+`MIRAGE_LXSTATS` prints the instructions run, the host time and the instructions a dispatch. The
+DOS column: the same sources built by DJGPP 12.2 (`i586-pc-msdosdjgpp-gcc`, Dhrystone with `-DTIME`,
+CoreMark's `simple` port with `-DITERATIONS=2000`), run by `MIRAGE_DOSSTATS=1 node tools/dos/run.mjs`,
+the score being the runs or iterations divided by the host seconds it prints (some 5 instructions a
+dispatch: no paging).
 
 BYTE's Sieve of Eratosthenes (8190 flags, 5000 times: `tools/bench/sieve.asm`, a 16-bit `.COM` of 126
 bytes, 730.7 M instructions), wall-clock seconds on the same host, lower is better. It is run in
@@ -152,15 +156,16 @@ Booting whole systems, wall-clock seconds to the arrival screen (lower is better
 
 | | QEMU (TCG) | v86 | MIRAGE |
 |---|---|---|---|
-| Windows 98 | 🏆 28 | 44 | 36 |
+| Windows 98 | 🏆 28 | 44 | 34 |
 | Windows 95 | 18 | 🏆 16 | 24 |
 | QNX 4.05 demo | 4 | 6 | 🏆 2 |
 
 QEMU and v86 run in real time, so their times include the waits a guest makes on its timers; MIRAGE
 runs headless as fast as it can (guest time follows its instructions, so an idle HLT costs nothing).
 Windows 95's arrival is its first dialog, the others' their desktop or prompt. `tools/v86/compare3.mjs`,
-MIRAGE's column measured 2026-11-02, QEMU's and v86's 2026-10-02. Linux 2.2 is left out until a
-regression in its timer check is fixed ([KNOWN-ISSUES.md](KNOWN-ISSUES.md)).
+MIRAGE's column measured 2026-11-02, QEMU's and v86's 2026-10-02. Linux 2.2 is left out: at
+MIRAGE's headless speed its console blanks itself (ten guest minutes) a few seconds after it boots,
+and the screen it settles on is that blank one.
 
 QEMU, DOSBox-X and Docker run native code; v86 runs WebAssembly; MIRAGE runs JavaScript, and its
 time goes where a JavaScript engine puts it. On paged code a block now runs through forward branches,

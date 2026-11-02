@@ -27,7 +27,6 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 | BeOS 5 | the splash screen | **Unknown.** The kernel log matches v86's to its last line; then user programs run and one loops waiting. Suspected: the display server does not start. |
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |
 | Damn Small Linux 4.4.10 | a black screen at runlevel 5 | **Unknown**: not investigated — it may only be slow. |
-| BasicLinux 3.5 (Linux 2.2), on the 586 profile | its console fills with "probable hardware bug: clock timer configuration lost" | **Regression**, since PIT counter 0 reads count from the reload write (2026-10-03): the kernel's timer interrupt reads a count it takes for a lost configuration. With `MIRAGE_PITOLD=1` it reaches its console in 6 s. |
 
 ## Time
 

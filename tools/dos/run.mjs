@@ -9,6 +9,7 @@
 // Text a program writes straight to video memory or through INT 10h never reaches DOS: with
 // MIRAGE_DOSSCREEN=1 the final text screen is printed (to stderr) as well.
 // MIRAGE_CPU (default 586), MIRAGE_DOSMEM (MiB, the player's machine), MIRAGE_DOSCYCLES (cap, 2e10).
+// MIRAGE_DOSSTATS=1 prints the instructions run, the host time they took and the instructions a dispatch.
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { basename, dirname, join, relative } from 'path';
 import { VFS } from '../../src/vfs.js';
@@ -51,12 +52,17 @@ const tail = args.length ? ' ' + args.join(' ') : '';
 dos.load(new Uint8Array(readFileSync(prog)), tail, 'C:\\' + basename(prog).toUpperCase());
 const LIMIT = Number(process.env.MIRAGE_DOSCYCLES) || 2e10;
 let why = '';
+const hostT0 = performance.now(), cyc0 = mc.cpu.cycles, exec0 = mc.rec.stats.exec;
 while (!dos.programDone && !fault) {
   mc.runSlice(200000);
   if (mc.blocked && mc.keyQueue.length === 0 && !typeNext()) { why = 'waiting for a key, and stdin is done'; break; }
   if (mc.cpu.cycles > LIMIT) { why = `still running after ${LIMIT} cycles`; break; }
 }
 flush();
+if (process.env.MIRAGE_DOSSTATS) {               // what a benchmark's score is made of: instructions and host time
+  const n = mc.cpu.cycles - cyc0, t = (performance.now() - hostT0) / 1000;
+  console.error(`mirage-dos: ${(n / 1e6).toFixed(1)} M instructions in ${t.toFixed(2)} s of host time, ${(n / t / 1e6).toFixed(0)} M a second, ${(n / (mc.rec.stats.exec - exec0)).toFixed(1)} a dispatch`);
+}
 
 if (process.env.MIRAGE_DOSSCREEN) {
   const cols = mc.mem.r16(0x44a) || 80, rows = (mc.mem.r8(0x484) || 24) + 1, lines = [];

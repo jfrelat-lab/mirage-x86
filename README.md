@@ -40,7 +40,7 @@ redistributable examples, none of that software is in this repository — see
 | DOS intros and demos | 31 of the 32 tried render; 37 intros are pinned by the golden test |
 | DOS games | real mode, DOS extenders (DPMI), EMS/XMS — per-title status in docs/COMPATIBILITY.md |
 | Windows 3.0, 95, 98, ME | the desktop |
-| Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell (Linux 2.2: a timer regression, see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md)); runlevel 5 |
+| Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell; runlevel 5 |
 | FreeDOS 1.3 (from its CD), MS-DOS 6.22 | the installer; the prompt |
 | QNX 4.05 demo disk, KolibriOS, OpenBSD | the desktop; the desktop; `login:` |
 | Linux programs (MIRAGE-LINUX) | Debian 12's bash, XFree86 3.3 and its clients, DOOM and Quake for Linux, Mesa's demos, the scene's Linux intros — the images in [docs/OASIS.md](docs/OASIS.md) |
@@ -58,15 +58,16 @@ Wall-clock seconds to the arrival screen, same image, same host (Apple M1; lower
 
 | | QEMU (TCG) | v86 | MIRAGE |
 |---|---|---|---|
-| Windows 98 | 28 | 44 | 36 |
+| Windows 98 | 28 | 44 | 34 |
 | Windows 95 | 18 | 16 | 24 |
 | QNX 4.05 demo | 4 | 6 | 2 |
 
 QEMU and v86 run in real time, so their times include the waits a guest makes on its timers; MIRAGE
 runs headless as fast as it can (guest time follows its instructions, so an idle HLT costs nothing).
 Windows 95's arrival is its first dialog, the others' their desktop or prompt. `tools/v86/compare3.mjs`,
-MIRAGE's column measured 2026-11-02, QEMU's and v86's 2026-10-02. Linux 2.2 is left out until a
-regression in its timer check is fixed ([KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)).
+MIRAGE's column measured 2026-11-02, QEMU's and v86's 2026-10-02. Linux 2.2 is left out: at
+MIRAGE's headless speed its console blanks itself (ten guest minutes) a few seconds after it boots,
+and the screen it settles on is that blank one.
 
 Linux programs run at 420–450 M x86 instructions a second on Dhrystone (830,000 Dhrystones a second,
 a fifth of QEMU's user-mode translator); [docs/COMPARISON.md](docs/COMPARISON.md#speed) has the

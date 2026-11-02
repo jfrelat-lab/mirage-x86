@@ -195,9 +195,22 @@ export class Machine {
       let count;
       if (pitOld) count = (this.pitReload - (this.cpu.cycles % this.pitReload)) & 0xffff;
       else {
-        const el = this.wallClockMs ? Math.floor((this.wallClockMs() - this._pitLoadMs) * 1193.182)
-          : Math.floor((this.cpu.cycles - this._pitLoad) * 65536 / this.pitBase);
-        count = (this._pitTicks - (el % this._pitTicks)) & 0xffff;
+        if (this.wallClockMs) {
+          const el = Math.floor((this.wallClockMs() - this._pitLoadMs) * 1193.182);
+          count = (this._pitTicks - (el % this._pitTicks)) & 0xffff;
+        } else if (this.timerAuto) {
+          // Headless the count follows the INT 8 schedule itself: N when the tick is due, down to 1 just
+          // before the next. Counted from the write in exact ticks, it drifted from the ticks, scheduled
+          // in whole cycles (and floored at pitBase/64): Linux 2.2's timer interrupt, which reads it at
+          // once, found it at N (LATCH: "clock timer configuration lost") or still at 1..30, not yet
+          // reloaded. From a write, the next tick is a period away, so the count runs from N as before.
+          const last = this.nextTimerCycle - this.pitReload;
+          const f = (this.cpu.cycles - last) / this.pitReload;
+          count = (this._pitTicks - (Math.floor((f - Math.floor(f)) * this._pitTicks))) & 0xffff;
+        } else {
+          const el = Math.floor((this.cpu.cycles - this._pitLoad) * 65536 / this.pitBase);
+          count = (this._pitTicks - (el % this._pitTicks)) & 0xffff;
+        }
       }
       if (this._pitAccess === 1) return count & 0xff;
       if (this._pitAccess === 2) return (count >> 8) & 0xff;

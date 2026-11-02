@@ -12,8 +12,10 @@ What changed for someone using MIRAGE, newest first. The commit history has ever
   authors published it.
 - **Faster paged code**: under paging a translated block goes on through forward branches, short
   loops and followed calls; Linux programs run Dhrystone at 420–450 M x86 instructions a second,
-  Windows 98 reaches its desktop in 36 s.
+  Windows 98 reaches its desktop in 34 s.
 - **Browser timing**: PIT counter 0 counts real time in the page and no retrace is missed between
   two steps of the host's clock — Future Crew's Unreal runs at its own speed.
+- **PIT**: counter 2 counts at counter 0's clock, and counter 0 reads back in phase with the
+  interrupts it drives: Linux 2.2 boots again (it found a 1193 kHz processor and a "lost" timer).
 - **x87**: FIST/FISTP store the integer indefinite on overflow and raise IE; FNCLEX clears the
   exception flags.
