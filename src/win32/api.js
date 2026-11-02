@@ -101,9 +101,12 @@ function windowState(fonts = {}) {
 
 /** The DLLs' tables. `gl`, `glu`: the GL and GLU entry points to use instead of the tracer's (in a page,
  *  src/hle/prism-gl.js's, on PRISM's gl.js) — the same signatures. `fonts`: the TrueType fonts a program
- *  may select, { "tahoma": bytes, "tahoma:bold": bytes } (src/win32/fonts.js finds them in a page). */
-export function win32Apis({ gl, glu, fonts } = {}) {
+ *  may select, { "tahoma": bytes, "tahoma:bold": bytes } (src/win32/fonts.js finds them in a page).
+ *  `files`: files a program may open (OpenFile), by lower-case base name, { "gm.dls": bytes }. */
+const GM_DLS_SIZE = 3440660;
+export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const st = windowState(fonts);
+  st.files = [];
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
   let vaNext = 0x10000000;
@@ -159,6 +162,38 @@ export function win32Apis({ gl, glu, fonts } = {}) {
     GetLastError: ['', () => 0], SetLastError: ['u', () => 0],
     SetUnhandledExceptionFilter: ['p', () => 0], SetErrorMode: ['u', () => 0],
     CloseHandle: ['p', () => 1], WaitForSingleObject: ['pu', () => 0],
+    /*
+     * Files, read only: those `files` names ({ "gm.dls": bytes }), found by their base name, and XP's
+     * system32\drivers\gm.dls (Roland's GS sound set for the Microsoft synthesizer), which is not
+     * shipped: without the visitor's own it opens as 3,440,660 zero bytes, its size on XP, so its
+     * instruments are silent. Stiletto (RGBA, 2010) reads its instruments from it, trying "drivers/gm.dls"
+     * then "drivers/etc/gm.dls" -- OpenFile searches the system directory -- and runs off the end of
+     * its list of names when neither opens. Any other name: HFILE_ERROR, ERROR_FILE_NOT_FOUND.
+     */
+    OpenFile: ['ppu', (x, pName, of, style) => {
+      const base = x.str(pName).replace(/^.*[\\/]/, '').toLowerCase();
+      const bytes = files[base] || (base === 'gm.dls' ? GM_DLS_SIZE : null);
+      if (of) { x.write(of, new Uint8Array(136)); x.write(of, Uint8Array.of(136)); }
+      if (bytes === null || style & 0x1003) { if (of) x.w16(of + 2, 2); return -1; }   // OF_WRITE, OF_READWRITE, OF_CREATE: no
+      const h = 0x4000 + st.files.length;
+      st.files.push({ bytes: typeof bytes === 'number' ? null : bytes, size: typeof bytes === 'number' ? bytes : bytes.length, pos: 0 });
+      return h;
+    }],
+    ReadFile: ['ppupp', (x, h, buf, n, pRead) => {
+      const f = st.files[h - 0x4000];
+      if (!f) { if (pRead) x.w32(pRead, 0); return 0; }
+      const k = Math.max(0, Math.min(n, f.size - f.pos));
+      x.write(buf, f.bytes ? f.bytes.subarray(f.pos, f.pos + k) : new Uint8Array(k));
+      f.pos += k; if (pRead) x.w32(pRead, k);
+      return 1;
+    }],
+    SetFilePointer: ['pipu', (x, h, dist, pHigh, how) => {
+      const f = st.files[h - 0x4000];
+      if (!f) return -1;                                               // INVALID_SET_FILE_POINTER
+      if (pHigh) x.w32(pHigh, 0);
+      f.pos = Math.max(0, (how === 1 ? f.pos : how === 2 ? f.size : 0) + dist);
+      return f.pos;
+    }],
     OutputDebugStringA: ['p', () => 0],
   };
   // ---- user32 --------------------------------------------------------------------------------------
@@ -237,7 +272,7 @@ export function win32Apis({ gl, glu, fonts } = {}) {
   const retire = (x, upTo) => {                                         // headers played to their end: WHDR_DONE
     while (wave.queue.length && wave.queue[0].end <= upTo) {
       const h = wave.queue.shift();
-      x.w32(h.hdr + 16, (x.r32(h.hdr + 16) | 1) & ~0x10);
+      if (h.hdr) x.w32(h.hdr + 16, (x.r32(h.hdr + 16) | 1) & ~0x10);
     }
   };
   const drain = () => {
@@ -265,8 +300,34 @@ export function win32Apis({ gl, glu, fonts } = {}) {
     retire(x, now);
     return { rate: f.rate, samples };
   };
+  /*
+   * sndPlaySoundA / PlaySoundA with SND_MEMORY: a whole RIFF WAVE in guest memory, played from its
+   * data chunk through waveOut's queue (no header of the program's to mark done). Stiletto (RGBA, 2010)
+   * renders its song into one and starts it so; SND_LOOP plays it over and over. A file name, or no
+   * sound (NULL stops), is silence: there are no sound files here.
+   */
+  const playMemory = (x, p, flags) => {
+    if (!p || !(flags & 4)) { if (!p) { wave.queue = []; wave.total = wave.consumed = 0; wave.t0 = null; } return 0; }   // SND_MEMORY
+    if (x.r32(p) !== 0x46464952 || x.r32(p + 8) !== 0x45564157) return 0;                      // 'RIFF' .. 'WAVE'
+    const end = p + 8 + x.r32(p + 4);
+    let fmt = null;
+    for (let c = p + 12; c + 8 <= end; c += 8 + ((x.r32(c + 4) + 1) & ~1)) {
+      const id = x.r32(c), len = x.r32(c + 4);
+      if (id === 0x20746d66) { const tag = x.r16(c + 8), ch = x.r16(c + 10), rate = x.r32(c + 12), align = x.r16(c + 20), bits = x.r16(c + 22); fmt = { tag, ch, rate, bits, align: align || ch * bits / 8 }; }   // 'fmt '
+      else if (id === 0x61746164 && fmt) {                                                    // 'data'
+        if (!(fmt.tag === 1 && (fmt.bits === 8 || fmt.bits === 16)) && !(fmt.tag === 3 && fmt.bits === 32) || fmt.ch < 1 || fmt.ch > 2) return 0;
+        const loops = flags & 8 ? 0xffffffff : 1;                                             // SND_LOOP
+        Object.assign(wave, { fmt, queue: [{ hdr: 0, ptr: c + 8, len, start: 0, end: len * loops }], total: len * loops, consumed: 0, t0: x.lx.mono(), x });
+        x.lx.setSoundSource(drain);
+        return 1;
+      }
+    }
+    return 0;
+  };
   const winmm = {
     timeGetTime: ['', (x) => ms(x)], timeBeginPeriod: ['u', () => 0], timeEndPeriod: ['u', () => 0],
+    sndPlaySoundA: ['pu', (x, p, flags) => playMemory(x, p, flags)],
+    PlaySoundA: ['ppu', (x, p, mod, flags) => playMemory(x, p, flags)],
     waveOutGetNumDevs: ['', () => 1],
     // waveOutOpen(&hwo, device, WAVEFORMATEX*, callback, instance, flags): PCM 8/16 bits or float, 1-2 channels.
     waveOutOpen: ['ppppuu', (x, ph, dev, wfx, cb, inst, flags) => {

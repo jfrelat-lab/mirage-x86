@@ -4266,6 +4266,36 @@ const runLinux = (hex, argv) => {
     got = [x.r32(mmt + 4), w.samples.length, w.samples.every((v, i) => v === ((i >> 1) & 1 ? 200 : 100)), x.r32(hdr + 16) & 1].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a looped waveOut header plays its bytes over and the position counts through the loops', got, '88200 44100 true 0'); }
+// Stiletto (RGBA, 2010) reads its instruments from XP's drivers/gm.dls (OpenFile, SetFilePointer,
+// ReadFile) and plays its song with sndPlaySoundA(SND_MEMORY | SND_ASYNC). Without OpenFile its
+// import walk landed on CloseHandle, the "open" returned 1 and its camera never moved; when no name
+// opens, it runs off the end of its list. gm.dls opens as XP's size in zeros; the WAV plays from memory.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis });
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1], k32 = (n) => fn('kernel32.dll', n);
+    const name = x.win.heapAlloc(32), of = x.win.heapAlloc(136), buf = x.win.heapAlloc(8), nr = x.win.heapAlloc(4);
+    x.write(name, new TextEncoder().encode('drivers/gm.dls\0')); x.write(buf, new Uint8Array(8).fill(0xaa));
+    const h = k32('OpenFile')(x, name, of, 0);
+    const at = k32('SetFilePointer')(x, h, 3440656, 0, 0), ok = k32('ReadFile')(x, h, buf, 8, nr, 0);
+    x.write(name, new TextEncoder().encode('nothere.dat\0'));
+    const miss = k32('OpenFile')(x, name, of, 0) | 0, err = x.r16(of + 2);
+    // a 16-bit stereo WAV of two frames, looped: what the mixer hears is its data chunk
+    const wav = x.win.heapAlloc(52), dv = new DataView(new ArrayBuffer(52));
+    [[0, 0x46464952], [4, 44], [8, 0x45564157], [12, 0x20746d66], [16, 16], [36, 0x61746164], [40, 8]].forEach(([a, v]) => dv.setUint32(a, v, true));
+    [[20, 1], [22, 2], [32, 4], [34, 16]].forEach(([a, v]) => dv.setUint16(a, v, true)); dv.setUint32(24, 44100, true); dv.setUint32(28, 44100 * 4, true);
+    [300, 300, 400, 400].forEach((v, i) => dv.setInt16(44 + 2 * i, v, true));
+    x.write(wav, new Uint8Array(dv.buffer));
+    const played = fn('winmm.dll', 'sndPlaySoundA')(x, wav, 4 | 1 | 8);
+    mc.cpu.cycles += (mc.cyclesPerSecond || 1e8) / 2;
+    const w = mc.dsp.drain();
+    got = [h > 0, at, ok, x.r32(nr), x.r32(buf + 4).toString(16), miss, err, played, w.samples.length, w.samples.every((v, i) => v === ((i >> 1) & 1 ? 400 : 300))].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: OpenFile reads XP\'s gm.dls as zeros; sndPlaySoundA plays a WAV from memory', got, 'true 3440656 1 4 aaaaaaaa -1 2 1 44100 true'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).
