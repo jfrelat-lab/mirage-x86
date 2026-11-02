@@ -169,7 +169,7 @@ recording device model, which says how far the program gets but not what it draw
 | Atrium (4K, Breakpoint 2008) | Direct3D 9 | Starts | still precomputing after 3 G instructions, its device created | 2026-10-31 |
 | Darwinism | Direct3D 9 | Starts | presents headless at about one frame a second: some 180 M x87 instructions a frame on one emulated core | 2026-10-31 |
 | Wishful Twisting | Direct3D 9 | Starts | still precomputing after 1.5 G instructions, before its first frame | 2026-10-31 |
-| Ergon | Direct3D 9 | Starts | presents headless; its `tx_1_0` texture shader (HLSL's `noise()`) is handed to PRISM's `d3d9.js`, which does not evaluate texture shaders yet | 2026-11-01 |
+| Ergon (4K, Breakpoint 2010) | Direct3D 9 | Renders | at 60 frames a second in Chrome: its height map a 1024x1024 float16 texture filled by its `tx_1_0` texture shader (`D3DXFillTextureTX`, HLSL's `noise()`), evaluated by PRISM as D3DX does (`d3dx9_42`), then raymarched (`oasis/images/win32/ergon-2010`) | 2026-11-02 |
 | Stiletto | Direct3D 9 | Starts | its skinned mesh and its nine Tahoma words (`D3DXCreateTextA`, from the visitor's Tahoma or DejaVu Sans) are made and it presents headless; it draws with the fixed function (lights, material, no shader), which PRISM's `d3d9.js` does not have yet | 2026-11-01 |
 | luxo4k | Direct3D 9 | Fails | shows a message box and exits: it needs DirectSound | 2026-10-31 |
 | Polystreptikum, Synchroplastikum | Direct3D 9 | Fails | a page fault before the device is created; cause not looked at | 2026-10-31 |

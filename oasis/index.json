@@ -232,6 +232,15 @@
     "output": "window"
   },
   {
+    "name": "win32/ergon-2010",
+    "title": "Ergon — Frequency, 4K for Windows",
+    "world": "win32",
+    "year": 2010,
+    "author": "Frequency, PRISM",
+    "thumb": "oasis/thumbs/win32-ergon-2010.png",
+    "output": "window"
+  },
+  {
     "name": "win32/flow2-2007",
     "title": "Flow2 — auld, 1K for Windows",
     "world": "win32",

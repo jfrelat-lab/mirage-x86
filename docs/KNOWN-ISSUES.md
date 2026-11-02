@@ -67,7 +67,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | DirectDraw, DirectSound, DirectInput | Programs that need them stop; luxo4k shows a message box and exits for want of DirectSound. |
 | Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test and `Reset` are not there yet. |
-| D3DX beyond HLSL | Shader assembly, `ID3DXFont`, effects and sprites are not done; texture shaders (`D3DXFillTextureTX`, Ergon) wait on PRISM. Meshes, skins, N-patches, normals, adjacency, `D3DXFillTexture` and text meshes (`D3DXCreateText`) are. |
+| D3DX beyond HLSL | Shader assembly, `ID3DXFont`, effects and sprites are not done. Meshes, skins, N-patches, normals, adjacency, `D3DXFillTexture`, texture shaders (`D3DXFillTextureTX`) and text meshes (`D3DXCreateText`) are. |
 | Windows fonts | MIRAGE ships none. An image lists the ones it selects (`machine.fonts`); the page reads the visitor's own (Chrome's Local Font Access, after asking) or else uses DejaVu Sans, whose shapes and widths differ. Glyphs are not hinted. |
 | One emulated core | Threads take turns on one CPU at about 200 M instructions a second: Darwinism (180 M x87 instructions a frame) draws a frame a second, Valleyball's synthesizer keeps up at 0.97 of real time, Stripped's precalculation lasts minutes. |
 | gdi32's ordinals | Crinkler's /RANGE imports by ordinal; MIRAGE's gdi32 does not number its exports as Windows XP's (no intro met needs it yet). opengl32's and d3dx9's are numbered as Microsoft's. |
