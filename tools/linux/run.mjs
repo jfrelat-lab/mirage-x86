@@ -9,7 +9,8 @@
 // (a Debian i386 tree from `docker export`), read as the program asks for it, and <program> is a path
 // in it: MIRAGE_LXROOT=rootfs node tools/linux/run.mjs /bin/ls -l /etc. MIRAGE_LXCWD sets the
 // working directory there. MIRAGE_VGA=cirrus puts a Cirrus CL-GD5446 on the VGA. MIRAGE_LXFB=1024x768 sizes /dev/fb0 (32 bits). MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
-// calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks).
+// calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks),
+// MIRAGE_LXSTATS=1 prints the instructions run and the host time they took.
 // MIRAGE_LXSHOT=<dir> writes the screen as PNG every MIRAGE_LXSTEP guest seconds (default 10), through
 // src/video.js as the browser draws it; MIRAGE_LXSECS stops the run after that many guest seconds —
 // for programs that never exit on their own (Quake, DOOM). MIRAGE_LXWAV=<file.wav> records what the
@@ -108,7 +109,12 @@ if (SHOT) {
 const WAV = process.env.MIRAGE_LXWAV, played = [];
 let wavRate = 0;
 const record = () => { if (!WAV || !mc.dsp) return; const { rate, samples } = mc.dsp.drain(); if (samples.length) { wavRate = rate; for (const v of samples) played.push(v); } };
+const hostT0 = performance.now(), cyc0 = mc.cpu.cycles, exec0 = mc.rec.stats.exec;
 while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (shoot) shoot(); record(); }
+if (process.env.MIRAGE_LXSTATS) {               // what a benchmark's score is made of: instructions and host time
+  const n = mc.cpu.cycles - cyc0, s = (performance.now() - hostT0) / 1000;
+  console.error(`mirage-linux: ${(n / 1e6).toFixed(1)} M instructions in ${s.toFixed(2)} s of host time, ${(n / s / 1e6).toFixed(0)} M a second, ${(n / (mc.rec.stats.exec - exec0)).toFixed(1)} a dispatch`);
+}
 if (shoot) shoot(true);                         // the screen as the run left it
 if (WAV) {
   const { writeFileSync } = await import('fs');

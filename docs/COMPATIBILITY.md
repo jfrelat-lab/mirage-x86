@@ -110,7 +110,7 @@ TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel 
 | Digger, Lode Runner | CGA | Renders | title; gameplay | 2026-08-01 |
 | Mars (Tim Clarke) | VGA 13h | Renders | steers with the mouse | 2026-08 |
 | Fractint 20.0 | VGA 13h | Plays | menus, draws and zooms the Mandelbrot set; needs the AH=58h last-fit strategy | 2026-10-09 |
-| Unreal 1.1 (Future Crew) | VGA 13h | Renders | sound menu, logos, the scroller part, at 70 frames a second in the browser (it times a frame with PIT counter 0, which now counts in real time there, and waits on every retrace); needed MCBs in front of AH=48h blocks and extended keys through AH=08h | 2026-11-02 |
+| Unreal 1.1 (Future Crew) | VGA 13h | Renders | sound menu, logos, the scroller part, at its own speed in the browser (it times a frame with PIT counter 0, which now counts in real time there, and waits on every retrace: 64 to 67 a second seen); needed MCBs in front of AH=48h blocks and extended keys through AH=08h | 2026-11-02 |
 | Dune, the 1991 playable demo (Cryo) | VGA 13h | Renders | the logos and the intro, from its ZIP in the browser | 2026-10-09 |
 | Jump 'n Bump | Mode X | Renders | the title screen; needed INT 31h to reload DS after DJGPP's crt0 widens it to 4 GiB | 2026-10-10 |
 | Second Reality (Future Crew) | — | Fails | derails to 0000:0000 at start | 2026-10-09 |
@@ -173,7 +173,7 @@ recording device model, which says how far the program gets but not what it draw
 | Stiletto | Direct3D 9 | Starts | its skinned mesh and its nine Tahoma words (`D3DXCreateTextA`, from the visitor's Tahoma or DejaVu Sans) are made and it presents headless; it draws with the fixed function (lights, material, no shader), which PRISM's `d3d9.js` does not have yet | 2026-11-01 |
 | luxo4k | Direct3D 9 | Fails | shows a message box and exits: it needs DirectSound | 2026-10-31 |
 | Polystreptikum, Synchroplastikum | Direct3D 9 | Fails | a page fault before the device is created; cause not looked at | 2026-10-31 |
-| Valleyball, Stripped | OpenGL | Starts | too slow: Valleyball's synthesizer renders at a third of real time, Stripped precomputes for minutes | 2026-10 |
+| Valleyball, Stripped | OpenGL | Starts | Valleyball's synthesizer renders at 0.97 of real time in the page, just short of keeping up; Stripped precomputes for minutes | 2026-10 |
 
 ## The CPU
 

@@ -24,9 +24,11 @@ The block object it returns:
 // epoch, ph0, ph1: the address space it was compiled in (see "Under paging")
 ```
 
-A block ends at a control transfer, at `maxOps`, one instruction after STI (the interrupt shadow),
-or after an instruction that wrote into its own code (see below). Jumps within the same segment
-record their targets in `term` instead of returning directly, so the second tier can follow them.
+Without paging (DOS, Windows 3.x), a block ends at a control transfer, at `maxOps`, one instruction
+after STI (the interrupt shadow), or after an instruction that wrote into its own code (see below).
+Jumps within the same segment record their targets in `term` instead of returning directly, so the
+second tier can follow them. Under paging (Linux and Win32 programs, the paged operating systems)
+a block goes on through most control transfers: see [Longer blocks](#longer-blocks-under-paging).
 
 **Instructions emitted as calls.** Anything rare or long — segment loads with descriptor checks,
 far transfers between privilege levels, task switches, CPUID, CMPXCHG8B, most x87 control
@@ -43,7 +45,9 @@ that overwrites the address with its own code gets its own code.
 ## Running blocks: `run(machine, maxBlocks)`
 
 The dispatch loop. Per block: deliver a pending interrupt if IF is set, compute the linear address
-of `CS:EIP`, find the block, run it, add its count to `cpu.cycles`.
+of `CS:EIP`, find the block, run it, add its count to `cpu.cycles`. A block that loops on itself
+turns inside its own function and comes back here when the loop ends, when the slice's block budget
+is spent, or when interrupts are enabled (they are delivered between blocks).
 
 - **The cache** is a page table without hashing: `blockPages[lin >>> 12][(lin & 0xfff) | d << 12]`,
   so the same address compiled for a 16-bit and a 32-bit segment are two entries. A slot reached
@@ -98,8 +102,11 @@ Emitted inline with each access:
   translated with the checks (`MIRAGE_NOREALSPEC=1` emits them everywhere).
 - **LOCK.** A LOCK prefix on an instruction that cannot be locked is #UD (`MIRAGE_LOCKUD=0`).
 
-The x87 is emitted inline against a local copy of the stack top, written back at every block exit;
-rare instructions call `fpu.js`. `MIRAGE_NOFPUINLINE=1` makes every x87 instruction a call.
+The x87 is emitted inline; rare instructions call `fpu.js`. `MIRAGE_NOFPUINLINE=1` makes every x87
+instruction a call. Within a block the stack top is a local `F` plus a depth known at translation
+time, so `ST(i)` is `st[(F+k)&7]` with `k` a constant, and a register's value once loaded or written
+stays in a local for the reads that follow (write-through: `st[]` and `cpu.ftop` are always current
+for a fault, an exit or a helper). `MIRAGE_NOFXCACHE=1` reads `cpu.ftop` at every access instead.
 
 ## Self-modifying code
 
@@ -122,18 +129,51 @@ When paging is on, the recompiler switches to the paged memory strategy and drop
 does so again whenever paging is switched on or off, or CR4.PSE changes while it is on.
 
 - **Page faults.** A memory access that cannot be translated throws `PageFault` from inside the
-  block. Every instruction stores its own EIP first under paging, so `run` catches the fault, sets
-  CR2 and delivers #PF with EIP at the faulting instruction. Restart is approximate: side effects
-  the instruction had already committed are not undone. Demand paging faults on the access itself,
-  which is the case that matters.
+  block, with EIP at the faulting instruction: `run` catches it, sets CR2 and delivers #PF. EIP is
+  stored only where it can be needed: not before an instruction that only moves registers and sets
+  flags, and for one that touches memory through the paged fast path, only on the slow path of the
+  probe (`(cpu.eip=X,m).r32(a)`), since the fast path cannot fault (`MIRAGE_NOLAZYEIP=1` stores it
+  before every such instruction). Restart is approximate: side effects the instruction had already
+  committed are not undone. Demand paging faults on the access itself, which is the case that
+  matters.
 - **Address spaces.** A CR3 load does not drop the cache. It increments `epoch`; a block compiled in
   an older epoch is checked the next time it is reached: if its first and last pages still map to
   the physical frames it was compiled from (`ph0`, `ph1`), it is kept, otherwise evicted. This is
   what keeps process switches cheap (`MIRAGE_NOD8=1` restores dropping the cache).
 - **INVLPG** refreshes the TLB entry and invalidates the blocks on that page.
 
+- **Flat segments.** A protected-mode segment of base 0 and limit 4 GiB can fail no limit check
+  (Linux's, Win32's, a DOS extender's flat model), so its accesses are emitted without one; the block
+  checks once, at its head, that the segments it relied on are still flat, and is translated again
+  if not (`MIRAGE_NOFLATSPEC=1`). With a flat 32-bit stack, PUSH, POP, CALL and RET move it inline.
+- **The translation memo.** A block's translation is kept by its bytes, its address and the state it
+  depends on (code size, real or not, x87 precision, flat segments), so a program loaded again or a
+  cache dropped for size recompiles nothing it has seen (`MIRAGE_NOMEMO=1`).
+
 A change of the A20 mask drops the cache and ends the slice as well, because `run` keeps the mask
 in a local for the whole slice.
+
+## Longer blocks under paging
+
+A JavaScript function call per block is the main cost of a dispatch loop, so under paging a block
+keeps going through what would end it elsewhere. Each has its switch.
+
+- **Side exits.** A forward conditional branch does not end the block: taken, it leaves
+  (`if(cond){cpu.eip=T;…;return;}`, giving back the instructions it did not run from the count), and
+  the block goes on after it (`MIRAGE_NOSIDEEXIT=1`).
+- **Skips.** A forward conditional branch of 64 bytes or less is kept inside the block instead:
+  `if(taken){cpu.cycles-=K}else{…}` around the instructions it jumps over, closed where it lands,
+  the x87 top read again there. Skips nest; a block that ends or follows a jump inside an open skip
+  is translated again without them. Elevated's synthesizer (`dec eax; jnz next` chains choosing an
+  x87 operation) went from 6 to 19-35 instructions a dispatch (`MIRAGE_NOSKIP=1`).
+- **Loops.** A backward branch to the block's head turns inside the function (the self-loop); one
+  to an instruction inside the block opens a `for(;;)` there, and the block goes on after it. Both
+  keep the dispatcher's accounting, a turn each (`MIRAGE_NOSELFLOOP=1`).
+- **Followed jumps and calls.** A direct JMP or CALL to the block's page goes on at its target in
+  the same block, up to four; a RET of a followed call goes on at the return address when the stack
+  holds it, and leaves as a side exit otherwise (`MIRAGE_NOFOLLOW=1`).
+
+Without paging none of these apply: the DOS golden runs, timed to the block, are what they were.
 
 ## The second tier (off)
 
@@ -161,6 +201,13 @@ All read once at start-up from the environment, all off by default unless stated
 | `MIRAGE_SEGLIM=0`, `MIRAGE_SEGWP=0`, `MIRAGE_LOCKUD=0` | turn off the limit, write-protection and LOCK checks |
 | `MIRAGE_NOREALSPEC=1` | emit the limit checks in real-mode blocks too |
 | `MIRAGE_NOD8=1` | drop the cache on every CR3 load |
+| `MIRAGE_NOSIDEEXIT=1`, `MIRAGE_NOSKIP=1`, `MIRAGE_NOSELFLOOP=1`, `MIRAGE_NOFOLLOW=1` | end the block at every branch, as without paging (see [Longer blocks](#longer-blocks-under-paging)) |
+| `MIRAGE_NOFXCACHE=1` | read the x87 stack top from `cpu.ftop` at every access |
+| `MIRAGE_NOLAZYEIP=1` | store EIP before every instruction that may fault |
+| `MIRAGE_NOFLATSPEC=1` | emit the limit checks for flat segments too |
+| `MIRAGE_NOMEMO=1` | no translation memo |
+| `MIRAGE_NOLAZYTLB=1`, `MIRAGE_NOXTLB=1` | fill the fast page tables eagerly; no TLB in front of the page walk |
+| `MIRAGE_KEEP_SRC=1` | keep each block's emitted source (for `tools/trace.js`) |
 | `MIRAGE_SEGIP=1` | record the instruction that loaded each segment, for diagnosis |
 | `MIRAGE_DERAIL_STOP=1` | stop on a derail |
 

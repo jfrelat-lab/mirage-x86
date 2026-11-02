@@ -6,6 +6,8 @@
   "description": "An x86 PC in plain JavaScript: an x86-to-JavaScript dynamic recompiler with a built-in DOS, and a bare PC that boots unmodified operating systems.",
   "scripts": {
     "test": "node tools/test.js",
+    "site": "node tools/site.mjs && node tools/site-check.mjs",
+    "deploy": "node tools/deploy.mjs",
     "test:dos": "node tools/test-dos.js",
     "test:gfx": "node tools/test-gfx.js",
     "test:demos": "node tools/test-demos.js",
@@ -36,7 +38,7 @@
     "type": "git",
     "url": "git+https://github.com/jfrelat-lab/mirage-x86.git"
   },
-  "homepage": "https://github.com/jfrelat-lab/mirage-x86",
+  "homepage": "https://mirage-x86.pages.dev",
   "bugs": {
     "url": "https://github.com/jfrelat-lab/mirage-x86/issues"
   }

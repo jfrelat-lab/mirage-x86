@@ -31,10 +31,9 @@ Each line is one capability, so that it can be checked on its own.
 | **EMS (EMM386/LIM 4.0) in HLE**: expanded memory with no driver to load | ❌ | ❌ | ✅ | ❌ | ✅ |
 | **DPMI host in HLE**: DOS/4GW, CWSDPMI and DJGPP programs with no extender host to load | ❌ | ❌ | 🟡 through the extender's own host | ❌ | ⭐ ✅ built-in host (C-Dogs, DOOM, Heretic, Kraptor) |
 | **BIOS in HLE**, interrupt services answered in JavaScript, checked against SeaBIOS, DOSBox-X and a vendor ROM | ❌ | ❌ (SeaBIOS ROM) | ✅ its own | ❌ (SeaBIOS ROM) | ✅ |
-| **Linux programs without a Linux kernel, in a browser** | ❌ | ❌ (`qemu-user` is native only) | ❌ | ❌ | ⭐ ✅ `tools/linux/run.mjs` (browser page to come) |
+| **Linux programs without a Linux kernel, in a browser** | ❌ | ❌ (`qemu-user` is native only) | ❌ | ❌ | ⭐ ✅ `linux.html`, `machines.html`, `tools/linux/run.mjs` |
 | **Linux binaries of 1994–1996**: a.out, libc 4, SVGAlib — no current kernel loads them | ❌ (a.out removed in Linux 5.18) | ❌ | ➖ | 🟡 under an old booted kernel ❔ | ⭐ ✅ id's Linux DOOM (`linuxsdoom`), unmodified, SVGAlib driving the emulated VGA |
-| **Win16 programs without Windows** | ❌ | ❌ | ❌ | ❌ | ⭐ 🟡 branch `win16-hle`: NE loader, CLOCK.EXE starts with Microsoft's own USER.EXE and GDI.EXE run as guest code |
-| **DOS, Linux user space, Win16 and bare-metal boot in one engine**, the world chosen by the file's signature | ❌ | 🟡 two programs (system, user) | ❌ | ❌ | ⭐ ✅ `tools/run.mjs` |
+| **DOS, Linux user space and bare-metal boot in one engine**, the world chosen by the file's signature | ❌ | 🟡 two programs (system, user) | ❌ | ❌ | ⭐ ✅ `tools/run.mjs` |
 | **Translated code as readable JavaScript** (`MIRAGE_KEEP_SRC=1`) | ➖ | ❌ | ❌ | ❌ (WebAssembly) | ⭐ ✅ |
 | **No WebAssembly, no build step, no dependency** | ➖ | ➖ | ➖ | ❌ | ⭐ ✅ |
 | **Runs reproducible to the cycle**: the guest clock follows retired instructions, randomness is seeded | ❌ | ❌ | 🟡 | ❌ | ⭐ ✅ |
@@ -47,7 +46,7 @@ Each line is one capability, so that it can be checked on its own.
 | Language | Go | C | C++ | Rust → WebAssembly, JavaScript | JavaScript |
 | Runs in a browser | ❌ | 🟡 experimental WebAssembly ports ❔ | 🟡 Emscripten ports (js-dos) ❔ | ✅ | ✅ |
 | Runs natively / in Node | ✅ | ✅ | ✅ | ✅ (Node) | ✅ (Node) |
-| How code is executed | natively (x86 host); through `qemu-user` or Rosetta on an ARM host | JIT to host code (TCG), or KVM/HVF | interpreter or dynamic recompiler | JIT to WebAssembly | x86 basic blocks become JavaScript source, compiled by the JavaScript engine |
+| How code is executed | natively (x86 host); through `qemu-user` or Rosetta on an ARM host | JIT to host code (TCG), or KVM/HVF | interpreter or dynamic recompiler | JIT to WebAssembly | x86 code becomes JavaScript source, block by block, compiled by the JavaScript engine |
 | To install | Docker Desktop or Engine, a daemon, a VM on macOS and Windows | a package | a package | nothing (a web page) | nothing (a web page), or Node |
 | Isolation | namespaces on the host's kernel | full emulation | full emulation | full emulation, browser sandbox | full emulation, browser sandbox; no system call reaches the host |
 | Screen and sound | ❌ (headless) | ✅ | ✅ | ✅ | ✅ |
@@ -61,7 +60,7 @@ Each line is one capability, so that it can be checked on its own.
 | DOS programs | ❌ | 🟡 under a booted DOS | ✅ | 🟡 under a booted DOS | ✅ |
 | DOS extenders (DOS/4GW, CWSDPMI, DJGPP) | ❌ | 🟡 under a booted DOS | ✅ | 🟡 under a booted DOS | ✅ |
 | Linux programs, current (static and dynamic ELF) | ✅ | ✅ `qemu-user` | ❌ | ❌ | ✅ Debian 12 i386 binaries (ls, bash, perl, sort…) as Docker prints them |
-| Win16 programs | ❌ | 🟡 under a booted Windows | 🟡 under a booted Windows | 🟡 under a booted Windows | 🟡 under a booted Windows 3.0; without Windows on a branch (above) |
+| Win16 programs | ❌ | 🟡 under a booted Windows | 🟡 under a booted Windows | 🟡 under a booted Windows | 🟡 under a booted Windows 3.0 |
 | Win32 programs | 🟡 Windows containers, on a Windows host | 🟡 under a booted Windows | 🟡 under a booted Windows 9x | 🟡 under a booted Windows | 🟡 under a booted Windows 9x; ✅ without Windows for the scene's OpenGL and Direct3D 9 intros (MIRAGE-WIN32) |
 | Windows 3.x | ❌ | ✅ | ✅ | ✅ | ✅ 3.0 to the Program Manager |
 | Windows 95, 98, ME | ❌ | ✅ | ✅ | ✅ | ✅ the desktop |
@@ -119,9 +118,17 @@ clock follows guest cycles); the others report their own score. n.m. = not measu
 
 | Benchmark | Docker (`qemu-user` on M1) | DOSBox-X (dynamic core, `cycles=max`) | v86 | MIRAGE-DOS (DJGPP) | MIRAGE-LINUX (musl) |
 |---|---|---|---|---|---|
-| Dhrystone 2.1, per second | 🏆 4,100,000 | 1,111,000 | n.m. | 169,000 | 156,500 |
-| CoreMark, iterations per second | 🏆 7,763 | n.m. | n.m. | 210 | 242 |
-| Guest instructions per second | ➖ | ➖ | ➖ | 82 M | 76–79 M |
+| Dhrystone 2.1, per second | 🏆 4,550,000–4,680,000 | 1,111,000 | n.m. | 169,000 | 830,000–875,000 |
+| CoreMark, iterations per second | 🏆 8,175–8,240 | n.m. | n.m. | 210 | 940–990 |
+| Guest instructions per second | ➖ | ➖ | ➖ | 82 M | 420–450 M (Dhrystone), 305–325 M (CoreMark) |
+
+Measured 2026-11-02 (Docker, MIRAGE-LINUX) and 2026-10-13 (DOSBox-X, MIRAGE-DOS, the DJGPP build).
+MIRAGE-LINUX runs paged, where blocks go on through branches, loops and calls
+([RECOMPILER.md](RECOMPILER.md#longer-blocks-under-paging)); MIRAGE-DOS runs in a DPMI host without
+paging, where they do not. How to reproduce the Linux column: Dhrystone 2.1 (netlib's `dhry-c`, built
+with `musl-gcc -static -O2 -march=pentiumpro -DTIMES -DHZ=100`) and CoreMark 1.01 (`-DPERFORMANCE_RUN=1
+-DITERATIONS=0`), then `MIRAGE_LXWALLCLOCK=1 MIRAGE_LXSTATS=1 node tools/linux/run.mjs <binary>`;
+`MIRAGE_LXSTATS` prints the instructions run, the host time and the instructions a dispatch.
 
 BYTE's Sieve of Eratosthenes (8190 flags, 5000 times: `tools/bench/sieve.asm`, a 16-bit `.COM` of 126
 bytes, 730.7 M instructions), wall-clock seconds on the same host, lower is better. It is run in
@@ -130,8 +137,8 @@ with a general protection fault inside CWSDPMI.
 
 | | DOSBox-X (dynamic, `cycles=max`) | MIRAGE-DOS | PCjs (COMPAQ DeskPro 386, at its highest speed) |
 |---|---|---|---|
-| Sieve, seconds | 🏆 6.2 | 13 | 64.3 |
-| Relative to MIRAGE | 2.1x faster | 1 | 4.9x slower |
+| Sieve, seconds | 🏆 6.2 | 11.1 in the page, 7.5 headless | 64.3 |
+| Relative to MIRAGE (in the page) | 1.8x faster | 1 | 5.8x slower |
 
 PCjs runs a machine at its original clock (16 MHz for the DeskPro 386); its debugger page's speed
 button doubles the target, and the host reached about 53 MHz of 386 cycles, about 4 cycles an
@@ -145,15 +152,21 @@ Booting whole systems, wall-clock seconds to the arrival screen (lower is better
 
 | | QEMU (TCG) | v86 | MIRAGE |
 |---|---|---|---|
-| Windows 98 | 🏆 28 | 44 | 50 |
-| Windows 95 | 18 | 🏆 16 | 34 |
+| Windows 98 | 🏆 28 | 44 | 36 |
+| Windows 95 | 18 | 🏆 16 | 24 |
 | QNX 4.05 demo | 4 | 6 | 🏆 2 |
-| Linux 2.2 | 10 | — | 🏆 8 |
+
+QEMU and v86 run in real time, so their times include the waits a guest makes on its timers; MIRAGE
+runs headless as fast as it can (guest time follows its instructions, so an idle HLT costs nothing).
+Windows 95's arrival is its first dialog, the others' their desktop or prompt. `tools/v86/compare3.mjs`,
+MIRAGE's column measured 2026-11-02, QEMU's and v86's 2026-10-02. Linux 2.2 is left out until a
+regression in its timer check is fixed ([KNOWN-ISSUES.md](KNOWN-ISSUES.md)).
 
 QEMU, DOSBox-X and Docker run native code; v86 runs WebAssembly; MIRAGE runs JavaScript, and its
-time goes where a JavaScript engine puts it: a profile of Dhrystone spends 28–42% calling one block
-of translated code after another (five x86 instructions a block on average). Closing that gap means
-compiling traces of blocks together (ROADMAP D8).
+time goes where a JavaScript engine puts it. On paged code a block now runs through forward branches,
+short loops and followed calls, some 30 x86 instructions a dispatch on Dhrystone where it was five
+(2026-10-12), and Dhrystone went from 156,500 to over 830,000 a second; real-mode and unpaged DOS code
+still ends a block at every branch (ROADMAP D8).
 
 ## Where this is going
 

@@ -129,7 +129,7 @@ async function runMirage() {
   const { bootSector } = await import(ROOT + '/src/boot.js');
   const { Video } = await import(ROOT + '/src/video.js');
   const disk = new Uint8Array(bytes);
-  const { mc } = makeMachine({ dos: false, memSize: MEM << 20 });
+  const { mc } = makeMachine({ dos: false, memSize: MEM << 20, cpu: '586' });   // the 586 profile, as the header says
   let drive = 0;
   if (!floppy) {
     const dv = new DataView(disk.buffer), e = 0x1be;

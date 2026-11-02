@@ -4,8 +4,12 @@ Thank you for looking. A few rules keep this emulator honest; they are short.
 
 ## Before you send a change
 
+Clone with the PRISM submodule (`git clone --recursive`, or `git submodule update --init` in a
+clone): its OpenGL and Direct3D 9 code is part of the suite.
+
 ```bash
 node tools/test.js              # must be all green
+node tools/test-dos-api.js      # the DOS and BIOS services: all green
 node tools/golden.js check      # must report 0 mismatch
 ```
 
@@ -14,7 +18,7 @@ Most of them are third-party and are not in the repository, so on a fresh clone 
 as skipped; that is expected. If a fingerprint changes, say why in the commit — and re-bless it
 (`node tools/golden.js capture <file>`) only when the new picture is the correct one.
 
-Documentation-only changes (`docs/`, `*.md`) do not need the two runs.
+Documentation-only changes (`docs/`, `*.md`) do not need these runs.
 
 ## What a fix looks like
 
@@ -36,13 +40,14 @@ old and the new tree, alternating, three times each.
 
 ## What not to send
 
-No operating system, game, intro, ROM or BIOS image — nothing whose licence is not yours to give.
-`boot/`, `games/` and `intros/` are ignored by git for that reason. A bug report that names the
+No operating system, game, intro, ROM or BIOS image whose licence does not allow passing it on.
+`boot/`, `games/` and `intros/` are ignored by git for that reason. The exceptions are the examples,
+each redistributable, with its licence in `examples/licenses/` (see `examples/README.md`). A bug report that names the
 program and where to obtain it legally is the right way to share a failure.
 
 ## Reporting a program that does not run
 
-Say which file (name, size, a checksum if you can), which page (`dos.html` or `boot.html`) and
+Say which file (name, size, a checksum if you can), which page (`dos.html`, `boot.html` or `machines.html`) and
 which options, and what you saw: the last screen, and any message in the browser console.
 
 ## Documentation

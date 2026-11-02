@@ -3,6 +3,17 @@
 <head>
 <meta charset="utf-8">
 <title>MIRAGE — an x86 PC in plain JavaScript</title>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="MIRAGE">
+<meta property="og:title" content="MIRAGE — an x86 PC in plain JavaScript">
+<meta property="og:description" content="An x86 PC in plain JavaScript: a dynamic recompiler from x86 to JavaScript, a built-in DOS, and a bare PC that boots unmodified operating systems.">
+<meta property="og:url" content="https://mirage-x86.pages.dev/">
+<meta property="og:image" content="https://mirage-x86.pages.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="MIRAGE, an x86 PC in plain JavaScript, beside the intros and boot-sector programs it runs">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://mirage-x86.pages.dev/">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="An x86 PC in plain JavaScript: a dynamic recompiler from x86 to JavaScript, a built-in DOS, and a bare PC that boots unmodified operating systems.">
 <link rel="stylesheet" href="site.css">
@@ -96,8 +107,8 @@
       <a class="btn" href="boot.html">Boot your own disk image</a>
     </div>
     <div class="stats">
-      <div><b>82 M</b><span>x86 instructions per second, compiled to JavaScript (Dhrystone on MIRAGE-DOS, Apple M1)</span></div>
-      <div><b>13 s</b><span>BYTE's Sieve: 730.7 M instructions — DOSBox-X 6.2 s, PCjs 64.3 s, same host</span></div>
+      <div><b>420 M</b><span>x86 instructions per second, compiled to JavaScript (Dhrystone on MIRAGE-LINUX, Apple M1)</span></div>
+      <div><b>11 s</b><span>BYTE's Sieve in the page: 730.7 M instructions — DOSBox-X 6.2 s, PCjs 64.3 s, same host</span></div>
       <div><b>1997</b><span>gcc 2.7.2 builds id's X11 DOOM from its sources inside MIRAGE, and XFree86 3.3 plays it — on no Linux kernel at all</span></div>
     </div>
     <p class="more"><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPARISON.md">How MIRAGE compares with QEMU, DOSBox-X, v86, PCjs and Docker →</a></p>
@@ -116,8 +127,8 @@
     <p class="lead">OASIS images of Linux programs as they shipped: Debian 1.3's libraries and X server, id's games,
       fetched from Debian's and idgames' own archives when the image is first run — nothing of theirs is copied here.
       Linux's system calls are answered in JavaScript; the programs are the original binaries, or built from their
-      sources by the compiler of the time. They need <code>node tools/oasis.mjs serve</code>, since a page cannot read
-      those archives itself. <a href="oasis.html">Every image's recipe →</a></p>
+      sources by the compiler of the time. The page fetches those archives through a small relay of its host, as
+      <code>node tools/oasis.mjs serve</code> does at home. <a href="oasis.html">Every image's recipe →</a></p>
     <div class="grid" id="linuxgrid"></div>
   </section>
 
@@ -162,7 +173,7 @@
           Cirrus GD5446 at 800x600, with twm, X DOOM and Debian's X games.</td></tr>
         <tr><td>DOS games</td><td>DOOM, Heretic, Quake and Wolfenstein 3D play; dozens of EGA and VGA titles render.</td></tr>
         <tr><td>Demos</td><td>31 of the 32 size-coded intros tried, from 32 bytes to 64 KB.</td></tr>
-        <tr><td>Not yet</td><td>Windows NT and 2000, ReactOS, BeOS; the Gravis Ultrasound; a network card, and networking for Linux programs; OpenGL; 64-bit.</td></tr>
+        <tr><td>Not yet</td><td>Windows NT and 2000, ReactOS, BeOS; the Gravis Ultrasound; a network card, and networking for Linux programs; 64-bit.</td></tr>
       </table>
       <p style="margin:10px 0 0"><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPATIBILITY.md">The full compatibility list</a>,
         with the date each result was recorded, and <a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/KNOWN-ISSUES.md">what does not work</a>.</p>

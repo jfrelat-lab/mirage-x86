@@ -161,8 +161,9 @@ machine.runSlice(maxBlocks)
          cpu.cycles += blk.count
 ```
 
-A block ends at a control transfer or after 192 instructions. Blocks are keyed by linear address and code-segment size. Under paging a
-block also remembers the physical frames it was compiled from: after a CR3 load it is revalidated
+Without paging a block ends at a control transfer or after 192 instructions; under paging it goes on
+through forward branches, short loops and followed calls ([RECOMPILER.md](RECOMPILER.md#longer-blocks-under-paging)).
+Blocks are keyed by linear address and code-segment size. Under paging a block also remembers the physical frames it was compiled from: after a CR3 load it is revalidated
 against the new address space rather than thrown away, which is what keeps process switches
 cheap. The cache is capped (16 MiB of source, 64 MiB under paging) and flushed when full.
 
@@ -187,10 +188,12 @@ Every interrupt vector initially points at a stub in the BIOS segment.
 
 There is one clock: `cpu.cycles`, the count of retired instructions. The PIT, the RTC's periodic
 interrupt, the VGA retrace and RDTSC are all derived from it — one 18.2 Hz timer tick is 182,584
-cycles by default, about 3.3 million instructions per guest second. Nothing reads the host's clock
-or `Math.random`, so a headless run is reproducible exactly; that is what the golden gate relies
-on. In the browser, `ui.js` paces timer ticks to wall-clock time so that a game runs at its real
-speed. [notes/timing.md](notes/timing.md) records how these numbers were chosen.
+cycles by default, about 3.3 million instructions per guest second. Headless, nothing reads the
+host's clock or `Math.random`, so a run is reproducible exactly; that is what the golden gate relies
+on. In the browser the guest's time is the host's (`machine.wallClockMs`): `ui.js` paces timer
+ticks to wall-clock time, and the VGA retrace and PIT counter 0's readback follow it, so that a game
+runs at its real speed however fast the CPU goes. MIRAGE-LINUX takes the host's clock with
+`MIRAGE_LXWALLCLOCK=1`, for benchmarks. [notes/timing.md](notes/timing.md) records how these numbers were chosen.
 
 ## Switches
 

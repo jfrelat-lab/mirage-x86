@@ -9,9 +9,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true          # vendor/prism: the OpenGL and Direct3D 9 tests need it
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       # Everything that needs nothing outside the repository. The golden check skips the programs
       # whose (third-party) files are absent and still pins the ones that are checked in.
+      # test.js keeps a few hundred machines alive till its end (each with its block directory, 8 MB):
+      # more than Node's default heap on the runner. Locally it runs within 4 GB.
       - run: npm run test:all
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096

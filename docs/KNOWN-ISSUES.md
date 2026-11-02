@@ -27,6 +27,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 | BeOS 5 | the splash screen | **Unknown.** The kernel log matches v86's to its last line; then user programs run and one loops waiting. Suspected: the display server does not start. |
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |
 | Damn Small Linux 4.4.10 | a black screen at runlevel 5 | **Unknown**: not investigated — it may only be slow. |
+| BasicLinux 3.5 (Linux 2.2), on the 586 profile | its console fills with "probable hardware bug: clock timer configuration lost" | **Regression**, since PIT counter 0 reads count from the reload write (2026-10-03): the kernel's timer interrupt reads a count it takes for a lost configuration. With `MIRAGE_PITOLD=1` it reaches its console in 6 s. |
 
 ## Time
 
@@ -68,7 +69,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test and `Reset` are not there yet. |
 | D3DX beyond HLSL | Shader assembly, `ID3DXFont`, effects and sprites are not done; texture shaders (`D3DXFillTextureTX`, Ergon) wait on PRISM. Meshes, skins, N-patches, normals, adjacency, `D3DXFillTexture` and text meshes (`D3DXCreateText`) are. |
 | Windows fonts | MIRAGE ships none. An image lists the ones it selects (`machine.fonts`); the page reads the visitor's own (Chrome's Local Font Access, after asking) or else uses DejaVu Sans, whose shapes and widths differ. Glyphs are not hinted. |
-| One emulated core | Threads take turns on one CPU at about 200 M instructions a second: Darwinism (180 M x87 instructions a frame) draws a frame a second, Valleyball's synthesizer falls behind, Stripped's precalculation lasts minutes. |
+| One emulated core | Threads take turns on one CPU at about 200 M instructions a second: Darwinism (180 M x87 instructions a frame) draws a frame a second, Valleyball's synthesizer keeps up at 0.97 of real time, Stripped's precalculation lasts minutes. |
 | gdi32's ordinals | Crinkler's /RANGE imports by ordinal; MIRAGE's gdi32 does not number its exports as Windows XP's (no intro met needs it yet). opengl32's and d3dx9's are numbered as Microsoft's. |
 | Win16 | No NE loader yet. |
 

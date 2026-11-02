@@ -31,10 +31,12 @@ IF is set. Not implemented: rotating priority, special mask mode, poll mode.
 per tick as DOSBox-X at `cycles=fixed 20000` (see [notes/timing.md](notes/timing.md) §6).
 
 - **Reprogramming** through ports 43h/40h changes the interrupt rate. The rate is capped at
-  `pitBase / 16` (about 291 Hz) because delivering an interrupt is expensive here
+  `pitBase / 64` (about 1165 Hz) because delivering an interrupt is expensive here
   (`MIRAGE_PITFLOOR` lowers the cap). Every mode is treated as periodic.
 - **Reading** port 40h returns the live count in 1.193 MHz ticks, counted from the moment the
   reload value was written, as an 8254 does (`MIRAGE_PITOLD=1` restores an older approximation).
+  Headless the ticks are derived from `cpu.cycles`; in the browser from the host's clock, as the
+  interrupts and the VGA retrace are there (Unreal times a frame with it).
 - **Delivery.** `serviceTimer` runs when `cpu.cycles` reaches `nextTimerCycle`: it bumps the BIOS
   tick count and delivers IRQ 0. `machine.timerAuto` is on headless (the clock is the cycle count,
   deterministic); in the browser `ui.js` turns it off and paces ticks to wall-clock time.

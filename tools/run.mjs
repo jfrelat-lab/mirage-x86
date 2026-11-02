@@ -4,7 +4,7 @@
 //
 // Detected by signature, never by extension (ROADMAP H11):
 //   7F 'ELF'                          -> MIRAGE-LINUX   tools/linux/run.mjs
-//   'MZ' + 'PE\0\0' at e_lfanew       -> Win32: not yet (MIRAGE-WIN32, H14)
+//   'MZ' + 'PE\0\0' at e_lfanew       -> Win32: not from the command line (an OASIS image, docs/OASIS.md)
 //   'MZ' + 'NE' at e_lfanew           -> Win16: not from the command line (it needs Windows' screen)
 //   'MZ' / 'ZM', or anything else     -> MIRAGE-DOS     tools/dos/run.mjs (a .COM has no signature)
 //   55 AA at 510 in a 512-byte image,
@@ -36,7 +36,7 @@ export function kind(b, size) {
 const k = kind(b, size);
 const runner = { linux: './linux/run.mjs', dos: './dos/run.mjs', boot: './run-boot.mjs' }[k];
 if (!runner) {
-  console.error(k === 'pe' ? 'mirage: a Win32 (PE) program — MIRAGE-WIN32 does not exist yet'
+  console.error(k === 'pe' ? 'mirage: a Win32 (PE) program — run it as an OASIS image (docs/OASIS.md)'
     : 'mirage: a Win16 (NE) program — run it in Windows 3.x in the browser');
   process.exit(126);
 }

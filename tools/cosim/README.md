@@ -65,7 +65,7 @@ MIRAGE matches Unicorn for the entire 266-instruction window up to the derail â€
 correct**. The game faithfully executes garbage (INT 3, then `PUSH AX; JMP 0x74F` into
 un-decodable bytes) which BOTH emulators reproduce from the same RAM. So the derail is **not
 a CPU bug**; the corruption is set up earlier (a device/DOS service returning/placing wrong
-data, or the THG-cracked binary is genuinely broken). Not chased further.
+data, or this copy of the binary is itself broken). Not chased further.
 
 ## Boot-image variant (2026-08-08)
 

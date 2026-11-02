@@ -3,6 +3,18 @@
 <head>
 <meta charset="utf-8">
 <title>MIRAGE — OASIS images</title>
+<meta name="description" content="OASIS images: recipes of the period PC, each program fetched from where its authors published it and run by MIRAGE.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="MIRAGE">
+<meta property="og:title" content="MIRAGE — OASIS images">
+<meta property="og:description" content="OASIS images: recipes of the period PC, each program fetched from where its authors published it and run by MIRAGE.">
+<meta property="og:url" content="https://mirage-x86.pages.dev/oasis.html">
+<meta property="og:image" content="https://mirage-x86.pages.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="MIRAGE, an x86 PC in plain JavaScript, beside the intros and boot-sector programs it runs">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://mirage-x86.pages.dev/oasis.html">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101820'/><text x='1.5' y='12' font-family='monospace' font-size='11' fill='%2300d0a0'>M:</text></svg>">
 <!--
@@ -64,11 +76,11 @@
 </header>
 <main>
   <h1><span>OASIS</span> — images of the period PC</h1>
-  <p class="lede">An OASIS image is a recipe, not an archive: the world a program needs (DOS or Linux user
-    space, both answered in JavaScript), the machine, and layers of files fetched from where their
+  <p class="lede">An OASIS image is a recipe, not an archive: the world a program needs (DOS, Linux user
+    space or Win32, all answered in JavaScript), the machine, and layers of files fetched from where their
     authors published them — Debian's archive, idgames, the examples of this repository. Nothing below
     is copied into MIRAGE; each layer says where it comes from.</p>
-  <pre class="cmd"><b>node tools/oasis.mjs serve --open</b>          every image, in the Machines page (Linux needs it)
+  <pre class="cmd"><b>node tools/oasis.mjs serve --open</b>          every image, in the Machines page, at home
 <b>node tools/oasis.mjs run</b> linux/mirage         one image, in a window of its own
 <b>node tools/oasis.mjs run</b> linux/debian-bookworm -c 'ls /'      in the terminal
 <b>node tools/oasis.mjs pull</b> linux/doom-1994       fetch its layers into ~/.cache/oasis</pre>

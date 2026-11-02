@@ -70,6 +70,19 @@ source is. boot.html inflates it in the browser.
 The binaries of the boot-sector programs are the ones v86's catalogue serves for the same programs; BootChess comes with its
 author's release text.
 
+- `linux/` holds Linux intros by The Orz (grz, Julien Verneuil), static i386 binaries taken unchanged
+  from the author's repositories, under their BSD 3-Clause licence:
+
+| File | Intro | Year | Licence text | Source |
+|---|---|---|---|---|
+| `linux/Apollonian_1920x1080x32`, `CalculatingSpace_…`, `Campers_…`, `QuasiSpace_…` | Apollonian, Calculating Space, Campers, QuasiSpace | 2021 | `licenses/codegolfing-bsd3.txt` | https://github.com/grz0zrg/codegolfing |
+| `linux/Crimson_…`, `Mmrnmhrm_…`, `Zeta_…` | Crimson, Mmrnmhrm, Zeta | 2022 | `licenses/codegolfing-bsd3.txt` | same |
+| `linux/the_light_1920x1080x32` | The light | 2023 | `licenses/codegolfing-bsd3.txt` | same |
+| `linux/flagship_1920x1080x32` | Flagship | 2021 | `licenses/flagship-bsd3.txt` | https://github.com/grz0zrg/Flagship |
+
+Three Linux entries of the manifest (Blin Elfom, pattern, attraction & decay) state no licence: they
+are not in this repository, and the page fetches them from their authors' own sites when they are run.
+
 - `thumbs/` are screenshots taken by MIRAGE: `node tools/demo-thumbs.mjs` regenerates them from the
   manifest.
 

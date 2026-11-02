@@ -1,6 +1,6 @@
 // site.mjs — the static export: MIRAGE's pages as any static host serves them, in site/.
 //
-//   node tools/site.mjs [--out=site]
+//   node tools/site.mjs [--out=site] [--origin=https://mirage-x86.pages.dev]   (the sitemap's addresses)
 //   node tools/oasis.mjs serve --static        (or any static server on site/) to look at it
 //
 // What is shipped is what the repository holds and the pages load: the pages and their styles, src/,
@@ -30,13 +30,14 @@ export const SHIPPED = (p) => /^[^/]+\.(html|css)$/.test(p) || p === 'LICENSE'
 
 /*
  * PRISM's environment modules, from the vendor/prism submodule (src/hle/prism-gl.js imports them): the
- * modules gl.js, glu.js and d3d9.js import, followed through their static imports, and PRISM's licence (MIT). A
+ * modules gl.js, glu.js and d3d9.js import, followed through their static imports, PRISM's licence (MIT) and
+ * its THIRD-PARTY.md (glu.js carries SGI Free Software License B code). A
  * submodule's files are not the repository's own (git ls-files lists the submodule, not them), so they
  * are named here; a module PRISM adds to that closure is shipped without a change here.
  */
 const PRISM = 'vendor/prism', PRISM_ENTRIES = ['src/env/gl.js', 'src/env/glu.js', 'src/env/d3d9.js'];
 export function prismShipped(root = ROOT) {
-  const out = new Set(['LICENSE']), todo = [...PRISM_ENTRIES];
+  const out = new Set(['LICENSE', 'THIRD-PARTY.md']), todo = [...PRISM_ENTRIES];
   while (todo.length) {
     const f = todo.pop();
     if (out.has(f)) continue;
@@ -72,5 +73,11 @@ function build() {
   /src/*
     Cache-Control: public, max-age=0, must-revalidate
   `));
+  // What a search engine is given: the pages (404.html excepted), addressed under --origin.
+  const origin = (arg('origin') || 'https://mirage-x86.pages.dev').replace(/\/$/, '');
+  const pages = files.filter((f) => /^[^/]+\.html$/.test(f) && f !== '404.html').sort();
+  write('robots.txt', Buffer.from(`User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`));
+  write('sitemap.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    + pages.map((f) => `  <url><loc>${origin}/${f === 'index.html' ? '' : f}</loc></url>\n`).join('') + '</urlset>\n'));
   console.log(`site: ${files.length} files (${split} in parts), ${(bytes / 1e6).toFixed(1)} MB -> ${OUT}`);
 }

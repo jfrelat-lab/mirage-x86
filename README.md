@@ -1,13 +1,19 @@
 # MIRAGE
 
+[![tests](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml/badge.svg)](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Run it in your browser](https://img.shields.io/badge/%E2%96%B6%20run%20it-in%20your%20browser-00d0a0)](https://mirage-x86.pages.dev)
+
 **An x86 PC in plain JavaScript: a dynamic recompiler that turns x86 machine code into JavaScript
 source, with a built-in DOS so a `.COM` or `.EXE` runs the moment you drop it on the page.**
 
-No WebAssembly, no build step, no dependencies. It runs in a browser and in Node.
+No WebAssembly, no build step, no dependencies beyond its sibling [PRISM](https://github.com/jfrelat-lab/prism)
+(a submodule, for OpenGL and Direct3D 9). It runs in a browser and in Node.
+
+**Try it: [mirage-x86.pages.dev](https://mirage-x86.pages.dev)** — boot-sector games, size-coded
+intros, DOS games and demos, a FreeDOS disk, Linux and Windows intros, each a click away.
 
 ```
  x86 machine code ─▶ decoder ─▶ JS source ─▶ new Function ─▶ the engine's own JIT ─▶ run
-                     (per basic block, cached by linear address, aware of self-modifying code)
+                     (block by block, cached by linear address, aware of self-modifying code)
 ```
 
 MIRAGE is four machines sharing one CPU:
@@ -25,15 +31,16 @@ MIRAGE is four machines sharing one CPU:
 
 ## What runs today
 
-Per-title status, with dates, is in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
-None of that software is in this repository — see [Third-party software](#third-party-software).
+Per-title status, with dates, is in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). Apart from the
+redistributable examples, none of that software is in this repository — see
+[Third-party software](#third-party-software).
 
 | | Reaches |
 |---|---|
-| DOS intros and demos | 31 of the 32 tried render; 21 are pinned by the golden test |
+| DOS intros and demos | 31 of the 32 tried render; 37 intros are pinned by the golden test |
 | DOS games | real mode, DOS extenders (DPMI), EMS/XMS — per-title status in docs/COMPATIBILITY.md |
 | Windows 3.0, 95, 98, ME | the desktop |
-| Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell; runlevel 5 |
+| Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell (Linux 2.2: a timer regression, see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md)); runlevel 5 |
 | FreeDOS 1.3 (from its CD), MS-DOS 6.22 | the installer; the prompt |
 | QNX 4.05 demo disk, KolibriOS, OpenBSD | the desktop; the desktop; `login:` |
 | Linux programs (MIRAGE-LINUX) | Debian 12's bash, XFree86 3.3 and its clients, DOOM and Quake for Linux, Mesa's demos, the scene's Linux intros — the images in [docs/OASIS.md](docs/OASIS.md) |
@@ -47,14 +54,23 @@ MIRAGE-WIN32 has OpenGL and Direct3D 9 but not yet DirectDraw, DirectSound, Dire
 
 ## How fast
 
-Wall-clock seconds to the arrival screen, same image, same host (lower is better):
+Wall-clock seconds to the arrival screen, same image, same host (Apple M1; lower is better):
 
 | | QEMU (TCG) | v86 | MIRAGE |
 |---|---|---|---|
-| Windows 98 | 28 | 44 | 50 |
-| Windows 95 | 18 | 16 | 34 |
+| Windows 98 | 28 | 44 | 36 |
+| Windows 95 | 18 | 16 | 24 |
 | QNX 4.05 demo | 4 | 6 | 2 |
-| Linux 2.2 | 10 | — | 8 |
+
+QEMU and v86 run in real time, so their times include the waits a guest makes on its timers; MIRAGE
+runs headless as fast as it can (guest time follows its instructions, so an idle HLT costs nothing).
+Windows 95's arrival is its first dialog, the others' their desktop or prompt. `tools/v86/compare3.mjs`,
+MIRAGE's column measured 2026-11-02, QEMU's and v86's 2026-10-02. Linux 2.2 is left out until a
+regression in its timer check is fixed ([KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)).
+
+Linux programs run at 420–450 M x86 instructions a second on Dhrystone (830,000 Dhrystones a second,
+a fifth of QEMU's user-mode translator); [docs/COMPARISON.md](docs/COMPARISON.md#speed) has the
+benchmarks and how to reproduce them.
 
 [v86](https://github.com/copy/v86) is the mature project in this space: it compiles to WebAssembly,
 is faster on Windows, and boots systems MIRAGE cannot. MIRAGE's own ground is the built-in DOS, the
@@ -65,12 +81,13 @@ readable generated code, and runs that are reproducible to the cycle.
 ```bash
 python3 tools/serve.py 8761      # with the oasis-fetch relay OASIS images are fetched through; any static server runs the rest
 # http://localhost:8761/            the home page, with the examples
-# http://localhost:8761/machines.html  DOS, Linux and the bare PC on one page (Linux: `node tools/oasis.mjs serve --open`)
+# http://localhost:8761/machines.html  DOS, Linux, Windows and the bare PC on one page
 # http://localhost:8761/dos.html    the DOS player: drop a .COM, .EXE or a folder
 # http://localhost:8761/boot.html   the bare PC: boot a floppy, hard-disk or ISO image
 ```
 
 ```bash
+git clone --recursive https://github.com/jfrelat-lab/mirage-x86   # PRISM is a submodule
 node tools/test.js                # the unit suite
 npm run test:all                  # every suite that needs nothing outside the repository
 ```
@@ -105,16 +122,30 @@ Reference — the present state, kept current:
 - [OASIS.md](docs/OASIS.md) — images of the period PC: `node tools/oasis.mjs run dos/c-dogs`, `run linux/doom-1994`.
 - [COMPARISON.md](docs/COMPARISON.md) — MIRAGE beside Docker, QEMU, DOSBox-X and v86: what only MIRAGE does, modes, CPU, devices, conformance, speed.
 - [ROADMAP.md](docs/ROADMAP.md) — what is open.
+- [SITE.md](docs/SITE.md) — how the static site is built, checked and hosted.
+- [CHANGELOG.md](CHANGELOG.md) — what changed, newest first.
 
 Record — [docs/notes/](docs/notes/README.md): the investigations, measurements and audits as they
 were written, wrong turns included. They are dated and not updated.
 
 ## Third-party software
 
-This repository contains MIRAGE and the small demos written for it (`demos/`). It contains no
-operating system, game, intro or BIOS from anyone else, and the tools that expect them look in
-`boot/`, `games/` and `intros/`, which are ignored by git. Bring your own, and check that you are
-allowed to use what you bring.
+This repository contains MIRAGE, the small demos written for it (`demos/`), and the **examples** of
+the home page (`examples/`): programs whose authors or rights holders allow passing them on, each
+with its licence in `examples/licenses/` and listed in [examples/README.md](examples/README.md) —
+seven boot-sector programs (MIT, BSD, ISC, WTFPL), demoscene intros under free licences (Řrřola's,
+viznut's Helium, The Orz's Linux intros), freeware and shareware DOS programs served as their
+publishers released them (Unreal, Fractint, the Dune demo, C-Dogs, the DOOM, Heretic, Wolfenstein 3D
+and Commander Keen shareware), and a FreeDOS 1.4 disk built from FreeDOS's own packages.
+
+[PRISM](https://github.com/jfrelat-lab/prism) is a submodule (`vendor/prism`, MIT); its OpenGL and
+Direct3D 9 code carries the third-party code listed in its
+[THIRD-PARTY.md](https://github.com/jfrelat-lab/prism/blob/main/THIRD-PARTY.md).
+
+OASIS images are recipes: the files they run are fetched from where their authors published them
+(Debian's archive, idgames, scene.org) and are not in this repository. Beyond that, the tools that
+expect an operating system, a game or an intro look in `boot/`, `games/` and `intros/`, which are
+ignored by git: bring your own, and check that you are allowed to use what you bring.
 
 The VGA fonts in `assets/` were rebuilt from rendered glyphs (`tools/build-fonts.mjs`).
 

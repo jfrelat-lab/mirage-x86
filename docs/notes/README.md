@@ -6,7 +6,7 @@ often looks like one already solved.
 
 **They are a record, not a description.** A note says what was true and what was believed on its
 date. It is not updated when the code changes; the present state of the project is in the documents
-one level up ([ARCHITECTURE](../ARCHITECTURE.md), [COMPAT](compat-log.md), [TESTING](../TESTING.md),
+one level up ([ARCHITECTURE](../ARCHITECTURE.md), [COMPATIBILITY](../COMPATIBILITY.md), [TESTING](../TESTING.md),
 [ROADMAP](../ROADMAP.md)). When a note and one of those disagree, the note is the one that is old.
 
 | Note | What it is |

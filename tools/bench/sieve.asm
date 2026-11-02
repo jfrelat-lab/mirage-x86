@@ -1,8 +1,9 @@
 ; sieve.asm — BYTE's Sieve of Eratosthenes (8190 flags), 5000 times, in 16-bit real mode: the same
 ; instructions on every emulator, timed by the host. Prints the primes found (1899), then DONE.
-; 730.7 M instructions. Measured 2026-10-13 on an Apple M1, wall clock: DOSBox-X (dynamic core,
-; cycles=max) 6.2 s, MIRAGE 13 s, PCjs's COMPAQ DeskPro 386 at its highest speed (about 53 MHz)
-; 64.3 s. A real-mode program, because DJGPP's Dhrystone stopped on PCjs with a general protection
+; 730.7 M instructions. Measured on an Apple M1, wall clock: DOSBox-X (dynamic core, cycles=max)
+; 6.2 s and PCjs's COMPAQ DeskPro 386 at its highest speed (about 53 MHz) 64.3 s (2026-10-13);
+; MIRAGE 11.1 s in the DOS player (dos.html?run=SIEVE.COM, which leaves part of each frame to the
+; display) and 7.5 s headless (tools/harness.mjs, runSlice to the end) (2026-11-02). A real-mode program, because DJGPP's Dhrystone stopped on PCjs with a general protection
 ; fault inside CWSDPMI.
 ;
 ;   nasm -f bin tools/bench/sieve.asm -o SIEVE.COM

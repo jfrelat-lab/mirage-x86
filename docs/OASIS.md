@@ -107,10 +107,14 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 |---|---|---|
 | `dos/c-dogs` | dos | C-Dogs 1.06, with the Sound Blaster 16 set up |
 | `dos/doom` | dos | DOOM 1.9 shareware, id's own archive |
-| `linux/doom-1994` | linux | `linuxsdoom`, id's SVGAlib DOOM of December 1994, an a.out binary with libc 4 — its libraries from Debian 1.3 ("bo") on archive.debian.org, its binary and WAD from idgames. SVGAlib drives the emulated VGA; the keyboard reaches it in K_MEDIUMRAW. No sound yet (`sndserver` is a second process) |
+| `linux/doom-1994` | linux | `linuxsdoom`, id's SVGAlib DOOM of December 1994, an a.out binary with libc 4 — its libraries from Debian 1.3 ("bo") on archive.debian.org, its binary and WAD from idgames. SVGAlib drives the emulated VGA; the keyboard reaches it in K_MEDIUMRAW. Silent: the image has no `sndserver` (`linux/doom-build` builds one and plays with it) |
 | `linux/mirage` | linux | Debian 12 i386 with Debian 1.3's a.out libraries and id's 1994 DOOM in `/usr/games/doom`: a real `bash` on the console (tty1, the VGA text screen), where `cd /usr/games/doom; ./linuxsdoom` forks and execs DOOM. The Linux machine of `machines.html` boots into it |
 | `linux/doom-x11` | linux | id's linuxdoom-1.10 built inside MIRAGE-LINUX (Debian 1.3's gcc 2.7.2) and played on XFree86 3.3 under twm, its picture handed to the server through MIT-SHM — the code of 1997, compiled and displayed by the tools of 1997, on no Linux kernel |
 | `linux/x11-1997` | linux | XFree86 3.3's SVGA server from Debian 1.3 (1997), its generic driver on MIRAGE's VGA in 320x200 at 256 colours, twm and the X clients of the time over a Unix socket; `ldconfig` builds the library cache as dpkg did, and the XF86Config is the image's |
+| `linux/doom-build` | linux | id's linuxdoom-1.10 and sndserv sources with Debian 1.3's gcc 2.7.2, binutils, make and libc5: `make` builds DOOM's sound server, and the game, inside MIRAGE-LINUX |
+| `linux/xbill-1997`, `xboing-1997`, `xjewel-1997` | linux | Debian 1.3's X games on XFree86 3.3's server, MIRAGE's emulated Cirrus GD5446, under twm |
+| `linux/mesa-1997` | linux | Mesa 2.2 and GLUT 3.3 (Debian 1.3), OpenGL in software: GLUT's demos and atlantis built by gcc 2.7.2 in a run layer, on XFree86 3.3 |
+| `linux/xscreensaver-gl-1998` | linux | Debian 2.0 on glibc 2.0: XFree86 3.3.2, Mesa 2.6 in software and xscreensaver-gl's nine OpenGL hacks |
 | `linux/doom-mini` | linux | a Linux with no distribution: busybox 1.35 (static, musl, 1 MB, 402 applets), the three a.out libraries linuxsdoom needs, the binary and its WAD — about 4 MB. A busybox shell on the console; `doom` starts the game |
 | `linux/quake-1997` | linux | `squake` 1.1, id's svgalib Quake of August 1997 — an ELF binary on libc5 and svgalib from Debian 1.3, the shareware `pak0.pak` from id's own `quake106.zip` (its LHA self-extractor read by `src/lha.js`). It plays its demos with sound — /dev/dsp in mmap mode, as Quake's snd_linux.c uses it; run with `-noudp` (no network yet) |
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
@@ -120,8 +124,6 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 
 ## What is not there yet
 
-- O3: layers fetched over HTTP by the browser itself, so an image runs from a static host with no
-  `oasis` command at all; and the cache offline.
+- The cache offline (O3's layers are fetched by the page, through its host's relay, at every visit).
 - O5: `commit` — saving the whole machine, CPU included — and URLs that resume a run.
-- The `win16` and `pc` worlds; `oasis run` for `win32` images (they run in the page only); DOS images other than one ZIP plus files in a window; sound for
-  Linux programs (DOOM's `sndserver` runs beside it, which needs two processes at once).
+- The `win16` and `pc` worlds; `oasis run` for `win32` images (they run in the page only); DOS images other than one ZIP plus files in a window.

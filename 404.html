@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Not found — MIRAGE</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101820'/><text x='1.5' y='12' font-family='monospace' font-size='11' fill='%2300d0a0'>M:</text></svg>">
+<!--
+  The static host answers a missing path with this page and a 404. Without one, Cloudflare Pages
+  takes the site for a single-page app and answers every missing path with index.html and a 200:
+  a page that probes for a file (src/fetch-whole.js looks for <file>, then <file>.parts.json)
+  would take the home page for the file.
+-->
+<style>
+  :root { --bg: #0a0e12; --ink: #b8c8d4; --dim: #6a8090; --accent: #00d0a0; }
+  html { background: var(--bg); }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; color: var(--ink);
+         font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 560px; padding: 24px; }
+  h1 { margin: 0 0 8px; font: 600 28px ui-monospace, "SF Mono", Menlo, monospace; color: #e6eef4; }
+  p { margin: 0 0 12px; color: var(--dim); }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<main>
+  <h1>C:\&gt; File not found</h1>
+  <p>There is nothing at this address.</p>
+  <p><a href="./">MIRAGE's home page</a> · <a href="machines.html">the machines</a> · <a href="oasis.html">OASIS images</a></p>
+</main>
+</body>
+</html>
