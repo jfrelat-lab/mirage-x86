@@ -85,7 +85,9 @@ export function installFPU(cpu) {
   const i64 = (a) => Number(cpu.mem.paged ? pl(a, 8, (v, o) => v.getBigInt64(o, true)) : dv.getBigInt64(a & msk(), true));
   const INDEF64 = -(2n ** 63n);   // x87's "integer indefinite", stored when the value will not fit
   const i64s = (a, v) => {
-    const n = Number.isFinite(v) && Math.abs(v) < 9223372036854775808 ? BigInt(Math.trunc(v)) : INDEF64;
+    const fits = v >= -9223372036854775808 && v < 9223372036854775808;   // false for NaN
+    if (!fits) cpu.fsw |= 0x01;                                          // IE: invalid operation
+    const n = fits ? BigInt(Math.trunc(v)) : INDEF64;
     if (cpu.mem.paged) return pwr(a, 8, (w, o) => w.setBigInt64(o, n, true));
     a &= msk();
     dv.setBigInt64(a, n, true);
@@ -149,6 +151,19 @@ export function installFPU(cpu) {
       default: { const fl = Math.floor(x), d = x - fl; return d < 0.5 ? fl : d > 0.5 ? fl + 1 : (fl % 2 === 0 ? fl : fl + 1); }
     }
   };
+
+  /** FIST/FISTP to a word or a doubleword: a value that does not fit once rounded, or a NaN or an
+   *  infinity, stores the "integer indefinite" (the most negative integer) and raises IE, as the
+   *  64-bit form does (i64s). They wrapped instead: 140721282326 stored as 0xc3a45d16, where Docker
+   *  i386 stores 0x80000000. The recompiler's inline emission calls them as cpu.fi32/cpu.fi16. */
+  const toIntN = (x, lim) => {
+    const r = toInt(x);
+    if (r >= -lim && r < lim) return r;                // false for NaN
+    cpu.fsw |= 0x01;
+    return -lim;
+  };
+  cpu.fi32 = (x) => toIntN(x, 2147483648);
+  cpu.fi16 = (x) => toIntN(x, 32768);
 
   /** PRECISION CONTROL (bits 8-9): 00 rounds every result to single precision. 10 (double) and 11
    *  (extended) are both this model's native float64 — we cannot be more precise than we are, and
@@ -316,16 +331,16 @@ export function installFPU(cpu) {
         return;
       case 0xdb:                                            // i32 load/store
         if (reg === 0) push(i32(a));
-        else if (reg === 2) cpu.mem.w32(a, toInt(ST(0)) >>> 0);
-        else if (reg === 3) { cpu.mem.w32(a, toInt(ST(0)) >>> 0); pop(); }
+        else if (reg === 2) cpu.mem.w32(a, cpu.fi32(ST(0)) >>> 0);
+        else if (reg === 3) { cpu.mem.w32(a, cpu.fi32(ST(0)) >>> 0); pop(); }
         else if (reg === 5) push(f80l(a));                  // fld m80
         else if (reg === 7) { f80s(a, ST(0)); pop(); }      // fstp m80
         else missMem(op, reg);
         return;
       case 0xdf:                                            // i16 load/store
         if (reg === 0) push(i16(a));
-        else if (reg === 2) cpu.mem.w16(a, toInt(ST(0)) & 0xffff);
-        else if (reg === 3) { cpu.mem.w16(a, toInt(ST(0)) & 0xffff); pop(); }
+        else if (reg === 2) cpu.mem.w16(a, cpu.fi16(ST(0)) & 0xffff);
+        else if (reg === 3) { cpu.mem.w16(a, cpu.fi16(ST(0)) & 0xffff); pop(); }
         else if (reg === 5) push(i64(a));                   // fild m64
         else if (reg === 7) { i64s(a, toInt(ST(0))); pop(); } // fistp m64 — Borland's __ftol
         else missMem(op, reg);                              // 4 fbld, 6 fbstp (packed BCD)
@@ -403,7 +418,8 @@ export function installFPU(cpu) {
         if (b === 0xe3) { cpu.ftop = 0; cpu.fsw = 0; cpu.fcw = 0x037f; cpu.focc.fill(0); st.fill(0); return; }   // fninit
         if (b >= 0xe8 && b <= 0xef) return cmpi(ST(0), ST(b - 0xe8));        // fucomi st0,st(i)
         if (b >= 0xf0 && b <= 0xf7) return cmpi(ST(0), ST(b - 0xf0));        // fcomi  st0,st(i)
-        if (b < 0xe0 || b > 0xe4) missReg(op, b);           // e0-e4 feni/fdisi/fnclex/fsetpm:genuine no-ops
+        if (b === 0xe2) { cpu.fsw &= ~0xff; return; }        // fnclex: the exception flags, ES and SF
+        if (b < 0xe0 || b > 0xe4) missReg(op, b);           // e0, e1, e4 feni/fdisi/fsetpm: genuine no-ops
         return;
       case 0xdf:
         // FFREEP ST(i): undocumented, but every x87 implementation has it and compilers emit it as

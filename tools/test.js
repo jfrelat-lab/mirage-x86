@@ -3521,6 +3521,25 @@ const runLinux = (hex, argv) => {
   let got; try { got = runLinux(hex, ['/w/CVT']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: CVTTSS2SI, CVTSS2SI and CVTSI2SS, as Docker i386 computes them', got,
     '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); }
+// tools/linux/fistind.asm: FIST and FISTP of a value their integer cannot hold store the integer
+// indefinite and raise IE; they wrapped (Docker i386 printed 0x80000000 where MIRAGE stored 1.5e11's low
+// 32 bits). The limits that fit first, IE clear; a quadword overflow and IE set; then, IE cleared by FNCLEX
+// (a no-op until then), the word and doubleword overflows, a NaN, and IE set again. Under paging, the
+// recompiler's inline stores.
+{ const hex = (                                         // nasm -f bin tools/linux/fistind.asm
+    '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
+    '000000000080040800800408130200002b02000007000000001000009bdbe3dd05b3810408db1d13820408a113820408e80d010000dd05bb' +
+    '810408db1d13820408a113820408e8f7000000dd05c3810408df1d138204080fbf0513820408e8df000000dd05cb810408df1513820408dd' +
+    'd80fbf0513820408e8c5000000dd05d3810408df3d13820408a117820408e8af000000a113820408e8a5000000dfe083e001e89b000000dd' +
+    '05fb810408df3d13820408a117820408e885000000a113820408e87b000000dfe083e001e871000000dbe2dd05db810408db1d13820408a1' +
+    '13820408e859000000dd05e3810408db1513820408ddd8a113820408e841000000dd05eb810408df1d138204080fbf0513820408e8290000' +
+    '00dd05f3810408db1d13820408a113820408e813000000dfe083e001e809000000b80100000031dbcd8060bf1b820408b908000000c1c004' +
+    '89c283e20f8a9203820408881747e2edc6070ab804000000bb01000000b91b820408ba09000000cd8061c3000000000000e0c19a99d9ffff' +
+    'ffdf41000000000000e0c000000000c0ffdf40000000000000e0c30000002e59764142000000c00b5ae6c1000000000088e3400000000000' +
+    '00f87f003d9160e458e14330313233343536373839616263646566');
+  let got; try { got = runLinux(hex, ['/w/FISTIND']).out; } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: FIST/FISTP out of range store the integer indefinite and raise IE, as Docker i386', got,
+    '80000000\n7fffffff\nffff8000\n00007fff\n80000000\n00000000\n00000000\n80000000\n00000000\n00000001\n80000000\n80000000\nffff8000\n80000000\n00000001\n'); }
 // tools/linux/x87mem.asm: what a 4K intro's synthesizer does, under paging (every Linux and Win32
 // program is paged) -- x87 on memory operands, push and pop, lodsb, a call through a pointer, a push from
 // memory, pushad and popad, then a block that branches back to itself a thousand times: 55, Docker i386's exit status --

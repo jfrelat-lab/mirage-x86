@@ -2042,13 +2042,13 @@ export class Recompiler {
           return fb();
         case 0xdb:                                                   // i32 load/store
           if (reg === 0) return fpush(`dv.getInt32(${a},true)`);             // FILD m32
-          if (reg === 2) return P(`m.w32(${a},cpu.f2i(${STe(0)})>>>0);`);            // FIST m32
-          if (reg === 3) return P(`m.w32(${a},cpu.f2i(${STe(0)})>>>0);${FPOP()}`);     // FISTP m32
+          if (reg === 2) return P(`m.w32(${a},cpu.fi32(${STe(0)})>>>0);`);            // FIST m32
+          if (reg === 3) return P(`m.w32(${a},cpu.fi32(${STe(0)})>>>0);${FPOP()}`);     // FISTP m32
           return fb();
         case 0xdf:                                                   // i16 load/store
           if (reg === 0) return fpush(`dv.getInt16(${a},true)`);             // FILD m16
-          if (reg === 2) return P(`m.w16(${a},cpu.f2i(${STe(0)})&0xffff);`);         // FIST m16
-          if (reg === 3) return P(`m.w16(${a},cpu.f2i(${STe(0)})&0xffff);${FPOP()}`);  // FISTP m16
+          if (reg === 2) return P(`m.w16(${a},cpu.fi16(${STe(0)})&0xffff);`);         // FIST m16
+          if (reg === 3) return P(`m.w16(${a},cpu.fi16(${STe(0)})&0xffff);${FPOP()}`);  // FISTP m16
           return fb();
       }
       // arithmetic with a memory source: D8=f32, DC=f64, DA=i32, DE=i16
@@ -2092,13 +2092,13 @@ export class Recompiler {
           return fb();
         case 0xdb:
           if (reg === 0) return fpush(i32);                                           // FILD m32
-          if (reg === 2) return P(memW(a, 32, `cpu.f2i(${STe(0)})>>>0`));          // FIST m32
-          if (reg === 3) return P(memW(a, 32, `cpu.f2i(${STe(0)})>>>0`) + FPOP());   // FISTP m32
+          if (reg === 2) return P(memW(a, 32, `cpu.fi32(${STe(0)})>>>0`));          // FIST m32
+          if (reg === 3) return P(memW(a, 32, `cpu.fi32(${STe(0)})>>>0`) + FPOP());   // FISTP m32
           return fb();
         case 0xdf:
           if (reg === 0) return fpush(i16);                                           // FILD m16
-          if (reg === 2) return P(memW(a, 16, `cpu.f2i(${STe(0)})&0xffff`));       // FIST m16
-          if (reg === 3) return P(memW(a, 16, `cpu.f2i(${STe(0)})&0xffff`) + FPOP());   // FISTP m16
+          if (reg === 2) return P(memW(a, 16, `cpu.fi16(${STe(0)})&0xffff`));       // FIST m16
+          if (reg === 3) return P(memW(a, 16, `cpu.fi16(${STe(0)})&0xffff`) + FPOP());   // FISTP m16
           return fb();
       }
       const vexpr = op === 0xd8 ? f32 : op === 0xdc ? f64 : op === 0xda ? i32 : i16;
