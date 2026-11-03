@@ -58,15 +58,16 @@ Wall-clock seconds to the arrival screen, same image, same host (Apple M1; lower
 
 | | QEMU (TCG) | v86 | MIRAGE |
 |---|---|---|---|
-| Windows 98 | 28 | 44 | 34 |
+| Windows 98 | 26 | 40 | 36 |
 | Windows 95 | 18 | 16 | 24 |
 | QNX 4.05 demo | 4 | 6 | 2 |
 
-QEMU and v86 run in real time, so their times include the waits a guest makes on its timers; MIRAGE
-runs headless as fast as it can (guest time follows its instructions, so an idle HLT costs nothing).
-Windows 95's arrival is its first dialog, the others' their desktop or prompt. `tools/v86/compare3.mjs`,
-MIRAGE's column measured 2026-11-02, QEMU's and v86's 2026-10-02. Linux 2.2 is left out: at
-MIRAGE's headless speed its console blanks itself (ten guest minutes) a few seconds after it boots,
+The three are not timed alike. QEMU and v86 run in real time, so their times include every wait a
+guest makes on its timers; MIRAGE is timed headless, where guest time follows its instructions and an
+idle HLT costs nothing — which is all of its lead on QNX, a disk that mostly waits. In the page MIRAGE
+runs in real time too. Windows 95's arrival is its first dialog, the others' their desktop or prompt.
+`tools/v86/compare3.mjs`, the three measured one after another on 2026-11-03. Linux 2.2 is left out:
+at MIRAGE's headless speed its console blanks itself (ten guest minutes) a few seconds after it boots,
 and the screen it settles on is that blank one.
 
 Linux programs run at 420–450 M x86 instructions a second on Dhrystone (830,000 Dhrystones a second,
@@ -74,7 +75,9 @@ a fifth of QEMU's user-mode translator); [docs/COMPARISON.md](docs/COMPARISON.md
 benchmarks and how to reproduce them.
 
 [v86](https://github.com/copy/v86) is the mature project in this space: it compiles to WebAssembly,
-is faster on Windows, and boots systems MIRAGE cannot. MIRAGE's own ground is the built-in DOS, the
+is faster on Windows, and boots systems MIRAGE cannot. On 32-bit computing the WebAssembly JITs are well
+ahead: v86 runs DJGPP's CoreMark 6 times as fast as MIRAGE, and CheerpX (WebVM's engine) runs Linux
+Dhrystone 9 times as fast; MIRAGE is ahead of js-dos and RetroTick. MIRAGE's own ground is the built-in DOS, the
 readable generated code, and runs that are reproducible to the cycle.
 
 ## Quick start
