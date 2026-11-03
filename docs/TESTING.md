@@ -38,7 +38,7 @@ what continuous integration runs.
 
 ## Machine references
 
-The rule: behaviour changes when independent implementations agree ([HARDWARE.md](HARDWARE.md)).
+The rule: behaviour changes when independent implementations agree ([DEVICES.md](DEVICES.md#the-machine-a-guest-sees)).
 
 **Probes.** `tools/*.asm` are small boot programs that print, on COM1, what the machine answers:
 PCI configuration (`pcidump`), the ATAPI drive (`atapiprobe`), a CD boot (`cdboot`), VBE modes

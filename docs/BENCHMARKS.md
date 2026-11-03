@@ -134,6 +134,6 @@ few seconds after it boots, and the screen it settles on is that blank one.
 MIRAGE runs JavaScript, and its time goes where a JavaScript engine puts it. Under paging a block
 runs on through forward branches, short loops and followed calls — some 30 x86 instructions a
 dispatch on Dhrystone ([RECOMPILER.md](RECOMPILER.md#longer-blocks-under-paging)); real-mode and
-unpaged DOS code still ends a block at every branch, about 5 instructions a dispatch (ROADMAP D8),
+unpaged DOS code still ends a block at every branch, about 5 instructions a dispatch (on the roadmap),
 which is most of the gap between its Linux and DOS figures. The WebAssembly JITs compile to a
 lower-level target and do not pay for a JavaScript function call between blocks.

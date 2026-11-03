@@ -10,8 +10,7 @@ These describe the project **as it is**. They carry no history: when the code ch
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How is it built? The model, the file map, execution, interrupts, time. Start here. |
 | [RECOMPILER.md](RECOMPILER.md) | How does x86 become JavaScript? Blocks, the cache, flags, self-modifying code. |
-| [DEVICES.md](DEVICES.md) | How are the BIOS, DOS, video, timer and input implemented? The port map. |
-| [HARDWARE.md](HARDWARE.md) | What machine does a guest see, and what was each part checked against? |
+| [DEVICES.md](DEVICES.md) | What machine does a guest see, what was each part checked against, and how are the BIOS, DOS and devices implemented? |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | What runs, how far, and when was that last recorded? |
 | [KNOWN-ISSUES.md](KNOWN-ISSUES.md) | What does not work, and is the cause known? |
 | [TESTING.md](TESTING.md) | What are the gates, the references and the tools? |

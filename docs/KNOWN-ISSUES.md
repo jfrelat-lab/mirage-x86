@@ -33,7 +33,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 - **Headless, a guest second is 3.32 million instructions**, whatever the processor profile (the
   PIT's rate, set to match DOSBox's work per frame). In the page the clock is real time and the
   processor runs as fast as the host. A late system run headless sees a slow processor; this is not
-  what stops Windows 2000 (above). A rate per profile is ROADMAP L3.
+  what stops Windows 2000 (above). A rate per profile is on the roadmap.
 - **The real-time clock starts at 1 January 1990, 08:00** in headless runs, so that runs repeat
   exactly; a guest then sees files "from the future". `MIRAGE_RTC=hostdate` starts it at the host's
   date instead.
