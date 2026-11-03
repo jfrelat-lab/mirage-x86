@@ -2426,13 +2426,25 @@ export class Recompiler {
       // ---- MMX (src/mmx.js): the forms with no mandatory prefix ---------------------------------
       // After each, what the block knows of the x87 stack is read again (fsync): MMX moves its top.
       if (!(d ? sz === 16 : sz === 32) && rep === 0 &&
-          (MMX_OPS.has(op2) || op2 === 0x6e || op2 === 0x7e || op2 === 0x7f || op2 === 0x77 || (op2 >= 0x71 && op2 <= 0x73))) {
+          (MMX_OPS.has(op2) || op2 === 0x6e || op2 === 0x7e || op2 === 0x7f || op2 === 0x77 || (op2 >= 0x70 && op2 <= 0x73) ||
+           op2 === 0xc4 || op2 === 0xc5 || op2 === 0xd7 || op2 === 0xe7)) {
         usesFPU = true;
         if (op2 === 0x77) { P('cpu.emms();'); fsync(); return; }                                   // EMMS
         const o = modrm();
         if (op2 === 0x6e) { P(`cpu.mmMovdIn(${o.reg},${rmR(o, 32)});`); fsync(); return; }          // MOVD mm, r/m32
         if (op2 === 0x7e) { if (!o.isReg) canFault = true; P(rmW(o, 32, `cpu.mmMovdOut(${o.reg})`)); fsync(); return; }   // MOVD r/m32, mm
-        if (op2 === 0x7f) {                                                                          // MOVQ mm/m64, mm
+        if (op2 === 0x70) {                                                                          // PSHUFW mm, mm/m64, imm8
+          let s2 = o.rm;
+          if (!o.isReg) { canFault = true; P(`cpu.mmLoad(${memAddr(o)},8);`); s2 = MM_SCRATCH; }
+          P(`cpu.mmShufw(${o.reg},${s2},${f8()});`); fsync(); return;
+        }
+        if (op2 === 0xc4) { const v = rmR(o, o.isReg ? 32 : 16); P(`cpu.mmInsrw(${o.reg},${v},${f8()});`); fsync(); return; }   // PINSRW mm, r32/m16, imm8
+        if (op2 === 0xc5 || op2 === 0xd7) {                                                          // PEXTRW r32, mm, imm8; PMOVMSKB r32, mm
+          if (!o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          P(rW(o.reg, 32, op2 === 0xc5 ? `cpu.mmExtrw(${o.rm},${f8()})` : `cpu.mmMovmskb(${o.rm})`)); fsync(); return;
+        }
+        if (op2 === 0x7f || op2 === 0xe7) {                                                          // MOVQ mm/m64, mm; MOVNTQ m64, mm
+          if (op2 === 0xe7 && o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
           if (o.isReg) P(`cpu.mmx(${MMX.MOVQ},${o.rm},${o.reg},-1);`);
           else {
             canFault = true; const a = memAddr(o), t = NT();

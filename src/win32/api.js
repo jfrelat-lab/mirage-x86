@@ -8,6 +8,7 @@
 // before running, so a missing name is a crash with no name, a present one a message that names it.
 import { gl as glTable, glu as gluTable } from '../hle/gl.js';
 import { d3d9Apis } from './d3d9.js';
+import { dsoundApis } from './dsound.js';
 import { parseTrueType } from './truetype.js';
 import { parseSMF } from '../midi.js';
 
@@ -108,6 +109,64 @@ const GM_DLS_SIZE = 3440660;
 export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const st = windowState(fonts);
   st.files = [];                                                      // handle - 4000h -> { f, pos }
+  st.events = new Map(); st.dcBitmaps = new Map(); st.dcStates = new Map();
+  const dcState = (hdc) => { let d = st.dcStates.get(hdc); if (!d) st.dcStates.set(hdc, d = { bkMode: 2, bkColor: 0xffffff, textColor: 0 }); return d; };
+  // A DC's font in pixels: its em (lfHeight < 0 is the character height, > 0 the cell's), its ascent
+  // and descent as the font's win metrics give them.
+  const textMetrics = (hdc) => {
+    const f = st.gdi.get(st.dcFonts.get(hdc)) || { height: 16, weight: 400 }, font = st.dcFont(hdc);
+    const asc = font ? font.winAscent : 0.8, desc = font ? font.winDescent : 0.2, em = font ? font.em : 1;
+    const h = f.height || 16, ppem = h < 0 ? -h : Math.max(1, Math.round(h * em / (asc + desc)));
+    const ascent = Math.round(asc * ppem / em), descent = Math.round(desc * ppem / em);
+    return { font, ppem, ascent, descent, height: ascent + descent, avg: Math.max(1, Math.round(ppem / 2)), max: ppem, weight: f.weight || 400 };
+  };
+  const fillRect = (bm, x0, y0, x1, y1, c) => {
+    for (let y = Math.max(0, y0); y < Math.min(bm.h, y1); y++) bm.px.fill(c, y * bm.w + Math.max(0, x0), y * bm.w + Math.max(0, Math.min(bm.w, x1)));
+  };
+  // A glyph's outline (truetype.js: y up, origin at the pen) filled at pixel centres, nonzero winding.
+  const fillGlyph = (bm, g, ox, oy, c) => {
+    const edges = [];
+    for (const ct of g.contours) {
+      let p = ct.start;
+      const line = (q) => { if (p[1] !== q[1]) edges.push([ox + p[0], oy - p[1], ox + q[0], oy - q[1]]); p = q; };
+      for (const cv of ct.curves) {
+        if (!cv.spline) { for (const q of cv.pts) line(q); continue; }
+        const pts = cv.pts;                                            // off-curve points, then the end on the curve
+        for (let i = 0; i < pts.length - 1; i++) {
+          const c1 = pts[i], end = i === pts.length - 2 ? pts[i + 1] : [(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2], a = p;
+          for (let k = 1; k <= 8; k++) { const t = k / 8, u = 1 - t; line([u * u * a[0] + 2 * u * t * c1[0] + t * t * end[0], u * u * a[1] + 2 * u * t * c1[1] + t * t * end[1]]); }
+        }
+      }
+      line(ct.start);
+    }
+    const ys = edges.flatMap((e) => [e[1], e[3]]);
+    for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(bm.h - 1, Math.ceil(Math.max(...ys))); y++) {
+      const yc = y + 0.5, xs = [];
+      for (const [x0, y0, x1, y1] of edges) {
+        if ((y0 <= yc && y1 > yc) || (y1 <= yc && y0 > yc)) xs.push([x0 + (yc - y0) * (x1 - x0) / (y1 - y0), y1 > y0 ? 1 : -1]);
+      }
+      xs.sort((a, b) => a[0] - b[0]);
+      let wind = 0;
+      for (let i = 0; i < xs.length - 1; i++) {
+        wind += xs[i][1];
+        if (!wind) continue;
+        for (let X = Math.max(0, Math.ceil(xs[i][0] - 0.5)); X < Math.min(bm.w, Math.ceil(xs[i + 1][0] - 0.5)); X++) bm.px[y * bm.w + X] = c;
+      }
+    }
+  };
+  // A DIB to or from a bitmap: BITMAPINFOHEADER's height > 0 bottom-up, < 0 top-down; 24 or 32 bits.
+  const dibCopy = (x, bm, start, lines, bits, bmi, toBitmap) => {
+    const w = x.r32(bmi + 4) | 0, h = x.r32(bmi + 8) | 0, bpp = x.r16(bmi + 14), stride = ((w * bpp + 31) >> 5) << 2;
+    if ((bpp !== 24 && bpp !== 32) || w !== bm.w) return 0;
+    const n = Math.min(lines, Math.abs(h) - start);
+    for (let r = 0; r < n; r++) {
+      const line = start + r, y = h > 0 ? bm.h - 1 - line : line, at = bits + r * stride;
+      if (y < 0 || y >= bm.h) continue;
+      if (toBitmap) { const b = x.bytes(at, w * bpp / 8); for (let i = 0; i < w; i++) bm.px[y * w + i] = b[i * bpp / 8 + 2] << 16 | b[i * bpp / 8 + 1] << 8 | b[i * bpp / 8]; }
+      else { const b = new Uint8Array(w * bpp / 8); for (let i = 0; i < w; i++) { const v = bm.px[y * w + i]; b[i * bpp / 8] = v & 0xff; b[i * bpp / 8 + 1] = (v >> 8) & 0xff; b[i * bpp / 8 + 2] = v >> 16; } x.write(at, b); }
+    }
+    return n;
+  };
   st.mci = new Map(); st.mciNext = 1; st.mciPlaying = 0;
   st.disk = new Map(Object.entries(files).map(([n, b]) => [n.toLowerCase(), { bytes: b, size: b.length }]));
   const baseName = (p) => p.replace(/^.*[\\/]/, '').toLowerCase();
@@ -141,8 +200,17 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     VirtualFree: ['puu', () => 1],
     VirtualProtect: ['puup', (x, a, s, prot, old) => { if (old) x.w32(old, 0x40); return 1; }],
     GetProcessHeap: ['', (x) => x.lx.rdBytes && x.r32(x.win.peb + 0x18)],
-    HeapAlloc: ['puu', (x, heap, flags, n) => x.win.heapAlloc(n)],
-    HeapFree: ['pup', () => 1],
+    // HEAP_ZERO_MEMORY (8): a block handed out again is cleared; a new one is zero already.
+    HeapAlloc: ['puu', (x, heap, flags, n) => { const p = x.win.heapAlloc(n); if (flags & 8) x.write(p, new Uint8Array(n)); return p; }],
+    HeapFree: ['pup', (x, heap, flags, p) => { x.win.heapFree(p); return 1; }],
+    HeapSize: ['pup', (x, heap, flags, p) => x.win.heapSize(p)],
+    HeapReAlloc: ['puup', (x, heap, flags, p, n) => {
+      const old = x.win.heapSize(p);
+      if (n <= old) return p;
+      const q = x.win.heapAlloc(n);
+      x.write(q, x.bytes(p, old)); if (flags & 8) x.write(q + old, new Uint8Array(n - old));
+      x.win.heapFree(p); return q;
+    }],
     GlobalAlloc: ['uu', (x, flags, n) => x.win.heapAlloc(n)],
     LocalAlloc: ['uu', (x, flags, n) => x.win.heapAlloc(n)],
     GlobalFree: ['p', () => 0], LocalFree: ['p', () => 0],
@@ -154,11 +222,30 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       return 0x2000 + tid;
     }],
     WaitForSingleObject: ['pu', (x, h, ms) => {
+      const ev = st.events.get(h);
+      if (ev) {                                                       // an event: signalled, or wait for SetEvent
+        if (ev.set) { if (!ev.manual) ev.set = false; return 0; }
+        return ms === 0 ? 0x102 : x.waitUntil(x.lx.mono() + 0.001);
+      }
       if (h < 0x2000 || h >= 0x3000) return 0;
       if (x.lx.threadExits.has(h - 0x2000)) return 0;                 // WAIT_OBJECT_0
       if (ms === 0) return 0x102;                                     // WAIT_TIMEOUT
       return x.waitUntil(x.lx.mono() + 0.001);                        // waits, a millisecond at a time, the others running
     }],
+    // Events (handle 3000h up) and critical sections, for programs whose threads hand work over (.kkrieger
+    // generates its textures on one). A critical section is owned by a thread: CRITICAL_SECTION's
+    // RecursionCount at +8 and OwningThread at +12, as Windows keeps them; a thread finding it owned waits.
+    CreateEventA: ['puup', (x, sa, manual, initial) => { const h = 0x3000 + st.events.size; st.events.set(h, { manual: !!manual, set: !!initial }); return h; }],
+    SetEvent: ['p', (x, h) => { const ev = st.events.get(h); if (ev) ev.set = true; return ev ? 1 : 0; }],
+    ResetEvent: ['p', (x, h) => { const ev = st.events.get(h); if (ev) ev.set = false; return ev ? 1 : 0; }],
+    InitializeCriticalSection: ['p', (x, cs) => { x.write(cs, new Uint8Array(24)); x.w32(cs + 4, 0xffffffff); return 0; }],
+    DeleteCriticalSection: ['p', () => 0],
+    EnterCriticalSection: ['p', (x, cs) => {
+      const me = x.lx.pid, owner = x.r32(cs + 12);
+      if (owner && owner !== me) return x.waitUntil(x.lx.mono() + 0.001);
+      x.w32(cs + 12, me); x.w32(cs + 8, x.r32(cs + 8) + 1); return 0;
+    }],
+    LeaveCriticalSection: ['p', (x, cs) => { const n = Math.max(0, (x.r32(cs + 8) | 0) - 1); x.w32(cs + 8, n); if (!n) x.w32(cs + 12, 0); return 0; }],
     GetExitCodeThread: ['pp', (x, h, p) => { const c = x.lx.threadExits.get(h - 0x2000); x.w32(p, c === undefined ? 259 : c); return 1; }],   // STILL_ACTIVE
     TerminateThread: ['pu', () => 1], ResumeThread: ['p', () => 1], SuspendThread: ['p', () => 0],
     GetCurrentThreadId: ['', (x) => x.lx.pid], GetCurrentProcessId: ['', () => 0x100],
@@ -229,6 +316,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     GetDC: ['p', () => st.hdc], ReleaseDC: ['pp', () => 1],
     ShowCursor: ['i', () => 0], SetCursorPos: ['ii', () => 1], ShowWindow: ['pi', () => 1], UpdateWindow: ['p', () => 1], SetWindowPos: ['ppiiiiu', () => 1],
     GetAsyncKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8001 : 0)],
+    GetCursorPos: ['p', (x, p) => { x.w32(p, st.mouseX ?? (st.w >> 1)); x.w32(p + 4, st.mouseY ?? (st.h >> 1)); return 1; }],
+    PostQuitMessage: ['i', () => 0],
     GetKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8000 : 0)],
     PeekMessageA: ['ppuuu', () => 0], PeekMessageW: ['ppuuu', () => 0],
     GetMessageA: ['ppuu', () => 1], TranslateMessage: ['p', () => 0], DispatchMessageA: ['p', () => 0],
@@ -254,13 +343,60 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     // Fonts and device contexts: what a font names and the DC it is selected into, for D3DXCreateText
     // (st.dcFont) to find its outlines among the fonts the page handed over.
-    GetStockObject: ['i', () => 0x01900010], DeleteObject: ['p', () => 1],
+    GetStockObject: ['i', () => 0x01900010], DeleteObject: ['p', (x, h) => { st.gdi.delete(h); return 1; }],
     SelectObject: ['pp', (x, hdc, obj) => {
-      if (!st.gdi.has(obj) || st.gdi.get(obj).kind !== 'font') return 0x01900010;
+      const o = st.gdi.get(obj);
+      if (o && o.kind === 'bitmap') { const prev = st.dcBitmaps.get(hdc) || 0x0185000f; st.dcBitmaps.set(hdc, obj); return prev; }   // DEFAULT_BITMAP's
+      if (!o || o.kind !== 'font') return 0x01900010;
       const prev = st.dcFonts.get(hdc) || 0x018a0021;                 // the DC's first font: SYSTEM_FONT's
       st.dcFonts.set(hdc, obj); return prev;
     }],
     CreateCompatibleDC: ['p', () => st.newHandle('dc', {})], DeleteDC: ['p', () => 1],
+    /*
+     * Text into memory bitmaps, as a program draws the letters it then turns into a texture (.kkrieger):
+     * a bitmap of 0x00RRGGBB pixels, ExtTextOutA filling the selected font's outlines at pixel centres
+     * by the nonzero rule -- GDI's aliased text; Windows' hinting and its own fonts are not here, so the
+     * letters are the visitor's font's, unhinted -- and GetDIBits/SetDIBits copying 24- and 32-bit DIBs.
+     * Without a font handed over, text measures as half an em a character and draws nothing.
+     */
+    CreateCompatibleBitmap: ['pii', (x, hdc, w, h) => st.newHandle('bitmap', { w, h, px: new Uint32Array(Math.max(0, w * h)) })],
+    SetBkMode: ['pi', (x, hdc, m) => { const d = dcState(hdc), prev = d.bkMode; d.bkMode = m; return prev; }],
+    SetBkColor: ['pu', (x, hdc, c) => { const d = dcState(hdc), prev = d.bkColor; d.bkColor = c; return prev; }],
+    SetTextColor: ['pu', (x, hdc, c) => { const d = dcState(hdc), prev = d.textColor; d.textColor = c; return prev; }],
+    GetTextMetricsA: ['pp', (x, hdc, tm) => {
+      const m = textMetrics(hdc);
+      x.write(tm, new Uint8Array(56));
+      [m.height, m.ascent, m.descent, m.height - m.ppem, 0, m.avg, m.max, m.weight].forEach((v, i) => x.w32(tm + 4 * i, v));
+      x.write(tm + 44, Uint8Array.of(32, 255, 31, 32));               // first, last, default, break character
+      return 1;
+    }],
+    GetTextExtentPoint32A: ['ppip', (x, hdc, str, n, size) => {
+      const m = textMetrics(hdc);
+      let w = 0;
+      for (const c of x.bytes(str, Math.max(0, n))) w += m.font ? m.font.glyph(c, m.ppem).cellIncX : m.avg;
+      x.w32(size, w); x.w32(size + 4, m.height); return 1;
+    }],
+    ExtTextOutA: ['piiuppip', (x, hdc, X, Y, opts, rect, str, n) => {
+      const bm = st.gdi.get(st.dcBitmaps.get(hdc)), d = dcState(hdc), m = textMetrics(hdc);
+      if (!bm || bm.kind !== 'bitmap') return 1;
+      const text = x.bytes(str, Math.max(0, n)), bgr = (c) => ((c & 0xff) << 16) | (c & 0xff00) | ((c >>> 16) & 0xff);
+      let width = 0;
+      const glyphs = [...text].map((c) => { const g = m.font ? m.font.glyph(c, m.ppem) : null; const at = width; width += g ? g.cellIncX : m.avg; return { g, at }; });
+      if (d.bkMode !== 1) fillRect(bm, X, Y, X + width, Y + m.height, bgr(d.bkColor));   // OPAQUE: the cells' background
+      if (opts & 2 && rect) fillRect(bm, x.r32(rect) | 0, x.r32(rect + 4) | 0, x.r32(rect + 8) | 0, x.r32(rect + 12) | 0, bgr(d.bkColor));   // ETO_OPAQUE
+      for (const { g, at } of glyphs) if (g) fillGlyph(bm, g, X + at, Y + m.ascent, bgr(d.textColor));
+      return 1;
+    }],
+    GetDIBits: ['ppuuppu', (x, hdc, hbm, start, lines, bits, bmi) => {
+      const bm = st.gdi.get(hbm);
+      if (!bm || bm.kind !== 'bitmap') return 0;
+      if (!bits) { x.w32(bmi + 4, bm.w); x.w32(bmi + 8, bm.h); x.w16(bmi + 12, 1); x.w16(bmi + 14, 32); x.w32(bmi + 16, 0); x.w32(bmi + 20, bm.w * bm.h * 4); return bm.h; }
+      return dibCopy(x, bm, start, lines, bits, bmi, false);
+    }],
+    SetDIBits: ['ppuuppu', (x, hdc, hbm, start, lines, bits, bmi) => {
+      const bm = st.gdi.get(hbm);
+      return bm && bm.kind === 'bitmap' ? dibCopy(x, bm, start, lines, bits, bmi, true) : 0;
+    }],
     CreateFontA: ['iiiiiuuuuuuuup', (x, h, w, esc, orient, weight, italic, underline, strike, charset, outPrec, clipPrec, quality, pitch, face) =>
       st.newHandle('font', { height: h, weight, face: x.str(face, 32) })],
     // LOGFONTA: lfHeight at 0, lfWeight at 16, lfFaceName at 28.
@@ -464,7 +600,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     _CIatan2: ['', CI2(Math.atan2), cd], _CIfmod: ['', CI2((a, b) => a % b), cd],
     _ftol: ['', ftol, cd], _ftol2: ['', ftol, cd], _ftol2_sse: ['', ftol, cd],
     abs: ['i', (x, v) => Math.abs(v), cd],
-    malloc: ['u', (x, n) => x.win.heapAlloc(n), cd], calloc: ['uu', (x, n, k) => x.win.heapAlloc(n * k), cd], free: ['p', () => 0, cd],
+    malloc: ['u', (x, n) => x.win.heapAlloc(n), cd], calloc: ['uu', (x, n, k) => { const p = x.win.heapAlloc(n * k); x.write(p, new Uint8Array(n * k)); return p; }, cd], free: ['p', () => 0, cd],
     memset: ['piu', (x, p, v, n) => { x.write(p, new Uint8Array(n).fill(v)); return p; }, cd],
     memcpy: ['ppu', (x, d, s, n) => { x.write(d, x.bytes(s, n)); return d; }, cd],
     strlen: ['p', (x, p) => x.str(p).length, cd],
@@ -510,5 +646,6 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     { dll: 'glu32.dll', fns: glu32 },
     { dll: 'winmm.dll', fns: winmm },
     ...d3d9Apis(st),
+    dsoundApis(),
   ];
 }

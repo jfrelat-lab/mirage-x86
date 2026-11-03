@@ -82,9 +82,36 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', apis = [], b
   }
 
   // ---- the process heap, the stack, the TEB and the PEB -------------------------------------------
-  lx.lazy.push([HEAP, HEAP + HEAP_SIZE]);
-  let heapNext = HEAP;
-  const heapAlloc = (n) => { const p = heapNext; heapNext += Math.ceil(Math.max(n, 1) / 8) * 8 + 8; return p; };
+  // The heap: blocks of 8-byte multiples, each after an 8-byte header holding its size, a block freed
+  // kept on a list by size and handed out again. Its first segment runs from 140000h to the image (as
+  // XP's does, below the program); then segments of 256 MiB from 10000000h. A program that frees what
+  // it allocates (.kkrieger's texture generator, megabytes at a time) stays in the memory it had; with
+  // no reuse and no bound the heap grew into the image at 400000h and overwrote the program.
+  const segments = [[HEAP, Math.min(HEAP + HEAP_SIZE, base > HEAP ? base : HEAP + HEAP_SIZE)]];
+  for (let s = 0x10000000; s < 0x30000000; s += 0x10000000) segments.push([s, s + 0x10000000]);
+  for (const [a, b] of segments) lx.lazy.push([a, b]);
+  let seg = 0, heapNext = HEAP + 8;
+  const freeBySize = new Map();
+  const hw32 = (va, v) => lx.wrBytes(va, Uint8Array.of(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255));
+  const hr32 = (va) => { const b = lx.rdBytes(va, 4); return (b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24) >>> 0; };
+  const heapAlloc = (n) => {
+    const size = Math.ceil(Math.max(n, 1) / 8) * 8, free = freeBySize.get(size);
+    if (free && free.length) return free.pop();
+    while (heapNext + size > segments[seg][1]) {
+      if (++seg >= segments.length) throw new Error(`mirage-win32: the heap is full (${n} bytes asked)`);
+      heapNext = segments[seg][0] + 8;
+    }
+    const p = heapNext; heapNext += size + 8;
+    hw32(p - 8, size);
+    return p;
+  };
+  const heapSize = (p) => (p ? hr32(p - 8) : 0);
+  const heapFree = (p) => {
+    if (!p) return;
+    const size = heapSize(p);
+    if (!freeBySize.has(size)) freeBySize.set(size, []);
+    freeBySize.get(size).push(p);
+  };
   lx.lazy.push([STACK_TOP - STACK_RESERVE, STACK_TOP]);
   lx.mapRange(STACK_TOP - 0x3000, STACK_TOP, true);
   lx.mapRange(TEB, PEB + PAGE, true);
@@ -192,7 +219,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', apis = [], b
     return tid;
   };
   const win = {
-    base, path, modules, load, heapAlloc, peb: PEB, teb: TEB, createThread,
+    base, path, modules, load, heapAlloc, heapFree, heapSize, peb: PEB, teb: TEB, createThread,
     /** GetProcAddress: an export by name or ordinal, 0 when there is none. */
     proc: (mod, name) => (typeof name === 'number' ? mod.byOrdinal.get(name) : mod.exports.get(name)) || 0,
     moduleAt: (b) => [...modules.values(), exeMod].find((m) => m.base === b >>> 0) || null,

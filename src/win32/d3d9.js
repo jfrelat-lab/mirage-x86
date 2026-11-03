@@ -45,7 +45,9 @@ const VTABLES = {
     GetPixelShaderConstantF:3 SetPixelShaderConstantI:3 GetPixelShaderConstantI:3 SetPixelShaderConstantB:3 GetPixelShaderConstantB:3
     DrawRectPatch:3 DrawTriPatch:3 DeletePatch:1 CreateQuery:2`,
   IDirect3DTexture9: `${BASETEX} GetLevelDesc:2 GetSurfaceLevel:2 LockRect:4 UnlockRect:1 AddDirtyRect:1`,
+  IDirect3DCubeTexture9: `${BASETEX} GetLevelDesc:2 GetCubeMapSurface:3 LockRect:5 UnlockRect:2 AddDirtyRect:2`,
   IDirect3DSurface9: `${RES} GetContainer:2 GetDesc:1 LockRect:3 UnlockRect:0 GetDC:1 ReleaseDC:1`,
+  IDirect3DSwapChain9: `${UNK} Present:5 GetFrontBufferData:1 GetBackBuffer:3 GetRasterStatus:1 GetDisplayMode:1 GetDevice:1 GetPresentParameters:1`,
   IDirect3DVertexBuffer9: `${RES} Lock:4 Unlock:0 GetDesc:1`,
   IDirect3DIndexBuffer9: `${RES} Lock:4 Unlock:0 GetDesc:1`,
   IDirect3DVertexShader9: `${UNK} GetDevice:1 GetFunction:2`,
@@ -333,7 +335,7 @@ export function d3d9Apis(st) {
     GetDevice: (x, self, pp) => { const d = o(self).devPtr; o(d).ref++; x.w32(pp, d); return S_OK; },
     SetPrivateData: () => S_OK, GetPrivateData: () => D3DERR_NOTAVAILABLE, FreePrivateData: () => S_OK,
     SetPriority: () => 0, GetPriority: () => 0, PreLoad: () => 0,
-    GetType: (x, self) => ({ IDirect3DSurface9: 1, IDirect3DTexture9: 3, IDirect3DVertexBuffer9: 6, IDirect3DIndexBuffer9: 7 })[o(self).iface],
+    GetType: (x, self) => ({ IDirect3DSurface9: 1, IDirect3DTexture9: 3, IDirect3DCubeTexture9: 5, IDirect3DVertexBuffer9: 6, IDirect3DIndexBuffer9: 7 })[o(self).iface],
     SetLOD: () => 0, GetLOD: () => 0, GetLevelCount: (x, self) => o(self).levels,
     SetAutoGenFilterType: () => S_OK, GetAutoGenFilterType: () => 2, GenerateMipSubLevels: () => 0,
   };
@@ -366,8 +368,37 @@ export function d3d9Apis(st) {
       o(t.surfaces[l]).ref++; x.w32(pp, t.surfaces[l]); return S_OK;
     },
     LockRect: (x, self, l, pLocked, pRect) => { const t = o(self); t.lv ??= []; const [w, hh] = levelSize(t, l); t.lv[l] ??= { w, h: hh, format: t.format }; return lockRect(x, t.lv[l], pLocked, pRect); },
-    UnlockRect: (x, self, l) => { const t = o(self); return unlockRect(x, t.lv[l], (r, b, pitch) => t.dev.textureWrite(t.h, l, null, b, pitch)); },
+    UnlockRect: (x, self, l) => { const t = o(self); return unlockRect(x, t.lv[l], (r, b, pitch) => { captured(x, t, l, -1, b); t.dev.textureWrite(t.h, l, null, b, pitch); }); },
     AddDirtyRect: () => S_OK,
+  };
+  /*
+   * Cube textures: six faces of square levels, locked face by face. PRISM's model has none yet, so a cube
+   * keeps its faces here and draws nothing: .kkrieger makes one before its first frame, and what its
+   * texture generator writes still reaches the capture (backend.textureCapture) like any texture's.
+   */
+  const swapChain = {
+    Present: (x, self, a, b, c, d, flags) => device.Present(x, o(self).devPtr, a, b, c, d),
+    GetBackBuffer: (x, self, i, type, pp) => device.GetBackBuffer(x, o(self).devPtr, 0, i, type, pp),
+    GetFrontBufferData: () => S_OK,
+    GetRasterStatus: (x, self, p) => device.GetRasterStatus(x, o(self).devPtr, 0, p),
+    GetDisplayMode: (x, self, p) => device.GetDisplayMode(x, o(self).devPtr, 0, p),
+    GetDevice: (x, self, pp) => { const d = o(self).devPtr; o(d).ref++; x.w32(pp, d); return S_OK; },
+    GetPresentParameters: (x, self, p) => { const q = o(o(self).devPtr).params; x.write(p, new Uint8Array(56)); x.w32(p, q.width); x.w32(p + 4, q.height); x.w32(p + 8, q.backBufferFormat); x.w32(p + 12, q.backBufferCount); x.w32(p + 32, q.windowed ? 1 : 0); x.w32(p + 52, q.presentInterval || 0); return S_OK; },
+  };
+  const cube = {
+    GetLevelDesc: (x, self, l, p) => { const t = o(self), [w] = levelSize(t, l); return surfDesc(x, p, { format: t.format, usage: t.usage, pool: t.pool, w, h: w }); },
+    GetCubeMapSurface: () => D3DERR_NOTAVAILABLE,
+    LockRect: (x, self, face, l, pLocked, pRect) => { const t = o(self), k = face * 32 + l; t.lv ??= []; const [w] = levelSize(t, l); t.lv[k] ??= { w, h: w, format: t.format }; return lockRect(x, t.lv[k], pLocked, pRect); },
+    UnlockRect: (x, self, face, l) => { const t = o(self); return unlockRect(x, t.lv[face * 32 + l], (r, b) => captured(x, t, l, face, b)); },
+    AddDirtyRect: () => S_OK,
+  };
+  // What a program wrote into a texture, as it unlocks it: for tools that compare it (tools/win32/run.mjs
+  // MIRAGE_W32TEX), through the backend; nothing when the backend does not ask.
+  let texSeq = 0;
+  const captured = (x, t, level, face, bytes) => {
+    if (!x.backend.textureCapture) return;
+    const [w, h] = levelSize(t, level);
+    x.backend.textureCapture({ seq: texSeq++, texture: t.h ?? t.id ?? 0, iface: face < 0 ? 'texture' : 'cube', face, level, w, h, format: t.format }, Uint8Array.from(bytes));
   };
   const surface = {
     GetContainer: (x, self, riid, pp) => { const s = o(self); if (!s.tex) return E_NOINTERFACE; o(s.tex).ref++; x.w32(pp, s.tex); return S_OK; },
@@ -378,7 +409,7 @@ export function d3d9Apis(st) {
       if (!s.tex) { const { bytes, pitch } = s.dev.surfaceRead(s.h); for (let y = 0; y < s.h2; y++) x.write(lk.mem + y * s.w * (BPP[s.format] || 4), bytes.subarray(y * pitch, y * pitch + s.w * (BPP[s.format] || 4))); }
       return r;
     },
-    UnlockRect: (x, self) => { const s = o(self); return unlockRect(x, s.lk, (r, b, pitch) => { if (s.tex) o(s.tex).dev.textureWrite(o(s.tex).h, s.level, null, b, pitch); }); },
+    UnlockRect: (x, self) => { const s = o(self); return unlockRect(x, s.lk, (r, b, pitch) => { if (s.tex) { captured(x, o(s.tex), s.level, -1, b); o(s.tex).dev.textureWrite(o(s.tex).h, s.level, null, b, pitch); } }); },
     GetDC: NOT('IDirect3DSurface9', 'GetDC'), ReleaseDC: NOT('IDirect3DSurface9', 'ReleaseDC'),
   };
   const buffer = {
@@ -438,6 +469,13 @@ export function d3d9Apis(st) {
     SetCursorProperties: () => S_OK, SetCursorPosition: () => 0, ShowCursor: () => 0, SetDialogBoxMode: () => S_OK,
     SetGammaRamp: () => 0, GetGammaRamp: (x, self, sw, p) => { for (let i = 0; i < 256; i++) for (let c = 0; c < 3; c++) x.w16(p + c * 512 + i * 2, i * 257); return 0; },
     GetNumberOfSwapChains: () => 1,
+    // ColorFill(surface, rect, D3DCOLOR): handed to the model when it has it; PRISM's has not yet, and the
+    // fill is then skipped (.kkrieger clears its surfaces so before its textures are made).
+    ColorFill: (x, self, surf, pRect, argb) => {
+      const r = pRect ? [x.r32(pRect) | 0, x.r32(pRect + 4) | 0, x.r32(pRect + 8) | 0, x.r32(pRect + 12) | 0] : null;
+      if (D(self).colorFill) D(self).colorFill(o(surf).h, r, argb >>> 0);
+      return S_OK;
+    },
     GetRasterStatus: (x, self, sw, p) => { x.w32(p, 0); x.w32(p + 4, 0); return S_OK; },
     Reset: (x, self, pp) => { const r = (k) => x.r32(pp + 4 * k), q = o(self).params; q.width = r(0) || q.width; q.height = r(1) || q.height; D(self).reset({ ...q }); return S_OK; },
     // Present: a vsynced swap with one frame in flight, as gdi32's SwapBuffers (api.js).
@@ -450,10 +488,21 @@ export function d3d9Apis(st) {
       if (x.backend.swap) x.backend.swap();
       return S_OK;
     },
+    // The implicit swap chain: its methods are the device's (.kkrieger asks for it to present).
+    GetSwapChain: (x, self, i, pp) => { x.w32(pp, i ? 0 : (o(self).swap ??= make(x, 'IDirect3DSwapChain9', { devPtr: self }))); if (!i) o(o(self).swap).ref++; return i ? D3DERR_INVALIDCALL : S_OK; },
+    GetNumberOfSwapChains: () => 1,
     GetBackBuffer: (x, self, sw, i, type, pp) => { const q = o(self).params; x.w32(pp, byHandle(x, D(self), D(self).getBackBuffer(sw, i), 'IDirect3DSurface9', { devPtr: self, w: q.width, h2: q.height, format: q.backBufferFormat, usage: 1 })); return S_OK; },
     CreateTexture: (x, self, w, hh, levels, usage, fmt, pool, pp) => {
       let n = levels; if (!n) { n = 1; while ((w >> n) || (hh >> n)) n++; }
       x.w32(pp, res(x, self, 'IDirect3DTexture9', D(self).createTexture(w, hh, levels, usage, fmt, pool), { w, h2: hh, levels: n, usage, format: fmt, pool })); return S_OK;
+    },
+    // A surface in system memory, to read a render target back into (GetRenderTargetData): PRISM's model
+    // keeps it as a render target of its own, so StretchRect and the readback work on it.
+    CreateOffscreenPlainSurface: (x, self, w, hh, fmt, pool, pp) => { x.w32(pp, res(x, self, 'IDirect3DSurface9', D(self).createRenderTarget(w, hh, fmt, 0, 0, 1), { w, h2: hh, format: fmt, usage: 0, pool })); return S_OK; },
+    GetRenderTargetData: (x, self, src, dst) => { D(self).stretchRect(o(src).h, null, o(dst).h, null, 0); return S_OK; },
+    CreateCubeTexture: (x, self, edge, levels, usage, fmt, pool, pp) => {
+      let n = levels; if (!n) { n = 1; while (edge >> n) n++; }
+      x.w32(pp, res(x, self, 'IDirect3DCubeTexture9', null, { id: 0x10000 + texSeq, w: edge, h2: edge, levels: n, usage, format: fmt, pool })); return S_OK;
     },
     CreateVertexBuffer: (x, self, len, usage, fvf, pool, pp) => { x.w32(pp, res(x, self, 'IDirect3DVertexBuffer9', D(self).createVertexBuffer(len, usage, fvf, pool), { length: len, usage, fvf, pool, format: 100 })); return S_OK; },
     CreateIndexBuffer: (x, self, len, usage, fmt, pool, pp) => { x.w32(pp, res(x, self, 'IDirect3DIndexBuffer9', D(self).createIndexBuffer(len, usage, fmt, pool), { length: len, usage, pool, format: fmt })); return S_OK; },
@@ -1000,7 +1049,7 @@ export function d3d9Apis(st) {
 
   // ---- the DLLs: each method a stub of d3d9.dll's, named for its interface ------------------------------
   const IMPL = {
-    IDirect3D9: d3d9, IDirect3DDevice9: device, IDirect3DTexture9: { ...resource, ...texture }, IDirect3DSurface9: { ...resource, ...surface },
+    IDirect3D9: d3d9, IDirect3DDevice9: device, IDirect3DTexture9: { ...resource, ...texture }, IDirect3DCubeTexture9: { ...resource, ...cube }, IDirect3DSwapChain9: swapChain, IDirect3DSurface9: { ...resource, ...surface },
     IDirect3DVertexBuffer9: { ...resource, ...buffer }, IDirect3DIndexBuffer9: { ...resource, ...buffer },
     IDirect3DVertexShader9: shaderObj, IDirect3DPixelShader9: shaderObj, IDirect3DVertexDeclaration9: shaderObj, IDirect3DQuery9: query,
     ID3DXBuffer: xbuffer, ID3DXConstantTable: ctab, ID3DXMesh: mesh, ID3DXSkinInfo: skin, ID3DXTextureShader: textureShader,

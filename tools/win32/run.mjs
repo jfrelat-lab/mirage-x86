@@ -4,6 +4,7 @@
 //   node tools/win32/run.mjs <program.exe>
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
 //   MIRAGE_W32TRACE=1               every API call as it is made
+//   MIRAGE_W32TEX=<dir>             every texture level as the program unlocks it: <dir>/NNNN.bin and index.json
 //   MIRAGE_W32WAV=<file.wav>        what waveOut played (and <file>.midi.wav what MIDI played: midiOut, MCI)
 import { readFileSync } from 'fs';
 import { basename } from 'path';
@@ -22,6 +23,18 @@ installBIOS(mc);
 const lx = installLinux(mc, { onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });
 lx.epoch = Math.floor(Date.now() / 1000);
 const backend = traceBackend();
+// MIRAGE_W32TEX=<dir>: what the program writes into its textures, level by level, as it unlocks them.
+const TEX = process.env.MIRAGE_W32TEX, texIndex = [];
+if (TEX) {
+  const { mkdirSync, writeFileSync } = await import('fs'), { createHash } = await import('crypto');
+  mkdirSync(TEX, { recursive: true });
+  backend.textureCapture = (info, bytes) => {
+    const file = String(info.seq).padStart(4, '0') + '.bin';
+    writeFileSync(`${TEX}/${file}`, bytes);
+    texIndex.push({ ...info, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), file, cycles: mc.cpu.cycles });
+    writeFileSync(`${TEX}/index.json`, JSON.stringify(texIndex, null, 1) + '\n');
+  };
+}
 if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { console.error('w32:', name, args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) : a)).join(' ')); if (t0) t0(name, args); }; }
 loadPE(lx, mc.mem, mc.cpu, exe, { path: `C:\\${basename(prog)}`, apis: win32Apis(), backend });
 const SEC = mc.cyclesPerSecond || 1e8, SECS = Number(process.env.MIRAGE_W32SECS) || 0;

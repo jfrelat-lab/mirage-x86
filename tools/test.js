@@ -3722,6 +3722,40 @@ const runLinux = (hex, argv) => {
     got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex'), bit('pentiummmx'), bit('686'), bit('586')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('MMX: every instruction as Docker i386 computes it; CPUID says MMX on pentiummmx alone', got, '103 36e93d3e88184161fd64b5679a9fb01f 1 0 0'); }
+// tools/linux/mmxsse.asm: the integer instructions SSE added to the MMX registers -- PMINUB, PMAXUB,
+// PAVGB, PAVGW, PMULHUW, PMINSW, PMAXSW, PSADBW from a register and from memory, PSHUFW in four orders,
+// PINSRW, PEXTRW, PMOVMSKB, MOVNTQ: 39 lines, as Docker i386 prints them (their MD5). .kkrieger
+// (farbrausch, 2004) builds its textures with PMAXSW and stopped on it (#UD).
+{ let got;
+  try { const hex = (                                   // nasm -f bin tools/linux/mmxsse.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408c0030000004000000700000000100000bf00a004080f6f05a0830408' +
+    '0f6f0da88304080fdac1e8e80200000f6f05a08304080fda05a8830408e8d50200000f6f05a88304080fda05a0830408' +
+    'e8c20200000f6f05a08304080f6f0da88304080fdec1e8ac0200000f6f05a08304080fde05a8830408e8990200000f6f' +
+    '05a88304080fde05a0830408e8860200000f6f05a08304080f6f0da88304080fe0c1e8700200000f6f05a08304080fe0' +
+    '05a8830408e85d0200000f6f05a88304080fe005a0830408e84a0200000f6f05a08304080f6f0da88304080fe3c1e834' +
+    '0200000f6f05a08304080fe305a8830408e8210200000f6f05a88304080fe305a0830408e80e0200000f6f05a0830408' +
+    '0f6f0da88304080fe4c1e8f80100000f6f05a08304080fe405a8830408e8e50100000f6f05a88304080fe405a0830408' +
+    'e8d20100000f6f05a08304080f6f0da88304080feac1e8bc0100000f6f05a08304080fea05a8830408e8a90100000f6f' +
+    '05a88304080fea05a0830408e8960100000f6f05a08304080f6f0da88304080feec1e8800100000f6f05a08304080fee' +
+    '05a8830408e86d0100000f6f05a88304080fee05a0830408e85a0100000f6f05a08304080f6f0da88304080ff6c1e844' +
+    '0100000f6f05a08304080ff605a8830408e8310100000f6f05a88304080ff605a0830408e81e0100000f7005a0830408' +
+    '1be8110100000f6f0da88304080f70c11be8010100000f7005a0830408e4e8f40000000f6f0da88304080f70c1e4e8e4' +
+    '0000000f7005a083040800e8d70000000f6f0da88304080f70c100e8c70000000f7005a083040893e8ba0000000f6f0d' +
+    'a88304080f70c193e8aa0000000f6f05a0830408b8785634120fc4c002e8950000000f6f05a08304080fc405aa830408' +
+    '03e8810000000f6f0da88304080fc5c1010f6ec0e86e0000000fc5c1030f6ec0e8620000000f6f0da88304080fd7c10f' +
+    '6ec0e8500000000f6f0da08304080fd7c10f6ec0e83e0000000f6f0da88304080fe70d089004080f6f0508900408e824' +
+    '0000000f7789fa81ea00a00408b900a00408bb01000000b804000000cd80b80100000031dbcd800f7f0500900408a104' +
+    '900408e80f000000a100900408e805000000c6070a47c3b908000000c1c00489c283e20f8a9290830408881747e2edc3' +
+    '303132333435363738396162636465660201feffff7f01800080008001ff807f04000000000000000100000001000000');
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: 'pentium3' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/MMXSSE']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    const { createHash } = await import('crypto');
+    got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex')].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('MMX with SSE: PMAXSW and the other integer additions as Docker i386 computes them', got, '39 b9e5b8c27f62c01835f6db8c0636cf15'); }
 // tools/linux/sse.asm: SSE and SSE2 on fixed operands -- arithmetic, logic, compares, conversions,
 // shuffles, unpacks, shifts and moves in single and double precision and on integers, with NaNs
 // (propagated quiet, the default one negative), signed zeros, ties to even and the integer
