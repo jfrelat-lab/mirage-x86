@@ -86,7 +86,7 @@ async function build() {
   `));
   // What a search engine is given: the pages (404.html excepted), addressed under --origin.
   const origin = (arg('origin') || 'https://mirage-x86.pages.dev').replace(/\/$/, '');
-  const pages = files.filter((f) => /^[^/]+\.html$/.test(f) && f !== '404.html').sort();
+  const pages = files.filter((f) => /^[^/]+\.html$/.test(f) && f !== '404.html' && f !== 'linux.html').sort();   // linux.html: oasis run's window
   write('robots.txt', Buffer.from(`User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`));
   write('sitemap.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
     + pages.map((f) => `  <url><loc>${origin}/${f === 'index.html' ? '' : f}</loc></url>\n`).join('') + '</urlset>\n'));

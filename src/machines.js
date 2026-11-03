@@ -321,7 +321,24 @@ async function linux(world = 'linux') {
       window.mirage = s;
       setState('running');
       canvas.focus();
+      preparing(img.prepare);
     } catch (e) { status.textContent = String(e.message || e); setState('failed', 'err'); }
+  };
+  // "prepare": { "seconds", "note" } in a manifest: what the program computes before its first frame,
+  // shown over the black screen with a bar on the page's clock, then taken away.
+  const preparing = (p) => {
+    const box = document.getElementById('prep');
+    clearInterval(preparing.timer); box.hidden = true;
+    if (!p || !p.seconds) return;
+    box.querySelector('b').textContent = `Preparing — about ${p.seconds < 90 ? `${p.seconds} seconds` : `${Math.round(p.seconds / 60 * 2) / 2} minutes`}`;
+    box.querySelector('span').textContent = p.note || 'the program computes before its first frame';
+    const bar = box.querySelector('em'), t0 = performance.now();
+    box.hidden = false; bar.style.width = '0';
+    preparing.timer = setInterval(() => {
+      const f = (performance.now() - t0) / 1000 / p.seconds;
+      bar.style.width = `${Math.min(100, f * 100)}%`;
+      if (f >= 1.15) { clearInterval(preparing.timer); box.hidden = true; }
+    }, 500);
   };
   if (!images) {
     // A static host: the images are listed (oasis/index.json) and their manifests are beside the page

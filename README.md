@@ -1,6 +1,6 @@
 # MIRAGE
 
-[![tests](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml/badge.svg)](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Run it in your browser](https://img.shields.io/badge/%E2%96%B6%20run%20it-in%20your%20browser-00d0a0)](https://mirage-x86.pages.dev)
+[![tests](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml/badge.svg)](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Run it in your browser](https://img.shields.io/badge/%E2%96%B6%20run%20it-in%20your%20browser-00d0a0)](https://mirage-x86.pages.dev) [![site](https://img.shields.io/website?url=https%3A%2F%2Fmirage-x86.pages.dev&label=site)](https://mirage-x86.pages.dev) [![Node 22+](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](package.json) [![No WebAssembly](https://img.shields.io/badge/WebAssembly-none-555)](docs/ARCHITECTURE.md)
 
 ### DOS games, Linux programs and the demoscene's Windows intros, run from their original binaries in your browser tab.
 
@@ -13,6 +13,8 @@ No WebAssembly, no build step, no dependencies beyond its sibling [PRISM](https:
 
 **Try it: [mirage-x86.pages.dev](https://mirage-x86.pages.dev)** — Windows 4K intros, Linux programs of
 1997, DOS games and demos, boot sectors and a FreeDOS disk, each a click away.
+
+<p align="center"><a href="https://mirage-x86.pages.dev/machines.html?m=win32&run=win32%2Felevated-2009"><img src="https://mirage-x86.pages.dev/assets/elevated.gif" width="640" alt="Elevated, RGBA and TBC's 4K intro of 2009, running in MIRAGE: its Win32 and Direct3D 9 calls answered in JavaScript, drawn through WebGL2"></a><br><sub><b>Elevated</b> (RGBA &amp; TBC, 4K, 2009): the Windows executable, unmodified, running in MIRAGE in a browser tab</sub></p>
 
 <table>
 <tr>
@@ -110,9 +112,7 @@ run — `boot/`, `games/`, `intros/`, ignored by git — is yours to bring.
 
 ## How it was built
 
-MIRAGE was written with [Claude Code](https://claude.com/claude-code), Anthropic's coding agent,
-directed by Julien Frelat; the commit history says so on every commit. The method is the one above:
-nothing is taken on trust, every behaviour is compared with an independent implementation.
+MIRAGE was written with [Claude Code](https://claude.com/claude-code).
 
 ## License
 
