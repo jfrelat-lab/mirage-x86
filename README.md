@@ -14,7 +14,7 @@ No WebAssembly, no build step, no dependencies beyond its sibling [PRISM](https:
 **Try it: [mirage-x86.pages.dev](https://mirage-x86.pages.dev)** — Windows 4K intros, Linux programs of
 1997, DOS games and demos, boot sectors and a FreeDOS disk, each a click away.
 
-<p align="center"><a href="https://mirage-x86.pages.dev/machines.html?m=win32&run=win32%2Felevated-2009"><img src="https://mirage-x86.pages.dev/assets/elevated.gif" width="640" alt="Elevated, RGBA and TBC's 4K intro of 2009, running in MIRAGE: its Win32 and Direct3D 9 calls answered in JavaScript, drawn through WebGL2"></a><br><sub><b>Elevated</b> (RGBA &amp; TBC, 4K, 2009): the Windows executable, unmodified, running in MIRAGE in a browser tab</sub></p>
+<p align="center"><a href="https://mirage-x86.pages.dev/machines.html?m=win32&run=win32%2Felevated-2009"><img src="assets/elevated.gif" width="600" alt="Elevated, RGBA and TBC's 4K intro of 2009, running in MIRAGE: its Win32 and Direct3D 9 calls answered in JavaScript, drawn through WebGL2"></a><br><sub><b>Elevated</b> (RGBA &amp; TBC, 4K, 2009): the Windows executable, unmodified, running in MIRAGE in a browser tab</sub></p>
 
 <table>
 <tr>
