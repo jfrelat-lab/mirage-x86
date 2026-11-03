@@ -146,7 +146,7 @@ by the golden test. Of pouët's top ten MS-DOS 4K intros, nine rendered (2026-08
 | Omniscent, Forever Reality, StarPort BBS 2, Another Soul Lost | 🟢 Renders | | 2026-08-28 |
 | Void 3 | 🟢 Renders | in the DOS player's 16 MiB (its 16 MiB DPMI block now fits): answer `2` and `1` to its SB questions; it precomputes its music, then plays. Its synthesis wants ~30 M instructions a second: headless that is `MIRAGE_PITRELOAD=1800000`, the browser measured 73 M. `?mem=` gives a program more RAM when one needs it. Needed DMA playback and the DPMI locked stack | 2026-10-11 |
 | C-Dogs 1.06 | 🟢 Plays | DOS/4GW 1.97 on MIRAGE's DPMI host, Sound Blaster 16 effects (SOUND.CFG from its DSETUP32). Needed selector 0040h in the host's GDT, a waiting INT 16h reached through a client's chain, and E0-prefixed arrow keys | 2026-10-12 |
-| Difúze (Řrřola) | 🟢 Renders | the reaction–diffusion patterns, after a few hundred frames; identical to Unicorn for 300 frames ([notes/2026-10-10-difuze.md](notes/2026-10-10-difuze.md)) | 2026-10-10 |
+| Difúze (Řrřola) | 🟢 Plays | the reaction–diffusion patterns, after a few hundred frames; identical to Unicorn for 300 frames ([notes/2026-10-10-difuze.md](notes/2026-10-10-difuze.md)); its General MIDI music through the MPU-401, on MIRAGE's own synthesizer | 2026-11-03 |
 | oktaeder | 🔴 Fails | not a MIRAGE defect — see above | 2026-08-22 |
 
 ## Windows programs (MIRAGE-WIN32, `machines.html?m=win32`)
@@ -164,13 +164,13 @@ recording device model, which says how far the program gets but not what it draw
 | Absolute Territory (4K, Revision 2017) | OpenGL | 🟢 Renders | 38 ms of fragment shader a frame on an M1 | 2026-10 |
 | cdak (4K, Chaos Constructions 2010) | Direct3D 9 | 🟢 Renders | 60 frames a second in Chrome: HLSL pixel shaders, render targets ping-ponged, a looped waveOut buffer | 2026-10-31 |
 | yes we can (4K, Chaos Constructions 2009) | Direct3D 9 | 🟢 Renders | 60 frames a second in Chrome: pixel shaders on one pre-transformed triangle, a float16 render target | 2026-10-31 |
-| Photon Race 2 (4K, NVScene 2008) | Direct3D 9 | 🟢 Renders | in Chrome after a few seconds of precalculation: HLSL vertex and pixel shaders, four float16 render targets at once, 192 passes a frame | 2026-10-31 |
+| Photon Race 2 (4K, NVScene 2008) | Direct3D 9 | 🟢 Plays | in Chrome after a few seconds of precalculation: HLSL vertex and pixel shaders, four float16 render targets at once, 192 passes a frame; its music a .mid it writes and plays through MCI's sequencer, on MIRAGE's General MIDI synthesizer | 2026-11-03 |
 | Elevated (4K, Breakpoint 2009) | Direct3D 9 | 🟢 Renders | the mountains in Chrome after 1½ minutes of precalculation (24 G instructions: its height map through `D3DXFillTexture`, then its music): a quad cut by `D3DXTessellateNPatches` into a million triangles raised by a vertex shader, the camera read back from a render target each frame | 2026-11-01 |
 | Atrium (4K, Breakpoint 2008) | Direct3D 9 | 🟠 Starts | still precomputing after 3 G instructions, its device created | 2026-10-31 |
 | Darwinism | Direct3D 9 | 🟠 Starts | presents headless at about one frame a second: some 180 M x87 instructions a frame on one emulated core | 2026-10-31 |
 | Wishful Twisting | Direct3D 9 | 🟠 Starts | still precomputing after 1.5 G instructions, before its first frame | 2026-10-31 |
 | Ergon (4K, Breakpoint 2010) | Direct3D 9 | 🟢 Renders | at 60 frames a second in Chrome: its height map a 1024x1024 float16 texture filled by its `tx_1_0` texture shader (`D3DXFillTextureTX`, HLSL's `noise()`), evaluated by PRISM as D3DX does (`d3dx9_42`), then raymarched (`oasis/images/win32/ergon-2010`) | 2026-11-02 |
-| Stiletto | Direct3D 9 | 🟠 Starts | its skinned mesh and its nine Tahoma words (`D3DXCreateTextA`, from the visitor's Tahoma or DejaVu Sans) are made and it presents headless; it draws with the fixed function (lights, material, no shader), which PRISM's `d3d9.js` does not have yet | 2026-11-01 |
+| Stiletto | Direct3D 9 | 🟠 Starts | its skinned mesh and its nine Tahoma words (`D3DXCreateTextA`, from the visitor's Tahoma or DejaVu Sans) are made and it presents headless; it draws with the fixed function (lights, material, no shader), which PRISM's `d3d9.js` does not have yet. Its camera moves since MIRAGE-WIN32 has OpenFile and sndPlaySoundA (before, its imports fell on other functions and its clock stood still); its instruments read from a zero `gm.dls` | 2026-11-02 |
 | luxo4k | Direct3D 9 | 🔴 Fails | shows a message box and exits: it needs DirectSound | 2026-10-31 |
 | Polystreptikum, Synchroplastikum | Direct3D 9 | 🔴 Fails | a page fault before the device is created; cause not looked at | 2026-10-31 |
 | Valleyball, Stripped | OpenGL | 🟠 Starts | Valleyball's synthesizer renders at 0.97 of real time in the page, just short of keeping up; Stripped precomputes for minutes | 2026-10 |
