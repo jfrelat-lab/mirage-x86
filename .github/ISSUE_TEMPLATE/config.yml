@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: What runs, and what is known not to
+    url: https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPATIBILITY.md
+    about: Per-title status, and the failures whose cause is known.

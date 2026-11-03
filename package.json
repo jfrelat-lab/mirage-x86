@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "An x86 PC in plain JavaScript: an x86-to-JavaScript dynamic recompiler with a built-in DOS, and a bare PC that boots unmodified operating systems.",
+  "description": "An x86 PC in plain JavaScript: a dynamic recompiler from x86 to JavaScript, with DOS, Linux system calls and the Win32 API built in.",
   "scripts": {
     "test": "node tools/test.js",
     "site": "node tools/site.mjs && node tools/site-check.mjs",
@@ -25,12 +25,18 @@
   "keywords": [
     "emulator",
     "x86",
-    "dos",
     "javascript",
     "dynamic-recompiler",
     "jit",
-    "pc",
-    "retrocomputing"
+    "dos",
+    "linux",
+    "win32",
+    "direct3d9",
+    "opengl",
+    "webgl",
+    "demoscene",
+    "retrocomputing",
+    "browser"
   ],
   "license": "MIT",
   "author": "Julien Frelat",
