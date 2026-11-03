@@ -15,7 +15,10 @@ These describe the project **as it is**. They carry no history: when the code ch
 | [COMPATIBILITY.md](COMPATIBILITY.md) | What runs, how far, and when was that last recorded? |
 | [KNOWN-ISSUES.md](KNOWN-ISSUES.md) | What does not work, and is the cause known? |
 | [TESTING.md](TESTING.md) | What are the gates, the references and the tools? |
+| [OASIS.md](OASIS.md) | What is an OASIS image, and how is one written and run? |
+| [COMPARISON.md](COMPARISON.md) | How does MIRAGE compare with QEMU, DOSBox-X, v86, Docker — and, for speed, js-dos, RetroTick, CheerpX and PCjs? |
 | [ROADMAP.md](ROADMAP.md) | What is open? |
+| [SITE.md](SITE.md) | How is the static site built, checked and hosted? |
 
 ## Record
 

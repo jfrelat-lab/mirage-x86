@@ -2,83 +2,68 @@
 
 [![tests](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml/badge.svg)](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Run it in your browser](https://img.shields.io/badge/%E2%96%B6%20run%20it-in%20your%20browser-00d0a0)](https://mirage-x86.pages.dev)
 
-**An x86 PC in plain JavaScript: a dynamic recompiler that turns x86 machine code into JavaScript
-source, with a built-in DOS so a `.COM` or `.EXE` runs the moment you drop it on the page.**
+### DOS games, Linux programs and the demoscene's Windows intros, run from their original binaries in your browser tab.
+
+**An x86 PC written in plain JavaScript. A dynamic recompiler turns x86 machine code into JavaScript
+source, and DOS, Linux's system calls and the Win32 API are built in: a `.COM`, an ELF or an `.exe`
+runs at once, with no operating system to boot.**
 
 No WebAssembly, no build step, no dependencies beyond its sibling [PRISM](https://github.com/jfrelat-lab/prism)
 (a submodule, for OpenGL and Direct3D 9). It runs in a browser and in Node.
 
-**Try it: [mirage-x86.pages.dev](https://mirage-x86.pages.dev)** — boot-sector games, size-coded
-intros, DOS games and demos, a FreeDOS disk, Linux and Windows intros, each a click away.
+**Try it: [mirage-x86.pages.dev](https://mirage-x86.pages.dev)** — Windows 4K intros, Linux programs of
+1997, DOS games and demos, boot sectors and a FreeDOS disk, each a click away.
+
+<table>
+<tr>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/machines.html?m=win32&run=win32%2Felevated-2009"><img src="https://mirage-x86.pages.dev/oasis/thumbs/win32-elevated-2009.png" width="200" alt="Elevated, RGBA and TBC's 4K intro, drawn by MIRAGE"></a><br><sub><b>Elevated (4K, 2009)</b><br>Windows · Direct3D 9</sub></td>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/machines.html?m=win32&run=win32%2Fhartverdrahtet-2012"><img src="https://mirage-x86.pages.dev/oasis/thumbs/win32-hartverdrahtet-2012.png" width="200" alt="Hartverdrahtet, Akronyme Analogiker's 4K intro, drawn by MIRAGE"></a><br><sub><b>Hartverdrahtet (4K, 2012)</b><br>Windows · OpenGL</sub></td>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/machines.html?m=linux&run=linux%2Fdoom-x11"><img src="https://mirage-x86.pages.dev/oasis/thumbs/linux-doom-x11.png" width="200" alt="id's X11 DOOM built by gcc 2.7.2 inside MIRAGE, on XFree86 3.3"></a><br><sub><b>DOOM on X11 (1997)</b><br>Linux · built inside MIRAGE</sub></td>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/machines.html?m=linux&run=linux%2Fmesa-1997"><img src="https://mirage-x86.pages.dev/oasis/thumbs/linux-mesa-1997.png" width="200" alt="Mesa 2.2's demos on XFree86 3.3, in MIRAGE"></a><br><sub><b>Mesa 2.2 (1997)</b><br>Linux · OpenGL in software</sub></td>
+</tr>
+<tr>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/dos.html?zip=examples%2Fgames%2Funreal11.zip&run=UNREAL"><img src="https://mirage-x86.pages.dev/examples/thumbs/unreal.png" width="200" alt="Future Crew's Unreal, in MIRAGE's DOS"></a><br><sub><b>Unreal (1992)</b><br>DOS · Sound Blaster</sub></td>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/dos.html?load=examples%2Fintros%2Fpuls.com&run=puls"><img src="https://mirage-x86.pages.dev/examples/thumbs/puls.png" width="200" alt="Řrřola's Puls, 256 bytes, in MIRAGE's DOS"></a><br><sub><b>Puls (256 bytes, 2009)</b><br>DOS · x87</sub></td>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/boot.html?img=examples%2Fboot%2Ffreedos.img.gz&cpu=586&mem=64"><img src="https://mirage-x86.pages.dev/examples/thumbs/freedos.png" width="200" alt="FreeDOS 1.4 booted by MIRAGE's bare PC"></a><br><sub><b>FreeDOS 1.4</b><br>Bare PC · boots</sub></td>
+<td align="center" width="25%"><a href="https://mirage-x86.pages.dev/#boot"><img src="https://mirage-x86.pages.dev/examples/thumbs/os-win98.png" width="200" alt="Windows 98's desktop, booted by MIRAGE"></a><br><sub><b>Windows 98</b><br>Bare PC · your own disk</sub></td>
+</tr>
+</table>
+
+<sub>Every picture is a frame MIRAGE drew. Screenshots of Microsoft products used with permission from Microsoft.</sub>
+
+- **Windows with no Windows**: Elevated, Ergon and ten more 4K intros, their Win32, OpenGL and Direct3D 9 in JavaScript.
+- **Linux with no kernel**: Debian 12's bash, id's DOOM and Quake, XFree86 3.3; gcc 2.7.2 builds DOOM inside it.
+- **Checked, not assumed**: gcc's 1,586 torture tests print what Docker prints (all but one); 44 programs pinned pixel for pixel.
+- **420 million x86 instructions a second** on Dhrystone, as JavaScript.
 
 ```
  x86 machine code ─▶ decoder ─▶ JS source ─▶ new Function ─▶ the engine's own JIT ─▶ run
                      (block by block, cached by linear address, aware of self-modifying code)
 ```
 
-MIRAGE is four machines sharing one CPU:
-
-- **A DOS player** (`dos.html`). DOS, the BIOS, XMS, EMS and a DPMI host are implemented in
-  JavaScript, so there is no DOS image to boot: a program starts at once.
-- **A bare PC** (`boot.html`). A BIOS, an 8259/8254/RTC chipset, VGA and VBE, IDE disks, an ATAPI
-  CD-ROM, and optionally a PCI bus and a 16550 serial port: enough to boot unmodified operating
-  systems from a disk image or an El Torito CD.
-- **MIRAGE-LINUX** (`linux.html`, `machines.html`). i386 Linux programs with no Linux: the kernel's
-  system calls in JavaScript, Debian's own binaries and libraries, from bash to X and Quake.
-- **MIRAGE-WIN32** (`machines.html?m=win32`). Windows programs with no Windows: the `.exe` mapped as
-  Windows XP maps it, every DLL it imports written in JavaScript, OpenGL and Direct3D 9 drawn by
-  [PRISM](https://github.com/jfrelat-lab/prism)'s WebGL2 renderer.
+Four machines share one CPU: **Windows** (MIRAGE-WIN32, `machines.html?m=win32`), **Linux**
+(MIRAGE-LINUX, `machines.html?m=linux`), **DOS** (`dos.html`: DOS, BIOS, XMS, EMS and a DPMI host in
+JavaScript) and a **bare PC** (`boot.html`: BIOS, VGA and VBE, IDE, CD-ROM, Sound Blaster, OPL3 and
+MIDI, enough to boot Windows 95 and 98 from their own disks).
 
 ## What runs today
 
-Per-title status, with dates, is in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). Apart from the
-redistributable examples, none of that software is in this repository — see
-[Third-party software](#third-party-software).
-
 | | Reaches |
 |---|---|
-| DOS intros and demos | 31 of the 32 tried render; 37 intros are pinned by the golden test |
-| DOS games | real mode, DOS extenders (DPMI), EMS/XMS — per-title status in docs/COMPATIBILITY.md |
-| Windows 3.0, 95, 98, ME | the desktop |
-| Linux 2.2 (BasicLinux), Linux 2.4 (Damn Small Linux, booted from its CD) | a shell; runlevel 5 |
-| FreeDOS 1.3 (from its CD), MS-DOS 6.22 | the installer; the prompt |
-| QNX 4.05 demo disk, KolibriOS, OpenBSD | the desktop; the desktop; `login:` |
-| Linux programs (MIRAGE-LINUX) | Debian 12's bash, XFree86 3.3 and its clients, DOOM and Quake for Linux, Mesa's demos, the scene's Linux intros — the images in [docs/OASIS.md](docs/OASIS.md) |
-| Windows intros (MIRAGE-WIN32) | seven OpenGL intros of 2007-2017 and five Direct3D 9 intros of 2008-2010, Elevated and Ergon among them — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) |
+| Windows intros (MIRAGE-WIN32) | 12 of the scene's 4K and 1K intros, 2007–2017, OpenGL and Direct3D 9 |
+| Linux programs (MIRAGE-LINUX) | Debian 12, XFree86 3.3 and its clients, DOOM and Quake, Mesa, the scene's Linux intros |
+| DOS | games and demos in real mode, with EMS/XMS and DOS extenders |
+| Operating systems (bare PC) | Windows 3.0 to ME to the desktop, Linux 2.2 and 2.4, QNX, KolibriOS, OpenBSD, FreeDOS |
 
-**What does not work yet**, so nobody has to find out the hard way: Windows NT 3.51 (dies after the
-graphical switch), Windows 2000 (stays on its boot screen), ReactOS (needs ACPI, which MIRAGE does
-not have), BeOS 5 (stays on its splash screen), Plan 9. There is no Gravis Ultrasound, no network card,
-no USB, no 64-bit mode. The CPU profiles go up to a Pentium 4 (MMX, SSE, SSE2).
-MIRAGE-WIN32 has OpenGL and Direct3D 9 but not yet DirectDraw, DirectSound, DirectInput or Win16.
+Not yet: Windows NT and 2000, ReactOS, BeOS, networking, 64-bit. Per-title status is in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), what fails and why in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
 ## How fast
 
-Wall-clock seconds to the arrival screen, same image, same host (Apple M1; lower is better):
-
-| | QEMU (TCG) | v86 | MIRAGE |
-|---|---|---|---|
-| Windows 98 | 26 | 40 | 36 |
-| Windows 95 | 18 | 16 | 24 |
-| QNX 4.05 demo | 4 | 6 | 2 |
-
-The three are not timed alike. QEMU and v86 run in real time, so their times include every wait a
-guest makes on its timers; MIRAGE is timed headless, where guest time follows its instructions and an
-idle HLT costs nothing — which is all of its lead on QNX, a disk that mostly waits. In the page MIRAGE
-runs in real time too. Windows 95's arrival is its first dialog, the others' their desktop or prompt.
-`tools/v86/compare3.mjs`, the three measured one after another on 2026-11-03. Linux 2.2 is left out:
-at MIRAGE's headless speed its console blanks itself (ten guest minutes) a few seconds after it boots,
-and the screen it settles on is that blank one.
-
-Linux programs run at 420–450 M x86 instructions a second on Dhrystone (830,000 Dhrystones a second,
-a fifth of QEMU's user-mode translator); [docs/COMPARISON.md](docs/COMPARISON.md#speed) has the
-benchmarks and how to reproduce them.
-
-[v86](https://github.com/copy/v86) is the mature project in this space: it compiles to WebAssembly,
-is faster on Windows, and boots systems MIRAGE cannot. On 32-bit computing the WebAssembly JITs are well
-ahead: v86 runs DJGPP's CoreMark 6 times as fast as MIRAGE, and CheerpX (WebVM's engine) runs Linux
-Dhrystone 9 times as fast; MIRAGE is ahead of js-dos and RetroTick. MIRAGE's own ground is the built-in DOS, the
-readable generated code, and runs that are reproducible to the cycle.
+Linux programs run at 420–450 M x86 instructions a second on Dhrystone; Windows 98 reaches its desktop
+in about 36 s. The WebAssembly emulators are faster on 32-bit code — v86 and CheerpX by 6 to 9 times —
+and MIRAGE is ahead of js-dos and RetroTick. [docs/COMPARISON.md](docs/COMPARISON.md#speed) has every
+figure and how to reproduce it.
 
 ## Quick start
 
@@ -101,57 +86,27 @@ them; the assembled demos are checked in.
 
 ## How it is tested
 
-MIRAGE is checked against other machines, not against its own expectations:
-
-- `tools/test.js` — the unit suite; each test was written to fail when its fix is reverted.
-- `tools/golden.js` — a fingerprint of the screen and state of 44 programs after a fixed number of
-  cycles. Most are third-party and are skipped when their files are absent.
-- `tools/conformance.js`, `tools/conformance386.mjs`, `tools/test-x86-uc.mjs` — single-instruction
-  tests against the SingleStepTests vectors and against Unicorn.
-- Probes in `tools/*.asm` — small boot programs that print what the hardware answers, run unchanged
-  under QEMU and under MIRAGE and compared line by line (PCI, ATAPI, VBE, the UART, CMPXCHG8B…).
-- Whole-system comparison against QEMU, DOSBox-X and v86 (`tools/v86/`, `tools/cosim/`).
-
-[docs/TESTING.md](docs/TESTING.md) has the details.
+Against other machines, not against its own expectations: a unit suite whose every test fails when its
+fix is reverted, 44 golden programs, single-instruction tests against SingleStepTests and Unicorn,
+probe programs run unchanged under QEMU and MIRAGE, and whole-system comparisons with QEMU, DOSBox-X
+and v86. [docs/TESTING.md](docs/TESTING.md) has the details.
 
 ## Documentation
 
-Reference — the present state, kept current:
-
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — the model, the file map, how a block runs. Start here.
-- [RECOMPILER.md](docs/RECOMPILER.md), [DEVICES.md](docs/DEVICES.md) — the engine; the BIOS, DOS and devices.
-- [HARDWARE.md](docs/HARDWARE.md) — the machine a guest sees, and what each part was checked against.
-- [COMPATIBILITY.md](docs/COMPATIBILITY.md), [KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) — what runs; what does not, and why.
-- [TESTING.md](docs/TESTING.md) — the gates and the comparison tools.
-- [OASIS.md](docs/OASIS.md) — images of the period PC: `node tools/oasis.mjs run dos/c-dogs`, `run linux/doom-1994`.
-- [COMPARISON.md](docs/COMPARISON.md) — MIRAGE beside Docker, QEMU, DOSBox-X and v86: what only MIRAGE does, modes, CPU, devices, conformance, speed.
-- [ROADMAP.md](docs/ROADMAP.md) — what is open.
-- [SITE.md](docs/SITE.md) — how the static site is built, checked and hosted.
-- [CHANGELOG.md](CHANGELOG.md) — what changed, newest first.
-
-Record — [docs/notes/](docs/notes/README.md): the investigations, measurements and audits as they
-were written, wrong turns included. They are dated and not updated.
+Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); [docs/README.md](docs/README.md) lists the
+rest — the recompiler, the devices, the machine a guest sees, what runs and what does not, the tests,
+OASIS images, the comparison with other emulators, the roadmap — and [CHANGELOG.md](CHANGELOG.md) what
+changed. [docs/notes/](docs/notes/README.md) keeps the investigations as they were written.
 
 ## Third-party software
 
-This repository contains MIRAGE, the small demos written for it (`demos/`), and the **examples** of
-the home page (`examples/`): programs whose authors or rights holders allow passing them on, each
-with its licence in `examples/licenses/` and listed in [examples/README.md](examples/README.md) —
-seven boot-sector programs (MIT, BSD, ISC, WTFPL), demoscene intros under free licences (Řrřola's,
-viznut's Helium, The Orz's Linux intros), freeware and shareware DOS programs served as their
-publishers released them (Unreal, Fractint, the Dune demo, C-Dogs, the DOOM, Heretic, Wolfenstein 3D
-and Commander Keen shareware), and a FreeDOS 1.4 disk built from FreeDOS's own packages.
-
-[PRISM](https://github.com/jfrelat-lab/prism) is a submodule (`vendor/prism`, MIT); its OpenGL and
-Direct3D 9 code carries the third-party code listed in its
-[THIRD-PARTY.md](https://github.com/jfrelat-lab/prism/blob/main/THIRD-PARTY.md).
-
-OASIS images are recipes: the files they run are fetched from where their authors published them
-(Debian's archive, idgames, scene.org) and are not in this repository. Beyond that, the tools that
-expect an operating system, a game or an intro look in `boot/`, `games/` and `intros/`, which are
-ignored by git: bring your own, and check that you are allowed to use what you bring.
-
-The VGA fonts in `assets/` were rebuilt from rendered glyphs (`tools/build-fonts.mjs`).
+The repository holds MIRAGE, its own small demos (`demos/`) and the home page's **examples**
+(`examples/`): programs their authors allow passing on, each with its licence in `examples/licenses/`
+([examples/README.md](examples/README.md)), and a FreeDOS 1.4 disk whose source is served beside it.
+OASIS images are recipes: what they run is fetched from where its authors published it (Debian,
+idgames, scene.org). [PRISM](https://github.com/jfrelat-lab/prism) is a submodule (MIT; its
+[THIRD-PARTY.md](https://github.com/jfrelat-lab/prism/blob/main/THIRD-PARTY.md)). Anything else you
+run — `boot/`, `games/`, `intros/`, ignored by git — is yours to bring.
 
 ## How it was built
 
