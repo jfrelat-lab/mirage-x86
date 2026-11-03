@@ -62,7 +62,7 @@ Not yet: Windows NT and 2000, ReactOS, BeOS, networking, 64-bit. Per-title statu
 
 Linux programs run at 420–450 M x86 instructions a second on Dhrystone; Windows 98 reaches its desktop
 in about 36 s. The WebAssembly emulators are faster on 32-bit code — v86 and CheerpX by 6 to 9 times —
-and MIRAGE is ahead of js-dos and RetroTick. [docs/COMPARISON.md](docs/COMPARISON.md#speed) has every
+and MIRAGE is ahead of js-dos and RetroTick. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has every
 figure and how to reproduce it.
 
 ## Quick start
