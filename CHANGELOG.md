@@ -25,3 +25,8 @@ What changed for someone using MIRAGE, newest first. The commit history has ever
 - **The home page**: four shelves (DOS, Linux, Windows, Boot), the Windows intros on it at last, each
   card tagged with what it uses and 🔊 where its sound was heard playing in MIRAGE; MIRAGE's own test
   programs and the weaker intros left to the Machines page.
+- **General MIDI**: an MPU-401 at 330h (UART mode), winmm's midiOut and MCI's sequencer, played by
+  a small synthesizer of MIRAGE's own (no Roland or Microsoft sound set): Difúze, omniscent and
+  Photon Race 2 have their music. The Standard MIDI File player was checked against Wine's MCI
+  sequencer on Photon Race 2's song: the same messages, in the same order, at the same times.
+- **MIRAGE-WIN32**: CreateFileA, WriteFile and DeleteFileA on a small disk of the program's own.

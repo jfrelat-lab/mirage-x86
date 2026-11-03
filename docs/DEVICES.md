@@ -161,6 +161,17 @@ moved further, so a detection that waits by reading the status port a hundred ti
 expire in the browser too. Status and timers checked with `tools/oplprobe.asm` against DOSBox-X and
 QEMU.
 
+**General MIDI** (`midi.js`): an MPU-401 at 330h-331h — reset (FFh) and UART mode (3Fh) answered
+with FEh, then every byte to 330h is MIDI — and, for MIRAGE-WIN32, winmm's midiOut and MCI's
+"sequencer", which plays a Standard MIDI File (format 0 or 1, its tempo map followed). One parser with
+running status feeds a synthesizer of MIRAGE's own: no sound set is shipped (a period PC had Roland's
+samples on a card or in Windows' GS synthesizer), so each of the 16 GM families is an oscillator, a
+one-pole filter and an envelope, and channel 10 a kit of noise and swept sines — the program's notes,
+rhythm, programs, volumes, pan, bend and pedal, in approximate timbres. It renders at 32 kHz on the
+machine's clock (MIRAGE-LINUX's for its programs), catching up at every message. The SMF player was
+checked against Wine's MCI sequencer on Photon Race 2's song (984 messages: same content, order and
+times).
+
 **Audio** (`audio.js`, `audio-out.js`): `audio.js` mixes the card (resampled linearly) and the PC
 speaker (port 61h and PIT channel 2, rendered from a timeline of their changes) into stereo at any
 rate, on the machine's clock, through a 16 Hz high-pass as a real output's AC coupling. In the

@@ -80,8 +80,10 @@
     "tags": [
       "game",
       "X11",
+      "Cirrus GD5446",
       "gcc 2.7.2"
-    ]
+    ],
+    "sound": true
   },
   {
     "name": "linux/laminator-2009",
@@ -123,7 +125,8 @@
     "tags": [
       "OpenGL",
       "Mesa",
-      "X11"
+      "X11",
+      "Cirrus GD5446"
     ]
   },
   {
@@ -229,6 +232,7 @@
     "tags": [
       "game",
       "X11",
+      "Cirrus GD5446",
       "/dev/dsp"
     ],
     "sound": true
@@ -254,7 +258,8 @@
     "tags": [
       "OpenGL",
       "Mesa",
-      "X11"
+      "X11",
+      "Cirrus GD5446"
     ]
   },
   {
@@ -401,8 +406,10 @@
     "tags": [
       "4K intro",
       "Direct3D 9",
-      "HLSL"
-    ]
+      "HLSL",
+      "MIDI"
+    ],
+    "sound": true
   },
   {
     "name": "win32/retrospection-2010",

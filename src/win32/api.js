@@ -9,6 +9,7 @@
 import { gl as glTable, glu as gluTable } from '../hle/gl.js';
 import { d3d9Apis } from './d3d9.js';
 import { parseTrueType } from './truetype.js';
+import { parseSMF } from '../midi.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
 
@@ -106,7 +107,12 @@ function windowState(fonts = {}) {
 const GM_DLS_SIZE = 3440660;
 export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const st = windowState(fonts);
-  st.files = [];
+  st.files = [];                                                      // handle - 4000h -> { f, pos }
+  st.mci = new Map(); st.mciNext = 1; st.mciPlaying = 0;
+  st.disk = new Map(Object.entries(files).map(([n, b]) => [n.toLowerCase(), { bytes: b, size: b.length }]));
+  const baseName = (p) => p.replace(/^.*[\\/]/, '').toLowerCase();
+  const diskFile = (p) => st.disk.get(baseName(p)) || (baseName(p) === 'gm.dls' ? { bytes: null, size: GM_DLS_SIZE } : null);
+  const openHandle = (f) => { st.files.push({ f, pos: 0 }); return 0x4000 + st.files.length - 1; };
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
   let vaNext = 0x10000000;
@@ -163,37 +169,55 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     SetUnhandledExceptionFilter: ['p', () => 0], SetErrorMode: ['u', () => 0],
     CloseHandle: ['p', () => 1], WaitForSingleObject: ['pu', () => 0],
     /*
-     * Files, read only: those `files` names ({ "gm.dls": bytes }), found by their base name, and XP's
-     * system32\drivers\gm.dls (Roland's GS sound set for the Microsoft synthesizer), which is not
-     * shipped: without the visitor's own it opens as 3,440,660 zero bytes, its size on XP, so its
-     * instruments are silent. Stiletto (RGBA, 2010) reads its instruments from it, trying "drivers/gm.dls"
-     * then "drivers/etc/gm.dls" -- OpenFile searches the system directory -- and runs off the end of
-     * its list of names when neither opens. Any other name: HFILE_ERROR, ERROR_FILE_NOT_FOUND.
+     * Files: a small disk of the program's own, by base name. On it: those `files` names ({ "gm.dls":
+     * bytes }), what the program writes (CreateFileA, WriteFile), and XP's system32\drivers\gm.dls
+     * (Roland's GS sound set for the Microsoft synthesizer), which is not shipped: without the visitor's
+     * own it opens as 3,440,660 zero bytes, its size on XP, so its instruments are silent. Stiletto
+     * (RGBA, 2010) reads its instruments from it, trying "drivers/gm.dls" then "drivers/etc/gm.dls" --
+     * OpenFile searches the system directory -- and runs off the end of its list when neither opens.
+     * Photon Race 2 (2008) writes its song to a .mid file, plays it through MCI and deletes it.
      */
     OpenFile: ['ppu', (x, pName, of, style) => {
-      const base = x.str(pName).replace(/^.*[\\/]/, '').toLowerCase();
-      const bytes = files[base] || (base === 'gm.dls' ? GM_DLS_SIZE : null);
+      const f = diskFile(x.str(pName));
       if (of) { x.write(of, new Uint8Array(136)); x.write(of, Uint8Array.of(136)); }
-      if (bytes === null || style & 0x1003) { if (of) x.w16(of + 2, 2); return -1; }   // OF_WRITE, OF_READWRITE, OF_CREATE: no
-      const h = 0x4000 + st.files.length;
-      st.files.push({ bytes: typeof bytes === 'number' ? null : bytes, size: typeof bytes === 'number' ? bytes : bytes.length, pos: 0 });
-      return h;
+      if (!f || style & 0x1003) { if (of) x.w16(of + 2, 2); return -1; }   // OF_WRITE, OF_READWRITE, OF_CREATE: no
+      return openHandle(f);
+    }],
+    // CreateFileA(name, access, share, sa, disposition, flags, template)
+    CreateFileA: ['puupuup', (x, pName, access, share, sa, disp) => {
+      const name = baseName(x.str(pName));
+      let f = diskFile(name);
+      if (disp === 2 || disp === 5 || (!f && (disp === 1 || disp === 4))) {   // CREATE_ALWAYS, TRUNCATE_EXISTING, or made
+        if (disp === 5 && !f) return -1;
+        f = { bytes: new Uint8Array(0), size: 0 }; st.disk.set(name, f);
+      } else if (!f || disp === 1) return -1;                          // INVALID_HANDLE_VALUE
+      return openHandle(f);
+    }],
+    WriteFile: ['ppupp', (x, h, buf, n, pDone) => {
+      const o = st.files[h - 0x4000];
+      if (!o || !o.f.bytes) { if (pDone) x.w32(pDone, 0); return 0; }
+      const f = o.f, end = o.pos + n;
+      if (end > f.bytes.length) { const b = new Uint8Array(Math.max(end, f.bytes.length * 2)); b.set(f.bytes); f.bytes = b; }
+      f.bytes.set(x.bytes(buf, n), o.pos); o.pos = end; f.size = Math.max(f.size, end);
+      if (pDone) x.w32(pDone, n);
+      return 1;
     }],
     ReadFile: ['ppupp', (x, h, buf, n, pRead) => {
-      const f = st.files[h - 0x4000];
-      if (!f) { if (pRead) x.w32(pRead, 0); return 0; }
-      const k = Math.max(0, Math.min(n, f.size - f.pos));
-      x.write(buf, f.bytes ? f.bytes.subarray(f.pos, f.pos + k) : new Uint8Array(k));
-      f.pos += k; if (pRead) x.w32(pRead, k);
+      const o = st.files[h - 0x4000];
+      if (!o) { if (pRead) x.w32(pRead, 0); return 0; }
+      const k = Math.max(0, Math.min(n, o.f.size - o.pos));
+      x.write(buf, o.f.bytes ? o.f.bytes.subarray(o.pos, o.pos + k) : new Uint8Array(k));
+      o.pos += k; if (pRead) x.w32(pRead, k);
       return 1;
     }],
     SetFilePointer: ['pipu', (x, h, dist, pHigh, how) => {
-      const f = st.files[h - 0x4000];
-      if (!f) return -1;                                               // INVALID_SET_FILE_POINTER
+      const o = st.files[h - 0x4000];
+      if (!o) return -1;                                               // INVALID_SET_FILE_POINTER
       if (pHigh) x.w32(pHigh, 0);
-      f.pos = Math.max(0, (how === 1 ? f.pos : how === 2 ? f.size : 0) + dist);
-      return f.pos;
+      o.pos = Math.max(0, (how === 1 ? o.pos : how === 2 ? o.f.size : 0) + dist);
+      return o.pos;
     }],
+    DeleteFileA: ['p', (x, pName) => (st.disk.delete(baseName(x.str(pName))) ? 1 : 0)],
     OutputDebugStringA: ['p', () => 0],
   };
   // ---- user32 --------------------------------------------------------------------------------------
@@ -326,6 +350,57 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   };
   const winmm = {
     timeGetTime: ['', (x) => ms(x)], timeBeginPeriod: ['u', () => 0], timeEndPeriod: ['u', () => 0],
+    // midiOut: one device, MIRAGE's General MIDI synthesizer (src/midi.js), as Windows' MIDI mapper
+    // sends to its GS synthesizer. Photon Race 2 (2008) plays its music so: short messages, no SysEx.
+    midiOutGetNumDevs: ['', () => 1],
+    midiOutGetDevCapsA: ['upu', (x, dev, caps, size) => {              // MIDIOUTCAPSA: MOD_SWSYNTH, 32 voices, 16 channels
+      if (!caps || size < 52) return 11;                               // MMSYSERR_INVALPARAM
+      x.write(caps, new Uint8Array(52)); x.w16(caps, 1); x.w16(caps + 2, 1); x.w32(caps + 4, 0x0100);
+      x.write(caps + 8, new TextEncoder().encode('MIRAGE General MIDI\0'));
+      x.w16(caps + 40, 7); x.w16(caps + 42, 32); x.w16(caps + 44, 32); x.w16(caps + 46, 0xffff); x.w32(caps + 48, 1);
+      return 0;
+    }],
+    midiOutOpen: ['ppppu', (x, ph, dev, cb, inst, flags) => { x.lx.midi(); if (ph) x.w32(ph, 0x6001); return 0; }],
+    midiOutShortMsg: ['pu', (x, h, msg) => { x.lx.midi().short(msg); return 0; }],
+    midiOutLongMsg: ['ppu', (x, h, hdr) => { x.w32(hdr + 16, x.r32(hdr + 16) | 1); return 0; }],      // SysEx: WHDR_DONE, nothing played
+    midiOutPrepareHeader: ['ppu', (x, h, hdr) => { x.w32(hdr + 16, x.r32(hdr + 16) | 2); return 0; }],
+    midiOutUnprepareHeader: ['ppu', (x, h, hdr) => { x.w32(hdr + 16, x.r32(hdr + 16) & ~2); return 0; }],
+    midiOutReset: ['p', (x) => { x.lx.midi().reset(); return 0; }],
+    midiOutClose: ['p', (x) => { x.lx.midi().reset(); return 0; }],
+    midiOutSetVolume: ['pu', () => 0], midiOutGetVolume: ['pp', (x, h, p) => { if (p) x.w32(p, 0xffffffff); return 0; }],
+    /*
+     * MCI: the "sequencer" device only, a Standard MIDI File played through the General MIDI synthesizer
+     * (src/midi.js parseSMF, machine.midi.play). Photon Race 2 opens its .mid (MCI_OPEN with
+     * MCI_OPEN_ELEMENT | MCI_OPEN_TYPE), then MCI_PLAY. Other devices (waveaudio, cdaudio): no such device.
+     */
+    mciSendCommandA: ['uuup', (x, dev, msg, flags, parms) => {
+      if (msg === 0x803) {                                             // MCI_OPEN
+        const type = flags & 0x2000 && !(flags & 0x1000) ? x.str(x.r32(parms + 8)).toLowerCase() : '';
+        const elem = flags & 0x200 ? x.str(x.r32(parms + 12)) : '';
+        if (type && type !== 'sequencer') return 263;                 // MCIERR_INVALID_DEVICE_NAME
+        if (!type && !/\.(mid|midi|rmi)$/i.test(elem)) return 263;
+        const f = elem && diskFile(elem);
+        if (!f || !f.bytes) return 275;                               // MCIERR_FILE_NOT_FOUND
+        let ev;
+        try { ev = parseSMF(f.bytes.subarray(0, f.size)); } catch { return 0x116; }   // MCIERR_INVALID_FILE
+        st.mci.set(st.mciNext, ev);
+        x.w32(parms + 4, st.mciNext++);
+        return 0;
+      }
+      const ev = st.mci.get(dev);
+      if (!ev) return 257;                                             // MCIERR_INVALID_DEVICE_ID
+      if (msg === 0x806) { x.lx.midi().play(ev); st.mciPlaying = dev; return 0; }      // MCI_PLAY
+      if (msg === 0x808 || msg === 0x804 || msg === 0x809) {          // MCI_STOP, MCI_CLOSE, MCI_PAUSE
+        if (st.mciPlaying === dev) { x.lx.midi().play(null); st.mciPlaying = 0; }
+        if (msg === 0x804) st.mci.delete(dev);
+        return 0;
+      }
+      if (msg === 0x814 && parms) {                                    // MCI_STATUS: the mode (MCI_STATUS_MODE) only
+        x.w32(parms + 4, x.r32(parms + 8) === 4 ? (st.mciPlaying === dev && x.lx.midi().playing() ? 526 : 525) : 0);
+        return 0;
+      }
+      return 0;
+    }],
     sndPlaySoundA: ['pu', (x, p, flags) => playMemory(x, p, flags)],
     PlaySoundA: ['ppu', (x, p, mod, flags) => playMemory(x, p, flags)],
     waveOutGetNumDevs: ['', () => 1],

@@ -85,7 +85,7 @@
 <body>
 <header class="site">
   <span class="logo">▚ MIRAGE<small>x86 → JavaScript</small></span>
-  <nav class="site" aria-label="Site"><a href="machines.html">Machines</a><a href="oasis.html">OASIS</a><a href="dos.html">DOS player</a><a href="boot.html">Bare PC</a><a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a><a href="https://github.com/jfrelat-lab/mirage-x86">Source</a></nav>
+  <nav class="site" aria-label="Site"><a href="machines.html">Machines</a><a href="oasis.html">OASIS</a><a href="dos.html">DOS player</a><a href="boot.html">Bare PC</a><a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a><a href="https://github.com/jfrelat-lab/mirage-x86">Source</a><a class="star" href="https://github.com/jfrelat-lab/mirage-x86" title="MIRAGE on GitHub: a star helps others find it">★ Star on GitHub</a></nav>
 </header>
 
 <main>
@@ -95,12 +95,12 @@
       the browser's own JIT compile it. No WebAssembly, no plug-in, nothing to install.</p>
     <div class="pipeline mono">x86 code → decoder → JavaScript source → new Function → the browser's JIT</div>
     <div class="three">
-      <a class="mach" href="machines.html?m=dos"><b>DOS</b><span>A DOS written in JavaScript, with its BIOS, XMS, EMS and a
-        DPMI host: drop a <code>.COM</code> or an <code>.EXE</code> on it and it runs at once. DOOM, Heretic, Wolfenstein 3D.</span></a>
-      <a class="mach" href="machines.html?m=linux"><b>Linux</b><span>Linux's system calls answered in JavaScript — no kernel:
-        a real <code>bash</code> from Debian 12, id's DOOM and Quake on SVGAlib, XFree86 3.3 on an emulated Cirrus card.</span></a>
       <a class="mach" href="machines.html?m=win32"><b>Windows</b><span>The Win32 API in JavaScript — no Windows: the
         demoscene's 4K intros on OpenGL and Direct3D 9, Elevated and Ergon among them, drawn through WebGL2.</span></a>
+      <a class="mach" href="machines.html?m=linux"><b>Linux</b><span>Linux's system calls answered in JavaScript — no kernel:
+        a real <code>bash</code> from Debian 12, id's DOOM and Quake on SVGAlib, XFree86 3.3 on an emulated Cirrus card.</span></a>
+      <a class="mach" href="machines.html?m=dos"><b>DOS</b><span>A DOS written in JavaScript, with its BIOS, XMS, EMS and a
+        DPMI host: drop a <code>.COM</code> or an <code>.EXE</code> on it and it runs at once. DOOM, Heretic, Wolfenstein 3D.</span></a>
       <a class="mach" href="machines.html?m=pc"><b>Bare PC</b><span>BIOS, VGA, disks and CD: boots unmodified operating
         systems from an image — Windows 95 and 98, Linux, the BSDs, FreeDOS.</span></a>
     </div>
@@ -109,6 +109,7 @@
     <div class="cta">
       <a class="btn primary" href="machines.html">Choose a machine</a>
       <a class="btn" href="#windows">Windows intros</a>
+      <a class="btn" href="#linux">Linux programs</a>
       <a class="btn" href="#dos">DOS games and demos</a>
       <a class="btn" href="oasis.html">OASIS images</a>
       <a class="btn" href="boot.html">Boot your own disk image</a>
@@ -121,12 +122,13 @@
     <p class="more"><a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPARISON.md">How MIRAGE compares with QEMU, DOSBox-X, v86, PCjs and Docker →</a></p>
   </section>
 
-  <section id="dos">
-    <h2>DOS</h2>
-    <p class="lead">Games and demos on MIRAGE's own DOS — a BIOS, XMS, EMS and a DPMI host written in JavaScript, no DOS
-      image. Everything here may be redistributed; each card links to its licence and its source. The screenshots
-      were taken by MIRAGE itself, and <span class="chip sound">🔊 sound</span> marks the ones heard playing.</p>
-    <div class="grid" id="dosgrid"><p class="lead">Loading…</p></div>
+  <section id="windows">
+    <h2>Windows intros, with no Windows</h2>
+    <p class="lead">4K and 1K intros of the demoscene, their Win32 API, OpenGL and Direct3D 9 written in JavaScript —
+      no Windows, no Microsoft DLL. Their shaders go to WebGL2 through <a href="https://github.com/jfrelat-lab/prism">PRISM</a>.
+      Each one is fetched from scene.org when first run. Every screenshot here was taken by MIRAGE itself, and
+      <span class="chip sound" title="Sound: heard playing in MIRAGE">🔊 sound</span> marks what was heard playing.</p>
+    <div class="grid" id="wingrid"></div>
   </section>
 
   <section id="linux">
@@ -138,26 +140,21 @@
     <div class="grid" id="linuxgrid"></div>
   </section>
 
-  <section id="windows">
-    <h2>Windows intros, with no Windows</h2>
-    <p class="lead">4K and 1K intros of the demoscene, their Win32 API, OpenGL and Direct3D 9 written in JavaScript —
-      no Windows, no Microsoft DLL. Their shaders go to WebGL2 through <a href="https://github.com/jfrelat-lab/prism">PRISM</a>.
-      Each one is fetched from scene.org when first run.</p>
-    <div class="grid" id="wingrid"></div>
+  <section id="dos">
+    <h2>DOS</h2>
+    <p class="lead">Games and demos on MIRAGE's own DOS — a BIOS, XMS, EMS and a DPMI host written in JavaScript, no DOS
+      image. Everything here may be redistributed; each card links to its licence and its source.</p>
+    <div class="grid" id="dosgrid"><p class="lead">Loading…</p></div>
   </section>
 
   <section id="boot">
     <h2>Boot</h2>
-    <p class="lead">Boot sectors of 512 bytes and a whole FreeDOS disk, started by MIRAGE's bare PC from its BIOS.</p>
+    <p class="lead">MIRAGE's bare PC starts disks from its BIOS: a whole FreeDOS disk and boot sectors of 512 bytes, to run
+      here, then operating systems taken to their desktop from their own disks. Those disks are not ours to share, so
+      they are screenshots — taken by MIRAGE itself — and the button opens the bare PC set up for that system: boot
+      your own copy, nothing is uploaded.</p>
     <div class="grid" id="bootgrid"></div>
-  </section>
-
-  <section id="booted">
-    <h2>Booted by MIRAGE</h2>
-    <p class="lead">Operating systems MIRAGE starts from their own disks to their desktop. Those disks are not ours
-      to share, so these are screenshots — taken by MIRAGE itself — and the button opens the bare PC set up for
-      that system: boot your own copy, nothing is uploaded.</p>
-    <div class="grid" id="gallery"></div>
+    <div class="grid" id="gallery" style="margin-top:16px"></div>
     <p class="fine">Screenshots of Microsoft products used with permission from Microsoft. Windows is a trademark of
       the Microsoft group of companies; MIRAGE is not affiliated with or endorsed by Microsoft.</p>
   </section>
@@ -245,7 +242,7 @@
   }).catch(() => { document.getElementById('booted').hidden = true; });
   // The shelf: examples/manifest.json and oasis/index.json, without what is marked "shelf": false; the
   // tags and the sound mark come from them too (sound only where it was heard playing in MIRAGE).
-  const chips = (x) => (x.tags?.length || x.sound) ? `<ul class="chips">${x.sound ? '<li class="chip sound">🔊 sound</li>' : ''}${(x.tags || []).map((t) => `<li class="chip">${esc(t)}</li>`).join('')}</ul>` : '';
+  const chips = (x) => (x.tags?.length || x.sound) ? `<ul class="chips">${x.sound ? '<li class="chip sound" title="Sound: heard playing in MIRAGE">🔊 sound</li>' : ''}${(x.tags || []).map((t) => `<li class="chip">${esc(t)}</li>`).join('')}</ul>` : '';
   const exampleCard = (e) => {
     const who = e.author + (e.year ? ', ' + e.year : '');
     const lic = e.licenseFile ? `<a href="${esc(e.licenseFile)}">${esc(e.license)}</a>` : esc(e.license);
@@ -277,12 +274,13 @@
     const on = (x) => x.shelf !== false;
     ex = ex.filter(on); imgs = imgs.filter((m) => on(m) && m.thumb);
     const intro = (m) => /intro/.test((m.tags || []).join(' '));
-    document.getElementById('dosgrid').innerHTML = ex.filter((e) => e.kind === 'zip' || e.kind === 'dos').map(exampleCard).join('');
+    const newest = (a, b) => (b.year || 0) - (a.year || 0);
+    document.getElementById('dosgrid').innerHTML = ex.filter((e) => e.kind === 'zip' || e.kind === 'dos').sort(newest).map(exampleCard).join('');
     const lx = imgs.filter((m) => m.world === 'linux');
-    document.getElementById('linuxgrid').innerHTML = sub('Programs') + lx.filter((m) => !intro(m)).sort((a, b) => a.year - b.year).map(imageCard).join('')
-      + sub('Demoscene intros') + [...lx.filter(intro).sort((a, b) => a.year - b.year).map(imageCard), ...ex.filter((e) => e.kind === 'linux').map(exampleCard)].join('');
-    document.getElementById('wingrid').innerHTML = imgs.filter((m) => m.world === 'win32').sort((a, b) => (b.sound ? 1 : 0) - (a.sound ? 1 : 0) || a.year - b.year).map(imageCard).join('');
-    document.getElementById('bootgrid').innerHTML = ex.filter((e) => e.kind === 'boot').map(exampleCard).join('');
+    document.getElementById('linuxgrid').innerHTML = sub('Programs') + lx.filter((m) => !intro(m)).sort(newest).map(imageCard).join('')
+      + sub('Demoscene intros') + [...lx.filter(intro), ...ex.filter((e) => e.kind === 'linux')].sort(newest).map((x) => (x.world ? imageCard(x) : exampleCard(x))).join('');
+    document.getElementById('wingrid').innerHTML = imgs.filter((m) => m.world === 'win32').sort(newest).map(imageCard).join('');
+    document.getElementById('bootgrid').innerHTML = ex.filter((e) => e.kind === 'boot').sort(newest).map(exampleCard).join('');
   }).catch(() => { document.getElementById('dosgrid').innerHTML = '<p class="lead">The examples could not be loaded.</p>'; });
 </script>
 </body>

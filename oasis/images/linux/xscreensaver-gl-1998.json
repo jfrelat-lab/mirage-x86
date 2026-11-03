@@ -110,5 +110,5 @@
   "output": "window",
   "notes": "Debian 2.0 (hamm, 1998), all of it on glibc 2.0: XFree86 3.3.2's SVGA server on MIRAGE's emulated Cirrus GD5446, twm, Mesa 2.6 in software, and xscreensaver-gl's nine OpenGL hacks — gears, pipes, moebius, sproingies, superquadrics, morph3d, rubik, stairs, cage — shown 20 seconds each (busybox timeout), each in its own window. The server draws at 8 bits per pixel, so Mesa dithers its colours as it did on the 256-colour screens of the time. Running it found three faults of MIRAGE-LINUX, all mended: gcc 2.x's FLDCW pair around each float-to-int conversion made every translated block revalidate; the server needs the Cirrus on a PCI bus with its 32 MiB aperture; and timeout's watcher lost its memory when it killed the hack.",
   "thumb": "oasis/thumbs/linux-xscreensaver-gl-1998.png",
-  "tags": ["OpenGL", "Mesa", "X11"]
+  "tags": ["OpenGL", "Mesa", "X11", "Cirrus GD5446"]
 }

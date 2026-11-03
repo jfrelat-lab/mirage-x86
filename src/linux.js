@@ -14,6 +14,7 @@
 // directory and the GDT sit below them. The kernel reads and writes the program's memory through
 // its own map of virtual pages (this.pages), so a bad pointer in a system call is -EFAULT, not a
 // fault taken in the kernel.
+import { installMidi } from './midi.js';
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
@@ -768,6 +769,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   machine.dsp = { drain: () => { const samples = dsp.pcm; dsp.pcm = []; return { rate: dsp.rate, samples }; } };
   // Another sound device in the card's place (src/win32's waveOut): the mixer pulls from `drain`.
   lx.setSoundSource = (drain) => { machine.dsp = { drain }; };
+  // General MIDI (src/midi.js), made when a program first opens it (MIRAGE-WIN32's midiOut*).
+  let midiClocked = false;
+  lx.midi = () => {
+    const m = installMidi(machine);
+    if (!midiClocked) { midiClocked = true; m.setClock(() => (machine.wallClockMs ? machine.wallClockMs() / 1000 : lx.mono())); }
+    return m;
+  };
   // The same card for a library made in JavaScript (src/hle/asound.js): its format, then samples
   // written as to /dev/dsp — bytes taken, or BLOCK while the buffer is full.
   lx.dspFormat = (rate, fmt, ch) => { dspDrain(); Object.assign(dsp, { rate, fmt, ch }); };
@@ -1000,6 +1008,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.realTime = !!realTime;
   lx.now = () => lx.realTime ? Date.now() / 1000 : lx.epoch + cpu.cycles / (machine.cyclesPerSecond || 1e8);
   lx.mono = () => lx.realTime ? performance.now() / 1000 : cpu.cycles / (machine.cyclesPerSecond || 1e8);
+  if (machine.midi) lx.midi();                                       // the BIOS's MPU-401 made it already: on lx's clock now
 
   // File descriptors: 0-2 are the pipes the oracle has (Docker without -t), never a terminal.
   const fds = [{ pipe: 0 }, { pipe: 1 }, { pipe: 2 }];

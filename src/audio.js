@@ -14,7 +14,7 @@
 // pull(rate) returns the samples for the time elapsed since the previous pull.
 
 const PIT_HZ = 1193182;
-const SPEAKER = 0.25, SB = 0.9, OPL = 1.5;  // levels against full scale; the OPL as loud against the DAC as in DOSBox-X's mix
+const SPEAKER = 0.25, SB = 0.9, OPL = 1.5, MIDI = 0.9;  // levels against full scale; the OPL as loud against the DAC as in DOSBox-X's mix
 
 /** The machine's time in seconds: wall-clock in the browser (where the PIT follows it too),
  *  otherwise cpu.cycles at 18.2065 * pitBase cycles a second, the PIT's own rate. */
@@ -28,9 +28,9 @@ export function installAudio(machine) {
     last: clock(machine),
     // Speaker timeline: [{ t, b (port 61h bits 0-1), hz }], the state in force from t on.
     spk: [{ t: -Infinity, b: 0, hz: 0, t0: 0 }],
-    // The resampled sources: the Sound Blaster's DAC and the OPL3, and MIRAGE-LINUX's /dev/dsp.
+    // The resampled sources: the Sound Blaster's DAC and the OPL3, MIRAGE-LINUX's /dev/dsp, and General MIDI (src/midi.js).
     src: [{ name: 'sb', gain: SB, fifo: [], frac: 0, prev: [0, 0] }, { name: 'opl', gain: OPL, fifo: [], frac: 0, prev: [0, 0] },
-      { name: 'dsp', gain: SB, fifo: [], frac: 0, prev: [0, 0] }],
+      { name: 'dsp', gain: SB, fifo: [], frac: 0, prev: [0, 0] }, { name: 'midi', gain: MIDI, fifo: [], frac: 0, prev: [0, 0] }],
     hp: [0, 0, 0, 0],                       // DC blocker state, per channel: x1, y1
     pull,
   };
@@ -48,7 +48,7 @@ export function installAudio(machine) {
   const take = (st, rate) => {
     const dev = machine[st.name];
     if (!dev) return;
-    if (dev.render) dev.render();                 // the OPL computes its samples up to now
+    if (dev.render) dev.render();                 // the OPL and the MIDI synthesizer compute their samples up to now
     const { rate: srcRate, samples } = dev.drain();
     if (!samples.length || !srcRate) return;
     const step = srcRate / rate, n = samples.length >> 1;

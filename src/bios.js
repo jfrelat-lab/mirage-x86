@@ -20,6 +20,7 @@ import { installPIC } from './pic.js';
 import { installDMA } from './dma.js';
 import { installSB } from './sb.js';
 import { installOPL } from './opl.js';
+import { installMPU401 } from './midi.js';
 
 const VRAM = 0xb8000;          // text video memory
 const BDA = 0x400;             // BIOS Data Area
@@ -1440,6 +1441,7 @@ export function installBIOS(machine, opts = {}) {
   installDMA(machine);   // 8237 pair (src/dma.js)
   installSB(machine);    // Sound Blaster 16 at 220h, IRQ 7, DMA 1/5, as BLASTER says (src/sb.js)
   installOPL(machine);   // its OPL3, also the AdLib at 388h (src/opl.js)
+  installMPU401(machine);   // its MPU-401 at 330h, UART mode, to MIRAGE's General MIDI synthesizer (src/midi.js)
   // A PCI bus (src/pci.js) is the difference between QEMU's -M pc and -M isapc: off unless asked for —
   // `pci: true`, or MIRAGE_PCI=1 in the tools — so the ISA machine every existing image boots on stays.
   const pciEnv = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PCI === '1';

@@ -4296,6 +4296,46 @@ const runLinux = (hex, argv) => {
     got = [h > 0, at, ok, x.r32(nr), x.r32(buf + 4).toString(16), miss, err, played, w.samples.length, w.samples.every((v, i) => v === ((i >> 1) & 1 ? 400 : 300))].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: OpenFile reads XP\'s gm.dls as zeros; sndPlaySoundA plays a WAV from memory', got, 'true 3440656 1 4 aaaaaaaa -1 2 1 44100 true'); }
+// General MIDI (src/midi.js). DOS: the MPU-401 at 330h acknowledges UART mode (3Fh) with FEh, then a
+// program change and a note on written to 330h sound in the synthesizer, at the machine's clock --
+// Difúze (2010) plays its music so. Win32: Photon Race 2 (2008) writes a .mid (CreateFileA, WriteFile),
+// opens it with MCI as a "sequencer" and plays it; a Standard MIDI File's tempo change moves the
+// times of what follows. Before, the MPU-401 did not answer and mciSendCommandA did not exist.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { parseSMF } = await import('../src/midi.js');
+    const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc);
+    const io = (port, v) => mc.ioWrite(port, 1, v);
+    io(0x331, 0x3f);
+    const st = mc.ioRead(0x331, 1), ack = mc.ioRead(0x330, 1);
+    mc.midi.capture = true;
+    io(0x330, 0xc0); io(0x330, 0x00); io(0x330, 0x90); io(0x330, 60); io(0x330, 100);
+    mc.cpu.cycles += 18.2065 * mc.pitBase / 10;                     // a tenth of a second
+    mc.midi.render();
+    const dos = mc.midi.drain().samples.filter((v) => v !== 0).length > 1000;
+    // A two-track SMF: 96 ticks a quarter; tempo 500000 us, then 250000 at tick 96; notes at 0, 96 and 192.
+    const vlq = (n) => (n < 128 ? [n] : [0x80 | (n >> 7), n & 0x7f]);
+    const trk = (ev) => { const b = ev.flat(); return [0x4d, 0x54, 0x72, 0x6b, 0, 0, b.length >> 8, b.length & 255, ...b]; };
+    const smf = Uint8Array.from([0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, 2, 0, 96,
+      ...trk([[0, 0xff, 0x51, 3, 0x07, 0xa1, 0x20], [...vlq(96), 0xff, 0x51, 3, 0x03, 0xd0, 0x90], [0, 0xff, 0x2f, 0]]),
+      ...trk([[0, 0x90, 60, 100], [...vlq(96), 0x90, 64, 100], [...vlq(96), 0x80, 64, 0], [0, 0xff, 0x2f, 0]])]);
+    const times = parseSMF(smf).map((e) => e.t.toFixed(2)).join(',');
+    const m2 = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(m2);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    const apis = win32Apis(), { x } = loadPE(lx, m2.mem, m2.cpu, exe, { apis });
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1];
+    const name = x.win.heapAlloc(32), buf = x.win.heapAlloc(smf.length), nw = x.win.heapAlloc(4), parms = x.win.heapAlloc(20), type = x.win.heapAlloc(16);
+    x.write(name, new TextEncoder().encode('C:\\TEMP\\SONG.MID\0')); x.write(buf, smf); x.write(type, new TextEncoder().encode('sequencer\0'));
+    const h = fn('kernel32.dll', 'CreateFileA')(x, name, 0x40000000, 0, 0, 2, 0, 0);
+    fn('kernel32.dll', 'WriteFile')(x, h, buf, smf.length, nw, 0);
+    x.write(parms, new Uint8Array(20)); x.w32(parms + 8, type); x.w32(parms + 12, name);
+    const open = fn('winmm.dll', 'mciSendCommandA')(x, 0, 0x803, 0x2200, parms), dev = x.r32(parms + 4);
+    const play = fn('winmm.dll', 'mciSendCommandA')(x, dev, 0x806, 0, 0);
+    const playing = lx.midi().playing();
+    got = [ack.toString(16), st.toString(16), dos, times, open, dev, play, playing].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('midi: the MPU-401 answers UART mode and sounds; an SMF\'s tempo is followed; MCI plays a written .mid', got, 'fe 0 true 0.00,0.50,0.75 0 1 0 true'); }
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).

@@ -8,7 +8,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 | Missing | Consequence |
 |---|---|
-| Sound | No Gravis Ultrasound. ADPCM and recording play silence. |
+| Sound | No Gravis Ultrasound. ADPCM and recording play silence. General MIDI plays through MIRAGE's own small synthesizer, not a Roland or Microsoft sound set: the notes are the program's, the timbres are approximations. |
 | A network card | Systems run without a network; QNX's demo disk stops asking for one. |
 | ACPI | ReactOS (installed for an ACPI machine) stops in its kernel: "did NOT find RSDT". |
 | A floppy *controller* | The BIOS serves drive A:, but a system that drives the controller itself cannot read a floppy. |
@@ -30,15 +30,18 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 ## Time
 
-- **The headless clock is slow for late systems.** One guest second is 3.3 million instructions, the
-  speed of a slow 386. Windows 2000 expects a Pentium and spends its time redrawing its boot
-  animation. `MIRAGE_PITRELOAD` changes the rate; no profile sets it yet.
-- **Raising that rate made the first seconds of one boot extremely slow** (ten minutes of host time
-  for five guest seconds, Windows 2000). Not explained.
-- **The real-time clock starts at a fixed date** in headless runs, so a guest sees files "from the
-  future".
-- **The timer interrupt rate is capped** at about 291 Hz. A program that asks for more gets 291.
-- **The second compilation tier is off.** A fused loop can run unbounded work in one slice.
+- **Headless, a guest second is 3.32 million instructions**, whatever the processor profile (the
+  PIT's rate, set to match DOSBox's work per frame). In the page the clock is real time and the
+  processor runs as fast as the host. A late system run headless sees a slow processor; this is not
+  what stops Windows 2000 (above). A rate per profile is ROADMAP L3.
+- **The real-time clock starts at 1 January 1990, 08:00** in headless runs, so that runs repeat
+  exactly; a guest then sees files "from the future". `MIRAGE_RTC=hostdate` starts it at the host's
+  date instead.
+- **The timer interrupt rate is capped** at about 1165 Hz (a reload of 1024 PIT ticks; 291 Hz until
+  2026-10-11). Keen 4 and Wolf3D ask for 561 and 700 Hz and get them; Chrome Revenge asks for 17.5 kHz
+  and gets 1165. `MIRAGE_PITFLOOR` lowers the floor.
+- **The second compilation tier is off** (`MIRAGE_TIER2=1` turns it on for work on it): a fused loop
+  could run unbounded work in one slice.
 
 ## The DOS player
 
@@ -57,6 +60,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
 | Second Reality | derails to 0000:0000 at start |
+| C-Dogs 1.06 | silent: its DSIK Sound Blaster driver polls the 16-bit DMA channel 5's count and plays nothing. Not investigated further |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |
 
