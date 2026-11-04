@@ -18,6 +18,7 @@ import { MMX, MMX_OPS, MM_SCRATCH } from './mmx.js';
 // Cap on basic-block length. Overridable because block boundaries are where IRQs are sampled, so
 // moving them is how you measure what depends on that — see docs/notes/timing.md §3, where it showed only
 // one golden of 43 is sensitive. Blocks average 2-3 instructions in practice; this cap is rarely hit.
+const NOREALCHAIN = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOREALCHAIN);
 const MAXOPS = (typeof process !== 'undefined' && process.env && +process.env.MIRAGE_MAXOPS) || 192;
 const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 
@@ -224,6 +225,7 @@ export class Recompiler {
     this.pageCov = [];             // per code page, how many blocks cover each 16-byte chunk — see _cover
     this.heat = new Map();         // lin -> exec count (for the JIT heatmap)
     this.profiling = false;        // gate heat tracking off the hot path
+    this.realChain = !NOREALCHAIN; // chained blocks without paging (translate): MIRAGE_NOREALCHAIN=1, or false here
     this.stats = { compiles: 0, exec: 0, invalidations: 0, t2compiles: 0, t2evicts: 0, flushes: 0, derailBlocks: 0, memoHits: 0 };
     // The translation memo: blocks kept across reset() under paging, by where they start and in what
     // mode, each with the bytes it was translated from. An exec drops the block cache (another program
@@ -305,6 +307,7 @@ export class Recompiler {
     // stale ones (a block decoded as `CD 20` where the memory now says `FF 15`).
     addr = addr >>> 0;
     const end = addr + len;
+    this._smcLo = addr; this._smcHi = end;                   // what a chained block asks of a write into it
     for (let p = addr >>> 12; p <= (end - 1) >>> 12; p++) {
       // Bounds FIRST, and without touching pageBlocks. This is the fast-out and it must not pay
       // for the Map that only the scan below needs: tube calls this barrier 3 030 236 times per
@@ -333,7 +336,13 @@ export class Recompiler {
           // compiled: keep it. Anything else evicts, and a small write is remembered byte by byte.
           if (blk.vol !== null && blk.vol.some(([s, e]) => addr >= s && end <= e)) continue;
           this._evict(blk, lin);
-          this.smcPages.set(p, (this.smcPages.get(p) || 0) + 1);
+          // A chained block (translate, without paging) counts as the blocks it is made of: one eviction for
+          // each piece the write lands in, as each piece was a block of its own before.
+          // A piece counts if it has run (the block of its own would have been made then) and no block of
+          // its own is cached at its start (that one counts for itself).
+          const n = blk.pieces ? blk.pieces.filter(([s, e], i) => s < end && addr < e && (i === 0 || ((blk.ran >>> Math.min(30, i)) & 1) && !this._blockAt(s))).length : 1;
+          if (n === 0) continue;
+          this.smcPages.set(p, (this.smcPages.get(p) || 0) + n);
           if (len <= 4) {
             if (this.smcHits.size > 65536) this.smcHits.clear();
             for (let a = addr; a < end; a++) this.smcHits.set(a, (this.smcHits.get(a) || 0) + 1);
@@ -377,8 +386,11 @@ export class Recompiler {
     if (e > (grp[b + 1] >>> 0)) grp[b + 1] = e;
   }
 
+  /** Whether a block of its own is cached at linear `lin` (either CS.D form). */
+  _blockAt(lin) { const pg = this.blockPages[lin >>> 12]; return pg !== undefined && !!(pg[lin & 0xfff] || pg[(lin & 0xfff) | 0x1000]); }
+
   _evict(blk, lin) {
-    if (blk === this.curBlk) this.cpu.smcSelf = 1;   // it is running RIGHT NOW — see the guard in translate
+    if (blk === this.curBlk) { this.cpu.smcSelf = 1; this.cpu.smcLo = this._smcLo; this.cpu.smcHi = this._smcHi; }   // it is running RIGHT NOW — see the guard in translate
     const pg = this.blockPages[lin >>> 12];
     if (pg !== undefined) { pg[lin & 0xfff] = undefined; pg[(lin & 0xfff) | 0x1000] = undefined; }   // both CS.D variants
     this.heat.delete(lin);
@@ -940,7 +952,7 @@ export class Recompiler {
     let ssB32 = false;
     const pagedRW = this.memStrategy.read === 'paged' && this.memStrategy.write === 'paged';
     const inlineStack = (sz) => sz === 32 && pagedRW && cpuNow.ssB && flatSeg(SS) && (ssB32 = true);
-    let ip = ip0, ipLast = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false, stiShadow = 0;
+    let ip = ip0, ipLast = ip0, ended = false, tmp = 0, count = 0, usesFPU = false, canFault = false, stiShadow = 0, usesM = false;
     const NT = () => '_' + (tmp++);
 
     // Terminator descriptor. Static, same-CS transfers (JMP rel / Jcc / LOOP / JCXZ) record
@@ -1186,7 +1198,38 @@ export class Recompiler {
      * one (the two would cross); a branch to the head is still the self-loop.
      */
     let loopFloor = -1;                                          // an out index: loops follow the code as it runs
-    const sideExits = pfRestart && !TIER2 && !NOSIDEEXIT;
+    /*
+     * CHAINED BLOCKS WITHOUT PAGING (real mode, DOS extenders): side exits and loops as under paging, with
+     * one difference -- wherever the block would have ended before, it checks what the dispatcher checks
+     * between two blocks (the slice's block budget, a halted or blocked machine, the trap flag, and, with
+     * interrupts enabled, a waiting IRQ or the next timer or device event) and leaves there if the
+     * dispatcher would have stopped or delivered something. So the instructions run, the slices and the
+     * cycle at which every interrupt lands are exactly what they were: the DOS golden runs, timed to the
+     * block, do not move. And the budget a block may translate is counted from each of those points, so
+     * that the cap of maxOps instructions cuts where it cut. BYTE's Sieve ran 3.0 instructions a dispatch
+     * (docs/notes/2026-11-03-sieve-profile.md). MIRAGE_NOREALCHAIN=1 turns it off.
+     */
+    // Not on a page whose code has been written to: there what a block is made of steers the self-modification heuristics.
+    const exact = !pfRestart && !TIER2 && !NOSIDEEXIT && rec.realChain && !checked && !this.smcPages.has(linStart >>> 12);
+    let segBase = 0;                                             // the count where the block would have begun
+    const HARDCAP = 4 * maxOps;                                  // a chained block ends at a branch past this
+    // A chained block counts its own cycles: each piece where the block would have ended is added to
+    // cpu.cycles there (so a port read after it sees the cycle it saw when that piece was a block of its
+    // own), and the dispatcher adds the last piece, the block's count. `mat` is how much the code at this
+    // point has added; an early way out gives back the last piece's count the dispatcher will add, as
+    // /*FIN*/ (resolved when the block is done).
+    let mat = 0, chained = false, chainStop = false, exited = false;
+    // An instruction it cannot decode, past a side exit, has not run yet (it may be data after a branch
+    // gcc made: UD2 after a call that does not return): the block ends before it, where it would have
+    // ended had the branch ended it, and the instruction is decoded if it is ever reached.
+    const endBefore = () => { if (!(chained || exited)) return false; count--; P(`cpu.eip=${curIpStart};`); P('return;'); ended = true; return true; };
+    const segEnds = [], segIps = [ip0];                          // the count where each piece ended; the ip where each began
+    // A write into the running block: into the piece running now, the block leaves after the writing
+    // instruction, as it always did; into another piece (a block of its own before), it leaves at the
+    // next place where it would have ended (cpu.smcSelf, below), before running what was written.
+    const boundary = (eip, next = true) => { const add = count - mat; mat = count; segBase = count; segEnds.push(count); if (next) segIps.push(eip); chained = true; usesM = true;
+      return `cpu.cycles+=${add};if(cpu.tbudget<=1||cpu.halted||cpu.smcSelf||M.blocked||(cpu.flags&${TF})||((cpu.flags&${IF})&&(M.hwIrqPending||cpu.cycles>=M.nextEvent))){cpu.smcSelf=0;cpu.eip=${eip};cpu.cycles-=/*FIN*/0;return;}cpu.tbudget--;${next ? `R.curBlk.ran|=${1 << Math.min(30, segIps.length - 1)};` : ''}`; };
+    const sideExits = (pfRestart || exact) && !TIER2 && !NOSIDEEXIT;
     /*
      * SKIPS. A short FORWARD conditional branch, taken, jumps over a few instructions the block then
      * decodes anyway: `if(cond){..}else{` the instructions `}`, closed where the branch lands, and the
@@ -1198,13 +1241,14 @@ export class Recompiler {
      * ends, or follows a jump, inside one is translated again without skips. MIRAGE_NOSKIP=1.
      */
     const skips = [], skipped = [];                              // open: { t, at (out index), n (count) }; closed: [at, end]
-    const skipsOn = sideExits && !NOSKIP && !noSkip && d;
+    const skipsOn = sideExits && pfRestart && !NOSKIP && !noSkip && d;
     // A conditional branch -- Jcc, and LOOP/LOOPE/LOOPNE/JCXZ, `cond` their condition as JavaScript,
     // `tm` the terminator they end the block with otherwise.
     const endJcc = (cc, target, next) => branch(condExpr(cc), target, { k: 'jcc', cc, t: +target, n: +next });
     const branch = (cond, target, tm) => {
       const at = starts.get(+target);
-      if (sideExits && at !== undefined && +target !== ip0 && at[0] > loopFloor && (!skips.length || at[0] > skips[skips.length - 1].at) && !skipped.some(([a, e]) => at[0] > a && at[0] <= e) && !fReads.some(([ri, di]) => ri >= at[0] && di < at[0])) {
+      if (exact && (count > HARDCAP || chainStop)) { term = tm; ended = true; return; }   // long enough, or the x87's precision moved: end where the block would have
+      if (sideExits && !exact && at !== undefined && +target !== ip0 && at[0] > loopFloor && (!skips.length || at[0] > skips[skips.length - 1].at) && !skipped.some(([a, e]) => at[0] > a && at[0] <= e) && !fReads.some(([ri, di]) => ri >= at[0] && di < at[0])) {
         cur.use |= lALL;
         loops.push([at[0], at[2]]);
         for (const [r, c] of fcache) if (c.def < at[0]) fcache.delete(r);   // F moves at the loop's head
@@ -1223,6 +1267,8 @@ export class Recompiler {
       }
       if (sideExits && !(+target >= ip0 && +target <= curIpStart)) {
         cur.use |= lALL;
+        exited = true;
+        if (exact) { P(`if(${cond}){cpu.smcSelf=0;cpu.cycles+=${count - mat}-/*FIN*/0;cpu.eip=${+target};return;}`); P(boundary(tm.n)); return; }
         P(`if(${cond}){cpu.eip=${+target};cpu.cycles-=/*REM${count}*/0;return;}`);
         return;
       }
@@ -1239,6 +1285,8 @@ export class Recompiler {
     };
     const endLoop = (tm) => { if (tm.v !== 0xe2) cur.use |= lZ; branch(termCond(tm), tm.t, tm); };
     const emitTermReturn = () => {
+      // A chained block may end with a write into one of its other pieces still pending (cpu.smcSelf): not the next block's.
+      if (chained) P('cpu.smcSelf=0;');
       // term.t is already reduced to the code segment's width at decode time (see ipAdd), so the
       // old runtime `&0xffff` was redundant in 16-bit code and destructive in 32-bit code — it threw
       // away the top half of every branch target above 0xFFFF.
@@ -1258,6 +1306,14 @@ export class Recompiler {
      */
     let selfLoop = false;
     const emitSelfLoop = () => {
+      if (exact) {                                               // a turn ends where the block ended: the dispatcher's checks
+        if (term.k !== 'jmp') {
+          const c = termCond(), stay = term.t === ip0 ? c : `!${c}`, exit = term.t === ip0 ? term.n : term.t;
+          P(`if(!(${stay})){cpu.smcSelf=0;cpu.cycles+=${count - mat}-/*FIN*/0;cpu.eip=${exit};return;}`);
+        }
+        const m0 = mat, s0 = segBase; P(boundary(ip0, false)); mat = m0; segBase = s0; segEnds.pop();   // the next turn starts with nothing added
+        return;
+      }
       const c = termCond(), stay = term.t === ip0 ? c : `!${c}`, exit = term.t === ip0 ? term.n : term.t;
       P(`if(!(${stay})){cpu.eip=${exit};return;}`);
       P(`if((cpu.flags&${IF})||cpu.tbudget<=1){cpu.eip=${ip0};return;}`);
@@ -1352,7 +1408,7 @@ export class Recompiler {
       for (let i = 0; i < moved.length; i++) out[eipAt + 1 + i] = moved[i];
       out[eipAt] = '';
     };
-    while (!ended && count < maxOps) {
+    while (!ended && count - segBase < maxOps) {
       pruneEip();
       if (follows && starts.has(ip)) break;                // a followed jump ran into code already here
       while (skips.length && skips[skips.length - 1].t <= ip) {
@@ -1904,8 +1960,14 @@ export class Recompiler {
           if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) {   // the guest asked for #UD; give it #UD
             P(`cpu.eip=${ipStart};cpu.raise(6);`); P('return;'); ended = true; break;
           }
+          if (endBefore()) break;
           throw new Error(unimplemented(op.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
       }
+
+      // A chained block stops chaining after an instruction that may change the x87's precision control
+      // (FLDCW, FLDENV, FRSTOR, FNINIT -- through these helpers): the next piece was translated for the
+      // precision in force when its block began, which the dispatcher checks (blk.fprec).
+      if (exact && !chainStop) for (let i = outMark; i < out.length; i++) if (/cpu\.(fldcw|fldenv|fpuMem|fpuReg)\(/.test(out[i])) { chainStop = true; break; }
 
       // Self-modification guard. A block holds the bytes it was translated from, so an instruction
       // that rewrites a LATER byte of its own block leaves the rest of the block running the stale
@@ -1920,8 +1982,11 @@ export class Recompiler {
         // ...and under paging it gives back the instructions after this one, as a side exit does: the
         // dispatcher adds the whole block's count. (Real and protected mode keep the old count, which
         // two of the DOS golden intros' frames are timed by: crevenge, qblove.)
-        const giveBack = pfRestart ? `cpu.cycles-=/*REM${count}*/0;` : '';
-        const abort = `if(cpu.smcSelf){cpu.smcSelf=0;cpu.eip=${SEQ()};${giveBack}return;}`;
+        // A write into the block itself leaves it after the writing instruction. Unpaged, the dispatcher then
+        // adds the whole block's count, as it always did; a chained block adds what its piece would have.
+        const giveBack = pfRestart ? `cpu.cycles-=/*REM${count}*/0;` : exact ? `cpu.cycles+=/*SEGEND${segEnds.length}:${mat}*/0;` : '';
+        const inPiece = exact ? `&&cpu.smcLo</*SEGHI${segEnds.length}*/0&&cpu.smcHi>/*SEGLO${segEnds.length}*/0` : '';
+        const abort = `if(cpu.smcSelf${inPiece}){cpu.smcSelf=0;cpu.eip=${SEQ()};${giveBack}return;}`;
         let helperWrite = false, inlineMark = false;
         for (let i = outMark; i < out.length; i++) {
           // The inline write emitter leaves a marker INSIDE its code-page branch. It must only RECORD
@@ -1938,7 +2003,7 @@ export class Recompiler {
           // instruction. They are rare enough on a hot path not to matter.
           else if (out[i].includes('m.w8(') || out[i].includes('m.w16(') || out[i].includes('m.w32(')) helperWrite = true;
         }
-        if (inlineMark) P(`if(_smc){_smc=0;cpu.smcSelf=0;cpu.eip=${SEQ()};${giveBack}return;}`);
+        if (inlineMark) P(`if(_smc${inPiece}){_smc=0;cpu.smcSelf=0;cpu.eip=${SEQ()};${giveBack}return;}`);
         else if (helperWrite) P(abort);
       }
       // STI opens the interrupt window one instruction LATE — and closes nowhere: the block must end
@@ -1974,19 +2039,24 @@ export class Recompiler {
     if (skips.length) return this.translate(linStart, ip0, maxOps, d, checked, true);
     if (needChecked) return this.translate(linStart, ip0, maxOps, d, true, noSkip);
     const bodyOut = out.slice();
-    selfLoop = !NOSELFLOOP && !TIER2 && pfRestart && (term.k === 'jcc' || term.k === 'jcxz' || term.k === 'loop')
-      && (term.t === ip0) !== (term.n === ip0);
+    selfLoop = !NOSELFLOOP && !TIER2 && (pfRestart || exact) && (((term.k === 'jcc' || term.k === 'jcxz' || term.k === 'loop')
+      && (term.t === ip0) !== (term.n === ip0)) || (exact && term.k === 'jmp' && term.t === ip0));
+    if (selfLoop && exact) usesM = true;
     if (selfLoop) emitSelfLoop(); else emitTermReturn();
     let head = '';
     if (flatUsed.size) {
       const sg = [...flatUsed];
       head = `if(((${sg.map((g) => `cpu.limit[${g}]`).join('&')})|0)!==-1||(${sg.map((g) => `cpu.limLo[${g}]`).join('|')})!==0${ssB32 ? '||!cpu.ssB' : ''}){cpu.eip=${ip0};cpu.unflat(${linStart});return;}`;
     }
-    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + head;
+    const pre = 'var r=cpu.reg,m=cpu.mem,sb=cpu.base,u8=m.u8,cp=m.codePage;' + memPrologue(this.memStrategy) + (usesFPU ? 'var st=cpu.fst,dv=m.dv,oc=cpu.focc;' : '') + (usesM ? 'var M=cpu.mach,R=M.rec;' : '') + head;
     const fx = FXC && usesFPU;
     for (const [at, dt] of loops) out[at] = 'for(;;){\n' + (fx ? `F=(cpu.ftop-${dt}+8)&7;\n` : '') + out[at];
     if (fx) out.unshift('var F=cpu.ftop;');
-    const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k)).replace(/\/\*FSYNC\*\//g, fx ? 'F=cpu.ftop;' : '');   // side exits: what they did not run
+    const fin = chained ? count - segBase : 0;                    // a chained block's count: its last piece
+    const segEnd = (i) => (i < segEnds.length ? segEnds[i] : count);
+    const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k)).replace(/\/\*FSYNC\*\//g, fx ? 'F=cpu.ftop;' : '')   // side exits: what they did not run
+      .replace(/\/\*FIN\*\/0/g, String(fin)).replace(/\/\*SEGEND(\d+):(\d+)\*\/0/g, (_, i, m0) => String(segEnd(+i) - +m0 - (chained ? fin : count)))
+      .replace(/\/\*SEG(LO|HI)(\d+)\*\/0/g, (_, w, i) => String(mask(linStart - ip0 + (w === 'LO' ? segIps[+i] : (+i + 1 < segIps.length ? segIps[+i + 1] : ip)))));
     const body = pre + '\n' + (selfLoop ? `for(;;){\n${code}\n}` : code);
     const fn = new Function('cpu', body);
     // The emitted source is kept ONLY if something will read it: the region compiler splices
@@ -1996,7 +2066,7 @@ export class Recompiler {
     // by emitted bytes.
     const keep = rec.keepSource;
     hi = Math.max(hi, ip);
-    return { fn, linStart: mask(linStart - ip0 + lo), linEnd: mask(linStart - ip0 + hi), ip0, ipEnd: ip, count,
+    return { fn, linStart: mask(linStart - ip0 + lo), linEnd: mask(linStart - ip0 + hi), ip0, ipEnd: ip, count: chained ? fin : count, ran: 0, pieces: chained ? segIps.map((a, i) => [mask(linStart - ip0 + a), mask(linStart - ip0 + (i + 1 < segIps.length ? segIps[i + 1] : ip))]) : undefined,
              body: keep ? body : '', bodyLen: body.length, term, bodyOut: keep ? bodyOut : EMPTY_LINES,
              // epoch/ph0/ph1 (ROADMAP D8) are set by _compile under paging; declared HERE so every block
              // has one shape — adding them afterwards made the dispatch loop's blk.fn/blk.count polymorphic
@@ -2782,6 +2852,7 @@ export class Recompiler {
           if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) {
             P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;   // ip-2: the 0F
           }
+          if (endBefore()) return;
           throw new Error(unimplemented('0f 0x' + op2.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 2), mem, rec));
       }
     }

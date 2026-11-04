@@ -51,3 +51,13 @@ alone is 3.4 %.
 - **The barrier** could skip the check for writes to a page's bytes known to hold no code (byte-
   granular tracking, on the roadmap); 3.4 % here, more for intros that keep their variables beside
   their code.
+
+## Afterwards (2026-11-04)
+
+Blocks now chain without paging, exactly
+([RECOMPILER.md](../RECOMPILER.md#longer-blocks-without-paging)): side exits and self-loops, with the
+dispatcher's checks at each former block end, so the golden runs did not move and nothing was
+re-blessed. The Sieve went from 3.0 to **8.5 instructions a dispatch**, 7.5 s to **4.84–4.87 s**
+headless and 11.1 s to **6.6–6.8 s** in the page — past native DOSBox-X's 6.2 s, better than the
+estimate. The inner loops do not run whole in one block: the boundary checks are kept to every
+former block end, which is what keeps the timing exact. The barrier's 3.4 % is still there.

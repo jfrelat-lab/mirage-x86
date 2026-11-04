@@ -2,6 +2,14 @@
 
 What changed for someone using MIRAGE, newest first. The commit history has every step.
 
+## Unreleased
+
+- **Faster DOS code**: without paging a translated block now runs on through side exits and its own
+  loop, stopping at each former block end for the dispatcher's checks, so timer interrupts land
+  where they did and every golden run is unchanged. BYTE's Sieve runs in 4.9 s headless (7.5 s
+  before) and 6.7 s in the page (11.1 s), ahead of native DOSBox-X's 6.2 s; DJGPP's Dhrystone
+  466,000 a second headless (320,000), CoreMark 608 iterations a second (402).
+
 ## 2026-11 — first public release
 
 - **Four machines on one CPU**: the DOS player (`dos.html`), the bare PC (`boot.html`), Linux

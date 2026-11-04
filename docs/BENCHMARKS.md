@@ -3,11 +3,11 @@
 How fast MIRAGE runs x86 code beside the other x86 emulators, on the same host and the same binaries.
 What each one *can do* is in [COMPARISON.md](COMPARISON.md).
 
-**At a glance.** On 32-bit code the WebAssembly JITs lead by a wide margin: v86 and CheerpX run the
-same programs 6 to 9 times as fast as MIRAGE. On 16-bit real-mode code (the Sieve) MIRAGE headless is
-within a fifth of native DOSBox-X and level with v86. MIRAGE is ahead of js-dos and RetroTick on
-every benchmark they finished. Its JavaScript runs at 420–450 M x86 instructions a second on Linux
-code, about 150 M on unpaged DOS code.
+**At a glance.** On 32-bit code the WebAssembly JITs lead: v86 runs DJGPP's Dhrystone and CoreMark
+2.5 to 4 times as fast as MIRAGE headless, and v86 and CheerpX run Linux code 6 to 9 times as fast. On
+16-bit real-mode code (the Sieve) MIRAGE is first: headless ahead of native DOSBox-X, and in the page
+ahead of v86 and js-dos. MIRAGE is ahead of js-dos and RetroTick on every benchmark they finished. Its
+JavaScript runs at 420–450 M x86 instructions a second on Linux code, 150 M on the Sieve.
 
 ## The rules
 
@@ -21,7 +21,7 @@ code, about 150 M on unpaged DOS code.
 - **Ranking**: within one benchmark and one guest system only. *Relative to the first* is the score
   over the best score (for a time, the best time over this one). A range is the spread of repeated
   runs; it is ranked by its best.
-- **Dates**: 2026-11-03; DOSBox-X native 2026-10-13, PCjs 2026-10-12.
+- **Dates**: 2026-11-03, MIRAGE's DOS rows 2026-11-04; DOSBox-X native 2026-10-13, PCjs 2026-10-12.
 
 ## DOS
 
@@ -31,8 +31,8 @@ code, about 150 M on unpaged DOS code.
 |---|---|---|---|---|
 | 🥇 1 | v86 | Node, MS-DOS 6.22 | 1,190,000 | `████████████████████` 100 % |
 | 🥈 2 | DOSBox-X | native, dynamic core | 1,111,000 | `███████████████████░` 93 % |
-| 🥉 3 | **MIRAGE** | headless (Node) | 315,000–322,000 | `█████░░░░░░░░░░░░░░░` 27 % |
-| 4 | **MIRAGE** | Chrome, the DOS player | 208,000 | `███░░░░░░░░░░░░░░░░░` 17 % |
+| 🥉 3 | **MIRAGE** | headless (Node) | 465,000–467,000 | `████████░░░░░░░░░░░░` 39 % |
+| 4 | **MIRAGE** | Chrome, the DOS player | 323,000 | `█████░░░░░░░░░░░░░░░` 27 % |
 | 5 | js-dos | Chrome | 161,000 | `███░░░░░░░░░░░░░░░░░` 14 % |
 | — | RetroTick | Node | did not finish | |
 
@@ -44,8 +44,8 @@ validated by CoreMark's own checks.
 | Rank | Emulator | Where it ran | Iterations a second | Relative to the first |
 |---|---|---|---|---|
 | 🥇 1 | v86 | Node, MS-DOS 6.22 | 2,554 | `████████████████████` 100 % |
-| 🥈 2 | **MIRAGE** | headless (Node) | 401–404 | `███░░░░░░░░░░░░░░░░░` 16 % |
-| 🥉 3 | **MIRAGE** | Chrome, the DOS player | 304 | `██░░░░░░░░░░░░░░░░░░` 12 % |
+| 🥈 2 | **MIRAGE** | headless (Node) | 606–609 | `█████░░░░░░░░░░░░░░░` 24 % |
+| 🥉 3 | **MIRAGE** | Chrome, the DOS player | 459–463 | `████░░░░░░░░░░░░░░░░` 18 % |
 | 4 | js-dos | Chrome | 240 | `██░░░░░░░░░░░░░░░░░░` 9 % |
 | — | DOSBox-X | native | not measured | |
 | — | RetroTick | Node | did not finish | |
@@ -57,13 +57,16 @@ real mode — the same instructions on every emulator. Lower is better.
 
 | Rank | Emulator | Where it ran | Time | Relative to the first |
 |---|---|---|---|---|
-| 🥇 1 | DOSBox-X | native, dynamic core | 6.2 s | `████████████████████` 100 % |
-| 🥈 2 | v86 | Node, MS-DOS 6.22 | 7.1 s | `█████████████████░░░` 87 % |
-| 🥉 3 | **MIRAGE** | headless (Node) | 7.5 s | `█████████████████░░░` 83 % |
-| 4 | js-dos | Chrome | 8.1 s | `███████████████░░░░░` 77 % |
-| 5 | **MIRAGE** | Chrome, the DOS player | 11.1 s | `███████████░░░░░░░░░` 56 % |
-| 6 | RetroTick | Node | 39.5 s | `███░░░░░░░░░░░░░░░░░` 16 % |
-| 7 | PCjs | Chrome, DeskPro 386 at its top speed | 64.3 s | `██░░░░░░░░░░░░░░░░░░` 10 % |
+| 🥇 1 | **MIRAGE** | headless (Node) | 4.84–4.87 s | `████████████████████` 100 % |
+| 🥈 2 | DOSBox-X | native, dynamic core | 6.2 s | `████████████████░░░░` 78 % |
+| 🥉 3 | **MIRAGE** | Chrome, the DOS player | 6.6–6.8 s | `███████████████░░░░░` 73 % |
+| 4 | v86 | Node, MS-DOS 6.22 | 7.1 s | `██████████████░░░░░░` 68 % |
+| 5 | js-dos | Chrome | 8.1 s | `████████████░░░░░░░░` 60 % |
+| 6 | RetroTick | Node | 39.5 s | `██░░░░░░░░░░░░░░░░░░` 12 % |
+| 7 | PCjs | Chrome, DeskPro 386 at its top speed | 64.3 s | `██░░░░░░░░░░░░░░░░░░` 8 % |
+
+DOSBox-X at `cycles=max` keeps part of each millisecond for itself and its display, as the DOS
+player does; headless MIRAGE does not.
 
 ## Linux
 
@@ -133,7 +136,9 @@ few seconds after it boots, and the screen it settles on is that blank one.
 
 MIRAGE runs JavaScript, and its time goes where a JavaScript engine puts it. Under paging a block
 runs on through forward branches, short loops and followed calls — some 30 x86 instructions a
-dispatch on Dhrystone ([RECOMPILER.md](RECOMPILER.md#longer-blocks-under-paging)); real-mode and
-unpaged DOS code still ends a block at every branch, about 5 instructions a dispatch (on the roadmap),
-which is most of the gap between its Linux and DOS figures. The WebAssembly JITs compile to a
+dispatch on Dhrystone ([RECOMPILER.md](RECOMPILER.md#longer-blocks-under-paging)). Without paging a
+block chains the same way but stops at each former block end to do the dispatcher's checks, so DOS
+timing stays exact; 8 to 14 instructions a dispatch
+([RECOMPILER.md](RECOMPILER.md#longer-blocks-without-paging)), which is most of the gap left between
+its Linux and DOS figures. The WebAssembly JITs compile to a
 lower-level target and do not pay for a JavaScript function call between blocks.

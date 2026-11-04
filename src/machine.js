@@ -40,6 +40,7 @@ export class Machine {
     this.ramSize = Math.min(opts.ramSize || this.mem.size, this.mem.size);
     this.mem.pfRaise = true;         // there is a run loop here to catch it — see Memory.xlat
     this.cpu = new CPU(this.mem);
+    this.cpu.mach = this;                           // for translated blocks that check what the dispatcher checks (recompiler.js, chained blocks)
     // Which x86 generation this machine is. Read by the recompiler at TRANSLATION time, so every
     // difference becomes a constant in the emitted code — see src/cpu-profile.js.
     // The VGA keeps its linear shadow up to date only when emitted reads rely on it.

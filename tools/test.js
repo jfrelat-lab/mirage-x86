@@ -2915,6 +2915,45 @@ const udRun = (gated) => {
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('TRAPS=')) line = t.trim(); }
   eq('POPF setting TF traps the instructions after it, as DOSBox-X does', line, 'TRAPS=06 CX=0 0 0 0 0 0'); }
 
+// ---- chained blocks without paging (recompiler.js translate, `exact`) -------------------------------
+// tools/realchain.asm, chained and not, slice by slice under the timer: a chained block checks, wherever
+// the block would have ended, what the dispatcher checks between two blocks, and counts its cycles there,
+// so the instructions run, the slices and the cycle every timer interrupt lands at are the same -- the
+// DOS golden runs are timed to the block. And it takes fewer dispatches. BYTE's Sieve: 3.0 instructions
+// a dispatch before, 8.5 after (docs/notes/2026-11-03-sieve-profile.md).
+{ let got;
+  try {
+    const img = Uint8Array.from('fa31c08ec026c70620005e01268c0e2200b036e64330c0e640b004e640fbb9004031f631ff31db4683fe07720331f64701f3031e6a014975eeb9003031d281faf02f7715428816530101d03d0080720231c0bd000001efebe5b8004ccd212eff066a0150b020e62058cf0000'.match(/../g), (x) => parseInt(x, 16));
+    const run = (chain) => {
+      const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); mc.timerAuto = true;
+      const dos = installDOS(mc, new VFS()); mc.rec.realChain = chain;
+      dos.load(img, '', 'C:\\RC.COM');
+      const states = []; let dispatches = 0;
+      for (let k = 0; k < 1000 && !dos.programDone; k++) {
+        dispatches += mc.runSlice(97);
+        states.push([mc.cpu.cycles, mc.cpu.eip, ...mc.cpu.reg, mc.mem.r16(0x46c)].join(','));
+      }
+      return { states, dispatches, done: dos.programDone };
+    };
+    const a = run(false), b = run(true);
+    const firstDiff = a.states.findIndex((v, i) => v !== b.states[i]);
+    got = [a.done && b.done, a.states.length === b.states.length, firstDiff, b.dispatches < a.dispatches].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('realmode chaining: the same instructions, slices and timer interrupts as unchained, in fewer dispatches', got, 'true true -1 true'); }
+
+// A chained block decodes on past a side exit, into bytes that may never run: gcc puts a UD2 after a
+// call that does not return, and CoreMark's DJGPP build stopped translating there ("unimplemented
+// opcode 0f 0b") though the branch before it is always taken. Past a side exit the block now ends
+// before what it cannot decode. `xor ax,ax; inc ax; jnz +2; ud2; mov ax,4c00h; int 21h`.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+    const dos = installDOS(mc, new VFS());
+    dos.load(Uint8Array.of(0x31, 0xc0, 0x40, 0x75, 0x02, 0x0f, 0x0b, 0xb8, 0x00, 0x4c, 0xcd, 0x21), '', 'C:\\UD2.COM');
+    for (let k = 0; k < 20 && !dos.programDone; k++) mc.runSlice(100);
+    got = dos.programDone;
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('a chained block ends before code it cannot decode past a side exit (a UD2 after a taken JNZ)', got, true); }
+
 // ---- the 8237 DMA controllers read back what was programmed (src/dma.js) ----------------------
 // tools/dmaprobe.asm under QEMU and DOSBox-X: A1=1234 C1=0FFF P1=05 A3=4321 C3=07FF P3=0A. Every one
 // of those read FFh here, and Void 3, which fills its sound buffer up to `0FFFh - count`, spun in its

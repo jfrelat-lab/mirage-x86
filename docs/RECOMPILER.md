@@ -173,7 +173,31 @@ keeps going through what would end it elsewhere. Each has its switch.
   the same block, up to four; a RET of a followed call goes on at the return address when the stack
   holds it, and leaves as a side exit otherwise (`MIRAGE_NOFOLLOW=1`).
 
-Without paging none of these apply: the DOS golden runs, timed to the block, are what they were.
+## Longer blocks without paging
+
+In real mode and unpaged protected mode (DOS, DPMI) a block goes on through side exits and turns
+self-loops too, but **exactly**: each former block end becomes a *boundary* where the block does what
+the dispatcher would have done between two blocks — it adds that piece's cycles, takes one from the
+slice's budget, and leaves when the budget is spent, a hardware interrupt is pending with IF set, a
+timer event falls due, TF is set, the CPU halted or blocked, or code it holds was written. So a
+timer interrupt lands on the same instruction as it did with one dispatch a piece, the cycle count a
+port read sees is the same, and the 44 golden runs are unchanged without any re-blessing.
+
+- **Counting.** A chained block's `count` is its last piece; an early exit gives back what it did
+  not run. A write to code in the piece being run aborts it at once, as before; a write further on
+  ends the block at the next boundary. The self-modifying-code heat counts one per piece hit, for
+  pieces that ran and have no block of their own — the same as unchained.
+- **Limits.** No inner loops or skips (they stay paged-only), no chaining on pages already seen
+  rewriting themselves, none past an x87 control-word load, at most `MIRAGE_MAXOPS` instructions a
+  piece and four times that a block; past a side exit an undecodable instruction ends the block
+  instead of raising #UD where the program never goes.
+- **What it gave** (Apple M1, headless): BYTE's Sieve from 3.0 to 8.5 instructions a dispatch, 8.3 s
+  to 4.85 s; DJGPP's Dhrystone 13.5 and CoreMark 14.1 a dispatch, Dhrystone from 320,000 to 466,000 a
+  second, CoreMark from 402 to 608 iterations a second ([BENCHMARKS.md](BENCHMARKS.md#dos)).
+
+`MIRAGE_NOREALCHAIN=1` turns it off (`rec.realChain` per machine); the
+`realmode chaining` test in `tools/test.js` runs `tools/realchain.asm` both ways, with a fast PIT and
+its own timer handler, and asks for the same instructions, slices and interrupts.
 
 ## The second tier (off)
 
@@ -192,6 +216,7 @@ All read once at start-up from the environment, all off by default unless stated
 
 | Switch | Effect |
 |---|---|
+| `MIRAGE_NOREALCHAIN` | no chaining without paging |
 | `MIRAGE_MAXOPS` | instructions per block (192) |
 | `MIRAGE_CODE_CAP` | the size cap of the cache, in bytes |
 | `MIRAGE_TIER2=1` | the second tier |

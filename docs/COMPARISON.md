@@ -112,9 +112,10 @@ Each line is one capability, so that it can be checked on its own.
 
 ## Speed
 
-Measured, ranked and explained in [BENCHMARKS.md](BENCHMARKS.md): on 32-bit code v86 and CheerpX run
-6 to 9 times as fast as MIRAGE; on 16-bit code MIRAGE headless is level with v86 and within a fifth of
-native DOSBox-X; MIRAGE is ahead of js-dos and RetroTick.
+Measured, ranked and explained in [BENCHMARKS.md](BENCHMARKS.md): on 32-bit code v86 runs 2.5 to 4
+times as fast as MIRAGE on DOS, and v86 and CheerpX 6 to 9 times on Linux; on 16-bit code MIRAGE is
+first, headless ahead of native DOSBox-X and in the page ahead of v86; MIRAGE is ahead of js-dos and
+RetroTick.
 
 ## Where this is going
 
