@@ -2571,6 +2571,7 @@ export class Recompiler {
           if (o.isReg && o.reg >= 5) return;
           if (!o.isReg && o.reg === 2) { canFault = true; P(`cpu.xmm.mxcsr=(${rmR(o, 32)})&0xffff;`); return; }
           if (!o.isReg && o.reg === 3) { canFault = true; P(rmW(o, 32, 'cpu.xmm.mxcsr')); return; }
+          if (endBefore()) return;
           throw new Error(unimplemented(`0f ae /` + o.reg, mask(linStart - ip0 + ip - 1), mem, rec));
         }
         const T = SSE_TABLE[pfx + op2.toString(16).padStart(2, '0')];
@@ -2648,12 +2649,14 @@ export class Recompiler {
           const op3 = f8();
           if (op3 === 0x23) { simple(SSE.PMOVSXWD, 8); return; }
           if (op3 === 0x31) { simple(SSE.PMOVZXBD, 4); return; }
+          if (endBefore()) return;
           throw new Error(unimplemented(`0f 38 ` + op3.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
         }
         if (p66 && op2 === 0x3a) {                       // three-byte 0F 3A escape
           const op3 = f8();
           if (op3 === 0x21) { withImm(SSE.INSERTPS, 4); return; }
           if (op3 === 0x40) { withImm(SSE.DPPS); return; }
+          if (endBefore()) return;
           throw new Error(unimplemented(`0f 3a ` + op3.toString(16).padStart(2, '0'), mask(linStart - ip0 + ip - 1), mem, rec));
         }
       }
@@ -2799,6 +2802,7 @@ export class Recompiler {
             P(wrGuard(o.seg) + `cpu.cmpxchg8b(${a},${AM(`${a}+4`)});`); return;
           }
           if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          if (endBefore()) return;
           throw new Error(unimplemented('0f 0xc7 /' + o.reg, mask(linStart - ip0 + ip - 2), mem, rec));
         }
         case 0xa0: P(sz === 16 ? `cpu.push16(cpu.seg[${FS}]);` : `cpu.push32(cpu.seg[${FS}]);`); return;   // PUSH FS
@@ -2843,6 +2847,7 @@ export class Recompiler {
           if ((rec._udSeen = true, guestOwnsUD(mem, rec.cpu))) {
             P(`cpu.eip=${ip - 2};cpu.raise(6);`); P('return;'); ended = true; return;
           }
+          if (endBefore()) return;
           throw new Error(`mirage: CPUID (0f a2) at linear 0x${mask(linStart - ip0 + ip - 2).toString(16)}` +
             ` — the '${rec.cpu.profile.name}' profile has no CPUID, which is correct for it. Use` +
             ` cpu: '586' for a part that has one, or give the guest an INT 6 handler.`);

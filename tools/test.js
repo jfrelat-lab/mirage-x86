@@ -2953,6 +2953,16 @@ const udRun = (gated) => {
     got = dos.programDone;
   } catch (e) { got = e.message.slice(0, 60); }
   eq('a chained block ends before code it cannot decode past a side exit (a UD2 after a taken JNZ)', got, true); }
+// The same for an instruction the CPU profile does not have: DOOM's DOS/4GW tests EFLAGS.ID and
+// jumps over its CPUID on a 386, and on the 386 profile the chained block stopped translating there.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20, cpu: '386' }); installBIOS(mc);
+    const dos = installDOS(mc, new VFS());
+    dos.load(Uint8Array.of(0x31, 0xc0, 0x40, 0x75, 0x02, 0x0f, 0xa2, 0xb8, 0x00, 0x4c, 0xcd, 0x21), '', 'C:\\NOCPUID.COM');
+    for (let k = 0; k < 20 && !dos.programDone; k++) mc.runSlice(100);
+    got = dos.programDone;
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('...and before a CPUID the 386 profile does not have, jumped over', got, true); }
 
 // ---- the 8237 DMA controllers read back what was programmed (src/dma.js) ----------------------
 // tools/dmaprobe.asm under QEMU and DOSBox-X: A1=1234 C1=0FFF P1=05 A3=4321 C3=07FF P3=0A. Every one
