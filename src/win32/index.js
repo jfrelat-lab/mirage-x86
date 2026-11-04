@@ -237,6 +237,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', apis = [], b
   lx.enterUser(base + h.entry, sp, { fs: FS_SEL });
   cpu.reg[3] = PEB;                                                   // EBX: XP starts a process with the PEB there
   cpu.reg[0] = base + h.entry;                                        // EAX: the entry point
+  cpu.fcw = 0x027f;                                                   // a Win32 process starts at 53 bits, not FNINIT's 0x037F
   lx.exe = path;
   return { modules, x, win };
 }

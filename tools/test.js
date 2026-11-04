@@ -2964,6 +2964,29 @@ const udRun = (gated) => {
   } catch (e) { got = e.message.slice(0, 60); }
   eq('...and before a CPUID the 386 profile does not have, jumped over', got, true); }
 
+// ---- x87: FSQRT under precision control, FPREM's condition codes and partial reduction, F2XM1 near 0 ----
+// Against Docker's i386 QEMU (its 80-bit floatx80 x87), as PRISM probed them for .kkrieger, whose
+// generator runs at 24 bits (cw 0x103F) and whose sFExp does fprem; f2xm1: fsqrt(2) at 24 bits is
+// 3ff6a09e60000000; 7 fprem 2 leaves 1 with Q=3 (C3=Q1, C1=Q0); 1e30 fprem 1 reduces only partly and
+// sets C2; f2xm1(-1e-6) is bea742163dc65d92, which 2^x-1 misses by some 1e5 ulp.
+{ const bits = (dv, o) => dv.getBigUint64(o, true).toString(16).padStart(16, '0');
+  const want = '3ff6a09e60000000 4200 400 bea742163dc65d92';
+  let got;
+  try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);           // the recompiled path: nasm of the program in the comment
+    const dos = installDOS(mc, new VFS());
+    // fninit; fldcw 007Fh; fld 2; fsqrt; fstp [es:0]; fldcw 037Fh; fld 2; fld 7; fprem; fstsw [es:8]; fstp [es:16]; fstp st0;
+    // fld1; fld 1e30; fprem; fstsw [es:24]; fstp st0; fstp st0; fld -1e-6; f2xm1; fstp [es:32]; exit (ES = 9000h)
+    dos.load(Uint8Array.from(Buffer.from('b800908ec0dbe3d92e5301dd065701d9fa26dd1e0000d92e5501dd065701dd065f01d9f89b26dd3e080026dd1e1000ddd8d9e8dd066701d9f89b26dd3e1800ddd8ddd8dd066f01d9f026dd1e2000b8004ccd217f007f0300000000000000400000000000001c40ea8ca039593e29468dedb5a0f7c6b0be', 'hex')), '', 'C:\\X87PC.COM');
+    for (let k = 0; k < 20 && !dos.programDone; k++) mc.runSlice(1000);
+    const dv = new DataView(mc.mem.u8.buffer, 0x90000);
+    got = [bits(dv, 0), (dv.getUint16(8, true) & 0x4700).toString(16), (dv.getUint16(24, true) & 0x4700).toString(16), bits(dv, 32)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('x87, recompiled: FSQRT at 24 bits, FPREM\'s C0-C3 and partial C2, F2XM1 near 0', got, want);
+  const c = new Machine({ memSize: 1 << 20 }).cpu, f = new Float64Array(1), dv = new DataView(f.buffer);
+  const run = (cw, a, b, op) => { c.fcw = cw; c.fsw = 0; c.ftop = 6; c.fst[6] = a; c.fst[7] = b; c.focc.fill(0); c.focc[6] = c.focc[7] = 1; c.fpuReg(0xd9, op[0], op[1]); f[0] = c.fst[c.ftop]; return bits(dv, 0); };
+  const sq = run(0x7f, 2, 0, [7, 2]), sw1 = (run(0x37f, 7, 2, [7, 0]), c.fsw & 0x4700), sw2 = (run(0x37f, 1e30, 1, [7, 0]), c.fsw & 0x4700);
+  eq('x87, interpreted (src/fpu.js): the same', [sq, sw1.toString(16), sw2.toString(16), run(0x37f, -1e-6, 0, [6, 0])].join(' '), want); }
+
 // ---- the 8237 DMA controllers read back what was programmed (src/dma.js) ----------------------
 // tools/dmaprobe.asm under QEMU and DOSBox-X: A1=1234 C1=0FFF P1=05 A3=4321 C3=07FF P3=0A. Every one
 // of those read FFh here, and Void 3, which fills its sound buffer up to `0FFFh - count`, spun in its
@@ -4052,7 +4075,7 @@ const runLinux = (hex, argv) => {
 // code in the headers, SizeOfImage past the file -- is mapped flat, as Windows maps an image whose
 // section alignment is below the page's: it reads a byte past SizeOfHeaders (42) and one past the
 // file (0) and exits with their sum. Absolute Territory (Prismbeings, 2017) is such an image.
-{ let got;
+{ let got, fcw;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const exe = Uint8Array.from((                       // nasm -f bin tools/win32/tinyhdr.asm
     '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
@@ -4062,10 +4085,12 @@ const runLinux = (hex, argv) => {
     '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (x) => parseInt(x, 16));
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     loadPE(lx, mc.mem, mc.cpu, exe, { apis: win32Apis(), backend: traceBackend() });
+    fcw = mc.cpu.fcw;
     for (let i = 0; i < 50 && !lx.done; i++) mc.runSlice(20000);
     got = [lx.done, lx.signal ? 'fault' : lx.status].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a /TINYHEADER image is mapped flat, the whole file at its base', got, 'true 42'); }
+  eq('win32: a /TINYHEADER image is mapped flat, the whole file at its base', got, 'true 42');
+  eq('win32: a process starts with the x87 at 53 bits (control word 027Fh, which MSVC\'s CRT keeps)', fcw, 0x27f); }
 // tools/linux/thread.asm: two threads of one address space (lx.spawnThread: SDL_CreateThread's, Win32's
 // CreateThread's). The main thread spins on a flag with no system call -- the clock's preemption gives
 // the thread its turn --, the thread sets it to 42 and exit(0)s alone (freeing the shared pages would

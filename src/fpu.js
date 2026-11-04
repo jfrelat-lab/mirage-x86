@@ -169,6 +169,8 @@ export function installFPU(cpu) {
    *  (extended) are both this model's native float64 — we cannot be more precise than we are, and
    *  say so rather than pretending. One predictable branch, called from the arithmetic paths. */
   cpu.fprec = (v) => ((cpu.fcw & 0x300) === 0 ? Math.fround(v) : v);
+  const f64 = new Float64Array(1), f64u = new Uint32Array(f64.buffer);
+  const f64bits = (x) => { f64[0] = x; return f64u[1]; };          // the high word: sign, exponent, top of the significand
 
   /** The tag word FNSTENV/FNSAVE publish: two bits per PHYSICAL register, register 0 in bits 0-1. */
   const tagWord = () => {
@@ -287,6 +289,22 @@ export function installFPU(cpu) {
     return a - b * n;
   };
 
+  /** FPREM: the remainder of a truncating division, and the quotient's three low bits in C0 (Q2), C3
+   *  (Q1) and C1 (Q0), C2 clear. When the exponents are 64 or more apart the x87 reduces only part of
+   *  the way and sets C2, and the program loops (`fstsw ax; sahf; jp again`): ST0 % (ST1 * 2^(D-N)),
+   *  N = 32 + D mod 32 of the SDM's 32..63 (PRISM's choice too). JS `%` is exact, as the x87 is. */
+  const expo = (x) => { const e = (f64bits(x) >>> 20) & 0x7ff; return e ? e - 1023 : Math.floor(Math.log2(Math.abs(x))); };
+  cpu.fprem = (a, b) => {
+    cpu.fsw &= ~0x4700;
+    if (b === 0 || !Number.isFinite(a) || Number.isNaN(b)) { cpu.fsw |= 0x01; return NaN; }
+    if (a === 0 || !Number.isFinite(b)) return a;
+    const d = expo(a) - expo(b);
+    if (d >= 64) { const s = 2 ** (d - (32 + d % 32)); cpu.fsw |= 0x0400; return a % (b * s); }
+    const r = a % b, ab = Math.abs(b), q = Math.round((Math.abs(a) % (8 * ab) - Math.abs(r)) / ab);
+    cpu.fsw |= (q & 4 ? 0x0100 : 0) | (q & 2 ? 0x4000 : 0) | (q & 1 ? 0x0200 : 0);
+    return r;
+  };
+
   /** log2(1+x). FYL2XP1 exists precisely because it is accurate for x near 0, so it goes through
    *  log1p rather than log2(1+x). It was absent entirely: the instruction left ST unchanged. */
   cpu.flog2p1 = (x) => Math.log1p(x) / Math.LN2;
@@ -375,15 +393,15 @@ export function installFPU(cpu) {
           case 0xec: push(Math.log10(2)); return;           // fldlg2
           case 0xed: push(Math.LN2); return;                // fldln2
           case 0xee: push(0); return;                       // fldz
-          case 0xf0: setST(0, Math.pow(2, ST(0)) - 1); return; // f2xm1
+          case 0xf0: setST(0, Math.expm1(ST(0) * Math.LN2)); return; // f2xm1: expm1, exact near 0 where 2^x-1 cancels
           case 0xf1: setST(1, ST(1) * Math.log2(ST(0))); pop(); return; // fyl2x
           case 0xf2: { const t = Math.tan(ST(0)); setST(0, t); push(1); return; } // fptan
           case 0xf3: { const r = Math.atan2(ST(1), ST(0)); setST(1, r); pop(); return; } // fpatan
           case 0xf4: cpu.fxtract(); return;                 // fxtract
           case 0xf5: setST(0, cpu.frem1(ST(0), ST(1))); return;   // fprem1 (IEEE remainder)
-          case 0xf8: setST(0, ST(0) % ST(1)); return;       // fprem (truncating quotient)
+          case 0xf8: setST(0, cpu.fprem(ST(0), ST(1))); return;   // fprem (truncating quotient, C0-C3)
           case 0xf9: setST(1, ST(1) * cpu.flog2p1(ST(0))); pop(); return;   // fyl2xp1
-          case 0xfa: setST(0, Math.sqrt(ST(0))); return;    // fsqrt
+          case 0xfa: setST(0, cpu.fprec(Math.sqrt(ST(0)))); return;    // fsqrt, rounded to the precision control as FADD is (SDM 8.1.5.2)
           case 0xfb: { const x = ST(0); setST(0, Math.sin(x)); push(Math.cos(x)); return; } // fsincos → ST0=cos, ST1=sin
           case 0xf6: cpu.ftop = (cpu.ftop - 1) & 7; return; // fdecstp (tags untouched)
           case 0xf7: cpu.ftop = (cpu.ftop + 1) & 7; return; // fincstp
