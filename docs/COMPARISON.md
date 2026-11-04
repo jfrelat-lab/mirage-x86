@@ -33,6 +33,11 @@ Each line is one capability, so that it can be checked on its own.
 | **BIOS in HLE**, interrupt services answered in JavaScript, checked against SeaBIOS, DOSBox-X and a vendor ROM | ❌ | ❌ (SeaBIOS ROM) | ✅ its own | ❌ (SeaBIOS ROM) | ✅ |
 | **Linux programs without a Linux kernel, in a browser** | ❌ | ❌ (`qemu-user` is native only) | ❌ | ❌ | ✅ `machines.html`, `tools/linux/run.mjs` (CheerpX does it too: WebVM, closed source, WebAssembly) |
 | **Linux binaries of 1994–1996**: a.out, libc 4, SVGAlib — no current kernel loads them | ❌ (a.out removed in Linux 5.18) | ❌ | ➖ | 🟡 under an old booted kernel ❔ | ⭐ ✅ id's Linux DOOM (`linuxsdoom`), unmodified, SVGAlib driving the emulated VGA |
+| **Windows programs without Windows, in a browser**: kernel32, user32, gdi32, winmm, DirectSound, OpenGL and Direct3D 9 answered in JavaScript, no Microsoft DLL | ❌ | ❌ | ❌ | ❌ | ✅ MIRAGE-WIN32, the scene's intros (RetroTick does it too for GUI programs and OpenGL screen savers, without Direct3D) |
+| **Direct3D 9 in a browser**: HLSL and shader-model bytecode translated to WebGL 2 | ❌ | ❌ | ❌ | ❌ | ⭐ ✅ Elevated, Ergon and the 4K intros of 2008–2012 ([3D graphics](#3d-graphics)) |
+| **OpenGL with GLSL shaders from a guest program, in a browser** | ❌ | ❌ | ❌ | ❌ | ⭐ ✅ Linux and Windows intros' GLSL 1.10/1.20, vertex and fragment (RetroTick: OpenGL 1.x without shaders) |
+| **AVX2 in a browser** | ❌ | ❌ | ❌ | ❌ | 🟡 the VEX operations the Linux 256-byte intros of 2021–2023 use, on YMM registers (JSLinux has all of AVX/AVX2/AVX-512, under its own kernel) |
+| **Period software fetched from where its authors published it**, with its terms shown before it runs | 🟡 images from a registry | ❌ | ❌ | 🟡 images hosted by the project | ⭐ ✅ OASIS: 34 recipes, each layer's origin and licence in a dialog |
 | **DOS, Linux user space and bare-metal boot in one engine**, the world chosen by the file's signature | ❌ | 🟡 two programs (system, user) | ❌ | ❌ | ⭐ ✅ `tools/run.mjs` |
 | **Translated code as readable JavaScript** (`MIRAGE_KEEP_SRC=1`) | ➖ | ❌ | ❌ | ❌ (WebAssembly) | ⭐ ✅ |
 | **No WebAssembly, no build step, no dependency** | ➖ | ➖ | ➖ | ❌ | ⭐ ✅ |
@@ -77,7 +82,8 @@ Each line is one capability, so that it can be checked on its own.
 | Paging, write protection, 4 MiB pages, hardware task switching | ➖ | ✅ | ✅ | ✅ | ✅ |
 | x87 FPU with 80-bit precision | ➖ | ✅ (softfloat) | 🟡 host-dependent ❔ | ✅ ❔ | 🟡 64-bit doubles: musl's `printf("%f")` rounds its last digit differently; gcc's `pr39228` fails |
 | MMX | ➖ | ✅ | ✅ ❔ | ✅ ❔ | ✅ `pentiummmx` and up, against Docker i386 |
-| SSE, SSE2 | ➖ | ✅ (and later) | 🟡 ❔ | ✅ ❔ | ✅ `pentium3` (SSE) and `pentium4` (SSE2), against Docker i386 |
+| SSE, SSE2 | ➖ | ✅ (and later) | 🟡 ❔ | ✅ ❔ | ✅ `pentium3` (SSE) and `pentium4` (SSE2), against Docker i386; a few SSE4.1 operations |
+| AVX, AVX2, BMI2 | ➖ (the host's CPU) | ✅ AVX/AVX2 in TCG ❔ | ❌ | ❌ | 🟡 eight VEX operations on XMM and YMM (VMOVDQU/A, VPMOVZXBD, VPSRAVD, VPADDUSB, VMOVD, VPSHUFD, VPBROADCASTB, VBROADCASTSS) and BMI2's SARX: what The Orz's Linux intros use, not the whole extension |
 | PAE, APIC, SMP | ➖ | ✅ | ❌ | 🟡 APIC ❔ | ❌ |
 
 ## Machine and devices
@@ -98,6 +104,25 @@ Each line is one capability, so that it can be checked on its own.
 | Serial (16550) | ➖ | ✅ | ✅ | ✅ | 🟡 option |
 | Network card | ➖ | ✅ | ✅ NE2000 | ✅ NE2000 over WebSocket | ❌ |
 | USB | ➖ | ✅ | ❌ | ❌ | ❌ |
+
+## 3D graphics
+
+How a guest program's 3D calls reach the screen. Under a booted system every emulator can run a
+software renderer (MIRAGE runs Mesa under XFree86 3.3); these rows are about the API itself.
+
+| | Docker | QEMU | DOSBox-X | v86 | MIRAGE |
+|---|---|---|---|---|---|
+| **OpenGL 1.x fixed pipeline**: immediate mode, vertex arrays, display lists, lighting, texturing, fog, GLU, GLUT | ➖ | 🟡 a Linux guest through virgl, natively ❔ | ❌ | ❌ | ✅ Linux (libGL, GLX, SDL 1.2) and Windows (opengl32, WGL): PRISM's `gl.js`, held to Mesa headless, WebGL 2 in the page |
+| **GLSL** (OpenGL 2.0/2.1: 1.10 and 1.20, vertex and fragment) | ➖ | 🟡 virgl ❔ | ❌ | ❌ | ✅ rewritten to GLSL ES 3.00, with the NVIDIA-era leniencies the intros shipped with (an integer where a float is wanted); `glCreateShaderProgramv` of GL 4.1 |
+| **Direct3D 9, HLSL** (shader models 2 and 3, through `D3DXCompileShader`) | ➖ | 🟡 under a booted Windows, software or virgl ❔ | 🟡 under Windows 9x with an emulated card ❔ | 🟡 under a booted Windows, software ❔ | ✅ typed HLSL → GLSL ES 3.00 translator, held to Wine's d3d9; D3DX's texture shaders (`tx_1_0`) and its noise |
+| **Direct3D 9 shader bytecode** (vs_1_1–vs_3_0, ps_2_0–ps_3_0, from fxc or `D3DXAssembleShader`) | ➖ | 🟡 as above ❔ | 🟡 as above ❔ | 🟡 as above ❔ | ✅ translated to GLSL ES 3.00 |
+| **Direct3D 9 fixed function** | ➖ | 🟡 as above ❔ | 🟡 as above ❔ | 🟡 as above ❔ | 🟡 pretransformed vertices, transform and lighting, texture stages; no fog or point size yet |
+| **D3DX helpers** (meshes, text, math) | ➖ | ➖ | ➖ | ➖ | 🟡 what the intros call: the math library, meshes (`D3DXCreateMeshFVF`, polygons, N-patch tessellation, normals), TrueType text meshes, texture fills |
+| Direct3D 5–8, DirectDraw | ➖ | 🟡 under a booted Windows ❔ | 🟡 under Windows 9x ❔ | 🟡 under a booted Windows ❔ | ❌ in MIRAGE-WIN32; under a booted Windows 98 not tried |
+| 3dfx Voodoo / Glide | ➖ | ❌ | ✅ Voodoo 1 ❔ | ❌ | ❌ |
+
+The OpenGL and Direct3D code is shared with PRISM, the sibling project that compiles the same
+period's C sources to JavaScript: one implementation, checked by both.
 
 ## Conformance
 
