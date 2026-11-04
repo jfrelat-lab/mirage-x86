@@ -29,7 +29,7 @@ export const MAX = 25 * 1024 * 1024;                     // Cloudflare Pages' la
 export const PART = 24 * 1024 * 1024;
 
 /** What goes on a host, as repository paths: tracked files of the pages' own directories. */
-export const SHIPPED = (p) => /^[^/]+\.(html|css)$/.test(p) || p === 'LICENSE'
+export const SHIPPED = (p) => /^[^/]+\.(html|css)$/.test(p) || p === 'LICENSE' || p === 'CHANGELOG.md'
   || /^(src|examples|demos|assets|oasis)\//.test(p) && !/\.md$/i.test(p);   // the demos' .asm: their cards' source links
 
 /*

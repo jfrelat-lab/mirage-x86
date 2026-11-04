@@ -1,17 +1,27 @@
-# Changelog
+# What's new
 
-What changed for someone using MIRAGE, newest first. The commit history has every step.
+What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIRAGE for someone using it,
+newest first. The site is updated continuously, so entries are dated rather than versioned. Every
+change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
-## Unreleased
+## 2026-11-04
 
-- **Faster DOS code**: without paging a translated block now runs on through side exits and its own
-  loop, stopping at each former block end for the dispatcher's checks, so timer interrupts land
-  where they did and every golden run is unchanged. BYTE's Sieve runs in 4.9 s headless (7.5 s
-  before) and 6.7 s in the page (11.1 s), ahead of native DOSBox-X's 6.2 s; DJGPP's Dhrystone
-  466,000 a second headless (320,000), CoreMark 608 iterations a second (402).
+- **Faster DOS code**: without paging, a translated block now runs on through forward branches and
+  its own loop, stopping at each place it used to end to do the checks the dispatcher did there, so
+  timer interrupts land on the same instruction and every golden run is unchanged. BYTE's Sieve runs in
+  4.9 s headless (7.5 s before) and 6.7 s in the page (11.1 s), ahead of native DOSBox-X's 6.2 s;
+  DJGPP's Dhrystone 466,000 a second headless (320,000), CoreMark 608 iterations a second (402).
+- **What MIRAGE does that the others do not**, and how far its OpenGL and Direct3D 9 go — fixed
+  pipeline, GLSL, HLSL, shader bytecode — and its AVX, in
+  [COMPARISON.md](https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/COMPARISON.md).
+- **What's new**: this page, read from `CHANGELOG.md` in the repository.
 
-## 2026-11 — first public release
+## 2026-11-03 — public launch
 
+- **The repository and the showcase are public**: [github.com/jfrelat-lab/mirage-x86](https://github.com/jfrelat-lab/mirage-x86)
+  under the MIT licence, the site at [mirage-x86.pages.dev](https://mirage-x86.pages.dev), the FreeDOS
+  disk's packages and their source released as
+  [freedos-1.4-sources](https://github.com/jfrelat-lab/mirage-x86/releases/tag/freedos-1.4-sources).
 - **Four machines on one CPU**: the DOS player (`dos.html`), the bare PC (`boot.html`), Linux
   programs with no kernel and Windows intros with no Windows (`machines.html`).
 - **OASIS images**: 34 recipes of the period PC — DOS games, Linux programs of 1994–1998 (DOOM,
