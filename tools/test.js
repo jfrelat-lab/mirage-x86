@@ -2111,6 +2111,26 @@ const udRun = (gated) => {
   eq('push/pop inline under paging go to SS\'s base plus ESP', [(cpu.reg[0] >>> 0).toString(16), (cpu.reg[4] >>> 0).toString(16), mem.r32(0x40fc).toString(16)].join(), '11223344,fc,55667788');
 }
 {
+  // An undefined 0F opcode decoded past a side exit, at ring 3: the translator asks whether the guest
+  // handles #UD by reading the IDT, which the processor reads as a supervisor. Read as a user access,
+  // FreeNOS's IDT page faulted at translate time -- a #PF for code that never runs -- and the kernel
+  // killed the process. `xor eax,eax; jz +2; 0f ff; jmp $`, the IDT in a supervisor page.
+  const mc = new Machine({ memSize: 4 << 20, cpu: '686' }), cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0); cpu.setSeg(ES, 0); cpu.setSeg(SS, 0);
+  mem.blit(0x1000, Uint8Array.from([0x31, 0xc0, 0x74, 0x02, 0x0f, 0xff, 0xeb, 0xfe]));
+  mem.blit(0x6000 + 6 * 8, Uint8Array.from([0, 0, 8, 0, 0, 0x8e, 0, 0]));                 // a present gate for #UD
+  mem.w32(0x10000, 0x11007);
+  for (let p = 0; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | (p === 6 ? 0x03 : 0x07)) >>> 0);
+  cpu.idtr.base = 0x6000; cpu.idtr.limit = 0x7ff;
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  cpu.csD = 1; cpu._cpl = 3;
+  let got;
+  try { for (let i = 0; i < 10; i++) mc.runSlice(4); got = [(cpu.eip >>> 0).toString(16), (cpu.cr2 >>> 0).toString(16)].join(); }
+  catch (e) { got = e.message.slice(0, 60); }
+  eq('ring 3: the IDT read for an opcode past a side exit is a supervisor access, and faults nobody', got, '6,0');
+}
+{
   // The VGA / VBE window is PHYSICAL A0000h, reached through whatever linear page maps it. Under paging
   // the device routing was skipped and the TLB marked device pages by LINEAR number, so xcom144 under
   // HDPMI32 (VBE 111h, banked) drew into the RAM behind A000 and its framebuffer stayed black.

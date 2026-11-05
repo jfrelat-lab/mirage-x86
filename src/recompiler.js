@@ -143,7 +143,13 @@ function guestOwnsUD(mem, cpu) {
   const idt = cpu.idtr;
   if (6 * 8 + 7 > idt.limit) return false;                 // no entry for vector 6 at all
   const a = ((idt.base >>> 0) + 6 * 8) >>> 0;
-  const access = mem.r8(a + 5);
+  // The processor reads the IDT as an implicit supervisor access (mem.sup), whatever the CPL. Read at
+  // ring 3 as a user access, FreeNOS's IDT (a supervisor page) faulted: at TRANSLATE time, for a 0F
+  // byte decoded past a side exit that never runs, a #PF the guest killed its process for. And the
+  // translator must never fault the guest at all: an IDT it cannot read is a gate it cannot see.
+  let access;
+  mem.sup++;
+  try { access = mem.r8(a + 5); } catch (e) { return false; } finally { mem.sup--; }
   if (!(access & 0x80)) return false;                      // P=0: the gate would fault on its own
   const type = access & 0x1f;                              // task, or 286/386 interrupt or trap gate
   return type === 0x05 || type === 0x06 || type === 0x07 || type === 0x0e || type === 0x0f;
