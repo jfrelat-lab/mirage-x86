@@ -69,7 +69,7 @@ Each line is one capability, so that it can be checked on its own.
 | Win32 programs | 🟡 Windows containers, on a Windows host | 🟡 under a booted Windows | 🟡 under a booted Windows 9x | 🟡 under a booted Windows | 🟡 under a booted Windows 9x; ✅ without Windows for the scene's OpenGL and Direct3D 9 intros (MIRAGE-WIN32) |
 | Windows 3.x | ❌ | ✅ | ✅ | ✅ | ✅ 3.0 to the Program Manager |
 | Windows 95, 98, ME | ❌ | ✅ | ✅ | ✅ | ✅ the desktop |
-| Windows NT, 2000, XP | ❌ | ✅ | 🟡 ❔ | ✅ ❔ | ❌ NT 3.51 stops after the graphical switch; 2000 stays on its boot screen |
+| Windows NT, 2000, XP | ❌ | ✅ | 🟡 ❔ | ✅ ❔ | 🟡 NT 3.51 reaches Program Manager; 2000 stays on its boot screen |
 | Linux kernels | ➖ | ✅ any | 🟡 old ones ❔ | ✅ | 🟡 2.2 and 2.4 to a shell |
 | 64-bit | ✅ | ✅ | ❌ | ❌ | ❌ |
 

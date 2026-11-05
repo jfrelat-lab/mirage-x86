@@ -21,7 +21,6 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 | System | Where it stops | Cause |
 |---|---|---|
-| Windows NT 3.51 | a stop error (C000021A) after the switch to graphics | **Suspected**: a context restored wrongly on the way back from a BIOS call in virtual-8086 mode. Not confirmed. |
 | Windows 2000 | its boot screen, progress bar empty | **Unknown.** After calibrating its delay loop it touches no device again. Not a matter of speed alone: it idles at 20 times the default clock rate too. |
 | ReactOS 0.4.15 | a stop in the kernel | **Known**: no ACPI tables. |
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |

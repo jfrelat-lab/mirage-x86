@@ -14,7 +14,6 @@ Effort: **S** a few hours, **M** a day or two, **L** more; ✅ done, 🔶 partly
 | ACPI: the tables and the PIIX4 power-management function — ReactOS, and probably Windows XP | L |
 | Optional: a cycle rate per CPU profile in turbo and headless runs, where a guest second is 3.32 M instructions whatever the profile. Not a fidelity gap: in real time MIRAGE runs as fast as the host, as QEMU and v86 do, and DOSBox-X's fixed cycles and QEMU's `-icount` do not follow the CPU model either. It would move every headless measurement, goldens included | S |
 | BeOS 5: why the display server does not start | M |
-| Windows NT 3.51: the stop error after the graphical switch | M |
 | Plan 9: an instruction pointer above FFFFh in a 16-bit segment | S |
 | Try Haiku, Alpine Linux (i686), Damn Small Linux's desktop, a full FreeDOS install | S each |
 

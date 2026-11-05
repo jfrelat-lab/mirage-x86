@@ -38,7 +38,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | <img src="compat/win95.png" width="160" alt=""> | Windows 95 | 🟢 Plays | the desktop (Enter at its three dialogs) | 64 MiB, `586` | 2026-11-05 |
 | <img src="compat/win98.png" width="160" alt=""> | Windows 98 | 🟢 Plays | the desktop | 64 MiB, `586` | 2026-11-05 |
 | <img src="compat/os-winme.png" width="160" alt=""> | Windows ME | 🟠 Starts | ScanDisk at 180 guest s, then guest time stops advancing (under investigation, as Linux 3.x and TinyCore); the desktop was reached in 2026-10 | 128 MiB, `586` | 2026-11-05 |
-| | Windows NT 3.51 | 🔴 Fails | the graphical switch, then a stop error | 64 MiB, `586`, PCI | 2026-10-01 |
+| <img src="compat/os-nt351.png" width="160" alt=""> | Windows NT 3.51 | 🟢 Plays | Program Manager (its welcome screen identical to QEMU `-M pc`'s; Ctrl+Alt+Del, empty password, Enter at the Service Control Manager and Invalid System Time messages) | 64 MiB, `586`, PCI | 2026-11-05 |
 | <img src="compat/os-win2k.png" width="160" alt=""> | Windows 2000 | 🔴 Fails | its boot screen, progress bar empty | 256 MiB, `pentiumpro`, PCI | 2026-11-05 |
 | <img src="compat/msdos622.png" width="160" alt=""> | MS-DOS 6.22 | 🟢 Plays | the prompt (DOOM under EMM386 last run 2026-09-28) | — | 2026-11-05 |
 | <img src="compat/msdos4.png" width="160" alt=""> | MS-DOS 4 (floppy) | 🟢 Plays | the date and time prompts | — | 2026-11-05 |

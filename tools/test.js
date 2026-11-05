@@ -2856,6 +2856,38 @@ const udRun = (gated) => {
   eq('...and at the RETF itself', got && got.eip, 0);
   eq('...and nothing overwrites EIP after the exception', cpu.eip, 0); }
 
+// ---- an IRET to a code segment whose DPL is not its RPL: #GP(selector), as a far RET -------------
+// Windows NT 3.51 ends every V86 BIOS call (VideoPortInt10) with an IRETD whose CS is its ring-0 code
+// selector with RPL 3 (000Bh), and resumes the caller from the #GP(0008) that follows (QEMU takes it).
+// MIRAGE accepted the frame and ran ring 3 at a kernel address: VBEMP's first INT 10h never came
+// back, and NT stayed in text mode where it should have switched to 1024x768.
+{ const iretTo = (cs) => {
+    const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+    const GDT = 0x8000;
+    const desc = (i, base, limit, access, flags) => { const a = GDT + i * 8;
+      mem.w16(a, limit & 0xffff); mem.w16(a + 2, base & 0xffff); mem.w8(a + 4, (base >> 16) & 0xff);
+      mem.w8(a + 5, access); mem.w8(a + 6, flags | ((limit >> 16) & 0x0f)); mem.w8(a + 7, (base >> 24) & 0xff); };
+    desc(1, 0x1000, 0xffff, 0x9a, 0);        // 08: ring-0 code
+    desc(2, 0x3000, 0xffff, 0x92, 0);        // 10: ring-0 data/stack
+    desc(3, 0x1000, 0xffff, 0xfa, 0);        // 18: ring-3 code
+    desc(4, 0x3000, 0xffff, 0xf2, 0);        // 20: ring-3 data/stack
+    cpu.gdtr = { base: GDT, limit: 0x2f }; cpu.cr0 |= 1;
+    cpu.setSeg(CS, 0x08); cpu.setSeg(SS, 0x10); cpu.sp = 0x1000;
+    for (const v of [0x23, 0x0800, 0x0202, cs, 0x0100]) cpu.push32(v);   // SS ESP EFLAGS CS EIP
+    mem.blit(0x1000, Uint8Array.from([0x66, 0xcf, 0xf4]));                // iretd / hlt
+    cpu.eip = 0;
+    let got = null;
+    mc.protInt = (n, err) => { got = { n, err, sp: cpu.sp, eip: cpu.eip }; cpu.halted = true; };
+    mc.rec.step();
+    return { got, cpu };
+  };
+  const bad = iretTo(0x0b);
+  eq('IRETD to CS=000Bh (DPL 0, RPL 3) is #GP(0008h)', bad.got && `${bad.got.n},${bad.got.err}`, '13,8');
+  eq('...delivered with the frame still on the stack', bad.got && bad.got.sp, 0x1000 - 20);
+  eq('...at the IRET itself, still in ring 0', bad.got && `${bad.got.eip},${bad.cpu.cpl}`, '0,0');
+  const good = iretTo(0x1b);
+  eq('...while IRETD to a DPL-3 code segment at RPL 3 goes to ring 3', good.got === null && `${good.cpu.cpl},${good.cpu.seg[CS]},${good.cpu.eip}`, `3,${0x1b},${0x100}`); }
+
 // ---- VBE 4F09h and the Attribute Controller's read-back: what tools/vbeprobe.asm saw under QEMU ------
 { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; const bios = installBIOS(mc);
   cpu.setSeg(ES, 0x0800); cpu.di = 0;

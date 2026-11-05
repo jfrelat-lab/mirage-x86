@@ -6,6 +6,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-05
 
+- **Windows NT 3.51 reaches Program Manager** in the bare PC (64 MiB, `586`, PCI). An IRET to a code
+  segment whose privilege does not match its selector now faults, as on a real processor: NT ends
+  every BIOS call its video driver makes on exactly that fault, and without it NT never switched to
+  graphics.
 - **KolibriOS, xcom144 and FreeNOS boot again** in the bare PC. A compatibility sweep found all three
   stopped since late October, each by a speed-up of the recompiler: an instruction it cannot translate
   inside a short skipped run of code, a stack with a base (HDPMI32's), and a page fault raised while

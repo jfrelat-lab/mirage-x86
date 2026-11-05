@@ -781,6 +781,21 @@ export class CPU {
     // short of a task switch. The frame is nine dwords, not three: the four data segments ride in it
     // because a V86 task's segment registers are 8086 values that no descriptor can describe.
     if (is32 && cpl === 0 && (fl & VM)) return this.enterV86(eip, cs, fl);
+    // The return CS obeys the far RET's rules (SDM, IRET: "return code segment selector RPL < CPL",
+    // "non-conforming and DPL != RPL", "conforming and DPL > RPL" are each #GP(selector)), and the
+    // frame is left as it was. Windows NT 3.51 ENDS every V86 BIOS call on this fault: its
+    // Ke386CallBios returns through an IRETD whose CS is the ring-0 code selector with RPL 3 (000Bh),
+    // and its #GP handler recognises the faulting IRET and resumes the caller. Accepting the frame
+    // ran ring 3 at a kernel address (#PF, U/S), VBEMP's first INT 10h never returned, and the
+    // graphical switch never came: QEMU takes #GP(0008) there.
+    {
+      const d = this.readDesc(cs), rpl = cs & 3;
+      const conforming = d && !d.sys && (d.type & 0x0c) === 0x0c;
+      if (rpl < cpl || (d && !d.sys && (conforming ? d.dpl > rpl : d.dpl !== rpl))) {
+        this.reg[4] = esp0;
+        return this.raise(13, cs & 0xfffc);
+      }
+    }
     // On a refused CS the returns below keep EIP where the emitter left it — at the IRET itself — and
     // skip the EFLAGS write at the end of this function. Loading CS and THEN assigning eip/flags
     // regardless is how a reported fault was overwritten by the very target that had been denied.
