@@ -3,8 +3,8 @@ nav.site { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font: 
 nav.site a { color: #6f8494; text-decoration: none; border: 1px solid transparent; border-radius: 5px; padding: 4px 8px; white-space: nowrap; }
 nav.site a:hover { color: #00d0a0; border-color: #1f2c38; }
 nav.site a[aria-current] { color: #00d0a0; border-color: #1d6a55; }
-nav.site a.star { color: #e3b341; border-color: #1f2c38; border-radius: 999px; }
-nav.site a.star:hover { color: #ffd166; border-color: #6b5a1e; }
+nav.site a.star { color: #062018; background: #00d0a0; border-color: #00d0a0; border-radius: 6px; font-weight: 600; }   /* the home page's own Star button */
+nav.site a.star:hover { color: #062018; border-color: #00d0a0; filter: brightness(1.12); }
 
 /* The site's header: the same height, logo and place for the navigation on every page. `:is(#_, header)`
    gives these rules an ID's weight, above the pages' own `#bar` and `#top`, without naming each page. */
