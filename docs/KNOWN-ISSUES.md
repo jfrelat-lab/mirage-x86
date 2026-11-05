@@ -27,6 +27,9 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 | BeOS 5 | the splash screen | **Unknown.** The kernel log matches v86's to its last line; then user programs run and one loops waiting. Suspected: the display server does not start. |
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |
 | Damn Small Linux 4.4.10 | a black screen at runlevel 5 | **Unknown**: not investigated — it may only be slow. |
+| OpenBSD | "starting network", about 250 guest s in | **Unknown**: guest time stops advancing while the host keeps running (as on 2026-10-20); `login:` was reached in 2026-09. |
+| 386BSD 1.0 | not stopped: `login:` is in video memory | **Display**: once the kernel has the console, the screen is drawn as one text row (640×16). Not investigated. |
+| XCOM (`xcom144.img`) | its 640×480 screen draws as noise | **Display, suspected**: the system runs (HDPMI32, its FreeDOS); the picture has been noise since at least 2026-10-20. |
 
 ## Time
 
@@ -60,6 +63,8 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
 | Second Reality | derails to 0000:0000 at start |
+| Jazz Jackrabbit | a #GP in its DPMI client at F000:0220 (error 3Ch) at start. Not investigated |
+| Zone 66 | refuses to run beside an XMS driver ("can not run with an XMS driver"), and the DOS player always has one |
 | C-Dogs 1.06 | silent: its DSIK Sound Blaster driver polls the 16-bit DMA channel 5's count and plays nothing. Not investigated further |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |
