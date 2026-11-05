@@ -36,7 +36,7 @@ No WebAssembly, no build step, no dependencies beyond its sibling [PRISM](https:
 - **Windows with no Windows**: Elevated, Ergon and ten more 4K intros, their Win32, OpenGL and Direct3D 9 in JavaScript.
 - **Linux with no kernel**: Debian 12's bash, id's DOOM and Quake, XFree86 3.3; gcc 2.7.2 builds DOOM inside it.
 - **Checked, not assumed**: gcc's 1,586 torture tests print what Docker prints (all but one); 44 programs pinned pixel for pixel.
-- **420 million x86 instructions a second** on Dhrystone, as JavaScript.
+- **450 million x86 instructions a second** on Dhrystone, as JavaScript.
 
 ```
  x86 machine code ─▶ decoder ─▶ JS source ─▶ new Function ─▶ the engine's own JIT ─▶ run
@@ -62,7 +62,7 @@ Not yet: Windows NT and 2000, ReactOS, BeOS, networking, 64-bit. Per-title statu
 
 ## How fast
 
-Linux programs run at 420–450 M x86 instructions a second on Dhrystone; Windows 98 reaches its desktop
+Linux programs run at 450–460 M x86 instructions a second on Dhrystone; Windows 98 reaches its desktop
 in about 36 s. On 16-bit real-mode code MIRAGE leads: BYTE's Sieve runs in 4.9 s headless and 6.7 s in
 the page, against 6.2 s for native DOSBox-X. The WebAssembly emulators are faster on 32-bit code — v86
 by 2.5 to 4 times on DOS, v86 and CheerpX by 6 to 9 times on Linux — and MIRAGE is ahead of js-dos and

@@ -7,7 +7,7 @@ What each one *can do* is in [COMPARISON.md](COMPARISON.md).
 2.5 to 4 times as fast as MIRAGE headless, and v86 and CheerpX run Linux code 6 to 9 times as fast. On
 16-bit real-mode code (the Sieve) MIRAGE is first: headless ahead of native DOSBox-X, and in the page
 ahead of v86 and js-dos. MIRAGE is ahead of js-dos and RetroTick on every benchmark they finished. Its
-JavaScript runs at 420–450 M x86 instructions a second on Linux code, 150 M on the Sieve.
+JavaScript runs at 450–460 M x86 instructions a second on Linux code, 150 M on the Sieve.
 
 ## The rules
 
