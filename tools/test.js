@@ -2684,6 +2684,18 @@ const udRun = (gated) => {
   eq('render() with linear page 0 unmapped does not fault', err, null);
   eq('...and draws the text cell (blue background behind a white glyph)', !!v.u32 && v.u32[0] !== v.u32[v.imgW * 20], true); }
 
+// ---- a 16-colour mode's height is the CRTC's, double scan included ------------------------------------
+// Pinball Fantasies sets mode 12h and then doubles every line (CRTC 09h bit 7) for a 640x240 menu. The
+// planar renderer took the mode's 480 lines and drew the memory below the menu as its lower half.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+  cpu.ax = 0x0012; mc.intHandlers[0x10](cpu, mc);
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const v = new Video(mc, canvas); v.font = mc.font;
+  v.render(); const h12 = v.imgH;
+  mc.ioWrite(0x3d4, 1, 0x09); mc.ioWrite(0x3d5, 1, mc.vga.crtc[0x09] | 0x80);
+  v.render();
+  eq('mode 12h renders 480 lines, and 240 once the CRTC doubles each one', [h12, v.imgH].join(), '480,240'); }
+
 // ---- cursor shape and the PS/2 aux channel, from testing boot.html ---------------------------------
 { // The mode set programs the CRTC cursor as SeaVGABIOS does (0607h scaled to the 16-line cell), and
   // AH=01h scales a CGA-style shape. Nothing set 0Ah/0Bh: under MS-DOS the cursor sat on the TOP line.

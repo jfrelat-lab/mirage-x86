@@ -104,8 +104,11 @@ export class Video {
   _renderPlanar() {
     const vga = this.machine.vga;
     // With a real VGA ROM the size is the CRTC's (no setMode ran); otherwise the mode's table.
+    // Its height is the CRTC's too, double scan included (09h bit 7): Pinball Fantasies sets mode 12h,
+    // then doubles every line for a 640x240 menu; drawn at the mode's 480 lines, its lower half was the
+    // memory below the screen.
     const hwd = vga.hw ? vga.crtcDims() : null;
-    const W = hwd && hwd.w >= 64 ? hwd.w : vga.width, H = hwd && hwd.h >= 64 ? hwd.h : vga.height;
+    const W = hwd && hwd.w >= 64 ? hwd.w : vga.width, H = hwd && hwd.h >= 64 ? hwd.h : (vga.crtc ? this._modeXHeight(vga) : vga.height);
     this._ensure(W, H);
     const u32 = this.u32, pal = this.pal, planes = vga.planes, palr = vga.palette;
     // Honour the CRTC display-start (page-flip / hardware scroll) and the offset register
