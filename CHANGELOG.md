@@ -4,6 +4,15 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-05
+
+- **KolibriOS, xcom144 and FreeNOS boot again** in the bare PC. A compatibility sweep found all three
+  stopped since late October, each by a speed-up of the recompiler: an instruction it cannot translate
+  inside a short skipped run of code, a stack with a base (HDPMI32's), and a page fault raised while
+  translating code that never runs. Each is fixed and has a test.
+- **COMPATIBILITY.md** re-run in full, with a small picture of every title, and a Linux section.
+- **The header's Star button** is the home page's own, in the accent green.
+
 ## 2026-11-04
 
 - **Faster DOS code**: without paging, a translated block now runs on through forward branches and
