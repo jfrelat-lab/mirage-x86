@@ -28,12 +28,11 @@ are in [notes/](notes/README.md), chiefly [notes/compat-log.md](notes/compat-log
 Images are v86's pre-installed disks unless marked *official media*. "Options" are what the image
 needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | System | Status | Reaches | Options | Run |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | System | Status | Reaches | Options | Run |
 |---|---|---|---|---|---|
-| <img src="compat/win30.png" width="160" alt=""> | Windows 3.0, as `W30HD.IMG` starts it | 🟢 Plays | Program Manager | — | 2026-11-05 |
-| | Windows 3.0, real mode (`win /r`) | 🟢 Plays | Program Manager | — | 2026-09-15 |
-| | Windows 3.0, standard mode, on MIRAGE's built-in DOS | 🟠 Unknown | last result: "Cannot load Windows in standard mode" | — | 2026-09-15 |
-| | Windows 3.0, 386 enhanced mode | 🟢 Plays | Program Manager | — | 2026-09-29 |
+| <img src="compat/win30.png" width="160" alt=""> | Windows 3.0, real mode (`win /r`, as `W30HD.IMG`'s AUTOEXEC.BAT starts it, on its MS-DOS 4) | 🟢 Plays | Program Manager | — | 2026-11-05 |
+| <img src="compat/os-win30-std.png" width="160" alt=""> <img src="compat/os-win30-std-hle.png" width="160" alt=""> | Windows 3.0, standard mode (`win /s`) | 🟢 Plays | Program Manager, on `W30HD.IMG`'s MS-DOS 4 (left) and on MIRAGE's built-in DOS (`tools/win30.mjs /s`, right); it failed on the built-in DOS with "Cannot load Windows in standard mode" until 2026-09 | — | 2026-11-05 |
+| <img src="compat/os-win30-386.png" width="160" alt=""> | Windows 3.0, 386 enhanced mode (`win /3`) | 🟢 Plays | Program Manager on `W30HD.IMG`'s MS-DOS 4, paging on, WIN386 at 0028:8000xxxx. On MIRAGE's built-in DOS it stops with "Cannot install the 386 enhanced mode Expanded Memory driver": its V86MMGR wants to take over a real HIMEM.SYS | — | 2026-11-05 |
 | <img src="compat/win31.png" width="160" alt=""> | Windows 3.1, standard mode | 🟢 Plays | Program Manager at 1024×768×256, pixel-identical to QEMU | — | 2026-11-05 |
 | <img src="compat/win95.png" width="160" alt=""> | Windows 95 | 🟢 Plays | the desktop (Enter at its three dialogs) | 64 MiB, `586` | 2026-11-05 |
 | <img src="compat/win98.png" width="160" alt=""> | Windows 98 | 🟢 Plays | the desktop | 64 MiB, `586` | 2026-11-05 |
