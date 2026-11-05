@@ -28,7 +28,7 @@ are in [notes/](notes/README.md), chiefly [notes/compat-log.md](notes/compat-log
 Images are v86's pre-installed disks unless marked *official media*. "Options" are what the image
 needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 
-| | System | Status | Reaches | Options | Run |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | System | Status | Reaches | Options | Run |
 |---|---|---|---|---|---|
 | <img src="compat/win30.png" width="160" alt=""> | Windows 3.0, as `W30HD.IMG` starts it | 🟢 Plays | Program Manager | — | 2026-11-05 |
 | | Windows 3.0, real mode (`win /r`) | 🟢 Plays | Program Manager | — | 2026-09-15 |
@@ -78,7 +78,7 @@ TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel 
 
 ## DOS games (the DOS player, `dos.html`)
 
-| | Title | Video | Status | Notes | Run |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Title | Video | Status | Notes | Run |
 |---|---|---|---|---|---|
 | <img src="compat/doom.png" width="160" alt=""> | DOOM (id, 1993) | VGA 13h | 🟢 Plays | attract demo with the status bar; with our DPMI host or its own DOS/4G | 2026-11-05 |
 | <img src="compat/heretic.png" width="160" alt=""> | Heretic | VGA 13h | 🟢 Plays | the attract demo; needs our DPMI host | 2026-11-05 |
@@ -144,7 +144,7 @@ TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel 
 by the golden test, all 44 golden runs as recorded on 2026-11-05. Of pouët's top ten MS-DOS 4K
 intros, nine rendered (2026-08-28).
 
-| | Title | Status | Notes | Run |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Title | Status | Notes | Run |
 |---|---|---|---|---|
 | | tube, memories, kaneda, lattice, puls, and the other 256-byte intros of the golden set | 🟢 Renders | fingerprinted by `tools/golden.js` | 2026-11-05 |
 | <img src="compat/intro-crevenge.png" width="160" alt=""> | Chrome Revenge (1K, SSE raytracer, VESA 640×480×32) | 🟢 Renders | | 2026-11-05 |
@@ -168,7 +168,7 @@ The ones that render are OASIS images (`oasis/images/win32/`), all captured in C
 "Headless" is a run in Node on the recording device model, which says how far the program gets but
 not what it draws.
 
-| | Title | API | Status | Notes | Run |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Title | API | Status | Notes | Run |
 |---|---|---|---|---|---|
 | <img src="compat/win32-ribbon-2009.png" width="160" alt=""> | To the Road of Ribbon, Flow2, Chocolux (1K) | OpenGL | 🟢 Renders | one GLSL fragment shader each | 2026-11-05 |
 | <img src="compat/win32-paradistance-2009.png" width="160" alt=""> | Retrospection, Paradistance (4K) | OpenGL | 🟢 Renders | with their music through waveOut | 2026-11-05 |
@@ -195,7 +195,7 @@ drawn by PRISM's libraries, SVGAlib on the emulated VGA. Each is an OASIS image
 (`oasis/images/linux/`) that fetches its programs from where their authors or Debian published them;
 all captured in Chrome on 2026-11-05.
 
-| | Image | Status | Notes | Run |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Image | Status | Notes | Run |
 |---|---|---|---|---|
 | <img src="compat/linux-mirage.png" width="160" alt=""> | Debian 12 i386 user space (`mirage`, `debian-bookworm`) | 🟢 Plays | a real bash with Debian's commands | 2026-11-05 |
 | <img src="compat/linux-doom-1994.png" width="160" alt=""> | DOOM (id's linuxsdoom, 1994, SVGAlib) | 🟢 Plays | a.out and libc 4, unmodified; the attract demo | 2026-11-05 |
