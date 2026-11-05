@@ -52,11 +52,16 @@ for (const e of list) {
   const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
   const v = new Video(mc, canvas); v.font = mc.font;
   const sec = 18.2065 * mc.pitBase, c = mc.cpu;
-  const keys = (e.keys || []).map(([t, k]) => ({ at: t * sec, codes: k.split(',').map((x) => parseInt(x, 16)) }));
+  // A key entry is scancodes, or the mouse: "m:x,y" moves it to (x, y) in the program's INT 33h range,
+  // "down" and "up" press and release the left button (src/mouse.js, as the page's mouse events do).
+  const keys = (e.keys || []).map(([t, k]) => ({ at: t * sec, k, codes: /^(m:|down|up)/.test(k) ? [] : k.split(',').map((x) => parseInt(x, 16)) }));
   for (const [t, name] of e.shots) {
     while (!fault && !dos.programDone && c.cycles < t * sec && !(c.halted && !(c.flags & 0x200))) {
       while (keys.length && c.cycles >= keys[0].at) {
-        const { codes } = keys.shift(); mc.pushScancodes(codes);
+        const { codes, k } = keys.shift();
+        if (k.startsWith('m:')) { const [x, y] = k.slice(2).split(',').map(Number); mc.mouseMoveTo(x, y); continue; }
+        if (k === 'down' || k === 'up') { mc.mouseButton(0, k === 'down'); continue; }
+        mc.pushScancodes(codes);
         // The BIOS half as src/keyboard.js pushes it: a key with no character (an arrow, F1) as (scan, 0).
         for (const s of codes) if (s !== 0xe0 && !(s & 0x80)) mc.keyQueue.push({ scan: s, ascii: ASCII[s] ?? 0 });
       }
