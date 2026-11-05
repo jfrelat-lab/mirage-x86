@@ -10,7 +10,13 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   stopped since late October, each by a speed-up of the recompiler: an instruction it cannot translate
   inside a short skipped run of code, a stack with a base (HDPMI32's), and a page fault raised while
   translating code that never runs. Each is fixed and has a test.
-- **COMPATIBILITY.md** re-run in full, with a small picture of every title, and a Linux section.
+- **COMPATIBILITY.md** re-run in full, with pictures: each DOS game's title and a moment of play,
+  drawn by MIRAGE's own renderer from a scripted headless run (`tools/compat-shots.mjs`, the keys of
+  each title in `tools/compat-shots.json`); every system where it boots or stops; a Linux section.
+- **Pinball Fantasies' menus whole**: a 16-colour screen that doubles its lines (CRTC double scan) was
+  drawn twice as tall, its lower half the memory below the menu.
+- **Five more DOS games run**: Raptor (on MIRAGE's DPMI host), Halloween Harry, Bio Menace, Major
+  Stryker and Jill of the Jungle; **BeOS 5 reaches its desktop**.
 - **Faster byte and word arithmetic**: CoreMark under MIRAGE-LINUX 990 → 1,056 iterations a second,
   Dhrystone 870,000 → 900,000 a second, and the DOS intros up to a fifth faster (puls, kaneda).
 - **The header's Star button** is the home page's own, in the accent green.

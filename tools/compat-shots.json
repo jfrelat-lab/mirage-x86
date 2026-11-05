@@ -1,0 +1,1682 @@
+[
+{
+"id": "2ndreal",
+"dir": "2NDREAL",
+"exe": "SECOND.EXE",
+"shots": [
+[
+5,
+"title"
+]
+]
+},
+{
+"id": "alleycat",
+"dir": "ALLEYCAT",
+"exe": "CAT.EXE",
+"shots": [
+[
+10,
+"title"
+],
+[
+115,
+"game"
+]
+],
+"keys": [
+[
+62,
+"31,b1"
+],
+[
+64,
+"1c,9c"
+],
+[
+70,
+"39,b9"
+],
+[
+92,
+"25,a5"
+],
+[
+95,
+"39,b9"
+]
+]
+},
+{
+"id": "arctic",
+"dir": "ARCTIC",
+"exe": "AA1.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+25,
+"game"
+]
+],
+"keys": [
+[
+8,
+"1c,9c"
+]
+]
+},
+{
+"id": "arkanoid",
+"dir": "ARKANOID",
+"exe": "ARKANOID.COM",
+"shots": [
+[
+15,
+"title"
+],
+[
+55,
+"game"
+]
+],
+"keys": [
+[
+4,
+"12,92"
+],
+[
+20,
+"25,a5"
+],
+[
+30,
+"39,b9"
+],
+[
+34,
+"39,b9"
+]
+]
+},
+{
+"id": "babyjo",
+"dir": "BABYJO",
+"exe": "BABY.EXE",
+"args": "2",
+"shots": [
+[
+15,
+"title"
+]
+]
+},
+{
+"id": "blues",
+"dir": "BLUES",
+"exe": "EGA.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+60,
+"game"
+]
+],
+"keys": [
+[
+35,
+"39,b9"
+]
+]
+},
+{
+"id": "cosmo",
+"dir": "COSMO",
+"exe": "COSMO1.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+60,
+"game"
+]
+]
+},
+{
+"id": "crystalc",
+"dir": "CRYSTALC",
+"exe": "CC1.EXE",
+"shots": [
+[
+30,
+"title"
+],
+[
+115,
+"game"
+]
+],
+"keys": [
+[
+32,
+"1c,9c"
+],
+[
+36,
+"1c,9c"
+],
+[
+40,
+"30,b0"
+],
+[
+50,
+"1c,9c"
+],
+[
+54,
+"1c,9c"
+],
+[
+58,
+"1c,9c"
+],
+[
+82,
+"1c,9c"
+],
+[
+86,
+"1c,9c"
+],
+[
+90,
+"39,b9"
+],
+[
+94,
+"1c,9c"
+]
+]
+},
+{
+"id": "darkage",
+"dir": "DARKAGE",
+"exe": "DA1.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+30,
+"game"
+]
+],
+"keys": [
+[
+8,
+"1c,9c"
+],
+[
+12,
+"1c,9c"
+]
+]
+},
+{
+"id": "davehm",
+"dir": "DAVEHM",
+"exe": "DAVE.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+60,
+"game"
+]
+],
+"keys": [
+[
+8,
+"1c,9c"
+],
+[
+12,
+"1c,9c"
+],
+[
+16,
+"1c,9c"
+],
+[
+37,
+"39,b9"
+],
+[
+40,
+"1c,9c"
+]
+]
+},
+{
+"id": "digger",
+"dir": "DIGGER",
+"exe": "digger.com",
+"shots": [
+[
+5,
+"title"
+]
+]
+},
+{
+"id": "doom",
+"dir": "DOOM",
+"exe": "DOOM.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+45,
+"game"
+]
+]
+},
+{
+"id": "duke1",
+"dir": "DUKE1",
+"exe": "DN1.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+85,
+"game"
+]
+],
+"keys": [
+[
+8,
+"1c,9c"
+],
+[
+12,
+"30,b0"
+],
+[
+32,
+"1f,9f"
+],
+[
+36,
+"1c,9c"
+],
+[
+57,
+"1c,9c"
+],
+[
+60,
+"39,b9"
+],
+[
+63,
+"1c,9c"
+],
+[
+66,
+"39,b9"
+]
+]
+},
+{
+"id": "dune",
+"dir": "DUNE",
+"exe": "DUNEDEM.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+60,
+"game"
+]
+]
+},
+{
+"id": "godthund",
+"dir": "GODTHUND",
+"exe": "GOT.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+55,
+"game"
+]
+],
+"keys": [
+[
+32,
+"1c,9c"
+],
+[
+36,
+"1c,9c"
+]
+]
+},
+{
+"id": "goldenax",
+"dir": "GOLDENAX",
+"exe": "gold.exe",
+"shots": [
+[
+25,
+"title"
+]
+],
+"keys": [
+[
+3,
+"05,85"
+],
+[
+20,
+"1c,9c"
+],
+[
+26,
+"1c,9c"
+],
+[
+30,
+"39,b9"
+],
+[
+36,
+"1c,9c"
+],
+[
+40,
+"1c,9c"
+]
+]
+},
+{
+"id": "heretic",
+"dir": "HERETIC",
+"exe": "HERETIC.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+30,
+"game"
+]
+]
+},
+{
+"id": "hexen",
+"dir": "HEXEN",
+"exe": "HEXEN.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+45,
+"game"
+]
+],
+"keys": [
+[
+6,
+"1c,9c"
+]
+]
+},
+{
+"id": "hocus",
+"dir": "HOCUS",
+"exe": "HOCUS.EXE",
+"shots": [
+[
+40,
+"title"
+],
+[
+95,
+"game"
+]
+],
+"keys": [
+[
+6,
+"1c,9c"
+],
+[
+12,
+"1c,9c"
+],
+[
+45,
+"1c,9c"
+],
+[
+50,
+"1c,9c"
+],
+[
+72,
+"1c,9c"
+],
+[
+76,
+"1c,9c"
+]
+]
+},
+{
+"id": "indy3",
+"dir": "INDY3",
+"exe": "INDY3.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+60,
+"game"
+]
+]
+},
+{
+"id": "jazz",
+"dir": "JAZZ",
+"exe": "JAZZ.EXE",
+"shots": [
+[
+5,
+"title"
+]
+]
+},
+{
+"id": "jumpbump",
+"dir": "JUMPBUMP",
+"exe": "jumpbump.exe",
+"shots": [
+[
+5,
+"title"
+]
+]
+},
+{
+"id": "keen1",
+"dir": "KEEN1",
+"exe": "KEEN1.EXE",
+"shots": [
+[
+30,
+"title"
+],
+[
+50,
+"game"
+]
+],
+"keys": [
+[
+32,
+"39,b9"
+],
+[
+34,
+"1c,9c"
+]
+]
+},
+{
+"id": "keen3",
+"dir": "KEEN3",
+"exe": "KEEN3.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+35,
+"game"
+]
+],
+"keys": [
+[
+17,
+"39,b9"
+],
+[
+19,
+"1c,9c"
+]
+]
+},
+{
+"id": "lemmings",
+"dir": "LEMMINGS",
+"exe": "VGALEMMI.EXE",
+"shots": [
+[
+15,
+"title"
+]
+],
+"keys": [
+[
+3,
+"02,82"
+]
+]
+},
+{
+"id": "loderun",
+"dir": "LODERUN",
+"exe": "LODERUN.COM",
+"shots": [
+[
+15,
+"game"
+]
+]
+},
+{
+"id": "loom",
+"dir": "LOOM",
+"exe": "LOOM.EXE",
+"shots": [
+[
+5,
+"title"
+]
+]
+},
+{
+"id": "maniac",
+"dir": "MANIAC",
+"exe": "MANIAC.EXE",
+"shots": [
+[
+5,
+"title"
+]
+]
+},
+{
+"id": "mathresc",
+"dir": "MATHRESC",
+"exe": "MR1.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+145,
+"game"
+]
+],
+"keys": [
+[
+32,
+"1e,9e"
+],
+[
+33,
+"1c,9c"
+],
+[
+36,
+"1c,9c"
+],
+[
+57,
+"1c,9c"
+],
+[
+61,
+"1c,9c"
+],
+[
+87,
+"1c,9c"
+],
+[
+91,
+"1c,9c"
+],
+[
+116,
+"1c,9c"
+],
+[
+119,
+"39,b9"
+],
+[
+122,
+"1c,9c"
+],
+[
+125,
+"39,b9"
+]
+]
+},
+{
+"id": "mi2",
+"dir": "MI2",
+"exe": "MONKEY2.EXE",
+"shots": [
+[
+15,
+"title"
+]
+]
+},
+{
+"id": "moktar",
+"dir": "MOKTAR",
+"exe": "MOKTAR.COM",
+"shots": [
+[
+15,
+"title"
+],
+[
+120,
+"game"
+]
+],
+"keys": [
+[
+20,
+"1c,9c"
+],
+[
+24,
+"1c,9c"
+],
+[
+96,
+"1c,9c"
+],
+[
+100,
+"1c,9c"
+]
+]
+},
+{
+"id": "monkey",
+"dir": "MONKEY",
+"exe": "monkey.exe",
+"shots": [
+[
+15,
+"title"
+]
+]
+},
+{
+"id": "monsterb",
+"dir": "MONSTERB",
+"exe": "BASH1.EXE",
+"shots": [
+[
+30,
+"title"
+],
+[
+80,
+"game"
+]
+],
+"keys": [
+[
+17,
+"1c,9c"
+],
+[
+32,
+"1c,9c"
+],
+[
+36,
+"1c,9c"
+],
+[
+57,
+"30,b0"
+],
+[
+60,
+"1c,9c"
+]
+]
+},
+{
+"id": "mystic",
+"dir": "MYSTIC",
+"exe": "TOWERS.EXE",
+"shots": [
+[
+20,
+"title"
+],
+[
+80,
+"game"
+]
+],
+"keys": [
+[
+6,
+"39,b9"
+],
+[
+25,
+"1c,9c"
+],
+[
+30,
+"1c,9c"
+],
+[
+52,
+"1c,9c"
+],
+[
+56,
+"1c,9c"
+]
+]
+},
+{
+"id": "omf",
+"dir": "OMF",
+"exe": "OMF.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+25,
+"game"
+]
+],
+"keys": [
+[
+8,
+"1c,9c"
+]
+]
+},
+{
+"id": "paganitz",
+"dir": "PAGANITZ",
+"exe": "PAGA1.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+115,
+"game"
+]
+],
+"keys": [
+[
+3,
+"02,82"
+],
+[
+20,
+"1c,9c"
+],
+[
+22,
+"02,82"
+],
+[
+26,
+"1c,9c"
+],
+[
+30,
+"1c,9c"
+],
+[
+57,
+"02,82"
+],
+[
+60,
+"1c,9c"
+],
+[
+64,
+"1c,9c"
+],
+[
+86,
+"1c,9c"
+],
+[
+89,
+"39,b9"
+],
+[
+92,
+"1c,9c"
+],
+[
+95,
+"39,b9"
+]
+]
+},
+{
+"id": "panic",
+"dir": "PANIC",
+"exe": "PANIC.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+45,
+"game"
+]
+],
+"keys": [
+[
+6,
+"1c,9c"
+]
+]
+},
+{
+"id": "pinball",
+"dir": "PINBALL",
+"exe": "PF.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+75,
+"game"
+]
+]
+},
+{
+"id": "pop",
+"dir": "POP",
+"exe": "PRINCE.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+60,
+"game"
+]
+]
+},
+{
+"id": "prehist",
+"dir": "PREHIST",
+"exe": "PREHISTO.COM",
+"shots": [
+[
+15,
+"title"
+],
+[
+90,
+"game"
+]
+],
+"keys": [
+[
+3,
+"12,92"
+],
+[
+4,
+"1c,9c"
+],
+[
+20,
+"1c,9c"
+],
+[
+26,
+"31,b1"
+],
+[
+27,
+"1c,9c"
+],
+[
+32,
+"1c,9c"
+],
+[
+57,
+"2e,ae"
+],
+[
+58,
+"1c,9c"
+],
+[
+62,
+"1c,9c"
+],
+[
+66,
+"1c,9c"
+]
+]
+},
+{
+"id": "quake",
+"dir": "QUAKE",
+"exe": "QUAKE.EXE",
+"args": "-nocdaudio",
+"shots": [
+[
+30,
+"title"
+],
+[
+60,
+"game"
+]
+]
+},
+{
+"id": "roc",
+"dir": "ROC",
+"exe": "ROC.EXE",
+"shots": [
+[
+90,
+"title"
+],
+[
+160,
+"game"
+]
+],
+"keys": [
+[
+95,
+"1c,9c"
+],
+[
+100,
+"1c,9c"
+],
+[
+132,
+"1c,9c"
+],
+[
+136,
+"1c,9c"
+]
+]
+},
+{
+"id": "secretag",
+"dir": "SECRETAG",
+"exe": "SAM1.EXE",
+"shots": [
+[
+60,
+"title"
+],
+[
+110,
+"game"
+]
+],
+"keys": [
+[
+62,
+"1c,9c"
+],
+[
+66,
+"30,b0"
+],
+[
+87,
+"30,b0"
+],
+[
+90,
+"1c,9c"
+]
+]
+},
+{
+"id": "skiordie",
+"dir": "SKIORDIE",
+"exe": "SKI.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+30,
+"game"
+]
+],
+"keys": [
+[
+8,
+"1c,9c"
+],
+[
+12,
+"1c,9c"
+]
+]
+},
+{
+"id": "stash",
+"dir": "STASH",
+"exe": "STASH.EXE",
+"shots": [
+[
+60,
+"title"
+],
+[
+240,
+"game"
+]
+]
+},
+{
+"id": "turbopas",
+"dir": "TURBOPAS",
+"exe": "TURBO.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+10,
+"game"
+]
+],
+"keys": [
+[
+6,
+"01,81"
+]
+]
+},
+{
+"id": "unreal",
+"dir": "UNREAL",
+"exe": "UNREAL.EXE",
+"shots": [
+[
+3,
+"title"
+],
+[
+40,
+"game"
+]
+],
+"keys": [
+[
+3,
+"e0,4b,e0,cb"
+],
+[
+4,
+"1c,9c"
+]
+]
+},
+{
+"id": "wolf3d",
+"dir": "WOLF3D",
+"exe": "WOLF3D.EXE",
+"shots": [
+[
+20,
+"title"
+],
+[
+90,
+"game"
+]
+],
+"keys": [
+[
+6,
+"39,b9"
+]
+]
+},
+{
+"id": "wordresc",
+"dir": "WORDRESC",
+"exe": "WR1.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+105,
+"game"
+]
+],
+"keys": [
+[
+62,
+"1e,9e"
+],
+[
+63,
+"1c,9c"
+],
+[
+66,
+"1c,9c"
+],
+[
+87,
+"1c,9c"
+],
+[
+90,
+"1c,9c"
+]
+]
+},
+{
+"id": "zone66",
+"dir": "ZONE66",
+"exe": "ZONE66.EXE",
+"shots": [
+[
+5,
+"title"
+]
+]
+},
+{
+"id": "keen4",
+"zip": "examples/games/4keen.zip",
+"exe": "KEEN4E.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+60,
+"game"
+]
+],
+"keys": [
+[
+6,
+"39,b9"
+]
+]
+},
+{
+"id": "cdogs",
+"zip": "examples/games/cdogs106.zip",
+"exe": "CDOGS.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+55,
+"game"
+]
+],
+"add": [
+"examples/games/cdogs/SOUND.CFG"
+],
+"keys": [
+[
+17,
+"1c,9c"
+],
+[
+20,
+"1c,9c"
+],
+[
+23,
+"1c,9c"
+],
+[
+25,
+"e0,48,e0,c8"
+],
+[
+26,
+"1c,9c"
+],
+[
+28,
+"1c,9c"
+],
+[
+30.0,
+"e0,50,e0,d0"
+],
+[
+30.4,
+"e0,50,e0,d0"
+],
+[
+30.8,
+"e0,50,e0,d0"
+],
+[
+31.2,
+"e0,50,e0,d0"
+],
+[
+31.6,
+"e0,50,e0,d0"
+],
+[
+32.0,
+"e0,50,e0,d0"
+],
+[
+32.4,
+"e0,50,e0,d0"
+],
+[
+32.8,
+"e0,50,e0,d0"
+],
+[
+33.2,
+"e0,50,e0,d0"
+],
+[
+33.6,
+"e0,50,e0,d0"
+],
+[
+35,
+"1c,9c"
+],
+[
+38,
+"1c,9c"
+]
+]
+},
+{
+"id": "bmenace",
+"dir": "BMENACE",
+"exe": "BMENACE1.EXE",
+"shots": [
+[
+40,
+"title"
+],
+[
+110,
+"game"
+]
+],
+"keys": [
+[
+6,
+"39,b9"
+],
+[
+72,
+"39,b9"
+],
+[
+76,
+"39,b9"
+],
+[
+80,
+"1c,9c"
+]
+]
+},
+{
+"id": "hharry",
+"dir": "HHARRY",
+"exe": "HH1.EXE",
+"shots": [
+[
+20,
+"title"
+],
+[
+80,
+"game"
+]
+],
+"keys": [
+[
+6,
+"1c,9c"
+],
+[
+25,
+"1c,9c"
+],
+[
+29,
+"1c,9c"
+],
+[
+52,
+"1c,9c"
+],
+[
+56,
+"1c,9c"
+],
+[
+60,
+"1c,9c"
+]
+]
+},
+{
+"id": "stryker",
+"dir": "STRYKER",
+"exe": "STRYKER.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+80,
+"game"
+]
+],
+"keys": [
+[
+6,
+"39,b9"
+],
+[
+20,
+"1c,9c"
+],
+[
+24,
+"1c,9c"
+],
+[
+28,
+"1c,9c"
+],
+[
+52,
+"1c,9c"
+],
+[
+56,
+"1c,9c"
+],
+[
+60,
+"1c,9c"
+]
+]
+},
+{
+"id": "jill",
+"dir": "JILL",
+"exe": "JILL1.EXE",
+"shots": [
+[
+15,
+"title"
+],
+[
+50,
+"game"
+]
+],
+"keys": [
+[
+6,
+"1c,9c"
+],
+[
+20,
+"1c,9c"
+],
+[
+24,
+"1c,9c"
+],
+[
+28,
+"1c,9c"
+]
+]
+},
+{
+"id": "raptor",
+"dir": "RAPTOR",
+"exe": "RAP.EXE",
+"shots": [
+[
+60,
+"title"
+],
+[
+140,
+"game"
+]
+],
+"keys": [
+[
+62,
+"1c,9c"
+],
+[
+66,
+"1c,9c"
+],
+[
+70,
+"1c,9c"
+],
+[
+74,
+"1c,9c"
+],
+[
+102,
+"1e,9e"
+],
+[
+103,
+"1c,9c"
+],
+[
+107,
+"1c,9c"
+],
+[
+111,
+"1c,9c"
+],
+[
+115,
+"1c,9c"
+]
+]
+},
+{
+"id": "tube",
+"files": [
+"intros/tube.com"
+],
+"exe": "TUBE.COM",
+"shots": [
+[
+3,
+"title"
+],
+[
+10,
+"game"
+]
+]
+},
+{
+"id": "pitman",
+"files": [
+"intros/pitman.com"
+],
+"exe": "PITMAN.COM",
+"keys": [
+[
+8,
+"19,99"
+],
+[
+11,
+"1c,9c"
+]
+],
+"shots": [
+[
+5,
+"title"
+],
+[
+20,
+"game"
+]
+]
+},
+{
+"id": "mars",
+"files": [
+"intros/mars.exe"
+],
+"exe": "MARS.EXE",
+"shots": [
+[
+5,
+"title"
+],
+[
+20,
+"game"
+]
+]
+},
+{
+"id": "fractint",
+"zip": "examples/games/frain200.zip",
+"exe": "FRACTINT.EXE",
+"keys": [
+[
+8,
+"1c,9c"
+],
+[
+12,
+"1c,9c"
+],
+[
+16,
+"1c,9c"
+]
+],
+"shots": [
+[
+6,
+"title"
+],
+[
+60,
+"game"
+]
+]
+},
+{
+"id": "dunedemo",
+"zip": "examples/games/dunedemo.zip",
+"exe": "DUNEDEM.EXE",
+"args": "ENG VGA ADL HIM 386",
+"shots": [
+[
+8,
+"title"
+],
+[
+40,
+"game"
+]
+]
+}
+]

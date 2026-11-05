@@ -24,10 +24,9 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 | Windows NT 3.51 | a stop error (C000021A) after the switch to graphics | **Suspected**: a context restored wrongly on the way back from a BIOS call in virtual-8086 mode. Not confirmed. |
 | Windows 2000 | its boot screen, progress bar empty | **Unknown.** After calibrating its delay loop it touches no device again. Not a matter of speed alone: it idles at 20 times the default clock rate too. |
 | ReactOS 0.4.15 | a stop in the kernel | **Known**: no ACPI tables. |
-| BeOS 5 | the splash screen | **Unknown.** The kernel log matches v86's to its last line; then user programs run and one loops waiting. Suspected: the display server does not start. |
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |
 | Damn Small Linux 4.4.10 | a black screen at runlevel 5 | **Unknown**: not investigated — it may only be slow. |
-| OpenBSD | "starting network", about 250 guest s in | **Unknown**: guest time stops advancing while the host keeps running (as on 2026-10-20); `login:` was reached in 2026-09. |
+| Windows ME, Linux 3.x (v86's mini CD), TinyCore 11, OpenBSD | guest time stops advancing: ME at ScanDisk (180 s), Linux 3.x at 120 s, TinyCore near 800 s, OpenBSD near 250 s | **Under investigation** (2026-11-05): the host keeps running and the guest clock stands still, the same symptom on four systems. OpenBSD did the same on 2026-10-20; the others are being bisected. |
 | 386BSD 1.0 | not stopped: `login:` is in video memory | **Display**: once the kernel has the console, the screen is drawn as one text row (640×16). Not investigated. |
 | XCOM (`xcom144.img`) | its 640×480 screen draws as noise | **Display, suspected**: the system runs (HDPMI32, its FreeDOS); the picture has been noise since at least 2026-10-20. |
 

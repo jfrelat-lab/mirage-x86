@@ -37,16 +37,16 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | <img src="compat/win31.png" width="160" alt=""> | Windows 3.1, standard mode | 🟢 Plays | Program Manager at 1024×768×256, pixel-identical to QEMU | — | 2026-11-05 |
 | <img src="compat/win95.png" width="160" alt=""> | Windows 95 | 🟢 Plays | the desktop (Enter at its three dialogs) | 64 MiB, `586` | 2026-11-05 |
 | <img src="compat/win98.png" width="160" alt=""> | Windows 98 | 🟢 Plays | the desktop | 64 MiB, `586` | 2026-11-05 |
-| | Windows ME | 🟢 Plays | the desktop, after ScanDisk | 128 MiB, `586` | 2026-10 |
+| <img src="compat/os-winme.png" width="160" alt=""> | Windows ME | 🟠 Starts | ScanDisk at 180 guest s, then guest time stops advancing (under investigation, as Linux 3.x and TinyCore); the desktop was reached in 2026-10 | 128 MiB, `586` | 2026-11-05 |
 | | Windows NT 3.51 | 🔴 Fails | the graphical switch, then a stop error | 64 MiB, `586`, PCI | 2026-10-01 |
-| | Windows 2000 | 🔴 Fails | its boot screen, progress bar empty | 256 MiB, `pentiumpro`, PCI | 2026-10-07 |
+| <img src="compat/os-win2k.png" width="160" alt=""> | Windows 2000 | 🔴 Fails | its boot screen, progress bar empty | 256 MiB, `pentiumpro`, PCI | 2026-11-05 |
 | <img src="compat/msdos622.png" width="160" alt=""> | MS-DOS 6.22 | 🟢 Plays | the prompt (DOOM under EMM386 last run 2026-09-28) | — | 2026-11-05 |
 | <img src="compat/msdos4.png" width="160" alt=""> | MS-DOS 4 (floppy) | 🟢 Plays | the date and time prompts | — | 2026-11-05 |
 | <img src="compat/freedos14.png" width="160" alt=""> | FreeDOS 1.4 (floppy) | 🟢 Plays | the installer's first question; the prompt, with HimemX, after `N` | — | 2026-11-05 |
-| | FreeDOS 1.3, Legacy CD (*official media*) | 🟠 Starts | the installer's language menu; not installed | — | 2026-10-04 |
+| <img src="compat/os-fd13.png" width="160" alt=""> | FreeDOS 1.3, Legacy CD (*official media*) | 🟠 Starts | the installer's language menu; not installed | — | 2026-11-05 |
 | <img src="compat/pcmos.png" width="160" alt=""> | PC-MOS/386 | 🟠 Starts | the date prompt | — | 2026-11-05 |
 | <img src="compat/linux22.png" width="160" alt=""> | Linux 2.2 (BasicLinux 3.5) | 🟢 Plays | "Please press Enter to activate this console"; a shell, a CD-ROM mounted (2026-10-07) | `586` | 2026-11-05 |
-| | Linux 2.4 (Damn Small Linux 4.4.10 CD, *official media*) | 🟠 Starts | runlevel 5, then a black screen and an idle CPU (X starting? not seen) after 900 guest s | 64 MiB, `586` | 2026-10-15 |
+| <img src="compat/os-dsl.png" width="160" alt=""> | Linux 2.4 (Damn Small Linux 4.4.10 CD, *official media*) | 🟠 Starts | runlevel 5, then a black screen and an idle CPU (X starting? not seen) after 900 guest s | 64 MiB, `586` | 2026-11-05 |
 | <img src="compat/elks.png" width="160" alt=""> | ELKS | 🟢 Plays | `login:` | — | 2026-11-05 |
 | <img src="compat/unixv7.png" width="160" alt=""> | Unix V7/x86 | 🟢 Plays | a single-user shell (Enter at `BOOT`) | — | 2026-11-05 |
 | <img src="compat/386bsd.png" width="160" alt=""> | 386BSD 1.0 | 🟠 Starts | `login:` in video memory (Esc at its boot prompt), but the screen shows one text row once the kernel has the console: a display defect (the picture is the text read from memory) | — | 2026-11-05 |
@@ -56,86 +56,94 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | <img src="compat/kolibri.png" width="160" alt=""> | KolibriOS | 🟢 Plays | the desktop (broken from 2026-10-29 to 2026-11-05: an XSAVE in a skipped run of code) | `586` | 2026-11-05 |
 | <img src="compat/gentleos.png" width="160" alt=""> | GentleOS/16 | 🟢 Renders | its screen, pixel-identical to QEMU | — | 2026-11-05 |
 | | XCOM (a small graphical OS, `xcom144.img`) | 🟠 Starts | boots through its FreeDOS and HDPMI32 to a 640×480 screen that draws as noise, as on 2026-10-20; the desktop was seen in 2026-09. HDPMI32 halted from 2026-10-26 to 2026-11-05 (the inline stack ignored SS's base) | — | 2026-11-05 |
-| | BeOS 5 | 🔴 Fails | the splash screen | 128 MiB, `586`, PCI | 2026-10-04 |
-| | ReactOS 0.4.15 | 🔴 Fails | a stop in the kernel: it needs ACPI | 256 MiB, `pentiumpro`, PCI | 2026-10-07 |
-| | Plan 9 (9legacy) | 🔴 Fails | the loader starts the kernel, which then stops | PCI | 2026-10 |
-| | Haiku | 🟠 Starts | its boot splash with all seven icons lit (Enter at the Boot Manager), then no desktop after 900 guest s | 256 MiB, `pentiumpro`, PCI | 2026-10-15 |
+| <img src="compat/os-beos.png" width="160" alt=""> | BeOS 5 | 🟢 Plays | the desktop, Tracker and Deskbar (Enter at the partition menu); it stopped at its splash screen until 2026-10 | 128 MiB, `586`, PCI | 2026-11-05 |
+| <img src="compat/os-reactos.png" width="160" alt=""> | ReactOS 0.4.15 | 🔴 Fails | a stop in the kernel: it needs ACPI | 256 MiB, `pentiumpro`, PCI | 2026-11-05 |
+| <img src="compat/os-plan9.png" width="160" alt=""> | Plan 9 (9legacy) | 🔴 Fails | the loader starts the kernel, which then stops | PCI | 2026-11-05 |
+| <img src="compat/os-haiku.png" width="160" alt=""> | Haiku | 🟠 Starts | its boot splash with all seven icons lit (Enter at the Boot Manager), then no desktop after 900 guest s | 256 MiB, `pentiumpro`, PCI | 2026-11-05 |
 | <img src="compat/mikeos.png" width="160" alt=""> | MikeOS 4.7 | 🟢 Plays | its interface chooser (program menu or command line) | — | 2026-11-05 |
 | <img src="compat/freenos.png" width="160" alt=""> | FreeNOS 1.0.3 | 🟢 Plays | its system information and a shell; its timer reads "0 ticks" (broken from 2026-10-29 to 2026-11-05: a #PF raised while translating code that never runs) | 256 MiB, `686` | 2026-11-05 |
-| | xwoaf (Linux, X11 on a floppy-sized CD) | 🟠 Starts | the keyboard chooser before `login:` | 256 MiB | 2026-10-15 |
-| | Oberon | 🟠 Starts | "OBERON loading…", then nothing | 64 MiB | 2026-10-15 |
-| | Linux 3.x (v86's mini CD) | 🟠 Starts | the kernel boots, then waits for a virtio 9p root (v86's own) | 128 MiB, `686` | 2026-10-15 |
-| | Linux 2.6 (v86's mini CD) | 🔴 Fails | ISOLINUX: "Booting kernel failed: Invalid argument" | 128 MiB, `686` | 2026-10-15 |
-| | TinyCore 11 | 🟠 Starts | "Loading extensions…", udev killing slow modprobes, after 900 guest s | 256 MiB, `686` | 2026-10-15 |
-| | SliTaz rolling 2024 | 🔴 Fails | a kernel panic, page fault in an interrupt (`__queue_work`) | 512 MiB, `686` | 2026-10-15 |
-| | HelenOS 0.14.1 | 🟠 Starts | the SPARTAN kernel boots and starts its services; rd and ns then die on a user-mode page fault at the same kernel address, 80167F55h | 256 MiB, `686` (or `586`) | 2026-10-15 |
-| | Sortix 1.0 | 🟠 Starts | GRUB loading its 5 MB initrd, unfinished after 600 guest s | 512 MiB, `686` | 2026-10-15 |
-| | ToaruOS 1.6.1 | 🟠 Starts | its bootloader menu; Enter is not taken | 512 MiB, `686` | 2026-10-15 |
-| | Tilck | 🔴 Fails | its bootloader and kernel start (800x600x32 console), then a kernel panic on a #GP in kmain | 128 MiB, `686` | 2026-10-15 |
+| <img src="compat/os-xwoaf.png" width="160" alt=""> | xwoaf (Linux, X11 on a floppy-sized CD) | 🟠 Starts | the keyboard chooser before `login:` | 256 MiB | 2026-11-05 |
+| <img src="compat/os-oberon.png" width="160" alt=""> | Oberon | 🟠 Starts | "OBERON loading…", then nothing | 64 MiB | 2026-11-05 |
+| <img src="compat/os-linux3.png" width="160" alt=""> | Linux 3.x (v86's mini CD) | 🟠 Starts | the kernel boots and waits for a virtio 9p root (v86's own); at 120 guest s guest time stops advancing (under investigation) | 128 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-linux26.png" width="160" alt=""> | Linux 2.6 (v86's mini CD) | 🔴 Fails | ISOLINUX: "Booting kernel failed: Invalid argument" | 128 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-tinycore.png" width="160" alt=""> | TinyCore 11 | 🟠 Starts | "Loading extensions…", udev killing slow modprobes; near 800 guest s guest time stops advancing (under investigation) | 256 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-slitaz.png" width="160" alt=""> | SliTaz rolling 2024 | 🟠 Starts | "Decompressing Linux…" at 600 guest s; a kernel panic in an interrupt was seen in 2026-10 | 512 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-helenos.png" width="160" alt=""> | HelenOS 0.14.1 | 🟠 Starts | the SPARTAN kernel boots and starts its services; rd and ns then die on a user-mode page fault at the same kernel address, 80167F55h | 256 MiB, `686` (or `586`) | 2026-11-05 |
+| <img src="compat/os-sortix.png" width="160" alt=""> | Sortix 1.0 | 🟠 Starts | GRUB loading its 5 MB initrd, unfinished after 600 guest s | 512 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-toaru.png" width="160" alt=""> | ToaruOS 1.6.1 | 🟠 Starts | its bootloader menu; Enter is not taken | 512 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-tilck.png" width="160" alt=""> | Tilck | 🔴 Fails | its bootloader and kernel start (800x600x32 console), then a kernel panic on a #GP in kmain | 128 MiB, `686` | 2026-11-05 |
 
 Boot-sector programs — BootChess, bootBASIC, bootOS, Invaders, Pillman, sectorFORTH, sectorLISP,
 TetrOS, Floppy Bird and the like — run; several were compared pixel for pixel with QEMU.
 
 ## DOS games (the DOS player, `dos.html`)
 
+Each picture pair is the title, then the game, drawn by MIRAGE's own renderer (`src/video.js`) from a headless run: `node tools/compat-shots.mjs`, the keys and moments of each title in `tools/compat-shots.json`.
+
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Title | Video | Status | Notes | Run |
 |---|---|---|---|---|---|
-| <img src="compat/doom.png" width="160" alt=""> | DOOM (id, 1993) | VGA 13h | 🟢 Plays | attract demo with the status bar; with our DPMI host or its own DOS/4G | 2026-11-05 |
-| <img src="compat/heretic.png" width="160" alt=""> | Heretic | VGA 13h | 🟢 Plays | the attract demo; needs our DPMI host | 2026-11-05 |
-| <img src="compat/hexen.png" width="160" alt=""> | Hexen (4-level demo) | VGA 13h | 🟢 Plays | a key past its shareware notice, then the attract demo; DOS/4GW 1.97 on our DPMI host | 2026-11-05 |
-| <img src="compat/quake.png" width="160" alt=""> | Quake | VGA 13h | 🟢 Plays | `-nocdaudio`; its console, then demo1 | 2026-11-05 |
-| <img src="compat/wolf3d.png" width="160" alt=""> | Wolfenstein 3D (shareware and registered) | Mode X | 🟢 Plays | signon; the attract loop and a played demo last seen 2026-09-09 | 2026-11-05 |
-| <img src="compat/alleycat.png" width="160" alt=""> | Alley Cat | CGA | 🟢 Plays | title, menus, the alley | 2026-11-05 |
-| <img src="compat/blues.png" width="160" alt=""> | Blues Brothers | EGA | 🟢 Plays | the title, then the stage where a player is chosen; a level last played 2026-08-01 | 2026-11-05 |
-| | Pitman | text | 🟢 Plays | title, menu, level 1 | 2026-08-28 |
-| <img src="compat/dune.png" width="160" alt=""> | Dune (Cryo) | VGA 13h | 🟢 Renders | the animated intro, in the `HIM 386` path too | 2026-11-05 |
-| <img src="compat/keen1.png" width="160" alt=""> | Commander Keen 1 | EGA | 🟢 Renders | the Apogee and id logos; file and video events identical to DOSBox-X (2026-08-18) | 2026-11-05 |
-| <img src="compat/keen3.png" width="160" alt=""> | Commander Keen 3, 4 | EGA | 🟢 Renders | Keen 3's title; Keen 4's main menu (2026-07-31) | 2026-11-05 |
-| <img src="compat/cosmo.png" width="160" alt=""> | Cosmo's Cosmic Adventure | EGA | 🟢 Renders | title | 2026-11-05 |
-| | Bio Menace | EGA | 🟢 Renders | | 2026-07-20 |
-| <img src="compat/duke1.png" width="160" alt=""> | Duke Nukem 1 | EGA | 🟢 Renders | title | 2026-11-05 |
-| <img src="compat/crystalc.png" width="160" alt=""> | Crystal Caves | EGA | 🟢 Renders | the Apogee logo; main menu (2026-08-01) | 2026-11-05 |
-| <img src="compat/secretag.png" width="160" alt=""> | Secret Agent | EGA | 🟢 Renders | the Apogee logo | 2026-11-05 |
-| <img src="compat/monsterb.png" width="160" alt=""> | Monster Bash | EGA | 🟢 Renders | notice screen | 2026-11-05 |
-| <img src="compat/darkage.png" width="160" alt=""> | Dark Ages | EGA | 🟢 Renders | title | 2026-11-05 |
-| <img src="compat/wordresc.png" width="160" alt=""> | Word Rescue, Math Rescue | EGA | 🟢 Renders | titles | 2026-11-05 |
-| <img src="compat/davehm.png" width="160" alt=""> | Dangerous Dave in the Haunted Mansion | EGA | 🟢 Renders | title; gameplay (2026-08-01) | 2026-11-05 |
-| <img src="compat/prehist.png" width="160" alt=""> | Prehistorik | EGA | 🟢 Renders | its language menu; title and intro, correct palette (2026-07-31) | 2026-11-05 |
-| <img src="compat/babyjo.png" width="160" alt=""> | Baby Jo | EGA | 🟢 Renders | language select (`BABY 2`) | 2026-11-05 |
-| <img src="compat/maniac.png" width="160" alt=""> | Maniac Mansion (enhanced) | EGA | 🟢 Renders | character select | 2026-11-05 |
-| <img src="compat/monkey.png" width="160" alt=""> | The Secret of Monkey Island (EGA) | EGA | 🟢 Renders | "Press ENTER to continue"; title (2026-08-22) | 2026-11-05 |
-| <img src="compat/mi2.png" width="160" alt=""> | Monkey Island 2 | VGA 13h | 🟢 Renders | the copy-protection screen | 2026-11-05 |
-| <img src="compat/indy3.png" width="160" alt=""> | Indiana Jones and the Last Crusade | EGA | 🟢 Renders | the Lucasfilm logo; the copy-protection screen (2026-08-01) | 2026-11-05 |
-| <img src="compat/loom.png" width="160" alt=""> | Loom | EGA | 🟢 Renders | proficiency menu | 2026-11-05 |
-| <img src="compat/pop.png" width="160" alt=""> | Prince of Persia | VGA 13h | 🟢 Renders | title | 2026-11-05 |
-| <img src="compat/hocus.png" width="160" alt=""> | Major Stryker, Hocus Pocus, Jill of the Jungle | VGA 13h | 🟢 Renders | Hocus Pocus's notice; titles (2026-07-20) | 2026-11-05 |
-| <img src="compat/godthund.png" width="160" alt=""> | God of Thunder | VGA 13h | 🟢 Renders | title | 2026-11-05 |
-| <img src="compat/roc.png" width="160" alt=""> | Realms of Chaos | Mode X | 🟢 Renders | its start-up log to the sound set-up, 22 s in; the title (uses XMS) last seen 2026-09-22 | 2026-11-05 |
-| <img src="compat/moktar.png" width="160" alt=""> | Moktar (Titus) | VGA 13h | 🟢 Renders | title; a launcher that EXECs the game | 2026-11-05 |
-| <img src="compat/arctic.png" width="160" alt=""> | Arctic Adventure | CGA | 🟢 Renders | title and menu | 2026-11-05 |
-| <img src="compat/digger.png" width="160" alt=""> | Digger, Lode Runner | CGA | 🟢 Renders | Digger's title; Lode Runner's gameplay | 2026-11-05 |
-| | Mars (Tim Clarke) | VGA 13h | 🟢 Renders | steers with the mouse | 2026-08 |
-| | Fractint 20.0 | VGA 13h | 🟢 Plays | menus, draws and zooms the Mandelbrot set; needs the AH=58h last-fit strategy | 2026-10-09 |
-| <img src="compat/unreal.png" width="160" alt=""> | Unreal 1.1 (Future Crew) | VGA 13h | 🟢 Renders | sound menu, logos, the scroller part, at its own speed in the browser (it times a frame with PIT counter 0 and waits on every retrace) | 2026-11-05 |
-| | Dune, the 1991 playable demo (Cryo) | VGA 13h | 🟢 Renders | the logos and the intro, from its ZIP in the browser | 2026-11-04 |
-| <img src="compat/jumpbump.png" width="160" alt=""> | Jump 'n Bump | Mode X | 🟢 Renders | the title screen; needed INT 31h to reload DS after DJGPP's crt0 widens it to 4 GiB | 2026-11-05 |
-| <img src="compat/omf.png" width="160" alt=""> | One Must Fall 2097 | VGA 13h | 🟢 Renders | its main menu, on DOS/4GW and our DPMI host | 2026-11-05 |
-| <img src="compat/pinball.png" width="160" alt=""> | Pinball Fantasies | Mode X | 🟢 Renders | past its memory check to the 21st Century logo | 2026-11-05 |
-| <img src="compat/skiordie.png" width="160" alt=""> | Ski or Die | EGA | 🟢 Renders | the title (it stalled in its own overlay loader until 2026-08) | 2026-11-05 |
-| <img src="compat/turbopas.png" width="160" alt=""> | Turbo Pascal 7.1 | text | 🟢 Renders | the IDE and its About box | 2026-11-05 |
-| | Second Reality (Future Crew) | — | 🔴 Fails | derails to 0000:0000 at start | 2026-11-05 |
-| | Stash (The Black Lotus, 64K) | VESA 320×200×16 | 🟢 Plays | progress bar while it precomputes (3.3 billion instructions, about 30 s), then the whole intro to its end text; needed 12 MiB of XMS in one block | 2026-10-10 |
-| <img src="compat/lemmings.png" width="160" alt=""> | Lemmings | VGA/EGA | 🟠 Starts | the machine-type menu (`VGALEMMI`); from `LEMMINGS.BAT`, the trap-flag decryption works, then it wants a raw floppy | 2026-11-05 |
-| <img src="compat/goldenax.png" width="160" alt=""> | Golden Axe | — | 🟠 Starts | its video menu; not driven past it headless | 2026-11-05 |
-| <img src="compat/arkanoid.png" width="160" alt=""> | Arkanoid | — | 🟠 Starts | its video menu; not driven past it headless | 2026-11-05 |
-| <img src="compat/paganitz.png" width="160" alt=""> | Paganitzu | EGA | 🟠 Starts | its display menu | 2026-11-05 |
-| <img src="compat/mystic.png" width="160" alt=""> | Mystic Towers | VGA 13h | 🟠 Starts | its set-up screen (EMS, mouse and Sound Blaster found), "Press any key" | 2026-11-05 |
-| <img src="compat/panic.png" width="160" alt=""> | Panic (Future Crew) | — | 🟠 Starts | its menu; not driven past it headless | 2026-11-05 |
+| <img src="compat/dos-doom-title.png" width="160" alt=""><br><img src="compat/dos-doom-game.png" width="160" alt=""> | DOOM (id, 1993) | VGA 13h | 🟢 Plays | its title, then the attract demo with the status bar; with our DPMI host or its own DOS/4G | 2026-11-05 |
+| <img src="compat/dos-heretic-title.png" width="160" alt=""><br><img src="compat/dos-heretic-game.png" width="160" alt=""> | Heretic | VGA 13h | 🟢 Plays | its title, then the attract demo; needs our DPMI host | 2026-11-05 |
+| <img src="compat/dos-hexen-title.png" width="160" alt=""><br><img src="compat/dos-hexen-game.png" width="160" alt=""> | Hexen (4-level demo) | VGA 13h | 🟢 Plays | a key past its shareware notice, then the attract demo; DOS/4GW 1.97 on our DPMI host | 2026-11-05 |
+| <img src="compat/dos-quake-title.png" width="160" alt=""><br><img src="compat/dos-quake-game.png" width="160" alt=""> | Quake | VGA 13h | 🟢 Plays | `-nocdaudio`; its console, then demo1 | 2026-11-05 |
+| <img src="compat/dos-wolf3d-title.png" width="160" alt=""><br><img src="compat/dos-wolf3d-game.png" width="160" alt=""> | Wolfenstein 3D (shareware and registered) | Mode X | 🟢 Plays | past its signon, the title, then the attract demo | 2026-11-05 |
+| <img src="compat/dos-keen1-title.png" width="160" alt=""><br><img src="compat/dos-keen1-game.png" width="160" alt=""> | Commander Keen 1 | EGA | 🟢 Plays | title, then a new game on the Mars map; file and video events identical to DOSBox-X (2026-08-18) | 2026-11-05 |
+| <img src="compat/dos-keen3-title.png" width="160" alt=""><br><img src="compat/dos-keen3-game.png" width="160" alt=""> | Commander Keen 3 | EGA | 🟢 Plays | title, then a new game on the map | 2026-11-05 |
+| <img src="compat/dos-keen4-title.png" width="160" alt=""><br><img src="compat/dos-keen4-game.png" width="160" alt=""> | Commander Keen 4 (shareware) | EGA | 🟢 Plays | past its set-up screen, the title, then the attract demo | 2026-11-05 |
+| <img src="compat/dos-cosmo-title.png" width="160" alt=""><br><img src="compat/dos-cosmo-game.png" width="160" alt=""> | Cosmo's Cosmic Adventure | EGA | 🟢 Plays | title, then the attract demo | 2026-11-05 |
+| <img src="compat/dos-bmenace-title.png" width="160" alt=""><br><img src="compat/dos-bmenace-game.png" width="160" alt=""> | Bio Menace (freeware) | EGA | 🟢 Renders | past its set-up screen and technical help, the new-game menu | 2026-11-05 |
+| <img src="compat/dos-duke1-title.png" width="160" alt=""><br><img src="compat/dos-duke1-game.png" width="160" alt=""> | Duke Nukem 1 | EGA | 🟢 Plays | title, then a new game: the first level | 2026-11-05 |
+| <img src="compat/dos-crystalc-title.png" width="160" alt=""><br><img src="compat/dos-crystalc-game.png" width="160" alt=""> | Crystal Caves | EGA | 🟢 Plays | title, then a new game: the first level | 2026-11-05 |
+| <img src="compat/dos-secretag-title.png" width="160" alt=""><br><img src="compat/dos-secretag-game.png" width="160" alt=""> | Secret Agent | EGA | 🟢 Plays | title, then a new game: the island map | 2026-11-05 |
+| <img src="compat/dos-monsterb-title.png" width="160" alt=""><br><img src="compat/dos-monsterb-game.png" width="160" alt=""> | Monster Bash | EGA | 🟢 Plays | title, then the first level with its hint box | 2026-11-05 |
+| <img src="compat/dos-darkage-title.png" width="160" alt=""><br><img src="compat/dos-darkage-game.png" width="160" alt=""> | Dark Ages | EGA | 🟢 Plays | title, then the first level | 2026-11-05 |
+| <img src="compat/dos-wordresc-title.png" width="160" alt=""><br><img src="compat/dos-wordresc-game.png" width="160" alt=""> | Word Rescue | EGA | 🟢 Plays | title, then the first level | 2026-11-05 |
+| <img src="compat/dos-mathresc-title.png" width="160" alt=""><br><img src="compat/dos-mathresc-game.png" width="160" alt=""> | Math Rescue | EGA | 🟢 Renders | title, then its main menu after the story | 2026-11-05 |
+| <img src="compat/dos-davehm-title.png" width="160" alt=""><br><img src="compat/dos-davehm-game.png" width="160" alt=""> | Dangerous Dave in the Haunted Mansion | EGA | 🟢 Plays | title, then the first level | 2026-11-05 |
+| <img src="compat/dos-jill-title.png" width="160" alt=""><br><img src="compat/dos-jill-game.png" width="160" alt=""> | Jill of the Jungle (shareware) | VGA 13h | 🟢 Plays | title, then a new game on the map | 2026-11-05 |
+| <img src="compat/dos-stryker-title.png" width="160" alt=""><br><img src="compat/dos-stryker-game.png" width="160" alt=""> | Major Stryker (shareware) | EGA | 🟢 Renders | past its notice, the credits, then the first mission's briefing | 2026-11-05 |
+| <img src="compat/dos-hocus-title.png" width="160" alt=""><br><img src="compat/dos-hocus-game.png" width="160" alt=""> | Hocus Pocus | VGA 13h | 🟢 Plays | past its notices, the main menu, then the first level | 2026-11-05 |
+| <img src="compat/dos-hharry-title.png" width="160" alt=""><br><img src="compat/dos-hharry-game.png" width="160" alt=""> | Halloween Harry (shareware) | VGA 13h | 🟢 Renders | past its configuration screen, the intro, then "Mission 1 — Office Block" (it exited without a mode until 2026-07) | 2026-11-05 |
+| <img src="compat/dos-raptor-title.png" width="160" alt=""><br><img src="compat/dos-raptor-game.png" width="160" alt=""> | Raptor: Call of the Shadows (shareware) | VGA 13h | 🟢 Renders | on our DPMI host: the main menu, then a new pilot's file (it failed for want of a DPMI host until 2026-08) | 2026-11-05 |
+| <img src="compat/dos-prehist-title.png" width="160" alt=""><br><img src="compat/dos-prehist-game.png" width="160" alt=""> | Prehistorik | EGA | 🟢 Renders | its language and sound menus, then the title | 2026-11-05 |
+| <img src="compat/dos-babyjo-title.png" width="160" alt=""> | Baby Jo | EGA | 🟢 Renders | language select (`BABY 2`) | 2026-11-05 |
+| <img src="compat/dos-maniac-title.png" width="160" alt=""> | Maniac Mansion (enhanced) | EGA | 🟢 Renders | character select | 2026-11-05 |
+| <img src="compat/dos-monkey-title.png" width="160" alt=""> | The Secret of Monkey Island (EGA) | EGA | 🟢 Renders | "Press ENTER to continue"; title (2026-08-22) | 2026-11-05 |
+| <img src="compat/dos-mi2-title.png" width="160" alt=""> | Monkey Island 2 | VGA 13h | 🟢 Renders | the copy-protection screen | 2026-11-05 |
+| <img src="compat/dos-indy3-title.png" width="160" alt=""><br><img src="compat/dos-indy3-game.png" width="160" alt=""> | Indiana Jones and the Last Crusade | EGA | 🟢 Renders | the Lucasfun circus intro, then the college; the copy-protection screen (2026-08-01) | 2026-11-05 |
+| <img src="compat/dos-loom-title.png" width="160" alt=""> | Loom | EGA | 🟢 Renders | proficiency menu (driven with the mouse) | 2026-11-05 |
+| <img src="compat/dos-pop-title.png" width="160" alt=""><br><img src="compat/dos-pop-game.png" width="160" alt=""> | Prince of Persia | VGA 13h | 🟢 Renders | title, then its intro in the palace | 2026-11-05 |
+| <img src="compat/dos-godthund-title.png" width="160" alt=""><br><img src="compat/dos-godthund-game.png" width="160" alt=""> | God of Thunder | VGA 13h | 🟢 Renders | title, then the player selection | 2026-11-05 |
+| <img src="compat/dos-roc-title.png" width="160" alt=""><br><img src="compat/dos-roc-game.png" width="160" alt=""> | Realms of Chaos | Mode X | 🟢 Plays | credits, then a new game in the forest (uses XMS) | 2026-11-05 |
+| <img src="compat/dos-moktar-title.png" width="160" alt=""><br><img src="compat/dos-moktar-game.png" width="160" alt=""> | Moktar (Titus) | VGA 13h | 🟢 Plays | title, then the first level; a launcher that EXECs the game | 2026-11-05 |
+| <img src="compat/dos-alleycat-title.png" width="160" alt=""><br><img src="compat/dos-alleycat-game.png" width="160" alt=""> | Alley Cat | CGA | 🟢 Plays | title, then the alley | 2026-11-05 |
+| <img src="compat/dos-blues-title.png" width="160" alt=""><br><img src="compat/dos-blues-game.png" width="160" alt=""> | Blues Brothers | EGA | 🟢 Plays | title, then the city map | 2026-11-05 |
+| <img src="compat/dos-arctic-title.png" width="160" alt=""><br><img src="compat/dos-arctic-game.png" width="160" alt=""> | Arctic Adventure | CGA | 🟢 Plays | title, then the map | 2026-11-05 |
+| <img src="compat/dos-arkanoid-title.png" width="160" alt=""><br><img src="compat/dos-arkanoid-game.png" width="160" alt=""> | Arkanoid | CGA | 🟢 Plays | its video and input menus, then round 1 | 2026-11-05 |
+| <img src="compat/dos-digger-title.png" width="160" alt=""> | Digger | CGA | 🟢 Renders | title and high scores | 2026-11-05 |
+| <img src="compat/dos-loderun-game.png" width="160" alt=""> | Lode Runner | CGA | 🟢 Renders | its gameplay | 2026-11-05 |
+| <img src="compat/dos-dune-title.png" width="160" alt=""><br><img src="compat/dos-dune-game.png" width="160" alt=""> | Dune (Cryo) | VGA 13h | 🟢 Renders | the animated intro, in the `HIM 386` path too | 2026-11-05 |
+| <img src="compat/dos-unreal-title.png" width="160" alt=""><br><img src="compat/dos-unreal-game.png" width="160" alt=""> | Unreal 1.1 (Future Crew) | VGA 13h | 🟢 Renders | its sound menu, then the scroller part (in the browser, at its own speed: it times a frame with PIT counter 0 and waits on every retrace) | 2026-11-05 |
+| <img src="compat/dos-jumpbump-title.png" width="160" alt=""> | Jump 'n Bump | Mode X | 🟢 Renders | the title screen; needed INT 31h to reload DS after DJGPP's crt0 widens it to 4 GiB | 2026-11-05 |
+| <img src="compat/dos-omf-title.png" width="160" alt=""><br><img src="compat/dos-omf-game.png" width="160" alt=""> | One Must Fall 2097 | VGA 13h | 🟢 Renders | its main menu, then the game's title, on DOS/4GW and our DPMI host | 2026-11-05 |
+| <img src="compat/dos-pinball-title.png" width="160" alt=""><br><img src="compat/dos-pinball-game.png" width="160" alt=""> | Pinball Fantasies | Mode X, 640×480 planar | 🟢 Renders | the 21st Century logo, then its table selection (shown whole since 2026-11-05: its menus double every line) | 2026-11-05 |
+| <img src="compat/dos-skiordie-title.png" width="160" alt=""><br><img src="compat/dos-skiordie-game.png" width="160" alt=""> | Ski or Die | EGA | 🟢 Renders | title, then Rodney's ski shop (it stalled in its own overlay loader until 2026-08) | 2026-11-05 |
+| <img src="compat/dos-turbopas-title.png" width="160" alt=""><br><img src="compat/dos-turbopas-game.png" width="160" alt=""> | Turbo Pascal 7.1 | text | 🟢 Renders | the IDE and its About box | 2026-11-05 |
+| <img src="compat/dos-cdogs-title.png" width="160" alt=""><br><img src="compat/dos-cdogs-game.png" width="160" alt=""> | C-Dogs 1.06 | VGA 13h | 🟢 Plays | its menu, then mission 1; Sound Blaster 16 effects (see the intros table) | 2026-11-05 |
+| <img src="compat/dos-stash-title.png" width="160" alt=""><br><img src="compat/dos-stash-game.png" width="160" alt=""> | Stash (The Black Lotus, 64K) | VESA 320×200×16 | 🟢 Plays | the progress bar while it precomputes, then the intro to its end text; needed 12 MiB of XMS in one block | 2026-11-05 |
+| <img src="compat/dos-lemmings-title.png" width="160" alt=""> | Lemmings | VGA/EGA | 🟠 Starts | the machine-type menu; then it wants a raw floppy ("Lemmings Disk 1 Not Found") | 2026-11-05 |
+| <img src="compat/dos-goldenax-title.png" width="160" alt=""> | Golden Axe | — | 🟠 Starts | its title, then a password entry from the manual | 2026-11-05 |
+| <img src="compat/dos-paganitz-title.png" width="160" alt=""><br><img src="compat/dos-paganitz-game.png" width="160" alt=""> | Paganitzu | EGA | 🟠 Starts | its display and controller menus, then the story | 2026-11-05 |
+| <img src="compat/dos-mystic-title.png" width="160" alt=""><br><img src="compat/dos-mystic-game.png" width="160" alt=""> | Mystic Towers | VGA 13h | 🟢 Plays | its set-up screen, the title, then a quest | 2026-11-05 |
+| <img src="compat/dos-panic-title.png" width="160" alt=""><br><img src="compat/dos-panic-game.png" width="160" alt=""> | Panic (Future Crew) | — | 🟠 Starts | its menu; not driven past it headless | 2026-11-05 |
+| <img src="compat/dos-2ndreal-title.png" width="160" alt=""> | Second Reality (Future Crew) | — | 🔴 Fails | derails to 0000:0000 at start | 2026-11-05 |
+| <img src="compat/dos-jazz-title.png" width="160" alt=""> | Jazz Jackrabbit | — | 🔴 Fails | a #GP in its DPMI client at F000:0220 (error 3Ch) at start | 2026-11-05 |
+| <img src="compat/dos-zone66-title.png" width="160" alt=""> | Zone 66 | — | 🔴 Fails | "This program can not run with an XMS driver" | 2026-11-05 |
+| <img src="compat/dos-pitman-title.png" width="160" alt=""><br><img src="compat/dos-pitman-game.png" width="160" alt=""> | Pitman | text | 🟢 Plays | its title and menu, then level 1 | 2026-11-05 |
+| <img src="compat/dos-mars-title.png" width="160" alt=""><br><img src="compat/dos-mars-game.png" width="160" alt=""> | Mars (Tim Clarke) | VGA 13h | 🟢 Renders | the landscape; steers with the mouse (2026-08) | 2026-11-05 |
+| <img src="compat/dos-fractint-title.png" width="160" alt=""><br><img src="compat/dos-fractint-game.png" width="160" alt=""> | Fractint 20.0 | VGA 13h | 🟢 Plays | its credits, then the Mandelbrot set drawn; zooms (2026-10-09); needs the AH=58h last-fit strategy | 2026-11-05 |
+| <img src="compat/dos-dunedemo-title.png" width="160" alt=""><br><img src="compat/dos-dunedemo-game.png" width="160" alt=""> | Dune, the 1991 playable demo (Cryo) | VGA 13h | 🟢 Renders | the logos and the intro, from its ZIP | 2026-11-05 |
 | | QBasic | text | 🟠 Starts | the IDE, after a long first compile | 2026-07-20 |
-| | Halloween Harry | text | 🔴 Fails | the launcher exits without setting a mode | 2026-07-20 |
-| | Jazz Jackrabbit | — | 🔴 Fails | a #GP in its DPMI client at F000:0220 (error 3Ch) at start | 2026-11-05 |
-| <img src="compat/zone66.png" width="160" alt=""> | Zone 66 | — | 🔴 Fails | "This program can not run with an XMS driver" | 2026-11-05 |
-| | Raptor | — | 🟠 Unknown | failed for want of a DPMI host; not re-run since there is one | 2026-08-01 |
 
 ## Intros and demos
 
@@ -146,7 +154,7 @@ intros, nine rendered (2026-08-28).
 
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Title | Status | Notes | Run |
 |---|---|---|---|---|
-| | tube, memories, kaneda, lattice, puls, and the other 256-byte intros of the golden set | 🟢 Renders | fingerprinted by `tools/golden.js` | 2026-11-05 |
+| <img src="compat/dos-tube-title.png" width="160" alt=""><br><img src="compat/dos-tube-game.png" width="160" alt=""> | tube, memories, kaneda, lattice, puls, and the other 256-byte intros of the golden set | 🟢 Renders | fingerprinted by `tools/golden.js` | 2026-11-05 |
 | <img src="compat/intro-crevenge.png" width="160" alt=""> | Chrome Revenge (1K, SSE raytracer, VESA 640×480×32) | 🟢 Renders | | 2026-11-05 |
 | <img src="compat/intro-qblove.png" width="160" alt=""> | qblove (1K) | 🟢 Renders | checked against the author's screenshot | 2026-11-05 |
 | <img src="compat/intro-mirrors.png" width="160" alt=""> | Mirrors Within (512b) | 🟢 Renders | 82 % pixel agreement with DOSBox-X | 2026-11-05 |
@@ -156,7 +164,6 @@ intros, nine rendered (2026-08-28).
 | | Juggler 2001 | 🟢 Renders | after the MIDI-port question and the keypress it asks for | 2026-08-28 |
 | <img src="compat/intro-omniscent.png" width="160" alt=""> | Omniscent, Forever Reality, StarPort BBS 2, Another Soul Lost | 🟢 Renders | | 2026-11-05 |
 | | Void 3 | 🟢 Renders | answer `2` and `1` to its SB questions; it precomputes its music, then plays. Its synthesis wants ~30 M instructions a second: headless that is `MIRAGE_PITRELOAD=1800000`, the browser measured 73 M. Needed DMA playback and the DPMI locked stack | 2026-10-11 |
-| | C-Dogs 1.06 | 🟢 Plays | DOS/4GW 1.97 on MIRAGE's DPMI host, Sound Blaster 16 effects (SOUND.CFG from its DSETUP32). Needed selector 0040h in the host's GDT, a waiting INT 16h reached through a client's chain, and E0-prefixed arrow keys | 2026-11-04 |
 | <img src="compat/intro-difze.png" width="160" alt=""> | Difúze (Řrřola) | 🟢 Plays | the reaction–diffusion patterns, after a few hundred frames; identical to Unicorn for 300 frames ([notes/2026-10-10-difuze.md](notes/2026-10-10-difuze.md)); its General MIDI music through the MPU-401 | 2026-11-05 |
 | | oktaeder | 🔴 Fails | not a MIRAGE defect — see above | 2026-11-05 |
 
