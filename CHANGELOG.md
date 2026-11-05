@@ -17,6 +17,14 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 - **COMPATIBILITY.md** re-run in full, with pictures: each DOS game's title and a moment of play,
   drawn by MIRAGE's own renderer from a scripted headless run (`tools/compat-shots.mjs`, the keys of
   each title in `tools/compat-shots.json`); every system where it boots or stops; a Linux section.
+- **Jazz Jackrabbit plays**: Borland's RTM now runs on MIRAGE's DPMI host, after ten fixes found by
+  tracing it: the raw mode switch, a resident program leaving protected mode, AX after a TSR, the
+  parent's path in a shared environment, the "MS-DOS" vendor API, selectors in DOS and BIOS answers,
+  exception frames on the host's stack, segment loads that fault, DPMI 0400h, and protected-mode
+  addresses in the palette and string calls.
+- **`?xms=0` and `?ems=0`** in the DOS player start it without that memory manager: **Zone 66**, which
+  refuses any XMS driver (on DOSBox-X too), shows its title.
+- **Windows 3.0 in all three modes**: real, standard and 386 enhanced, each to Program Manager.
 - **Pinball Fantasies' menus whole**: a 16-colour screen that doubles its lines (CRTC double scan) was
   drawn twice as tall, its lower half the memory below the menu.
 - **Five more DOS games run**: Raptor (on MIRAGE's DPMI host), Halloween Harry, Bio Menace, Major

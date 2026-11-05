@@ -6,7 +6,7 @@
 //
 // An entry: { id, dir (under games/), zip (a path in the repository, e.g. examples/games/4keen.zip) or
 // files (single programs, e.g. ["intros/tube.com"]),
-// exe, args?, mem?, keys?: [[seconds, "1c,9c"], ...], shots: [[seconds, name], ...] }.
+// exe, args?, mem?, xms?/ems? (false: no such driver), keys?: [[seconds, "1c,9c"], ...], shots: [[seconds, name], ...] }.
 // Times are guest seconds (CPU cycles), not BIOS ticks: a game that takes INT 8 over freezes those.
 // Keys are set-1 scancodes, make and break; the DOS half (scan, ASCII) is queued too, as a real
 // keypress does (src/keyboard.js), for the programs that read INT 16h or INT 21h -- arrows and
@@ -45,7 +45,7 @@ for (const e of list) {
   else if (e.files) for (const f of e.files) vfs.addFile('\\' + VFS.dosName(f.split('/').pop()), new Uint8Array(readFileSync(join(ROOT, f))));   // single programs: intros/
   else { const dir = join(ROOT, 'games', e.dir); for (const r of walk(dir)) vfs.addFile('\\' + r.split('/').join('\\'), new Uint8Array(readFileSync(join(dir, r)))); }
   vfs.chdir('\\' + (e.cwd || ''));
-  const { mc, dos } = makeMachine({ vfs, ...(e.mem ? { mem: e.mem } : {}), ...(e.cpu ? { cpu: e.cpu } : {}) });
+  const { mc, dos } = makeMachine({ vfs, ...(e.mem ? { mem: e.mem } : {}), ...(e.cpu ? { cpu: e.cpu } : {}), ...(e.xms === false ? { xms: false } : {}), ...(e.ems === false ? { ems: false } : {}) });   // xms/ems false: the DOS player's ?xms=0 / ?ems=0
   let fault = null; mc.onError = (x) => { fault = x; };
   const exe = e.exe.split('/').join('\\');
   dos.load(vfs.readFile('\\' + exe), e.args ? ' ' + e.args : '', 'C:\\' + exe);
