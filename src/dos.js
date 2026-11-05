@@ -34,6 +34,22 @@ const playerMem = (mib = 16) => {
 };
 const DOS_PLAYER_MEM = playerMem(16);
 
+// The DOS player's per-program machine options, from its URL (main.js) or a manifest entry:
+//   mem=N   N MiB of RAM (playerMem)
+//   xms=0   no XMS driver — as not loading HIMEM.SYS. Zone 66's extender takes extended memory raw
+//           (INT 15h AH=88h) and quits on INT 2Fh AX=4300h answering AL=80h: "This program can not
+//           run with an XMS driver!!!". DOSBox-X's default xms=true refuses it the same way; xms=false
+//           runs it.
+//   ems=0   no expanded memory manager
+// Only what is given is returned, so the machine keeps its defaults for the rest.
+const playerOptions = (params) => {
+  const o = {}, mem = parseInt(params.get('mem'), 10), off = (v) => v === '0' || v === 'false' || v === 'off';
+  if (mem > 0) o.mem = mem;
+  if (off(params.get('xms'))) o.xms = false;
+  if (off(params.get('ems'))) o.ems = false;
+  return o;
+};
+
 export function installDOS(machine, vfs) {
   const mem = machine.mem, cpu = machine.cpu;
   // The EMS driver answers to its name in the device chain, and that — not the INT 67h vector — is
@@ -1051,4 +1067,4 @@ export function installDOS(machine, vfs) {
   return dos;
 }
 
-export { PSP_SEG, ENV_SEG, MEM_TOP, DOS_PLAYER_MEM, playerMem };
+export { PSP_SEG, ENV_SEG, MEM_TOP, DOS_PLAYER_MEM, playerMem, playerOptions };

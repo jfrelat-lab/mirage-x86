@@ -37,7 +37,10 @@ const vfs = new VFS();
 for (const rel of walk(dir)) vfs.addFile('\\' + rel.split('/').join('\\'), new Uint8Array(readFileSync(join(dir, rel))));
 vfs.chdir('\\');
 
-const { mc, dos } = makeMachine({ vfs });
+// NOXMS=1 boots without an XMS driver (as tools/dpmi-probe.mjs does), for a title that refuses to
+// run beside one: Zone 66 asks INT 2Fh AX=4300h and quits on AL=80h, as it does under DOSBox-X's
+// default xms=true.
+const { mc, dos } = makeMachine({ vfs, xms: process.env.NOXMS ? false : undefined });
 let fault = null; mc.onError = (e) => { fault = e; };
 dos.load(new Uint8Array(readFileSync(join(dir, prog))), tail ? ' ' + tail : '', 'C:\\' + prog);
 // Bounded on the BIOS tick counter at 0040:006C — the same clock tools/egaref.mjs stops DOSBox on,

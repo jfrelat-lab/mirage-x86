@@ -52,7 +52,8 @@ export class Mirage {
     this.machine.timerAuto = false;   // browser paces the PIT to wall-clock (18.2 Hz) in _loop() below
     this.machine.vcpuHz = opts.vcpuHz ?? VCPU_HZ;   // emulated CPU speed cap; null = unthrottled
     this.machine.wallClockMs = () => performance.now();   // anchors the 0x3DA beam to real 70 Hz
-    this.bios = installBIOS(this.machine);
+    // xms/ems: false boots without that memory manager (src/dos.js playerOptions, ?xms=0 / ?ems=0).
+    this.bios = installBIOS(this.machine, { xms: opts.xms, ems: opts.ems });
     this.vfs = new VFS();
     this.dos = installDOS(this.machine, this.vfs);
     this.video = new Video(this.machine, canvas);

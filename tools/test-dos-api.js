@@ -16,7 +16,7 @@
 
 import { Machine } from '../src/machine.js';
 import { installBIOS } from '../src/bios.js';
-import { installDOS } from '../src/dos.js';
+import { installDOS, playerMem, playerOptions } from '../src/dos.js';
 import { readFileSync } from 'fs';
 import { VFS } from '../src/vfs.js';
 import { bootSector, isBootSector } from '../src/boot.js';
@@ -991,6 +991,30 @@ function asciiz(mc, cpu, off, str) {
   cpu.ah = 0x0a; cpu.reg[2] = 0x1234; mc.cpu.xmsCall();           // bogus handle
   eq('XMS AH=0A on a bad handle fails', cpu.reg[0] & 0xffff, 0);
   eq('XMS AH=0A on a bad handle reports "invalid handle"', cpu.reg[3] & 0xff, 0xa2);
+}
+
+// ---------------------------------------------------------------- the DOS player without XMS
+// Zone 66 asks INT 2Fh AX=4300h, quits on AL=80h ("This program can not run with an XMS driver!!!"),
+// and then wants at least 512 KB from INT 15h AH=88h. DOSBox-X refuses it the same way with its
+// default xms=true and runs it with xms=false; the DOS player had no way to boot without XMS.
+{
+  const opts = playerOptions(new URLSearchParams('mem=32&xms=0'));
+  eq('playerOptions: ?xms=0 asks for no XMS driver', opts.xms, false);
+  eq('playerOptions: ?mem= is kept', opts.mem, 32);
+  eq('playerOptions: EMS keeps its default unless asked', 'ems' in opts, false);
+  eq('playerOptions: no parameters change nothing', Object.keys(playerOptions(new URLSearchParams(''))).length, 0);
+  const at = (o) => {
+    const mc = new Machine(playerMem(16));
+    installBIOS(mc, { xms: o.xms, ems: o.ems }); installDOS(mc, new VFS());
+    const cpu = mc.cpu;
+    cpu.reg[0] = 0x4300; mc.intHandlers[0x2f](cpu, mc); const al = cpu.reg[0] & 0xff;
+    cpu.reg[0] = 0x8800; mc.intHandlers[0x15](cpu, mc);
+    return { al, ext: cpu.reg[0] & 0xffff };
+  };
+  const without = at(opts), withXms = at(playerOptions(new URLSearchParams('mem=32')));
+  eq('player default: XMS present (AX=4300h -> 80h)', withXms.al, 0x80);
+  ok('?xms=0: no XMS driver answers AX=4300h', without.al !== 0x80);
+  ok('?xms=0: INT 15h AH=88h reports the extended memory (>= 512 KB, Zone 66\'s minimum)', without.ext >= 512);
 }
 
 // ---------------------------------------------------------------- XMS AH=0Bh move block

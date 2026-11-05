@@ -137,7 +137,7 @@ Each picture pair is the title, then the game, drawn by MIRAGE's own renderer (`
 | <img src="compat/dos-panic-title.png" width="160" alt=""> <img src="compat/dos-panic-game.png" width="160" alt=""> | Panic (Future Crew) | — | 🟠 Starts | its menu; not driven past it headless | 2026-11-05 |
 | <img src="compat/dos-2ndreal-title.png" width="160" alt=""> | Second Reality (Future Crew) | — | 🔴 Fails | derails to 0000:0000 at start | 2026-11-05 |
 | <img src="compat/dos-jazz-title.png" width="160" alt=""> | Jazz Jackrabbit | — | 🔴 Fails | a #GP in its DPMI client at F000:0220 (error 3Ch) at start | 2026-11-05 |
-| <img src="compat/dos-zone66-title.png" width="160" alt=""> | Zone 66 | — | 🔴 Fails | "This program can not run with an XMS driver" | 2026-11-05 |
+| <img src="compat/dos-zone66-title.png" width="160" alt=""> | Zone 66 | VGA 13h | 🟢 Renders | its title picture, with `&xms=0`: it refuses any XMS driver ("This program can not run with an XMS driver"), on DOSBox-X too unless `xms=false` | 2026-11-05 |
 | <img src="compat/dos-pitman-title.png" width="160" alt=""> <img src="compat/dos-pitman-game.png" width="160" alt=""> | Pitman | text | 🟢 Plays | its title and menu, then level 1 | 2026-11-05 |
 | <img src="compat/dos-mars-title.png" width="160" alt=""> <img src="compat/dos-mars-game.png" width="160" alt=""> | Mars (Tim Clarke) | VGA 13h | 🟢 Renders | the landscape; steers with the mouse (2026-08) | 2026-11-05 |
 | <img src="compat/dos-fractint-title.png" width="160" alt=""> <img src="compat/dos-fractint-game.png" width="160" alt=""> | Fractint 20.0 | VGA 13h | 🟢 Plays | its credits, then the Mandelbrot set drawn; zooms (2026-10-09); needs the AH=58h last-fit strategy | 2026-11-05 |

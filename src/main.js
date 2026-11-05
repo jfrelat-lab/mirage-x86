@@ -11,8 +11,10 @@
 //   ?cmd=DIR             run an arbitrary shell command line
 //   ?mhz=8               cap the guest at N million cycles/s (default: uncapped — see ui.js VCPU_HZ)
 //   ?mem=64              N MiB of RAM instead of 16 (src/dos.js playerMem)
+//   ?xms=0 / ?ems=0      no XMS driver / no EMS manager (src/dos.js playerOptions): Zone 66 needs xms=0
 
 import { Mirage } from './ui.js';
+import { playerOptions } from './dos.js';
 import { installFullscreen } from './fullscreen.js';
 import { VFS } from './vfs.js';
 
@@ -22,9 +24,8 @@ const boot = document.getElementById('boot');
 const drop = document.getElementById('drop');
 
 const mhz = parseFloat(new URLSearchParams(location.search).get('mhz'));
-const mem = parseInt(new URLSearchParams(location.search).get('mem'), 10);
 const app = new Mirage(canvas, {
-  ...(mem > 0 ? { mem } : {}),
+  ...playerOptions(new URLSearchParams(location.search)),   // mem, xms, ems
   onFrame: throttle(updateHud, 100),
   ...(mhz > 0 ? { vcpuHz: mhz * 1e6 } : {}),
 });
