@@ -862,9 +862,18 @@ export class Recompiler {
     let needChecked = false;
     // Shared by LDS/LES/LSS/LFS/LGS: an offset at the effective address, then a 16-bit selector.
     // Its position depends on the operand size — +2 for a word offset, +4 for a dword.
+    // In protected mode the selector load can FAULT, and then it has to end the block with EIP at this
+    // instruction and the register untouched, as MOV Sreg does — the handler restarts it. Borland
+    // RTM (Jazz Jackrabbit) loads its segments on #NP: `les di,[bp+6]` with a not-present selector
+    // went to the handler, which was then overwritten by the rest of the block running on, and the
+    // client returned through the exception frame. Both halves are read first, so `les bx,[bx]`
+    // takes its selector from the address it was given. A real-mode block cannot fault here.
     const loadPtr = (o, segIdx, size) => {
       const a = memAddr(o);
-      return `${rW(o.reg, size, size === 16 ? `m.r16(${a})` : `m.r32(${a})>>>0`)}cpu.setSeg(${segIdx},m.r16(${AM(`${a}+${size === 16 ? 2 : 4}`)}));`;
+      const off = size === 16 ? `m.r16(${a})` : `m.r32(${a})>>>0`, sel = `m.r16(${AM(`${a}+${size === 16 ? 2 : 4}`)})`;
+      if (REAL) return `${rW(o.reg, size, off)}cpu.setSeg(${segIdx},${sel});`;
+      canFault = true;
+      return `{const _po=${off},_ps=${sel};cpu.eip=${curIpStart};if(cpu.setSeg(${segIdx},_ps)===false)return;${rW(o.reg, size, '_po')}}`;
     };
     // BIOS service entry (f000:00..ff). Reached when a guest calls the ISR *inline* — reads the
     // vector from the IVT and far-JMP/CALLs f000:n instead of executing `INT n` (Secret Agent's

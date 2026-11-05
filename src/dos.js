@@ -33,7 +33,6 @@ const playerMem = (mib = 16) => {
   return { memSize: size, ramSize: ram };
 };
 const DOS_PLAYER_MEM = playerMem(16);
-
 // The DOS player's per-program machine options, from its URL (main.js) or a manifest entry:
 //   mem=N   N MiB of RAM (playerMem)
 //   xms=0   no XMS driver — as not loading HIMEM.SYS. Zone 66's extender takes extended memory raw
@@ -73,6 +72,7 @@ export function installDOS(machine, vfs) {
     blockBase: PSP_SEG,       // first paragraph of the running program's block (MCB at base-1)
     programDone: false,
     exitCode: 0,
+    exitType: 0,                    // AH of 4Dh: 0 normal termination, 3 terminate and stay resident
     findList: [], findIdx: 0,
     switchChar: 0x2f,         // AH=37h: '/' — what DOS reports as the command-line option prefix
     date: null, time: null,   // AH=2Bh/2Dh: a guest-set date/time, if any
@@ -120,6 +120,19 @@ export function installDOS(machine, vfs) {
    * @param {number} envSeg  the block's segment
    * @param {string} path    full path of the program that will own it
    */
+  /** The program path an environment block ends with ('' if it has none): setEnvProgramPath's inverse. */
+  function envProgramPath(envSeg) {
+    let p = envSeg << 4;
+    for (let guard = 0; guard < 0x8000; guard++) {
+      if (mem.r8(p) === 0) break;
+      while (mem.r8(p) !== 0) p++;
+      p++;
+    }
+    p++;
+    if (mem.r16(p) < 1) return '';
+    return String.fromCharCode(...mem.readCStr(p + 2));
+  }
+
   function setEnvProgramPath(envSeg, path) {
     let p = envSeg << 4;
     for (let guard = 0; guard < 0x8000; guard++) {        // scan to the strings' double NUL
@@ -169,7 +182,7 @@ export function installDOS(machine, vfs) {
   // ---- program loaders ----------------------------------------------------
   function prep(tail, progPath) {
     machine.rec.reset();
-    dos.programDone = false; dos.exitCode = 0;
+    dos.programDone = false; dos.exitCode = 0; dos.exitType = 0;
     dos.allocs = new Map();      // seg → paragraphs for live AH=48 blocks
     dos.memFloor = MEM_TOP;      // bump base above the program's own block (lowered when it shrinks)
     dos.blockBase = PSP_SEG;     // the paragraph its MCB describes; differs from the PSP when loaded high
@@ -484,13 +497,20 @@ export function installDOS(machine, vfs) {
                                 : { base: childBase, psp: childBase, load: childBase + 0x10, top: MEM_TOP };
     const childPsp = childPlace.psp;
     const envSeg = mem.r16(pbLin) || ENV_SEG;             // 0 in the param block = inherit parent's env
+    // The child is handed the very block it names (or its parent's), where DOS would have given it a
+    // copy, so the path that block ended with goes back when the child ends (terminate). Without
+    // that, a parent whose child stays resident went on as the CHILD: Jazz Jackrabbit's stub passes
+    // its own environment to Borland's RTM, RTM goes resident and is asked to load "the program",
+    // reads the stub's environment to find its file — and opened C:\RTM.000 instead of JAZZ.EXE
+    // ("Loader error (0023): invalid exe format").
+    const parentEnvPath = envProgramPath(envSeg);
     setEnvProgramPath(envSeg, path.startsWith('C:') || path.startsWith('\\') ? path : 'C:\\' + path.replace(/^\\/, ''));
     const tOff = mem.r16(pbLin + 2), tSeg = mem.r16(pbLin + 4), tLin = (tSeg << 4) + tOff;
     let tail = ''; const tLen = mem.r8(tLin);
     for (let i = 0; i < tLen; i++) tail += String.fromCharCode(mem.r8(tLin + 1 + i));
 
     dos.execStack.push({                                  // save the parent to resume on the child's exit
-      reg: Array.from(cpu.reg), seg: Array.from(cpu.seg),
+      reg: Array.from(cpu.reg), seg: Array.from(cpu.seg), pe: cpu.cr0 & 1, envSeg, parentEnvPath,
       eip: cpu.eip, flags: cpu.flags, psp: dos.psp, dta: dos.dta,
       allocTop: dos.allocTop, allocs: dos.allocs, memFloor: dos.memFloor, blockBase: dos.blockBase,
     });
@@ -499,7 +519,7 @@ export function installDOS(machine, vfs) {
     buildPSP(childPsp, tail);
     mem.w16((childPsp << 4) + 0x16, dos.psp);             // parent PSP link
     mem.w16((childPsp << 4) + 0x2c, envSeg);              // environment segment
-    dos.psp = childPsp; vfs.setPsp(childPsp); dos.exitCode = 0;   // the child inherits open handles
+    dos.psp = childPsp; vfs.setPsp(childPsp); dos.exitCode = 0; dos.exitType = 0;   // the child inherits open handles
 
     dos.blockBase = childPlace.base;
     let childTop = MEM_TOP;                               // a .COM child owns the rest of memory
@@ -544,11 +564,19 @@ export function installDOS(machine, vfs) {
     return 0;
   }
 
-  const terminate = (code) => {
+  const terminate = (code, type = 0) => {
     dos.exitCode = code & 0xff;
+    dos.exitType = type;
     const ctx = dos.execStack.pop();
     if (ctx) {                                            // a child of an EXEC — resume the parent
       machine.rec.reset();
+      // The parent resumes in the mode it called EXEC from. A DPMI client exits (or goes resident)
+      // from PROTECTED mode, and the parent it returns to may be real-mode code: Jazz Jackrabbit's
+      // stub EXECs Borland's RTM, which switches to protected mode and ends with INT 21h AH=31h
+      // there. Loading the stub's segments as selectors was #GP(0830h). A host reflects the call to
+      // DOS in real mode; here, as there, the parent comes back with PE as it left it.
+      if ((cpu.cr0 ^ ctx.pe) & 1) cpu.setCR0(((cpu.cr0 & ~1) | ctx.pe) >>> 0);
+      if (ctx.parentEnvPath) setEnvProgramPath(ctx.envSeg, ctx.parentEnvPath);
       cpu.reg.set(ctx.reg);
       for (const s of [ES, CS, SS, DS]) cpu.setSeg(s, ctx.seg[s]);
       cpu.eip = ctx.eip; cpu.flags = ctx.flags & ~CF;    // EXEC succeeded → CF clear for the parent
@@ -566,7 +594,7 @@ export function installDOS(machine, vfs) {
   // paragraph below the child's PSP, which is where EXEC put its MCB header.
   const terminateResident = (code, keepPara) => {
     const psp = dos.psp, hadParent = dos.execStack.length > 0;
-    terminate(code);
+    terminate(code, 3);                                   // AH=4Dh reports type 3: "stayed resident"
     if (hadParent) { dos.allocs.set(psp - 1, Math.max(1, keepPara) + 1); recomputeTop(); }
   };
 
@@ -597,6 +625,17 @@ export function installDOS(machine, vfs) {
     if ((k.ascii & 0xff) === 0) dos.pendingScan = k.scan & 0xff;
     return k.ascii & 0xff;
   };
+  // A DPMI client calling INT 21h in protected mode reaches these handlers directly. Pointers it
+  // passes work as they are (an address is the segment register's BASE plus the offset, selector or
+  // not), but a SEGMENT handed back would be loaded as a selector. The "MS-DOS" extensions a host
+  // offers (Windows 3.x, Borland's DPMI16BI; src/dpmi.js INT 2Fh AX=168Ah) return a selector there
+  // instead — Borland's RTM (Jazz Jackrabbit) asks AH=34h for the InDOS flag and loads ES from it.
+  const clientPM = () => (cpu.cr0 & 1) !== 0 && !cpu.v86 && !!machine.dpmi && machine.dpmi.active;
+  const segOut = (i, seg) => cpu.setSeg(i, clientPM() ? machine.clientSeg(seg) : seg);
+  const pspOut = () => (clientPM() ? (machine.dpmi.segToSel(dos.psp) || dos.psp) : dos.psp);
+  // ...and a selector passed where DOS takes a segment is the paragraph its base names. An LDT
+  // selector only (TI set): a GDT one is not the client's to hand us.
+  const segIn = (v) => (clientPM() && (v & 4) ? machine.dpmi.selToSeg(v) : v);
   machine.hookInterrupt(0x21, (cpu) => {
     const ah = cpu.ah;
     // Real DOS clears CF on success. Most cases below just `break`, so without this they returned
@@ -673,13 +712,16 @@ export function installDOS(machine, vfs) {
         cpu.dx = ((((hs / 100) | 0) % 60) << 8) | (hs % 100);
         break;
       }
-      case 0x2f: { cpu.setSeg(ES, (dos.dta >> 4) & 0xffff); cpu.bx = dos.dta & 0xf; break; } // get DTA
+      case 0x2f: { segOut(ES, (dos.dta >> 4) & 0xffff); cpu.bx = dos.dta & 0xf; break; } // get DTA
       case 0x30: cpu.ax = (dos.version[1] << 8) | dos.version[0]; cpu.bx = 0; cpu.cx = 0; break; // version
       case 0x33: cpu.dx = 0; break;                                  // ctrl-break state
       case 0x35: {                                                    // get vector — see 0x25 above
-        if (machine.dpmi && machine.dpmi.active && (cpu.cr0 & 1)) {
-          const p = machine.dpmi.pmVec[cpu.al];
-          if (p) { cpu.setSeg(ES, p.sel); if (machine.dpmi.is32) cpu.reg[3] = p.off >>> 0; else cpu.bx = p.off & 0xffff; break; }
+        // In protected mode the PROTECTED-mode vector, as 0204 reads it — the host's own stub when the
+        // client has not set one. Answering the real-mode vector there put F000h in ES, which is
+        // #GP(F000h): Jazz Jackrabbit asks for INT 09h's.
+        if (clientPM()) {
+          const p = machine.dpmi.getPMVec(cpu.al);
+          cpu.setSeg(ES, p.sel); if (machine.dpmi.is32) cpu.reg[3] = p.off >>> 0; else cpu.bx = p.off & 0xffff; break;
         }
         const v = machine.getVector(cpu.al); cpu.setSeg(ES, v.seg); cpu.bx = v.off; break; }
       case 0x36: { cpu.ax = 4; cpu.bx = 0x4000; cpu.cx = 512; cpu.dx = 0xffff; break; } // free space
@@ -745,7 +787,7 @@ export function installDOS(machine, vfs) {
       // not in its directory: real DOS answers "file not found" and it moves on to its next candidate,
       // where we said "here it is" and sent it to open a file that does not exist.
       case 0x43: {
-        const path = asciiz((cpu.seg[DS] << 4) + (cpu.dx & 0xffff));
+        const path = asciiz(cpu.base[DS] + (cpu.dx & 0xffff));
         if (!vfs.exists(path)) { err(2); break; }                  // 2 = file not found
         if (cpu.al === 0x01) { ok(); break; }                      // set: accepted and ignored — we store no attributes
         ok(); cpu.cx = vfs.isDir(path) ? 0x10 : 0x20;              // directory bit, else archive
@@ -826,7 +868,7 @@ export function installDOS(machine, vfs) {
       // The SFT is rebuilt HERE rather than kept in step on every file call: a program walks it
       // immediately after asking for the List of Lists, and rebuilding 20 entries on every read
       // would be paid by every program to serve the few that look.
-      case 0x52: { syncSFT(); cpu.setSeg(ES, LOL_SEG); cpu.bx = LOL_OFF; break; }  // get list of lists (SysVars); [ES:BX-2] = first MCB
+      case 0x52: { syncSFT(); segOut(ES, LOL_SEG); cpu.bx = LOL_OFF; break; }  // get list of lists (SysVars); [ES:BX-2] = first MCB
       // The three below were picked from tools/survey-gaps.mjs, not from reading the code: they are
       // what the corpus actually calls and did not get.
       // Found by tools/dos-oracle.mjs, not by the corpus survey: no game we have calls these, but a
@@ -862,14 +904,16 @@ export function installDOS(machine, vfs) {
       // OEM path (30h/01h) and it concluded "Incorrect DOS version". Compared against DOSBox-X,
       // which answers AL=0 and gets 30h/00h — the sequences agree for twelve calls once we do too.
       case 0xdc: cpu.al = 0; cpu.cx = 0; ok(); break;
-      case 0x62: cpu.bx = dos.psp; ok(); break;                      // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
+      // In protected mode the PSP goes in and out as a SELECTOR (the MS-DOS extensions, see segOut):
+      // Borland's RTM keeps what 51h gives it and loads ES from it.
+      case 0x62: cpu.bx = pspOut(); ok(); break;                     // get PSP — Jazz, Keen1, Loom, ROC, Ski or Die
       // 51h is the older twin of 62h, and 50h its setter. An extender moves the current PSP around
       // the client it loads, so it needs both halves: a getter alone loses the set silently.
-      case 0x51: cpu.bx = dos.psp; ok(); break;
+      case 0x51: cpu.bx = pspOut(); ok(); break;
       // Switching PSP switches HANDLE TABLES: handle numbers belong to the current PSP. Windows 3.0
       // flips constantly between its own and the running Win16 task's, and that is the path by which
       // a task was closing KERNEL's font file.
-      case 0x50: dos.psp = cpu.bx & 0xffff; vfs.setPsp(dos.psp); ok(); break;
+      case 0x50: dos.psp = segIn(cpu.bx & 0xffff); vfs.setPsp(dos.psp); ok(); break;
       case 0x29: {                                                   // parse filename into an FCB — Ski or Die
         // DS:SI = text, ES:DI = FCB. Fill drive (0 = default, else 1-based), then the 8.3 name
         // blank-padded and uppercased. AL returns 1 if the name held a wildcard, else 0; SI is left
@@ -939,7 +983,7 @@ export function installDOS(machine, vfs) {
         // Keen1 reads it. A TSR uses the flag to know whether DOS is re-entrant right now; since our
         // INT 21h handlers are atomic JS, it is always 0 — but the pointer has to be real, because
         // the caller dereferences it.
-        cpu.setSeg(ES, LOL_SEG); cpu.bx = INDOS_OFF; ok(); break;
+        segOut(ES, LOL_SEG); cpu.bx = INDOS_OFF; ok(); break;
       case 0x4a: {                                                   // resize memory block
         const seg = cpu.seg[ES], want = cpu.bx & 0xffff;
         // A block can grow up to the next block's MCB, or the top of memory.
@@ -966,7 +1010,10 @@ export function installDOS(machine, vfs) {
       }
       case 0x31: terminateResident(cpu.al, cpu.dx & 0xffff); break;  // TSR — keep DX paragraphs
       case 0x4c: terminate(cpu.al); break;                           // terminate w/ code
-      case 0x4d: cpu.ax = dos.exitCode; break;                       // get return code
+      // Get return code: AL = the code, AH = how the child ended — 0 normal, 3 resident (AH=31h or
+      // INT 27h). Jazz Jackrabbit's stub EXECs Borland's RTM and goes on only if AX is 0300h: a TSR
+      // that installed itself. AH=0 printed "Loader error (0000): unrecognized error".
+      case 0x4d: cpu.ax = ((dos.exitType & 0xff) << 8) | dos.exitCode; break;
       case 0x4e: findFirst(); break;
       case 0x4f: findNext(); break;
       case 0x56: vfs.rename(asciiz(cpu.base[DS] + (cpu.dx & 0xffff)), asciiz(cpu.base[ES] + (cpu.di & 0xffff))) ? ok() : err(2); break;

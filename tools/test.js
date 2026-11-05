@@ -3187,6 +3187,37 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   } catch (e) { got = e.message; }
   eq('DPMI: INT 16h waiting for a key from protected mode gets it', got, 'KEY=1C0D'); }
 
+// ---- DPMI: what Borland's RTM needs from the host (Jazz Jackrabbit) -----------------------------
+// tools/rtmhost.asm, one letter per check, '1' when it holds: V 0400h Get Version (CL = 3, our 386);
+// M the "MS-DOS" vendor API (INT 2Fh AX=168Ah) and its LDT alias; I/G/P INT 21h AH=34h, 35h and
+// 51h/50h/62h answering selectors, not paragraphs, in protected mode; F INT 10h AX=1130h the same;
+// D INT 10h AX=1012h reading ES:DX through a selector's base; N a LES of a not-present selector
+// restarted by a #NP handler that writes below the client's SP (the frame is on the locked stack);
+// R a 0306h raw switch to real mode and back, landing at ring 3 with IOPL 3. Each of these stopped
+// Jazz Jackrabbit in turn. Not oracle-checked against another host: CWSDPMI has no "MS-DOS" API.
+{ const hex = (                                         // nasm -f bin tools/rtmhost.asm, 799 bytes
+    'b44abb0010cd218c0ec303b43c31c9baa203cd210f823302a3c503b88716cd2f85c00f852502893ec7038c06c90389f3' +
+    'b448cd210f8213028ec031c0ff1ec7030f8207028c0edd038c1edf038c16e103b8000431c9cd3183f85a750a80f90375' +
+    '05c606b50331b88a16beae03cd2f84c07524893ecb038c06cd03b80001ff1ecb0372138ee08ccb83e3f864807f05fa75' +
+    '05c606b60331b434cd2126803f007505c606b70331b80402b309cd318916cf03890ed103b80935cd213b1ecf03750d8c' +
+    'c03b06d1037505c606b80331b451cd21891ed303b80600cd31a1c303c1c00489c383e0f083e30f39c2751b39d975178b' +
+    '1ed303b450cd21b462cd213b1ed3037505c606b9033155b83011b706cd105d8cc08ee0c606ba03311e07b81210bb0100' +
+    'b90100bac003cd10bac703b001eebac903ec88c4ec3d2211750aec3c337505c606bb033131c0b90100cd317266a3d503' +
+    '89c3b807008b0ec303c1c10489ca83e2f083e10fcd31b808008b1ed50331c9baffffcd31b809008b1ed503b97200cd31' +
+    'b80302b30b8cc9ba5003cd31a1d503a3d903bf3412c43ed70381ff785675148cc03b06d503750c803edb03017505c606' +
+    'bc0331b80603cd31890ee503891ee703893ee9038936eb038926e303a1c30389c189c289e389c6bfde02ff2ee9038cc8' +
+    '3b06c3037505c606dc03016802029da1df0389c18b16e1038b1ee3038b36dd03bf0703ff2ee503fafb3b26e303750c80' +
+    '3edc03017505c606bd03311e07c70609040040a1c503a3fd03c70605040b00c7060104b503a1c303a31104b80003bb21' +
+    '0031c966bfed030000cd31b8004ccd215589e55053068e46108b5e0e26c747feadde26c747fcadde26c747faadde26c7' +
+    '47f8adde26c747f6adde26c747f4adde26c747f2adde26c747f0addeb809008b1ed503b9f200cd31c606db0301075b58' +
+    '5dcb52544d484f53542e545854004d532d444f53003030303030303030300d0a11223300000000000000000000000000' +
+    '000000000000007856000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '00000000000000000000000000000000000000000000000000000000000000');
+  let got;
+  try { const out = runProbe(hex, 799, 'RTMHOST.COM').vfs.readFile('\\RTMHOST.TXT'); got = out && new TextDecoder().decode(out).trim(); }
+  catch (e) { got = e.message; }
+  eq('DPMI: RTM\'s host services (V M I G P F D N R)', got, '111111111'); }
+
 // ---- MIRAGE-LINUX (src/linux.js): static i386 ELF programs, system calls answered in JS ---------
 // The oracle is a real kernel: `docker run --platform linux/386 i386/debian` on the same binaries.
 const runLinux = (hex, argv) => {

@@ -606,7 +606,7 @@ export function installBIOS(machine, opts = {}) {
         } else if (cpu.al === 0x08) {            // read overscan -> BH
           cpu.bx = (cpu.bx & 0x00ff) | ((bios.overscan & 0xff) << 8);
         } else if (cpu.al === 0x09) {            // read all 16 palette registers + overscan -> ES:DX
-          let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff);
+          let p = cpu.base[0] + (cpu.dx & 0xffff);
           for (let i = 0; i < 16; i++) mem.w8(p++, machine.vga ? machine.vga.palette[i] & 0x3f : i);
           mem.w8(p, bios.overscan & 0xff);
         } else if (cpu.al === 0x15) {            // read one DAC register: BL -> DH red, CH green, CL blue
@@ -614,7 +614,7 @@ export function installBIOS(machine, opts = {}) {
           cpu.dx = (cpu.dx & 0x00ff) | ((bios.dac[reg * 3] & 0x3f) << 8);
           cpu.cx = ((bios.dac[reg * 3 + 1] & 0x3f) << 8) | (bios.dac[reg * 3 + 2] & 0x3f);
         } else if (cpu.al === 0x02) {            // set all 16 palette registers + overscan (ES:DX -> 17 bytes)
-          if (machine.vga) { let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); for (let i = 0; i < 16; i++) machine.vga.palette[i] = mem.r8(p++) & 0x3f; }
+          if (machine.vga) { let p = cpu.base[0] + (cpu.dx & 0xffff); for (let i = 0; i < 16; i++) machine.vga.palette[i] = mem.r8(p++) & 0x3f; }
         } else if (cpu.al === 0x10) {            // set one DAC register
           const reg = cpu.bx & 0xff;
           bios.dac[reg * 3] = (cpu.dx >> 8) & 0x3f;     // DH = red
@@ -625,7 +625,7 @@ export function installBIOS(machine, opts = {}) {
           if (machine.vga) machine.vga.atc[0] = (machine.vga.atc[0] & ~0x08) | (bios.blink ? 0x08 : 0);   // AC mode control bit 3
         } else if (cpu.al === 0x17) {            // GET block of DAC registers (mirror of AL=12h)
           const start = cpu.bx & 0xff, count = cpu.cx & 0xffff;   // BL, not BX — see AL=12h below
-          let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
+          let p = cpu.base[0] + (cpu.dx & 0xffff); // ES:DX
           for (let i = 0; i < count; i++) {
             mem.w8(p++, bios.dac[(start + i) * 3] & 0x3f);
             mem.w8(p++, bios.dac[(start + i) * 3 + 1] & 0x3f);
@@ -640,7 +640,7 @@ export function installBIOS(machine, opts = {}) {
           // array, so its whole palette upload did nothing: the demo then rendered against the
           // default VGA DAC. Right geometry, wrong colours everywhere (docs/notes/2026-09-05-mesha.md).
           const start = cpu.bx & 0xff, count = cpu.cx & 0xffff;
-          let p = (cpu.seg[0] << 4) + (cpu.dx & 0xffff); // ES:DX
+          let p = cpu.base[0] + (cpu.dx & 0xffff); // ES:DX
           for (let i = 0; i < count; i++) {
             bios.dac[(start + i) * 3] = mem.r8(p++) & 0x3f;
             bios.dac[(start + i) * 3 + 1] = mem.r8(p++) & 0x3f;
@@ -670,7 +670,7 @@ export function installBIOS(machine, opts = {}) {
           else if (bh === 6 || bh === 7) { src = machine.font; pts = 16; }
           else { src = machine.font8x8; pts = 8; if (bh === 0 || bh === 4) half = 128 * 8; }
           const seg = 0xf000, off = stageFont(pts);
-          cpu.setSeg(0, seg); cpu.bp = (off + half) & 0xffff;   // ES:BP → font table
+          cpu.setSeg(0, machine.clientSeg ? machine.clientSeg(seg) : seg); cpu.bp = (off + half) & 0xffff;   // ES:BP → font table
           // CX and DL describe the CURRENT screen font, not the one BH asked for: all three references
           // answer the BDA's character height and rows-1 (T11) — CX was the requested font's height.
           cpu.cx = mem.r16(BDA + 0x85) || pts;
@@ -688,7 +688,7 @@ export function installBIOS(machine, opts = {}) {
         // AL bit 0: move the cursor past the string; CLEAR, the cursor stays where it was.
         const len = cpu.cx & 0xffff, withAttr = cpu.al & 2, bl = cpu.bx & 0xff;
         const row0 = getRow(), col0 = getCol();
-        let p = (cpu.seg[0] << 4) + (cpu.bp & 0xffff); // ES:BP
+        let p = cpu.base[0] + (cpu.bp & 0xffff); // ES:BP
         setCur(cpu.dx & 0xff, (cpu.dx >> 8) & 0xff);
         for (let i = 0; i < len; i++) {
           const c = mem.r8(p++); const at = withAttr ? mem.r8(p++) : bl;
@@ -901,7 +901,7 @@ export function installBIOS(machine, opts = {}) {
   machine.hookInterrupt(0x15, (cpu) => {
     if (cpu.ah === 0xc2 && machine.ps2) return machine.ps2.int15(cpu);   // pointing device (src/ps2mouse.js)
     if (cpu.ah === 0xc0) {                     // get the system configuration table
-      cpu.setSeg(ES, VBE_SEG); cpu.bx = CFG_TABLE_OFF;
+      cpu.setSeg(ES, machine.clientSeg ? machine.clientSeg(VBE_SEG) : VBE_SEG); cpu.bx = CFG_TABLE_OFF;
       cpu.ah = 0; cpu.flags &= ~CF;
       return;
     }

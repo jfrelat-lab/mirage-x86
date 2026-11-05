@@ -22,6 +22,7 @@ const IRQ_RET_OFF = 0x0260;                                      // where a PM h
 // handler's frame landed on it. tools/dpmistack.asm, CWSDPMI under DOSBox-X and under QEMU: the
 // handler's SS is not the client's, and 64 bytes below the client's ESP survive five ticks.
 const LOCKED_SIZE = 0x4000;
+const LOCKED_LEVEL = 0x1000;                                     // one nesting level's share of it
 const RM_STACK_TOP = 0x0500;                                     // host-provided real-mode stack (256 B below)
 const RMCS_SCRATCH = 0x0300;                                     // 50-byte call structure the host builds
                                                                  // when it reflects a client's INT n
@@ -43,7 +44,12 @@ const SEL_CLIENT = 0x20;                          // first client segment (index
 // The locked stack: the LDT's LAST entry, kept out of the allocator. Index 0 looked unused, but
 // DOS/4GW (Heretic) treats it as its own and the stack faulted #NP under the first tick.
 const SEL_LOCKED = ((LDT_ENTRIES - 1) * 8) | TI | 3;
-const SEL_MAX = (LDT_ENTRIES - 1) * 8;
+// A read/write data alias of the LDT itself, the one before it: what the "MS-DOS" vendor API's
+// function 0100h hands out (below). Kept out of the allocator like the locked stack.
+const SEL_LDT_ALIAS = ((LDT_ENTRIES - 2) * 8) | TI | 3;
+const SEL_MAX = (LDT_ENTRIES - 2) * 8;
+// The "MS-DOS" vendor-specific API entry (INT 2Fh AX=168Ah): a few real x86 bytes in the BIOS segment.
+const VENDOR_OFF = 0x0270;
 
 export function installDPMI(machine) {
   const mem = machine.mem, cpu = machine.cpu;
@@ -127,6 +133,43 @@ export function installDPMI(machine) {
     return sel | TI | 3;
   };
 
+  /** 0002's selector for a real-mode segment: one per segment, never freed, 0 if the LDT is full.
+   *  Also what the DOS extensions below hand back where real-mode DOS returns a segment. */
+  const segToSel = (seg) => {
+    let sel = dpmi.segSels.get(seg);
+    if (sel === undefined) {
+      sel = allocClientSel(seg, false);
+      if (!sel) return 0;
+      dpmi.segSels.set(seg, sel);
+    }
+    return sel;
+  };
+  dpmi.segToSel = segToSel;
+  /** A protected-mode interrupt vector as 0204 reads it: the client's (0205), or the host's own
+   *  reflecting stub for that vector in the host code segment. */
+  dpmi.getPMVec = (n) => dpmi.pmVec[n] || { sel: SEL_HOST_CODE | TI, off: n };
+  /** What a JS service hands back for a real-mode SEGMENT: itself, or — to a client in protected
+   *  mode — a selector over it (segToSel), since loading the paragraph into a segment register there
+   *  is #GP(paragraph). Jazz Jackrabbit's Pascal runtime asks INT 10h AX=1130h for the font pointer
+   *  and took #GP(F000h) inside the call ("Runtime error 216"). */
+  machine.clientSeg = (seg) => ((cpu.cr0 & 1) && !cpu.v86 && dpmi.active ? (segToSel(seg) || seg) : seg);
+  /** The real-mode paragraph an LDT selector's base names (base >> 4): the way back for a selector a
+   *  client passes where DOS takes a segment. */
+  dpmi.selToSeg = (sel) => {
+    const a = (LDT_BASE + (sel & 0xfff8)) >>> 0;
+    const base = (mem.r16(a + 2) | (mem.r8(a + 4) << 16) | (mem.r8(a + 7) << 24)) >>> 0;
+    return (base >>> 4) & 0xffff;
+  };
+
+  /** The processor type a DPMI host reports (1687h, 0400h): 2 = 286 ... 5 = Pentium, from the CPU
+   *  profile — 3 for the default '386', and for a part with CPUID, 5 or more (capped at 6). */
+  const cpuType = () => {
+    const p = cpu.profile || {};
+    if (p.name === '286') return 2;
+    if (!p.cpuid) return 3;
+    return /686|pentium(pro|3|4)/.test(p.name || '') ? 6 : 5;
+  };
+
   /** Build the tables once, on the first mode switch. */
   const buildTables = () => {
     for (let i = 0; i < LDT_ENTRIES * 8; i++) mem.w8(LDT_BASE + i, 0);
@@ -139,6 +182,7 @@ export function installDPMI(machine) {
     // A 16-bit code selector over the BIOS segment, for services that hand back a protected-mode
     // far address (0305): a real-mode segment value will not do.
     setDesc(SEL_HOST_CODE, DPMI_ENTRY_SEG << 4, 0xffff, 0xfa, 0x00);
+    setDesc(SEL_LDT_ALIAS, LDT_BASE, LDT_LIMIT, 0xf2, 0x00);
     // Load LDTR directly rather than through LLDT: that would need a GDT entry describing the LDT,
     // and nothing here reads one. The GDT stays empty — a client never sees a GDT selector from us.
     cpu.ldtr.sel = 0; cpu.ldtr.base = LDT_BASE; cpu.ldtr.limit = LDT_LIMIT;
@@ -275,6 +319,19 @@ export function installDPMI(machine) {
         return ok();
       }
 
+      // 0400 — Get Version. AH.AL = 0.90; BX bit 0 = 32-bit host, bit 1 = interrupts are reflected
+      // in REAL mode (not V86), bit 2 = virtual memory (none); CL = processor (the CPU profile's, as
+      // 1687h reports it); DH/DL = the master and slave PICs' base vectors. Refused, this left CL as
+      // the caller had it: Borland Pascal's runtime stores CL-1 as Test8086 straight away, and Jazz
+      // Jackrabbit compares its saved configuration's processor byte against that.
+      case 0x0400: {
+        c.ax = 0x005a;
+        c.reg[3] = (c.reg[3] & ~0xffff) | 0x0003;                    // BX
+        c.reg[1] = (c.reg[1] & ~0xff) | cpuType();                   // CL
+        c.reg[2] = (c.reg[2] & ~0xffff) | 0x0870;                    // DH = 08h, DL = 70h
+        return ok();
+      }
+
       // 0306 — Get Raw Mode Switch Addresses. Same as 0305: refusing leaves the previous call's
       // values in the registers it answers in, and the client stores those.
       //   BX:CX = real -> protected routine, SI:DI = protected -> real routine
@@ -315,13 +372,8 @@ export function installDPMI(machine) {
       // segment is cached and handed back again. Refusing it returned 0x8001 in AX, which the client
       // loaded straight into ES as if it were a selector.
       case 0x0002: {
-        const seg = c.reg[3] & 0xffff;                                  // BX
-        let sel = dpmi.segSels.get(seg);
-        if (sel === undefined) {
-          sel = allocClientSel(seg, false);
-          if (!sel) return fail(0x8011);                                // descriptor unavailable
-          dpmi.segSels.set(seg, sel);
-        }
+        const sel = segToSel(c.reg[3] & 0xffff);                        // BX
+        if (!sel) return fail(0x8011);                                  // descriptor unavailable
         c.ax = sel;
         return ok();
       }
@@ -646,7 +698,7 @@ export function installDPMI(machine) {
       //   in:  BL = vector;  out: CX:EDX = selector:offset
       case 0x0204: {
         const n = c.reg[3] & 0xff;
-        const v = dpmi.pmVec[n] || { sel: SEL_HOST_CODE | TI, off: n };
+        const v = dpmi.getPMVec(n);
         c.reg[1] = (c.reg[1] & ~0xffff) | (v.sel & 0xffff);          // CX
         c.reg[2] = v.off >>> 0;                                       // EDX
         return ok();
@@ -713,6 +765,14 @@ export function installDPMI(machine) {
     // same address are already distinct entries, and emitted code reads segment bases at run time.
     // Flushing on every switch made a client that bounces between modes re-translate constantly.
     cpu.setCR0(toProtected ? ((cpu.cr0 | 1) >>> 0) : ((cpu.cr0 & ~1) >>> 0));
+    // Into protected mode, CPL first, as the initial entry does: the caller is real-mode code at
+    // F000 (CPL 0), and the SS it hands over is the client's ring-3 stack, which an SS load at CPL 0
+    // refuses (RPL and DPL must equal CPL). Jazz Jackrabbit's RTM drops to real mode and comes back
+    // through here with SS=3Fh, and took #GP(3Ch) at F000:0220.
+    // And IOPL 3, as the initial entry leaves it: the flags arrive from real-mode code, where IOPL is
+    // whatever DOS had (0), and a ring-3 client's CLI then took #GP(0) — RTM's, right after it came
+    // back this way to start Jazz Jackrabbit.
+    if (toProtected) { cpu._cpl = si & 3; cpu.flags |= IOPL_MASK; }
     cpu.setSeg(DS, ax); cpu.setSeg(ES, cx); cpu.setSeg(SS, dx);
     cpu.reg[4] = (cpu.reg[4] & ~0xffff) | bx;   // SP only: the convention passes 16 bits
     cpu.setSeg(CS, si); cpu.eip = di;
@@ -916,6 +976,19 @@ export function installDPMI(machine) {
     const oldSS = cpu.seg[SS], oldESP = cpu.reg[4] >>> 0, oldFlags = cpu.flags;
     const oldCS = cpu.seg[CS], oldEIP = cpu.eip >>> 0;
     const push = (v) => cpu.pushW(v, is32);
+    // On the host's locked stack, as DPMI 0.9 has it, not below the client's SP. A handler may write
+    // there: Borland RTM's not-present handler (Jazz Jackrabbit, which loads its segments on #NP)
+    // pushes the faulting CS:IP onto the CLIENT's stack through the frame's SS:SP, so that its loader
+    // can return to it — on top of our frame when the frame was there, which then RETFed through
+    // zeros. Nested in a handler already on the locked stack, below where it is; otherwise at the
+    // level the hardware-interrupt nesting has reached (deliverIrq).
+    if (oldSS !== SEL_LOCKED) {
+      let level = 0;
+      for (const x of dpmi.irqSaved) if (x) level++;
+      const top = LOCKED_SIZE - Math.min(level, LOCKED_SIZE / LOCKED_LEVEL - 1) * LOCKED_LEVEL;
+      cpu.setSeg(SS, SEL_LOCKED);
+      cpu.reg[4] = is32 ? top : ((cpu.reg[4] & ~0xffff) | top);
+    }
     push(oldSS); push(is32 ? oldESP : (oldESP & 0xffff));
     push(is32 ? (oldFlags >>> 0) : (oldFlags & 0xffff));
     push(oldCS); push(is32 ? oldEIP : (oldEIP & 0xffff));
@@ -956,7 +1029,6 @@ export function installDPMI(machine) {
    * nowhere.
    */
   dpmi.irqSaved = [];
-  const LOCKED_LEVEL = 0x1000;
   const deliverIrq = (vec) => {
     const v = dpmi.pmVec[vec];
     if (!v) return false;
@@ -1005,6 +1077,11 @@ export function installDPMI(machine) {
   mem.u8[(DPMI_ENTRY_SEG << 4) + EXC_RET_OFF] = 0xcb;     // guarded: cpu.dpmiExcReturn()
   mem.u8[(DPMI_ENTRY_SEG << 4) + IRQ_RET_OFF] = 0xcf;     // guarded: cpu.dpmiIrqReturn()
   for (let i = 0; i < CB_MAX; i++) mem.u8[(DPMI_ENTRY_SEG << 4) + CB_BASE_OFF + i] = 0xcb;
+  // The "MS-DOS" vendor API (INT 2Fh AX=168Ah), as Windows 3.x's and Borland's DPMI16BI host give it.
+  // Its one function, AX=0100h, returns in AX a selector the client can WRITE the LDT through:
+  //   cmp ax,0100h / jne no / mov ax,SEL_LDT_ALIAS / clc / retf / no: stc / retf
+  mem.blit(((DPMI_ENTRY_SEG << 4) + VENDOR_OFF) >>> 0, Uint8Array.of(
+    0x3d, 0x00, 0x01, 0x75, 0x05, 0xb8, SEL_LDT_ALIAS & 0xff, SEL_LDT_ALIAS >> 8, 0xf8, 0xcb, 0xf9, 0xcb));
 
   // INT 2Fh AX=1687h — "is a DPMI host present, and where do I switch?" Chain to whatever already
   // owns the vector (XMS answers 43xx there) rather than replacing it.
@@ -1026,10 +1103,26 @@ export function installDPMI(machine) {
     if (c.ax === 0x1687) {
       c.ax = 0;                                  // 0 = host present
       c.reg[3] = (c.reg[3] & ~0xffff) | 1;       // BX bit 0: 32-bit programs supported
-      c.reg[1] = (c.reg[1] & ~0xff) | 3;         // CL = processor type (3 = 386)
+      c.reg[1] = (c.reg[1] & ~0xff) | cpuType(); // CL = processor type (3 = 386)
       c.reg[2] = (c.reg[2] & ~0xffff) | 0x005a;  // DX = DPMI version 0.90
       c.reg[6] = c.reg[6] & ~0xffff;             // SI = paragraphs of host data needed: none
       c.setSeg(ES, DPMI_ENTRY_SEG); c.reg[7] = (c.reg[7] & ~0xffff) | DPMI_ENTRY_OFF;
+      return true;
+    }
+    // 168Ah — Get Vendor-Specific API Entry Point, DS:(E)SI = the vendor's name. Protected mode only.
+    // "MS-DOS" is the API Windows 3.x's host and Borland's DPMI16BI offer, and Borland's RTM (Jazz
+    // Jackrabbit) refuses a host without it — "Error: no DOS extensions in the DPMI server" — unless
+    // INT 2Fh AX=1600h says Windows is running. AL=0 and ES:(E)DI = entry on success; AL is left
+    // at 8Ah for any other name, which is "not supported".
+    if (c.ax === 0x168a && (c.cr0 & 1) && dpmi.active) {
+      const p = (c.base[DS] + (dpmi.is32 ? (c.reg[6] >>> 0) : (c.reg[6] & 0xffff))) >>> 0;
+      let name = '';
+      for (let i = 0; i < 16; i++) { const b = mem.r8((p + i) >>> 0); if (!b) break; name += String.fromCharCode(b); }
+      if (name === 'MS-DOS') {
+        c.reg[0] &= ~0xff;                       // AL = 0: supported
+        c.setSeg(ES, SEL_HOST_CODE | TI);
+        c.reg[7] = dpmi.is32 ? VENDOR_OFF : ((c.reg[7] & ~0xffff) | VENDOR_OFF);
+      }
       return true;
     }
     return prev ? prev(c, m) : false;

@@ -61,7 +61,6 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
 | Second Reality | derails to 0000:0000 at start |
-| Jazz Jackrabbit | a #GP in its DPMI client at F000:0220 (error 3Ch) at start. Not investigated |
 | C-Dogs 1.06 | silent: its DSIK Sound Blaster driver polls the 16-bit DMA channel 5's count and plays nothing. Not investigated further |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |

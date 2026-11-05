@@ -1017,6 +1017,35 @@ function asciiz(mc, cpu, off, str) {
   ok('?xms=0: INT 15h AH=88h reports the extended memory (>= 512 KB, Zone 66\'s minimum)', without.ext >= 512);
 }
 
+// ---------------------------------------------------------------- EXEC: a child resident from protected mode
+// tools/tsrpm.asm EXECs tools/tsrpmc.asm, which enters protected mode through the DPMI host and ends
+// with INT 21h AX=3100h there — Jazz Jackrabbit's stub and Borland's RTM. The parent must come back
+// in real mode (its segments were reloaded as selectors: #GP), AH=4Dh must say 0300h (stayed
+// resident; we said 0000h and the stub printed "Loader error (0000)"), and the environment the two
+// shared must end with the PARENT's path again (RTM read it to find the program, and found itself).
+{
+  const img = (hex, n) => { const b = new Uint8Array(n); b.set(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16))); return b; }
+  const parent = img(
+    'bc0b03b44abb0001cd21a12c00a3a1018c0ea501b8004bba8c01bba101cd21724e8cc88ed88ec0b44dcd21bfb401e843' +
+    '001e8e1e2c0031f6ac84c075fbac84c075f6adbfbb01ac84c07403aaebf81fb80d0aab89f981e9b10151b43c31c9ba97' +
+    '01cd2159720989c3b440bab101cd21b8004ccd21b90400c1c00450240f04303c397602040788054758e2ecc354535250' +
+    '4d432e434f4d00545352504d2e545854000000af0100000000000000000000000d41583d3f3f3f3f20503d', 523);   // nasm -f bin tools/tsrpm.asm
+  const child = img(
+    'b44abb0001cd21b88716cd2f85c07522893e37018c06390189f3b448cd2172128ec031c0ff1e37017208b80031ba4000' +
+    'cd21b8014ccd21', 59);   // nasm -f bin tools/tsrpmc.asm
+  const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc);
+  const vfs = new VFS(), dos = installDOS(mc, vfs);
+  vfs.addFile('\\TSRPMC.COM', child);
+  let got;
+  try {
+    dos.load(parent, '', 'C:\\TSRPM.COM');
+    for (let i = 0; i < 4000 && !dos.programDone; i++) mc.runSlice(20000);
+    const out = vfs.readFile('\\TSRPM.TXT'); got = out && new TextDecoder().decode(out).trim();
+  } catch (e) { got = e.message; }
+  eq('EXEC: a child resident from protected mode returns to its parent, 4Dh = 0300h, parent path kept',
+     got, 'AX=0300 P=C:\\TSRPM.COM');
+}
+
 // ---------------------------------------------------------------- XMS AH=0Bh move block
 // The defect class: a move endpoint used to be resolved without ever checking it against the block's
 // size, so an out-of-range copy scribbled over a neighbouring handle — or past the end of RAM, where
