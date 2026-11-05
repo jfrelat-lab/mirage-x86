@@ -983,6 +983,34 @@ export class CPU {
     r >>>= 0;
     this.flags = (this.flags & ~0x8d5) | PF4[r & 0xff] | (r === 0 ? 0x40 : 0) | ((r >>> 24) & 0x80);
   }
+  /*
+   * The 8- and 16-bit forms, for the byte and word arithmetic of the ALU group (add, sub, cmp, and, or,
+   * xor, test): their operands and result come masked to the width. Generic, the width an argument,
+   * these were 7 % of CoreMark's time under MIRAGE-LINUX (core_state_transition compares bytes).
+   * SF is the width's top bit, OF its bit moved to 800h.
+   */
+  setAdd8(a, b, r) {
+    this.flags = (this.flags & ~0x8d5) | (a + b > 0xff ? 1 : 0) | PF4[r] | ((a ^ b ^ r) & 0x10)
+      | (r === 0 ? 0x40 : 0) | (r & 0x80) | (((~(a ^ b) & (a ^ r)) << 4) & 0x800);
+  }
+  setSub8(a, b, r) {
+    this.flags = (this.flags & ~0x8d5) | (a < b ? 1 : 0) | PF4[r] | ((a ^ b ^ r) & 0x10)
+      | (r === 0 ? 0x40 : 0) | (r & 0x80) | ((((a ^ b) & (a ^ r)) << 4) & 0x800);
+  }
+  setLogic8(r) {
+    this.flags = (this.flags & ~0x8d5) | PF4[r] | (r === 0 ? 0x40 : 0) | (r & 0x80);
+  }
+  setAdd16(a, b, r) {
+    this.flags = (this.flags & ~0x8d5) | (a + b > 0xffff ? 1 : 0) | PF4[r & 0xff] | ((a ^ b ^ r) & 0x10)
+      | (r === 0 ? 0x40 : 0) | ((r >>> 8) & 0x80) | (((~(a ^ b) & (a ^ r)) >>> 4) & 0x800);
+  }
+  setSub16(a, b, r) {
+    this.flags = (this.flags & ~0x8d5) | (a < b ? 1 : 0) | PF4[r & 0xff] | ((a ^ b ^ r) & 0x10)
+      | (r === 0 ? 0x40 : 0) | ((r >>> 8) & 0x80) | ((((a ^ b) & (a ^ r)) >>> 4) & 0x800);
+  }
+  setLogic16(r) {
+    this.flags = (this.flags & ~0x8d5) | PF4[r & 0xff] | (r === 0 ? 0x40 : 0) | ((r >>> 8) & 0x80);
+  }
   setLogic(r, bits) {
     const m = bits === 32 ? 0xffffffff : (1 << bits) - 1, msb = 1 << (bits - 1);
     r &= m;

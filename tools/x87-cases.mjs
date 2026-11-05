@@ -55,7 +55,9 @@ export const X87_CASES = [
   c('fsincos 1 (two results)', LD1, [0xd9, 0xfb], STPQ, STPQ2),
   { ...c('fptan 1 (pushes 1.0)', LD1, [0xd9, 0xf2], STPQ, STPQ2), fp: { off: 24, ulp: 2 } },
   c('fpatan', LD1, LDPI, [0xd9, 0xf3], STPQ),
-  c('f2xm1 ln2', LDLN2, [0xd9, 0xf0], STPQ),
+  // F2XM1 is expm1(x ln 2) since 920481a (exact near 0, as the 80-bit x87 of Docker's QEMU); Unicorn's
+  // QEMU 5 computes pow(2, x) - 1 in the host's double, an ulp away here at x = ln 2.
+  { ...c('f2xm1 ln2', LDLN2, [0xd9, 0xf0], STPQ), fp: { off: 16, ulp: 1 } },
   { ...c('fyl2x log2(pi)', LD1, LDPI, [0xd9, 0xf1], STPQ), fp: { off: 16, ulp: 2 } },
   { ...c('fyl2xp1', LD1, LDLN2, [0xd9, 0xf9], STPQ), fp: { off: 16, ulp: 2 } },
 

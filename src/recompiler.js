@@ -1149,14 +1149,14 @@ export class Recompiler {
       const a = NT(), b = NT(), rr = NT();
       P(`var ${a}=(${dRead})${M(sz)},${b}=(${src})${M(sz)};`);
       switch (op) {
-        // 32-bit: the branch-free setters (cpu.setAdd32 and kin), the same flags.
-        case 'add': P(`var ${rr}=(${a}+${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setAdd32(${a},${b},${rr});` : `cpu.setAdd(${a},${b},${rr},${sz});`, lALL); break;
-        case 'or': P(`var ${rr}=(${a}|${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
-        case 'and': P(`var ${rr}=(${a}&${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
-        case 'xor': P(`var ${rr}=(${a}^${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
-        case 'sub': P(`var ${rr}=(${a}-${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(sz === 32 ? `cpu.setSub32(${a},${b},${rr});` : `cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
-        case 'cmp': P(`var ${rr}=(${a}-${b})${M(sz)};`); PFLAG(sz === 32 ? `cpu.setSub32(${a},${b},${rr});` : `cpu.setSub(${a},${b},${rr},${sz});`, lALL); break;
-        case 'test': P(`var ${rr}=(${a}&${b})${M(sz)};`); PFLAG(sz === 32 ? `cpu.setLogic32(${rr});` : `cpu.setLogic(${rr},${sz});`, lALL); break;
+        // The branch-free setters of the width (cpu.setAdd8/16/32 and kin), the same flags.
+        case 'add': P(`var ${rr}=(${a}+${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setAdd${sz}(${a},${b},${rr});`, lALL); break;
+        case 'or': P(`var ${rr}=(${a}|${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic${sz}(${rr});`, lALL); break;
+        case 'and': P(`var ${rr}=(${a}&${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic${sz}(${rr});`, lALL); break;
+        case 'xor': P(`var ${rr}=(${a}^${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setLogic${sz}(${rr});`, lALL); break;
+        case 'sub': P(`var ${rr}=(${a}-${b})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setSub${sz}(${a},${b},${rr});`, lALL); break;
+        case 'cmp': P(`var ${rr}=(${a}-${b})${M(sz)};`); PFLAG(`cpu.setSub${sz}(${a},${b},${rr});`, lALL); break;
+        case 'test': P(`var ${rr}=(${a}&${b})${M(sz)};`); PFLAG(`cpu.setLogic${sz}(${rr});`, lALL); break;
         case 'adc': { cur.use |= lC; const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}+${b}+${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setAdc(${a},${b},${c},${rr},${sz});`, lALL); break; }
         case 'sbb': { cur.use |= lC; const c = NT(); P(`var ${c}=cpu.flags&1;var ${rr}=(${a}-${b}-${c})${M(sz)};`); if (dWrite) P(dWrite(rr)); PFLAG(`cpu.setSbb(${a},${b},${c},${rr},${sz});`, lALL); break; }
       }
