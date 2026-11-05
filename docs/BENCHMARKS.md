@@ -21,7 +21,7 @@ JavaScript runs at 420–450 M x86 instructions a second on Linux code, 150 M on
 - **Ranking**: within one benchmark and one guest system only. *Relative to the first* is the score
   over the best score (for a time, the best time over this one). A range is the spread of repeated
   runs; it is ranked by its best.
-- **Dates**: 2026-11-03, MIRAGE's DOS rows 2026-11-04; DOSBox-X native 2026-10-13, PCjs 2026-10-12.
+- **Dates**: 2026-11-03, MIRAGE's DOS rows 2026-11-04, its Linux rows 2026-11-05; DOSBox-X native 2026-10-13, PCjs 2026-10-12.
 
 ## DOS
 
@@ -79,7 +79,7 @@ count that runs over ten seconds).
 |---|---|---|---|---|
 | 🥇 1 | CheerpX | Chrome | 7,530,000 | `████████████████████` 100 % |
 | 🥈 2 | Docker (`qemu-user`) | native | 4,550,000–4,680,000 | `████████████░░░░░░░░` 62 % |
-| 🥉 3 | **MIRAGE** | headless (Node) | 830,000–875,000 | `██░░░░░░░░░░░░░░░░░░` 12 % |
+| 🥉 3 | **MIRAGE** | headless (Node) | 895,000–900,000 | `██░░░░░░░░░░░░░░░░░░` 12 % |
 
 ### CoreMark 1.0
 
@@ -87,7 +87,7 @@ count that runs over ten seconds).
 |---|---|---|---|---|
 | 🥇 1 | CheerpX | Chrome | 9,786 | `████████████████████` 100 % |
 | 🥈 2 | Docker (`qemu-user`) | native | 8,175–8,240 | `█████████████████░░░` 84 % |
-| 🥉 3 | **MIRAGE** | headless (Node) | 940–990 | `██░░░░░░░░░░░░░░░░░░` 10 % |
+| 🥉 3 | **MIRAGE** | headless (Node) | 1,055–1,058 | `██░░░░░░░░░░░░░░░░░░` 11 % |
 
 ## Booting whole systems
 

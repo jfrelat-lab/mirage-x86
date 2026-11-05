@@ -11,6 +11,8 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   inside a short skipped run of code, a stack with a base (HDPMI32's), and a page fault raised while
   translating code that never runs. Each is fixed and has a test.
 - **COMPATIBILITY.md** re-run in full, with a small picture of every title, and a Linux section.
+- **Faster byte and word arithmetic**: CoreMark under MIRAGE-LINUX 990 → 1,056 iterations a second,
+  Dhrystone 870,000 → 900,000 a second, and the DOS intros up to a fifth faster (puls, kaneda).
 - **The header's Star button** is the home page's own, in the accent green.
 
 ## 2026-11-04
