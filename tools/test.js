@@ -18,7 +18,7 @@ import { unzip, deice } from '../src/zip.js';
 import { deflateRawSync } from 'zlib';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
-import { describeRegion, recentBlocks } from '../src/derail.js';
+import { describeRegion, recentBlocks, allZero } from '../src/derail.js';
 import { installDOS, DOS_PLAYER_MEM, playerMem } from '../src/dos.js';
 import { installAudio } from '../src/audio.js';
 import { createOPL } from '../src/opl.js';
@@ -3679,6 +3679,25 @@ const runLinux = (hex, argv) => {
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.size].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: x87 operations picked by forward branches, skipped inside the block (41, as Docker i386)', got, '41 762 1'); }
+// tools/linux/skipud.asm: XSAVE (0F AE /4, not translated) inside a run a short forward branch always
+// skips. Kept inside the block as a skip, it made the recompiler refuse the whole block: KolibriOS's
+// kernel stopped there ("unimplemented opcode 0x0f ae /4"). The block now ends before it.
+{ let got;
+  try { const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004086900000069000000050000000010000031c085c074030fae20bb07000000b801000000cd80';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/SKIPUD']);
+    for (let i = 0; i < 50 && !lx.done; i++) mc.runSlice(20000);
+    got = [lx.done, lx.status].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('linux: an instruction not translated, inside a run a forward branch skips, ends the block before it', got, 'true 7'); }
+// The derail detector reads code through the page tables. A 4 MiB page (PDE.PS with CR4.PSE) has no
+// page table: read as one, KolibriOS's kernel looked like "a run of zero bytes" and was reported derailed.
+{ const mc = new Machine({ memSize: 16 << 20, cpu: '586' }), m = mc.mem;
+  m.w32(0x1000 + (0x80000000 >>> 22) * 4, 0x00400083);                // 80000000h -> 400000h, one 4 MiB page
+  m.u8.set([0x55, 0x89, 0xe5], 0x400000 + 0x21688);                   // push ebp; mov ebp, esp
+  new DataView(m.u8.buffer).setUint32(0x400000 + 0x21 * 4, 0x00900001, true);                             // the page's own bytes, read as a page table, say: present, at an empty frame
+  mc.cpu.cr3 = 0x1000; mc.cpu.cr4 = 0x10; mc.cpu.cr0 |= 0x80000001; m.paged = true;
+  eq('the derail detector reads a 4 MiB page as the code it holds', allZero(m, 0x80021688), false); }
 // tools/linux/follow.asm: a loop that calls a subroutine and jumps over an instruction. Under paging
 // a direct CALL or JMP to the head's page goes on in the same block, so neither the subroutine nor
 // the jump's target begins one, nor the return address its RET goes back to (unless the subroutine

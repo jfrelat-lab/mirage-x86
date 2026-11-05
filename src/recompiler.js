@@ -1222,7 +1222,8 @@ export class Recompiler {
     // An instruction it cannot decode, past a side exit, has not run yet (it may be data after a branch
     // gcc made: UD2 after a call that does not return): the block ends before it, where it would have
     // ended had the branch ended it, and the instruction is decoded if it is ever reached.
-    const endBefore = () => { if (!(chained || exited)) return false; count--; P(`cpu.eip=${curIpStart};`); P('return;'); ended = true; return true; };
+    // Past a branch, or inside a skip that may jump over it, an instruction that cannot be translated may never run.
+    const endBefore = () => { if (!(chained || exited || skips.length)) return false; count--; P(`cpu.eip=${curIpStart};`); P('return;'); ended = true; return true; };
     const segEnds = [], segIps = [ip0];                          // the count where each piece ended; the ip where each began
     // A write into the running block: into the piece running now, the block leaves after the writing
     // instruction, as it always did; into another piece (a block of its own before), it leaves at the

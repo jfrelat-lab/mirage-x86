@@ -27,6 +27,9 @@ function peek(mem, a) {
   if (!mem.paged || !mem.cpu) return mem.u8[a & (mem.size - 1)];
   const pde = mem.r32phys((((mem.cpu.cr3 & 0xfffff000) >>> 0) + ((a >>> 22) * 4)) >>> 0);
   if (!(pde & 1)) return -1;
+  // A 4 MiB page (PS with CR4.PSE): the directory entry maps it whole. KolibriOS maps its kernel so,
+  // and its page tables read as zeros: a false "run of zero bytes" once its blocks grew past 64.
+  if ((pde & 0x80) && (mem.cpu.cr4 & 0x10)) return mem.u8[(((pde & 0xffc00000) >>> 0) | (a & 0x3fffff)) & (mem.size - 1)];
   const pte = mem.r32phys((((pde & 0xfffff000) >>> 0) + (((a >>> 12) & 0x3ff) * 4)) >>> 0);
   if (!(pte & 1)) return -1;
   return mem.u8[(((pte & 0xfffff000) >>> 0) | (a & 0xfff)) & (mem.size - 1)];

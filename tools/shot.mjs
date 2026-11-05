@@ -45,7 +45,10 @@ dos.load(new Uint8Array(readFileSync(join(dir, prog))), tail ? ' ' + tail : '', 
 // advances roughly 150 guest ticks each: its "frame 40" is minutes of guest time, and comparing that
 // against a 60-tick DOSBox capture says nothing. No tickTimer() either — the run loop owns the PIT,
 // and calling it drives the clock a second time.
-const ticks = () => (mc.mem.r16(0x46c) | (mc.mem.r16(0x46e) << 16)) >>> 0;
+// Counted from where the BIOS started it: 0040:006C begins at the time of day (the RTC's), not at 0,
+// so an absolute bound ended every run before its first instruction.
+const tick0 = (mc.mem.r16(0x46c) | (mc.mem.r16(0x46e) << 16)) >>> 0;
+const ticks = () => ((((mc.mem.r16(0x46c) | (mc.mem.r16(0x46e) << 16)) >>> 0) - tick0 + 0x1800b0) % 0x1800b0);
 // A guest that hooks INT 8 for its own pacing and does not chain to the BIOS leaves 0040:006C
 // frozen — the counter is software, kept by the BIOS handler, not by the PIT. Quake does exactly
 // that: it reaches mode 13h and draws while `ticks()` stays at 0, so a tick-bounded loop never
@@ -130,3 +133,8 @@ const crc32 = (b) => { let c = ~0 >>> 0; for (let i = 0; i < b.length; i++) { c 
 const chunk = (t, d) => { const body = Buffer.concat([Buffer.from(t), d]); const L = Buffer.alloc(4); L.writeUInt32BE(d.length); const C = Buffer.alloc(4); C.writeUInt32BE(crc32(body)); return Buffer.concat([L, body, C]); };
 writeFileSync(out, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level: 9 })), chunk('IEND', Buffer.alloc(0))]));
 console.log(`${sub}/${prog} @ ${ticks()} ticks — mode 0x${mode.toString(16)} ${mc.mem.planar ? '(planar)' : ''} — ${fault ? 'FAULT ' + fault.message : dos.programDone ? 'done' : 'running'} -> ${out}`);
+// A text mode has no picture to write: its screen, as text, says where the program stopped.
+if (mode <= 3 || mode === 7) {
+  const base = mode === 7 ? 0xb0000 : 0xb8000, cols = mc.mem.r16(0x44a) || 80, rows = (mc.mem.r8(0x484) || 24) + 1;
+  for (let r = 0; r < rows; r++) { let l = ''; for (let c = 0; c < cols; c++) { const ch = mc.mem.r8(base + (r * cols + c) * 2); l += ch >= 32 && ch < 127 ? String.fromCharCode(ch) : ' '; } if (l.trim()) console.log('| ' + l.trimEnd()); }
+}
