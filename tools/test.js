@@ -2097,6 +2097,20 @@ const udRun = (gated) => {
   eq('...and FLD / FSTP m64 too', [mem.dv.getFloat64(0x9028, true), mem.dv.getFloat64(0x5028, true)].join(), '2.5,0');
 }
 {
+  // PUSH and POP inline under paging take SS's base: "flat" is a 4 GiB expand-up limit, not a zero
+  // base. HDPMI32's stack (xcom144) has a base, and its pushes landed at ESP itself: the host halted.
+  const mc = new Machine({ memSize: 4 << 20 }), cpu = mc.cpu, mem = mc.mem;
+  mem.setA20(true); mc.rec.MM = mem.mask;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0); cpu.setSeg(ES, 0); cpu.setSeg(SS, 0);
+  mem.blit(0x1000, Uint8Array.from([0x68, 0x44, 0x33, 0x22, 0x11, 0x58, 0x68, 0x88, 0x77, 0x66, 0x55, 0xf4]));   // push 11223344h; pop eax; push 55667788h; hlt
+  mem.w32(0x10000, 0x11007);
+  for (let p = 0; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);
+  cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
+  cpu.csD = 1; cpu.base[SS] = 0x4000; cpu.limit[SS] = 0xffffffff; cpu.limLo[SS] = 0; cpu.ssB = 1; cpu.reg[4] = 0x100;
+  for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
+  eq('push/pop inline under paging go to SS\'s base plus ESP', [(cpu.reg[0] >>> 0).toString(16), (cpu.reg[4] >>> 0).toString(16), mem.r32(0x40fc).toString(16)].join(), '11223344,fc,55667788');
+}
+{
   // The VGA / VBE window is PHYSICAL A0000h, reached through whatever linear page maps it. Under paging
   // the device routing was skipped and the TLB marked device pages by LINEAR number, so xcom144 under
   // HDPMI32 (VBE 111h, banked) drew into the RAM behind A000 and its framebuffer stayed black.

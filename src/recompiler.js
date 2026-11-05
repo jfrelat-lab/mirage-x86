@@ -1124,8 +1124,10 @@ export class Recompiler {
     const { memRead, memW } = memEmitters(this.memStrategy, MM, NT);
     const rmR = (o, sz) => o.isReg ? rR(o.rm, sz) : memRead(memAddr(o, sz), sz);
     // The flat stack's push and pop (see inlineStack): a statement, and a statement and its value.
-    const pushS = (v) => { const a = NT(), t = NT(); return `var ${t}=(${v})>>>0,${a}=(r[4]-4)>>>0;${memW(a, 32, t)}r[4]=${a};`; };
-    const popS = () => { const a = NT(), t = NT(); return [`var ${a}=r[4]>>>0,${t}=${memRead(a, 32)};r[4]=(${a}+4)>>>0;`, t]; };
+    // "Flat" is a 4 GiB expand-up limit, not a zero base: a DPMI host's ring-0 stack (HDPMI32, under
+    // xcom144) has both a base and that limit. The address is SS's base plus ESP; ESP moves alone.
+    const pushS = (v) => { const a = NT(), l = NT(), t = NT(); return `var ${t}=(${v})>>>0,${a}=(r[4]-4)>>>0,${l}=(sb[${SS}]+${a})>>>0;${memW(l, 32, t)}r[4]=${a};`; };
+    const popS = () => { const a = NT(), l = NT(), t = NT(); return [`var ${a}=r[4]>>>0,${l}=(sb[${SS}]+${a})>>>0,${t}=${memRead(l, 32)};r[4]=(${a}+4)>>>0;`, t]; };
     // The write-protection check: a store through a segment whose W bit is clear (or through a code
     // segment) is #GP(0). `cpu.segRO` is precomputed at segment-load time, so this is one typed-array
     // load and a predictable branch — not a call. ON BY DEFAULT since the bench said what it costs:
