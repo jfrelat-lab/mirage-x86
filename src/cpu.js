@@ -403,6 +403,10 @@ export class CPU {
    *   17h  platform ID, 8Bh  microcode revision — zero: none loaded
    *   1Bh  APIC base — zero: no local APIC (CPUID says so too)
    *   2Ah  power-on configuration — zero
+   *   79h  BIOS update trigger, write-only: a write is taken and no update is applied, so 8Bh still
+   *        reads zero. Windows 2000's update.sys carries a Pentium Pro microcode update for our
+   *        signature and loads it here (WRMSR 79h, EAX = the update's address); a #GP stopped the boot
+   *        with KMODE_EXCEPTION_NOT_HANDLED. QEMU (TCG) ignores the write the same way.
    * Any other register is #GP(0), as on the part; so is either instruction outside ring 0.
    * Returns false when it raised.
    */
@@ -416,7 +420,7 @@ export class CPU {
   wrmsr() {
     if (this.cpl !== 0 || (this.flags & 0x20000)) { this.raise(13, 0); return false; }
     const n = this.reg[1] >>> 0;
-    if (n === 0x10 || n === 0x17 || n === 0x1b || n === 0x2a || n === 0x8b) return true;   // writes ignored
+    if (n === 0x10 || n === 0x17 || n === 0x1b || n === 0x2a || n === 0x79 || n === 0x8b) return true;   // writes ignored
     this.raise(13, 0); return false;
   }
 

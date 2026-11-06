@@ -193,7 +193,12 @@ function eq(name, got, want) {
   cpu.cycles = 0x123456789; cpu.reg[1] = 0x10; const ok = cpu.rdmsr();
   eq('...RDMSR 10h is the time-stamp counter', [ok, cpu.reg[2], (cpu.reg[0] >>> 0).toString(16)].join(), 'true,1,23456789');
   cpu.reg[1] = 0x1234; const bad = cpu.rdmsr();
-  eq('...and a register the part lacks is #GP', [bad, gp].join(), 'false,13'); }
+  eq('...and a register the part lacks is #GP', [bad, gp].join(), 'false,13');
+  // Windows 2000's update.sys loads its microcode for family 6 model 1 through WRMSR 79h: a #GP there
+  // was KMODE_EXCEPTION_NOT_HANDLED. The write is taken, nothing is applied: 8Bh still reads zero.
+  gp = 0; cpu.reg[1] = 0x79; cpu.reg[0] = 0x81234000; cpu.reg[2] = 0; const upd = cpu.wrmsr();
+  cpu.reg[1] = 0x8b; cpu.reg[0] = 5; cpu.reg[2] = 5; cpu.rdmsr();
+  eq('...WRMSR 79h (BIOS update trigger) is taken, and the microcode revision (8Bh) stays zero', [upd, gp, cpu.reg[0], cpu.reg[2]].join(), 'true,0,0,0'); }
 
 // ---- CMOVcc (0F 40-4F): MOV Gv,Ev only if the condition holds; flags untouched. -------
 // AX=5; CMP AX,5 (ZF=1); CMOVZ CX,BX copies (taken); CMOVNZ DX,BX does not (not taken).
@@ -1769,6 +1774,21 @@ const udRun = (gated) => {
   eq('the absent slave reads status 00h', inb(0x1f7), 0);
   outb(0x1f6, 0xa0);
   eq('...and the master keeps its own status (a slave probe cleared it: "drive not ready")', inb(0x1f7) & 0x40, 0x40); }
+// A BIOS geometry ATA cannot express (Windows 2000's v86 image is partitioned with 128 heads): the
+// drive reports and translates 16 heads, 63 sectors, as QEMU's and a real drive do. atapi.sys
+// addresses by CHS with the heads IDENTIFY gives; with 128 it wrote head 72 as A0h|48h (the LBA bit),
+// head 80 as F0h (the slave), and the read never completed: the boot screen for ever.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const inb = (p) => mc.portRead[p](p, 1) & 0xff, inw = (p) => mc.portRead[p](p, 2) & 0xffff, outb = (p, v) => mc.portWrite[p](p, 1, v);
+  const img = new Uint8Array(2 * 128 * 63 * 512); for (let i = 0; i < img.length; i++) img[i] = (i >> 9) & 0xff ^ (i & 0x1ff);
+  mc.disk.attach(0x80, img, { cyl: 2, heads: 128, spt: 63, type: 3 });
+  outb(0x1f6, 0xa0); outb(0x1f7, 0xec);
+  const id = []; for (let i = 0; i < 256; i++) id.push(inw(0x1f0));
+  eq('IDENTIFY with a 128-head BIOS geometry: 16 heads, 63 sectors, the cylinders that fill the disk (words 1/3/6, 54-56)',
+    [id[1], id[3], id[6], id[54], id[55], id[56]].join(), '16,16,63,16,16,63');
+  outb(0x1f2, 1); outb(0x1f3, 7); outb(0x1f4, 3); outb(0x1f5, 0); outb(0x1f6, 0xa5); outb(0x1f7, 0x20);   // CHS 3/5/7
+  const lba = (3 * 16 + 5) * 63 + 6, rd = []; for (let k = 0; k < 256; k++) { const w = inw(0x1f0); rd.push(w & 0xff, w >> 8); }
+  eq('...and READ SECTORS by CHS translates with those 16 heads', rd.every((b, i) => b === img[lba * 512 + i]), true); }
 
 // ---- INT 13h extensions (EDD), BDA 0475h, CMOS type-47 parameters ------------------------------
 // Windows 95/98 (FAT32 boot sector) and NetBSD's bootstrap read by LBA through AH=42h: "Disk I/O error",

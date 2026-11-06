@@ -21,7 +21,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 | System | Where it stops | Cause |
 |---|---|---|
-| Windows 2000 | its boot screen, progress bar empty | **Unknown.** After calibrating its delay loop it touches no device again. Not a matter of speed alone: it idles at 20 times the default clock rate too. |
+| Windows 2000 | its boot screen, progress bar empty, at the default headless rate | **Speed**: the boot screen scrolls a band from a timer DPC; at 3.3 M instructions a guest second each step costs 0.1-0.15 guest s and the DPC takes 99 % of the processor. At 5 times the rate (`MIRAGE_PITRELOAD=912920`) it reaches the desktop. |
 | ReactOS 0.4.15 | a stop in the kernel | **Known**: no ACPI tables. |
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |
 | Damn Small Linux 4.4.10 | a black screen at runlevel 5 | **Unknown**: not investigated — it may only be slow. |
@@ -31,8 +31,8 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 
 - **Headless, a guest second is 3.32 million instructions**, whatever the processor profile (the
   PIT's rate, set to match DOSBox's work per frame). In the page the clock is real time and the
-  processor runs as fast as the host. A late system run headless sees a slow processor; this is not
-  what stops Windows 2000 (above). A rate per profile is on the roadmap.
+  processor runs as fast as the host. A late system run headless sees a slow processor: Windows 2000
+  (above) needs 5 times the rate. A rate per profile is on the roadmap.
 - **The real-time clock starts at 1 January 1990, 08:00** in headless runs, so that runs repeat
   exactly; a guest then sees files "from the future". `MIRAGE_RTC=hostdate` starts it at the host's
   date instead.

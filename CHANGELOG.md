@@ -6,14 +6,19 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-06
 
-- **Second Reality plays** (Future Crew, 1993): choose "No sound" at its set-up and the demo runs.
-  Its loader is a scheduler driven by the single-step trap, and an `INT n` was wrongly followed by a
+- **Windows 2000 reaches its desktop** in the bare PC (256 MiB, `pentiumpro`, PCI), given a faster
+  headless clock. Two faults stopped it. The hard disk reported the 128 heads of its partition table
+  to the controller, which has room for 16: Windows' disk driver addresses by cylinder, head and
+  sector, so head 72 or 80 spilled into the drive-select bits and the read went to a drive that is not
+  there. The disk now reports 16 heads and 63 sectors, as QEMU's and a real one do. Then Windows'
+  microcode updater wrote the update trigger register, which was a fault; the write is now taken.
+- **Second Reality plays** (Future Crew, 1993): choose the SoundBlaster Pro at its set-up and the
+  demo runs with its music. Its loader is a scheduler driven by the single-step trap, and an `INT n` was wrongly followed by a
   trap (DOSBox-X counts 9 traps on the new probe `tools/inttrap.asm`, MIRAGE counted 11); it also
   needed INT 21h AH=55h, a child PSP, and a child that ends without ending its parent.
 - **386BSD's console shows whole**, to `login:`. Its kernel zeroes the BIOS data area, where MIRAGE
   read the number of text rows, and drew one row; the text screen's size now comes from the video
   card's own registers, as on real hardware and in QEMU.
-
 - **Windows ME, Linux 3.x and TinyCore no longer freeze**: the recompiler's memo of past translations
   was bounded by a count of blocks, each holding its compiled function; once paged blocks grew it held
   1.3 GB and the host spent 99 % of its time collecting garbage. It is now bounded by the source it

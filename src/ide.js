@@ -69,7 +69,19 @@ function channel(machine, cfg) {
   const dev = () => cfg.device((ide.head >> 4) & 1);
   const drive = () => { const d = dev(); return d && d.ata ? d.ata : null; };
   const cd = () => { const d = dev(); return d && d.cd ? d.cd : null; };
-  const geom = () => { const d = drive(); return d ? d.geom : null; };
+  // The drive's own default CHS translation, which IDENTIFY reports and CHS commands use until
+  // INITIALIZE DEVICE PARAMETERS sets another. The BIOS geometry (d.geom, from the partition table)
+  // is what INT 13h serves, but ATA has 4 head bits: a disk partitioned with 128 heads (Windows 2000's
+  // v86 image) cannot report 128 here. Windows 2000's atapi.sys addresses by CHS with the heads it
+  // reads: head 72 written to the drive/head register as A0h|48h set the LBA bit, head 80 the device
+  // bit too, the read went to an absent slave and never completed — the boot screen for ever. Like
+  // QEMU's (hw/block/hd-geometry.c) and a real drive's: 16 heads, 63 sectors, at most 16383 cylinders.
+  const geom = () => {
+    const d = drive(); if (!d) return null;
+    const g = d.geom;
+    if (g.heads <= 16 && g.spt <= 63) return g;
+    return { cyl: Math.min(16383, Math.floor(d.data.length / (SECTOR * 16 * 63))), heads: 16, spt: 63 };
+  };
   const irq = () => { if (!(ide.control & 0x02)) machine.raiseIRQ(cfg.irq); };   // nIEN masks the line
   const done = () => { ide.status = DRDY | DSC; irq(); };
   const abort = () => { ide.error = ABRT; ide.status = DRDY | DSC | ERR; irq(); };
