@@ -148,7 +148,8 @@ does so again whenever paging is switched on or off, or CR4.PSE changes while it
   if not (`MIRAGE_NOFLATSPEC=1`). With a flat 32-bit stack, PUSH, POP, CALL and RET move it inline.
 - **The translation memo.** A block's translation is kept by its bytes, its address and the state it
   depends on (code size, real or not, x87 precision, flat segments), so a program loaded again or a
-  cache dropped for size recompiles nothing it has seen (`MIRAGE_NOMEMO=1`).
+  cache dropped for size recompiles nothing it has seen (`MIRAGE_NOMEMO=1`). It is bounded, as the
+  code cache is, by the JavaScript source it holds (32 MiB), dropping its oldest entries past that.
 
 A change of the A20 mask drops the cache and ends the slice as well, because `run` keeps the mask
 in a local for the whole slice.

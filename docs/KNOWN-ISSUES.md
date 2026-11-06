@@ -26,7 +26,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |
 | Damn Small Linux 4.4.10 | a black screen at runlevel 5 | **Unknown**: not investigated — it may only be slow. |
 | 386BSD 1.0 | not stopped: `login:` is in video memory | **Display**: once the kernel has the console, the screen is drawn as one text row (640×16). Not investigated. |
-| XCOM (`xcom144.img`) | its 640×480 screen draws as noise | **Display, suspected**: the system runs (HDPMI32, its FreeDOS); the picture has been noise since at least 2026-10-20. |
+| XCOM (`xcom144.img`) | its 640×480 screen draws as noise | **Display, suspected**: the system runs (HDPMI32, its FreeDOS); its desktop was drawn in 2026-09. |
 
 ## Time
 
@@ -37,8 +37,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 - **The real-time clock starts at 1 January 1990, 08:00** in headless runs, so that runs repeat
   exactly; a guest then sees files "from the future". `MIRAGE_RTC=hostdate` starts it at the host's
   date instead.
-- **The timer interrupt rate is capped** at about 1165 Hz (a reload of 1024 PIT ticks; 291 Hz until
-  2026-10-11). Keen 4 and Wolf3D ask for 561 and 700 Hz and get them; Chrome Revenge asks for 17.5 kHz
+- **The timer interrupt rate is capped** at about 1165 Hz (a reload of 1024 PIT ticks). Keen 4 and Wolf3D ask for 561 and 700 Hz and get them; Chrome Revenge asks for 17.5 kHz
   and gets 1165. `MIRAGE_PITFLOOR` lowers the floor.
 - **The second compilation tier is off** (`MIRAGE_TIER2=1` turns it on for work on it): a fused loop
   could run unbounded work in one slice.
@@ -60,6 +59,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
 | Second Reality | derails to 0000:0000 at start |
+| Zone 66 | after its intro and five story pages, a black screen for minutes; not investigated (it also refuses any XMS driver, as on DOSBox-X: run it with `?xms=0`) |
 | C-Dogs 1.06 | silent: its DSIK Sound Blaster driver polls the 16-bit DMA channel 5's count and plays nothing. Not investigated further |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |
 | Heretic without our DPMI host | its bound DOS/4G faults after entering protected mode by itself |
@@ -68,13 +68,14 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 
 | Missing | Consequence |
 |---|---|
-| DirectDraw, DirectSound, DirectInput | Programs that need them stop; luxo4k shows a message box and exits for want of DirectSound. |
-| Direct3D 9 without shaders | PRISM's `d3d9.js` draws with HLSL shaders; the fixed function, vertex declarations, stencil, alpha test and `Reset` are not there yet. |
-| D3DX beyond HLSL | Shader assembly, `ID3DXFont`, effects and sprites are not done. Meshes, skins, N-patches, normals, adjacency, `D3DXFillTexture`, texture shaders (`D3DXFillTextureTX`) and text meshes (`D3DXCreateText`) are. |
-| Windows fonts | MIRAGE ships none. An image lists the ones it selects (`machine.fonts`); the page reads the visitor's own (Chrome's Local Font Access, after asking) or else uses DejaVu Sans, whose shapes and widths differ. Glyphs are not hinted. |
+| DirectDraw, DirectInput | Programs that need them stop. DirectSound is there. |
+| Direct3D 9 beyond shaders | PRISM's `d3d9.js` draws with HLSL shaders and the fixed function's default texture stage (Stiletto's lights and material); other texture-stage operations (Darwinism), vertex declarations, stencil, alpha test and `Reset` (Wishful Twisting) are not there yet. |
+| D3DX beyond HLSL | Shader assembly, `ID3DXFont`, effects, sprites and matrix stacks (`D3DXCreateMatrixStack`, Atrium) are not done. Meshes, skins, N-patches, normals, adjacency, `D3DXFillTexture`, texture shaders (`D3DXFillTextureTX`) and text meshes (`D3DXCreateText`) are. |
+| Windows fonts | MIRAGE ships none. An image lists the ones it selects (`machine.fonts`); the page reads the visitor's own (Chrome's Local Font Access, after asking) or else uses DejaVu Sans, whose shapes and widths differ. Glyphs are not hinted. A text mesh in a font the page does not provide stops the program (luxo4k asks for Times). |
 | One emulated core | Threads take turns on one CPU at about 200 M instructions a second: Darwinism (180 M x87 instructions a frame) draws a frame a second, Valleyball's synthesizer keeps up at 0.97 of real time, Stripped's precalculation lasts minutes. |
 | gdi32's ordinals | Crinkler's /RANGE imports by ordinal; MIRAGE's gdi32 does not number its exports as Windows XP's (no intro met needs it yet). opengl32's and d3dx9's are numbered as Microsoft's. |
 | Win16 | No NE loader yet. |
+| Polystreptikum, Synchroplastikum | a page fault before their Direct3D device is created; not investigated |
 
 ## The tools
 
