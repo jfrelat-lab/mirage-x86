@@ -3002,6 +3002,26 @@ const udRun = (gated) => {
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('TRAPS=')) line = t.trim(); }
   eq('POPF setting TF traps the instructions after it, as DOSBox-X does', line, 'TRAPS=06 CX=0 0 0 0 0 0'); }
 
+// ---- INT n under TF: no trap after it, none in its handler -------------------------------------------
+// tools/inttrap.asm traces nop / int 60h / nop / mov ah,30h / int 21h / nop and prints the low byte of
+// each trapped IP. DOSBox-X (normal and dynamic): nine traps, none at the INT 60h handler (6D) and none
+// right after INT 21h (1F). MIRAGE trapped after every traced instruction, INT n included, so INT 1 was
+// entered at the handler's first instruction with TF clear in its frame: Second Reality's INT 1 thread
+// scheduler lost a thread's TF that way and ran into its anti-debug wipe of the IVT.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const dos = installDOS(mc, new VFS());
+  const hex = (                                         // nasm -f bin tools/inttrap.asm, 206 bytes
+    'b80125ba7301cd21b86025ba6d01cd219c580d0001509d90cd6090b430cd21909c5825fffe509da0ad01babf01b409cd21' +
+    'a0ad01e85d00bac601b409cd2131f60fb62ead0183fd107603bd100039ee73108a84af01e83c00b220b402cd2146ebecba' +
+    'cb01b409cd21b8004ccd212efe06ae01cf5589e5532e0fb61ead0183fb10730a508a46022e8887af01582efe06ad015b5d' +
+    'cf50c0e804e8030058240f04303c397602040788c2b402cd21c300000000000000000000000000000000000054524150' +
+    '533d242049503d240d0a24');
+  const img = Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16));
+  dos.load(img, '', 'C:\\INTTRAP.COM');
+  let guard = 0; while (!dos.programDone && guard++ < 2000) mc.runSlice(2000);
+  let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('TRAPS=')) line = t.trim(); }
+  eq('INT n under TF: no trap after it nor in its handler, as DOSBox-X', line, 'TRAPS=09 IP=18 1B 1D 20 21 22 25 26 27'); }
+
 // ---- chained blocks without paging (recompiler.js translate, `exact`) -------------------------------
 // tools/realchain.asm, chained and not, slice by slice under the timer: a chained block checks, wherever
 // the block would have ended, what the dispatcher checks between two blocks, and counts its cycles there,

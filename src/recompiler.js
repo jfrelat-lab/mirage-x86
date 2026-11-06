@@ -602,6 +602,19 @@ export class Recompiler {
     return blk.count;
   }
 
+  /** The opcode of a software interrupt (INT3 0xCC, INT n 0xCD, INTO 0xCE) at `lin`, past any
+   *  prefixes; 0 for any other instruction. Used only on the single-step path. */
+  _softIntOp(lin) {
+    const mem = this.mem, paged = this.pagedMode, MM = this.MM;
+    for (let i = 0; i < 15; i++) {
+      const b = mem.r8(paged ? (lin + i) >>> 0 : (lin + i) & MM);
+      if (b === 0x26 || b === 0x2e || b === 0x36 || b === 0x3e || b === 0x64 || b === 0x65 ||
+          b === 0x66 || b === 0x67 || b === 0xf0 || b === 0xf2 || b === 0xf3) continue;
+      return b === 0xcc || b === 0xcd || b === 0xce ? b : 0;
+    }
+    return 0;
+  }
+
   /** Fused dispatch loop: run up to maxBlocks blocks with the try/catch
    *  hoisted out of the per-block path and stats.exec accumulated once — this is the
    *  hot loop (puls was ~20% here). halted/blocked are still checked every iteration:
@@ -638,13 +651,21 @@ export class Recompiler {
         // for the handler; its IRET restores TF and traps the next instruction in turn.
         // A REP string instruction counts as one instruction here, as DOSBox-X counts it; QEMU traps
         // after every iteration instead (tools/reptrap.asm: 6 traps against 11), so it is left alone.
+        // INT n, INT3 and an INTO that interrupts are NOT followed by a trap: they clear TF on the way
+        // into the handler, which runs untraced, and its IRET restores TF without trapping either —
+        // the next trap comes after the instruction that follows the INT (tools/inttrap.asm, DOSBox-X:
+        // TRAPS=09). Trapping anyway entered INT 1 a second time at the handler's first instruction,
+        // with TF clear in the frame it pushed. Second Reality's loader is a scheduler driven by INT 1
+        // whose threads also execute `int 1` themselves: the extra trap saved one thread with TF off,
+        // that thread ran into the loader's anti-debug path, and it wiped the IVT (0000:0000).
         if (cpu.flags & TF) {
           const blk = this.translate(lin, ip0, 1);
+          const op = this._softIntOp(lin);           // read before it runs: it may rewrite itself
           this.curBlk = blk;
           blk.fn(cpu, blk);
           cpu.cycles += blk.count;
           cpu.tbudget--; n++;
-          machine.swInt(1);
+          if (op === 0 || (op === 0xce && !(cpu.flags & OF))) machine.swInt(1);
           continue;
         }
         const page = pages[lin >>> 12];
