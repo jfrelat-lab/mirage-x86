@@ -480,6 +480,8 @@ export function installDOS(machine, vfs) {
   // child terminates, terminate() below pops the context and resumes the parent right
   // after its INT 21h — DOS's INT 22h return, modelled without a real IRET.
   dos.execStack = [];
+  // PSPs made by AH=55h, which no EXEC loaded: segment -> the parent and its registers at that call.
+  dos.childPsps = new Map();
 
   function execChild(path, pbLin) {
     const bytes = vfs.readFile(path) || vfs.readFile('\\' + path);
@@ -567,6 +569,27 @@ export function installDOS(machine, vfs) {
   const terminate = (code, type = 0) => {
     dos.exitCode = code & 0xff;
     dos.exitType = type;
+    // A PSP made by AH=55h ends as DOS ends any process: INT 22h-24h back from its PSP, its parent
+    // current again, and execution at its PSP:000Ah — the terminate address its creator stored there
+    // — on the stack the parent called AH=55h on. Second Reality's loader runs its set-up program
+    // this way and expects to come back at 0824:0765; taken for the end of the whole program, the
+    // demo quit to DOS the moment the set-up screen was confirmed.
+    const child = dos.childPsps.get(dos.psp);
+    if (child) {
+      const p = dos.psp << 4, ret = mem.r32(p + 0x0a);
+      dos.childPsps.delete(dos.psp);
+      mem.w32(0x22 * 4, ret); mem.w32(0x23 * 4, mem.r32(p + 0x0e)); mem.w32(0x24 * 4, mem.r32(p + 0x12));
+      vfs.jfts.delete(dos.psp);
+      dos.psp = child.parent; vfs.setPsp(child.parent); syncSFT();
+      cpu.reg.set(child.reg);
+      for (const sr of [ES, SS, DS]) cpu.setSeg(sr, child.seg[sr]);
+      cpu.setSeg(CS, ret >>> 16); cpu.eip = ret & 0xffff; cpu.flags = child.flags & ~CF;
+      cpu.halted = false;
+      // Reached through a hooked INT 21h chaining to our stub, the IRET frame there is the dead
+      // child's: CS:IP is ours now, not the frame's.
+      if (machine._inBiosCallback >= 0) machine.transferred = true;
+      return;
+    }
     const ctx = dos.execStack.pop();
     if (ctx) {                                            // a child of an EXEC — resume the parent
       machine.rec.reset();
@@ -914,6 +937,28 @@ export function installDOS(machine, vfs) {
       // flips constantly between its own and the running Win16 task's, and that is the path by which
       // a task was closing KERNEL's font file.
       case 0x50: dos.psp = segIn(cpu.bx & 0xffff); vfs.setPsp(dos.psp); ok(); break;
+      // Create child PSP: DX = its segment, SI = the memory-size word for offset 02h. A copy of the
+      // current PSP with the open handles inherited, the parent link and the INT 22h-24h vectors set,
+      // and it BECOMES the current PSP (RBIL; DOSBox's DOS_ChildPSP). A loader that places its own
+      // program uses it: Second Reality's builds a PSP at the top of memory, and the stub there
+      // checks PSP:0002 against its size. Unimplemented, there was no PSP there at all, only the
+      // bytes the loader had read in, and the stub printed "Not enough memory".
+      case 0x55: {
+        const child = cpu.dx & 0xffff, src = dos.psp << 4, dst = child << 4;
+        if (child !== dos.psp) for (let i = 0; i < 0x100; i++) mem.w8(dst + i, mem.r8(src + i));
+        mem.w8(dst, 0xcd); mem.w8(dst + 1, 0x20);
+        mem.w16(dst + 0x02, cpu.si & 0xffff);
+        mem.w32(dst + 0x0a, mem.r32(0x22 * 4));
+        mem.w32(dst + 0x0e, mem.r32(0x23 * 4));
+        mem.w32(dst + 0x12, mem.r32(0x24 * 4));
+        mem.w16(dst + 0x16, dos.psp);
+        // What the parent's stack and registers were, for when this PSP terminates: DOS goes back
+        // to the address at the CHILD's PSP:000Ah on the stack the parent made this call on.
+        dos.childPsps.set(child, { parent: dos.psp, reg: Array.from(cpu.reg), seg: Array.from(cpu.seg), flags: cpu.flags });
+        vfs.jfts.delete(child);
+        dos.psp = child; vfs.setPsp(child); syncSFT();
+        cpu.al = 0xf0; ok(); break;
+      }
       case 0x29: {                                                   // parse filename into an FCB — Ski or Die
         // DS:SI = text, ES:DI = FCB. Fill drive (0 = default, else 1-based), then the 8.3 name
         // blank-padded and uppercased. AL returns 1 if the name held a wildcard, else 0; SI is left

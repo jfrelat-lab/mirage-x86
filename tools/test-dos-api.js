@@ -1182,6 +1182,36 @@ function asciiz(mc, cpu, off, str) {
   eq('logical page 1 kept its own byte', mc.mem.u8[lin(frame, 0)], 0xb2);
 }
 
+// AH=55h, create child PSP, and that PSP's termination. Second Reality's loader makes a PSP at the top
+// of memory with SI = its memory-size word, runs its set-up program there, and stores its own return
+// address at the child's PSP:000Ah. Unimplemented, the stub found no PSP and printed "Not enough
+// memory"; and the child's AH=4Ch then ended the whole program instead of returning to the loader.
+{
+  const c = mk(), parent = c.dos.psp, child = 0x5000;
+  const ivt22 = c.mc.mem.r32(0x22 * 4);
+  c.mc.mem.w16((parent << 4) + 0x80, 0x0d00);                       // something to copy: an empty tail
+  c.cpu.setSeg(2, 0x3000); c.cpu.sp = 0x1234; c.cpu.bp = 0x5a5a;   // the parent's stack at the call
+  const r = int21(c, 0x55, (cpu) => { cpu.dx = child; cpu.si = 0x6000; });
+  const p = child << 4;
+  eq('55h succeeds', r.cf, 0);
+  eq("55h: the child PSP starts with INT 20h", c.mc.mem.r16(p), 0x20cd);
+  eq('55h: SI is the memory-size word at PSP:0002', c.mc.mem.r16(p + 2), 0x6000);
+  eq('55h: the parent link at PSP:0016', c.mc.mem.r16(p + 0x16), parent);
+  eq('55h: the terminate address at PSP:000A is INT 22h', c.mc.mem.r32(p + 0x0a), ivt22);
+  eq('55h: the child is the current PSP', int21(c, 0x62).cpu.bx & 0xffff, child);
+  // The creator stores its return address in the child, as Second Reality's loader does.
+  c.mc.mem.w16(p + 0x0a, 0x0765); c.mc.mem.w16(p + 0x0c, 0x0824);
+  c.cpu.setSeg(2, 0x4000); c.cpu.sp = 0x0100; c.cpu.bp = 0;        // the child runs on its own stack
+  int21(c, 0x4c, (cpu) => { cpu.al = 0; });
+  eq('4Ch from the child does not end the program', c.dos.programDone, false);
+  eq('4Ch from the child goes to its PSP:000A', [c.cpu.seg[1], c.cpu.eip & 0xffff].join(':'), [0x0824, 0x0765].join(':'));
+  eq('...on the stack the parent made the 55h call on', [c.cpu.seg[2], c.cpu.sp, c.cpu.bp].join(), [0x3000, 0x1234, 0x5a5a].join());
+  eq('...and the parent is the current PSP again', c.dos.psp, parent);
+  eq('...and INT 22h is what the child held', c.mc.mem.r32(0x22 * 4), 0x08240765);
+  int21(c, 0x4c, (cpu) => { cpu.al = 0; });
+  eq("the parent's own 4Ch still ends the program", c.dos.programDone, true);
+}
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage DOS/BIOS services: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
