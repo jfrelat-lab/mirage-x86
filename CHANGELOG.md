@@ -10,6 +10,8 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   but keeps the x87's own exponent range (a tiny product no longer becomes 0), and loading the
   control word mid-block takes effect at once. kkrieger's power function, 2,400 calls, now matches
   Visual C++'s build of it under Wine on QEMU bit for bit (342 of 2,400 before).
+- **The home page plays Elevated as a video**, with a button for its music; the README shows it as an
+  animated WebP (1 MB instead of a 4 MB GIF, every colour), the GIF kept for older browsers.
 - **Record what you see**: the Machines page has a Record button. It saves the screen and its sound
   as an MP4 (WebM where the browser writes no MP4). For the repository, `tools/record.mjs` films a DOS
   title headless, a frame every 1/30 s of guest time with its Sound Blaster, OPL3 or MIDI sound, so

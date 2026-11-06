@@ -37,8 +37,8 @@
   .hero-top .pipeline { white-space: normal; line-height: 1.7; }
   @media (max-width: 960px) { .hero-top { grid-template-columns: 1fr; gap: 20px; } }
   .cta.small .btn { padding: 7px 12px; font-size: 14px; }
-  .hero-media { margin: 0; } .hero-media img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.45); }
-  .hero-media figcaption { color: var(--dim); font-size: 13px; margin-top: 6px; } .hero-media b { color: #e6eef4; }
+  .hero-media { margin: 0; } .hero-media img, .hero-media video { display: block; aspect-ratio: 16 / 9; background: #000; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.45); }
+  .hero-media figcaption { color: var(--dim); font-size: 13px; margin-top: 6px; } .linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; } .hero-media b { color: #e6eef4; }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; }
   .btn { display: inline-block; padding: 10px 16px; border: 1px solid var(--accent); border-radius: 6px;
          color: var(--accent); font-weight: 600; }
@@ -112,9 +112,13 @@
           <a class="btn" href="https://github.com/jfrelat-lab/mirage-x86">★ Star on GitHub</a>
         </div>
       </div>
-      <figure class="hero-media"><a href="machines.html?m=win32&amp;run=win32%2Felevated-2009"><img src="assets/elevated.gif" width="600" height="336"
-        alt="Elevated, RGBA and TBC's 4K intro of 2009, running in MIRAGE"></a>
-        <figcaption><b>Elevated</b> (RGBA &amp; TBC, 4K, 2009): the Windows executable, unmodified, running in MIRAGE.</figcaption></figure>
+      <figure class="hero-media"><a href="machines.html?m=win32&amp;run=win32%2Felevated-2009"><video id="heroVideo" width="640" height="360"
+        autoplay muted loop playsinline preload="auto" poster="assets/elevated-poster.jpg" aria-label="Elevated, RGBA and TBC's 4K intro of 2009, running in MIRAGE">
+        <source src="assets/elevated.mp4" type="video/mp4">
+        <picture><source srcset="assets/elevated.webp" type="image/webp"><img src="assets/elevated.gif" width="640" height="360"
+        alt="Elevated, RGBA and TBC's 4K intro of 2009, running in MIRAGE"></picture></video></a>
+        <figcaption><b>Elevated</b> (RGBA &amp; TBC, 4K, 2009): the Windows executable, unmodified, running in MIRAGE.
+        <button id="heroSound" type="button" class="linkish">🔊 Sound on</button></figcaption></figure>
     </div>
     <div class="three">
       <a class="mach" href="machines.html?m=win32"><b>Windows</b><span>The Win32 API in JavaScript — no Windows: the
@@ -289,6 +293,12 @@
     document.getElementById('wingrid').innerHTML = imgs.filter((m) => m.world === 'win32').sort(newest).map(imageCard).join('');
     document.getElementById('bootgrid').innerHTML = ex.filter((e) => e.kind === 'boot').sort(newest).map(exampleCard).join('');
   }).catch(() => { document.getElementById('dosgrid').innerHTML = '<p class="lead">The examples could not be loaded.</p>'; });
+</script>
+<script>
+  // The hero plays muted, as browsers allow on their own; this button gives it its music.
+  (() => { const v = document.getElementById('heroVideo'), b = document.getElementById('heroSound');
+    if (!v || !b) return;
+    b.onclick = () => { v.muted = !v.muted; if (!v.muted) { v.currentTime = 0; v.play(); } b.textContent = v.muted ? '🔊 Sound on' : '🔇 Sound off'; }; })();
 </script>
 </body>
 </html>
