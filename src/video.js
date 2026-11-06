@@ -139,8 +139,16 @@ export class Video {
     // The card and the BDA are the truth, whoever programs them (our INT 10h keeps them, a real ROM
     // does, Linux's vgacon writes the CRTC itself): columns 044Ah, rows 0484h, blink AC 10h bit 3,
     // display start CRTC 0Ch/0Dh (hardware scrolling), cursor CRTC 0Ah/0Bh/0Eh/0Fh.
+    // The size is the CRTC's when it is programmed, as the card draws it: Horizontal Display End + 1
+    // columns, Vertical Display End + 1 scanlines over the character height (09h bits 0-4 + 1). The
+    // BDA is ordinary RAM: 386BSD zeroes physical page 0, and 0040:0084 = 0 drew ONE row of its
+    // console (QEMU, whose BDA reads mode 0 there too, draws the CRTC's 80x25). The BDA stays the
+    // fallback for a CRTC nobody loaded (our POST, our modes 0, 1 and 7) -- and a zeroed BDA, which
+    // no BIOS leaves (rows - 1 = 0 is a one-row screen), falls back to 80x25.
     const u8 = this.mem.u8, p16 = (a) => u8[a] | (u8[a + 1] << 8);
-    const cols = vga ? (p16(0x44a) || COLS) : COLS, rows = vga ? ((u8[0x484] + 1) || ROWS) : ROWS;
+    const td = vga ? this._textDims(vga) : null;
+    const cols = td ? td.cols : vga ? (p16(0x44a) || COLS) : COLS;
+    const rows = td ? td.rows : vga && u8[0x484] ? u8[0x484] + 1 : ROWS;
     this._ensure(cols * CW, rows * CH);
     const mem = this.mem, font = this.font, u32 = this.u32, pal = this.pal, W = this.imgW;
     if (!font) return;
@@ -180,6 +188,17 @@ export class Video {
         }
       }
     }
+  }
+
+  /** Text columns and rows as the CRTC defines them, or null when it is not programmed for text (our
+   *  POST loads no CRTC, and our mode set no table for modes 0, 1 and 7: those registers stay zero). */
+  _textDims(vga) {
+    const c = vga.crtc; if (!c || !c[0x01] || !c[0x12]) return null;
+    const ov = c[0x07], cols = c[0x01] + 1;
+    let lines = (c[0x12] | (((ov >> 1) & 1) << 8) | (((ov >> 6) & 1) << 9)) + 1;
+    if (c[0x09] & 0x80) lines >>= 1;
+    const rows = Math.floor(lines / ((c[0x09] & 0x1f) + 1));
+    return cols >= 20 && cols <= 132 && rows >= 1 && rows <= 100 ? { cols, rows } : null;
   }
 
   _renderGfx13() {

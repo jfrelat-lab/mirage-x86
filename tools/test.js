@@ -1587,18 +1587,38 @@ const udRun = (gated) => {
   eq('text: ink 8 is AC 8 = 38h -> DAC 38h (dark grey)', cell(0xdb, 0x08), video.pal[0x38]);
   cpu.ax = 0x0100; cpu.cx = 0x0e10; mc.intHandlers[0x10](cpu, mc);
   eq('AH=01h keeps the cursor type in the BDA (0460h end, 0461h start)', [mem.r8(0x460), mem.r8(0x461)].join(), '16,14');
-  // hw: 40 columns from the BDA, cursor from CRTC 0Eh/0Fh, shape from 0Ah/0Bh.
-  mc.vga.hw = true; mem.w16(0x44a, 40); mem.w8(0x484, 24);
+  // hw: 40 columns as a ROM's mode 1 leaves them (CRTC 01h = 27h, BDA 40), cursor from CRTC 0Eh/0Fh,
+  // shape from 0Ah/0Bh.
+  mc.vga.hw = true; mem.w16(0x44a, 40); mem.w8(0x484, 24); mc.vga.crtc[0x01] = 0x27;
   mc.vga.crtc[0x0e] = 0; mc.vga.crtc[0x0f] = 41; mc.vga.crtc[0x0a] = 0x0e; mc.vga.crtc[0x0b] = 0x0f;
   for (let i = 0; i < 80; i++) mem.w16(0xb8000 + i * 2, 0x0720);
   video.frame = 16; video.render();
-  eq('hw text: the width comes from the BDA columns', video.imgW, 320);
+  eq('hw text: the width comes from the CRTC (40 columns)', video.imgW, 320);
   eq('...and the cursor from CRTC 0Eh/0Fh: row 1, column 1, scanline 14', video.u32[(16 + 14) * 320 + 8], video.pal[7]);
   // hw planar: 640x480 from the CRTC programming mode 12h (display end 4Fh, VDE 1DFh).
   const c = mc.vga.crtc; c[0x01] = 0x4f; c[0x12] = 0xdf; c[0x07] = 0x3e; c[0x09] = 0x40;
   eq('hw planar: size from the CRTC', JSON.stringify(mc.vga.crtcDims?.()), '{"w":640,"h":480}');
   c[0x01] = 0x27; c[0x12] = 0x8f; c[0x07] = 0x1f; c[0x09] = 0xc0;          // mode 0Dh: 40 clocks, doubled 400 lines
   eq('...320x200 when the CRTC doubles every line', JSON.stringify(mc.vga.crtcDims?.()), '{"w":320,"h":200}'); }
+
+// ---- Text geometry is the card's, not the BDA's (386BSD) -------------------------------------------
+// 386BSD's kernel zeroes physical page 0 and its pccons writes only the cursor registers: the
+// renderer took rows from 0040:0084 (now 0) and drew ONE row of the console, while QEMU (whose BDA
+// reads mode 0 too) draws the CRTC's 80x25. Our POST loads no CRTC, so a zeroed BDA under an
+// unloaded CRTC is 80x25 too; once the CRTC is loaded, its geometry wins over the BDA.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const video = new Video(mc, canvas); video.font = new Uint8Array(4096);
+  for (let a = 0x400; a < 0x500; a++) mem.w8(a, 0);                        // the kernel's page 0
+  video.frame = 0; video.render();
+  eq('text with a zeroed BDA and no CRTC loaded: 80x25', `${video.imgW}x${video.imgH}`, '640x400');
+  cpu.ax = 0x0003; mc.intHandlers[0x10](cpu, mc);                         // loads the mode-3 CRTC
+  for (let a = 0x400; a < 0x500; a++) mem.w8(a, 0);
+  video.render();
+  eq('...with the mode-3 CRTC loaded: 80x25 from it', `${video.imgW}x${video.imgH}`, '640x400');
+  mc.vga.crtc[0x09] = 0x47;                                                // 8-line cells: 50 rows
+  video.render();
+  eq('...and rows follow CRTC 09h, not the BDA', video.imgH / 16, 50); }
 
 // ---- INT 10h AX=1121h-1124h: graphics fonts set the BDA rows and height; AX=1130h reports them ---
 // They were no-ops, and AX=1130h answered the REQUESTED font's height. QEMU/SeaBIOS, DOSBox-X and
