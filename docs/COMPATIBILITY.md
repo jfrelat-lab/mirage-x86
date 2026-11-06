@@ -184,7 +184,7 @@ fingerprint of its screen with the recorded one, so a regression in it cannot la
 | <img src="compat/intro-qblove.png" width="160" alt=""> | 🏅 qblove (1K) | 🟢 Renders | checked against the author's screenshot | 2026-11-05 |
 | <img src="compat/golden-revitro.png" width="160" alt=""> | 🏅 revitro | 🟢 Renders |  | 2026-11-05 |
 | <img src="compat/golden-rv256.png" width="160" alt=""> | 🏅 rv256 | 🟢 Renders |  | 2026-11-05 |
-| <img src="compat/dos-2ndreal-title.png" width="160" alt=""> | Second Reality (Future Crew) | 🔴 Fails | derails to 0000:0000 at start | 2026-11-05 |
+| <img src="compat/dos-2ndreal-title.png" width="160" alt=""> <img src="compat/dos-2ndreal-game.png" width="160" alt=""> | Second Reality (Future Crew) | 🟢 Renders | "No sound" at its set-up, then the demo: its opening and the starfield over the mountains | 2026-11-06 |
 | <img src="compat/golden-starport.png" width="160" alt=""> | 🏅 StarPort BBS 2 | 🟢 Renders |  | 2026-11-05 |
 | <img src="compat/dos-stash-title.png" width="160" alt=""> | Stash (The Black Lotus, 64K) | 🟢 Plays | the progress bar while it precomputes (3.3 billion instructions), then the intro to its end text | 2026-11-05 |
 | <img src="compat/golden-symetrie.png" width="160" alt=""> | 🏅 symetrie | 🟢 Renders |  | 2026-11-05 |

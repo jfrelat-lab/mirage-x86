@@ -58,7 +58,6 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Program | Cause |
 |---|---|
 | Lemmings | needs a raw floppy (it reads its disk by INT 13h); the files alone are not enough |
-| Second Reality | derails to 0000:0000 at start |
 | Zone 66 | after its intro and five story pages, a black screen for minutes; not investigated (it also refuses any XMS driver, as on DOSBox-X: run it with `?xms=0`) |
 | C-Dogs 1.06 | silent: its DSIK Sound Blaster driver polls the 16-bit DMA channel 5's count and plays nothing. Not investigated further |
 | oktaeder | programs PCI hardware directly and relies on a register DOS leaves by accident; it derails on DOSBox-X too |

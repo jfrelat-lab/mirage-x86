@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-06
 
+- **Second Reality plays** (Future Crew, 1993): choose "No sound" at its set-up and the demo runs.
+  Its loader is a scheduler driven by the single-step trap, and an `INT n` was wrongly followed by a
+  trap (DOSBox-X counts 9 traps on the new probe `tools/inttrap.asm`, MIRAGE counted 11); it also
+  needed INT 21h AH=55h, a child PSP, and a child that ends without ending its parent.
+
 - **Windows ME, Linux 3.x and TinyCore no longer freeze**: the recompiler's memo of past translations
   was bounded by a count of blocks, each holding its compiled function; once paged blocks grew it held
   1.3 GB and the host spent 99 % of its time collecting garbage. It is now bounded by the source it
