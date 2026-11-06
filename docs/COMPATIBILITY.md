@@ -224,14 +224,16 @@ not what it draws.
 | <img src="compat/win32-photonrace2-2008.png" width="160" alt=""> | Photon Race 2 (4K, NVScene 2008) | Direct3D 9 | 🟢 Plays | after a few seconds of precalculation: HLSL vertex and pixel shaders, four float16 render targets at once, 192 passes a frame; its music a .mid played through MCI's sequencer on MIRAGE's General MIDI synthesizer | 2026-11-05 |
 | <img src="compat/win32-elevated-2009.png" width="160" alt=""> | Elevated (4K, Breakpoint 2009) | Direct3D 9 | 🟢 Renders | the mountains after about 1½ minutes of precalculation (24 G instructions): its height map through `D3DXFillTexture`, a quad cut by `D3DXTessellateNPatches` into a million triangles raised by a vertex shader | 2026-11-05 |
 | <img src="compat/win32-ergon-2010.png" width="160" alt=""> | Ergon (4K, Breakpoint 2010) | Direct3D 9 | 🟢 Renders | at 60 frames a second: its height map a 1024x1024 float16 texture filled by its `tx_1_0` texture shader (`D3DXFillTextureTX`, HLSL's `noise()`), then raymarched | 2026-11-05 |
-| | Atrium (4K, Breakpoint 2008) | Direct3D 9 | 🔴 Fails | stops on `D3DXCreateMatrixStack`, which MIRAGE-WIN32 does not have yet | 2026-11-06 |
-| | Darwinism | Direct3D 9 | 🔴 Fails | stops on a fixed-function texture stage (COLOROP and ALPHAOP 2, no pixel shader) that PRISM does not draw yet | 2026-11-06 |
-| | Wishful Twisting | Direct3D 9 | 🔴 Fails | stops on `IDirect3DDevice9::Reset`, not in PRISM yet | 2026-11-06 |
+| <img src="compat/win32-atrium-2008.png" width="160" alt=""> | Atrium (4K, Breakpoint 2008) | Direct3D 9 | 🟢 Renders | after some 18 G instructions of precalculation: `D3DXCreateBox` meshes placed by an `ID3DXMatrixStack` and `D3DXVec3TransformCoordArray`, HLSL shaders | 2026-11-06 |
+| <img src="compat/win32-luxo4k-2007.png" width="160" alt=""> | luxo4k (4K, RGBA & Conspiracy, 2007) | Direct3D 9 | 🟢 Renders | the fixed function: D3DX meshes, Direct3D's lights, "PIXAR" from `D3DXCreateText` in "times", which XP substitutes with Times New Roman | 2026-11-06 |
+| <img src="compat/win32-valleyball-2009.png" width="160" alt=""> | Valleyball (4K, Breakpoint 2009) | OpenGL | 🟢 Renders | one raymarching GLSL shader on two triangles, its music from a thread; ends itself after some 100 s | 2026-11-06 |
+| | Darwinism | Direct3D 9 | 🔴 Fails | its frames run headless; PRISM does not draw its fixed-function stage yet (COLOROP SELECTARG1 of the texture factor, no texture, no pixel shader), nor its stencil | 2026-11-06 |
+| | Wishful Twisting | Direct3D 9 | 🔴 Fails | after 13 G instructions it calls `IDirect3DDevice9::Reset` with its creation parameters, not in PRISM yet; headless it then draws (an `ID3DXMatrixStack`, 700,000 calls a frame) | 2026-11-06 |
 | | Stiletto | Direct3D 9 | 🟠 Starts | its skinned mesh and its nine Tahoma words are made and it presents headless; it draws with the fixed function (lights, material, no shader). Its camera moves | 2026-11-02 |
 | | .kkrieger (farbrausch, 2004) | Direct3D 9 | 🟠 Starts | its first frames and generated textures headless; runs out of memory after four frames | 2026-11-03 |
-| | luxo4k | Direct3D 9 | 🔴 Fails | stops on `D3DXCreateText` with the font Times, which the page does not provide | 2026-11-06 |
-| | Polystreptikum, Synchroplastikum | Direct3D 9 | 🔴 Fails | a page fault before the device is created; cause not looked at | 2026-11-06 |
-| | Valleyball, Stripped | OpenGL | 🟠 Starts | Valleyball exits at once headless (status 0); Stripped still precomputes after 180 s at 60 fps | 2026-11-06 |
+| | Polystreptikum (2007) | Direct3D 9 | 🔴 Fails | past dx8vb.dll's D3DX math and its letters drawn into a DIB section, its synthesizer divides by zero: it plays the instruments of XP's `gm.dls`, which MIRAGE does not ship (read as zeros) | 2026-11-06 |
+| | Synchroplastikum (2005) | Direct3D 9 | 🔴 Fails | past dx8vb.dll, stops on `CreateVolumeTexture` (on another branch), then on a cube texture's surface as a render target, which PRISM has not | 2026-11-06 |
+| | Stripped (Numerica 2009) | OpenGL | 🟠 Renders, slowly | its first frame after some 29 G instructions (about 3 minutes in Chrome), then some 240,000 `glVertex3f` a frame: 20 M instructions a second | 2026-11-06 |
 
 ## Linux programs (MIRAGE-LINUX, `machines.html?m=linux`)
 
