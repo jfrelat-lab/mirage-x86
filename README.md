@@ -55,9 +55,9 @@ MIDI, enough to boot Windows 95 and 98 from their own disks).
 | Windows intros (MIRAGE-WIN32) | 12 of the scene's 4K and 1K intros, 2007–2017, OpenGL and Direct3D 9 |
 | Linux programs (MIRAGE-LINUX) | Debian 12, XFree86 3.3 and its clients, DOOM and Quake, Mesa, the scene's Linux intros |
 | DOS | games and demos in real mode, with EMS/XMS and DOS extenders |
-| Operating systems (bare PC) | Windows 3.0 to ME to the desktop, Linux 2.2 and 2.4, QNX, KolibriOS, OpenBSD, FreeDOS |
+| Operating systems (bare PC) | Windows 3.0 to ME and Windows NT 3.51 to the desktop, BeOS 5, Linux 2.2 and 2.4, QNX, KolibriOS, OpenBSD, NetBSD, FreeDOS |
 
-Not yet: Windows NT and 2000, ReactOS, BeOS, networking, 64-bit. Per-title status is in
+Not yet: Windows 2000 and later, ReactOS, Haiku, networking, 64-bit. Per-title status is in
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), what fails and why in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
 ## How fast
