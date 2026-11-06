@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-06
 
+- **Three more Windows intros**, each a click away in the Windows machine: **Atrium** (Breakpoint
+  2008), **luxo4k** (RGBA & Conspiracy, 2007, its lamp hopping on "PIXAR") and **Valleyball**
+  (Breakpoint 2009). MIRAGE-WIN32 gained D3DX's matrix stack and boxes, more of Direct3D 9's
+  transforms, DIB sections, Windows XP's font substitutions ("Times" is Times New Roman) and
+  dx8vb.dll's math, which Polystreptikum and Synchroplastikum load.
 - **Windows 2000 reaches its desktop** in the bare PC (256 MiB, `pentiumpro`, PCI), given a faster
   headless clock. Two faults stopped it. The hard disk reported the 128 heads of its partition table
   to the controller, which has room for 16: Windows' disk driver addresses by cylinder, head and
