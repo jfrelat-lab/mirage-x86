@@ -2684,6 +2684,15 @@ const udRun = (gated) => {
   eq('render() with linear page 0 unmapped does not fault', err, null);
   eq('...and draws the text cell (blue background behind a white glyph)', !!v.u32 && v.u32[0] !== v.u32[v.imgW * 20], true); }
 
+// ---- the translation memo is bounded by the source it holds -------------------------------------------
+// Each memo entry keeps its compiled function (V8 charges about eight times the source). Bounded by a
+// count of 200 000 blocks, it reached 1.3 GB once paged blocks followed jumps and calls: Linux 3.x,
+// TinyCore and Windows ME spent 99 % of their time in the garbage collector, guest time standing still.
+{ const mc = new Machine({ memSize: 1 << 20 }), rec = mc.rec;
+  rec.memoCap = 10000;
+  for (let i = 0; i < 100; i++) rec._memoPut('k' + i, { linStart: 0x1000 + i * 16, linEnd: 0x1010 + i * 16, bodyLen: 1000 });
+  eq('the memo keeps no more source than its bound, the newest entries', [rec.memoBytes <= 10000, rec.memo.size, rec.memo.has('k99'), rec.memo.has('k0')].join(), 'true,10,true,false'); }
+
 // ---- a 16-colour mode's height is the CRTC's, double scan included ------------------------------------
 // Pinball Fantasies sets mode 12h and then doubles every line (CRTC 09h bit 7) for a 640x240 menu. The
 // planar renderer took the mode's 480 lines and drew the memory below the menu as its lower half.

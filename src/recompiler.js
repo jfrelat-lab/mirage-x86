@@ -62,7 +62,11 @@ const NOSIDEEXIT = typeof process !== 'undefined' && !!(process.env && process.e
 const NOSKIP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSKIP);
 // MIRAGE_NOMEMO=1: no translation memo across reset() (see _memoGet).
 const NOMEMO = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOMEMO);
-const MEMO_MAX = 200000;          // blocks the memo keeps (the oldest go first)
+// The memo is bounded by the source it holds, as the code cache is: each entry keeps its compiled
+// function, which V8 charges at about eight times the source. Bounded by count (200 000 blocks), it
+// held 1.3 GB once paged blocks grew (followed jumps and calls, 2e0bb67): Linux 3.x, TinyCore and
+// Windows ME then spent 99 % of their time in the garbage collector and guest time stood still.
+const MEMO_BYTES = 32 << 20;
 const EMPTY_LINES = [];   // shared placeholder for a block whose source is not retained
 const T2_HOT = 64;         // promote a block to a region after this many executions
 // The block directory: one slot per 4 KiB page of the 4 GiB linear space, dense from the start. Grown
@@ -240,6 +244,7 @@ export class Recompiler {
     // a quarter of the host time of building DOOM in MIRAGE-LINUX. A block is reused only where
     // memory holds exactly its bytes, in the mode it was translated for.
     this.memo = new Map();             // key -> [{ snap, tmpl }]
+    this.memoBytes = 0; this.memoCap = MEMO_BYTES;   // the source the memo holds, and its bound
     this.epoch = 0;                // bumped by each CR3 load under paging; see _revalidate (ROADMAP D8)
     // Two block caches, paging on and paging off, swapped by switchPaging rather than dropped. A DPMI
     // host that pages (CWSDPMI) returns to real mode for every interrupt and DOS call: FreeDOS running
@@ -807,12 +812,15 @@ export class Recompiler {
     const snap = this._bytes(blk.linStart, blk.linEnd);
     if (snap === null) return;
     let list = this.memo.get(key);
-    if (list === undefined) {
-      if (this.memo.size >= MEMO_MAX) this.memo.delete(this.memo.keys().next().value);
-      list = []; this.memo.set(key, list);
-    }
-    if (list.length >= 4) list.shift();             // a few programs at the same address (cpp, cc1, as)
+    if (list === undefined) { list = []; this.memo.set(key, list); }
+    if (list.length >= 4) this.memoBytes -= list.shift().tmpl.bodyLen || 0;   // a few programs at the same address (cpp, cc1, as)
     list.push({ snap, tmpl: { ...blk, hot: 0, epoch: 0, ph0: -1, ph1: -1, snap: null } });
+    this.memoBytes += blk.bodyLen || 0;
+    for (const [k, l] of this.memo) {               // the oldest keys go first, until the source fits
+      if (this.memoBytes <= this.memoCap || k === key) break;
+      for (const e of l) this.memoBytes -= e.tmpl.bodyLen || 0;
+      this.memo.delete(k);
+    }
   }
 
   /** Execute exactly one instruction, uncached — used by the conformance harness

@@ -25,7 +25,7 @@ is only suspected. What is planned about them is in [ROADMAP.md](ROADMAP.md); wh
 | ReactOS 0.4.15 | a stop in the kernel | **Known**: no ACPI tables. |
 | Plan 9 (9legacy) | after the kernel is entered | **Known**: it runs with an instruction pointer above FFFFh in a 16-bit code segment, which MIRAGE does not handle. |
 | Damn Small Linux 4.4.10 | a black screen at runlevel 5 | **Unknown**: not investigated — it may only be slow. |
-| Windows ME, Linux 3.x (v86's mini CD), TinyCore 11, OpenBSD | guest time stops advancing: ME at ScanDisk (180 s), Linux 3.x at 120 s, TinyCore near 800 s, OpenBSD near 250 s | **Under investigation** (2026-11-05): the host keeps running and the guest clock stands still, the same symptom on four systems. OpenBSD did the same on 2026-10-20; the others are being bisected. |
+| OpenBSD | "starting network", about 250 guest s in | **Unknown**: guest time stops advancing while the host keeps running, as on 2026-10-20; `login:` was reached in 2026-09. (Windows ME, Linux 3.x and TinyCore had the same symptom, from the translation memo filling the heap: fixed 2026-11-06.) |
 | 386BSD 1.0 | not stopped: `login:` is in video memory | **Display**: once the kernel has the console, the screen is drawn as one text row (640×16). Not investigated. |
 | XCOM (`xcom144.img`) | its 640×480 screen draws as noise | **Display, suspected**: the system runs (HDPMI32, its FreeDOS); the picture has been noise since at least 2026-10-20. |
 

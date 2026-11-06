@@ -36,7 +36,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | <img src="compat/win31.png" width="160" alt=""> | Windows 3.1, standard mode | 🟢 Plays | Program Manager at 1024×768×256, pixel-identical to QEMU | — | 2026-11-05 |
 | <img src="compat/win95.png" width="160" alt=""> | Windows 95 | 🟢 Plays | the desktop (Enter at its three dialogs) | 64 MiB, `586` | 2026-11-05 |
 | <img src="compat/win98.png" width="160" alt=""> | Windows 98 | 🟢 Plays | the desktop | 64 MiB, `586` | 2026-11-05 |
-| <img src="compat/os-winme.png" width="160" alt=""> | Windows ME | 🟠 Starts | ScanDisk at 180 guest s, then guest time stops advancing (under investigation, as Linux 3.x and TinyCore); the desktop was reached in 2026-10 | 128 MiB, `586` | 2026-11-05 |
+| <img src="compat/os-winme.png" width="160" alt=""> | Windows ME | 🟢 Plays | the desktop, after ScanDisk and its display settings (Esc at the hardware wizard). Guest time stood still at ScanDisk from 2026-10-29 to 2026-11-06: the translation memo filled the host's heap | 128 MiB, `586` | 2026-11-06 |
 | <img src="compat/os-nt351.png" width="160" alt=""> | Windows NT 3.51 | 🟢 Plays | Program Manager (its welcome screen identical to QEMU `-M pc`'s; Ctrl+Alt+Del, empty password, Enter at the Service Control Manager and Invalid System Time messages) | 64 MiB, `586`, PCI | 2026-11-05 |
 | <img src="compat/os-win2k.png" width="160" alt=""> | Windows 2000 | 🔴 Fails | its boot screen, progress bar empty | 256 MiB, `pentiumpro`, PCI | 2026-11-05 |
 | <img src="compat/msdos622.png" width="160" alt=""> | MS-DOS 6.22 | 🟢 Plays | the prompt (DOOM under EMM386 last run 2026-09-28) | — | 2026-11-05 |
@@ -63,9 +63,9 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | <img src="compat/freenos.png" width="160" alt=""> | FreeNOS 1.0.3 | 🟢 Plays | its system information and a shell; its timer reads "0 ticks" (broken from 2026-10-29 to 2026-11-05: a #PF raised while translating code that never runs) | 256 MiB, `686` | 2026-11-05 |
 | <img src="compat/os-xwoaf.png" width="160" alt=""> | xwoaf (Linux, X11 on a floppy-sized CD) | 🟠 Starts | the keyboard chooser before `login:` | 256 MiB | 2026-11-05 |
 | <img src="compat/os-oberon.png" width="160" alt=""> | Oberon | 🟠 Starts | "OBERON loading…", then nothing | 64 MiB | 2026-11-05 |
-| <img src="compat/os-linux3.png" width="160" alt=""> | Linux 3.x (v86's mini CD) | 🟠 Starts | the kernel boots and waits for a virtio 9p root (v86's own); at 120 guest s guest time stops advancing (under investigation) | 128 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-linux3.png" width="160" alt=""> | Linux 3.x (v86's mini CD) | 🟠 Starts | the kernel boots and waits for a virtio 9p root (v86's own); it froze at 120 guest s from 2026-10-29 to 2026-11-06 (the memo) | 128 MiB, `686` | 2026-11-06 |
 | <img src="compat/os-linux26.png" width="160" alt=""> | Linux 2.6 (v86's mini CD) | 🔴 Fails | ISOLINUX: "Booting kernel failed: Invalid argument" | 128 MiB, `686` | 2026-11-05 |
-| <img src="compat/os-tinycore.png" width="160" alt=""> | TinyCore 11 | 🟠 Starts | "Loading extensions…", udev killing slow modprobes; near 800 guest s guest time stops advancing (under investigation) | 256 MiB, `686` | 2026-11-05 |
+| <img src="compat/os-tinycore.png" width="160" alt=""> | TinyCore 11 | 🟠 Starts | "Loading extensions…", udev killing slow modprobes, after 900 guest s (it froze near 800 s from 2026-10-29 to 2026-11-06, the memo) | 256 MiB, `686` | 2026-11-06 |
 | <img src="compat/os-slitaz.png" width="160" alt=""> | SliTaz rolling 2024 | 🟠 Starts | "Decompressing Linux…" at 600 guest s; a kernel panic in an interrupt was seen in 2026-10 | 512 MiB, `686` | 2026-11-05 |
 | <img src="compat/os-helenos.png" width="160" alt=""> | HelenOS 0.14.1 | 🟠 Starts | the SPARTAN kernel boots and starts its services; rd and ns then die on a user-mode page fault at the same kernel address, 80167F55h | 256 MiB, `686` (or `586`) | 2026-11-05 |
 | <img src="compat/os-sortix.png" width="160" alt=""> | Sortix 1.0 | 🟠 Starts | GRUB loading its 5 MB initrd, unfinished after 600 guest s | 512 MiB, `686` | 2026-11-05 |
