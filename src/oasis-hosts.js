@@ -10,8 +10,9 @@
 // whole of raw.githubusercontent.com would make the relay a proxy for every repository there.
 // ftp.scene.org/pub/ and ftp.untergrund.net/users/parapete/: the party archives of the Linux OpenGL
 // intros of 2003-2010 (oasis/images/linux/*-20xx.json), fetched as scene.org keeps them.
+// conspiracy.hu/files/: Conspiracy's own downloads, where its 2023 repack of luxo4k (2007) is.
 export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.net', 'yolp.omgwtf.ru',
-  'raw.githubusercontent.com/dominikfhnw/demoscene_releases/', 'ftp.scene.org/pub/', 'ftp.untergrund.net/users/parapete/'];
+  'raw.githubusercontent.com/dominikfhnw/demoscene_releases/', 'ftp.scene.org/pub/', 'ftp.untergrund.net/users/parapete/', 'conspiracy.hu/files/'];
 
 /** The URL to fetch for `?url=`, or null when the relay must refuse it. */
 export function relayTarget(raw) {

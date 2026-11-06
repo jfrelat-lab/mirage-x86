@@ -1,0 +1,27 @@
+{
+  "oasis": 1,
+  "title": "luxo4k — RGBA & Conspiracy, 4K for Windows",
+  "year": 2007,
+  "author": "RGBA & Conspiracy, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium3",
+    "fonts": ["Times New Roman"]
+  },
+  "layers": [
+    {
+      "zip": "https://conspiracy.hu/files/cns!rgba_luxo4k-repack.zip",
+      "files": {
+        "cns!rgba_luxo4k.exe": "/intro/cns!rgba_luxo4k.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/cns!rgba_luxo4k.exe"
+  },
+  "output": "window",
+  "notes": "A 4K made in 2007 for the San Francisco demoscene outreach tour, Pixar's Luxo Jr. lamp in under 4096 bytes: graphics by iq, sound by Gargaj, Crinkler-packed (this is Conspiracy's 2023 repack, from Conspiracy's own site). It draws with Direct3D 9's fixed function: D3DX meshes lit by Direct3D's lights, its title made by D3DXCreateText in \"times\", which Windows answers with Times New Roman (FontSubstitutes). MIRAGE-WIN32 makes d3d9.dll and d3dx9_33.dll in JavaScript; the page reads the visitor's own Times New Roman (Chrome asks first) or uses DejaVu Serif.",
+  "thumb": "oasis/thumbs/win32-luxo4k-2007.png",
+  "tags": ["4K intro", "Direct3D 9"],
+  "sound": true
+}

@@ -1,0 +1,30 @@
+{
+  "oasis": 1,
+  "title": "Atrium — TBC & Loonies, 4K for Windows",
+  "year": 2008,
+  "author": "TBC & Loonies, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium3"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.scene.org/pub/parties/2008/breakpoint08/in4k/atrium_by_tbc_and_loonies.zip",
+      "files": {
+        "atrium1280x720.exe": "/intro/atrium1280x720.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/atrium1280x720.exe"
+  },
+  "output": "window",
+  "notes": "Breakpoint 2008, 4K intro: an atrium of galleries and railings under a starry sky, a red ribbon winding through it, all generated from boxes, by Mentor (object generator, synthesizer, rendering), Puryx (music), Blueberry and Lemmus; packed by Crinkler. Its objects are D3DXCreateBox meshes transformed through an ID3DXMatrixStack and D3DXVec3TransformCoordArray into one vertex buffer, drawn with HLSL vertex and pixel shaders (2.0). MIRAGE-WIN32 makes d3d9.dll and d3dx9_24.dll in JavaScript; PRISM's d3d9.js draws with WebGL2. It precalculates first: some 18 billion instructions, a minute or more of black screen.",
+  "thumb": "oasis/thumbs/win32-atrium-2008.png",
+  "tags": ["4K intro", "Direct3D 9", "HLSL"],
+  "sound": true,
+  "prepare": {
+    "seconds": 75,
+    "note": "Atrium precalculates first: some 18 billion instructions, on a black screen."
+  }
+}

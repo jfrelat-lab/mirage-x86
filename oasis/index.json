@@ -293,6 +293,21 @@
     "sound": true
   },
   {
+    "name": "win32/atrium-2008",
+    "title": "Atrium — TBC & Loonies, 4K for Windows",
+    "world": "win32",
+    "year": 2008,
+    "author": "TBC & Loonies, PRISM",
+    "thumb": "oasis/thumbs/win32-atrium-2008.png",
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "Direct3D 9",
+      "HLSL"
+    ],
+    "sound": true
+  },
+  {
     "name": "win32/cdak-2010",
     "title": "cdak — Quite & Orange, 4K for Windows",
     "world": "win32",
@@ -381,6 +396,20 @@
     "sound": true
   },
   {
+    "name": "win32/luxo4k-2007",
+    "title": "luxo4k — RGBA & Conspiracy, 4K for Windows",
+    "world": "win32",
+    "year": 2007,
+    "author": "RGBA & Conspiracy, PRISM",
+    "thumb": "oasis/thumbs/win32-luxo4k-2007.png",
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "Direct3D 9"
+    ],
+    "sound": true
+  },
+  {
     "name": "win32/paradistance-2009",
     "title": "Paradistance — Titan, 4K for Windows",
     "world": "win32",
@@ -439,6 +468,21 @@
       "OpenGL",
       "GLSL"
     ]
+  },
+  {
+    "name": "win32/valleyball-2009",
+    "title": "Valleyball — bluFlame, 4K for Windows",
+    "world": "win32",
+    "year": 2009,
+    "author": "bluFlame, PRISM",
+    "thumb": "oasis/thumbs/win32-valleyball-2009.png",
+    "output": "window",
+    "tags": [
+      "4K intro",
+      "OpenGL",
+      "GLSL"
+    ],
+    "sound": true
   },
   {
     "name": "win32/yeswecan-2009",

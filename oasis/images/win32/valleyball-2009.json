@@ -1,0 +1,26 @@
+{
+  "oasis": 1,
+  "title": "Valleyball — bluFlame, 4K for Windows",
+  "year": 2009,
+  "author": "bluFlame, PRISM",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium3"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.scene.org/pub/parties/2009/breakpoint09/in4k/bluflame_valleyball.zip",
+      "files": {
+        "bin/valleyball_1280x720.exe": "/intro/valleyball_1280x720.exe"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/intro/valleyball_1280x720.exe"
+  },
+  "output": "window",
+  "notes": "Breakpoint 2009, 4K intro, by xTr1m, Hel and raYn: a valley, its water and a beach ball raymarched and raytraced in one GLSL fragment shader on two triangles, the music by a synthesizer thread through waveOut. Its fine vertical stripes are its own, a colour mask by pixel column. MIRAGE-WIN32 answers opengl32.dll and winmm.dll in JavaScript; PRISM's gl.js draws with WebGL2. The intro ends itself after some 100 seconds.",
+  "thumb": "oasis/thumbs/win32-valleyball-2009.png",
+  "tags": ["4K intro", "OpenGL", "GLSL"],
+  "sound": true
+}
