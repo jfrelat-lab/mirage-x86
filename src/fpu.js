@@ -10,6 +10,21 @@
 
 import { CF, PF, AF, ZF, SF, OF } from './cpu.js';
 
+/** A result at PRECISION CONTROL = single: the x87 rounds the SIGNIFICAND to 24 bits (to nearest)
+ *  and keeps its own 15-bit exponent, so a value below FLT_MIN or above FLT_MAX neither becomes a
+ *  float denormal nor underflows or overflows, as Math.fround alone would make it (kkrieger's sFPow
+ *  of x^64 is about 1e-73). Inside float's normal range the two agree, and that test is the fast
+ *  path. Outside it the value is scaled by 2^-k into it, rounded, and scaled back exactly: an
+ *  off-by-one floor of log2 at a power of two only leaves the scaled value in [0.5,1) or [2,4), still
+ *  normal, so the rounding is the same. 2^k is split in two halves so neither overflows a double.
+ *  A result beyond double's own exponent range (a double denormal, or past 2^1024) is out of scope. */
+export function sig24(v) {
+  const a = Math.abs(v);
+  if (a === 0 || !(a < Infinity) || (a >= 1.1754943508222875e-38 && a < 3.4e38)) return Math.fround(v);
+  const k = Math.floor(Math.log2(a)), h = k >> 1;
+  return Math.fround(v * 2 ** -h * 2 ** -(k - h)) * 2 ** h * 2 ** (k - h);
+}
+
 export function installFPU(cpu) {
   const st = new Float64Array(8);
   cpu.fst = st;
@@ -168,7 +183,8 @@ export function installFPU(cpu) {
   /** PRECISION CONTROL (bits 8-9): 00 rounds every result to single precision. 10 (double) and 11
    *  (extended) are both this model's native float64 — we cannot be more precise than we are, and
    *  say so rather than pretending. One predictable branch, called from the arithmetic paths. */
-  cpu.fprec = (v) => ((cpu.fcw & 0x300) === 0 ? Math.fround(v) : v);
+  cpu.fprec = (v) => ((cpu.fcw & 0x300) === 0 ? sig24(v) : v);
+  cpu.sig24 = sig24;                               // for the recompiler's blocks translated at PC=single
   const f64 = new Float64Array(1), f64u = new Uint32Array(f64.buffer);
   const f64bits = (x) => { f64[0] = x; return f64u[1]; };          // the high word: sign, exponent, top of the significand
 

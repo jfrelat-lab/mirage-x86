@@ -25,6 +25,9 @@ const MM_PLACEHOLDER = '__MM__';  // replaced with the memory mask literal
 // Debug kill switch: MIRAGE_NOFPUINLINE=1 falls back to the cpu.fpuMem/fpuReg runtime
 // dispatch instead of emitting each x87 op inline. Browser-safe (no `process`).
 const NOFPUINLINE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFPUINLINE);
+// The emitted calls that may load the x87 control word: FLDCW, FLDENV, the memory fallback (FRSTOR,
+// and every x87 memory form under MIRAGE_NOFPUINLINE), FNINIT (DB E3: op 219, /4, rm 3).
+const PCWRITE = /cpu\.(fldcw|fldenv|fpuMem)\(|cpu\.fpuReg\(219,4,3\)/;
 // MIRAGE_NOSTRIP=1 disables the dead-flag elimination (debug / differential gate).
 import { resolveMemStrategy, memEmitters, memPrologue } from './mem-strategy.js';
 import { describeRegion, recentBlocks, allZero } from './derail.js';
@@ -1415,7 +1418,7 @@ export class Recompiler {
       const e = rg === 0 ? `${x}+${y}` : rg === 1 ? `${x}*${y}` : rg === 4 ? `${x}-${y}`
         : rg === 5 ? `${y}-${x}` : rg === 6 ? `cpu.fdiv(${x},${y})` : rg === 7 ? `cpu.fdiv(${y},${x})` : x;
       if (rg !== 2 && rg !== 3) pcDep = true;
-      return (FPREC24 && rg !== 2 && rg !== 3) ? `Math.fround(${e})` : e;   // 2/3 = compare (returns x)
+      return (FPREC24 && rg !== 2 && rg !== 3) ? `cpu.sig24(${e})` : e;   // 2/3 = compare (returns x)
     };
 
     // ===================== main decode loop =====================
@@ -2015,6 +2018,17 @@ export class Recompiler {
       // (FLDCW, FLDENV, FRSTOR, FNINIT -- through these helpers): the next piece was translated for the
       // precision in force when its block began, which the dispatcher checks (blk.fprec).
       if (exact && !chainStop) for (let i = outMark; i < out.length; i++) if (/cpu\.(fldcw|fldenv|fpuMem|fpuReg)\(/.test(out[i])) { chainStop = true; break; }
+      // ...and the rest of THIS block was folded for that precision too (FPREC24), as was whatever a
+      // followed call or a chained piece adds to it. So the block leaves, at the next instruction,
+      // when the instruction actually moved PC across single/not single; otherwise it goes on as before,
+      // and the boundaries the DOS golden runs are timed by do not move.
+      let pcWrite = false;
+      if (!ended && usesFPU) for (let i = outMark; i < out.length && !pcWrite; i++) pcWrite = PCWRITE.test(out[i]);
+      if (pcWrite) {
+        cur.use |= lALL;
+        const giveBack = pfRestart ? `cpu.cycles-=/*REM${count}*/0;` : exact ? `cpu.cycles+=/*SEGEND${segEnds.length}:${mat}*/0;` : '';
+        P(`if((cpu.fcw&0x300)${FPREC24 ? '!==' : '==='}0){cpu.eip=${SEQ()};${giveBack}return;}`);
+      }
 
       // Self-modification guard. A block holds the bytes it was translated from, so an instruction
       // that rewrites a LATER byte of its own block leaves the rest of the block running the stale

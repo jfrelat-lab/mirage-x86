@@ -108,6 +108,12 @@ time, so `ST(i)` is `st[(F+k)&7]` with `k` a constant, and a register's value on
 stays in a local for the reads that follow (write-through: `st[]` and `cpu.ftop` are always current
 for a fault, an exit or a helper). `MIRAGE_NOFXCACHE=1` reads `cpu.ftop` at every access instead.
 
+Precision control is folded in at translation: under PC = single, FADD, FSUB and FMUL are emitted
+through `cpu.sig24` (the significand rounded to 24 bits, the exponent kept: not `Math.fround`), and
+FDIV and FSQRT read the control word through `cpu.fprec`. A block so folded is checked against the
+control word when dispatched (`blk.fprec`), and a block that loads the control word (FLDCW, FLDENV,
+FNINIT, the memory fallback) leaves right after it when the precision moved across single.
+
 ## Self-modifying code
 
 Every 4 KiB page a block was compiled from is marked. A guest write to a marked page calls

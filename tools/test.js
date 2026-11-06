@@ -18,6 +18,7 @@ import { unzip, deice } from '../src/zip.js';
 import { deflateRawSync } from 'zlib';
 import { Video } from '../src/video.js';
 import { CPU, CS, DS, ES, SS, CF, ZF, SF, OF, PF } from '../src/cpu.js';
+import { sig24 } from '../src/fpu.js';
 import { describeRegion, recentBlocks, allZero } from '../src/derail.js';
 import { installDOS, DOS_PLAYER_MEM, playerMem } from '../src/dos.js';
 import { installAudio } from '../src/audio.js';
@@ -2827,6 +2828,50 @@ const udRun = (gated) => {
   let n = 0; while (!cpu.halted && n++ < 400) mc.runSlice(1000);
   const r1 = mc.mem.dv.getFloat64(0x1030, true), r2 = mc.mem.dv.getFloat64(0x1038, true);
   eq('one block under both precisions: 1/3 to 24 bits, then to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true'); }
+
+// A real-mode program at 1000h (DS = CS = 100h), the control word at 40h and 42h, doubles from 48h on;
+// run until HLT. For the precision-control checks below.
+const x87Prog = (code, cw, doubles) => {
+  const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
+  mc.mem.blit(0x1000, Uint8Array.from(code));
+  mc.mem.dv.setUint16(0x1040, cw[0], true); mc.mem.dv.setUint16(0x1042, cw[1], true);
+  doubles.forEach((v, i) => mc.mem.dv.setFloat64(0x1048 + 8 * i, v, true));
+  let n = 0; while (!cpu.halted && n++ < 100) mc.runSlice(1000);
+  return (i) => mc.mem.dv.getFloat64(0x1048 + 8 * i, true);
+};
+
+// ---- FLDCW in the middle of a block: what follows it is translated for the new precision ---------------
+// The precision is folded into a block when it is translated, and checked when the block is dispatched:
+// an FADD after an FLDCW in the same block ran at the precision the block began with. kkrieger's sFPow
+// (fldcw 103Fh, then the call, then the arithmetic, all one block under paging) came out at 53 bits.
+// nasm: fldcw [40h] / fld qword [48h] / fadd qword [50h] / fstp qword [58h] / fldcw [42h] / hlt
+{ const r = x87Prog([0xd9, 0x2e, 0x40, 0x00, 0xdd, 0x06, 0x48, 0x00, 0xdc, 0x06, 0x50, 0x00, 0xdd, 0x1e, 0x58, 0x00, 0xd9, 0x2e, 0x42, 0x00, 0xf4],
+    [0x007f, 0x027f], [1 / 3, 0, 0]);
+  eq('FLDCW to single in the middle of a block: the FADD after it is rounded to 24 bits', r(2) === Math.fround(1 / 3), true); }
+
+// ---- single precision rounds the significand, not the exponent -----------------------------------------
+// At PC = single the x87 rounds a result's significand to 24 bits and keeps its own 15-bit exponent:
+// 1e-40 * 1e-33 is about 1e-73, not 0, and 1e30 * 1e30 is not infinity. Math.fround made them a float.
+// kkrieger's sFPow(x, 64) lives there. Folded (FMUL) and run-time (FDIV, through cpu.fprec) paths both.
+// nasm: fldcw [40h] / fld qword [48h] / fmul qword [50h] / fstp qword [68h] / fld qword [48h] /
+//       fdiv qword [58h] / fstp qword [70h] / fld qword [60h] / fmul qword [60h] / fstp qword [78h] /
+//       fldcw [42h] / hlt
+{ const r = x87Prog([0xd9, 0x2e, 0x40, 0x00, 0xdd, 0x06, 0x48, 0x00, 0xdc, 0x0e, 0x50, 0x00, 0xdd, 0x1e, 0x68, 0x00,
+    0xdd, 0x06, 0x48, 0x00, 0xdc, 0x36, 0x58, 0x00, 0xdd, 0x1e, 0x70, 0x00, 0xdd, 0x06, 0x60, 0x00, 0xdc, 0x0e, 0x60, 0x00,
+    0xdd, 0x1e, 0x78, 0x00, 0xd9, 0x2e, 0x42, 0x00, 0xf4], [0x007f, 0x027f], [1e-40, 1e-33, 1e33, 1e30, 0, 0, 0]);
+  // The 24-bit rounding of each, by a scale that keeps it inside float's range (exact both ways).
+  const at24 = (v, s) => Math.fround(v * 2 ** s) * 2 ** -s;
+  const got = [r(4), r(5), r(6)], want = [at24(1e-40 * 1e-33, 250), at24(1e-40 / 1e33, 250), at24(1e30 * 1e30, -200)];
+  eq('single precision: 1e-40*1e-33, 1e-40/1e33 and 1e30*1e30 keep their exponent, 24-bit significands', got.map((v, i) => v === want[i] && v !== 0 && Number.isFinite(v)).join(), 'true,true,true');
+  eq('...and those really are rounded (not left at 53 bits)', got.map((v, i) => v !== [1e-40 * 1e-33, 1e-40 / 1e33, 1e30 * 1e30][i]).join(), 'true,true,true'); }
+
+// ---- sig24 at the edges: a power of two, a value that rounds up to one, float's range limits ------------
+{ const at24 = (v, s) => Math.fround(v * 2 ** s) * 2 ** -s;
+  const cases = [[2 ** -200, 200], [2 ** -200 * (1 - 2 ** -30), 200], [2 ** -200 * (1 + 2 ** -24), 200], [2 ** -200 * (1 + 3 * 2 ** -25), 200],
+    [-(2 ** 300) * (1 + 2 ** -23 + 2 ** -40), -300], [2 ** -126 * (1 - 2 ** -30), 126], [2 ** 128 * (1 + 2 ** -20), -128], [2 ** -1000 * 1.1, 1000], [2 ** 1000 * 1.7, -1000]];
+  eq('sig24: 24-bit significands at any double exponent, powers of two and carries included', cases.filter(([v, s]) => sig24(v) !== at24(v, s)).length, 0);
+  eq('...and float\'s normal range is Math.fround', [1, 1 / 3, -1e-20, 3e38, 2 ** -126].every((v) => sig24(v) === Math.fround(v)) && Object.is(sig24(-0), -0) && Number.isNaN(sig24(NaN)) && sig24(-Infinity) === -Infinity, true); }
 
 // ---- an immediate the code keeps rewriting is read at run time, not retranslated ----------------------
 // DOOM's R_DrawColumn writes each column's texture step into `add ebp,imm32`: every write evicted the
