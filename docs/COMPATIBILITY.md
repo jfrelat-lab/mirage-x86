@@ -47,7 +47,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | <img src="compat/os-dsl.png" width="160" alt=""> | Linux 2.4 (Damn Small Linux 4.4.10 CD, *official media*) | 🟠 Starts | runlevel 5, then a black screen and an idle CPU (X starting? not seen) after 900 guest s | 64 MiB, `586` | 2026-11-05 |
 | <img src="compat/elks.png" width="160" alt=""> | ELKS | 🟢 Plays | `login:` | — | 2026-11-05 |
 | <img src="compat/unixv7.png" width="160" alt=""> | Unix V7/x86 | 🟢 Plays | a single-user shell (Enter at `BOOT`) | — | 2026-11-05 |
-| <img src="compat/386bsd.png" width="160" alt=""> | 386BSD 1.0 | 🟠 Starts | `login:` in video memory (Esc at its boot prompt), but the screen shows one text row once the kernel has the console: a display defect (the picture is the text read from memory) | — | 2026-11-05 |
+| <img src="compat/386bsd.png" width="160" alt=""> | 386BSD 1.0 | 🟢 Renders | `login:` (Esc at its boot prompt) | — | 2026-11-06 |
 | <img src="compat/netbsd.png" width="160" alt=""> | NetBSD 4.0.1 | 🟢 Plays | `login:`; a root shell, multi-user (2026-09) | 256 MiB, `pentium` | 2026-11-05 |
 | <img src="compat/os-openbsd.png" width="160" alt=""> | OpenBSD | 🟠 Starts | `login:` at 900 guest s (the image's password is not known) | 128 MiB, `586` | 2026-11-06 |
 | <img src="compat/qnx.png" width="160" alt=""> | QNX 4.05 demo disk | 🟠 Starts | the welcome screen; stops asking for a network card | — | 2026-11-05 |

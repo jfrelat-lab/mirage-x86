@@ -10,6 +10,9 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   Its loader is a scheduler driven by the single-step trap, and an `INT n` was wrongly followed by a
   trap (DOSBox-X counts 9 traps on the new probe `tools/inttrap.asm`, MIRAGE counted 11); it also
   needed INT 21h AH=55h, a child PSP, and a child that ends without ending its parent.
+- **386BSD's console shows whole**, to `login:`. Its kernel zeroes the BIOS data area, where MIRAGE
+  read the number of text rows, and drew one row; the text screen's size now comes from the video
+  card's own registers, as on real hardware and in QEMU.
 
 - **Windows ME, Linux 3.x and TinyCore no longer freeze**: the recompiler's memo of past translations
   was bounded by a count of blocks, each holding its compiled function; once paged blocks grew it held
