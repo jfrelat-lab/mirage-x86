@@ -23,7 +23,9 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   there. The disk now reports 16 heads and 63 sectors, as QEMU's and a real one do. Then Windows'
   microcode updater wrote the update trigger register, which was a fault; the write is now taken.
 - **Second Reality plays** (Future Crew, 1993): choose the SoundBlaster Pro at its set-up and the
-  demo runs with its music. Its loader is a scheduler driven by the single-step trap, and an `INT n` was wrongly followed by a
+  demo runs with its music. Its credits are drawn once and it runs on past the spaceship: PIT
+  counter 0 now counts by two in mode 3, as an 8254 does (the demo measured its frame at half its
+  length and starved its own drawing), and a part ending frees the memory it allocated. Its loader is a scheduler driven by the single-step trap, and an `INT n` was wrongly followed by a
   trap (DOSBox-X counts 9 traps on the new probe `tools/inttrap.asm`, MIRAGE counted 11); it also
   needed INT 21h AH=55h, a child PSP, and a child that ends without ending its parent.
 - **386BSD's console shows whole**, to `login:`. Its kernel zeroes the BIOS data area, where MIRAGE
