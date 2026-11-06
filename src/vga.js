@@ -123,6 +123,12 @@ export function installVGA(machine) {
     vga.beamStamp++;
   };
   vga.recomputeBeam = recomputeBeam;
+  // POWER-ON: the card holds the mode-3 CRTC a VGA BIOS's POST leaves (SeaVGABIOS sets mode 3), not
+  // zeros. Our POST writes mode 3 into the BDA but never loaded the card, so a guest that takes the
+  // console without a mode set (386BSD's pccons writes only the cursor) found a CRTC with no
+  // geometry. The cursor registers (0Ah/0Bh, 0Eh/0Fh) stay the BIOS cursor code's.
+  BIOS_CRTC[0x03].forEach((v, i) => { if (i < 0x0a || i > 0x0f) vga.crtc[i] = v; });
+  recomputeBeam();
 
   vga.clear = () => planes.fill(0);
 

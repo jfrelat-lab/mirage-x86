@@ -1619,6 +1619,11 @@ const udRun = (gated) => {
   mc.vga.crtc[0x09] = 0x47;                                                // 8-line cells: 50 rows
   video.render();
   eq('...and rows follow CRTC 09h, not the BDA', video.imgH / 16, 50); }
+// A VGA BIOS's POST leaves the card in mode 3: the CRTC holds that geometry at power-on, before any
+// INT 10h mode set (src/vga.js installVGA). 386BSD takes the console from that state.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const c = mc.vga.crtc;
+  eq('power-on CRTC: mode 3 (01h=4Fh, 09h=4Fh, 12h=8Fh, 13h=28h)', [c[0x01], c[0x09], c[0x12], c[0x13]].map((v) => v.toString(16)).join(','), '4f,4f,8f,28'); }
 
 // ---- INT 10h AX=1121h-1124h: graphics fonts set the BDA rows and height; AX=1130h reports them ---
 // They were no-ops, and AX=1130h answered the REQUESTED font's height. QEMU/SeaBIOS, DOSBox-X and
