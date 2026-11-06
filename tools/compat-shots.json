@@ -583,6 +583,24 @@
 [
 5,
 "title"
+],
+[
+25,
+"game"
+]
+],
+"keys": [
+[
+5,
+"e0,4d"
+],
+[
+8.5,
+"e0,48"
+],
+[
+9.5,
+"e0,c8"
 ]
 ]
 },
@@ -679,10 +697,112 @@
 "id": "maniac",
 "dir": "MANIAC",
 "exe": "MANIAC.EXE",
+"keys": [
+[
+5.5,
+"50,d0"
+],
+[
+5.75,
+"50,d0"
+],
+[
+6.0,
+"50,d0"
+],
+[
+6.25,
+"50,d0"
+],
+[
+6.5,
+"50,d0"
+],
+[
+6.75,
+"50,d0"
+],
+[
+7.0,
+"50,d0"
+],
+[
+7.25,
+"50,d0"
+],
+[
+7.5,
+"1c,9c"
+],
+[
+7.75,
+"4d,cd"
+],
+[
+8.0,
+"4d,cd"
+],
+[
+8.25,
+"4d,cd"
+],
+[
+8.5,
+"4d,cd"
+],
+[
+8.75,
+"4d,cd"
+],
+[
+9.0,
+"1c,9c"
+],
+[
+9.25,
+"0a,8a"
+],
+[
+9.5,
+"50,d0"
+],
+[
+9.75,
+"50,d0"
+],
+[
+10.0,
+"50,d0"
+],
+[
+10.25,
+"50,d0"
+],
+[
+10.5,
+"50,d0"
+],
+[
+10.75,
+"50,d0"
+],
+[
+11.0,
+"1c,9c"
+]
+],
 "shots": [
 [
 5,
 "title"
+],
+[
+10.9,
+"kids"
+],
+[
+110,
+"game"
 ]
 ]
 },
@@ -1328,7 +1448,8 @@
 "title"
 ]
 ],
-"xms": false
+"xms": false,
+"keys": []
 },
 {
 "id": "keen4",
@@ -1656,12 +1777,8 @@
 "exe": "TUBE.COM",
 "shots": [
 [
-3,
+4,
 "title"
-],
-[
-10,
-"game"
 ]
 ]
 },
@@ -1702,10 +1819,6 @@
 [
 5,
 "title"
-],
-[
-20,
-"game"
 ]
 ]
 },
@@ -1751,6 +1864,513 @@
 [
 40,
 "game"
+]
+]
+},
+{
+"id": "g-256b",
+"files": [
+"intros/256b.com"
+],
+"exe": "256B.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-256bytef",
+"files": [
+"intros/256bytef.com"
+],
+"exe": "256BYTEF.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-above",
+"files": [
+"intros/above.com"
+],
+"exe": "ABOVE.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-abstract",
+"files": [
+"intros/abstract.com"
+],
+"exe": "ABSTRACT.COM",
+"shots": [
+[
+6,
+"title"
+]
+]
+},
+{
+"id": "g-animate",
+"files": [
+"intros/animate.com"
+],
+"exe": "ANIMATE.COM",
+"shots": [
+[
+9,
+"title"
+]
+]
+},
+{
+"id": "g-chaosequ",
+"files": [
+"intros/chaosequ.com"
+],
+"exe": "CHAOSEQU.COM",
+"shots": [
+[
+3,
+"title"
+]
+]
+},
+{
+"id": "g-dirojed",
+"files": [
+"intros/dirojed.com"
+],
+"exe": "DIROJED.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-endless",
+"files": [
+"intros/endless.com"
+],
+"exe": "ENDLESS.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-intoanew",
+"files": [
+"intros/intoanew.com"
+],
+"exe": "INTOANEW.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-intro",
+"files": [
+"intros/intro.com"
+],
+"exe": "INTRO.COM",
+"shots": [
+[
+20,
+"title"
+]
+]
+},
+{
+"id": "g-intro256",
+"files": [
+"intros/intro256.com"
+],
+"exe": "INTRO256.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-kaneda",
+"files": [
+"intros/kaneda.com"
+],
+"exe": "KANEDA.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-lattice",
+"files": [
+"intros/lattice.com"
+],
+"exe": "LATTICE.COM",
+"shots": [
+[
+12,
+"title"
+]
+]
+},
+{
+"id": "g-memories",
+"files": [
+"intros/memories.com"
+],
+"exe": "MEMORIES.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-nibble",
+"files": [
+"intros/nibble.com"
+],
+"exe": "NIBBLE.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-paleozoa",
+"files": [
+"intros/paleozoa.com"
+],
+"exe": "PALEOZOA.COM",
+"shots": [
+[
+9,
+"title"
+]
+]
+},
+{
+"id": "g-paralaxa",
+"files": [
+"intros/paralaxa.com"
+],
+"exe": "PARALAXA.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-puls",
+"files": [
+"intros/puls.com"
+],
+"exe": "PULS.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-revitro",
+"files": [
+"intros/revitro.com"
+],
+"exe": "REVITRO.COM",
+"shots": [
+[
+10,
+"title"
+]
+]
+},
+{
+"id": "g-rv256",
+"files": [
+"intros/rv256.com"
+],
+"exe": "RV256.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-symetrie",
+"files": [
+"intros/symetrie.com"
+],
+"exe": "SYMETRIE.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-upup",
+"files": [
+"intros/upup.com"
+],
+"exe": "UPUP.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-warp",
+"files": [
+"intros/warp.com"
+],
+"exe": "WARP.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-worm",
+"files": [
+"intros/worm.com"
+],
+"exe": "WORM.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-mirrors",
+"files": [
+"intros/mirrors.com"
+],
+"exe": "MIRRORS.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-qblove",
+"files": [
+"intros/qblove.com"
+],
+"exe": "QBLOVE.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-freality",
+"files": [
+"intros/freality.com"
+],
+"exe": "FREALITY.COM",
+"shots": [
+[
+20,
+"title"
+]
+]
+},
+{
+"id": "g-mesha",
+"files": [
+"intros/mesha.com"
+],
+"exe": "MESHA.COM",
+"shots": [
+[
+112,
+"title"
+]
+]
+},
+{
+"id": "g-omniscent",
+"files": [
+"intros/omniscent.com"
+],
+"exe": "OMNISCEN.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-soullost",
+"files": [
+"intros/soullost.com"
+],
+"exe": "SOULLOST.COM",
+"shots": [
+[
+15,
+"title"
+]
+]
+},
+{
+"id": "g-starport",
+"files": [
+"intros/starport.com"
+],
+"exe": "STARPORT.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-crevenge",
+"files": [
+"intros/crevenge.com"
+],
+"exe": "CREVENGE.COM",
+"shots": [
+[
+14,
+"title"
+]
+]
+},
+{
+"id": "g-difze",
+"files": [
+"intros/difze.com"
+],
+"exe": "DIFZE.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-oktaeder",
+"files": [
+"intros/oktaeder.com"
+],
+"exe": "OKTAEDER.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-plasma13",
+"files": [
+"demos/PLASMA13.COM"
+],
+"exe": "PLASMA13.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-xormunch",
+"files": [
+"demos/XORMUNCH.COM"
+],
+"exe": "XORMUNCH.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-planar",
+"files": [
+"demos/PLANAR.COM"
+],
+"exe": "PLANAR.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-cga",
+"files": [
+"demos/CGA.COM"
+],
+"exe": "CGA.COM",
+"shots": [
+[
+4,
+"title"
+]
+]
+},
+{
+"id": "g-vesa",
+"files": [
+"demos/VESA.COM"
+],
+"exe": "VESA.COM",
+"shots": [
+[
+1.5,
+"title"
 ]
 ]
 }

@@ -10,6 +10,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   was bounded by a count of blocks, each holding its compiled function; once paged blocks grew it held
   1.3 GB and the host spent 99 % of its time collecting garbage. It is now bounded by the source it
   holds, as the code cache is. Windows ME reaches its desktop again, OpenBSD its `login:`.
+- **COMPATIBILITY.md, reorganized**: games and demos in separate tables, each in alphabetical order;
+  🏅 marks the titles the golden test pins, and each golden intro and demo has its own row and
+  picture. Maniac Mansion and Jump 'n Bump are shown in play: neither had a keyboard problem, the
+  scripted runs simply never pressed what each game waits for.
 
 ## 2026-11-05
 
