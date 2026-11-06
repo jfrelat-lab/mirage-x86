@@ -50,7 +50,7 @@ needs beyond the defaults (16 MiB, the `386` profile, no PCI).
 | <img src="compat/unixv7.png" width="160" alt=""> | Unix V7/x86 | 🟢 Plays | a single-user shell (Enter at `BOOT`) | — | 2026-11-05 |
 | <img src="compat/386bsd.png" width="160" alt=""> | 386BSD 1.0 | 🟠 Starts | `login:` in video memory (Esc at its boot prompt), but the screen shows one text row once the kernel has the console: a display defect (the picture is the text read from memory) | — | 2026-11-05 |
 | <img src="compat/netbsd.png" width="160" alt=""> | NetBSD 4.0.1 | 🟢 Plays | `login:`; a root shell, multi-user (2026-09) | 256 MiB, `pentium` | 2026-11-05 |
-| | OpenBSD | 🟠 Starts | the kernel and `rc` to "starting network"; then guest time stops advancing (as on 2026-10-20). `login:` was reached in 2026-09 | 128 MiB, `586` | 2026-11-05 |
+| <img src="compat/os-openbsd.png" width="160" alt=""> | OpenBSD | 🟠 Starts | `login:` at 900 guest s (the image's password is not known); guest time stood still near 250 s from 2026-10 to 2026-11-06 (the translation memo) | 128 MiB, `586` | 2026-11-06 |
 | <img src="compat/qnx.png" width="160" alt=""> | QNX 4.05 demo disk | 🟠 Starts | the welcome screen; stops asking for a network card | — | 2026-11-05 |
 | <img src="compat/kolibri.png" width="160" alt=""> | KolibriOS | 🟢 Plays | the desktop (broken from 2026-10-29 to 2026-11-05: an XSAVE in a skipped run of code) | `586` | 2026-11-05 |
 | <img src="compat/gentleos.png" width="160" alt=""> | GentleOS/16 | 🟢 Renders | its screen, pixel-identical to QEMU | — | 2026-11-05 |

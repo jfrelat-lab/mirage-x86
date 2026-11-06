@@ -9,7 +9,7 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 - **Windows ME, Linux 3.x and TinyCore no longer freeze**: the recompiler's memo of past translations
   was bounded by a count of blocks, each holding its compiled function; once paged blocks grew it held
   1.3 GB and the host spent 99 % of its time collecting garbage. It is now bounded by the source it
-  holds, as the code cache is. Windows ME reaches its desktop again.
+  holds, as the code cache is. Windows ME reaches its desktop again, OpenBSD its `login:`.
 
 ## 2026-11-05
 
