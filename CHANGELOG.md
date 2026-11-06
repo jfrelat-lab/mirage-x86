@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-06
 
+- **Record what you see**: the Machines page has a Record button. It saves the screen and its sound
+  as an MP4 (WebM where the browser writes no MP4). For the repository, `tools/record.mjs` films a DOS
+  title headless, a frame every 1/30 s of guest time with its Sound Blaster, OPL3 or MIDI sound, so
+  no frame is dropped whatever the computer's speed; `tools/webp.mjs` makes animated WebPs, a quarter
+  of a GIF's size with every colour.
 - **Three more Windows intros**, each a click away in the Windows machine: **Atrium** (Breakpoint
   2008), **luxo4k** (RGBA & Conspiracy, 2007, its lamp hopping on "PIXAR") and **Valleyball**
   (Breakpoint 2009). MIRAGE-WIN32 gained D3DX's matrix stack and boxes, more of Direct3D 9's

@@ -20,6 +20,7 @@ import { bootSector, attachImage } from './boot.js';
 import { installAudio } from './audio.js';
 import { AudioOut } from './audio-out.js';
 import { installFullscreen } from './fullscreen.js';
+import { canRecord, startRecording, saveRecording } from './recorder.js';
 import { startLinux, oasisHost } from './linuxrun.js';
 
 const $ = (id) => document.getElementById(id);
@@ -91,6 +92,20 @@ $('pause').onclick = () => {
 let soundOn = params.get('mute') !== '1';
 const syncSound = () => { $('sound').setAttribute('aria-pressed', String(soundOn)); if (session && session.audio) { session.audio.setMuted(!soundOn); if (soundOn) session.audio.start(); } };
 $('sound').onclick = () => { soundOn = !soundOn; syncSound(); };
+// Record: the screen and its sound, in real time, to a file the visitor keeps (src/recorder.js).
+let recording = null;
+if (canRecord()) $('recBtn').hidden = false;
+$('recBtn').onclick = async () => {
+  const b = $('recBtn');
+  if (!recording) {
+    recording = startRecording(canvas, session && soundOn ? session.audio : null);
+    b.setAttribute('aria-pressed', 'true'); b.textContent = '● Stop';
+    return;
+  }
+  const r = recording; recording = null;
+  b.setAttribute('aria-pressed', 'false'); b.textContent = 'Record';
+  saveRecording(await r.stop(), params.get('run') || $('vmName').textContent);
+};
 // Audio may start only after a gesture: the first key or click starts it.
 for (const ev of ['keydown', 'pointerdown']) window.addEventListener(ev, () => { if (session && session.audio && soundOn) session.audio.start(); }, { once: true, capture: true });
 

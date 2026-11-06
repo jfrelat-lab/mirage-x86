@@ -5,6 +5,7 @@
 //   node tools/chrome-perf.mjs "<url>" [seconds=40] [profileFrom=20] [profileSecs=10]
 //   e.g. node tools/chrome-perf.mjs "http://localhost:8762/dos.html?zip=examples/games/doom19s.zip&run=DOOM&add=examples/games/doom/DEFAULT.CFG"
 //   KEYS="6:Enter,9:ArrowLeft" presses those keys at those seconds (Wolf3D's sign-on, Unreal's menu);
+//   DOWNLOADS=<dir> keeps the page's downloads (the Record button's video, clicked with EVALS);
 //   SHOT=<file.png> takes a screenshot at the end; SHOTS=20,40 SHOTPREFIX=/tmp/x one at each of those seconds.
 //   KEYS items are separated by '|' when one holds a comma; "12:type=cd \\games\\liquiwar\n" types text.
 //   Works on dos.html (window.mirage is the app) and boot.html (window.mirage is the session).
@@ -46,6 +47,8 @@ const send = (method, params = {}) => new Promise((r) => { const i = ++id; pendi
 const evaluate = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); return r.result && r.result.result ? r.result.result.value : r; };
 
 await send('Page.enable'); await send('Runtime.enable'); await send('Profiler.enable');
+// DOWNLOADS=<dir>: what the page hands the visitor (the Record button's video) is saved there.
+if (process.env.DOWNLOADS) for (const m of ['Browser.setDownloadBehavior', 'Page.setDownloadBehavior']) await send(m, { behavior: 'allow', downloadPath: process.env.DOWNLOADS });
 await send('Page.navigate', { url });
 const tLoad = Date.now();
 for (let i = 0; i < (process.env.NOWAIT ? 0 : 450); i++) {   // NOWAIT=1: a page that starts nothing by itself (a program given with FILES)
