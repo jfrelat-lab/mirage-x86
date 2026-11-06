@@ -73,6 +73,8 @@ const VTABLES = {
     SetMinBoneInfluence:f GetMinBoneInfluence:0 SetBoneName:2 GetBoneName:1 SetBoneOffsetMatrix:2 GetBoneOffsetMatrix:1
     Clone:1 Remap:2 SetFVF:1 SetDeclaration:1 GetFVF:0 GetDeclaration:1 UpdateSkinnedMesh:4 ConvertToBlendedMesh:10
     ConvertToIndexedBlendedMesh:11`,
+  ID3DXMatrixStack: `${UNK} Pop:0 Push:0 LoadIdentity:0 LoadMatrix:1 MultMatrix:1 MultMatrixLocal:1 RotateAxis:pf RotateAxisLocal:pf
+    RotateYawPitchRoll:fff RotateYawPitchRollLocal:fff Scale:fff ScaleLocal:fff Translate:fff TranslateLocal:fff GetTop:0`,
 };
 const sigOf = (s) => 'p' + (/^\d+$/.test(s) ? 'u'.repeat(+s) : s);
 /*
@@ -162,10 +164,41 @@ const D3DX_SPAN = {
   SHMultiply5: [32, 43], SHMultiply6: [32, 43], UVAtlasCreate: [25, 43], UVAtlasPack: [25, 43],
   UVAtlasPartition: [25, 43],
 };
+/*
+ * DX8VB.DLL'S EXPORTS, in the order that numbers them (ordinal 1 first): DirectX 8 for Visual Basic, which
+ * Windows XP installs, and the only DLL that exports D3DX's math -- prefixed VB_, D3DX8 being a static
+ * library. Calodox's 4Ks (Synchroplastikum 2005, Polystreptikum 2007) load it by name, find
+ * VB_D3DXVec3Add by hash and take the 104 functions that follow it by ordinal, so the numbering is the
+ * interface. The order is Wine's dlls/dx8vb/dx8vb.spec, whose names are all stubs there.
+ */
+const DX8VB_NAMES = `
+  Vec2Dot Vec2CCW Vec2Add Vec2Subtract Vec2Minimize Vec2Maximize Vec2Scale Vec2Lerp Vec2Normalize Vec2Hermite
+  Vec2BaryCentric Vec2Transform Vec2TransformCoord Vec2TransformNormal Vec3Length Vec3LengthSq Vec3Dot Vec3Cross
+  Vec3Add Vec3Subtract Vec3Minimize Vec3Maximize Vec3Scale Vec3Lerp Vec3Normalize Vec3Hermite Vec3BaryCentric
+  Vec3Transform Vec3TransformCoord Vec3TransformNormal Vec4Length Vec4LengthSq Vec4Dot Vec4Add Vec4Subtract
+  Vec4Minimize Vec4Maximize Vec4Scale Vec4Lerp Vec4Cross Vec4Normalize Vec4Hermite Vec4BaryCentric Vec4Transform
+  MatrixIdentity MatrixIsIdentity MatrixfDeterminant MatrixMultiply MatrixTranspose MatrixInverse MatrixScaling
+  MatrixTranslation MatrixRotationX MatrixRotationY MatrixRotationZ MatrixRotationAxis MatrixRotationQuaternion
+  MatrixRotationYawPitchRoll MatrixTransformation MatrixAffineTransformation MatrixLookAtRH MatrixLookAtLH
+  MatrixPerspectiveRH MatrixPerspectiveLH MatrixPerspectiveFovRH MatrixPerspectiveFovLH MatrixPerspectiveOffCenterRH
+  MatrixPerspectiveOffCenterLH MatrixOrthoRH MatrixOrthoLH MatrixOrthoOffCenterRH MatrixOrthoOffCenterLH MatrixShadow
+  MatrixReflect QuaternionLength QuaternionLengthSq QuaternionIdentity QuaternionIsIdentity QuaternionConjugate
+  QuaternionToAxisAngle QuaternionRotationMatrix QuaternionRotationAxis QuaternionRotationYawPitchRoll
+  QuaternionMultiply QuaternionNormalize QuaternionInverse QuaternionLn QuaternionExp QuaternionSlerp QuaternionSquad
+  QuaternionBaryCentric PlaneDot PlaneDotCoord PlaneDotNormal PlaneNormalize PlaneIntersectLine PlaneFromPointNormal
+  PlaneFromPoints PlaneTransform ColorNegative ColorAdd ColorSubtract ColorScale ColorModulate ColorLerp
+  ColorAdjustSaturation ColorAdjustContrast Vec2Length Vec2LengthSq
+  =D3DVertexBuffer8SetData =D3DVertexBuffer8GetData =D3DIndexBuffer8SetData =D3DIndexBuffer8GetData =DXLockArray8
+  =DXUnlockArray8 =VB_NewBuffer =VB_AddDataToBuffer =VB_AddStringToBuffer =VB_GetDataFromBuffer =VB_GetStringFromBuffer
+  Vec2CatmullRom Vec3CatmullRom Vec4CatmullRom Vec3Project Vec3Unproject =VB_D3DColorRGBA =VB_D3DColorARGB
+  =VB_D3DColorXRGB =VB_D3DColorMake QuaternionDot =D3DXMeshVertexBuffer8SetData =D3DXMeshVertexBuffer8GetData
+  =D3DXMeshIndexBuffer8SetData =D3DXMeshIndexBuffer8GetData =DXCopyMemory =DllCanUnloadNow =DllGetClassObject
+  =DllRegisterServer =DllUnregisterServer`.trim().split(/\s+/).map((n) => (n[0] === '=' ? n.slice(1) : `VB_D3DX${n}`));
 
 const METHODS = Object.fromEntries(Object.entries(VTABLES).map(([i, s]) => [i, s.trim().split(/\s+/).map((t) => t.split(':'))]));
 
 // Bytes a pixel of a D3DFORMAT takes (d3d9types.h's numbers).
+const IDENTITY = Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
 const BPP = { 20: 3, 21: 4, 22: 4, 23: 2, 24: 2, 25: 2, 26: 2, 28: 1, 31: 4, 32: 4, 33: 4, 34: 4, 35: 4, 36: 8, 50: 1, 51: 2,
   111: 2, 112: 4, 113: 8, 114: 4, 115: 8, 116: 16 };
 // Bytes a vertex of an FVF takes (D3DXGetFVFVertexSize): the position (XYZ, XYZRHW, XYZB1..5, XYZW), a
@@ -318,6 +351,16 @@ export function d3d9Apis(st) {
   const surfDesc = (x, p, d) => { x.write(p, new Uint8Array(32)); x.w32(p, d.format); x.w32(p + 4, d.type || 1); x.w32(p + 8, d.usage || 0);
     x.w32(p + 12, d.pool || 0); x.w32(p + 24, d.w); x.w32(p + 28, d.h); return S_OK; };
 
+  // A draw's vertices from the program's memory. With an FVF, a stride wider than the FVF's vertex (luxo4k
+  // draws XYZ, 12 bytes, 16 apart) reads each vertex's elements where they are and skips the rest, as
+  // Direct3D does; the vertices go to the model packed at the FVF's own size.
+  const packed = (x, self, p, n, stride) => {
+    const fvf = o(self).fvf, size = fvf ? fvfSize(fvf) : stride;
+    if (!fvf || stride <= size) return [x.bytes(p, n * stride), stride];
+    const out = new Uint8Array(n * size);
+    for (let i = 0; i < n; i++) out.set(x.bytes(p + i * stride, size), i * size);
+    return [out, size];
+  };
   // ---- the methods ----------------------------------------------------------------------------------
   const unknown = {
     QueryInterface: (x, self, riid, pp) => { if (pp) x.w32(pp, 0); return E_NOINTERFACE; },
@@ -522,7 +565,15 @@ export function d3d9Apis(st) {
       const rects = count && pRects ? Array.from({ length: count }, (_, i) => [0, 4, 8, 12].map((k) => x.r32(pRects + 16 * i + k) | 0)) : null;
       return D(self).clear(rects, flags, color >>> 0, z, stencil) || S_OK;
     },
-    SetTransform: (x, self, st2, p) => D(self).setTransform(st2, floats(x, p, 16)) || S_OK,
+    // The transforms, kept here for GetTransform and MultiplyTransform (identity until set). Multiply as
+    // the documentation and wined3d's multiply_matrix have it: the new matrix is pMatrix x the state's.
+    SetTransform: (x, self, st2, p) => { const m = floats(x, p, 16); (o(self).transforms ??= new Map()).set(st2, m); return D(self).setTransform(st2, m) || S_OK; },
+    GetTransform: (x, self, st2, p) => { const m = o(self).transforms?.get(st2); x.write(p, new Uint8Array((m || IDENTITY).buffer.slice(0))); return S_OK; },
+    MultiplyTransform: (x, self, st2, p) => {
+      const a = floats(x, p, 16), b = o(self).transforms?.get(st2) || IDENTITY, m = new Float32Array(16);
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 4; k++) m[i * 4 + j] += a[i * 4 + k] * b[k * 4 + j];
+      (o(self).transforms ??= new Map()).set(st2, m); return D(self).setTransform(st2, m) || S_OK;
+    },
     // The fixed function's lights and material: D3DLIGHT9 (type; diffuse, specular, ambient; position,
     // direction; range, falloff, attenuation 0-2, theta, phi) and D3DMATERIAL9 (diffuse, ambient,
     // specular, emissive; power), kept here for the Gets and handed to the device model.
@@ -568,9 +619,11 @@ export function d3d9Apis(st) {
     SetSoftwareVertexProcessing: () => S_OK, GetSoftwareVertexProcessing: () => 0,
     DrawPrimitive: (x, self, type, start, n) => D(self).drawPrimitive(type, start, n) || S_OK,
     DrawIndexedPrimitive: (x, self, ...a) => D(self).drawIndexedPrimitive(...a) || S_OK,
-    DrawPrimitiveUP: (x, self, type, n, p, stride) => D(self).drawPrimitiveUP(type, n, x.bytes(p, VERTS[type](n) * stride), stride) || S_OK,
-    DrawIndexedPrimitiveUP: (x, self, type, minIndex, numVerts, n, pIdx, ifmt, pV, stride) =>
-      D(self).drawIndexedPrimitiveUP(type, minIndex, numVerts, n, x.bytes(pIdx, VERTS[type](n) * (ifmt === 102 ? 4 : 2)), ifmt, x.bytes(pV, (minIndex + numVerts) * stride), stride) || S_OK,
+    DrawPrimitiveUP: (x, self, type, n, p, stride) => { const [v, st] = packed(x, self, p, VERTS[type](n), stride); return D(self).drawPrimitiveUP(type, n, v, st) || S_OK; },
+    DrawIndexedPrimitiveUP: (x, self, type, minIndex, numVerts, n, pIdx, ifmt, pV, stride) => {
+      const [v, st] = packed(x, self, pV, minIndex + numVerts, stride);
+      return D(self).drawIndexedPrimitiveUP(type, minIndex, numVerts, n, x.bytes(pIdx, VERTS[type](n) * (ifmt === 102 ? 4 : 2)), ifmt, v, st) || S_OK;
+    },
     // D3DVERTEXELEMENT9s to D3DDECL_END (stream 0xFF).
     CreateVertexDeclaration: (x, self, p, pp) => {
       const els = []; let n = 0;
@@ -580,8 +633,8 @@ export function d3d9Apis(st) {
       }
       x.w32(pp, res(x, self, 'IDirect3DVertexDeclaration9', D(self).createVertexDeclaration(els), { bytes: x.bytes(p, 8 * (n + 1)) })); return S_OK;
     },
-    SetVertexDeclaration: (x, self, d) => D(self).setVertexDeclaration(h(d)) || S_OK,
-    SetFVF: (x, self, fvf) => D(self).setFVF(fvf) || S_OK,
+    SetVertexDeclaration: (x, self, d) => { o(self).fvf = 0; return D(self).setVertexDeclaration(h(d)) || S_OK; },
+    SetFVF: (x, self, fvf) => { o(self).fvf = fvf; return D(self).setFVF(fvf) || S_OK; },
     CreateVertexShader: (x, self, p, pp) => { const t = shaderTokens(x, p); x.w32(pp, res(x, self, 'IDirect3DVertexShader9', D(self).createVertexShader(t), { tokens: t })); return S_OK; },
     CreatePixelShader: (x, self, p, pp) => { const t = shaderTokens(x, p); x.w32(pp, res(x, self, 'IDirect3DPixelShader9', D(self).createPixelShader(t), { tokens: t })); return S_OK; },
     SetVertexShader: (x, self, s) => D(self).setVertexShader(h(s)) || S_OK,
@@ -602,6 +655,46 @@ export function d3d9Apis(st) {
   // ---- D3DX ---------------------------------------------------------------------------------------
   const blobObj = (x, u8) => { const d = galloc(x, u8.length); x.write(d, u8); return make(x, 'ID3DXBuffer', { ptr: d, size: u8.length }); };
   const xbuffer = { GetBufferPointer: (x, self) => o(self).ptr, GetBufferSize: (x, self) => o(self).size };
+  /*
+   * ID3DXMatrixStack (D3DXCreateMatrixStack), as Wine's d3dx9_36/math.c: the matrices in guest memory,
+   * GetTop a pointer to the top one. An operation multiplies the top on the right ("MultMatrix": top x M),
+   * its Local form on the left (M x top) -- D3DX's row vectors, so Local applies M first. Atrium (2008)
+   * builds its scene's transforms with one.
+   */
+  const math = d3dxMath();
+  const stackTop = (s) => s.mem + 64 * s.depth;
+  const stackOp = (make) => (local) => (x, self, ...a) => {
+    const s = o(self), t = stackTop(s);
+    make(x, s.tmp, ...a);
+    return math.D3DXMatrixMultiply[1](x, t, local ? s.tmp : t, local ? t : s.tmp), S_OK;
+  };
+  const rotAxis = stackOp((x, m, pv, ang) => math.D3DXMatrixRotationAxis[1](x, m, pv, ang));
+  const rotYPR = stackOp((x, m, yaw, pitch, roll) => math.D3DXMatrixRotationYawPitchRoll[1](x, m, yaw, pitch, roll));
+  const scale = stackOp((x, m, sx, sy, sz) => math.D3DXMatrixScaling[1](x, m, sx, sy, sz));
+  const translate = stackOp((x, m, tx, ty, tz) => math.D3DXMatrixTranslation[1](x, m, tx, ty, tz));
+  const mult = stackOp((x, m, pm) => x.write(m, x.bytes(pm, 64)));
+  const matrixStack = {
+    Push: (x, self) => {
+      const s = o(self);
+      if (s.depth + 1 >= s.cap) { const mem = galloc(x, 128 * s.cap); x.write(mem, x.bytes(s.mem, 64 * s.cap)); s.mem = mem; s.cap *= 2; }
+      x.write(stackTop(s) + 64, x.bytes(stackTop(s), 64)); s.depth++; return S_OK;
+    },
+    Pop: (x, self) => { const s = o(self); if (s.depth) s.depth--; return S_OK; },
+    LoadIdentity: (x, self) => (math.D3DXMatrixIdentity[1](x, stackTop(o(self))), S_OK),
+    LoadMatrix: (x, self, pm) => { if (!pm) return D3DERR_INVALIDCALL; x.write(stackTop(o(self)), x.bytes(pm, 64)); return S_OK; },
+    MultMatrix: mult(false), MultMatrixLocal: mult(true),
+    RotateAxis: rotAxis(false), RotateAxisLocal: rotAxis(true),
+    RotateYawPitchRoll: rotYPR(false), RotateYawPitchRollLocal: rotYPR(true),
+    Scale: scale(false), ScaleLocal: scale(true), Translate: translate(false), TranslateLocal: translate(true),
+    GetTop: (x, self) => stackTop(o(self)),
+  };
+  const createMatrixStack = (x, flags, pp) => {
+    if (!pp) return D3DERR_INVALIDCALL;
+    const cap = 32, mem = galloc(x, 64 * cap), tmp = galloc(x, 64);
+    math.D3DXMatrixIdentity[1](x, mem);
+    x.w32(pp, make(x, 'ID3DXMatrixStack', { mem, tmp, cap, depth: 0 }));
+    return S_OK;
+  };
   const CLASS = { 0: 0, 1: 0, 2: 2, 3: 3 };
   const ctab = {
     GetBufferPointer: (x, self) => o(self).ptr, GetBufferSize: (x, self) => o(self).size,
@@ -671,7 +764,7 @@ export function d3d9Apis(st) {
   const mesh = {
     DrawSubset: (x, self, id) => {
       const m = o(self), d = D(m.devPtr);
-      d.setFVF(m.fvf); d.setStreamSource(0, h(m.vb), 0, m.stride); d.setIndices(h(m.ib));
+      d.setFVF(m.fvf); o(m.devPtr).fvf = m.fvf; d.setStreamSource(0, h(m.vb), 0, m.stride); d.setIndices(h(m.ib));
       for (let f = 0; f < m.faces;) {
         if (x.r32(m.attr + 4 * f) !== id) { f++; continue; }
         let e = f + 1;
@@ -900,6 +993,24 @@ export function d3d9Apis(st) {
     ob.ref = 1; x.w32(ppMesh, m);
     return S_OK;
   };
+  // D3DXCreateBox as Wine's: a unit cube scaled, four corners a side (-x, +y, +x, -y, +z, -z), each side
+  // two faces (a, a+1, a+2) and (a+2, a+3, a); Wine's adjacency table. Atrium (2008) builds with boxes.
+  const BOX = [-1, -1, -1, -1, -1, 1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, 1, 1, 1, 1, 1, 1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1, -1, -1,
+    -1, -1, 1, -1, -1, -1, 1, -1, -1, 1, -1, 1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1, -1, -1, -1, -1, 1, -1, 1, 1, -1, 1, -1, -1];
+  const BOX_NORMALS = [-1, 0, 0, 0, 1, 0, 1, 0, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1];
+  const BOX_ADJ = [6, 9, 1, 2, 10, 0, 1, 9, 3, 4, 10, 2, 3, 8, 5, 7, 11, 4, 0, 11, 7, 5, 8, 6, 7, 4, 9, 2, 0, 8, 1, 3, 11, 5, 6, 10];
+  const createBox = (x, devPtr, w, hh, dd, ppMesh, ppAdj) => {
+    if (!devPtr || w < 0 || hh < 0 || dd < 0 || !ppMesh) return D3DERR_INVALIDCALL;
+    const m = meshFVF(x, 12, 24, 0x10, 0x12, devPtr), v = new Float32Array(6 * 24), idx = new Uint16Array(36);
+    for (let i = 0; i < 24; i++) v.set([w * BOX[3 * i] / 2, hh * BOX[3 * i + 1] / 2, dd * BOX[3 * i + 2] / 2, ...BOX_NORMALS.slice(3 * (i >> 2), 3 * (i >> 2) + 3)], 6 * i);
+    for (let i = 0, f = 0; i < 12; i++, f += 2) idx.set([f, f + 1, i % 2 ? f - 2 : f + 2], 3 * i);
+    const pp = x.win.heapAlloc(4);
+    mesh.LockVertexBuffer(x, m, 0, pp); x.write(x.r32(pp), new Uint8Array(v.buffer)); mesh.UnlockVertexBuffer(x, m);
+    mesh.LockIndexBuffer(x, m, 0, pp); x.write(x.r32(pp), new Uint8Array(idx.buffer)); mesh.UnlockIndexBuffer(x, m);
+    if (ppAdj) x.w32(ppAdj, blobObj(x, new Uint8Array(Uint32Array.from(BOX_ADJ).buffer)));
+    o(m).ref = 1; x.w32(ppMesh, m);
+    return S_OK;
+  };
   // D3DXCreateText: the text in the font selected into `hdc`, a mesh of XYZ | NORMAL in ems
   // (src/win32/textmesh.js, Wine's algorithm), its glyphs' metrics in ems if asked. As Wine: no adjacency.
   const createText = (x, devPtr, hdc, text, deviation, extrusion, ppMesh, ppAdj, pGM) => {
@@ -1026,6 +1137,8 @@ export function d3d9Apis(st) {
   const prof = (s) => (x) => { const p = x.win.heapAlloc(8); x.write(p, new TextEncoder().encode(s + '\0')); return p; };
   const d3dx = {
     D3DXCompileShader: ['puppppuppp', d3dxCompile],
+    D3DXCreateMatrixStack: ['up', createMatrixStack],
+    D3DXCreateBox: ['pfffpp', createBox],
     D3DXCreateMeshFVF: ['uuuupp', (x, faces, verts, options, fvf, dev, pp) => {
       if (!faces || !verts || !dev || !pp || (!(options & 1) && verts > 0x10000)) return D3DERR_INVALIDCALL;
       x.w32(pp, meshFVF(x, faces, verts, options, fvf, dev)); return S_OK;
@@ -1052,7 +1165,7 @@ export function d3d9Apis(st) {
     IDirect3D9: d3d9, IDirect3DDevice9: device, IDirect3DTexture9: { ...resource, ...texture }, IDirect3DCubeTexture9: { ...resource, ...cube }, IDirect3DSwapChain9: swapChain, IDirect3DSurface9: { ...resource, ...surface },
     IDirect3DVertexBuffer9: { ...resource, ...buffer }, IDirect3DIndexBuffer9: { ...resource, ...buffer },
     IDirect3DVertexShader9: shaderObj, IDirect3DPixelShader9: shaderObj, IDirect3DVertexDeclaration9: shaderObj, IDirect3DQuery9: query,
-    ID3DXBuffer: xbuffer, ID3DXConstantTable: ctab, ID3DXMesh: mesh, ID3DXSkinInfo: skin, ID3DXTextureShader: textureShader,
+    ID3DXBuffer: xbuffer, ID3DXConstantTable: ctab, ID3DXMesh: mesh, ID3DXSkinInfo: skin, ID3DXTextureShader: textureShader, ID3DXMatrixStack: matrixStack,
   };
   const fns = {
     Direct3DCreate9: ['u', (x, sdk) => make(x, 'IDirect3D9')],
@@ -1066,7 +1179,15 @@ export function d3d9Apis(st) {
   }
   const out = [{ dll: 'd3d9.dll', fns }];
   for (let v = 24; v <= 43; v++) out.push({ dll: `d3dx9_${v}.dll`, fns: d3dxExports(v, d3dx, NOT) });
+  out.push({ dll: 'dx8vb.dll', fns: dx8vbExports({ ...d3dx, ...d3dxVectorMath() }, NOT) });
   return out;
+}
+
+/** dx8vb.dll's exports, numbered as Microsoft's: VB_D3DXname answered by D3DX's own D3DXname. */
+function dx8vbExports(impl, NOT) {
+  const fns = {};
+  DX8VB_NAMES.forEach((n, i) => { const f = impl[n.replace(/^VB_/, '')] || ['', NOT('dx8vb', n)]; fns[n] = [f[0], f[1], { ...(f[2] || {}), ordinal: i + 1 }]; });
+  return fns;
 }
 
 /** d3dx9_`v`.dll's exports: its names numbered as Microsoft's, `impl`'s functions or NOT; ours after them. */
@@ -1106,7 +1227,19 @@ function d3dxMath() {
     return [inv, det];
   };
   const M = (sig, f) => [sig, (x, out, ...a) => wf(x, out, f(x, ...a))];
+  // D3DXVec3TransformCoordArray(out, outStride, in, inStride, matrix, n) and its kin: each vector as the
+  // single function transforms it, strided both ways.
+  const coord = (q, m) => { const r = [0, 1, 2, 3].map((j) => q[0] * m[j] + q[1] * m[4 + j] + q[2] * m[8 + j] + m[12 + j]); return r.slice(0, 3).map((c) => c / r[3]); };
+  const ARR = (n, f) => ['pupupu', (x, out, os, pin, is, pm, count) => {
+    const m = rd(x, pm);
+    for (let i = 0; i < count; i++) wf(x, out + os * i, f(vec(x, pin + is * i, n), m));
+    return out;
+  }];
   return {
+    D3DXVec3TransformCoordArray: ARR(3, coord),
+    D3DXVec3TransformNormalArray: ARR(3, (q, m) => [0, 1, 2].map((j) => q[0] * m[j] + q[1] * m[4 + j] + q[2] * m[8 + j])),
+    D3DXVec3TransformArray: ARR(3, (q, m) => [0, 1, 2, 3].map((j) => q[0] * m[j] + q[1] * m[4 + j] + q[2] * m[8 + j] + m[12 + j])),
+    D3DXVec4TransformArray: ARR(4, (q, m) => [0, 1, 2, 3].map((j) => q.reduce((s, c, k) => s + c * m[k * 4 + j], 0))),
     D3DXMatrixIdentity: M('p', () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
     D3DXMatrixMultiply: M('ppp', (x, a, b) => mul(rd(x, a), rd(x, b))),
     D3DXMatrixMultiplyTranspose: M('ppp', (x, a, b) => { const m = mul(rd(x, a), rd(x, b)); return m.map((_, i) => m[(i % 4) * 4 + (i >> 2)]); }),
@@ -1135,4 +1268,73 @@ function d3dxMath() {
     D3DXVec3Transform: M('ppp', (x, v, pm) => { const [a, b, c] = vec(x, v, 3), m = rd(x, pm); return [0, 1, 2, 3].map((j) => a * m[j] + b * m[4 + j] + c * m[8 + j] + m[12 + j]); }),
     D3DXVec4Transform: M('ppp', (x, v, pm) => { const q = vec(x, v, 4), m = rd(x, pm); return [0, 1, 2, 3].map((j) => q.reduce((s, c, k) => s + c * m[k * 4 + j], 0)); }),
   };
+}
+
+/**
+ * The rest of D3DX's math, as d3dx9math.inl and d3dx9_36/math.c compute it: what d3dx9 has inline in its
+ * header and so does not export, but dx8vb.dll does (VB_D3DX...). Vectors of 2, 3 or 4 floats,
+ * quaternions (x, y, z, w), planes (a, b, c, d), colours (r, g, b, a); a float result on the x87 stack.
+ */
+export function d3dxVectorMath() {
+  const vec = (x, p, n) => Array.from({ length: n }, (_, i) => x.f32(p + 4 * i));
+  const wf = (x, p, vals) => { const f = new Float32Array(vals), u = new Uint32Array(f.buffer); u.forEach((v, i) => x.w32(p + 4 * i, v)); return p; };
+  const M = (sig, f) => [sig, (x, out, ...a) => wf(x, out, f(x, ...a))];
+  const F = (sig, f) => [sig, (x, ...a) => ({ st0: Math.fround(f(x, ...a)) })];
+  const dot = (a, b) => a.reduce((s, c, i) => s + c * b[i], 0);
+  const out = {};
+  for (const n of [2, 3, 4]) {
+    const V = `D3DXVec${n}`, v = (x, p) => vec(x, p, n);
+    out[`${V}Length`] = F('p', (x, a) => Math.hypot(...v(x, a)));
+    out[`${V}LengthSq`] = F('p', (x, a) => dot(v(x, a), v(x, a)));
+    out[`${V}Dot`] = F('pp', (x, a, b) => dot(v(x, a), v(x, b)));
+    out[`${V}Add`] = M('ppp', (x, a, b) => { const q = v(x, b); return v(x, a).map((c, i) => c + q[i]); });
+    out[`${V}Subtract`] = M('ppp', (x, a, b) => { const q = v(x, b); return v(x, a).map((c, i) => c - q[i]); });
+    out[`${V}Minimize`] = M('ppp', (x, a, b) => { const q = v(x, b); return v(x, a).map((c, i) => Math.min(c, q[i])); });
+    out[`${V}Maximize`] = M('ppp', (x, a, b) => { const q = v(x, b); return v(x, a).map((c, i) => Math.max(c, q[i])); });
+    out[`${V}Scale`] = M('ppf', (x, a, s) => v(x, a).map((c) => c * s));
+    out[`${V}Lerp`] = M('pppf', (x, a, b, s) => { const q = v(x, b); return v(x, a).map((c, i) => c + s * (q[i] - c)); });
+    out[`${V}Normalize`] = M('pp', (x, a) => { const q = v(x, a), l = Math.hypot(...q); return l ? q.map((c) => c / l) : q.map(() => 0); });
+    out[`${V}Hermite`] = M('pppppf', (x, p1, t1, p2, t2, s) => {
+      const s2 = s * s, s3 = s2 * s, h1 = 2 * s3 - 3 * s2 + 1, h2 = s3 - 2 * s2 + s, h3 = -2 * s3 + 3 * s2, h4 = s3 - s2;
+      const [a, b, c, d] = [p1, t1, p2, t2].map((p) => v(x, p));
+      return a.map((_, i) => h1 * a[i] + h2 * b[i] + h3 * c[i] + h4 * d[i]);
+    });
+    out[`${V}CatmullRom`] = M('pppppf', (x, p0, p1, p2, p3, s) => {
+      const [a, b, c, d] = [p0, p1, p2, p3].map((p) => v(x, p)), s2 = s * s, s3 = s2 * s;
+      return a.map((_, i) => 0.5 * (2 * b[i] + (c[i] - a[i]) * s + (2 * a[i] - 5 * b[i] + 4 * c[i] - d[i]) * s2 + (d[i] - a[i] + 3 * b[i] - 3 * c[i]) * s3));
+    });
+    out[`${V}BaryCentric`] = M('ppppff', (x, p1, p2, p3, f, g) => { const [a, b, c] = [p1, p2, p3].map((p) => v(x, p)); return a.map((_, i) => a[i] + f * (b[i] - a[i]) + g * (c[i] - a[i])); });
+  }
+  out.D3DXVec2CCW = F('pp', (x, a, b) => { const [p, q] = [vec(x, a, 2), vec(x, b, 2)]; return p[0] * q[1] - p[1] * q[0]; });
+  out.D3DXVec3Cross = M('ppp', (x, a, b) => { const [p, q] = [vec(x, a, 3), vec(x, b, 3)]; return [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]]; });
+  out.D3DXQuaternionLength = out.D3DXVec4Length; out.D3DXQuaternionLengthSq = out.D3DXVec4LengthSq; out.D3DXQuaternionDot = out.D3DXVec4Dot;
+  out.D3DXQuaternionNormalize = out.D3DXVec4Normalize;
+  out.D3DXQuaternionIdentity = M('p', () => [0, 0, 0, 1]);
+  out.D3DXQuaternionConjugate = M('pp', (x, q) => { const [a, b, c, d] = vec(x, q, 4); return [-a, -b, -c, d]; });
+  out.D3DXQuaternionRotationAxis = M('ppf', (x, pv, ang) => { const a = vec(x, pv, 3), l = Math.hypot(...a) || 1, s = Math.sin(ang / 2); return [...a.map((c) => c / l * s), Math.cos(ang / 2)]; });
+  // D3DXQuaternionMultiply(out, q1, q2) is the rotation q1 then q2: q2 * q1 in Hamilton's product.
+  out.D3DXQuaternionMultiply = M('ppp', (x, p1, p2) => {
+    const [ax, ay, az, aw] = vec(x, p2, 4), [bx, by, bz, bw] = vec(x, p1, 4);
+    return [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx, aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz];
+  });
+  out.D3DXQuaternionSlerp = M('pppf', (x, p1, p2, t) => {
+    const a = vec(x, p1, 4); let b = vec(x, p2, 4), d = dot(a, b);
+    if (d < 0) { b = b.map((c) => -c); d = -d; }
+    if (1 - d < 1e-3) return a.map((c, i) => c + t * (b[i] - c));
+    const th = Math.acos(d), s = Math.sin(th), k0 = Math.sin((1 - t) * th) / s, k1 = Math.sin(t * th) / s;
+    return a.map((c, i) => k0 * c + k1 * b[i]);
+  });
+  out.D3DXMatrixRotationQuaternion = M('pp', (x, pq) => {
+    const [a, b, c, d] = vec(x, pq, 4);
+    return [1 - 2 * (b * b + c * c), 2 * (a * b + c * d), 2 * (a * c - b * d), 0, 2 * (a * b - c * d), 1 - 2 * (a * a + c * c), 2 * (b * c + a * d), 0,
+      2 * (a * c + b * d), 2 * (b * c - a * d), 1 - 2 * (a * a + b * b), 0, 0, 0, 0, 1];
+  });
+  out.D3DXPlaneDot = F('pp', (x, p, v) => dot(vec(x, p, 4), vec(x, v, 4)));
+  out.D3DXPlaneDotCoord = F('pp', (x, p, v) => dot(vec(x, p, 4), [...vec(x, v, 3), 1]));
+  out.D3DXPlaneDotNormal = F('pp', (x, p, v) => dot(vec(x, p, 3), vec(x, v, 3)));
+  out.D3DXPlaneNormalize = M('pp', (x, p) => { const q = vec(x, p, 4), l = Math.hypot(q[0], q[1], q[2]); return l ? q.map((c) => c / l) : [0, 0, 0, 0]; });
+  out.D3DXColorNegative = M('pp', (x, c) => { const q = vec(x, c, 4); return [1 - q[0], 1 - q[1], 1 - q[2], q[3]]; });
+  out.D3DXColorAdd = out.D3DXVec4Add; out.D3DXColorSubtract = out.D3DXVec4Subtract; out.D3DXColorScale = out.D3DXVec4Scale; out.D3DXColorLerp = out.D3DXVec4Lerp;
+  out.D3DXColorModulate = M('ppp', (x, a, b) => { const q = vec(x, b, 4); return vec(x, a, 4).map((c, i) => c * q[i]); });
+  return out;
 }

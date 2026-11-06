@@ -4497,6 +4497,70 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: D3DXCreateText from a TrueType font gdi32 selects: GGO_NATIVE\'s contours, Wine\'s outlines, triangles and sides', got,
     '300,0 q2q2q2q2 | 82 | 60 | 0.32 | 0.315 | 0.6,0.6,0,0.6,0.7,0.6,0.65 | 3,1,1,128'); }
+// What the 4K intros of 2005-2008 met (2026-11-06). dx8vb.dll's exports numbered as Microsoft's (Wine's
+// .spec order): Polystreptikum finds VB_D3DXVec3Add by hash and takes the 104 functions after it by ordinal,
+// the last VB_D3DXVec3CatmullRom; its CatmullRom as D3DX's, a length on the x87 stack. ID3DXMatrixStack as
+// Wine's (Atrium): ScaleLocal after TranslateLocal scales first; Translate multiplies on the right; Pop.
+// D3DXCreateBox as Wine's: corner 6 of a 2x4x6 box at (1, 2, 3) with +y's normal, face 1 (2, 3, 0).
+// MultiplyTransform as wined3d: pMatrix x the state's, so a scaling leaves the translation alone. A DIB
+// section's pixels are the program's memory: TextOutA's opaque background lands there, the pixel the
+// program wrote outside it stays. DrawPrimitiveUP of XYZ vertices 16 bytes apart (luxo4k) reaches the model
+// packed at 12. "Times" is Times New Roman (FontSubstitutes): its metrics, not the no-font guess.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0, 0, 2, 1], 0x40);
+    const o = new DataView(exe.buffer, 0x58); o.setUint16(0, 0x10b, true); o.setUint32(28, 0x400000, true); o.setUint32(32, 0x1000, true); o.setUint32(36, 0x200, true); o.setUint32(56, 0x2000, true); o.setUint32(60, 0x200, true);
+    // a TrueType font of one empty glyph: an em of 1000, ascent 900, descent 300, every character 700 wide
+    const be16 = (...v) => v.flatMap((n) => [(n >> 8) & 255, n & 255]);
+    const head = new Array(54).fill(0); head.splice(18, 2, ...be16(1000));
+    const os2 = new Array(78).fill(0); os2.splice(74, 4, ...be16(900, 300));
+    const hhea = new Array(36).fill(0); hhea.splice(34, 2, ...be16(1));
+    const tables = { head, maxp: [0, 0, 0x50, 0, ...be16(1)], hhea, 'OS/2': os2, hmtx: be16(700, 0),
+      cmap: [...be16(0, 1, 3, 1, 0, 12), ...be16(4, 24, 0, 2, 2, 0, 0, 0xffff, 0, 0xffff, 1, 0)], loca: be16(0, 0), glyf: [] };
+    const names = Object.keys(tables), ttf = [...be16(1, 0, names.length, 0, 0, 0)];
+    let at = 12 + 16 * names.length;
+    for (const n of names) { ttf.push(...[...n].map((c) => c.charCodeAt(0)), 0, 0, 0, 0, ...be16(at >>> 16, at & 0xffff, 0, tables[n].length)); at += tables[n].length; }
+    for (const n of names) ttf.push(...tables[n]);
+    const be = traceBackend(), apis = win32Apis({ fonts: { 'times new roman': Uint8Array.from(ttf) } }), { x, win } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: be });
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1], d9 = (n) => fn('d3d9.dll', n), dx = (n) => fn('d3dx9_24.dll', n), vb = (n) => fn('dx8vb.dll', n), gdi = (n) => fn('gdi32.dll', n);
+    const dxvb = win.load('dx8vb'), ord = (n) => [...dxvb.byOrdinal].find(([, a]) => a === dxvb.exports.get(n))[0];
+    const ords = ['VB_D3DXVec3Add', 'VB_D3DXVec3CatmullRom', 'DllGetClassObject'].map(ord).join(' ');
+    const fl = (p, ...v) => x.write(p, new Uint8Array(Float32Array.from(v).buffer)), rf = (p, n) => Array.from({ length: n }, (_, i) => +x.f32(p + 4 * i).toFixed(3) + 0);
+    const P = x.win.heapAlloc(16 * 4); [0, 1, 2, 3].forEach((i) => fl(P + 16 * i, i, 2 * i, 0));
+    const out = x.win.heapAlloc(16); vb('VB_D3DXVec3CatmullRom')(x, out, P, P + 16, P + 32, P + 48, 0.5);
+    fl(P, 3, 4, 0); const len = vb('VB_D3DXVec3Length')(x, P).st0;
+    const pp = x.win.heapAlloc(56), pp4 = () => x.win.heapAlloc(4); x.write(pp, new Uint8Array(56)); x.w32(pp + 32, 1);
+    const ppDev = pp4(); d9('IDirect3D9::CreateDevice')(x, d9('Direct3DCreate9')(x, 32), 0, 1, 0, 0x40, pp, ppDev); const dev = x.r32(ppDev);
+    const ppS = pp4(); dx('D3DXCreateMatrixStack')(x, 0, ppS); const S = x.r32(ppS), ms = (n, ...a) => d9(`ID3DXMatrixStack::${n}`)(x, S, ...a);
+    ms('TranslateLocal', 1, 2, 3); ms('ScaleLocal', 2, 2, 2);
+    const t1 = rf(ms('GetTop'), 16).filter((_, i) => i === 0 || i >= 12).join(',');
+    ms('Push'); ms('Translate', 10, 0, 0); const t2 = rf(ms('GetTop') + 48, 3).join(','); ms('Pop'); const t3 = rf(ms('GetTop') + 48, 3).join(',');
+    const ppM = pp4(), pl = pp4(); dx('D3DXCreateBox')(x, dev, 2, 4, 6, ppM, 0); const box = x.r32(ppM);
+    d9('ID3DXMesh::LockVertexBuffer')(x, box, 0, pl); const corner = rf(x.r32(pl) + 24 * 6, 6).join(',');
+    d9('ID3DXMesh::LockIndexBuffer')(x, box, 0, pl); const face1 = [3, 4, 5].map((k) => x.r16(x.r32(pl) + 2 * k)).join(',');
+    const boxN = [d9('ID3DXMesh::GetNumVertices')(x, box), d9('ID3DXMesh::GetNumFaces')(x, box)].join(' ');
+    const m = x.win.heapAlloc(64); fl(m, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1); d9('IDirect3DDevice9::SetTransform')(x, dev, 256, m);
+    fl(m, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1); d9('IDirect3DDevice9::MultiplyTransform')(x, dev, 256, m);
+    d9('IDirect3DDevice9::GetTransform')(x, dev, 256, m); const world = rf(m, 16).filter((_, i) => i === 0 || i === 12).join(',');
+    // a 32-bit top-down DIB section, 32x20; the program writes pixel (30, 10), then text at (2, 1) on red
+    const bmi = x.win.heapAlloc(40); x.write(bmi, new Uint8Array(40)); x.w32(bmi, 40); x.w32(bmi + 4, 32); x.w32(bmi + 8, -20); x.w16(bmi + 12, 1); x.w16(bmi + 14, 32);
+    const ppBits = pp4(), hbm = gdi('CreateDIBSection')(x, 0, bmi, 0, ppBits, 0, 0), bits = x.r32(ppBits), dc = gdi('CreateCompatibleDC')(x, 0);
+    x.w32(bits + 4 * (10 * 32 + 30), 0x123456); gdi('SelectObject')(x, dc, hbm); gdi('SetBkColor')(x, dc, 0x0000ff);
+    const txt = x.win.heapAlloc(4); x.write(txt, new TextEncoder().encode('AB\0'));
+    gdi('TextOutA')(x, dc, 2, 1, txt, 2);
+    const px = (X, Y) => x.r32(bits + 4 * (Y * 32 + X)).toString(16);
+    const dib = [px(2, 1), px(1, 1), px(30, 10)].join(',');
+    fl(P, 0, 0, 0, 9, 1, 0, 0, 9, 0, 1, 0, 9); d9('IDirect3DDevice9::SetFVF')(x, dev, 2); d9('IDirect3DDevice9::DrawPrimitiveUP')(x, dev, 4, 1, P, 16);
+    const [, , vtx, vstride] = be.d3d.device.last.drawPrimitiveUP, up = `${vtx.length}/${vstride} ${new Float32Array(vtx.slice().buffer)[3]}`;
+    const lf = x.win.heapAlloc(60); x.write(lf, new Uint8Array(60)); x.w32(lf, -10); x.write(lf + 28, new TextEncoder().encode('Times\0'));
+    const dc2 = gdi('CreateCompatibleDC')(x, 0); gdi('SelectObject')(x, dc2, gdi('CreateFontIndirectA')(x, lf));
+    const size = x.win.heapAlloc(8); gdi('GetTextExtentPoint32A')(x, dc2, txt, 2, size);
+    got = [ords, rf(out, 3).join(','), +len.toFixed(3), t1, t2, t3, boxN, corner, face1, world, dib, up, x.r32(size), x.r32(size + 4)].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: dx8vb.dll\'s ordinals and math, ID3DXMatrixStack, D3DXCreateBox, MultiplyTransform, a DIB section\'s text, "Times"', got,
+    '19 122 137 | 1.5,3,0 | 5 | 2,1,2,3,1 | 11,2,3 | 1,2,3 | 24 12 | 1,2,3,0,1,0 | 2,3,0 | 2,1 | ff0000,0,123456 | 36/12 1 | 14 | 12'); }
 // SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
 // the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
 // one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.

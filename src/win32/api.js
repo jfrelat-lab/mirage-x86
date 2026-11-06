@@ -81,6 +81,13 @@ const numbered = (fns) => {
 };
 
 /** The process's window and its GL context, as the APIs below share them. */
+/*
+ * The faces Windows XP answers with another (HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\
+ * FontSubstitutes, as XP installs it): a program that asks for "Times" gets Times New Roman. luxo4k (2009)
+ * writes its title in "times".
+ */
+export const FONT_SUBSTITUTES = { times: 'times new roman', helvetica: 'arial', 'ms shell dlg': 'microsoft sans serif', 'ms shell dlg 2': 'tahoma' };
+
 function windowState(fonts = {}) {
   const st = { hwnd: 0x10010, hdc: 0x1001, hglrc: 0x10000, w: 640, h: 480, mode: null, lastSwap: 0, keys: new Set(), msgs: [] };
   // GDI's objects (fonts, DCs) by handle; the font selected into each DC.
@@ -93,7 +100,9 @@ function windowState(fonts = {}) {
   st.dcFont = (hdc) => {
     const f = st.gdi.get(st.dcFonts.get(hdc));
     if (!f) return null;
-    const face = f.face.toLowerCase(), key = [f.weight >= 600 ? `${face}:bold` : null, face].find((k) => k && fonts[k]);
+    const faces = [f.face.toLowerCase()];
+    if (FONT_SUBSTITUTES[faces[0]]) faces.push(FONT_SUBSTITUTES[faces[0]]);
+    const key = faces.flatMap((face) => [f.weight >= 600 ? `${face}:bold` : null, face]).find((k) => k && fonts[k]);
     if (!key) return null;
     if (!parsed.has(key)) parsed.set(key, parseTrueType(fonts[key]));
     return parsed.get(key);
@@ -330,6 +339,16 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     wsprintfA: ['ppp', NOT('user32', 'wsprintfA')[1], { cdecl: true }],
   };
   // ---- gdi32 ---------------------------------------------------------------------------------------
+  // Text drawn into a bitmap (ExtTextOutA), at the pen (X, Y), the cell's top.
+  const textOut = (x, bm, d, m, X, Y, opts, rect, str, n) => {
+    const text = x.bytes(str, Math.max(0, n)), bgr = (c) => ((c & 0xff) << 16) | (c & 0xff00) | ((c >>> 16) & 0xff);
+    let width = 0;
+    const glyphs = [...text].map((c) => { const g = m.font ? m.font.glyph(c, m.ppem) : null; const at = width; width += g ? g.cellIncX : m.avg; return { g, at }; });
+    if (d.bkMode !== 1) fillRect(bm, X, Y, X + width, Y + m.height, bgr(d.bkColor));   // OPAQUE: the cells' background
+    if (opts & 2 && rect) fillRect(bm, x.r32(rect) | 0, x.r32(rect + 4) | 0, x.r32(rect + 8) | 0, x.r32(rect + 12) | 0, bgr(d.bkColor));   // ETO_OPAQUE
+    for (const { g, at } of glyphs) if (g) fillGlyph(bm, g, X + at, Y + m.ascent, bgr(d.textColor));
+    return 1;
+  };
   const gdi32 = {
     ChoosePixelFormat: ['pp', () => 1], SetPixelFormat: ['pip', () => 1],
     DescribePixelFormat: ['piup', () => 1],
@@ -379,17 +398,30 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     ExtTextOutA: ['piiuppip', (x, hdc, X, Y, opts, rect, str, n) => {
       const bm = st.gdi.get(st.dcBitmaps.get(hdc)), d = dcState(hdc), m = textMetrics(hdc);
       if (!bm || bm.kind !== 'bitmap') return 1;
-      const text = x.bytes(str, Math.max(0, n)), bgr = (c) => ((c & 0xff) << 16) | (c & 0xff00) | ((c >>> 16) & 0xff);
-      let width = 0;
-      const glyphs = [...text].map((c) => { const g = m.font ? m.font.glyph(c, m.ppem) : null; const at = width; width += g ? g.cellIncX : m.avg; return { g, at }; });
-      if (d.bkMode !== 1) fillRect(bm, X, Y, X + width, Y + m.height, bgr(d.bkColor));   // OPAQUE: the cells' background
-      if (opts & 2 && rect) fillRect(bm, x.r32(rect) | 0, x.r32(rect + 4) | 0, x.r32(rect + 8) | 0, x.r32(rect + 12) | 0, bgr(d.bkColor));   // ETO_OPAQUE
-      for (const { g, at } of glyphs) if (g) fillGlyph(bm, g, X + at, Y + m.ascent, bgr(d.textColor));
-      return 1;
+      if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);   // a DIB section: its pixels are the program's memory
+      const r = textOut(x, bm, d, m, X, Y, opts, rect, str, n);
+      if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, false);
+      return r;
+    }],
+    TextOutA: ['piipi', (x, hdc, X, Y, str, n) => gdi32.ExtTextOutA[1](x, hdc, X, Y, 0, 0, str, n)],
+    /*
+     * CreateDIBSection: a bitmap whose pixels are in the program's memory, where it reads the text drawn
+     * into it (Polystreptikum's letters, made a texture). 24 and 32 bits; the drawing goes through the
+     * bitmap's own pixels, loaded from that memory before and stored back after.
+     */
+    CreateDIBSection: ['ppuppu', (x, hdc, bmi, usage, ppBits) => {
+      const w = x.r32(bmi + 4) | 0, h = x.r32(bmi + 8) | 0, bpp = x.r16(bmi + 14);
+      if (w <= 0 || !h || (bpp !== 24 && bpp !== 32)) { if (ppBits) x.w32(ppBits, 0); return 0; }
+      const stride = ((w * bpp + 31) >> 5) << 2, bits = x.win.heapAlloc(stride * Math.abs(h)), copy = x.win.heapAlloc(40);
+      x.write(bits, new Uint8Array(stride * Math.abs(h)));
+      x.write(copy, x.bytes(bmi, 40));
+      if (ppBits) x.w32(ppBits, bits);
+      return st.newHandle('bitmap', { w, h: Math.abs(h), px: new Uint32Array(w * Math.abs(h)), dib: { bits, bmi: copy } });
     }],
     GetDIBits: ['ppuuppu', (x, hdc, hbm, start, lines, bits, bmi) => {
       const bm = st.gdi.get(hbm);
       if (!bm || bm.kind !== 'bitmap') return 0;
+      if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
       if (!bits) { x.w32(bmi + 4, bm.w); x.w32(bmi + 8, bm.h); x.w16(bmi + 12, 1); x.w16(bmi + 14, 32); x.w32(bmi + 16, 0); x.w32(bmi + 20, bm.w * bm.h * 4); return bm.h; }
       return dibCopy(x, bm, start, lines, bits, bmi, false);
     }],
