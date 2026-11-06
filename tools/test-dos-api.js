@@ -1212,6 +1212,21 @@ function asciiz(mc, cpu, off, str) {
   eq("the parent's own 4Ch still ends the program", c.dos.programDone, true);
 }
 
+// A 55h child's end frees the blocks it allocated, as DOS frees every block a process owns. Second
+// Reality runs each part as such a child; the parts' buffers stayed allocated, and at the spaceship
+// part its loader found no room: "FATAL: Could not load or execute internal subfile".
+{
+  const c = mk(), parent = c.dos.psp;
+  int21(c, 0x4a, (cpu) => { cpu.setSeg(0, parent); cpu.bx = 0x1000; });   // the parent shrinks to make room
+  const mine = int21(c, 0x48, (cpu) => { cpu.bx = 0x100; }).cpu.ax & 0xffff;
+  int21(c, 0x55, (cpu) => { cpu.dx = 0x7000; cpu.si = 0x9fff; });
+  c.mc.mem.w16((0x7000 << 4) + 0x0a, 0x0765); c.mc.mem.w16((0x7000 << 4) + 0x0c, 0x0824);
+  const its = int21(c, 0x48, (cpu) => { cpu.bx = 0x2000; }).cpu.ax & 0xffff;
+  int21(c, 0x4c, (cpu) => { cpu.al = 0; });
+  eq("55h child's 4Ch frees its own block (49h on it: error 9) and keeps the parent's",
+    [int21(c, 0x49, (cpu) => { cpu.setSeg(0, its); }).cf, int21(c, 0x49, (cpu) => { cpu.setSeg(0, mine); }).cf].join(), '1,0');
+}
+
 // ----------------------------------------------------------------------------
 console.log(`\nmirage DOS/BIOS services: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

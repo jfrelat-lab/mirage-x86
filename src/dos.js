@@ -68,6 +68,7 @@ export function installDOS(machine, vfs) {
     },
     allocTop: PSP_SEG,
     allocs: new Map(),        // live AH=48 allocations: seg → paragraphs
+    allocOwner: new Map(),    // seg → the PSP current when AH=48h handed it out (its MCB owner)
     memFloor: MEM_TOP,        // bump base above the program's own block
     blockBase: PSP_SEG,       // first paragraph of the running program's block (MCB at base-1)
     programDone: false,
@@ -184,6 +185,7 @@ export function installDOS(machine, vfs) {
     machine.rec.reset();
     dos.programDone = false; dos.exitCode = 0; dos.exitType = 0;
     dos.allocs = new Map();      // seg → paragraphs for live AH=48 blocks
+    dos.allocOwner = new Map();
     dos.memFloor = MEM_TOP;      // bump base above the program's own block (lowered when it shrinks)
     dos.blockBase = PSP_SEG;     // the paragraph its MCB describes; differs from the PSP when loaded high
     if (machine.xms) machine.xms.reset();   // a fresh program gets a clean extended-memory pool
@@ -580,6 +582,12 @@ export function installDOS(machine, vfs) {
       dos.childPsps.delete(dos.psp);
       mem.w32(0x22 * 4, ret); mem.w32(0x23 * 4, mem.r32(p + 0x0e)); mem.w32(0x24 * 4, mem.r32(p + 0x12));
       vfs.jfts.delete(dos.psp);
+      // ...and, as DOS frees every block a process owns when it ends, the blocks AH=48h gave out while
+      // this PSP was current. Second Reality's parts run as such children and allocate their own
+      // buffers; kept, they stacked up until the loader could not fit the next part -- "FATAL: Could
+      // not load or execute internal subfile" as the spaceship part began.
+      for (const [sg, owner] of dos.allocOwner) if (owner === dos.psp) { dos.allocs.delete(sg); dos.allocOwner.delete(sg); }
+      recomputeTop();
       dos.psp = child.parent; vfs.setPsp(child.parent); syncSFT();
       cpu.reg.set(child.reg);
       for (const sr of [ES, SS, DS]) cpu.setSeg(sr, child.seg[sr]);
@@ -878,7 +886,7 @@ export function installDOS(machine, vfs) {
         if (strategy === 2) { const [, end] = fits[fits.length - 1]; seg = end - par; }
         else if (strategy === 1) { const [at] = fits.reduce((x, y) => (y[1] - y[0] < x[1] - x[0] ? y : x)); seg = at + 1; }
         else seg = fits[0][0] + 1;
-        dos.allocs.set(seg, par); recomputeTop(); cpu.ax = seg; ok(); break;
+        dos.allocs.set(seg, par); dos.allocOwner.set(seg, dos.psp); recomputeTop(); cpu.ax = seg; ok(); break;
       }
       case 0x49: {                                                   // free a block (reclaims)
         // Freeing a segment we never handed out used to report success, so a double free — or a
@@ -886,7 +894,7 @@ export function installDOS(machine, vfs) {
         // wrong. Real DOS returns error 9, "invalid memory block address".
         const seg = cpu.seg[ES];
         if (!dos.allocs.has(seg)) { err(9); break; }
-        dos.allocs.delete(seg); recomputeTop(); ok(); break;
+        dos.allocs.delete(seg); dos.allocOwner.delete(seg); recomputeTop(); ok(); break;
       }
       // The SFT is rebuilt HERE rather than kept in step on every file call: a program walks it
       // immediately after asking for the List of Lists, and rebuilding 20 entries on every read
