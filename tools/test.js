@@ -637,7 +637,17 @@ function eq(name, got, want) {
   eq('PIT: FFFFh just loaded reads FFFFh, and 1000 ticks of cycles later FFFFh-1000', [at0.toString(16), (0xffff - read()).toString()].join(), 'ffff,1000');
   mc.ioWrite(0x43, 1, 0x30); mc.ioWrite(0x40, 1, 0x00); mc.ioWrite(0x40, 1, 0x10);
   cpu.cycles += Math.ceil(mc.pitBase * 0x100 / 65536);
-  eq('...and a new reload restarts the count from it', read().toString(16), 'f00'); }
+  eq('...and a new reload restarts the count from it', read().toString(16), 'f00');
+  // Mode 3 (36h, the BIOS's square wave) counts by two, N to 0 twice a period. Second Reality's
+  // copper times a frame so -- FFFFh, a retrace, the count, (65536 - count) / 2 -- and counted by one it
+  // found 8522 clocks a frame, not 17045: its interrupts all came in the first half of the frame, the
+  // last polled 3DAh through the second, and the credit texts, drawn too late, came out doubled.
+  mc.ioWrite(0x43, 1, 0x36); mc.ioWrite(0x40, 1, 0xff); mc.ioWrite(0x40, 1, 0xff);
+  cpu.cycles += Math.ceil(mc.pitBase * 17045 / 65536);
+  const sq = read();
+  cpu.cycles += Math.ceil(mc.pitBase * 32768 / 65536);
+  eq('PIT mode 3: a frame after FFFFh reads FFFEh - 2 x 17045, and half a period later the same again',
+    [(0xfffe - sq) / 2, read() === sq].join(), '17045,true'); }
 
 // ---- the ATAPI CD-ROM, secondary master (src/ide.js): what tools/atapiprobe.asm reads on QEMU -cdrom ----
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);

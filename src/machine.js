@@ -165,6 +165,7 @@ export class Machine {
       this._pitReadHi = false;                        // any counter-0 command re-aligns reads to LSB first
       if (access === 0) return;                       // counter-latch command (read), no reload change
       this._pitAccess = access; this._pitHiNext = false;
+      this._pitMode = (v >> 1) & 7; if (this._pitMode > 5) this._pitMode -= 4;   // 6, 7 are 2, 3
     });
     this.onPortWrite(0x40, (_p, _s, v) => {
       v &= 0xff;
@@ -190,6 +191,22 @@ export class Machine {
     // counted in cycles of an unthrottled CPU, a 70 Hz frame was far past 16 bits. Unreal (Future Crew,
     // 1992) times the frame between two retraces with this counter, twice, wants the two within 32
     // clocks, and after 32 tries set its timer to 65536: its frames came at 18 Hz, not 70.
+    // The mode matters to the count: in mode 3 (square wave, the BIOS's own 36h, which most programs
+    // write again) the 8254 counts down by TWO each clock, N to 0 for the high half of the period and
+    // again for the low half; modes 0, 1, 2 and 4 count by one. Second Reality and Unreal (Future Crew)
+    // time a frame by writing FFFFh in mode 3 and reading the count back at the next retrace, then
+    // halve 65536 - count: counted by one, their frame was 8522 PIT clocks instead of 17045, every
+    // copper interrupt of the frame came in its first half, and the last one polled 3DAh for the rest
+    // of it -- half the CPU gone, and Second Reality's credit texts drawn too late, doubled.
+    // Before the guest's first control word the count runs by one, as it always did here, though the
+    // BIOS leaves mode 3: 256bytef and kaneda (golden) seed their randomness from port 40h unprogrammed,
+    // and counted by two (even values only, as on a PC) their pictures change. A decision for later.
+    this._pitMode = 2;
+    const pitCount = (n, el) => {                     // the count `el` clocks into a period of n
+      if (this._pitMode !== 3) return (n - el) & 0xffff;
+      const h = (n + 1) >> 1;                         // an odd count stays high one clock longer
+      return ((n & ~1) - 2 * (el < h ? el : el - h)) & 0xffff;
+    };
     this._pitTicks = 0x10000; this._pitLoad = 0; this._pitLoadMs = 0;
     const pitOld = typeof process !== 'undefined' && process.env && process.env.MIRAGE_PITOLD === '1';
     this.onPortRead(0x40, () => {
@@ -198,7 +215,7 @@ export class Machine {
       else {
         if (this.wallClockMs) {
           const el = Math.floor((this.wallClockMs() - this._pitLoadMs) * 1193.182);
-          count = (this._pitTicks - (el % this._pitTicks)) & 0xffff;
+          count = pitCount(this._pitTicks, el % this._pitTicks);
         } else if (this.timerAuto) {
           // Headless the count follows the INT 8 schedule itself: N when the tick is due, down to 1 just
           // before the next. Counted from the write in exact ticks, it drifted from the ticks, scheduled
@@ -207,10 +224,10 @@ export class Machine {
           // reloaded. From a write, the next tick is a period away, so the count runs from N as before.
           const last = this.nextTimerCycle - this.pitReload;
           const f = (this.cpu.cycles - last) / this.pitReload;
-          count = (this._pitTicks - (Math.floor((f - Math.floor(f)) * this._pitTicks))) & 0xffff;
+          count = pitCount(this._pitTicks, Math.floor((f - Math.floor(f)) * this._pitTicks));
         } else {
           const el = Math.floor((this.cpu.cycles - this._pitLoad) * 65536 / this.pitBase);
-          count = (this._pitTicks - (el % this._pitTicks)) & 0xffff;
+          count = pitCount(this._pitTicks, el % this._pitTicks);
         }
       }
       if (this._pitAccess === 1) return count & 0xff;
