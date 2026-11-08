@@ -6,6 +6,8 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-08
 
+- **WinQuake's video modes**: `vid_mode 2` gives an 800x600 window, the screen following the size a
+  program gives its window (`SetWindowPos`, `MoveWindow`) and the frame its style has (`SetWindowLongA`).
 - **WinQuake runs in the browser, with no Windows**: id Software's own `winquake.exe` of March 1997,
   unmodified, with the shareware episode, one click away in the Windows machine. Its sound plays
   through DirectSound, and the keyboard and mouse reach it as window messages. MIRAGE-WIN32 gained

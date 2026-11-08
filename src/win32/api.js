@@ -438,9 +438,14 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const createWindow = (x, cls, style, w, h, wide) => {
     const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
     if (st.classes.has(key)) st.wndProc = st.classes.get(key);
-    const b = style & 0xc00000 ? 3 : style & 0x800000 ? 1 : 0, cap = (style & 0xc00000) === 0xc00000 ? 19 : 0;   // as AdjustWindowRectEx
-    if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = Math.max(1, w - 2 * b); st.h = Math.max(1, h - 2 * b - cap); }
+    st.style = style; resize(w, h);
     return st.hwnd;
+  };
+  // The window made w x h (its frame included): the client area inside the frame its style has, as
+  // AdjustWindowRectEx adds it -- what the screen shows.
+  const resize = (w, h) => {
+    const style = st.style | 0, b = style & 0xc00000 ? 3 : style & 0x800000 ? 1 : 0, cap = (style & 0xc00000) === 0xc00000 ? 19 : 0;
+    if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = Math.max(1, w - 2 * b); st.h = Math.max(1, h - 2 * b - cap); }
   };
   const putMsg = (x, m, e) => { x.w32(m, st.hwnd); x.w32(m + 4, e.msg); x.w32(m + 8, e.wp); x.w32(m + 12, e.lp); x.w32(m + 16, e.time || 0); x.w32(m + 20, st.mouseX ?? 0); x.w32(m + 24, st.mouseY ?? 0); };
   const user32 = {
@@ -451,7 +456,11 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, true)],
     ChangeDisplaySettingsA: ['pu', (x, dm) => { if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; } return 0; }],   // DEVMODEA's dmPelsWidth, dmPelsHeight
     GetDC: ['p', () => st.hdc], ReleaseDC: ['pp', () => 1],
-    ShowCursor: ['i', () => 0], SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; return 1; }], ShowWindow: ['pi', () => 1], UpdateWindow: ['p', () => 1], SetWindowPos: ['ppiiiiu', () => 1],
+    ShowCursor: ['i', () => 0], SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; return 1; }], ShowWindow: ['pi', () => 1], UpdateWindow: ['p', () => 1],
+    // A window moved or sized: its new size, unless SWP_NOSIZE (1). WinQuake's video modes resize its
+    // window this way (vid_mode 2: 806x625 with its frame, an 800x600 picture).
+    SetWindowPos: ['ppiiiiu', (x, hwnd, after, X, Y, w, h, flags) => { if (hwnd === st.hwnd && !(flags & 1)) resize(w, h); return 1; }],
+    MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => { if (hwnd === st.hwnd) resize(w, h); return 1; }],
     GetAsyncKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8001 : 0)],
     GetCursorPos: ['p', (x, p) => { x.w32(p, st.mouseX ?? (st.w >> 1)); x.w32(p + 4, st.mouseY ?? (st.h >> 1)); return 1; }],
     PostQuitMessage: ['i', () => 0],
@@ -491,7 +500,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     SetFocus: ['p', () => st.hwnd], EnableWindow: ['pi', () => 0], MessageBeep: ['u', () => 1],
     SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1], ClipCursor: ['p', () => 1],
     InvalidateRect: ['ppi', () => 1], PostMessageA: ['puuu', () => 1], SendMessageA: ['puuu', () => 0], KillTimer: ['pu', () => 1],
-    SetWindowLongA: ['piu', () => 0],
+    // GWL_STYLE (-16): the frame the window's size includes from now on (WinQuake's windowed and full-screen modes).
+    SetWindowLongA: ['pii', (x, hwnd, i, v) => { if (i === -16 && hwnd === st.hwnd) { const prev = st.style | 0; st.style = v; return prev; } return 0; }],
     // WM_PAINT's DC: the window's, the whole client area to paint (PAINTSTRUCT: hdc, fErase, rcPaint).
     BeginPaint: ['pp', (x, hwnd, ps) => { x.write(ps, new Uint8Array(64)); x.w32(ps, st.hdc); x.w32(ps + 16, st.w); x.w32(ps + 20, st.h); return st.hdc; }],
     EndPaint: ['pp', () => 1],

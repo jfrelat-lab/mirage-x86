@@ -4719,7 +4719,18 @@ const runLinux = (hex, argv) => {
     const wbuf = x.win.heapAlloc(16), n = k('MultiByteToWideChar')(1252, 0, str('Qu'), -1, wbuf, 8);
     got = [x.r32(vi + 4), x.r32(vi + 8), x.r32(vi + 12), n, x.r16(wbuf + 2).toString(16), k('CompareStringA')(0, 1, str('ID1'), -1, str('id1'), -1), k('GetACP')()].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: GetVersionExA (XP), MultiByteToWideChar, CompareStringA ignoring case, GetACP', got, '5 1 2600 3 75 2 1252'); }
+  eq('win32: GetVersionExA (XP), MultiByteToWideChar, CompareStringA ignoring case, GetACP', got, '5 1 2600 3 75 2 1252');
+  // The window's size follows SetWindowPos and its style: WinQuake's vid_mode 2 resizes a framed window
+  // to 806x625 (800x600 inside), its full-screen modes make it a popup with no frame.
+  try { const { fn, x } = await w32(), u = (n) => fn('user32.dll', n), r = x.win.heapAlloc(16);
+    const client = () => { u('GetClientRect')(0x10010, r); return `${x.r32(r + 8)}x${x.r32(r + 12)}`; };
+    u('CreateWindowExA')(0, 0, 0, 0xcf0000, 0, 0, 326, 265); const a = client();
+    u('SetWindowPos')(0x10010, 0, 0, 0, 806, 625, 0x184); const b = client();
+    u('SetWindowPos')(0x10010, 0, 0, 0, 0, 0, 0x163); const c = client();             // SWP_NOSIZE: unchanged
+    u('SetWindowLongA')(0x10010, -16, 0x80000000); u('SetWindowPos')(0x10010, 0, 0, 0, 640, 480, 0x104);
+    got = [a, b, c, client()].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: the client area follows SetWindowPos (not with SWP_NOSIZE) and the style SetWindowLongA sets', got, '320x240 800x600 800x600 640x480'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

@@ -7,7 +7,8 @@
 //   MIRAGE_W32SHOTS=5,10 MIRAGE_W32SHOTPREFIX=/tmp/w   the screen (a GDI window's, on the card's framebuffer)
 //                                   at those guest seconds: <prefix>-<s>s.png
 //   MIRAGE_W32KEYS=12:01,14:1c       keys pressed at those guest seconds, by PC scancode (hex; e0xx for an
-//                                   extended key), held a tenth of a second: WM_KEYDOWN, WM_KEYUP
+//                                   extended key), held a tenth of a second: WM_KEYDOWN, WM_KEYUP; 2a+ and
+//                                   2a- press and release (Shift held over the keys between)
 //   MIRAGE_W32DIR=<dir>             the files beside it, by base name, on the program's own disk (src/win32/api.js)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
 //   MIRAGE_W32TRACE=1               every API call as it is made
@@ -94,7 +95,8 @@ const shot = async (t) => {
   const f = `${process.env.MIRAGE_W32SHOTPREFIX || '/tmp/w32'}-${t}s.png`; writePNG(f, rgb, v.width, v.height, 1); console.error(`mirage-win32: ${v.width}x${v.height} at ${t} s -> ${f}`);
 };
 const KEYS = (process.env.MIRAGE_W32KEYS || '').split(',').filter(Boolean).flatMap((k) => {
-  const [t, c] = k.split(':'), v = parseInt(c, 16), ext = v > 0xff, scan = v & 0xff;
+  const [t, c] = k.split(':'), v = parseInt(c, 16), ext = v > 0xff, scan = v & 0xff, hold = c.slice(-1);
+  if (hold === '+' || hold === '-') return [{ at: Number(t), down: hold === '+', scan, ext }];   // held down, let go
   return [{ at: Number(t), down: true, scan, ext }, { at: Number(t) + 0.1, down: false, scan, ext }];
 }).sort((a, b) => a.at - b.at);
 while (!lx.done && mc.cpu.cycles < LIMIT) {
