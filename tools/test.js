@@ -4654,6 +4654,72 @@ const runLinux = (hex, argv) => {
     got = [held, n0, r, swaps].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: SwapBuffers waits while the page has not taken the last frame, then presents', got, 'true 0 1 1'); }
+// WinQuake (id Software, 1997) on MIRAGE-WIN32: what it needed, each answered as Windows answers it.
+// The context comes from tools/win32/tinyhdr.asm's image (the test above); the functions are called
+// as the program's stubs call them.
+{ const w32 = async (args = '') => {
+    const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const exe = Uint8Array.from((
+    '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
+    '000000000000000000004000040000000400000004000000000000000400000000000000000001004000000000000000' +
+    '0300000000001000001000000000100000100000000000000000000064a1300000008b400c8b400c8b008b008b58188b' +
+    '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
+    '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
+    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, args, backend: traceBackend() });
+    const fn = (dll, name) => { const f = apis.find((d) => d.dll === dll).fns[name][1]; return (...a) => f(x, ...a); };
+    const str = (t) => { const b = new TextEncoder().encode(t + '\0'), p = x.win.heapAlloc(b.length); x.write(p, b); return p; };
+    return { mc, lx, x, apis, fn, str };
+  };
+  let got;
+  // VirtualAlloc's regions are not the heap's: the C runtime's 4 MiB reserve and the game's 16 MiB from
+  // HeapAlloc both began at 10000000h, and Quake's zone was overwritten ("Z_CheckHeap").
+  try { const { fn, x } = await w32(), va = fn('kernel32.dll', 'VirtualAlloc')(0, 0x400000, 0x2000, 4), heap = x.r32(x.win.peb + 0x18);
+    const big = fn('kernel32.dll', 'HeapAlloc')(heap, 0, 0x1000000);
+    got = String(va + 0x400000 <= big || big + 0x1000000 <= va);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: VirtualAlloc\'s region and a 16 MiB HeapAlloc do not overlap', got, 'true');
+  // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
+  try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');
+  // An 8-bit DIB section, its colour table set, stretched into the window: on the card's framebuffer.
+  try { const { mc, fn, x } = await w32(), g = (n) => fn('gdi32.dll', n);
+    fn('user32.dll', 'CreateWindowExA')(0, 0, 0, 0, 0, 0, 320, 200);   // no frame: a 320x200 client area
+    const bmi = x.win.heapAlloc(40 + 1024); x.write(bmi, new Uint8Array(1064)); x.w32(bmi, 40); x.w32(bmi + 4, 160); x.w32(bmi + 8, -100); x.w16(bmi + 12, 1); x.w16(bmi + 14, 8);
+    const pp = x.win.heapAlloc(4), dc = g('CreateCompatibleDC')(0), hbm = g('CreateDIBSection')(dc, bmi, 0, pp, 0, 0);
+    g('SelectObject')(dc, hbm);
+    const q = x.win.heapAlloc(4); x.w32(q, 0x123456); g('SetDIBColorTable')(dc, 5, 1, q);
+    const bits = x.r32(pp); x.write(bits + 160 * 10 + 20, Uint8Array.of(5));   // pixel (20, 10): index 5
+    g('StretchBlt')(0x1001, 0, 0, 320, 200, dc, 0, 0, 160, 100, 0xcc0020);
+    const fb = (X, Y) => new Uint32Array(mc.mem.u8.buffer, mc.mem.u8.byteOffset + mc.vbeFbBase + (Y * 320 + X) * 4, 1)[0];
+    got = [hbm ? 'dib' : 'none', mc.vbe && `${mc.vbe.width}x${mc.vbe.height}`, fb(40, 20).toString(16), fb(41, 21).toString(16), fb(42, 20)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: an 8-bit DIB section, its colour table set, stretched to the window reaches the framebuffer', got, 'dib 320x200 123456 123456 0');
+  // Winsock on a machine with no network: WSAStartup says WSASYSNOTREADY; byte order and dotted addresses answer.
+  try { const { fn, str } = await w32(), w = (n) => fn('wsock32.dll', n);
+    got = [w('WSAStartup')(0x101, 0), w('htons')(0x1234).toString(16), w('inet_addr')(str('1.2.3.4')).toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: wsock32 without a network (WSAStartup 10091), htons, inet_addr', got, '10091 3412 4030201');
+  // A key: WM_KEYDOWN with the scancode in lParam's bits 16-23 (WinQuake's MapKey), then
+  // DispatchMessageA enters the window's procedure with its four arguments, returning into the stub.
+  try { const { mc, fn, x, apis, str } = await w32(), u = (n) => fn('user32.dll', n);
+    const wc = x.win.heapAlloc(40); x.write(wc, new Uint8Array(40)); x.w32(wc + 4, 0x401234); x.w32(wc + 36, str('WinQuake'));
+    u('RegisterClassA')(wc); u('CreateWindowExA')(0, str('winquake'), 0, 0, 0, 0, 320, 200);
+    apis.input.key(true, 0x1e);
+    const m = x.win.heapAlloc(28), had = u('PeekMessageA')(m, 0, 0, 0, 1), ret = mc.cpu.eip;
+    const lp = x.r32(m + 12), sp0 = mc.cpu.reg[4] >>> 0;
+    u('DispatchMessageA')(m);
+    const sp = mc.cpu.reg[4] >>> 0;
+    got = [had, x.r32(m + 4).toString(16), x.r32(m + 8).toString(16), ((lp >> 16) & 255).toString(16), mc.cpu.eip.toString(16), x.r32(sp) === ret, x.r32(sp + 8).toString(16), sp0 - sp].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a key posts WM_KEYDOWN (scancode in lParam); DispatchMessageA enters the window procedure', got, '1 100 41 1e 401234 true 100 20');
+  // The C runtime's start-up: XP's version, code page 1252's conversions, the C locale's comparisons.
+  try { const { fn, x, str } = await w32(), k = (n) => fn('kernel32.dll', n);
+    const vi = x.win.heapAlloc(148); x.w32(vi, 148); k('GetVersionExA')(vi);
+    const wbuf = x.win.heapAlloc(16), n = k('MultiByteToWideChar')(1252, 0, str('Qu'), -1, wbuf, 8);
+    got = [x.r32(vi + 4), x.r32(vi + 8), x.r32(vi + 12), n, x.r16(wbuf + 2).toString(16), k('CompareStringA')(0, 1, str('ID1'), -1, str('id1'), -1), k('GetACP')()].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: GetVersionExA (XP), MultiByteToWideChar, CompareStringA ignoring case, GetACP', got, '5 1 2600 3 75 2 1252'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

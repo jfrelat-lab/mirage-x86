@@ -183,7 +183,21 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const openHandle = (f) => { st.files.push({ f, pos: 0 }); return 0x4000 + st.files.length - 1; };
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
-  let vaNext = 0x10000000;
+  // UTF-16 for the W functions: Latin-1 both ways, as code page 1252 is for what these programs say.
+  const wide = (str) => { const w = new Uint8Array(str.length * 2); for (let i = 0; i < str.length; i++) w[2 * i] = str.charCodeAt(i) & 0xff; return w; };
+  const wideRead = (x, p, n, noNul) => { const cs = []; for (let i = 0; n < 0 ? true : i < n; i++) { const c = x.r16(p + 2 * i); if (n < 0 && !c) { if (!noNul) cs.push(0); break; } cs.push(c); } return cs; };
+  const ctype1 = (c) => (c >= 65 && c <= 90 ? 0x181 : c >= 97 && c <= 122 ? 0x182 : c >= 48 && c <= 57 ? 0x84 : c === 32 ? 0x48 : c === 9 ? 0x68
+    : c >= 10 && c <= 13 ? 0x28 : c < 32 || c === 127 ? 0x20 : c < 127 ? 0x10 : 0) | (c >= 65 && c <= 70 || c >= 97 && c <= 102 ? 0x80 : 0);
+  const lcmap = (c, f) => (f & 0x100 && c >= 65 && c <= 90 ? c + 32 : f & 0x200 && c >= 97 && c <= 122 ? c - 32 : c);   // LCMAP_LOWERCASE, UPPERCASE
+  const compare = (a, b, flags) => {                                  // CSTR_LESS_THAN 1, EQUAL 2, GREATER 3; NORM_IGNORECASE 1
+    const f = (c) => (flags & 1 && c >= 97 && c <= 122 ? c - 32 : c);
+    for (let i = 0; i < Math.min(a.length, b.length); i++) { const d = f(a[i]) - f(b[i]); if (d) return d < 0 ? 1 : 3; }
+    return a.length === b.length ? 2 : a.length < b.length ? 1 : 3;
+  };
+  // VirtualAlloc's regions, above the heap's segments (10000000h to 30000000h, src/win32/index.js): they
+  // began at 10000000h, inside the heap, and WinQuake's 16 MiB from HeapAlloc fell on the 4 MiB its C
+  // runtime had reserved there -- "Z_CheckHeap: next block doesn't have proper back link".
+  let vaNext = 0x30000000;
   const kernel32 = {
     // Crinkler's header calls it once more on the byte after its list of DLL names, and takes the NULL
     // Windows answers as the list's end: only a name that looks like one is worth a line in the log.
@@ -259,7 +273,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     TerminateThread: ['pu', () => 1], ResumeThread: ['p', () => 1], SuspendThread: ['p', () => 0],
     GetCurrentThreadId: ['', (x) => x.lx.pid], GetCurrentProcessId: ['', () => 0x100],
     SetThreadPriority: ['pi', () => 1], SetPriorityClass: ['pu', () => 1], GetCurrentThread: ['', () => 0xfffffffe], GetCurrentProcess: ['', () => 0xffffffff],
-    GetCommandLineA: ['', (x) => (st.cmd ||= (() => { const p = x.win.heapAlloc(x.win.path.length + 3); x.write(p, new TextEncoder().encode(`"${x.win.path}"\0`)); return p; })())],
+    GetCommandLineA: ['', (x) => (st.cmd ||= (() => { const b = new TextEncoder().encode(`"${x.win.path}"${x.win.args ? ' ' + x.win.args : ''}\0`), p = x.win.heapAlloc(b.length); x.write(p, b); return p; })())],   // the program's path quoted, then its arguments
     GetVersion: ['', () => 0x0a280105],                                 // 5.1, build 2600: Windows XP
     GetLastError: ['', () => 0], SetLastError: ['u', () => 0],
     SetUnhandledExceptionFilter: ['p', () => 0], SetErrorMode: ['u', () => 0],
@@ -315,28 +329,197 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     DeleteFileA: ['p', (x, pName) => (st.disk.delete(baseName(x.str(pName))) ? 1 : 0)],
     OutputDebugStringA: ['p', () => 0],
+    SetEndOfFile: ['p', (x, h) => { const o = st.files[h - 0x4000]; if (!o) return 0; o.f.size = o.pos; return 1; }],
+    FlushFileBuffers: ['p', () => 1],
+    // A name on the program's disk is a file (FILE_ATTRIBUTE_ARCHIVE); the disk has no directories but
+    // its root, so anything else is not there.
+    GetFileAttributesA: ['p', (x, pName) => { const n = x.str(pName); return /^[a-z]:\\?$|^\.?[\\/]?$/i.test(n) ? 0x10 : diskFile(n) ? 0x20 : 0xffffffff; }],
+    CreateDirectoryA: ['pp', () => 1],
+    GetCurrentDirectoryA: ['up', (x, n, buf) => { if (n >= 4) x.write(buf, new TextEncoder().encode('C:\\\0')); return 3; }],
+    GetSystemDirectoryA: ['pu', (x, buf, n) => { const s = 'C:\\WINDOWS\\system32'; if (n > s.length) x.write(buf, new TextEncoder().encode(s + '\0')); return s.length; }],
+    // FindFirstFileA over the disk: '*' and '?' in the base name; WIN32_FIND_DATAA's attributes at 0,
+    // size at 32 (low dword), name at 44. A search handle is 5000h up.
+    FindFirstFileA: ['pp', (x, pPat, fd) => {
+      const pat = baseName(x.str(pPat)), re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+      const list = [...st.disk.keys()].filter((n) => re.test(n));
+      if (!list.length) return -1;
+      st.finds ||= []; st.finds.push({ list, i: 0 });
+      const h = 0x5000 + st.finds.length - 1; findFill(x, fd, list[0]); return h;
+    }],
+    FindNextFileA: ['pp', (x, h, fd) => { const s = st.finds && st.finds[h - 0x5000]; if (!s || ++s.i >= s.list.length) return 0; findFill(x, fd, s.list[s.i]); return 1; }],
+    FindClose: ['p', () => 1],
+    GetFileType: ['p', (x, h) => (h >= 0x4000 && h < 0x5000 ? 1 : h >= 0x10 && h <= 0x12 ? 2 : 0)],   // DISK, CHAR (the console), UNKNOWN
+    GetStdHandle: ['i', (x, n) => (n >= -12 && n <= -10 ? 0x10 + (-10 - n) : -1)],                     // 10h input, 11h output, 12h error
+    SetStdHandle: ['ip', () => 1], SetHandleCount: ['u', (x, n) => n],
+    // ---- what the Visual C++ runtime asks at start-up --------------------------------------------------
+    HeapCreate: ['uuu', (x) => x.r32(x.win.peb + 0x18)], HeapDestroy: ['p', () => 1],   // one heap serves every handle
+    GetVersionExA: ['p', (x, p) => {                                 // OSVERSIONINFOA: Windows XP, build 2600
+      if (x.r32(p) < 148) return 0;
+      x.w32(p + 4, 5); x.w32(p + 8, 1); x.w32(p + 12, 2600); x.w32(p + 16, 2); x.write(p + 20, new Uint8Array(128)); return 1;
+    }],
+    GetStartupInfoA: ['p', (x, p) => { x.write(p, new Uint8Array(68)); x.w32(p, 68); return 0; }],
+    GetModuleFileNameA: ['ppu', (x, h, buf, n) => {
+      const m = h && h !== x.win.base ? x.win.moduleAt(h) : null, s = m ? `C:\\WINDOWS\\system32\\${m.name}` : x.win.path;
+      const k = Math.min(s.length, n - 1); if (n) x.write(buf, new TextEncoder().encode(s.slice(0, k) + '\0')); return k;
+    }],
+    // The environment: one variable, as a block of NUL-terminated strings ending in an empty one.
+    GetEnvironmentStrings: ['', (x) => (st.envA ||= (() => { const b = new TextEncoder().encode('PATH=C:\\WINDOWS\\system32\0\0'), p = x.win.heapAlloc(b.length); x.write(p, b); return p; })())],
+    GetEnvironmentStringsW: ['', (x) => (st.envW ||= (() => { const w = wide('PATH=C:\\WINDOWS\\system32\0\0'), p = x.win.heapAlloc(w.length); x.write(p, w); return p; })())],
+    FreeEnvironmentStringsA: ['p', () => 1], FreeEnvironmentStringsW: ['p', () => 1], SetEnvironmentVariableA: ['pp', () => 1],
+    GlobalMemoryStatus: ['p', (x, p) => {                            // MEMORYSTATUS: 64 MiB of RAM, half free, a 2 GiB address space
+      const v = [32, 0, 64 << 20, 32 << 20, 192 << 20, 160 << 20, 0x7ffe0000, 0x7f000000];
+      v.forEach((n, i) => x.w32(p + i * 4, n)); return 0;
+    }],
+    GlobalLock: ['p', (x, h) => h], GlobalUnlock: ['p', () => 1],
+    // Code pages: Windows-1252 for ANSI, 437 for OEM, one byte a character either way.
+    GetACP: ['', () => 1252], GetOEMCP: ['', () => 437],
+    GetCPInfo: ['up', (x, cp, p) => { x.write(p, new Uint8Array(20)); x.w32(p, 1); x.write(p + 4, Uint8Array.of(0x3f)); return 1; }],
+    MultiByteToWideChar: ['uupipi', (x, cp, flags, src, n, dst, max) => {
+      const b = n < 0 ? x.bytes(src, x.str(src).length + 1) : x.bytes(src, n);
+      if (!max) return b.length;
+      const k = Math.min(b.length, max), w = new Uint8Array(k * 2); for (let i = 0; i < k; i++) w[2 * i] = b[i];
+      x.write(dst, w); return k;
+    }],
+    WideCharToMultiByte: ['uupipipp', (x, cp, flags, src, n, dst, max) => {
+      const cs = wideRead(x, src, n);
+      if (!max) return cs.length;
+      const k = Math.min(cs.length, max); x.write(dst, Uint8Array.from(cs.slice(0, k), (c) => (c < 256 ? c : 0x3f))); return k;
+    }],
+    // CT_CTYPE1 of each character, as the C locale classes them (ctype's isupper, isdigit...).
+    GetStringTypeA: ['uupip', (x, lcid, type, src, n, out) => { const b = n < 0 ? [...x.bytes(src, x.str(src).length + 1)] : [...x.bytes(src, n)]; b.forEach((c, i) => x.w16(out + 2 * i, ctype1(c))); return 1; }],
+    GetStringTypeW: ['upip', (x, type, src, n, out) => { wideRead(x, src, n).forEach((c, i) => x.w16(out + 2 * i, ctype1(c))); return 1; }],
+    LCMapStringA: ['uupipi', (x, lcid, flags, src, n, dst, max) => {
+      const b = [...(n < 0 ? x.bytes(src, x.str(src).length + 1) : x.bytes(src, n))].map((c) => lcmap(c, flags));
+      if (!max) return b.length; const k = Math.min(b.length, max); x.write(dst, Uint8Array.from(b.slice(0, k))); return k;
+    }],
+    LCMapStringW: ['uupipi', (x, lcid, flags, src, n, dst, max) => {
+      const cs = wideRead(x, src, n).map((c) => lcmap(c, flags));
+      if (!max) return cs.length; const k = Math.min(cs.length, max); cs.slice(0, k).forEach((c, i) => x.w16(dst + 2 * i, c)); return k;
+    }],
+    CompareStringA: ['uupipi', (x, lcid, flags, a, na, b, nb) => compare([...(na < 0 ? new TextEncoder().encode(x.str(a)) : x.bytes(a, na))], [...(nb < 0 ? new TextEncoder().encode(x.str(b)) : x.bytes(b, nb))], flags)],
+    CompareStringW: ['uupipi', (x, lcid, flags, a, na, b, nb) => compare(wideRead(x, a, na, true), wideRead(x, b, nb, true), flags)],
+    // Exceptions. RtlUnwind takes the frames off TEB's list down to the target, as ntdll's does once the
+    // handlers below it have run; the runtime calls it from its own handler.
+    RtlUnwind: ['pppu', (x, target) => { if (target) x.w32(x.win.teb, target); return 0; }],
+    RaiseException: ['uuup', (x, code) => { throw new Error(`mirage-win32: RaiseException(${code.toString(16)})`); }],
+    UnhandledExceptionFilter: ['p', () => 1],                         // EXCEPTION_EXECUTE_HANDLER
+    TerminateProcess: ['pu', (x, h, code) => { x.lx.exitProcess(code); return 1; }],
+    // The console of a text-mode program (WinQuake's dedicated server): there is none to open, and none
+    // has input or a screen buffer to read. A program run in a window never asks.
+    AllocConsole: ['', () => 0], FreeConsole: ['', () => 1],
+    GetNumberOfConsoleInputEvents: ['pp', (x, h, p) => { if (p) x.w32(p, 0); return 1; }],
+    ReadConsoleInputA: ['ppup', (x, h, buf, n, p) => { if (p) x.w32(p, 0); return 1; }],
+    WriteConsoleInputA: ['ppup', () => 0], GetConsoleScreenBufferInfo: ['pp', () => 0], ReadConsoleOutputCharacterA: ['ppuup', () => 0],
+    SetConsoleWindowInfo: ['pip', () => 0], SetConsoleScreenBufferSize: ['pu', () => 0], GetLargestConsoleWindowSize: ['p', () => 0],
+    // Memory shared with a parent process (WinQuake's -HFILE, from id's launcher): no file mapping here.
+    MapViewOfFile: ['puuuu', () => 0], UnmapViewOfFile: ['p', () => 1],
+    // The first of several objects to be signalled: an event set, or a thread ended, as WaitForSingleObject.
+    WaitForMultipleObjects: ['upiu', (x, n, hs, all, ms) => {
+      for (let i = 0; i < n; i++) {
+        const h = x.r32(hs + 4 * i), ev = st.events.get(h);
+        if (ev ? ev.set : h >= 0x2000 && h < 0x3000 && x.lx.threadExits.has(h - 0x2000)) { if (ev && !ev.manual) ev.set = false; return i; }
+      }
+      return ms === 0 ? 0x102 : x.waitUntil(x.lx.mono() + 0.001);
+    }],
   };
+  // WIN32_FIND_DATAA for a file of the disk: archive, its size, its name.
+  function findFill(x, fd, name) {
+    x.write(fd, new Uint8Array(320)); x.w32(fd, 0x20); x.w32(fd + 32, st.disk.get(name).size);
+    x.write(fd + 44, new TextEncoder().encode(name.slice(0, 259) + '\0'));
+  }
   // ---- user32 --------------------------------------------------------------------------------------
+  // Window classes by name and atom, and the window's procedure.
+  st.classes = new Map();
+  const registerClass = (x, proc, name) => {
+    const atom = 0xc001 + (st.atoms = (st.atoms || 0) + 1) - 1;
+    st.classes.set(atom, proc); if (name >= 0x10000) st.classes.set(x.str(name, 256).toLowerCase(), proc);
+    return atom;
+  };
+  const createWindow = (x, cls, style, w, h, wide) => {
+    const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
+    if (st.classes.has(key)) st.wndProc = st.classes.get(key);
+    const b = style & 0xc00000 ? 3 : style & 0x800000 ? 1 : 0, cap = (style & 0xc00000) === 0xc00000 ? 19 : 0;   // as AdjustWindowRectEx
+    if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = Math.max(1, w - 2 * b); st.h = Math.max(1, h - 2 * b - cap); }
+    return st.hwnd;
+  };
+  const putMsg = (x, m, e) => { x.w32(m, st.hwnd); x.w32(m + 4, e.msg); x.w32(m + 8, e.wp); x.w32(m + 12, e.lp); x.w32(m + 16, e.time || 0); x.w32(m + 20, st.mouseX ?? 0); x.w32(m + 24, st.mouseY ?? 0); };
   const user32 = {
     // The window: one, the size it was made or the display mode set; its DC and GL go to the backend.
-    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => { if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = w; st.h = h; } return st.hwnd; }],
-    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => { if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = w; st.h = h; } return st.hwnd; }],
+    // The window: its client area is what a framed window keeps inside the frame AdjustWindowRectEx adds;
+    // its procedure is its class's (by name or by atom), which DispatchMessageA calls.
+    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, false)],
+    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, true)],
     ChangeDisplaySettingsA: ['pu', (x, dm) => { if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; } return 0; }],   // DEVMODEA's dmPelsWidth, dmPelsHeight
     GetDC: ['p', () => st.hdc], ReleaseDC: ['pp', () => 1],
-    ShowCursor: ['i', () => 0], SetCursorPos: ['ii', () => 1], ShowWindow: ['pi', () => 1], UpdateWindow: ['p', () => 1], SetWindowPos: ['ppiiiiu', () => 1],
+    ShowCursor: ['i', () => 0], SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; return 1; }], ShowWindow: ['pi', () => 1], UpdateWindow: ['p', () => 1], SetWindowPos: ['ppiiiiu', () => 1],
     GetAsyncKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8001 : 0)],
     GetCursorPos: ['p', (x, p) => { x.w32(p, st.mouseX ?? (st.w >> 1)); x.w32(p + 4, st.mouseY ?? (st.h >> 1)); return 1; }],
     PostQuitMessage: ['i', () => 0],
     GetKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8000 : 0)],
-    PeekMessageA: ['ppuuu', () => 0], PeekMessageW: ['ppuuu', () => 0],
-    GetMessageA: ['ppuu', () => 1], TranslateMessage: ['p', () => 0], DispatchMessageA: ['p', () => 0],
-    DefWindowProcA: ['puuu', () => 0], RegisterClassA: ['p', () => 0xc001], RegisterClassExA: ['p', () => 0xc001],
+    // The message queue: what the visitor's keys and mouse put there (win32Apis(...).input). MSG is
+    // hwnd, message, wParam, lParam, time, pt; PM_REMOVE (1) takes it off the queue.
+    PeekMessageA: ['ppuuu', (x, m, hwnd, min, max, remove) => { if (!st.msgs.length) return 0; putMsg(x, m, st.msgs[0]); if (remove & 1) st.msgs.shift(); return 1; }],
+    PeekMessageW: ['ppuuu', (x, m, hwnd, min, max, remove) => user32.PeekMessageA[1](x, m, hwnd, min, max, remove)],
+    // GetMessageA waits for one, as an idle window does (the call is made again when the time comes);
+    // WM_QUIT (12h) makes it return 0.
+    GetMessageA: ['ppuu', (x, m) => { if (!st.msgs.length) return x.waitUntil(x.lx.mono() + 0.01); const e = st.msgs.shift(); putMsg(x, m, e); return e.msg === 0x12 ? 0 : 1; }],
+    TranslateMessage: ['p', () => 0],
+    // DispatchMessageA runs the window's procedure in the program: its four arguments pushed, its return
+    // into this stub's `ret 4`, which then returns to the caller with what the procedure returned.
+    DispatchMessageA: ['p', (x, m) => {
+      const proc = st.wndProc; if (!proc) return 0;
+      const c = x.cpu, args = [x.r32(m), x.r32(m + 4), x.r32(m + 8), x.r32(m + 12)];
+      let sp = c.reg[4] >>> 0;
+      for (const v of [c.eip >>> 0, ...args].reverse()) { sp -= 4; x.w32(sp, v); }
+      c.reg[4] = sp; c.eip = proc; return 0;
+    }],
+    DefWindowProcA: ['puuu', () => 0],
+    // WNDCLASSA: lpfnWndProc at 4, lpszClassName at 36; WNDCLASSEXA: at 8 and 40. An atom of its own each.
+    RegisterClassA: ['p', (x, wc) => registerClass(x, x.r32(wc + 4), x.r32(wc + 36))],
+    RegisterClassExA: ['p', (x, wc) => registerClass(x, x.r32(wc + 8), x.r32(wc + 40))],
     GetSystemMetrics: ['i', (x, n) => (n === 0 ? st.w : n === 1 ? st.h : 0)],
     GetClientRect: ['pp', (x, hwnd, r) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, st.w); x.w32(r + 12, st.h); return 1; }],
     GetWindowRect: ['pp', (x, hwnd, r) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, st.w); x.w32(r + 12, st.h); return 1; }],
-    MessageBoxA: ['pppu', () => 1], SetTimer: ['puup', () => 1], ValidateRect: ['pp', () => 1], DestroyWindow: ['p', () => 1],
+    // A message box is not shown; its caption and text go to the log, where an error says what it is.
+    MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', () => 1], ValidateRect: ['pp', () => 1], DestroyWindow: ['p', () => 1],
     LoadCursorA: ['pp', () => 0x10003], LoadIconA: ['pp', () => 0x10002], SetCursor: ['p', () => 0], AdjustWindowRect: ['pui', () => 1],
     wsprintfA: ['ppp', NOT('user32', 'wsprintfA')[1], { cdecl: true }],
+    // A program's own windows beyond the first (WinQuake's start-up dialog, made from its resources and
+    // destroyed once the game window is up): a handle of their own, never on the screen here.
+    CreateDialogParamA: ['pppp' + 'p', () => 0x10020],
+    GetActiveWindow: ['', () => st.hwnd], SetActiveWindow: ['p', () => st.hwnd], SetForegroundWindow: ['p', () => 1],
+    SetFocus: ['p', () => st.hwnd], EnableWindow: ['pi', () => 0], MessageBeep: ['u', () => 1],
+    SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1], ClipCursor: ['p', () => 1],
+    InvalidateRect: ['ppi', () => 1], PostMessageA: ['puuu', () => 1], SendMessageA: ['puuu', () => 0], KillTimer: ['pu', () => 1],
+    SetWindowLongA: ['piu', () => 0],
+    // WM_PAINT's DC: the window's, the whole client area to paint (PAINTSTRUCT: hdc, fErase, rcPaint).
+    BeginPaint: ['pp', (x, hwnd, ps) => { x.write(ps, new Uint8Array(64)); x.w32(ps, st.hdc); x.w32(ps + 16, st.w); x.w32(ps + 20, st.h); return st.hdc; }],
+    EndPaint: ['pp', () => 1],
+    // WINDOWPLACEMENT: its length at 0, then flags, show state, the two points and the normal rectangle.
+    GetWindowPlacement: ['pp', (x, hwnd, p) => { x.write(p, new Uint8Array(44)); x.w32(p, 44); x.w32(p + 8, 1); x.w32(p + 36, st.w); x.w32(p + 40, st.h); return 1; }],
+    SetWindowPlacement: ['pp', () => 1],
+    // The frame XP's classic style puts round a client area: a 3-pixel border and an 18-pixel caption
+    // (WS_CAPTION), a 1-pixel border alone (WS_BORDER) -- what AdjustWindowRectEx adds.
+    AdjustWindowRectEx: ['puiu', (x, r, style) => {
+      const b = style & 0xc00000 ? 3 : style & 0x800000 ? 1 : 0, cap = (style & 0xc00000) === 0xc00000 ? 19 : 0;
+      x.w32(r, (x.r32(r) | 0) - b); x.w32(r + 4, (x.r32(r + 4) | 0) - b - cap); x.w32(r + 8, (x.r32(r + 8) | 0) + b); x.w32(r + 12, (x.r32(r + 12) | 0) + b);
+      return 1;
+    }],
+    // The display's modes, one by one as EnumDisplaySettings lists them: DEVMODEA's dmBitsPerPel at
+    // 104, dmPelsWidth 108, dmPelsHeight 112, dmDisplayFrequency 120 (its size, 156, at 36).
+    EnumDisplaySettingsA: ['pup', (x, dev, i, dm) => {
+      const modes = [[640, 480], [800, 600], [1024, 768]].flatMap(([w, h]) => [8, 16, 32].map((b) => [w, h, b]));
+      const m = i === 0xffffffff || i === 0xfffffffe ? [st.w, st.h, 32] : modes[i];
+      if (!m) return 0;
+      x.w16(dm + 36, 156); x.w32(dm + 104, m[2]); x.w32(dm + 108, m[0]); x.w32(dm + 112, m[1]); x.w32(dm + 120, 60); x.w32(dm + 40, 0x1c0000);
+      return 1;
+    }],
+    // SPI_GETWORKAREA (30h): the screen; anything else asked is answered without change.
+    SystemParametersInfoA: ['uupu', (x, what, n, p) => { if (what === 0x30 && p) { x.w32(p, 0); x.w32(p + 4, 0); x.w32(p + 8, st.w); x.w32(p + 12, st.h); } return 1; }],
+    // No string resources are read here: an empty string, as for an id the table lacks.
+    LoadStringA: ['pupi', (x, inst, id, buf, n) => { if (n > 0) x.write(buf, Uint8Array.of(0)); return 0; }],
+    // No message ever arrives here, so it waits its time out (WAIT_TIMEOUT), as an idle window does.
+    MsgWaitForMultipleObjects: ['upiuu', (x, n, handles, all, ms) => { if (!ms) return 0x102; const r = x.sleep(Math.min(ms, 1000) / 1000); return r === 0 ? 0x102 : r; }],
   };
   // ---- gdi32 ---------------------------------------------------------------------------------------
   // Text drawn into a bitmap (ExtTextOutA), at the pen (X, Y), the cell's top.
@@ -348,6 +531,44 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     if (opts & 2 && rect) fillRect(bm, x.r32(rect) | 0, x.r32(rect + 4) | 0, x.r32(rect + 8) | 0, x.r32(rect + 12) | 0, bgr(d.bkColor));   // ETO_OPAQUE
     for (const { g, at } of glyphs) if (g) fillGlyph(bm, g, X + at, Y + m.ascent, bgr(d.textColor));
     return 1;
+  };
+  // The window's client area: what reaches the screen.
+  const screen = () => { if (!st.screen || st.screen.w !== st.w || st.screen.h !== st.h) st.screen = { w: st.w, h: st.h, px: new Uint32Array(st.w * st.h) }; return st.screen; };
+  const isWindowDC = (hdc) => hdc === st.hdc;
+  // Where a DC's drawing lands, as pixels { w, h, px } and done() to put them where they belong: the
+  // screen for the window's DC, the selected bitmap (and a section's memory) for a memory DC.
+  const target = (x, hdc) => {
+    if (isWindowDC(hdc)) { const sc = screen(); return { ...sc, done: () => { if (x.lx.fbShow && !(sc.w & 7) && sc.w >= 320 && sc.h >= 200) x.lx.fbShow(sc.px, sc.w, sc.h); } }; }
+    const bm = st.gdi.get(st.dcBitmaps.get(hdc));
+    if (!bm || bm.kind !== 'bitmap' || bm.dib8) return null;          // drawing into an 8-bit section: not here
+    if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
+    return { w: bm.w, h: bm.h, px: bm.px, done: () => { if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, false); } };
+  };
+  // A DC's pixels to read: (x, y) -> 0x00RRGGBB, or null.
+  const source = (x, hdc) => {
+    if (isWindowDC(hdc)) { const sc = screen(); return { w: sc.w, h: sc.h, at: (X, Y) => sc.px[Y * sc.w + X] }; }
+    const bm = st.gdi.get(st.dcBitmaps.get(hdc));
+    if (!bm || bm.kind !== 'bitmap') return null;
+    if (bm.dib8) {
+      const { bits, stride } = bm.dib8, raw = x.bytes(bits, stride * bm.h), c = bm.colors;
+      return { w: bm.w, h: bm.h, at: (X, Y) => c[raw[(bm.up ? bm.h - 1 - Y : Y) * stride + X]] };
+    }
+    if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
+    return { w: bm.w, h: bm.h, at: (X, Y) => bm.px[Y * bm.w + X] };
+  };
+  const blit = (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh) => {
+    const s = source(x, src), t = target(x, dst);
+    if (!s || !t || !dw || !dh) return 1;
+    for (let j = 0; j < Math.abs(dh); j++) {
+      const ty = dy + (dh < 0 ? -j : j); if (ty < 0 || ty >= t.h) continue;
+      const syy = sy + Math.floor(j * sh / Math.abs(dh)); if (syy < 0 || syy >= s.h) continue;
+      for (let i = 0; i < Math.abs(dw); i++) {
+        const tx = dx + (dw < 0 ? -i : i); if (tx < 0 || tx >= t.w) continue;
+        const sxx = sx + Math.floor(i * sw / Math.abs(dw)); if (sxx < 0 || sxx >= s.w) continue;
+        t.px[ty * t.w + tx] = s.at(sxx, syy);
+      }
+    }
+    t.done(); return 1;
   };
   const gdi32 = {
     ChoosePixelFormat: ['pp', () => 1], SetPixelFormat: ['pip', () => 1],
@@ -411,6 +632,20 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
      */
     CreateDIBSection: ['ppuppu', (x, hdc, bmi, usage, ppBits) => {
       const w = x.r32(bmi + 4) | 0, h = x.r32(bmi + 8) | 0, bpp = x.r16(bmi + 14);
+      // 8 bits: indices into the section's own colour table, read from the program's memory when the
+      // section is drawn (WinQuake's frame, through SciTech MGL). DIB_RGB_COLORS gives the table as
+      // RGBQUADs; DIB_PAL_COLORS as indices into the palette selected in the DC.
+      if (w > 0 && h && bpp === 8) {
+        const stride = (w + 3) & ~3, bits = x.win.heapAlloc(stride * Math.abs(h)), n = x.r32(bmi + 32) || 256, colors = new Uint32Array(256);
+        x.write(bits, new Uint8Array(stride * Math.abs(h)));
+        const pal = st.gdi.get(dcState(hdc).palette);
+        for (let i = 0; i < Math.min(n, 256); i++) {
+          if (usage === 1) colors[i] = pal ? pal.colors[x.r16(bmi + 40 + 2 * i) & 255] : 0;
+          else { const q = x.r32(bmi + 40 + 4 * i); colors[i] = q & 0xffffff; }
+        }
+        if (ppBits) x.w32(ppBits, bits);
+        return st.newHandle('bitmap', { w, h: Math.abs(h), up: h > 0, px: null, dib8: { bits, stride }, colors });
+      }
       if (w <= 0 || !h || (bpp !== 24 && bpp !== 32)) { if (ppBits) x.w32(ppBits, 0); return 0; }
       const stride = ((w * bpp + 31) >> 5) << 2, bits = x.win.heapAlloc(stride * Math.abs(h)), copy = x.win.heapAlloc(40);
       x.write(bits, new Uint8Array(stride * Math.abs(h)));
@@ -428,6 +663,52 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     SetDIBits: ['ppuuppu', (x, hdc, hbm, start, lines, bits, bmi) => {
       const bm = st.gdi.get(hbm);
       return bm && bm.kind === 'bitmap' ? dibCopy(x, bm, start, lines, bits, bmi, true) : 0;
+    }],
+    // The colour table of the 8-bit section selected in a DC: RGBQUADs, as many as asked.
+    SetDIBColorTable: ['puup', (x, hdc, start, n, q) => {
+      const bm = st.gdi.get(st.dcBitmaps.get(hdc));
+      if (!bm || !bm.colors) return 0;
+      const k = Math.max(0, Math.min(n, 256 - start)); for (let i = 0; i < k; i++) bm.colors[start + i] = x.r32(q + 4 * i) & 0xffffff;
+      return k;
+    }],
+    GetDIBColorTable: ['puup', (x, hdc, start, n, q) => {
+      const bm = st.gdi.get(st.dcBitmaps.get(hdc));
+      if (!bm || !bm.colors) return 0;
+      const k = Math.max(0, Math.min(n, 256 - start)); for (let i = 0; i < k; i++) x.w32(q + 4 * i, bm.colors[start + i]);
+      return k;
+    }],
+    /*
+     * The screen: 32 bits a pixel, no palette (RC_PALETTE clear), as XP's desktop at its default -- so a
+     * program draws through DIB sections and GDI converts, the way WinQuake's -dibonly windows do.
+     */
+    GetDeviceCaps: ['pi', (x, hdc, i) => ({ 8: st.w, 10: st.h, 12: 32, 14: 1, 24: -1, 38: 0x7e99, 88: 96, 90: 96, 104: 0, 106: 0, 108: 0, 116: 60, 117: st.w, 118: st.h })[i] ?? 0],
+    CreateDCA: ['pppp', () => st.hdc],
+    Escape: ['piipp', () => 0], SetStretchBltMode: ['pi', () => 1],
+    // Palettes: LOGPALETTE's entries kept as 0x00RRGGBB; on a screen without one, realizing maps nothing.
+    CreatePalette: ['p', (x, lp) => {
+      const n = x.r16(lp + 2), colors = new Uint32Array(256);
+      for (let i = 0; i < Math.min(n, 256); i++) { const e = x.r32(lp + 4 + 4 * i); colors[i] = ((e & 255) << 16) | (e & 0xff00) | ((e >> 16) & 255); }
+      return st.newHandle('palette', { colors });
+    }],
+    SelectPalette: ['ppi', (x, hdc, hpal) => { const d = dcState(hdc), prev = d.palette || 0x0188000b; d.palette = hpal; return prev; }],   // DEFAULT_PALETTE's
+    RealizePalette: ['p', () => 0], UnrealizeObject: ['p', () => 1],
+    AnimatePalette: ['puup', (x, hpal, start, n, pe) => {
+      const p = st.gdi.get(hpal); if (!p || p.kind !== 'palette') return 0;
+      for (let i = 0; i < n && start + i < 256; i++) { const e = x.r32(pe + 4 * i); p.colors[start + i] = ((e & 255) << 16) | (e & 0xff00) | ((e >> 16) & 255); }
+      return 1;
+    }],
+    GetSystemPaletteEntries: ['puup', () => 0],                       // no palette on this screen
+    SetSystemPaletteUse: ['pu', () => 1], GetSystemPaletteUse: ['p', () => 1],   // SYSPAL_STATIC
+    // Raster copies: SRCCOPY between DCs (a section selected in a memory DC, the window's own), the
+    // stretch by nearest pixels; into the window they reach the screen (lx.fbShow). PatBlt fills
+    // BLACKNESS and WHITENESS; other operations copy (WinQuake asks SRCCOPY only).
+    BitBlt: ['piiiipiiu', (x, dst, dx, dy, w, h, src, sx, sy) => blit(x, dst, dx, dy, w, h, src, sx, sy, w, h)],
+    StretchBlt: ['piiiipiiiiu', (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh) => blit(x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh)],
+    PatBlt: ['piiiiu', (x, hdc, X, Y, w, h, rop) => {
+      const c = rop === 0x42 ? 0 : rop === 0xff0062 ? 0xffffff : null;
+      if (c === null) return 1;
+      const t = target(x, hdc); if (t) { fillRect(t, X, Y, X + w, Y + h, c); t.done(); }
+      return 1;
     }],
     CreateFontA: ['iiiiiuuuuuuuup', (x, h, w, esc, orient, weight, italic, underline, strike, charset, outPrec, clipPrec, quality, pitch, face) =>
       st.newHandle('font', { height: h, weight, face: x.str(face, 32) })],
@@ -517,6 +798,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     return 0;
   };
   const winmm = {
+    // No joystick: none counted, and the one asked about is unplugged (JOYERR_UNPLUGGED).
+    joyGetNumDevs: ['', () => 0], joyGetDevCapsA: ['upu', () => 167], joyGetPosEx: ['up', () => 167],
     timeGetTime: ['', (x) => ms(x)], timeBeginPeriod: ['u', () => 0], timeEndPeriod: ['u', () => 0],
     // midiOut: one device, MIRAGE's General MIDI synthesizer (src/midi.js), as Windows' MIDI mapper
     // sends to its GS synthesizer. Photon Race 2 (2008) plays its music so: short messages, no SysEx.
@@ -663,7 +946,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       return out.length;
     }, cd],
   };
-  return [
+  const tables = [
     { dll: 'msvcrt.dll', fns: msvcrt },
     { dll: 'ntdll.dll', fns: { RtlZeroMemory: ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }] } },
     { dll: 'kernel32.dll', fns: kernel32 },
@@ -679,5 +962,81 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     { dll: 'winmm.dll', fns: winmm },
     ...d3d9Apis(st),
     dsoundApis(),
+    { dll: 'wsock32.dll', fns: wsock32 },
+    // The registry: empty. A key opens as not found (ERROR_FILE_NOT_FOUND), so nothing is read from it
+    // or written to it, as on a machine where the program never ran.
+    { dll: 'advapi32.dll', fns: { RegOpenKeyExA: ['ppuup', () => 2], RegCreateKeyExA: ['ppupuuppp', () => 2], RegQueryValueExA: ['pppppp', () => 2],
+      RegSetValueExA: ['ppuupu', () => 2], RegCloseKey: ['p', () => 0] } },
   ];
+  /*
+   * The visitor's input, as Windows posts it to the window: a key by its PC scancode (set 1; 0xE0-
+   * prefixed keys `ext`) as WM_KEYDOWN / WM_KEYUP (Alt as WM_SYSKEY*), the scancode in lParam's bits
+   * 16-23 where WinQuake's MapKey reads it, the virtual key in wParam; the mouse as WM_MOUSEMOVE and
+   * button messages, its moves added to the cursor that GetCursorPos reads (WinQuake recentres it
+   * with SetCursorPos each frame and turns by the difference).
+   */
+  tables.input = {
+    key(down, scan, ext = false) {
+      const vk = scanToVk(scan, ext), alt = vk === 0x12;
+      if (down) st.keys.add(vk); else st.keys.delete(vk);
+      st.msgs.push({ msg: (alt ? 0x104 : 0x100) + (down ? 0 : 1), wp: vk, lp: (1 | (scan & 0xff) << 16 | (ext ? 1 << 24 : 0) | (down ? 0 : 0xc0000000)) >>> 0 });
+    },
+    mouseMove(dx, dy) {
+      st.mouseX = (st.mouseX ?? st.w >> 1) + dx; st.mouseY = (st.mouseY ?? st.h >> 1) + dy;
+      st.msgs.push({ msg: 0x200, wp: st.buttons | 0, lp: ((st.mouseY & 0xffff) << 16 | (st.mouseX & 0xffff)) >>> 0 });
+    },
+    mouseButton(b, down) {                                          // 0 left, 1 right, 2 middle
+      const bit = [1, 2, 0x10][b], msg = [0x201, 0x204, 0x207][b] + (down ? 0 : 1);
+      st.buttons = down ? (st.buttons | 0) | bit : (st.buttons | 0) & ~bit;
+      st.msgs.push({ msg, wp: st.buttons, lp: ((st.mouseY ?? 0) & 0xffff) << 16 | ((st.mouseX ?? 0) & 0xffff) });
+    },
+  };
+  return tables;
 }
+
+// A PC scancode (set 1) to its Windows virtual key, for a US layout.
+const SCAN_VK = (() => {
+  const t = {}, row = (start, keys) => [...keys].forEach((c, i) => { t[start + i] = c.charCodeAt(0); });
+  row(0x02, '1234567890'); row(0x10, 'QWERTYUIOP'); row(0x1e, 'ASDFGHJKL'); row(0x2c, 'ZXCVBNM');
+  Object.assign(t, { 0x01: 0x1b, 0x0c: 0xbd, 0x0d: 0xbb, 0x0e: 0x08, 0x0f: 0x09, 0x1a: 0xdb, 0x1b: 0xdd, 0x1c: 0x0d, 0x1d: 0x11, 0x27: 0xba,
+    0x28: 0xde, 0x29: 0xc0, 0x2a: 0x10, 0x2b: 0xdc, 0x33: 0xbc, 0x34: 0xbe, 0x35: 0xbf, 0x36: 0x10, 0x37: 0x6a, 0x38: 0x12, 0x39: 0x20, 0x3a: 0x14 });
+  for (let i = 0; i < 10; i++) t[0x3b + i] = 0x70 + i;               // F1-F10
+  Object.assign(t, { 0x57: 0x7a, 0x58: 0x7b, 0x47: 0x24, 0x48: 0x26, 0x49: 0x21, 0x4b: 0x25, 0x4d: 0x27, 0x4f: 0x23, 0x50: 0x28, 0x51: 0x22, 0x52: 0x2d, 0x53: 0x2e });
+  return t;
+})();
+const scanToVk = (scan, ext) => (ext && scan === 0x1c ? 0x0d : SCAN_VK[scan & 0x7f] || 0);
+
+/*
+ * wsock32.dll, Winsock 1.1 by its ordinals (a program imports these by number): a machine with no
+ * network. WSAStartup fails with WSASYSNOTREADY, as on a PC with no TCP/IP installed, and a program
+ * gives its network up there -- WinQuake says "Winsock initialization failed" and plays alone. Every
+ * socket call fails the same way; byte order and dotted addresses are only arithmetic, and answer.
+ */
+const NONET = 10091;                                                  // WSASYSNOTREADY
+const sw16 = (v) => ((v & 0xff) << 8) | ((v >> 8) & 0xff), sw32 = (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24)) >>> 0;
+const wsock32 = {
+  accept: ['ppp', () => -1, { ordinal: 1 }], bind: ['ppi', () => -1, { ordinal: 2 }], closesocket: ['p', () => -1, { ordinal: 3 }],
+  connect: ['ppi', () => -1, { ordinal: 4 }], getpeername: ['ppp', () => -1, { ordinal: 5 }], getsockname: ['ppp', () => -1, { ordinal: 6 }],
+  getsockopt: ['piipp', () => -1, { ordinal: 7 }], htonl: ['u', (x, v) => sw32(v), { ordinal: 8 }], htons: ['u', (x, v) => sw16(v), { ordinal: 9 }],
+  inet_addr: ['p', (x, p) => {                                        // "a.b.c.d" in network order, INADDR_NONE otherwise
+    const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(x.str(p, 32));
+    return m && m.slice(1).every((n) => +n < 256) ? (+m[1] | +m[2] << 8 | +m[3] << 16 | +m[4] << 24) >>> 0 : 0xffffffff;
+  }, { ordinal: 10 }],
+  inet_ntoa: ['u', (x, a) => {                                        // into one buffer of its own, as Winsock's per-thread one
+    const b = new TextEncoder().encode(`${a & 255}.${(a >>> 8) & 255}.${(a >>> 16) & 255}.${a >>> 24}\0`);
+    x.ntoaBuf ||= x.win.heapAlloc(16); x.write(x.ntoaBuf, b); return x.ntoaBuf;
+  }, { ordinal: 11 }],
+  ioctlsocket: ['pip', () => -1, { ordinal: 12 }], listen: ['pi', () => -1, { ordinal: 13 }],
+  ntohl: ['u', (x, v) => sw32(v), { ordinal: 14 }], ntohs: ['u', (x, v) => sw16(v), { ordinal: 15 }],
+  recv: ['ppii', () => -1, { ordinal: 16 }], recvfrom: ['ppiipp', () => -1, { ordinal: 17 }], select: ['ipppp', () => -1, { ordinal: 18 }],
+  send: ['ppii', () => -1, { ordinal: 19 }], sendto: ['ppiipi', () => -1, { ordinal: 20 }], setsockopt: ['piipi', () => -1, { ordinal: 21 }],
+  shutdown: ['pi', () => -1, { ordinal: 22 }], socket: ['iii', () => -1, { ordinal: 23 }],
+  gethostbyaddr: ['pii', () => 0, { ordinal: 51 }], gethostbyname: ['p', () => 0, { ordinal: 52 }], getprotobyname: ['p', () => 0, { ordinal: 53 }],
+  getprotobynumber: ['i', () => 0, { ordinal: 54 }], getservbyname: ['pp', () => 0, { ordinal: 55 }], getservbyport: ['ip', () => 0, { ordinal: 56 }],
+  gethostname: ['pi', () => -1, { ordinal: 57 }],
+  WSASetBlockingHook: ['p', () => 0, { ordinal: 109 }], WSAUnhookBlockingHook: ['', () => -1, { ordinal: 110 }],
+  WSAGetLastError: ['', () => NONET, { ordinal: 111 }], WSASetLastError: ['i', () => 0, { ordinal: 112 }],
+  WSACancelBlockingCall: ['', () => -1, { ordinal: 113 }], WSAIsBlocking: ['', () => 0, { ordinal: 114 }],
+  WSAStartup: ['up', () => NONET, { ordinal: 115 }], WSACleanup: ['', () => -1, { ordinal: 116 }],
+  __WSAFDIsSet: ['pp', () => 0, { ordinal: 151 }],
+};

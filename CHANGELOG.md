@@ -6,6 +6,17 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-08
 
+- **WinQuake runs in the browser, with no Windows**: id Software's own `winquake.exe` of March 1997,
+  unmodified, with the shareware episode, one click away in the Windows machine. Its sound plays
+  through DirectSound, and the keyboard and mouse reach it as window messages. MIRAGE-WIN32 gained
+  what a full game asks beyond an intro:
+  - Visual C++'s runtime start-up;
+  - GDI's 8-bit DIB sections, palettes and `StretchBlt`, drawn on the card's framebuffer;
+  - the message queue, with `DispatchMessageA` running the game's window procedure;
+  - Winsock for a machine with no network, and an empty registry.
+  A fault was fixed on the way: `VirtualAlloc` handed out addresses inside the heap. `tools/win32/run.mjs`
+  now takes arguments, a directory of files, scripted keys and screenshots, and can name the first
+  function a program calls that is not made yet.
 - **Six intros drawn as on DOSBox-X**, three causes found with two new probes for the oracles:
   - **kaneda, paleozoa and upup** shift a 16-bit register by more than 16 bits, which Intel leaves
     undefined and no processor ignores: a Pentium rotates the source, a Pentium Pro and later shift

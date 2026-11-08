@@ -33,7 +33,7 @@ No WebAssembly, no build step, no dependencies beyond its sibling [PRISM](https:
 
 <sub>Every picture is a frame MIRAGE drew. Screenshots of Microsoft products used with permission from Microsoft.</sub>
 
-- **Windows with no Windows**: Elevated, Ergon and thirteen more 4K and 1K intros, their Win32, OpenGL and Direct3D 9 in JavaScript.
+- **Windows with no Windows**: id Software's WinQuake, and Elevated, Ergon and thirteen more 4K and 1K intros, their Win32, GDI, OpenGL and Direct3D 9 in JavaScript.
 - **Linux with no kernel**: Debian 12's bash, id's DOOM and Quake, XFree86 3.3; gcc 2.7.2 builds DOOM inside it.
 - **Checked, not assumed**: gcc's 1,586 torture tests print what Docker prints (all but one); 44 programs pinned pixel for pixel.
 - **450 million x86 instructions a second** on Dhrystone, as JavaScript.
@@ -52,7 +52,7 @@ MIDI, enough to boot Windows 95 and 98 from their own disks).
 
 | | Reaches |
 |---|---|
-| Windows intros (MIRAGE-WIN32) | 15 of the scene's 4K and 1K intros, 2007–2017, OpenGL and Direct3D 9 |
+| Windows programs (MIRAGE-WIN32) | WinQuake (1997); 15 of the scene's 4K and 1K intros, 2007–2017, OpenGL and Direct3D 9 |
 | Linux programs (MIRAGE-LINUX) | Debian 12, XFree86 3.3 and its clients, DOOM and Quake, Mesa, the scene's Linux intros |
 | DOS | games and demos in real mode, with EMS/XMS and DOS extenders |
 | Operating systems (bare PC) | Windows 3.0 to ME, NT 3.51 and 2000 to the desktop, BeOS 5, Linux 2.2 and 2.4, QNX, KolibriOS, OpenBSD, NetBSD, FreeDOS |

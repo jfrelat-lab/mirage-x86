@@ -61,14 +61,20 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   lx.host = host;
   // machine.hle: libraries made in JavaScript in /usr/lib — ["sdl12", "gl", "glu", "asound"], the GL ones
   // PRISM's (src/hle/prism-gl.js) — for the Linux OpenGL intros of 2003-2010.
-  let hle = null;
+  let hle = null, w32in = null;
   if (win32) {
     const [{ prismLibraries }, { win32Apis }] = await Promise.all([import('./hle/prism-gl.js'), import('./win32/api.js')]);
     hle = await prismLibraries(lx, mc.mem, ['gl', 'glu']);
     const [glLib, gluLib] = hle.libs;
     // machine.fonts: the TrueType fonts it selects (D3DXCreateText), the visitor's or free ones (src/win32/fonts.js)
     const fonts = m.fonts ? await (await import('./win32/fonts.js')).pageFonts(m.fonts, (t) => onOutput(t + '\n')) : undefined;
-    win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), apis: win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts }), backend: hle.backend });
+    // The files beside the program, and in the directories below it, on its own disk (by base name):
+    // WinQuake's id1/pak0.pak. An intro alone in its directory has none.
+    const files = {}, dir = img.entry.run.replace(/\/[^/]*$/, '') || '/';
+    (function walk(d) { for (const n of host.list(d)) { const p = `${d === '/' ? '' : d}/${n}`, st = host.lstat(p); if (st && st.type === 'dir') walk(p); else if (st && st.type === 'file' && p !== img.entry.run) files[n] = host.read(p); } })(dir);
+    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files });
+    w32in = apis.input;
+    win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
   } else if (m.hle) {
     const [{ installHLE }, { prismLibraries }] = await Promise.all([import('./hle/index.js'), import('./hle/prism-gl.js')]);
     hle = await prismLibraries(lx, mc.mem, m.hle);
@@ -110,7 +116,12 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
       mc.blocked = false;                                                 // a read waiting for a key runs again
     },
   };
-  const keyboard = new Keyboard({ keyQueue: typed, pushScancodes: (a) => { if (lx.tty.kbMode !== 1) lx.keyScancodes(a); } });
+  // A Windows program gets its keys as window messages (src/win32/api.js input): each make or break
+  // code, E0-prefixed ones as extended keys.
+  let e0 = false;
+  const toWin32 = (codes) => { for (const c of codes) { if (c === 0xe0) { e0 = true; continue; } w32in.key(!(c & 0x80), c & 0x7f, e0); e0 = false; } };
+  const keyboard = new Keyboard({ keyQueue: w32in ? { length: 0, shift() {}, push() {} } : typed,
+    pushScancodes: (a) => { if (w32in) toWin32(a); else if (lx.tty.kbMode !== 1) lx.keyScancodes(a); } });
   keyboard.attach(window);
   // The mouse: a click on the screen captures it (pointer lock, Esc releases it), and its moves and
   // buttons go to /dev/mouse as a Microsoft serial mouse's packets — SVGAlib's mouse, Quake's aim.
@@ -118,10 +129,10 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   const btn = (b) => (b === 0 ? 1 : b === 2 ? 2 : 0);
   const onDown = (ev) => {
     if (document.pointerLockElement !== canvas) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
-    buttons |= btn(ev.button); lx.mouseInput(0, 0, buttons); ev.preventDefault();
+    buttons |= btn(ev.button); if (w32in) w32in.mouseButton([0, 2, 1][ev.button] ?? 0, true); else lx.mouseInput(0, 0, buttons); ev.preventDefault();
   };
-  const onUp = (ev) => { if (document.pointerLockElement !== canvas) return; buttons &= ~btn(ev.button); lx.mouseInput(0, 0, buttons); };
-  const onMove = (ev) => { if (document.pointerLockElement === canvas && (ev.movementX || ev.movementY)) lx.mouseInput(ev.movementX, ev.movementY, buttons); };
+  const onUp = (ev) => { if (document.pointerLockElement !== canvas) return; buttons &= ~btn(ev.button); if (w32in) w32in.mouseButton([0, 2, 1][ev.button] ?? 0, false); else lx.mouseInput(0, 0, buttons); };
+  const onMove = (ev) => { if (document.pointerLockElement === canvas && (ev.movementX || ev.movementY)) { if (w32in) w32in.mouseMove(ev.movementX, ev.movementY); else lx.mouseInput(ev.movementX, ev.movementY, buttons); } };
   canvas.addEventListener('mousedown', onDown); window.addEventListener('mouseup', onUp); window.addEventListener('mousemove', onMove);
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 

@@ -485,6 +485,22 @@
     "sound": true
   },
   {
+    "name": "win32/winquake-1997",
+    "title": "WinQuake 1.00 — id Software, Quake for Windows 95 and NT",
+    "world": "win32",
+    "year": 1997,
+    "author": "id Software",
+    "thumb": "oasis/thumbs/win32-winquake-1997.png",
+    "output": "window",
+    "tags": [
+      "Game",
+      "Win32",
+      "GDI",
+      "DirectSound"
+    ],
+    "sound": true
+  },
+  {
     "name": "win32/yeswecan-2009",
     "title": "yes we can — Quite, 4K for Windows",
     "world": "win32",

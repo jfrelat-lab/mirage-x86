@@ -60,7 +60,7 @@ export function peHeader(b) {
  * leave the CPU at its entry point. `apis`: [{ dll, fns: { name: [sig, fn, { cdecl?, ordinal? }?] } }].
  * Returns { modules, x } — x the context the API functions get (guest memory, lx, backend, win).
  */
-export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', apis = [], backend = {} } = {}) {
+export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', apis = [], backend = {} } = {}) {
   const h = peHeader(exe);
   if (!h) throw new Error('mirage-win32: not a PE32 i386 executable');
   lx.prepareSpace();
@@ -219,7 +219,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', apis = [], b
     return tid;
   };
   const win = {
-    base, path, modules, load, heapAlloc, heapFree, heapSize, peb: PEB, teb: TEB, createThread,
+    base, path, args, modules, load, heapAlloc, heapFree, heapSize, peb: PEB, teb: TEB, createThread,
     /** GetProcAddress: an export by name or ordinal, 0 when there is none. */
     proc: (mod, name) => (typeof name === 'number' ? mod.byOrdinal.get(name) : mod.exports.get(name)) || 0,
     moduleAt: (b) => [...modules.values(), exeMod].find((m) => m.base === b >>> 0) || null,
