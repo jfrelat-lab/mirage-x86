@@ -1220,14 +1220,28 @@ export class CPU {
   }
 
   // ---- double-precision shifts (SHLD/SHRD) --------------------------------
+  // A 16-bit SHLD/SHRD with a count of 17 to 31 is undefined in Intel's manual, and processors differ
+  // (Bochs's shift16.cc; tools/shd16.asm on the oracles). A P6 and later shift dst:src:dst, so past 16
+  // the source moves in from one side and the destination from the other: QEMU does that. A Pentium
+  // shifts dst:src:src, which comes to rotating the source by count-16: DOSBox-X does that. The 386
+  // and 486 are not measured here; they take the Pentium's way, which is what DOS sizecoders see in
+  // DOSBox. kaneda (golden) builds its palette with `shrd ax,cx,18` and `shld si,cx,17`, qblove and
+  // crevenge use `shrd cx,si,23`; left alone, as this returned before, kaneda stayed grey.
+  shd16(dst, src, c, left) {
+    const k = c - 16, other = this.profile && this.profile.p6 ? dst : src;
+    const res = (left ? (src << k) | (other >>> (16 - k)) : (src >>> k) | (other << (16 - k))) & 0xffff;
+    this.setShiftResult(res, 16, !!(left ? (src >>> (16 - k)) & 1 : (src >>> (k - 1)) & 1), false); return res;
+  }
   shld(dst, src, c, bits) {
-    const m = bits === 32 ? 0xffffffff : (1 << bits) - 1; dst &= m; src &= m; c &= 31; if (!c || c > bits) return dst;
+    const m = bits === 32 ? 0xffffffff : (1 << bits) - 1; dst &= m; src &= m; c &= 31; if (!c) return dst;
+    if (c > bits) return this.shd16(dst, src, c, true);
     const res = ((dst << c) | (src >>> (bits - c))) & m;
     const cf = (dst >>> (bits - c)) & 1, of = c === 1 ? (((res >>> (bits - 1)) & 1) ^ ((dst >>> (bits - 1)) & 1)) : 0;
     this.setShiftResult(res, bits, !!cf, !!of); return res;
   }
   shrd(dst, src, c, bits) {
-    const m = bits === 32 ? 0xffffffff : (1 << bits) - 1; dst &= m; src &= m; c &= 31; if (!c || c > bits) return dst;
+    const m = bits === 32 ? 0xffffffff : (1 << bits) - 1; dst &= m; src &= m; c &= 31; if (!c) return dst;
+    if (c > bits) return this.shd16(dst, src, c, false);
     const res = ((dst >>> c) | (src << (bits - c))) & m;
     const cf = (dst >>> (c - 1)) & 1, of = c === 1 ? (((res >>> (bits - 1)) & 1) ^ ((dst >>> (bits - 1)) & 1)) : 0;
     this.setShiftResult(res, bits, !!cf, !!of); return res;

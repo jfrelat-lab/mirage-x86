@@ -4,6 +4,19 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-08
+
+- **Six intros drawn as on DOSBox-X**, three causes found with two new probes for the oracles:
+  - **kaneda, paleozoa and upup** shift a 16-bit register by more than 16 bits, which Intel leaves
+    undefined and no processor ignores: a Pentium rotates the source, a Pentium Pro and later shift
+    destination, source and destination together (Bochs; `tools/shd16.asm` on DOSBox-X and QEMU).
+    MIRAGE answered with the register unchanged; it now follows the processor it is set to be.
+    crevenge, which uses the Pentium Pro's FUCOMI, is tested as one.
+  - **nibble, soullost and 256bytef** read the 8x8 font at F000:FA6E, where every PC BIOS keeps it;
+    MIRAGE's ROM held zeros there, so their text was blank.
+  - **256bytef and kaneda** seed their randomness from the timer without programming it. The BIOS
+    leaves it counting down by two (mode 3), as DOSBox-X does (`tools/pit40.asm`); MIRAGE now does too.
+
 ## 2026-11-06
 
 - **x87 at single precision, as the hardware does it**: a result is rounded to 24 bits of significand

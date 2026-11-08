@@ -25,7 +25,7 @@
     "fault": null
   },
   "intros/256bytef.com": {
-    "hash": "3eecb8fee0aaa0194f0fe49f9bc392ab794d4569",
+    "hash": "1f2e56b2406ae1b6a885b43e8cce124b2f04a25e",
     "mode": 19,
     "fault": null
   },
@@ -80,7 +80,7 @@
     "fault": null
   },
   "intros/kaneda.com": {
-    "hash": "4a52f5daa3787d335cec90ffcd33f6d9d636277b",
+    "hash": "f50257098ae015b7194dfa1b9b041ecbbafe23e1",
     "mode": 19,
     "fault": null
   },
@@ -100,7 +100,7 @@
     "fault": null
   },
   "intros/nibble.com": {
-    "hash": "d959c84a07c7f91912d778cc5c7026b4564a0b22",
+    "hash": "992f13357b05117f1c32ca598ed0690acfe056e5",
     "mode": 19,
     "fault": null
   },
@@ -110,7 +110,7 @@
     "fault": "mirage: unhandled exception INT 06h re-raised 100000x at the same address 0018:0143 (linear 0x2c3) — the guest is stuck on one instruction; an exception resumes at the faulting one, so nothing will change. INSIDE THE REAL-MODE IVT (vector 176) — the guest left its own code. Recent block starts (oldest first, the last is this one): 0814:100 -> 0814:128 -> 0814:138 -> 0018:140 -> 0018:143"
   },
   "intros/paleozoa.com": {
-    "hash": "5549cd1796c6637deb52e70327e37a180c18d46a",
+    "hash": "d8b146b4fd02ef1c5f3ac1335e20b0a34ffd9208",
     "mode": 19,
     "fault": null
   },
@@ -130,7 +130,7 @@
     "fault": null
   },
   "intros/qblove.com": {
-    "hash": "9e2cd675e2edf2260f90d9a1dd58ebc270a0109d",
+    "hash": "588138bbb94f46dbdf9c0cae83927fe1f37b1c88",
     "mode": 19,
     "fault": null
   },
@@ -155,7 +155,7 @@
     "fault": null
   },
   "intros/upup.com": {
-    "hash": "6c324db3039029c2d53dfe7d2d4f48af3c00c0b3",
+    "hash": "9ce8330e04f750212e2d2f46a9368b8c8c5b3808",
     "mode": 19,
     "fault": null
   },
@@ -195,7 +195,7 @@
     "fault": null
   },
   "intros/soullost.com": {
-    "hash": "7f68639b05cfde0ed43b6075bfe81bf713d77345",
+    "hash": "ca4757b208f218ca0f0737ccbe585144e747dc57",
     "mode": 19,
     "fault": null
   },
@@ -210,7 +210,7 @@
     "fault": null
   },
   "intros/crevenge.com": {
-    "hash": "8212110d08de8936abf1498e75a05f664324cf65",
+    "hash": "39556949a08fa282390191959ec8bf5be499d2ff",
     "mode": 3,
     "fault": null
   },

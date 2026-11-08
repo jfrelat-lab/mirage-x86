@@ -650,6 +650,26 @@ function eq(name, got, want) {
   eq('PIT mode 3: a frame after FFFFh reads FFFEh - 2 x 17045, and half a period later the same again',
     [(0xfffe - sq) / 2, read() === sq].join(), '17045,true'); }
 
+// The BIOS leaves counter 0 in mode 3, so a program that never programs the timer reads it counting by
+// two: tools/pit40.asm's run A, 256 even counts of 256 on DOSBox-X (256bytef and kaneda seed from it).
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+  const read = () => { mc.ioWrite(0x43, 1, 0x00); const lo = mc.ioRead(0x40, 1); return lo | (mc.ioRead(0x40, 1) << 8); };
+  let even = 0;
+  for (let i = 0; i < 256; i++) { cpu.cycles += 977 + i; if (!(read() & 1)) even++; }
+  eq('PIT at power-on: mode 3 as the BIOS leaves it, 256 of 256 latched counts even', even, 256); }
+
+// 16-bit SHLD/SHRD past 16 (tools/shd16.asm): a P6 shifts dst:src:dst, as QEMU answers; a Pentium,
+// and here a 386 or 486, rotates the source, as DOSBox-X answers. kaneda's palette, qblove, crevenge.
+{ const shd = (cpu) => { const c = new Machine({ memSize: 1 << 20, cpu }).cpu;
+    return [17, 18, 24, 31].map((n) => c.shld(0x1234, 0xabcd, n, 16).toString(16) + '/' + c.shrd(0x1234, 0xabcd, n, 16).toString(16)).join(); };
+  eq('SHLD/SHRD 16-bit, counts 17, 18, 24, 31 (1234h, ABCDh): a 686 as QEMU', shd('686'), '579a/55e6,af34/2af3,cd12/34ab,891a/2469');
+  eq('...and a 386 or 586 as DOSBox-X', [shd('386'), shd('586')].join(' '), '579b/d5e6,af36/6af3,cdab/cdab,d5e6/579b '.repeat(2).trim()); }
+
+// The 8x8 font's first half at F000:FA6E, as every PC BIOS keeps it: 256bytef reads its digits there.
+{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+  const f = new Uint8Array(256 * 8); for (let i = 0; i < f.length; i++) f[i] = (i * 7) & 0xff; mc.font8x8 = f;
+  eq("ROM font: '2' at F000:FBFE is the 8x8 font's", [...mc.mem.u8.slice(0xffbfe, 0xffc06)].join(), [...f.slice(0x32 * 8, 0x33 * 8)].join()); }
+
 // ---- the ATAPI CD-ROM, secondary master (src/ide.js): what tools/atapiprobe.asm reads on QEMU -cdrom ----
 { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   eq('ATAPI: no drive fitted, the secondary channel floats', mc.ioRead(0x177, 1), 0xff);

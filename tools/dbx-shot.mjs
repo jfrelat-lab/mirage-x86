@@ -1,7 +1,8 @@
 // dbx-shot.mjs — what DOSBox-X's VGA actually shows for a DOS program, as PNG frames.
 //
 //   node tools/dbx-shot.mjs <prog.com|dir> <seconds> <outPrefix> [at=1,5,10] [tail]
-//   PROG=NAME.EXE for a directory; DBXCYCLES (default "fixed 20000"), DBXMACHINE (default svga_s3).
+//   PROG=NAME.EXE for a directory; DBXCYCLES (default "fixed 20000"), DBXMACHINE (default svga_s3),
+//   DBXCPUTYPE (DOSBox-X's cputype, e.g. pentium_mmx or ppro_slow; its default otherwise).
 //
 // The other DOSBox-X paths in this repo read guest MEMORY (tools/grabber.asm, egaref.mjs): the
 // framebuffer bytes and the DAC, laid out by our own idea of the mode. That cannot tell how the card
@@ -41,6 +42,7 @@ if (statSync(target).isDirectory()) {
 const r = spawnSync('/bin/sh', ['-c', `ulimit -t ${SECS * 4 + 60}; exec dosbox-x -silent -nogui -nomenu -time-limit ${SECS} ` +
   `-set "dosbox captures=${join(work, 'cap')}" -set "dosbox machine=${process.env.DBXMACHINE || 'svga_s3'}" ` +
   `-set "cpu cycles=${process.env.DBXCYCLES || 'fixed 20000'}" -set "speaker pcspeaker=false" ` +
+  (process.env.DBXCPUTYPE ? `-set "cpu cputype=${process.env.DBXCPUTYPE}" ` : '') +
   `-c "mount c ${join(work, 'c')}" -c c: -c "dx-capture /v ${prog}${tail ? ' ' + tail : ''}" -c exit`],
 { encoding: 'utf8', env: { ...process.env, SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy' } });
 const avis = readdirSync(join(work, 'cap')).filter((f) => f.endsWith('.avi')).sort();

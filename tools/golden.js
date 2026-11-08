@@ -50,6 +50,9 @@ const TICKS = 60, BUDGET = 400000;
 // not. Pin a program while its picture is on screen; "pin the show, not the curtain" below is the
 // same rule, and this is the case that showed it also applies to the palette.
 const TICK_OVERRIDE = { animate: 20, crevenge: 200, freality: 40, mesha: 170, omniscent: 120, starport: 200 };
+// Intros that need a later processor than the default 386 run as one: crevenge executes FUCOMI, so it
+// only ever ran on a P6, and its `shrd cx,si,23` (a 16-bit count past 16) gives a P6's answer there.
+const CPU_OVERRIDE = { crevenge: '686' };
 
 // Fixed workload set: both own demos + every third-party intro. Third-party binaries are
 // gitignored, so `check` silently skips any that are absent on this machine.
@@ -67,7 +70,7 @@ const WORKLOADS = [
       'mirrors', 'nibble', 'oktaeder', 'omniscent', 'paleozoa', 'paralaxa', 'pitman', 'puls',
       'qblove', 'revitro', 'rv256', 'soullost', 'starport', 'symetrie', 'tube', 'upup', 'warp',
       'worm']
-    .map((n) => [`intros/${n}.com`, TICK_OVERRIDE[n] ? { ticks: TICK_OVERRIDE[n] } : undefined]),
+    .map((n) => [`intros/${n}.com`, TICK_OVERRIDE[n] || CPU_OVERRIDE[n] ? { ...(TICK_OVERRIDE[n] ? { ticks: TICK_OVERRIDE[n] } : {}), ...(CPU_OVERRIDE[n] ? { cpu: CPU_OVERRIDE[n] } : {}) } : undefined]),
   ['intros/mars.exe'],
   // Boot-sector workloads run through the INT 19h handoff with no DOS installed at all. Pinning one
   // here is what keeps that second entry point from silently rotting: nothing else exercises it.
@@ -94,7 +97,7 @@ function fingerprint(relPath, opts = {}) {
   if (!existsSync(abs)) return null;
   if (opts.test386) return test386Fingerprint(abs);
   // Composed exactly like the browser (fonts, mouse, 16 MiB) — see harness.mjs for why that matters.
-  const { mc, dos } = makeMachine({ dos: !opts.boot });
+  const { mc, dos } = makeMachine({ dos: !opts.boot, ...(opts.cpu ? { cpu: opts.cpu } : {}) });
   let fault = null; mc.onError = (e) => { fault = e; };
   // The engine reports a derail as soon as it sees one, but only this loop knows WHICH workload is
   // running; an unattributed warning in a 43-program run is close to useless.

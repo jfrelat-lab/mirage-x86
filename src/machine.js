@@ -198,10 +198,10 @@ export class Machine {
     // halve 65536 - count: counted by one, their frame was 8522 PIT clocks instead of 17045, every
     // copper interrupt of the frame came in its first half, and the last one polled 3DAh for the rest
     // of it -- half the CPU gone, and Second Reality's credit texts drawn too late, doubled.
-    // Before the guest's first control word the count runs by one, as it always did here, though the
-    // BIOS leaves mode 3: 256bytef and kaneda (golden) seed their randomness from port 40h unprogrammed,
-    // and counted by two (even values only, as on a PC) their pictures change. A decision for later.
-    this._pitMode = 2;
+    // From power-on: the BIOS leaves counter 0 in mode 3 (36h, 18.2 Hz), so a program reading port 40h
+    // without programming the timer reads even counts, as tools/pit40.asm reads on DOSBox-X (256 of 256;
+    // SeaBIOS under QEMU leaves mode 2). 256bytef and kaneda seed their randomness so (golden).
+    this._pitMode = 3;
     const pitCount = (n, el) => {                     // the count `el` clocks into a period of n
       if (this._pitMode !== 3) return (n - el) & 0xffff;
       const h = (n + 1) >> 1;                         // an odd count stays high one clock longer
@@ -275,6 +275,16 @@ export class Machine {
 
   /** Register a JS service routine for INT n and point its vector at our stub. */
   hookInterrupt(n, fn) { this.intHandlers[n] = fn; this.setVector(n, BIOS_SEG, n); }
+
+  // The 8x8 font's first 128 characters at F000:FA6E, where every PC BIOS since IBM's keeps them
+  // (the CGA's graphics characters; INT 1Fh points at the other 128). Programs read it directly:
+  // 256bytef (golden) draws its "256" from FS=F000, SI=FBFEh, FC16h, FC1Eh. Placed when the font is,
+  // whenever a page or a tool loads it, before or after the BIOS.
+  get font8x8() { return this._font8x8; }
+  set font8x8(f) {
+    this._font8x8 = f;
+    if (f && f.length >= 1024 && this.mem && this.mem.u8.length >= 0x100000) this.mem.u8.set(f.subarray(0, 1024), 0xffa6e);
+  }
 
   /** True when a guest handler sits on top of our service for INT n — the vector no longer points
    *  at our stub (or at the HLE DOS trampolines, which are ours). Our XMS driver and DPMI host use it

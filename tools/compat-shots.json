@@ -2056,7 +2056,7 @@
 "exe": "KANEDA.COM",
 "shots": [
 [
-4,
+12,
 "title"
 ]
 ]
@@ -2310,6 +2310,7 @@
 },
 {
 "id": "g-crevenge",
+"cpu": "686",
 "files": [
 "intros/crevenge.com"
 ],
