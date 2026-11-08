@@ -247,7 +247,7 @@ const linuxUser = (img) => savedUser() || (img && (img.hostUser || img.user)) ||
 // without what is Linux's own: the examples' intros, the user's name, a program of one's own.
 async function linux(world = 'linux') {
   const isLinux = world === 'linux';
-  const shelfTitle = isLinux ? 'Linux intros and OASIS images' : 'Win32 intros (OASIS images)';
+  const shelfTitle = isLinux ? 'Linux intros and OASIS images' : 'Windows programs (OASIS images)';
   const userBtn = $('userBtn');
   userBtn.hidden = !isLinux;
   const showUser = () => { userBtn.textContent = `User: ${savedUser() || 'player'}`; };
