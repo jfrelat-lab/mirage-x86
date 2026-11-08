@@ -439,7 +439,41 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
     if (st.classes.has(key)) st.wndProc = st.classes.get(key);
     st.style = style; resize(w, h);
-    return st.hwnd;
+    // What CreateWindowEx sends before it returns: WM_NCCREATE and WM_CREATE with the CREATESTRUCT
+    // made of its own arguments (on the caller's stack, in CREATESTRUCT's order reversed), then
+    // WM_SIZE and WM_MOVE.
+    const a = (x.cpu.reg[4] >>> 0) + 4, cs = x.win.heapAlloc(48);
+    [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].forEach((k, i) => x.w32(cs + 4 * i, x.r32(a + 4 * k)));
+    return send(x, [[0x81, 0, cs], [0x01, 0, cs], [0x05, 0, sizeLp()], [0x03, 0, 0]], () => st.hwnd, 48);
+  };
+  const sizeLp = () => ((st.h & 0xffff) << 16 | (st.w & 0xffff)) >>> 0;
+  /*
+   * Messages Windows SENDS: the window procedure runs in the program before the API returns. The
+   * procedure is entered with its four arguments and a return into user32's ordinal-only stub 2600
+   * (mirageReturn), which enters it again for the next message, and after the last returns to the
+   * API's caller with `result(eax)` in EAX and the API's own `pop` bytes of arguments taken, as its
+   * stdcall return would. Sends nest (a procedure calling an API that sends): each its frame.
+   */
+  st.sends = [];
+  const callProc = (x, [msg, wp, lp], ret) => {
+    const c = x.cpu; let sp = c.reg[4] >>> 0;
+    for (const v of [lp, wp, msg, st.hwnd]) { sp -= 4; x.w32(sp, v >>> 0); }
+    sp -= 4; x.w32(sp, ret); c.reg[4] = sp; c.eip = st.wndProc;
+  };
+  const back = (x) => x.win.proc(x.win.load('user32.dll'), 2600);
+  const send = (x, msgs, result, pop) => {
+    if (!st.wndProc || !msgs.length) return result(0);
+    const esp0 = x.cpu.reg[4] >>> 0;                                  // the caller's return address, its arguments above
+    st.sends.push({ msgs: msgs.slice(1), result, pop, esp0 });
+    callProc(x, msgs[0], back(x));
+    return 0;
+  };
+  const mirageReturn = (x) => {
+    const f = st.sends[st.sends.length - 1], c = x.cpu, eax = c.reg[0] >>> 0;
+    if (f.msgs.length) { c.reg[4] = f.esp0; callProc(x, f.msgs.shift(), back(x)); return eax; }
+    st.sends.pop();
+    const ret = x.r32(f.esp0); c.reg[4] = (f.esp0 + 4 + f.pop) >>> 0; c.eip = ret;
+    return f.result(eax);
   };
   // The window made w x h (its frame included): the client area inside the frame its style has, as
   // AdjustWindowRectEx adds it -- what the screen shows.
@@ -456,11 +490,26 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, true)],
     ChangeDisplaySettingsA: ['pu', (x, dm) => { if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; } return 0; }],   // DEVMODEA's dmPelsWidth, dmPelsHeight
     GetDC: ['p', () => st.hdc], ReleaseDC: ['pp', () => 1],
-    ShowCursor: ['i', () => 0], SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; return 1; }], ShowWindow: ['pi', () => 1], UpdateWindow: ['p', () => 1],
+    ShowCursor: ['i', () => 0], SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
+    // returns that the window was hidden. UpdateWindow paints it once (WM_PAINT).
+    ShowWindow: ['pi', (x, hwnd, cmd) => {
+      if (hwnd !== st.hwnd || st.shown || cmd === 0) return st.shown ? 1 : 0;
+      st.shown = true;
+      return send(x, [[0x18, 1, 0], [0x1c, 1, 0], [0x86, 1, 0], [0x06, 1, 0], [0x07, 0, 0]], () => 0, 8);
+    }],
+    UpdateWindow: ['p', (x, hwnd) => (hwnd === st.hwnd ? send(x, [[0x0f, 0, 0]], () => 1, 4) : 1)],
     // A window moved or sized: its new size, unless SWP_NOSIZE (1). WinQuake's video modes resize its
     // window this way (vid_mode 2: 806x625 with its frame, an 800x600 picture).
-    SetWindowPos: ['ppiiiiu', (x, hwnd, after, X, Y, w, h, flags) => { if (hwnd === st.hwnd && !(flags & 1)) resize(w, h); return 1; }],
-    MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => { if (hwnd === st.hwnd) resize(w, h); return 1; }],
+    SetWindowPos: ['ppiiiiu', (x, hwnd, after, X, Y, w, h, flags) => {
+      if (hwnd !== st.hwnd || flags & 1) return 1;
+      const w0 = st.w, h0 = st.h; resize(w, h);
+      return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 28) : 1;   // WM_SIZE, the client area's new size
+    }],
+    MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => {
+      if (hwnd !== st.hwnd) return 1;
+      const w0 = st.w, h0 = st.h; resize(w, h);
+      return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 24) : 1;
+    }],
     GetAsyncKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8001 : 0)],
     GetCursorPos: ['p', (x, p) => { x.w32(p, st.mouseX ?? (st.w >> 1)); x.w32(p + 4, st.mouseY ?? (st.h >> 1)); return 1; }],
     PostQuitMessage: ['i', () => 0],
@@ -490,7 +539,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     GetClientRect: ['pp', (x, hwnd, r) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, st.w); x.w32(r + 12, st.h); return 1; }],
     GetWindowRect: ['pp', (x, hwnd, r) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, st.w); x.w32(r + 12, st.h); return 1; }],
     // A message box is not shown; its caption and text go to the log, where an error says what it is.
-    MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', () => 1], ValidateRect: ['pp', () => 1], DestroyWindow: ['p', () => 1],
+    MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', () => 1], ValidateRect: ['pp', () => 1], // The window's end: WM_DESTROY, then WM_NCDESTROY; the program's other windows (dialogs) have no procedure here.
+    DestroyWindow: ['p', (x, hwnd) => (hwnd === st.hwnd && !st.destroyed ? (st.destroyed = true, send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 1, 4)) : 1)],
     LoadCursorA: ['pp', () => 0x10003], LoadIconA: ['pp', () => 0x10002], SetCursor: ['p', () => 0], AdjustWindowRect: ['pui', () => 1],
     wsprintfA: ['ppp', NOT('user32', 'wsprintfA')[1], { cdecl: true }],
     // A program's own windows beyond the first (WinQuake's start-up dialog, made from its resources and
@@ -499,7 +549,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     GetActiveWindow: ['', () => st.hwnd], SetActiveWindow: ['p', () => st.hwnd], SetForegroundWindow: ['p', () => 1],
     SetFocus: ['p', () => st.hwnd], EnableWindow: ['pi', () => 0], MessageBeep: ['u', () => 1],
     SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1], ClipCursor: ['p', () => 1],
-    InvalidateRect: ['ppi', () => 1], PostMessageA: ['puuu', () => 1], SendMessageA: ['puuu', () => 0], KillTimer: ['pu', () => 1],
+    InvalidateRect: ['ppi', () => 1], PostMessageA: ['puuu', (x, hwnd, msg, wp, lp) => { st.msgs.push({ msg, wp, lp }); return 1; }],
+    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp) => (hwnd === st.hwnd ? send(x, [[msg, wp, lp]], (eax) => eax, 16) : 0)], KillTimer: ['pu', () => 1],
     // GWL_STYLE (-16): the frame the window's size includes from now on (WinQuake's windowed and full-screen modes).
     SetWindowLongA: ['pii', (x, hwnd, i, v) => { if (i === -16 && hwnd === st.hwnd) { const prev = st.style | 0; st.style = v; return prev; } return 0; }],
     // WM_PAINT's DC: the window's, the whole client area to paint (PAINTSTRUCT: hdc, fErase, rcPaint).
@@ -529,6 +580,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // No string resources are read here: an empty string, as for an id the table lacks.
     LoadStringA: ['pupi', (x, inst, id, buf, n) => { if (n > 0) x.write(buf, Uint8Array.of(0)); return 0; }],
     // No message ever arrives here, so it waits its time out (WAIT_TIMEOUT), as an idle window does.
+    mirageReturn: ['', (x) => mirageReturn(x), { ordinal: 2600, noName: true }],
     MsgWaitForMultipleObjects: ['upiuu', (x, n, handles, all, ms) => { if (!ms) return 0x102; const r = x.sleep(Math.min(ms, 1000) / 1000); return r === 0 ? 0x102 : r; }],
   };
   // ---- gdi32 ---------------------------------------------------------------------------------------

@@ -4730,7 +4730,26 @@ const runLinux = (hex, argv) => {
     u('SetWindowLongA')(0x10010, -16, 0x80000000); u('SetWindowPos')(0x10010, 0, 0, 0, 640, 480, 0x104);
     got = [a, b, c, client()].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: the client area follows SetWindowPos (not with SWP_NOSIZE) and the style SetWindowLongA sets', got, '320x240 800x600 800x600 640x480'); }
+  eq('win32: the client area follows SetWindowPos (not with SWP_NOSIZE) and the style SetWindowLongA sets', got, '320x240 800x600 800x600 640x480');
+  // Sent messages: CreateWindowExA enters the window procedure with WM_NCCREATE, WM_CREATE (its
+  // CREATESTRUCT from its own arguments), WM_SIZE and WM_MOVE, each returning into user32's stub,
+  // and after the last returns to its caller with the window's handle, its 48 bytes of arguments taken.
+  try { const { mc, fn, x, apis, str } = await w32(), u = (n) => fn('user32.dll', n), c = mc.cpu;
+    const wc = x.win.heapAlloc(40); x.write(wc, new Uint8Array(40)); x.w32(wc + 4, 0x401234); x.w32(wc + 36, str('Q'));
+    u('RegisterClassA')(wc);
+    const sp0 = ((c.reg[4] >>> 0) - 0x100) & ~3, args = [0, str('q'), 0, 0xcf0000, 0, 0, 326, 265, 0, 0, 0x400000, 0x5150];
+    x.w32(sp0, 0x401000); args.forEach((v, i) => x.w32(sp0 + 4 + 4 * i, v)); c.reg[4] = sp0;
+    u('CreateWindowExA')(...args);
+    const back = apis.find((d) => d.dll === 'user32.dll').fns.mirageReturn[1], seen = [];
+    let eax = 0;
+    for (let i = 0; i < 6 && c.eip === 0x401234; i++) {
+      const sp = c.reg[4] >>> 0, msg = x.r32(sp + 8), lp = x.r32(sp + 16);
+      seen.push(msg.toString(16) + (msg === 1 ? '/' + x.r32(lp).toString(16) : msg === 5 ? '/' + (lp >>> 16) : ''));
+      c.reg[4] = sp + 20; c.reg[0] = 0; eax = back(x);                  // the procedure's ret 16, into the stub
+    }
+    got = [seen.join(','), c.eip.toString(16), eax.toString(16), (c.reg[4] >>> 0) - sp0].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: CreateWindowExA sends WM_NCCREATE, WM_CREATE (CREATESTRUCT), WM_SIZE, WM_MOVE, then returns the window', got, '81,1/5150,5/240,3 401000 10010 52'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

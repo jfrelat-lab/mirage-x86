@@ -6,6 +6,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-08
 
+- **Windows' own messages reach a program's window**, as Windows sends them before the call returns: on
+  creation (`WM_NCCREATE`, `WM_CREATE`, `WM_SIZE`, `WM_MOVE`), on first showing (`WM_SHOWWINDOW`, activation,
+  focus), on painting, resizing and destruction; `SendMessageA` and `PostMessageA` work. The 25 Windows
+  intros behave exactly as before.
 - **WinQuake's video modes**: `vid_mode 2` gives an 800x600 window, the screen following the size a
   program gives its window (`SetWindowPos`, `MoveWindow`) and the frame its style has (`SetWindowLongA`).
 - **WinQuake runs in the browser, with no Windows**: id Software's own `winquake.exe` of March 1997,
