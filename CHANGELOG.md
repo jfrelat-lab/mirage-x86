@@ -6,6 +6,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-09
 
+- **GLQuake runs in the browser**: id Software's OpenGL Quake of August 1997, unmodified, its
+  OpenGL 1.1 drawn through WebGL by PRISM's `gl.js` — full screen, or in a window on the desktop with
+  `-window`. It needed five more OpenGL calls (`glAlphaFunc`, `glTexEnvf`, `glDepthRange`,
+  `glTexSubImage2D`, `glReadPixels`), `InitCommonControls` and `GetDlgItem`.
 - **Windows programs have windows**: a program's window with a caption is drawn on a 1024x768
   desktop, as Windows 2000 and XP's classic style draw it, with its frame, its title and a close
   button, and the cursor. A window is moved by its title bar, and the program learns where it went

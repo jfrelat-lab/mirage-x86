@@ -589,6 +589,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // A program's own windows beyond the first (WinQuake's start-up dialog, made from its resources and
     // destroyed once the game window is up): a handle of their own, never on the screen here.
     CreateDialogParamA: ['pppp' + 'p', () => 0x10020],
+    GetDlgItem: ['pi', (x, dlg, id) => 0x10100 + (id & 0xff)],      // a control of such a window: a handle of its own
     GetActiveWindow: ['', () => st.hwnd], SetActiveWindow: ['p', () => st.hwnd], SetForegroundWindow: ['p', () => 1],
     SetFocus: ['p', () => st.hwnd], EnableWindow: ['pi', () => 0], MessageBeep: ['u', () => 1],
     SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1],
@@ -829,6 +830,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     wglCreateContext: ['p', () => st.hglrc],
     wglMakeCurrent: ['pp', (x, hdc, ctx) => { if (ctx && !st.mode) { st.mode = true; x.backend.setVideoMode(st.w, st.h, true); } return 1; }],
     wglDeleteContext: ['p', () => 1],
+    wglGetCurrentDC: ['', () => (st.mode ? st.hdc : 0)], wglGetCurrentContext: ['', () => (st.mode ? st.hglrc : 0)],   // after wglMakeCurrent
     wglGetProcAddress: ['p', (x, name) => x.win.proc(x.win.modules.get('opengl32.dll'), x.str(name))],
     wglUseFontBitmapsA: ['puuu', () => 1],
     wglSwapLayerBuffers: ['pu', (x) => gdi32.SwapBuffers[1](x)],
@@ -1070,6 +1072,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     ...d3d9Apis(st),
     dsoundApis(),
     { dll: 'wsock32.dll', fns: wsock32 },
+    // comctl32: the common controls are registered (InitCommonControls, ordinal 17); none is drawn here.
+    { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }] } },
     // The registry: empty. A key opens as not found (ERROR_FILE_NOT_FOUND), so nothing is read from it
     // or written to it, as on a machine where the program never ran.
     { dll: 'advapi32.dll', fns: { RegOpenKeyExA: ['ppuup', () => 2], RegCreateKeyExA: ['ppupuuppp', () => 2], RegQueryValueExA: ['pppppp', () => 2],

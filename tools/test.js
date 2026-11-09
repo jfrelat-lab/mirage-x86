@@ -4778,7 +4778,13 @@ const runLinux = (hex, argv) => {
     u('ChangeDisplaySettingsA')(dm, 6);
     got = [before, after, closes.join('/'), apis.wm.clientRect() ? 'framed' : 'full'].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32 wm: a caption drag moves the window at the next PeekMessage; the close button posts WM_CLOSE; CDS_TEST changes nothing', got, '0,0 300,200 10 framed'); }
+  eq('win32 wm: a caption drag moves the window at the next PeekMessage; the close button posts WM_CLOSE; CDS_TEST changes nothing', got, '0,0 300,200 10 framed');
+  // GLQuake (1997): opengl32's entry points it imports beyond the intros', read from the stack as their
+  // C signatures say (PRISM's gl.js does the work), comctl32's InitCommonControls by ordinal 17.
+  try { const { apis } = await w32(), ogl = apis.find((d) => d.dll === 'opengl32.dll').fns, cc = apis.find((d) => d.dll === 'comctl32.dll').fns;
+    got = [...['glAlphaFunc', 'glTexEnvf', 'glDepthRange', 'glTexSubImage2D', 'glReadPixels'].map((n) => ogl[n][0]), cc.InitCommonControls[2].ordinal, typeof ogl.wglGetCurrentDC[1]].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: GLQuake\'s GL entry points and signatures, InitCommonControls (ordinal 17)', got, 'uf uuf dd uiiiiiuup iiiiuup 17 function'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

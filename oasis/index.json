@@ -381,6 +381,22 @@
     ]
   },
   {
+    "name": "win32/glquake-1997",
+    "title": "GLQuake 0.95 — id Software, Quake on OpenGL",
+    "world": "win32",
+    "year": 1997,
+    "author": "id Software",
+    "thumb": "oasis/thumbs/win32-glquake-1997.png",
+    "output": "window",
+    "tags": [
+      "Game",
+      "Win32",
+      "OpenGL",
+      "DirectSound"
+    ],
+    "sound": true
+  },
+  {
     "name": "win32/hartverdrahtet-2012",
     "title": "Hartverdrahtet — Akronyme Analogiker, 4K for Windows",
     "world": "win32",

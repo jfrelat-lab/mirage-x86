@@ -15,7 +15,8 @@ glRecti iiii; glRects iiii; glRectf ffff; glRectd dddd; glBegin u; glEnd ; glVer
 glTexCoord2f ff; glTexCoord1f f; glNormal3f fff; glMatrixMode u; glLoadIdentity ; glRotatef ffff; glRotated dddd; glTranslatef fff; glTranslated ddd; glScalef fff;
 glFrustum dddddd; glOrtho dddddd; glViewport iiii; glEnable u; glDisable u; glBlendFunc uu; glLineWidth f; glPointSize f; glShadeModel u;
 glDepthFunc u; glDepthMask u; glCullFace u; glFrontFace u; glPushMatrix ; glPopMatrix ; glFlush ; glFinish ; glHint uu; glPolygonMode uu;
-glBindTexture uu; glTexParameteri uui; glTexParameterf uuf; glTexEnvi uui; glCopyTexSubImage2D uiiiiiii; glCopyTexImage2D uuiiiiii; glActiveTexture u;
+glBindTexture uu; glTexParameteri uui; glTexParameterf uuf; glTexEnvi uui; glTexEnvf uuf; glAlphaFunc uf; glDepthRange dd;
+glTexSubImage2D uiiiiiuup; glReadPixels iiiiuup; glCopyTexSubImage2D uiiiiiii; glCopyTexImage2D uuiiiiii; glActiveTexture u;
 glCreateShader u; glCompileShader u; glCreateProgram ; glAttachShader uu; glLinkProgram u; glUseProgram u; glDeleteShader u; glDeleteProgram u;
 glUniform1f if; glUniform2f iff; glUniform3f ifff; glUniform4f iffff; glUniform1i ii; glUniform2i iii;
 glCreateShaderObjectARB u; glCompileShaderARB u; glCreateProgramObjectARB ; glAttachObjectARB uu; glLinkProgramARB u; glUseProgramObjectARB u;

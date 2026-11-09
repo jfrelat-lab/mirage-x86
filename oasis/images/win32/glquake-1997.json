@@ -1,0 +1,34 @@
+{
+  "oasis": 1,
+  "title": "GLQuake 0.95 — id Software, Quake on OpenGL",
+  "year": 1997,
+  "author": "id Software",
+  "world": "win32",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/unsup/glq8_27.zip",
+      "files": {
+        "GLQUAKE.EXE": "/quake/glquake.exe"
+      }
+    },
+    {
+      "zip": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/quake/quake106.zip",
+      "lha": "resource.1",
+      "into": "quake",
+      "files": {
+        "ID1/PAK0.PAK": "id1/pak0.pak"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/quake/glquake.exe"
+  },
+  "output": "window",
+  "notes": "id Software's OpenGL Quake (glquake.exe of 26 August 1997, glq8_27.zip, from id's own FTP), with the shareware episode's data (quake106.zip). The executable as id built it, without the 3dfx miniGL driver that came beside it: MIRAGE-WIN32 makes opengl32.dll in JavaScript and PRISM's gl.js draws its OpenGL 1.1 through WebGL2, the Win32 calls, the sound (DirectSound) and Winsock (no network) answered as for WinQuake.",
+  "thumb": "oasis/thumbs/win32-glquake-1997.png",
+  "tags": ["Game", "Win32", "OpenGL", "DirectSound"],
+  "sound": true
+}
