@@ -705,11 +705,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // A Win32 window's client area on the screen (src/win32/api.js: what BitBlt and StretchBlt draw into
   // the window): 0x00RRGGBB pixels, w x h, put on the card in the framebuffer's 32-bit mode, where the
   // page and the headless tools show it as they show /dev/fb0.
-  lx.fbShow = (px, w, h) => {
+  lx.fbView = (w, h) => {                                    // the screen's pixels, w x h at 32 bits, to write
     if (FB.w !== w || FB.h !== h) lx.setFb(w, h);
     const base = fbOn();
-    new Uint32Array(machine.mem.u8.buffer, machine.mem.u8.byteOffset + base, w * h).set(px.subarray(0, w * h));
+    return new Uint32Array(machine.mem.u8.buffer, machine.mem.u8.byteOffset + base, w * h);
   };
+  lx.fbShow = (px, w, h) => lx.fbView(w, h).set(px.subarray(0, w * h));
+  lx.romFont = () => machine.font || null;                   // the VGA ROM's 8x16 font: window captions
   const fbIoctl = (req, arg) => {
     const base = fbOn(), line = FB.w * (FB.bpp >> 3);
     const z = (a, n) => { for (let i = 0; i < n; i += 4) wr32(a + i, 0); };

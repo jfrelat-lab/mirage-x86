@@ -9,6 +9,8 @@
 //   MIRAGE_W32KEYS=12:01,14:1c       keys pressed at those guest seconds, by PC scancode (hex; e0xx for an
 //                                   extended key), held a tenth of a second: WM_KEYDOWN, WM_KEYUP; 2a+ and
 //                                   2a- press and release (Shift held over the keys between)
+//   MIRAGE_W32MOUSE=10:98,10,down|10.2:398,210|10.4:up   the mouse on the screen at those guest seconds:
+//                                   a point (mouseAt), the left button down or up there
 //   MIRAGE_W32DIR=<dir>             the files beside it, by base name, on the program's own disk (src/win32/api.js)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
 //   MIRAGE_W32TRACE=1               every API call as it is made
@@ -28,6 +30,7 @@ if (!prog) { console.error('usage: node tools/win32/run.mjs <program.exe>'); pro
 const exe = new Uint8Array(readFileSync(prog));
 const mc = new Machine({ memSize: win32Memory(exe), cpu: process.env.MIRAGE_CPU || '686' });
 installBIOS(mc);
+try { mc.font = new Uint8Array(readFileSync(new URL('../../assets/vga-rom-8x16.bin', import.meta.url))); } catch { /* captions without letters */ }   // as the page loads it
 const lx = installLinux(mc, { onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });
 lx.epoch = Math.floor(Date.now() / 1000);
 const backend = traceBackend();
@@ -99,8 +102,14 @@ const KEYS = (process.env.MIRAGE_W32KEYS || '').split(',').filter(Boolean).flatM
   if (hold === '+' || hold === '-') return [{ at: Number(t), down: hold === '+', scan, ext }];   // held down, let go
   return [{ at: Number(t), down: true, scan, ext }, { at: Number(t) + 0.1, down: false, scan, ext }];
 }).sort((a, b) => a.at - b.at);
+const MOUSE = (process.env.MIRAGE_W32MOUSE || '').split('|').filter(Boolean).map((m) => { const [t, a] = m.split(':'); return { at: Number(t), a: a.split(',') }; });
 while (!lx.done && mc.cpu.cycles < LIMIT) {
   while (KEYS.length && mc.cpu.cycles >= KEYS[0].at * SEC) { const k = KEYS.shift(); apis.input.key(k.down, k.scan, k.ext); }
+  while (MOUSE.length && mc.cpu.cycles >= MOUSE[0].at * SEC) {
+    const { a } = MOUSE.shift();
+    if (a[0] === 'up' || a[0] === 'down') apis.input.mouseButton(0, a[0] === 'down');
+    else { apis.input.mouseAt(Number(a[0]), Number(a[1])); if (a[2]) apis.input.mouseButton(0, a[2] === 'down'); }
+  }
   mc.runSlice(200000); record();
   while (SHOTS.length && mc.cpu.cycles >= SHOTS[0] * SEC) await shot(SHOTS.shift());
 }

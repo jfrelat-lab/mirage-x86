@@ -4749,7 +4749,36 @@ const runLinux = (hex, argv) => {
     }
     got = [seen.join(','), c.eip.toString(16), eax.toString(16), (c.reg[4] >>> 0) - sp0].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: CreateWindowExA sends WM_NCCREATE, WM_CREATE (CREATESTRUCT), WM_SIZE, WM_MOVE, then returns the window', got, '81,1/5150,5/240,3 401000 10010 52'); }
+  eq('win32: CreateWindowExA sends WM_NCCREATE, WM_CREATE (CREATESTRUCT), WM_SIZE, WM_MOVE, then returns the window', got, '81,1/5150,5/240,3 401000 10010 52');
+  // The window manager (src/win32/wm.js): a captioned window is drawn framed on a 1024x768 desktop --
+  // the classic blue, its caption's gradient, its client area at its place on the screen -- and an
+  // 8-bit section stretched into it lands there; a popup is the screen alone (the intros, unchanged).
+  try { const { mc, fn, x } = await w32(), u = (n) => fn('user32.dll', n), g = (n) => fn('gdi32.dll', n);
+    u('CreateWindowExA')(0, 0, 0, 0x00cf0000, 100, 50, 326, 265); u('ShowWindow')(0x10010, 1);
+    const bmi = x.win.heapAlloc(1064); x.write(bmi, new Uint8Array(1064)); x.w32(bmi, 40); x.w32(bmi + 4, 320); x.w32(bmi + 8, -240); x.w16(bmi + 12, 1); x.w16(bmi + 14, 8);
+    const pp = x.win.heapAlloc(4), dc = g('CreateCompatibleDC')(0), hbm = g('CreateDIBSection')(dc, bmi, 0, pp, 0, 0); g('SelectObject')(dc, hbm);
+    const q = x.win.heapAlloc(4); x.w32(q, 0x123456); g('SetDIBColorTable')(dc, 7, 1, q); x.write(x.r32(pp), new Uint8Array(320 * 240).fill(7));
+    g('BitBlt')(0x1001, 0, 0, 320, 240, dc, 0, 0, 0xcc0020);
+    const fb = (X, Y) => new Uint32Array(mc.mem.u8.buffer, mc.mem.u8.byteOffset + mc.vbeFbBase + (Y * 1024 + X) * 4, 1)[0].toString(16);
+    got = [`${mc.vbe.width}x${mc.vbe.height}`, fb(0, 0), fb(103, 55), fb(103, 72), fb(422, 311), fb(423, 72)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32 wm: a captioned window on the 1024x768 desktop, its caption, its client area at (103, 72)', got, '1024x768 3a6ea5 a246a 123456 123456 d4d0c8');
+  // Dragging the caption moves it; the move reaches the program as WM_MOVE at its next PeekMessage,
+  // before it can look (WinQuake puts its window back where it remembers it otherwise). The close
+  // button posts WM_CLOSE; a mode only tested (CDS_TEST) changes nothing.
+  try { const { fn, x, apis } = await w32(), u = (n) => fn('user32.dll', n), i = apis.input, r = x.win.heapAlloc(16), m = x.win.heapAlloc(28);
+    u('CreateWindowExA')(0, 0, 0, 0x00cf0000, 0, 0, 326, 265); u('ShowWindow')(0x10010, 1);
+    const rect = () => { u('GetWindowRect')(0x10010, r); return [x.r32(r), x.r32(r + 4)].join(','); };
+    i.mouseAt(98, 10); i.mouseButton(0, true); i.mouseAt(398, 210); i.mouseButton(0, false);
+    const before = rect(); u('PeekMessageA')(m, 0, 0, 0, 1); const after = rect();
+    i.mouseAt(313, 10); i.mouseButton(0, true); i.mouseButton(0, false);           // the close button, where the window was
+    i.mouseAt(613, 210); i.mouseButton(0, true); i.mouseButton(0, false);          // ... and where it is
+    const closes = []; while (u('PeekMessageA')(m, 0, 0, 0, 1)) closes.push(x.r32(m + 4).toString(16));
+    const dm = x.win.heapAlloc(156); x.write(dm, new Uint8Array(156)); x.w32(dm + 108, 640); x.w32(dm + 112, 480);
+    u('ChangeDisplaySettingsA')(dm, 6);
+    got = [before, after, closes.join('/'), apis.wm.clientRect() ? 'framed' : 'full'].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32 wm: a caption drag moves the window at the next PeekMessage; the close button posts WM_CLOSE; CDS_TEST changes nothing', got, '0,0 300,200 10 framed'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

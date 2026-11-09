@@ -61,7 +61,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   lx.host = host;
   // machine.hle: libraries made in JavaScript in /usr/lib — ["sdl12", "gl", "glu", "asound"], the GL ones
   // PRISM's (src/hle/prism-gl.js) — for the Linux OpenGL intros of 2003-2010.
-  let hle = null, w32in = null;
+  let hle = null, w32in = null, w32wm = null;
   if (win32) {
     const [{ prismLibraries }, { win32Apis }] = await Promise.all([import('./hle/prism-gl.js'), import('./win32/api.js')]);
     hle = await prismLibraries(lx, mc.mem, ['gl', 'glu']);
@@ -73,7 +73,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     const files = {}, dir = img.entry.run.replace(/\/[^/]*$/, '') || '/';
     (function walk(d) { for (const n of host.list(d)) { const p = `${d === '/' ? '' : d}/${n}`, st = host.lstat(p); if (st && st.type === 'dir') walk(p); else if (st && st.type === 'file' && p !== img.entry.run) files[n] = host.read(p); } })(dir);
     const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files });
-    w32in = apis.input;
+    w32in = apis.input; w32wm = apis.wm;
     win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
   } else if (m.hle) {
     const [{ installHLE }, { prismLibraries }] = await Promise.all([import('./hle/index.js'), import('./hle/prism-gl.js')]);
@@ -127,13 +127,36 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   // buttons go to /dev/mouse as a Microsoft serial mouse's packets — SVGAlib's mouse, Quake's aim.
   let buttons = 0;
   const btn = (b) => (b === 0 ? 1 : b === 2 ? 2 : 0);
-  const onDown = (ev) => {
-    if (document.pointerLockElement !== canvas) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
-    buttons |= btn(ev.button); if (w32in) w32in.mouseButton([0, 2, 1][ev.button] ?? 0, true); else lx.mouseInput(0, 0, buttons); ev.preventDefault();
+  // A Windows program's mouse (src/win32/wm.js) is free until the program captures it: free, it is
+  // the point of the screen under the visitor's pointer -- the window's frame drags and closes, the
+  // client area gets the program's messages -- and a game that hides and clips the cursor to aim
+  // gets the pointer locked on a click, its moves relative, until it lets go.
+  const locked = () => document.pointerLockElement === canvas;
+  const screenPoint = (ev) => {                                       // the canvas is letterboxed (object-fit: contain)
+    const r = canvas.getBoundingClientRect(), k = Math.min(r.width / canvas.width, r.height / canvas.height) || 1;
+    return [Math.floor((ev.clientX - r.left - (r.width - canvas.width * k) / 2) / k), Math.floor((ev.clientY - r.top - (r.height - canvas.height * k) / 2) / k)];
   };
-  const onUp = (ev) => { if (document.pointerLockElement !== canvas) return; buttons &= ~btn(ev.button); if (w32in) w32in.mouseButton([0, 2, 1][ev.button] ?? 0, false); else lx.mouseInput(0, 0, buttons); };
-  const onMove = (ev) => { if (document.pointerLockElement === canvas && (ev.movementX || ev.movementY)) { if (w32in) w32in.mouseMove(ev.movementX, ev.movementY); else lx.mouseInput(ev.movementX, ev.movementY, buttons); } };
+  const wbtn = (ev) => [0, 2, 1][ev.button] ?? 0;
+  const onDown = (ev) => {
+    if (w32in && !locked()) {
+      if (w32in.captures()) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
+      w32in.mouseAt(...screenPoint(ev)); w32in.mouseButton(wbtn(ev), true); ev.preventDefault(); return;
+    }
+    if (!locked()) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
+    buttons |= btn(ev.button); if (w32in) w32in.mouseButton(wbtn(ev), true); else lx.mouseInput(0, 0, buttons); ev.preventDefault();
+  };
+  const onUp = (ev) => {
+    if (w32in && !locked()) { w32in.mouseAt(...screenPoint(ev)); w32in.mouseButton(wbtn(ev), false); return; }
+    if (!locked()) return;
+    buttons &= ~btn(ev.button); if (w32in) w32in.mouseButton(wbtn(ev), false); else lx.mouseInput(0, 0, buttons);
+  };
+  const onMove = (ev) => {
+    if (w32in && !locked()) { if (ev.target === canvas || ev.buttons) w32in.mouseAt(...screenPoint(ev)); return; }
+    if (locked() && (ev.movementX || ev.movementY)) { if (w32in) w32in.mouseMove(ev.movementX, ev.movementY); else lx.mouseInput(ev.movementX, ev.movementY, buttons); }
+  };
   canvas.addEventListener('mousedown', onDown); window.addEventListener('mouseup', onUp); window.addEventListener('mousemove', onMove);
+  // Windows draws its own cursor on the screen (src/win32/wm.js): the page's is hidden over it.
+  if (w32in) { canvas.style.cursor = 'none'; canvas.addEventListener('mouseleave', () => w32in.leave()); }
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 
   // The CPU runs in ~12 ms chunks chained through a MessageChannel; requestAnimationFrame only draws.
@@ -157,8 +180,12 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   let frames = 0, last = performance.now(), c0 = 0, raf = 0;
   const draw = () => {
     if (stopped) return;
-    const glFrame = hle && hle.frame();
-    if (glFrame) {                                                       // an SDL OpenGL window: PRISM's picture
+    const glFrame = hle && hle.frame(), cr = glFrame && w32wm && w32wm.clientRect();
+    if (w32in && locked() && !w32in.captures()) document.exitPointerLock();   // the program let the mouse go
+    if (cr) {                                                            // a framed Windows window: the screen, WebGL's picture in its client area
+      video.render();
+      canvas.getContext('2d').drawImage(glFrame, cr.x, cr.y, cr.w, cr.h);
+    } else if (glFrame) {                                                // an SDL OpenGL window: PRISM's picture
       if (canvas.width !== glFrame.width || canvas.height !== glFrame.height) { canvas.width = glFrame.width; canvas.height = glFrame.height; }
       canvas.getContext('2d').drawImage(glFrame, 0, 0);
     } else video.render();

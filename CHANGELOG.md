@@ -4,6 +4,16 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-09
+
+- **Windows programs have windows**: a program's window with a caption is drawn on a 1024x768
+  desktop, as Windows 2000 and XP's classic style draw it, with its frame, its title and a close
+  button, and the cursor. A window is moved by its title bar, and the program learns where it went
+  (WinQuake keeps its place). The close button asks the program to close. The desktop, the frame and
+  the cursor are drawn on the emulated screen, so screenshots and the Record button show them. Full-screen
+  programs, the intros among them, keep the whole screen as before. WinQuake's `-startwindowed` opens
+  its 320x240 window on the desktop.
+
 ## 2026-11-08
 
 - **Windows' own messages reach a program's window**, as Windows sends them before the call returns: on

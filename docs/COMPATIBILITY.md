@@ -211,7 +211,7 @@ MIRAGE's own test demos (`demos/`), all golden:
 
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Title | API | Status | Notes |
 |---|---|---|---|---|
-| <img src="compat/win32-winquake-game.png" width="160" alt=""> <img src="compat/win32-winquake-menu.png" width="160" alt=""> | WinQuake 1.00 (id Software, 1997) | GDI, DirectSound, Winsock | 🟢 Plays | id's own `winquake.exe` with the shareware episode, `-dibonly`: its software renderer in an 8-bit DIB section that `StretchBlt` puts on the screen, its sound through DirectSound, keys and mouse as window messages; Winsock reports no network, so it plays alone | 2026-11-08 |
+| <img src="compat/win32-winquake-game.png" width="160" alt=""> <img src="compat/win32-winquake-menu.png" width="160" alt=""> | WinQuake 1.00 (id Software, 1997) | GDI, DirectSound, Winsock | 🟢 Plays | id's own `winquake.exe` with the shareware episode, `-dibonly`: its software renderer in an 8-bit DIB section that `StretchBlt` puts on the screen, its sound through DirectSound, keys and mouse as window messages; Winsock reports no network, so it plays alone. In a window (`vid_mode` 0-2, `-startwindowed`) it sits framed on the desktop and can be dragged | 2026-11-09 |
 
 ### Intros
 

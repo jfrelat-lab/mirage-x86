@@ -11,6 +11,7 @@ import { d3d9Apis } from './d3d9.js';
 import { dsoundApis } from './dsound.js';
 import { parseTrueType } from './truetype.js';
 import { parseSMF } from '../midi.js';
+import { windowManager } from './wm.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
 
@@ -117,6 +118,7 @@ function windowState(fonts = {}) {
 const GM_DLS_SIZE = 3440660;
 export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const st = windowState(fonts);
+  const wm = windowManager(st);                                       // the screen the window sits on (src/win32/wm.js)
   st.files = [];                                                      // handle - 4000h -> { f, pos }
   st.events = new Map(); st.dcBitmaps = new Map(); st.dcStates = new Map();
   const dcState = (hdc) => { let d = st.dcStates.get(hdc); if (!d) st.dcStates.set(hdc, d = { bkMode: 2, bkColor: 0xffffff, textColor: 0 }); return d; };
@@ -435,7 +437,10 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     st.classes.set(atom, proc); if (name >= 0x10000) st.classes.set(x.str(name, 256).toLowerCase(), proc);
     return atom;
   };
-  const createWindow = (x, cls, style, w, h, wide) => {
+  const createWindow = (x, cls, style, w, h, wide, X, Y, title) => {
+    // Where it sits on the desktop (CW_USEDEFAULT: the first cascade position) and its caption.
+    st.x = X === -0x80000000 ? 22 : X; st.y = Y === -0x80000000 || X === -0x80000000 ? 22 : Y;
+    st.title = title ? (wide ? String.fromCharCode(...wideRead(x, title, -1, true)) : x.str(title, 256)) : '';
     const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
     if (st.classes.has(key)) st.wndProc = st.classes.get(key);
     st.style = style; resize(w, h);
@@ -478,49 +483,75 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   // The window made w x h (its frame included): the client area inside the frame its style has, as
   // AdjustWindowRectEx adds it -- what the screen shows.
   const resize = (w, h) => {
-    const style = st.style | 0, b = style & 0xc00000 ? 3 : style & 0x800000 ? 1 : 0, cap = (style & 0xc00000) === 0xc00000 ? 19 : 0;
+    const { b, cap } = wm.frame();
     if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = Math.max(1, w - 2 * b); st.h = Math.max(1, h - 2 * b - cap); }
+    wm.dirty = true;
   };
   const putMsg = (x, m, e) => { x.w32(m, st.hwnd); x.w32(m + 4, e.msg); x.w32(m + 8, e.wp); x.w32(m + 12, e.lp); x.w32(m + 16, e.time || 0); x.w32(m + 20, st.mouseX ?? 0); x.w32(m + 24, st.mouseY ?? 0); };
   const user32 = {
     // The window: one, the size it was made or the display mode set; its DC and GL go to the backend.
     // The window: its client area is what a framed window keeps inside the frame AdjustWindowRectEx adds;
     // its procedure is its class's (by name or by atom), which DispatchMessageA calls.
-    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, false)],
-    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, true)],
-    ChangeDisplaySettingsA: ['pu', (x, dm) => { if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; } return 0; }],   // DEVMODEA's dmPelsWidth, dmPelsHeight
+    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, false, X, Y, title)],
+    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, true, X, Y, title)],
+    // A display mode: the screen becomes it and the program's window fills it (a full-screen program
+    // draws at that size); NULL gives the desktop back, where a framed window sits.
+    // CDS_TEST (2) only asks whether the mode would do: it would (DISP_CHANGE_SUCCESSFUL), nothing changes.
+    ChangeDisplaySettingsA: ['pu', (x, dm, flags) => {
+      if (flags & 2) return 0;
+      if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; st.modeSet = true; } else st.modeSet = false;
+      wm.dirty = true; return 0;
+    }],
+    SetWindowTextA: ['pp', (x, hwnd, t) => { if (hwnd === st.hwnd) { st.title = t ? x.str(t, 256) : ''; wm.redraw(); } return 1; }],
+    GetWindowTextA: ['ppi', (x, hwnd, buf, n) => { const t = hwnd === st.hwnd ? (st.title || '') : ''; if (n > 0) x.write(buf, new TextEncoder().encode(t.slice(0, n - 1) + '\0')); return Math.min(t.length, Math.max(0, n - 1)); }],
+    // A point of the client area on the screen and back: the window's place and its frame.
+    ClientToScreen: ['pp', (x, hwnd, p) => { const c = wm.client(); x.w32(p, (x.r32(p) | 0) + c.x); x.w32(p + 4, (x.r32(p + 4) | 0) + c.y); return 1; }],
+    ScreenToClient: ['pp', (x, hwnd, p) => { const c = wm.client(); x.w32(p, (x.r32(p) | 0) - c.x); x.w32(p + 4, (x.r32(p + 4) | 0) - c.y); return 1; }],
     GetDC: ['p', () => st.hdc], ReleaseDC: ['pp', () => 1],
-    ShowCursor: ['i', () => 0], SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
+    // The cursor's display count (hidden below zero) and its confinement: a program that hides it and
+    // clips it to its window has the mouse to itself, and the page captures the pointer for it.
+    ShowCursor: ['i', (x, show) => { st.cursorCount = (st.cursorCount | 0) + (show ? 1 : -1); wm.moveCursor(); return st.cursorCount; }],
+    SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; wm.moveCursor(); return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
     // returns that the window was hidden. UpdateWindow paints it once (WM_PAINT).
     ShowWindow: ['pi', (x, hwnd, cmd) => {
       if (hwnd !== st.hwnd || st.shown || cmd === 0) return st.shown ? 1 : 0;
-      st.shown = true;
+      st.shown = true; wm.dirty = true;
       return send(x, [[0x18, 1, 0], [0x1c, 1, 0], [0x86, 1, 0], [0x06, 1, 0], [0x07, 0, 0]], () => 0, 8);
     }],
     UpdateWindow: ['p', (x, hwnd) => (hwnd === st.hwnd ? send(x, [[0x0f, 0, 0]], () => 1, 4) : 1)],
     // A window moved or sized: its new size, unless SWP_NOSIZE (1). WinQuake's video modes resize its
     // window this way (vid_mode 2: 806x625 with its frame, an 800x600 picture).
     SetWindowPos: ['ppiiiiu', (x, hwnd, after, X, Y, w, h, flags) => {
-      if (hwnd !== st.hwnd || flags & 1) return 1;
+      if (hwnd !== st.hwnd) return 1;
+      if (!(flags & 2)) { st.x = X; st.y = Y; wm.dirty = true; }       // unless SWP_NOMOVE
+      if (flags & 1) return 1;                                         // SWP_NOSIZE
       const w0 = st.w, h0 = st.h; resize(w, h);
       return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 28) : 1;   // WM_SIZE, the client area's new size
     }],
     MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => {
       if (hwnd !== st.hwnd) return 1;
+      st.x = X; st.y = Y;
       const w0 = st.w, h0 = st.h; resize(w, h);
       return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 24) : 1;
     }],
     GetAsyncKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8001 : 0)],
     GetCursorPos: ['p', (x, p) => { x.w32(p, st.mouseX ?? (st.w >> 1)); x.w32(p + 4, st.mouseY ?? (st.h >> 1)); return 1; }],
-    PostQuitMessage: ['i', () => 0],
+    PostQuitMessage: ['i', (x, code) => { st.msgs.push({ msg: 0x12, wp: code >>> 0, lp: 0 }); return 0; }],   // WM_QUIT, which GetMessage ends on
     GetKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8000 : 0)],
     // The message queue: what the visitor's keys and mouse put there (win32Apis(...).input). MSG is
     // hwnd, message, wParam, lParam, time, pt; PM_REMOVE (1) takes it off the queue.
-    PeekMessageA: ['ppuuu', (x, m, hwnd, min, max, remove) => { if (!st.msgs.length) return 0; putMsg(x, m, st.msgs[0]); if (remove & 1) st.msgs.shift(); return 1; }],
+    PeekMessageA: ['ppuuu', (x, m, hwnd, min, max, remove) => {
+      const peek = () => { if (!st.msgs.length) return 0; putMsg(x, m, st.msgs[0]); if (remove & 1) st.msgs.shift(); return 1; };
+      return st.pendingMove ? send(x, [[0x03, 0, takeMove()]], peek, 20) : peek();   // a window moved: WM_MOVE sent first
+    }],
     PeekMessageW: ['ppuuu', (x, m, hwnd, min, max, remove) => user32.PeekMessageA[1](x, m, hwnd, min, max, remove)],
     // GetMessageA waits for one, as an idle window does (the call is made again when the time comes);
     // WM_QUIT (12h) makes it return 0.
-    GetMessageA: ['ppuu', (x, m) => { if (!st.msgs.length) return x.waitUntil(x.lx.mono() + 0.01); const e = st.msgs.shift(); putMsg(x, m, e); return e.msg === 0x12 ? 0 : 1; }],
+    GetMessageA: ['ppuu', (x, m) => {
+      if (st.pendingMove) { putMsg(x, m, { msg: 0x03, wp: 0, lp: takeMove() }); return 1; }
+      if (!st.msgs.length) return x.waitUntil(x.lx.mono() + 0.01);
+      const e = st.msgs.shift(); putMsg(x, m, e); return e.msg === 0x12 ? 0 : 1;
+    }],
     TranslateMessage: ['p', () => 0],
     // DispatchMessageA runs the window's procedure in the program: its four arguments pushed, its return
     // into this stub's `ret 4`, which then returns to the caller with what the procedure returned.
@@ -531,13 +562,25 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       for (const v of [c.eip >>> 0, ...args].reverse()) { sp -= 4; x.w32(sp, v); }
       c.reg[4] = sp; c.eip = proc; return 0;
     }],
-    DefWindowProcA: ['puuu', () => 0],
+    // What a window does with a message its procedure passes on: WM_CLOSE destroys it (WM_DESTROY and
+    // WM_NCDESTROY, sent); WM_SYSCOMMAND's SC_CLOSE posts WM_CLOSE. The rest needs nothing here.
+    DefWindowProcA: ['puuu', (x, hwnd, msg, wp) => {
+      if (msg === 0x10 && hwnd === st.hwnd && !st.destroyed) { st.destroyed = true; return send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 0, 16); }
+      if (msg === 0x112 && (wp & 0xfff0) === 0xf060) st.msgs.push({ msg: 0x10, wp: 0, lp: 0 });
+      return 0;
+    }],
     // WNDCLASSA: lpfnWndProc at 4, lpszClassName at 36; WNDCLASSEXA: at 8 and 40. An atom of its own each.
     RegisterClassA: ['p', (x, wc) => registerClass(x, x.r32(wc + 4), x.r32(wc + 36))],
     RegisterClassExA: ['p', (x, wc) => registerClass(x, x.r32(wc + 8), x.r32(wc + 40))],
-    GetSystemMetrics: ['i', (x, n) => (n === 0 ? st.w : n === 1 ? st.h : 0)],
+    // SM_CXSCREEN, SM_CYSCREEN (the desktop, or the mode a program set), SM_CYCAPTION and the frames as
+    // XP's classic style, the work area above a 30-pixel taskbar.
+    GetSystemMetrics: ['i', (x, n) => {
+      const S = st.modeSet ? { w: st.w, h: st.h } : st.desk;
+      return ({ 0: S.w, 1: S.h, 4: 18, 5: 1, 6: 1, 7: 3, 8: 3, 32: 4, 33: 4, 16: S.w, 17: S.h - 30 - 19 })[n] ?? 0;
+    }],
     GetClientRect: ['pp', (x, hwnd, r) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, st.w); x.w32(r + 12, st.h); return 1; }],
-    GetWindowRect: ['pp', (x, hwnd, r) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, st.w); x.w32(r + 12, st.h); return 1; }],
+    // The window on the screen, its frame included: where the program put it, or the visitor dragged it.
+    GetWindowRect: ['pp', (x, hwnd, r) => { const o = wm.outer(); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + o.w); x.w32(r + 12, o.y + o.h); return 1; }],
     // A message box is not shown; its caption and text go to the log, where an error says what it is.
     MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', () => 1], ValidateRect: ['pp', () => 1], // The window's end: WM_DESTROY, then WM_NCDESTROY; the program's other windows (dialogs) have no procedure here.
     DestroyWindow: ['p', (x, hwnd) => (hwnd === st.hwnd && !st.destroyed ? (st.destroyed = true, send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 1, 4)) : 1)],
@@ -548,7 +591,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     CreateDialogParamA: ['pppp' + 'p', () => 0x10020],
     GetActiveWindow: ['', () => st.hwnd], SetActiveWindow: ['p', () => st.hwnd], SetForegroundWindow: ['p', () => 1],
     SetFocus: ['p', () => st.hwnd], EnableWindow: ['pi', () => 0], MessageBeep: ['u', () => 1],
-    SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1], ClipCursor: ['p', () => 1],
+    SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1],
+    ClipCursor: ['p', (x, r) => { st.clip = r ? { l: x.r32(r) | 0, t: x.r32(r + 4) | 0, r: x.r32(r + 8) | 0, b: x.r32(r + 12) | 0 } : null; return 1; }],
     InvalidateRect: ['ppi', () => 1], PostMessageA: ['puuu', (x, hwnd, msg, wp, lp) => { st.msgs.push({ msg, wp, lp }); return 1; }],
     SendMessageA: ['puuu', (x, hwnd, msg, wp, lp) => (hwnd === st.hwnd ? send(x, [[msg, wp, lp]], (eax) => eax, 16) : 0)], KillTimer: ['pu', () => 1],
     // GWL_STYLE (-16): the frame the window's size includes from now on (WinQuake's windowed and full-screen modes).
@@ -600,7 +644,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   // Where a DC's drawing lands, as pixels { w, h, px } and done() to put them where they belong: the
   // screen for the window's DC, the selected bitmap (and a section's memory) for a memory DC.
   const target = (x, hdc) => {
-    if (isWindowDC(hdc)) { const sc = screen(); return { ...sc, done: () => { if (x.lx.fbShow && !(sc.w & 7) && sc.w >= 320 && sc.h >= 200) x.lx.fbShow(sc.px, sc.w, sc.h); } }; }
+    if (isWindowDC(hdc)) { const sc = screen(); return { ...sc, done: () => wm.present(x.lx, sc) }; }
     const bm = st.gdi.get(st.dcBitmaps.get(hdc));
     if (!bm || bm.kind !== 'bitmap' || bm.dib8) return null;          // drawing into an 8-bit section: not here
     if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
@@ -641,7 +685,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       const now = x.lx.mono();
       if (now < st.lastSwap + 1 / 60) return x.waitUntil(st.lastSwap + 1 / 60);
       if (x.backend.swapReady && !x.backend.swapReady()) return x.waitUntil(now + 0.002);
-      st.lastSwap = now; x.backend.swap(); return 1;
+      st.lastSwap = now; if (wm.framed()) wm.present(x.lx, null);       // the desktop and frame round WebGL's picture
+      x.backend.swap(); return 1;
     }],
     // Fonts and device contexts: what a font names and the DC it is selected into, for D3DXCreateText
     // (st.dcFont) to find its outlines among the fonts the page handed over.
@@ -1033,26 +1078,65 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   /*
    * The visitor's input, as Windows posts it to the window: a key by its PC scancode (set 1; 0xE0-
    * prefixed keys `ext`) as WM_KEYDOWN / WM_KEYUP (Alt as WM_SYSKEY*), the scancode in lParam's bits
-   * 16-23 where WinQuake's MapKey reads it, the virtual key in wParam; the mouse as WM_MOUSEMOVE and
-   * button messages, its moves added to the cursor that GetCursorPos reads (WinQuake recentres it
-   * with SetCursorPos each frame and turns by the difference).
+   * 16-23 where WinQuake's MapKey reads it, the virtual key in wParam.
+   *
+   * The mouse comes two ways. Free, it is where the visitor points on the screen (mouseAt): over the
+   * window's frame the window manager answers -- the caption drags the window, the close button
+   * posts WM_CLOSE -- and over its client area the program gets WM_MOUSEMOVE and button messages in
+   * client coordinates. Captured -- the program hid the cursor or clipped it to its window, as a game
+   * does to aim; captures() tells the page to lock the pointer -- its moves are added to the cursor
+   * (mouseMove), kept inside the clip, and every button is the program's: WinQuake recentres the
+   * cursor with SetCursorPos each frame and turns by the difference.
    */
+  const clientLp = () => { const c = wm.client(); return ((((st.mouseY | 0) - c.y) & 0xffff) << 16 | (((st.mouseX | 0) - c.x) & 0xffff)) >>> 0; };
+  const captured = () => !!st.clip || (st.cursorCount | 0) < 0;
+  // A drag moves the window where the visitor points; the move takes effect at the program's next
+  // PeekMessage or GetMessage, which delivers WM_MOVE before anything else -- as Windows' drag loop
+  // sends it -- so a program learns of it before it looks: WinQuake compares GetWindowRect with the
+  // place it remembers every frame and puts its window back there when they differ.
+  const postMove = () => { st.pendingMove = { x: wm.drag ? wm.drag.x : st.x, y: wm.drag ? wm.drag.y : st.y }; };
+  const takeMove = () => {
+    const p = st.pendingMove; st.pendingMove = null;
+    st.x = p.x; st.y = p.y; wm.dirty = true;
+    const c = wm.client(); return ((c.y & 0xffff) << 16 | (c.x & 0xffff)) >>> 0;
+  };
+  const free = () => !captured() && wm.framed();
   tables.input = {
     key(down, scan, ext = false) {
       const vk = scanToVk(scan, ext), alt = vk === 0x12;
       if (down) st.keys.add(vk); else st.keys.delete(vk);
       st.msgs.push({ msg: (alt ? 0x104 : 0x100) + (down ? 0 : 1), wp: vk, lp: (1 | (scan & 0xff) << 16 | (ext ? 1 << 24 : 0) | (down ? 0 : 0xc0000000)) >>> 0 });
     },
-    mouseMove(dx, dy) {
-      st.mouseX = (st.mouseX ?? st.w >> 1) + dx; st.mouseY = (st.mouseY ?? st.h >> 1) + dy;
-      st.msgs.push({ msg: 0x200, wp: st.buttons | 0, lp: ((st.mouseY & 0xffff) << 16 | (st.mouseX & 0xffff)) >>> 0 });
+    captures: () => captured(),
+    leave() { st.pointerIn = false; wm.moveCursor(); },             // the pointer left the screen: no cursor drawn
+    mouseAt(X, Y) {                                                 // free: a point of the screen
+      st.mouseX = X | 0; st.mouseY = Y | 0; st.pointerIn = true; wm.moveCursor();
+      if (wm.drag) { wm.drag.x = X - wm.drag.dx; wm.drag.y = Y - wm.drag.dy; postMove(); return; }
+      if (!free() || wm.hit(X, Y) === 'client') st.msgs.push({ msg: 0x200, wp: st.buttons | 0, lp: clientLp() });
+    },
+    mouseMove(dx, dy) {                                             // captured: a move
+      let X = (st.mouseX ?? (st.w >> 1)) + dx, Y = (st.mouseY ?? (st.h >> 1)) + dy;
+      if (st.clip) { X = Math.max(st.clip.l, Math.min(st.clip.r - 1, X)); Y = Math.max(st.clip.t, Math.min(st.clip.b - 1, Y)); }
+      st.mouseX = X; st.mouseY = Y;
+      st.msgs.push({ msg: 0x200, wp: st.buttons | 0, lp: clientLp() });
     },
     mouseButton(b, down) {                                          // 0 left, 1 right, 2 middle
+      const X = st.mouseX | 0, Y = st.mouseY | 0;
+      if (free() && b === 0) {
+        if (!down && wm.drag) { postMove(); wm.drag = null; return; }
+        if (!down && wm.closeArmed) { wm.closeArmed = false; wm.redraw(); if (wm.hit(X, Y) === 'close') st.msgs.push({ msg: 0x10, wp: 0, lp: 0 }); return; }
+        const where = wm.hit(X, Y);
+        if (down && where === 'caption') { wm.drag = { dx: X - (st.x | 0), dy: Y - (st.y | 0), x: st.x | 0, y: st.y | 0 }; return; }
+        if (down && where === 'close') { wm.closeArmed = true; wm.redraw(); return; }
+        if (where !== 'client') return;
+      } else if (free() && wm.hit(X, Y) !== 'client') return;
       const bit = [1, 2, 0x10][b], msg = [0x201, 0x204, 0x207][b] + (down ? 0 : 1);
       st.buttons = down ? (st.buttons | 0) | bit : (st.buttons | 0) & ~bit;
-      st.msgs.push({ msg, wp: st.buttons, lp: ((st.mouseY ?? 0) & 0xffff) << 16 | ((st.mouseX ?? 0) & 0xffff) });
+      st.msgs.push({ msg, wp: st.buttons, lp: clientLp() });
     },
   };
+  /** Where WebGL's picture goes on the screen, for a framed window (null: it is the whole screen). */
+  tables.wm = { clientRect: () => (wm.framed() ? { ...wm.client(), screen: st.desk } : null) };
   return tables;
 }
 
