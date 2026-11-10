@@ -6,6 +6,12 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-10
 
+- **Quake II for Linux**: id's Linux build of 1998 (3.20, SVGAlib), unmodified, with the demo's data:
+  `quake2` loads its renderer and its game with `dlopen`, draws in 320x240 (the VGA's unchained "mode
+  X", programmed by SVGAlib itself), plays its demo and answers its menu. Two fixes for every Linux
+  program: large anonymous memory is committed page by page as it is touched, as a kernel does (Quake
+  II asks for tens of megabytes and uses a few), and a VGA programmed into mode X without the BIOS
+  now shows.
 - **DirectDraw**: full-screen 2D of 1995-2002 (DirectX 1-3's interfaces): display modes in 8, 16 and
   32 bits, a primary surface and its back buffer, flips, copies with colour keys, palettes that change
   the screen at once. Quake II's software renderer now runs full screen through it, as on a PC,

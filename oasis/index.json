@@ -173,6 +173,21 @@
     "sound": true
   },
   {
+    "name": "linux/quake2-1998",
+    "title": "Quake II 3.20 for Linux (SVGAlib) — id Software, with the 1998 demo's data",
+    "world": "linux",
+    "year": 1998,
+    "author": "id Software, port by Dave 'Zoid' Kirsch",
+    "thumb": "oasis/thumbs/linux-quake2-1998.png",
+    "output": "window",
+    "caution": true,
+    "tags": [
+      "game",
+      "SVGAlib"
+    ],
+    "sound": true
+  },
+  {
     "name": "linux/retrospection-2010",
     "title": "Retrospection — Trolls in the Shadows & FRequency, 4K for Linux",
     "world": "linux",

@@ -2335,6 +2335,19 @@ const udRun = (gated) => {
   eq('restoring chain-4 leaves Mode X', vga.modeX, false);
   eq('...and stops routing A000 through the planes', mem.planar, false);
 }
+// ...and Mode X set by the registers alone, no INT 10h: SVGAlib (Linux Quake II's 320x240) leaves the BIOS
+// mode at 3 and programs the Sequencer, then the Graphics Controller's 256-colour bits. Seen as text
+// mode, the window stayed plain RAM and the screen black.
+{
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const vga = mc.vga, mem = mc.mem;
+  mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, 0x06);            // chain-4 off, while the card is in text mode
+  const before = vga.modeX;
+  mc.ioWrite(0x3ce, 1, 5); mc.ioWrite(0x3cf, 1, 0x40);            // 256 colours
+  mc.ioWrite(0x3ce, 1, 6); mc.ioWrite(0x3cf, 1, 0x05);            // graphics, A000 64K
+  eq('Mode X from the registers alone: not before 256 colours, then planes', [before, vga.modeX, mem.planar].join(), 'false,true,true');
+}
 
 // ---- a self-modifying instruction still commits its FLAGS before the block stops ------------
 // The guard used to `return` from inside the write emitter — the middle of an instruction — so
@@ -3470,6 +3483,23 @@ const runLinux = (hex, argv) => {
     got = lx.done ? lx.status : -1;
   } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: /dev/fb0 — screen infos, mmap onto the card, a pixel read back', got, 63); }
+// tools/linux/lazymap.asm: anonymous memory larger than the machine (Quake II's hunks) -- 32 MiB mmapped on
+// a 16 MiB machine, its ends written and read back, mprotect and write() on pages never touched, munmap.
+// 31 when all hold; committed whole at mmap, it ran out of physical memory.
+{ const hex = (
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004080b0100000b010000070000000010000031ff57b8c000000031dbb900' +
+    '000002ba03000000be22000000bfffffffff31edcd805f3d00f0ffff0f878000000083cf0189c5c7450078563412c785' +
+    'fcffff01f0debc9a817d0078563412750f81bdfcffff01f0debc9a750383cf02b87d0000008d9d00001000b900100000' +
+    'ba01000000cd8085c0750383cf04b804000000bb010000008d8d00002000ba04000000cd8083f804750383cf08b85b00' +
+    '000089ebb900000002cd8085c0750383cf1089fbb801000000cd80');
+  let got;
+  try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/LAZYMAP']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    got = lx.done ? lx.status : -1;
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: anonymous mmap larger than memory, committed page by page', got, 31); }
 // tools/linux/oldcalls.asm: libc5's calls — creat with a mode kept (0755: ld's output runs), fcntl 55 with
 // FD_CLOEXEC, getdents 141 and readdir 89. 15; Docker (qemu-user on this host) 7, lacking readdir.
 { const hex = (                                         // nasm -f bin tools/linux/oldcalls.asm (its file part)

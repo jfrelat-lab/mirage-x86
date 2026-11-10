@@ -141,6 +141,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     return lx.pages.get(vpn);
   };
   const phys = (va) => { const p = page(va >>> 12); return p ? p.frame + (va & 0xfff) : -1; };
+  // A range unmapped is no longer reserved: what is left of each reservation either side of it stays.
+  const unreserve = (a, b) => {
+    if (!lx.lazy || !lx.lazy.length) return;
+    lx.lazy = lx.lazy.flatMap(([x, y]) => (b <= x || a >= y ? [[x, y]] : [...(x < a ? [[x, a]] : []), ...(y > b ? [[b, y]] : [])]));
+  };
   const rd8 = (va) => { const a = phys(va >>> 0); if (a < 0) throw E.EFAULT; return mem.u8[a]; };
   const rd32 = (va) => (rd8(va) | (rd8(va + 1) << 8) | (rd8(va + 2) << 16) | (rd8(va + 3) << 24)) >>> 0;
   const wr8 = (va, v) => {
@@ -414,7 +419,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const QUANTUM = () => 0.02 * (machine.cyclesPerSecond || 1e8);         // 20 ms of guest time
   const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
   const snapshot = () => ({
-    pid: lx.pid, ppid: lx.ppid, vm: lx.vm, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, wake: lx.wake,
+    pid: lx.pid, ppid: lx.ppid, vm: lx.vm, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, lazy: lx.lazy, wake: lx.wake,
     fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
     sigInfo: lx.sigInfo.slice(), sigBlocked: lx.sigBlocked.slice(), sigPend: new Set(lx.sigPend), sigSaved: lx.sigSaved,
     alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames, pgid: lx.pgid, sid: lx.sid, ctty: lx.ctty,
@@ -428,7 +433,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // and where the next mapping goes is the process's, not the thread's.
     const shared = s.vm === lx.vm;
     Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: shared ? lx.brkStart : s.brkStart, brk: shared ? lx.brk : s.brk,
-      mmapNext: shared ? lx.mmapNext : s.mmapNext, wake: s.wake ?? null, vm: s.vm,
+      mmapNext: shared ? lx.mmapNext : s.mmapNext, lazy: shared ? lx.lazy : s.lazy || [], wake: s.wake ?? null, vm: s.vm,
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
       sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty });
     fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
@@ -517,6 +522,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.procs.push(parent);
     lx.pages = pages; installPages(pages); cpu.setCR3(cpu.cr3);
     lx.vm = nextVm++;                                                    // the child's own address space
+    lx.lazy = lx.lazy.slice();                                           // and its own reservations
     lx.sliceStart = cpu.cycles;
     lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map();
     lx.sigInfo = lx.sigInfo.slice(); lx.sigHandlers = lx.sigHandlers.slice(); lx.sigBlocked = lx.sigBlocked.slice();
@@ -1856,7 +1862,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EACCES;
         src = f.node.data.subarray(Math.min(pgoff * PAGE, f.node.size), Math.min(pgoff * PAGE + len, f.node.size));
       }
-      unmapRange(at, at + size); mapRange(at, at + size, true);
+      unmapRange(at, at + size);
+      // Anonymous memory of a megabyte or more is reserved and its pages committed when first touched,
+      // as a kernel does: Quake II's hunks are mmaps of tens of megabytes it fills a little of, and
+      // committed whole they ran 128 MiB out of frames while its first map loaded.
+      if (!src && size >= 0x100000) { lx.lazy.push([at, at + size]); return at; }
+      mapRange(at, at + size, true);
       if (src) wrBytes(at, src);
       return at;
     },
@@ -1866,13 +1877,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       return SYS[192](rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12), rd32(args + 16), off >>> 12);
     },
     86: (path) => uselib(rdStr(path)),                                     // uselib
-    91: (addr, len) => { unmapRange(addr, addr + len); return 0; },        // munmap
+    91: (addr, len) => { unmapRange(addr, addr + len); unreserve(addr >>> 0, (addr + len) >>> 0); return 0; },   // munmap
     163: (old, oldLen, newLen, flags) => {                                 // mremap: move to fresh pages
       if (!(flags & 1)) return newLen <= oldLen ? old : -E.ENOMEM;          // MREMAP_MAYMOVE
       const at = lx.mmapNext, size = Math.ceil(newLen / PAGE) * PAGE; lx.mmapNext += size;
       mapRange(at, at + size, true);
       wrBytes(at, rdBytes(old, Math.min(oldLen, newLen)));
-      unmapRange(old, old + oldLen); return at;
+      unmapRange(old, old + oldLen); unreserve(old >>> 0, (old + oldLen) >>> 0); return at;
     },
     // mprotect: the pages' rights as Linux sets them — writable with PROT_WRITE, absent with PROT_NONE
     // (the kernel's own reads go through lx.pages, not the PTEs). Quake's Sys_MakeCodeWriteable asks
@@ -1881,7 +1892,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     125: (addr, len, prot) => {
       if (addr & 0xfff) return -E.EINVAL;
       const first = addr >>> 12, end = Math.ceil((addr + len) / PAGE);
-      for (let p = first; p < end; p++) if (!lx.pages.has(p)) return -E.ENOMEM;
+      for (let p = first; p < end; p++) if (!page(p)) return -E.ENOMEM;   // a reserved page committed
       for (let p = first; p < end; p++) {
         const pg = lx.pages.get(p);
         pg.write = !!(prot & 2); pg.none = !(prot & 7);

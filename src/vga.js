@@ -223,13 +223,19 @@ export function installVGA(machine) {
   };
 
   // ---- register ports (also accept the AL=index/AH=data 16-bit `out dx,ax` form) ----
+  // Mode X: 256 colours with chain-4 off. Mode 13h's set by our INT 10h, or the card's own state when a
+  // program programs the registers itself: SVGAlib on Linux (Quake II's 320x240) never calls a BIOS,
+  // so vga.mode stayed 3, the window stayed plain RAM and the four planes it drew were one, unshown.
+  const modeXRoute = () => {
+    const mx = !vga.planar && !(vga.memMode & 0x08) && (vga.mode === 0x13 || ((vga.gc[5] & 0x40) !== 0 && (vga.gc[6] & 1) !== 0));
+    if (mx !== vga.modeX) { vga.modeX = mx; mem.setPlanar(vga.planar || vga.modeX); }
+  };
   const seqData = (v) => {
     if (vga.seqIndex === 2) vga.mapMask = v & 0x0f;
     else if (vga.seqIndex === 4) {                    // memory mode: bit3 = chain-4. Clearing it in mode 13h = Mode-X (unchained)
       vga.memMode = v & 0xff;
       if (vga.hw) { hwRoute(); return; }
-      const mx = vga.mode === 0x13 && !(v & 0x08);
-      if (mx !== vga.modeX) { vga.modeX = mx; mem.setPlanar(vga.planar || vga.modeX); }
+      modeXRoute();
     }
   };
   machine.onPortWrite(0x3c4, (_p, s, v) => { vga.seqIndex = v & 0x1f; if (s === 2) seqData((v >> 8) & 0xff); });
@@ -243,7 +249,7 @@ export function installVGA(machine) {
     // GC 4 (read map select) and GC 5 (read mode) change what every byte of the window reads back:
     // the only event that forces a full shadow rebuild. Measured at 0-1 times per run.
     if ((i === 4 || i === 5 || i === 2 || i === 7) && vga.gc[i] !== old) vga.rebuildShadow();
-    if ((i === 5 || i === 6) && vga.hw) hwRoute();
+    if (i === 5 || i === 6) { if (vga.hw) hwRoute(); else if (vga.gc[i] !== old) modeXRoute(); }
   };
   machine.onPortWrite(0x3ce, (_p, s, v) => { vga.gcIndex = v & 0x0f; if (s === 2) gcData((v >> 8) & 0xff); });
   machine.onPortWrite(0x3cf, (_p, _s, v) => gcData(v & 0xff));
