@@ -473,6 +473,22 @@
     "sound": true
   },
   {
+    "name": "win32/quake2-gl-1998",
+    "title": "Quake II demo 3.14, OpenGL — id Software, 1998",
+    "world": "win32",
+    "year": 1998,
+    "author": "id Software",
+    "thumb": "oasis/thumbs/win32-quake2-gl-1998.png",
+    "output": "window",
+    "tags": [
+      "Game",
+      "Win32",
+      "OpenGL",
+      "DirectSound"
+    ],
+    "sound": true
+  },
+  {
     "name": "win32/retrospection-2010",
     "title": "Retrospection — Trolls in the Shadows & FRequency, 4K for Windows",
     "world": "win32",

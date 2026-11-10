@@ -882,12 +882,18 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   delete opengl32.glXGetProcAddress; delete opengl32.glXGetProcAddressARB;
   Object.assign(opengl32, {
     wglCreateContext: ['p', () => st.hglrc],
-    wglMakeCurrent: ['pp', (x, hdc, ctx) => { if (ctx && !st.mode) { st.mode = true; x.backend.setVideoMode(st.w, st.h, true); } return 1; }],
+    // The GL surface takes the window's size when a context is made current, and again whenever that size
+    // changed: Quake II re-creates its window and context at a new video mode (800x600 from its menu).
+    wglMakeCurrent: ['pp', (x, hdc, ctx) => {
+      if (ctx && (!st.mode || st.glW !== st.w || st.glH !== st.h)) { st.mode = true; st.glW = st.w; st.glH = st.h; x.backend.setVideoMode(st.w, st.h, true); }
+      return 1;
+    }],
     wglDeleteContext: ['p', () => 1],
     wglGetCurrentDC: ['', () => (st.mode ? st.hdc : 0)], wglGetCurrentContext: ['', () => (st.mode ? st.hglrc : 0)],   // after wglMakeCurrent
     wglGetProcAddress: ['p', (x, name) => x.win.proc(x.win.modules.get('opengl32.dll'), x.str(name))],
     wglUseFontBitmapsA: ['puuu', () => 1],
     wglSwapLayerBuffers: ['pu', (x) => gdi32.SwapBuffers[1](x)],
+    wglSwapBuffers: ['p', (x) => gdi32.SwapBuffers[1](x)],              // opengl32's own name for it (Quake II's ref_gl asks it by GetProcAddress)
   });
   const glu32 = { ...(glu || gluTable().fns) };
   // ---- winmm -----------------------------------------------------------------------------------------

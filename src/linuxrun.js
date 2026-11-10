@@ -216,6 +216,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   draw();
   return {
     mc, lx, audio, hle,
+    w32: w32in ? { input: w32in, wm: w32wm } : null,                   // a Windows program's input, for tests that drive the page
     pause(on) { paused = on; },
     stop() {
       stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove);

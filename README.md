@@ -33,7 +33,7 @@ No WebAssembly, no build step, no dependencies beyond its sibling [PRISM](https:
 
 <sub>Every picture is a frame MIRAGE drew. Screenshots of Microsoft products used with permission from Microsoft.</sub>
 
-- **Windows with no Windows**: id Software's WinQuake, GLQuake and the Quake II demo, and Elevated, Ergon and thirteen more 4K and 1K intros, their Win32, GDI, OpenGL and Direct3D 9 in JavaScript.
+- **Windows with no Windows**: id Software's WinQuake, GLQuake and the Quake II demo (software and OpenGL), and Elevated, Ergon and thirteen more 4K and 1K intros, their Win32, GDI, OpenGL and Direct3D 9 in JavaScript.
 - **Linux with no kernel**: Debian 12's bash, id's DOOM and Quake, XFree86 3.3; gcc 2.7.2 builds DOOM inside it.
 - **Checked, not assumed**: gcc's 1,586 torture tests print what Docker prints (all but one); 44 programs pinned pixel for pixel.
 - **450 million x86 instructions a second** on Dhrystone, as JavaScript.

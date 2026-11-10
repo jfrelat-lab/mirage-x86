@@ -6,6 +6,12 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-10
 
+- **Quake II in OpenGL too**: the same demo with its OpenGL renderer, full screen, about 45 frames a
+  second in Chrome. Its Video menu changes the resolution (800x600) and the picture follows; a new
+  game starts from the menu and the mouse turns the view, in OpenGL as in the software renderer.
+  MIRAGE learnt the stack layout of 78 more OpenGL 1.x functions from PRISM's own table of them.
+  A fault found on the way: the game's DLLs were placed where the OpenGL layer allocates its strings,
+  and the first `glGetString` overwrote `ref_gl.dll`'s code.
 - **The frame rate shown is the program's**: the Machines page counted its own refreshes, which follow
   the monitor (144 on a 144 Hz screen while Elevated drew 60). It now shows the frames the program
   presents each second, and the most it could present at the speed the computer emulates and draws

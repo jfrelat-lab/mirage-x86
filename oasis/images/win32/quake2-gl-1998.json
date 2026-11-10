@@ -1,0 +1,41 @@
+{
+  "oasis": 1,
+  "title": "Quake II demo 3.14, OpenGL — id Software, 1998",
+  "year": 1998,
+  "author": "id Software",
+  "world": "win32",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "zip": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/quake2/q2-314-demo-x86.exe",
+      "files": {
+        "Install/Data/quake2.exe": "/quake2/quake2.exe",
+        "Install/Data/ref_soft.dll": "/quake2/ref_soft.dll",
+        "Install/Data/ref_gl.dll": "/quake2/ref_gl.dll",
+        "Install/Data/baseq2/gamex86.dll": "/quake2/baseq2/gamex86.dll",
+        "Install/Data/baseq2/pak0.pak": "/quake2/baseq2/pak0.pak",
+        "license.txt": "/quake2/license.txt"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/quake2/quake2.exe",
+    "args": [
+      "+set",
+      "vid_ref",
+      "gl"
+    ]
+  },
+  "output": "window",
+  "notes": "id Software's Quake II demo of March 1998, with its OpenGL renderer: quake2.exe loads ref_gl.dll, which loads opengl32.dll itself and asks it for each OpenGL function by GetProcAddress; MIRAGE-WIN32 makes opengl32.dll in JavaScript and PRISM's gl.js draws on WebGL2. The rest as in the software version: its own DLLs mapped as Windows does, DirectSound, Winsock on an empty network, the licence beside it.",
+  "thumb": "oasis/thumbs/win32-quake2-gl-1998.png",
+  "tags": [
+    "Game",
+    "Win32",
+    "OpenGL",
+    "DirectSound"
+  ],
+  "sound": true
+}

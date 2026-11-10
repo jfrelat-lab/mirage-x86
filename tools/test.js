@@ -4704,7 +4704,7 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: wsock32 on an empty network: WSAStartup 1.1, a socket, recvfrom WSAEWOULDBLOCK, 127.0.0.1, htons, inet_addr', got, '0 101 true -1 10035 127.0.0.1 3412 4030201');
   // A DLL of the program's own, from its disk (Quake II's ref_soft.dll, gamex86.dll), made here: linked
-  // for 10000000h, mapped at 40000000h with its HIGHLOW relocation applied, its DllMain entered by
+  // for 10000000h, mapped at 50000000h with its HIGHLOW relocation applied, its DllMain entered by
   // LoadLibraryA (DLL_PROCESS_ATTACH, returning into user32's stub), its export found by GetProcAddress.
   try {
     const d = new Uint8Array(0x2000), dv = new DataView(d.buffer), put = (o, t) => d.set(new TextEncoder().encode(t + '\0'), o);
@@ -4738,7 +4738,7 @@ const runLinux = (hex, argv) => {
     const fnAt = k('GetProcAddress')(x, base, gn);
     got = [base.toString(16), entered, args.join(','), (fnAt - base).toString(16), (x.r32(base + 0x1011) - base).toString(16)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a DLL from the program\'s disk: relocated to 40000000h, DllMain entered (hinst, 1, 0), its export found', got, '40000000 true 40000000,1,0 1010 1100');
+  eq('win32: a DLL from the program\'s disk: relocated to 50000000h, DllMain entered (hinst, 1, 0), its export found', got, '50000000 true 50000000,1,0 1010 1100');
   // A key: WM_KEYDOWN with the scancode in lParam's bits 16-23 (WinQuake's MapKey), then
   // DispatchMessageA enters the window's procedure with its four arguments, returning into the stub.
   try { const { mc, fn, x, apis, str } = await w32(), u = (n) => fn('user32.dll', n);
@@ -4823,7 +4823,18 @@ const runLinux = (hex, argv) => {
   try { const { apis } = await w32(), ogl = apis.find((d) => d.dll === 'opengl32.dll').fns, cc = apis.find((d) => d.dll === 'comctl32.dll').fns;
     got = [...['glAlphaFunc', 'glTexEnvf', 'glDepthRange', 'glTexSubImage2D', 'glReadPixels'].map((n) => ogl[n][0]), cc.InitCommonControls[2].ordinal, typeof ogl.wglGetCurrentDC[1]].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: GLQuake\'s GL entry points and signatures, InitCommonControls (ordinal 17)', got, 'uf uuf dd uiiiiiuup iiiiuup 17 function'); }
+  eq('win32: GLQuake\'s GL entry points and signatures, InitCommonControls (ordinal 17)', got, 'uf uuf dd uiiiiiuup iiiiuup 17 function');
+  // Quake II's OpenGL: a new video mode re-creates the window and the context, and the GL surface takes
+  // the new size at wglMakeCurrent (it kept 640x480 while the game drew 800x600); wglSwapBuffers is
+  // opengl32's own name for SwapBuffers; glDeleteTextures and glScissor read from the stack.
+  try { const { fn, x, apis } = await w32(), sizes = [];
+    x.backend.setVideoMode = (w, h) => sizes.push(`${w}x${h}`);
+    const u = (n) => fn('user32.dll', n), o = (n) => fn('opengl32.dll', n), ogl = apis.find((d) => d.dll === 'opengl32.dll').fns;
+    u('CreateWindowExA')(0, 0, 0, 0x80000000, 0, 0, 640, 480); o('wglMakeCurrent')(0x1001, 0x10000); o('wglMakeCurrent')(0x1001, 0x10000);
+    u('CreateWindowExA')(0, 0, 0, 0x80000000, 0, 0, 800, 600); o('wglMakeCurrent')(0x1001, 0x10000);
+    got = [sizes.join(','), typeof ogl.wglSwapBuffers[1], ogl.glDeleteTextures[0], ogl.glScissor[0]].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: the GL surface follows a new video mode at wglMakeCurrent; wglSwapBuffers; glDeleteTextures, glScissor', got, '640x480,800x600 function ip iiii'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

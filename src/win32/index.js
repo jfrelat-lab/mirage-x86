@@ -208,11 +208,13 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   /*
    * A DLL of the program's own, from its disk (`readFile`): Quake II's ref_gl.dll, ref_soft.dll and
    * gamex86.dll, which it loads with LoadLibrary and asks GetProcAddress for GetRefAPI and GetGameAPI.
-   * Mapped from 40000000h up, clear of the heap's segments and the DLLs made here, its base relocations
+   * Mapped from 50000000h up -- clear of the heap's segments, of lx.alloc's region from 40000000h (the
+   * GL layer's strings, PRISM's own memory: a glGetString there overwrote ref_gl.dll's code when the
+   * DLLs began at 40000000h) and of the DLLs made here (opengl32's at 5ED00000h) -- its base relocations
    * applied (IMAGE_REL_BASED_HIGHLOW) when that is not the base it was linked for, its imports bound,
    * its exports read. Its DllMain is LoadLibraryA's to call (src/win32/api.js): `init` is pending.
    */
-  let dllNext = 0x40000000;
+  let dllNext = 0x50000000;
   const loadFile = (key) => {
     const img = readFile && readFile(key), ih = img && peHeader(img);
     if (!ih) return null;
