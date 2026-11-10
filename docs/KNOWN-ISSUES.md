@@ -66,7 +66,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 
 | Missing | Consequence |
 |---|---|
-| DirectDraw, DirectInput | Programs that need them stop. DirectSound is there. |
+| DirectInput; DirectDraw 2 and later | Programs that need them stop. DirectSound and DirectDraw 1 (DirectX 1-3's interfaces: 8-, 16- and 32-bit modes, flips, copies, palettes, colour keys) are there; DirectDraw's later interfaces (IDirectDraw2, 4, 7) and drawing on a surface with GDI (GetDC) are not. |
 | Direct3D 9 beyond shaders | PRISM's `d3d9.js` draws with HLSL shaders and the fixed function's default texture stage (Stiletto's lights and material); other texture-stage operations (Darwinism), vertex declarations, stencil, alpha test, `Reset` (Wishful Twisting), volume textures and cube textures as render targets (Synchroplastikum) are not there yet. |
 | D3DX beyond HLSL | Shader assembly, `ID3DXFont`, effects and sprites are not done. Matrix stacks, boxes, meshes, skins, N-patches, normals, adjacency, `D3DXFillTexture`, texture shaders (`D3DXFillTextureTX`) and text meshes (`D3DXCreateText`) are. |
 | Windows fonts | MIRAGE ships none. An image lists the ones it selects (`machine.fonts`); the page reads the visitor's own (Chrome's Local Font Access, after asking) or else uses DejaVu Sans, whose shapes and widths differ. Glyphs are not hinted. A text mesh in a font the page does not provide stops the program (luxo4k asks for Times). |

@@ -467,7 +467,7 @@
     "tags": [
       "Game",
       "Win32",
-      "GDI",
+      "DirectDraw",
       "DirectSound"
     ],
     "sound": true

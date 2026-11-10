@@ -6,6 +6,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-10
 
+- **DirectDraw**: full-screen 2D of 1995-2002 (DirectX 1-3's interfaces): display modes in 8, 16 and
+  32 bits, a primary surface and its back buffer, flips, copies with colour keys, palettes that change
+  the screen at once. Quake II's software renderer now runs full screen through it, as on a PC,
+  and changes resolution from its Video menu.
 - **Quake II in OpenGL too**: the same demo with its OpenGL renderer, full screen, about 45 frames a
   second in Chrome. Its Video menu changes the resolution (800x600) and the picture follows; a new
   game starts from the menu and the mouse turns the view, in OpenGL as in the software renderer.

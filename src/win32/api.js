@@ -12,6 +12,7 @@ import { dsoundApis } from './dsound.js';
 import { parseTrueType } from './truetype.js';
 import { parseSMF } from '../midi.js';
 import { windowManager } from './wm.js';
+import { ddrawApis } from './ddraw.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
 
@@ -1131,6 +1132,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     { dll: 'winmm.dll', fns: winmm },
     ...d3d9Apis(st),
     dsoundApis(),
+    ddrawApis(st, wm, send),
     { dll: 'wsock32.dll', fns: wsock32 },
     // comctl32: the common controls are registered (InitCommonControls, ordinal 17); none is drawn here.
     { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }] } },

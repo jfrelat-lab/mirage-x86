@@ -24,8 +24,8 @@
     "run": "/quake2/quake2.exe"
   },
   "output": "window",
-  "notes": "id Software's Quake II demo of March 1998 (q2-314-demo-x86.exe, from id's own FTP), freely distributed by electronic means with its licence (license.txt, beside it here). The executable as id built it, with its own DLLs: quake2.exe loads ref_soft.dll, its software renderer, and gamex86.dll, the game, from its directory; MIRAGE-WIN32 maps them as Windows does (relocated, their imports bound, DllMain run) and answers their Win32 calls in JavaScript. It draws through GDI in a window on the desktop (DirectDraw, its full-screen path, is not made yet), plays its sound through DirectSound, and starts Winsock on a network with nobody else on it; single play goes through its own loopback.",
+  "notes": "id Software's Quake II demo of March 1998 (q2-314-demo-x86.exe, from id's own FTP), freely distributed by electronic means with its licence (license.txt, beside it here). The executable as id built it, with its own DLLs: quake2.exe loads ref_soft.dll, its software renderer, and gamex86.dll, the game, from its directory; MIRAGE-WIN32 maps them as Windows does (relocated, their imports bound, DllMain run) and answers their Win32 calls in JavaScript. It draws full screen through DirectDraw (an 8-bit display mode and its palette), plays its sound through DirectSound, and starts Winsock on a network with nobody else on it; single play goes through its own loopback.",
   "thumb": "oasis/thumbs/win32-quake2-1998.png",
-  "tags": ["Game", "Win32", "GDI", "DirectSound"],
+  "tags": ["Game", "Win32", "DirectDraw", "DirectSound"],
   "sound": true
 }

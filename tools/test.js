@@ -4834,7 +4834,34 @@ const runLinux = (hex, argv) => {
     u('CreateWindowExA')(0, 0, 0, 0x80000000, 0, 0, 800, 600); o('wglMakeCurrent')(0x1001, 0x10000);
     got = [sizes.join(','), typeof ogl.wglSwapBuffers[1], ogl.glDeleteTextures[0], ogl.glScissor[0]].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: the GL surface follows a new video mode at wglMakeCurrent; wglSwapBuffers; glDeleteTextures, glScissor', got, '640x480,800x600 function ip iiii'); }
+  eq('win32: the GL surface follows a new video mode at wglMakeCurrent; wglSwapBuffers; glDeleteTextures, glScissor', got, '640x480,800x600 function ip iiii');
+  // DirectDraw (src/win32/ddraw.js): an 8-bit display mode, a palette, a primary surface with a back
+  // buffer; a pixel drawn into the back buffer reaches the screen at Flip, in the palette's colour; a
+  // copy with a source colour key leaves the key's pixels alone; a palette changed shows at once.
+  try { const { mc, x, apis } = await w32(), dd = apis.find((d) => d.dll === 'ddraw.dll').fns, call = (n, ...a) => dd[n][1](x, ...a);
+    const pp = x.win.heapAlloc(4); call('DirectDrawCreate', 0, pp, 0); const ddo = x.r32(pp);
+    call('IDirectDraw::SetCooperativeLevel', ddo, 0x10010, 0x11); call('IDirectDraw::SetDisplayMode', ddo, 320, 200, 8);
+    const pe = x.win.heapAlloc(1024); x.write(pe, new Uint8Array(1024)); x.w32(pe + 4 * 5, 0x00563412);   // entry 5: red 12h, green 34h, blue 56h
+    call('IDirectDraw::CreatePalette', ddo, 0x44, pe, pp, 0); const pal = x.r32(pp);
+    const d = x.win.heapAlloc(108); x.write(d, new Uint8Array(108)); x.w32(d, 108); x.w32(d + 4, 0x21); x.w32(d + 20, 1); x.w32(d + 104, 0x218);   // CAPS | BACKBUFFERCOUNT; PRIMARY | FLIP | COMPLEX
+    call('IDirectDraw::CreateSurface', ddo, d, pp, 0); const prim = x.r32(pp);
+    const caps = x.win.heapAlloc(4); x.w32(caps, 4); call('IDirectDrawSurface::GetAttachedSurface', prim, caps, pp); const back = x.r32(pp);
+    call('IDirectDrawSurface::SetPalette', prim, pal);
+    call('IDirectDrawSurface::Lock', back, 0, d, 1, 0); const bits = x.r32(d + 36), pitch = x.r32(d + 16);
+    x.write(bits + 10 * pitch + 20, Uint8Array.of(5)); call('IDirectDrawSurface::Unlock', back, 0);
+    call('IDirectDrawSurface::Flip', prim, 0, 1);
+    const fb = (X, Y) => new Uint32Array(mc.mem.u8.buffer, mc.mem.u8.byteOffset + mc.vbeFbBase + (Y * mc.vbe.width + X) * 4, 1)[0].toString(16);
+    const a = [mc.vbe.width + 'x' + mc.vbe.height, pitch, fb(20, 10)];
+    // A 2x1 sprite, key 7, onto the primary: its pixel 7 leaves the screen's pixel as it was.
+    const sd = x.win.heapAlloc(108); x.write(sd, new Uint8Array(108)); x.w32(sd, 108); x.w32(sd + 4, 7); x.w32(sd + 8, 1); x.w32(sd + 12, 2); x.w32(sd + 104, 0x40);
+    call('IDirectDraw::CreateSurface', ddo, sd, pp, 0); const spr = x.r32(pp);
+    call('IDirectDrawSurface::Lock', spr, 0, sd, 1, 0); x.write(x.r32(sd + 36), Uint8Array.of(7, 5)); call('IDirectDrawSurface::Unlock', spr, 0);
+    const ck = x.win.heapAlloc(8); x.w32(ck, 7); x.w32(ck + 4, 7); call('IDirectDrawSurface::SetColorKey', spr, 8, ck);
+    call('IDirectDrawSurface::BltFast', prim, 19, 11, spr, 0, 1);
+    x.w32(pe, 0x00ffffff); call('IDirectDrawPalette::SetEntries', pal, 0, 0, 1, pe);   // entry 0 white: the screen's 0s turn white at once
+    got = [...a, fb(19, 11), fb(20, 11), fb(0, 0)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: DirectDraw 8-bit: Flip shows the back buffer in the palette\'s colours, a colour key, SetEntries at once', got, '320x200 320 123456 ffffff 123456 ffffff'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a
