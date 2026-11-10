@@ -173,6 +173,22 @@
     "sound": true
   },
   {
+    "name": "linux/quake-x11-1997",
+    "title": "Quake for X11 (id Software, October 1997) — in a window on XFree86 3.3",
+    "world": "linux",
+    "year": 1997,
+    "author": "id Software, port by Dave 'Zoid' Kirsch; The XFree86 Project, the Debian project",
+    "thumb": "oasis/thumbs/linux-quake-x11-1997.png",
+    "output": "window",
+    "caution": true,
+    "tags": [
+      "game",
+      "X11",
+      "Cirrus GD5446"
+    ],
+    "sound": true
+  },
+  {
     "name": "linux/quake2-1998",
     "title": "Quake II 3.20 for Linux (SVGAlib) — id Software, with the 1998 demo's data",
     "world": "linux",

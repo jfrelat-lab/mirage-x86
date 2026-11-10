@@ -6,6 +6,8 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-10
 
+- **Quake for X11**: id's windowed Linux Quake of 1997, unmodified, in a 640x400 window on XFree86
+  3.3 under twm, on the emulated Cirrus card; its demos and its menu.
 - **Quake II for Linux**: id's Linux build of 1998 (3.20, SVGAlib), unmodified, with the demo's data:
   `quake2` loads its renderer and its game with `dlopen`, draws in 320x240 (the VGA's unchained "mode
   X", programmed by SVGAlib itself), plays its demo and answers its menu. Two fixes for every Linux

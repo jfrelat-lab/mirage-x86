@@ -260,6 +260,7 @@ all captured in Chrome on 2026-11-05.
 | <img src="compat/linux-doom-mini.png" width="160" alt=""> | DOOM, the smallest image (`doom-mini`) | 🟢 Plays | its shell, `linuxsdoom` one command away | 2026-11-05 |
 | | DOOM built by gcc 2.7.2 (`doom-build`, `doom-x11`) | 🟢 Plays | builds DOOM from source on first run (about 9 minutes), then X11 DOOM; the build not re-run on 2026-11-05 | 2026-11-05 |
 | <img src="compat/linux-quake-1997.png" width="160" alt=""> | Quake (1997) | 🟢 Plays | its demo loop | 2026-11-05 |
+| <img src="compat/linux-quake-x11.png" width="160" alt=""> | Quake for X11 (`quake-x11-1997`) | 🟢 Plays | id's `quake.x11` 1.0 in a 640x400 window on XFree86 3.3 (Cirrus GD5446, 256 colours), under twm; its demos, its menu | 2026-11-10 |
 | <img src="compat/linux-quake2.png" width="160" alt=""> | Quake II 3.20 (`quake2-1998`, SVGAlib) | 🟢 Plays | id's libc5 build with the 1998 demo's data: `ref_soft.so` and `gamei386.so` through `dlopen`, 320x240 in mode X; its demo, its menu | 2026-11-10 |
 | <img src="compat/linux-x11-1997.png" width="160" alt=""> | XFree86 3.3 (`x11-1997`) | 🟢 Plays | xterm and xclocks under twm on the emulated Cirrus card | 2026-11-05 |
 | <img src="compat/linux-xboing-1997.png" width="160" alt=""> | XBoing, XBill, xjewel (1997) | 🟢 Renders | their title screens | 2026-11-05 |
