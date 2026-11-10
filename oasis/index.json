@@ -204,6 +204,22 @@
     "sound": true
   },
   {
+    "name": "linux/quake2-x11-1998",
+    "title": "Quake II 3.20 for Linux on X11 (ref_softx) — id Software, with the 1998 demo's data",
+    "world": "linux",
+    "year": 1998,
+    "author": "id Software, port by Dave 'Zoid' Kirsch; The XFree86 Project, the Debian project",
+    "thumb": "oasis/thumbs/linux-quake2-x11-1998.png",
+    "output": "window",
+    "caution": true,
+    "tags": [
+      "game",
+      "X11",
+      "Cirrus GD5446"
+    ],
+    "sound": true
+  },
+  {
     "name": "linux/retrospection-2010",
     "title": "Retrospection — Trolls in the Shadows & FRequency, 4K for Linux",
     "world": "linux",

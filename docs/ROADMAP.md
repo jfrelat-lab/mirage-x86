@@ -98,7 +98,7 @@ Rule for all of them: a change that speeds up the paged systems must not slow th
 | **TinyCC** (i386, static): C compiled in milliseconds in the page — a 1997 C sandbox beside PRISM's | S |
 | **MIRAGE-LINUX against Docker's i386 emulation (qemu-user) and a whole Linux under v86**, the same binaries timed — a table for the showcase | S |
 | **A shared clipboard**: X's selections and the browser's, through the JavaScript window manager | M |
-| **Quake II for Linux** (3.20, 1998) with id's demo — ✅ `ref_soft.so` on SVGAlib (`linux/quake2-1998`: libc5, Debian 1.3's svgalib, 320x240 in mode X). To do: `ref_softx.so` on X11, `ref_glx.so` | 🔶 S |
+| **Quake II for Linux** (3.20, 1998) with id's demo — ✅ `ref_soft.so` on SVGAlib (`linux/quake2-1998`: libc5, Debian 1.3's svgalib, 320x240 in mode X). ✅ `ref_softx.so` on X11 (`linux/quake2-x11-1998`). To do: `ref_gl.so` (3dfx, fxMesa), `ref_glx.so` (GLX in an X window) | 🔶 S |
 | **Terminal games** of Debian 1.3: NetHack 3.2, Angband, Moria, bsdgames — termcap and ncurses, the tty's ioctls, ANSI on the VGA console | S |
 | **X11 games** of Debian 1.3 — ✅ xboing, xbill, xjewel on the Cirrus: `linux/xbill-1997`, `linux/xboing-1997`, `linux/xjewel-1997` — one image per game, each starting the X server, twm and its game itself, the three with the same layers so the cache serves them all (xboing's private colormap recolours the rest of the screen while it has the focus, as 8-bit X did). To do: xgalaga (Debian 2.1 only: glibc beside libc5); then Abuse (Crack dot Com, 1996, X11 and SVGAlib, its data in the public domain) | S |
 | **Network games**: xpilot, Netrek — UDP and TCP between tabs or machines, the first users of the network's relays | M |
