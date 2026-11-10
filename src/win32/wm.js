@@ -122,6 +122,7 @@ export function windowManager(st) {
    */
   wm.present = (lx, client) => {
     wm.lx = lx;
+    if (client) wm.presented = (wm.presented | 0) + 1;              // a frame the program drew (the page's fps)
     if (!lx || !lx.fbView) return;
     uncover();
     if (!wm.framed()) {

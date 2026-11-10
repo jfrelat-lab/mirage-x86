@@ -163,6 +163,17 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   const tick = new MessageChannel();
   let fault = null, stopped = false, paused = false;
   mc.onError = (err) => { fault = err; console.error(err); };
+  /*
+   * What the status line says: the frames the PROGRAM presents each second (SwapBuffers, Direct3D's
+   * Present, an SDL GL swap, a Windows window's GDI copy) -- not the page's own refreshes, which only
+   * follow the monitor (144 on a 144 Hz screen while Elevated presented 60) -- and the most it could
+   * present: those frames over the share of the second the host spent running the machine and
+   * drawing. A program that paces itself waits, and its wait is not counted, so 60 frames for 400 ms
+   * of work read "max ~150". The GPU's own time (WebGL draws asynchronously) is not in it.
+   */
+  let presents = 0, busy = 0;
+  if (hle && hle.backend && hle.backend.swap) { const swap = hle.backend.swap.bind(hle.backend); hle.backend.swap = (...a) => { presents++; return swap(...a); }; }
+  const programFrames = () => presents + (w32wm && w32wm.presented ? w32wm.presented() : 0);
   tick.port1.onmessage = () => {
     if (stopped) return;
     const t0 = performance.now();
@@ -171,15 +182,17 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
       mc.runSlice(20000);
       if (mc.blocked && !lx.ttyIn.length) { waiting = true; break; }     // a read waits for a key: give the time back
     }
+    busy += performance.now() - t0;
     if (lx.done) onStatus(`exited with status ${lx.status}` + (lx.signal ? ` (signal ${lx.signal})` : ''));
     else if (fault) onStatus(String(fault.message || fault).split('\n')[0]);
     else if (paused || waiting) setTimeout(() => tick.port2.postMessage(0), paused ? 50 : 10);
     else tick.port2.postMessage(0);
   };
   tick.port2.postMessage(0);
-  let frames = 0, last = performance.now(), c0 = 0, raf = 0;
+  let last = performance.now(), c0 = 0, raf = 0, f0 = 0;
   const draw = () => {
     if (stopped) return;
+    const d0 = performance.now();
     const glFrame = hle && hle.frame(), cr = glFrame && w32wm && w32wm.clientRect();
     if (w32in && locked() && !w32in.captures()) document.exitPointerLock();   // the program let the mouse go
     if (cr) {                                                            // a framed Windows window: the screen, WebGL's picture in its client area
@@ -189,12 +202,14 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
       if (canvas.width !== glFrame.width || canvas.height !== glFrame.height) { canvas.width = glFrame.width; canvas.height = glFrame.height; }
       canvas.getContext('2d').drawImage(glFrame, 0, 0);
     } else video.render();
-    frames++;
     audio.pump();
     const now = performance.now();
+    busy += now - d0;
     if (now - last > 1000 && !lx.done && !fault) {
-      onStatus(paused ? 'paused' : `${((mc.cpu.cycles - c0) / (now - last) / 1000).toFixed(1)} M instructions/s · ${frames} fps`);
-      frames = 0; last = now; c0 = mc.cpu.cycles;
+      const sec = (now - last) / 1000, f = programFrames(), fps = (f - f0) / sec, share = busy / (now - last);
+      const shown = f > 0 ? `${Math.round(fps)} fps · max ≈ ${share > 0.95 ? Math.round(fps) : Math.round(fps / Math.max(share, 0.01))} · ` : '';
+      onStatus(paused ? 'paused' : `${shown}${((mc.cpu.cycles - c0) / (now - last) / 1000).toFixed(1)} M instructions/s`);
+      last = now; c0 = mc.cpu.cycles; f0 = f; busy = 0;
     }
     raf = requestAnimationFrame(draw);
   };

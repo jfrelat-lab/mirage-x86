@@ -1196,7 +1196,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   /** A file of the program's disk, by name (the loader's DLLs of the program's own), or null. */
   tables.readFile = (name) => { const f = diskFile(name); return f && f.bytes ? f.bytes : null; };
   /** Where WebGL's picture goes on the screen, for a framed window (null: it is the whole screen). */
-  tables.wm = { clientRect: () => (wm.framed() ? { ...wm.client(), screen: st.desk } : null) };
+  tables.wm = { clientRect: () => (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0 };   // GDI frames shown
   return tables;
 }
 

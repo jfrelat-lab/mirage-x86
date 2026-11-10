@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-10
 
+- **The frame rate shown is the program's**: the Machines page counted its own refreshes, which follow
+  the monitor (144 on a 144 Hz screen while Elevated drew 60). It now shows the frames the program
+  presents each second, and the most it could present at the speed the computer emulates and draws
+  it ("44 fps · max ≈ 44": WinQuake, every instruction it can get; "47 fps · max ≈ 120": GLQuake,
+  waiting for the page to show each frame).
 - **Quake II runs in the browser**: id Software's demo of March 1998, unmodified, in a window on the
   desktop, its sound included; the menu, the console, the screen sizes (`sw_mode`) and the mouse in
   play work. It is the first program here that brings DLLs of its own: `quake2.exe` loads its
