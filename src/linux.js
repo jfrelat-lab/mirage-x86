@@ -170,6 +170,37 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const wrBytes = (va, b) => { for (let i = 0; i < b.length; i++) wr8(va + i, b[i]); };
   const rdStr = (va) => { let s = ''; for (let c; (c = rd8(va++));) s += String.fromCharCode(c); return s; };
   lx.rdBytes = rdBytes; lx.rdStr = rdStr;
+
+  // ---- what a library made in JavaScript may ask of the process (src/hle) -------------------------
+  // The address of a symbol of the shared objects the dynamic loader mapped (their .dynsym), or 0.
+  lx.elfMaps = [];
+  lx.symbol = (name) => {
+    for (const { at, data } of lx.elfMaps) {
+      const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      if (data.length < 52) continue;                                    // ET_EXEC at 0, ET_DYN at its base
+      const shoff = v.getUint32(32, true), shentsize = v.getUint16(46, true), shnum = v.getUint16(48, true);
+      for (let i = 0; i < shnum; i++) {
+        const sh = shoff + i * shentsize;
+        if (sh + 40 > data.length || v.getUint32(sh + 4, true) !== 11) continue;   // SHT_DYNSYM
+        const off = v.getUint32(sh + 16, true), size = v.getUint32(sh + 20, true);
+        const str = v.getUint32(shoff + v.getUint32(sh + 24, true) * shentsize + 16, true);
+        for (let k = off; k + 16 <= off + size; k += 16) {
+          let n = str + v.getUint32(k, true), j = 0;
+          while (j < name.length && data[n + j] === name.charCodeAt(j)) j++;
+          if (j === name.length && data[n + j] === 0 && v.getUint16(k + 14, true) !== 0) return (at + v.getUint32(k + 4, true)) >>> 0;
+        }
+      }
+    }
+    return 0;
+  };
+  // The process's environment as it is now, putenv's changes with it: libc's __environ, else the stack's.
+  lx.getenv = (name) => {
+    const ev = lx.symbol('__environ') || lx.symbol('environ');
+    let p = ev ? rd32(ev) : 0;
+    if (!p) return null;
+    for (let s; (s = rd32(p)); p += 4) { const e = rdStr(s); if (e.startsWith(name + '=')) return e.slice(name.length + 1); }
+    return null;
+  };
   lx.phys = phys;                                                         // a guest address's byte in memory, or -1
   lx.BLOCK = BLOCK;                                                       // what a call that waits answers (src/hle)
   lx.wrBytes = (va, b) => wrBytes(va, b);
@@ -286,6 +317,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     mem.u8.fill(0, GDT_BASE, GDT_BASE + GDT_ENTRIES * 8);
     lx.mmapNext = MMAP_BASE;
     lx.lazy = [];
+    lx.elfMaps = [];
   };
   /** Into ring 3 at `eip` with the stack at `sp`: flat segments, paging on. `fs`: a selector of its own
    *  (Win32's TEB) instead of the flat data one. */
@@ -317,6 +349,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const h = ah ? null : elfHeader(elf);
     const bias = h && h.type === 3 ? PIE_BASE : 0;
     const main = h ? loadImage(elf, h, bias) : { phdr: 0, top: loadAout(elf, ah) };
+    if (h) lx.elfMaps = [{ at: bias, data: elf }];                        // the program first: its copies of libc's data win
     // The break starts at the end of the BSS itself, not at its page's end: Linux 2.0 to 2.6 set
     // start_brk = brk = elf_brk (binfmt_elf.c; set_brk aligns only the mapping). libc5's malloc asks
     // brk(&end) and takes anything else for a refusal — gcc 2.7.2 said "virtual memory exhausted".
@@ -419,7 +452,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const QUANTUM = () => 0.02 * (machine.cyclesPerSecond || 1e8);         // 20 ms of guest time
   const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
   const snapshot = () => ({
-    pid: lx.pid, ppid: lx.ppid, vm: lx.vm, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, lazy: lx.lazy, wake: lx.wake,
+    pid: lx.pid, ppid: lx.ppid, vm: lx.vm, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, lazy: lx.lazy, elfMaps: lx.elfMaps, wake: lx.wake,
     fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
     sigInfo: lx.sigInfo.slice(), sigBlocked: lx.sigBlocked.slice(), sigPend: new Set(lx.sigPend), sigSaved: lx.sigSaved,
     alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames, pgid: lx.pgid, sid: lx.sid, ctty: lx.ctty,
@@ -433,7 +466,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // and where the next mapping goes is the process's, not the thread's.
     const shared = s.vm === lx.vm;
     Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: shared ? lx.brkStart : s.brkStart, brk: shared ? lx.brk : s.brk,
-      mmapNext: shared ? lx.mmapNext : s.mmapNext, lazy: shared ? lx.lazy : s.lazy || [], wake: s.wake ?? null, vm: s.vm,
+      mmapNext: shared ? lx.mmapNext : s.mmapNext, lazy: shared ? lx.lazy : s.lazy || [], elfMaps: shared ? lx.elfMaps : s.elfMaps || [], wake: s.wake ?? null, vm: s.vm,
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
       sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty });
     fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
@@ -1861,6 +1894,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (!(flags & 0x20)) {                                                // a file: copied, not shared
         const f = fdOf(fd); if (!f.node || f.node.dir) return -E.EACCES;
         src = f.node.data.subarray(Math.min(pgoff * PAGE, f.node.size), Math.min(pgoff * PAGE + len, f.node.size));
+        // An ELF file's head, mapped by the dynamic loader: where its symbols are (lx.symbol).
+        if (pgoff === 0 && src[0] === 0x7f && src[1] === 0x45 && src[2] === 0x4c && src[3] === 0x46) lx.elfMaps = [...lx.elfMaps.filter((e) => e.at !== at), { at, data: f.node.data }];
       }
       unmapRange(at, at + size);
       // Anonymous memory of a megabyte or more is reserved and its pages committed when first touched,

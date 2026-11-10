@@ -69,7 +69,8 @@ if (process.env.MIRAGE_LXHLE) {
   const { sdl12 } = await import('../../src/hle/sdl12.js');
   const { gl, glu } = await import('../../src/hle/gl.js');
   const { asound } = await import('../../src/hle/asound.js');
-  const pick = { sdl12, gl, glu, asound };
+  const { fxmesa, glide } = await import('../../src/hle/fxmesa.js');
+  const pick = { sdl12, gl, glu, asound, fxmesa: () => fxmesa(gl()), glide };
   hleTrace = traceBackend();
   const libs = process.env.MIRAGE_LXHLE.split(',').map((n) => pick[n] && pick[n]()).filter(Boolean);
   for (const f of installHLE(lx, mc.mem, mc.cpu, libs, hleTrace)) { lx.addFile(f.path, f.bytes); for (const l of f.links) lx.addFile(l, f.bytes); }
@@ -124,7 +125,7 @@ if (WAV) {
   for (let i = 0; i < n; i++) b.writeInt16LE(Math.max(-32768, Math.min(32767, played[i])), 44 + i * 2);
   writeFileSync(WAV, b); console.error(`mirage-linux: ${(n / 2 / r).toFixed(1)} s of sound at ${r} Hz -> ${WAV}`);
 }
-if (hleTrace) { const t = hleTrace.summary(); console.error('hle:', JSON.stringify({ mode: t.mode, frames: t.frames, calls: t.calls })); for (const s of t.shaders) console.error('hle shader:\n' + s); }
+if (hleTrace) { const t = hleTrace.summary(); console.error('hle:', JSON.stringify({ mode: t.mode, ...(t.gamma !== undefined ? { gamma: t.gamma } : {}), frames: t.frames, calls: t.calls })); for (const s of t.shaders) console.error('hle shader:\n' + s); }
 if (!lx.done && SECS) { console.error(`mirage-linux: stopped after ${SECS} guest seconds`); process.exit(0); }
 if (!lx.done) { console.error('mirage-linux: still running after', LIMIT, 'cycles'); process.exit(124); }
 if (lx.signal) {

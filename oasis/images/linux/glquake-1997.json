@@ -1,0 +1,93 @@
+{
+  "oasis": 1,
+  "title": "GLQuake 0.97 for Linux (id Software, November 1997) — its 3dfx OpenGL, drawn by WebGL",
+  "year": 1997,
+  "author": "id Software, port by Dave 'Zoid' Kirsch",
+  "world": "linux",
+  "machine": {
+    "cpu": "686",
+    "mem": 64,
+    "hle": [
+      "fxmesa",
+      "glide"
+    ]
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/base/libc5_5.4.33-6.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/base/ldso_1.8.12-1.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/svgalib1_1.2.10-5.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xlib6_3.3-4.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xext_3.3-4.deb"
+    },
+    {
+      "tar": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/unsup/unix/glquake-0.97-i386-unknown-linux2.0.tar.gz",
+      "into": "usr/games/quake"
+    },
+    {
+      "zip": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/quake/quake106.zip",
+      "lha": "resource.1",
+      "into": "usr/games/quake",
+      "files": {
+        "ID1/PAK0.PAK": "id1/pak0.pak"
+      }
+    },
+    {
+      "links": {
+        "/lib/ld-linux.so.1": "ld-linux.so.1.8.12",
+        "/sbin/ldconfig": "ldconfig.new"
+      }
+    },
+    {
+      "file": "oasis/files/ld.so.conf-x11",
+      "to": "/etc/ld.so.conf"
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/root"
+      ]
+    },
+    {
+      "run": "ldconfig",
+      "cwd": "/"
+    }
+  ],
+  "entry": {
+    "run": "/usr/games/quake/glquake",
+    "args": [
+      "-noudp",
+      "-nocdaudio"
+    ],
+    "cwd": "/usr/games/quake",
+    "console": true,
+    "env": {
+      "HOME": "/root",
+      "TERM": "linux"
+    }
+  },
+  "output": "window",
+  "notes": "id's GLQuake 0.97 for Linux, written for a 3dfx Voodoo: its libMesaGL.so.2 (Mesa on Glide, with fxMesa's full-screen calls) is made in JavaScript by MIRAGE (src/hle/fxmesa.js), its OpenGL drawn by PRISM's gl.js on WebGL2; its keyboard and mouse are Debian 1.3's svgalib, as on a 1997 PC. pak0.pak is quake106.zip's shareware episode.",
+  "thumb": "oasis/thumbs/linux-glquake-1997.png",
+  "license": "oasis/licenses/quake-shareware.txt",
+  "licenseName": "id Software's shareware licence (SLICNSE.TXT, June 1996), as quake106.zip carries it",
+  "caution": "Quake's shareware episode is id Software's, under its shareware licence, not a free one: it may be played and passed on whole and free of charge, with the licence, and not used commercially or displayed publicly. MIRAGE never copies it: the page fetches quake106.zip from idgames, unchanged, the licence inside it.",
+  "tags": [
+    "game",
+    "OpenGL",
+    "3dfx",
+    "SVGAlib"
+  ],
+  "sound": true
+}

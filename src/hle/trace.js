@@ -11,6 +11,7 @@ export function traceBackend() {
     mode: null, frames: 0, calls: new Map(), shaders: new Map(), first: [], quit: false,
     trace(name, args) { t.calls.set(name, (t.calls.get(name) || 0) + 1); if (t.first.length < 400) t.first.push([name, args]); },
     setVideoMode(w, h, opengl) { t.mode = { w, h, opengl }; },
+    setGamma(g) { t.gamma = g; },
     swap() { t.frames++; },
     nextEvent() { return null; },
     d3d9() { return t.d3d || (t.d3d = recordD3D9()); },
@@ -25,7 +26,7 @@ export function traceBackend() {
       }
     },
     summary() {
-      return { mode: t.mode, frames: t.frames, calls: Object.fromEntries([...t.calls].sort((a, b) => b[1] - a[1])), shaders: [...t.shaders.values()],
+      return { mode: t.mode, ...(t.gamma !== undefined ? { gamma: t.gamma } : {}), frames: t.frames, calls: Object.fromEntries([...t.calls].sort((a, b) => b[1] - a[1])), shaders: [...t.shaders.values()],
         d3d: t.d3d ? Object.fromEntries([...t.d3d.calls].sort((a, b) => b[1] - a[1])) : null };
     },
   };

@@ -3483,6 +3483,42 @@ const runLinux = (hex, argv) => {
     got = lx.done ? lx.status : -1;
   } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: /dev/fb0 — screen infos, mmap onto the card, a pixel read back', got, 63); }
+// src/hle/fxmesa.js: libMesaGL.so.2 for the 3dfx games (GLQuake 0.97, Quake II's ref_gl.so) -- fxMesa's
+// full screen at a Glide resolution (7: 640x480, 15: 400x300), Glide's SST_GAMMA, the swap paced at sixty a second, and the
+// names they find it by (libGL.so for ref_gl's dlopen) with OpenGL's entry points beside fxMesa's.
+{ let got;
+  try { const { fxmesa } = await import('../src/hle/fxmesa.js'), { gl } = await import('../src/hle/gl.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const lib = fxmesa(gl()), be = traceBackend(); let t = 1;
+    const x = { backend: be, alloc: () => 0x1000, w32: () => {}, lx: { mono: () => t, getenv: (n) => (n === 'SST_GAMMA' ? '1.6' : null) }, waitUntil: () => 'wait' };
+    const call = (n, ...a) => lib.fns[n][1](x, ...a), modes = [];
+    call('fxMesaCreateContext', 0, 7, 0, 0); modes.push(`${be.mode.w}x${be.mode.h}${be.mode.opengl ? 'gl' : ''}`);
+    call('fxMesaCreateContext', 0, 15, 0, 0); modes.push(`${be.mode.w}x${be.mode.h}`);
+    const s1 = call('fxMesaSwapBuffers'); t += 0.001; const s2 = call('fxMesaSwapBuffers'); t += 0.02; const s3 = call('fxMesaSwapBuffers');
+    got = [...modes, be.gamma, s1, s2, s3, be.frames, lib.soname, lib.links.includes('libGL.so'), !!lib.fns.glVertex3f, !!lib.fns.fxMesaMakeCurrent].join(' ');
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('hle: fxMesa -- Glide resolutions, a paced swap, libMesaGL.so.2 as libGL.so', got, '640x480gl 400x300 1.6 0 wait 0 2 libMesaGL.so.2 true true true'); }
+// lx.getenv for the libraries made in JavaScript: the environment as the process changed it, through the
+// __environ its ELF defines (.dynsym) -- Quake II's ref_gl putenvs SST_GAMMA and Glide read it there.
+// An ELF of three sections (null, .dynsym, .dynstr) whose __environ is at 0x9000; the array it points
+// to holds "A=1" and "SST_GAMMA=1.6".
+{ let got;
+  try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.prepareSpace(); lx.mapRange(0x9000, 0xa000, true);
+    const elf = new Uint8Array(0x200), v = new DataView(elf.buffer);
+    elf.set([0x7f, 0x45, 0x4c, 0x46, 1, 1, 1]); v.setUint16(16, 2, true);
+    v.setUint32(32, 0x100, true); v.setUint16(46, 40, true); v.setUint16(48, 3, true);
+    const sh = (i, type, off, size, link) => { const b = 0x100 + 40 * i; v.setUint32(b + 4, type, true); v.setUint32(b + 16, off, true); v.setUint32(b + 20, size, true); v.setUint32(b + 24, link, true); };
+    sh(1, 11, 0x80, 32, 2); sh(2, 3, 0x40, 16, 0);
+    elf.set([...Buffer.from('\0__environ\0')], 0x40);
+    v.setUint32(0x90, 1, true); v.setUint32(0x94, 0x9000, true); v.setUint16(0x9e, 5, true);   // symbol 1: name 1, value, shndx 5
+    lx.elfMaps = [{ at: 0, data: elf }];
+    const put = (va, bytes) => lx.wrBytes(va, bytes);
+    const wr32 = (va, x) => put(va, Uint8Array.of(x & 255, (x >> 8) & 255, (x >> 16) & 255, x >>> 24));
+    wr32(0x9000, 0x9010); wr32(0x9010, 0x9100); wr32(0x9014, 0x9110); wr32(0x9018, 0);
+    put(0x9100, Uint8Array.from(Buffer.from('A=1\0'))); put(0x9110, Uint8Array.from(Buffer.from('SST_GAMMA=1.6\0')));
+    got = [lx.symbol('__environ').toString(16), lx.getenv('SST_GAMMA'), lx.getenv('B')].join(' ');
+  } catch (e) { got = e.message.slice(0, 60); }
+  eq('linux: lx.getenv -- the environment through the ELF\'s __environ', got, '9000 1.6 '); }
 // tools/linux/lazymap.asm: anonymous memory larger than the machine (Quake II's hunks) -- 32 MiB mmapped on
 // a 16 MiB machine, its ends written and read back, mprotect and write() on pages never touched, munmap.
 // 31 when all hold; committed whole at mmap, it ran out of physical memory.

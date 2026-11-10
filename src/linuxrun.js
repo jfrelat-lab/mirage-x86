@@ -190,6 +190,23 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   };
   tick.port2.postMessage(0);
   let last = performance.now(), c0 = 0, raf = 0, f0 = 0;
+  // A display gamma the program set (fxMesa's, from Glide's SST_GAMMA): an SVG gamma filter on the
+  // canvas, the picture's channels raised to 1/gamma as the Voodoo's DAC table did.
+  let gammaShown = 1;
+  const showGamma = (g) => {
+    if (g === gammaShown) return;
+    gammaShown = g;
+    let f = document.getElementById('mirage-gamma');
+    if (!f) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '0'); svg.setAttribute('height', '0'); svg.style.position = 'absolute';
+      svg.innerHTML = '<filter id="mirage-gamma" color-interpolation-filters="sRGB"><feComponentTransfer>' +
+        '<feFuncR type="gamma"/><feFuncG type="gamma"/><feFuncB type="gamma"/></feComponentTransfer></filter>';
+      document.body.appendChild(svg); f = svg.querySelector('filter');
+    }
+    for (const fn of f.querySelectorAll('feFuncR, feFuncG, feFuncB')) fn.setAttribute('exponent', String(1 / g));
+    canvas.style.filter = g === 1 ? '' : 'url(#mirage-gamma)';
+  };
   const draw = () => {
     if (stopped) return;
     const d0 = performance.now();
@@ -199,6 +216,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
       video.render();
       canvas.getContext('2d').drawImage(glFrame, cr.x, cr.y, cr.w, cr.h);
     } else if (glFrame) {                                                // an SDL OpenGL window: PRISM's picture
+      if (hle.gamma) showGamma(hle.gamma());
       if (canvas.width !== glFrame.width || canvas.height !== glFrame.height) { canvas.width = glFrame.width; canvas.height = glFrame.height; }
       canvas.getContext('2d').drawImage(glFrame, 0, 0);
     } else video.render();
@@ -219,7 +237,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     w32: w32in ? { input: w32in, wm: w32wm } : null,                   // a Windows program's input, for tests that drive the page
     pause(on) { paused = on; },
     stop() {
-      stopped = true; cancelAnimationFrame(raf); keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove);
+      stopped = true; cancelAnimationFrame(raf); canvas.style.filter = ''; keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove);
       window.removeEventListener('keydown', wake); window.removeEventListener('pointerdown', wake); audio.close();
     },
   };

@@ -1,0 +1,103 @@
+{
+  "oasis": 1,
+  "title": "Quake II 3.20 for Linux in OpenGL (ref_gl, 3dfx) — id Software, with the 1998 demo's data",
+  "year": 1998,
+  "author": "id Software, port by Dave 'Zoid' Kirsch",
+  "world": "linux",
+  "thumb": "oasis/thumbs/linux-quake2-gl-1998.png",
+  "machine": {
+    "cpu": "686",
+    "mem": 64,
+    "hle": [
+      "fxmesa",
+      "glide"
+    ]
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/base/libc5_5.4.33-6.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/base/ldso_1.8.12-1.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/dists/bo/main/binary-i386/libs/svgalib1_1.2.10-5.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xlib6_3.3-4.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/x11/xext_3.3-4.deb"
+    },
+    {
+      "tar": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/quake2/unix/quake2-3.20-i386-unknown-linux2.0.tar.gz",
+      "into": "usr/games/quake2"
+    },
+    {
+      "zip": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/quake2/q2-314-demo-x86.exe",
+      "files": {
+        "Install/Data/baseq2/pak0.pak": "/usr/games/quake2/baseq2/pak0.pak",
+        "license.txt": "/usr/games/quake2/license.txt"
+      }
+    },
+    {
+      "file": "oasis/files/quake2.conf",
+      "to": "/etc/quake2.conf"
+    },
+    {
+      "links": {
+        "/lib/ld-linux.so.1": "ld-linux.so.1.8.12",
+        "/sbin/ldconfig": "ldconfig.new"
+      }
+    },
+    {
+      "file": "oasis/files/ld.so.conf-x11",
+      "to": "/etc/ld.so.conf"
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/root"
+      ]
+    },
+    {
+      "run": "ldconfig",
+      "cwd": "/"
+    }
+  ],
+  "entry": {
+    "run": "/usr/games/quake2/quake2",
+    "args": [
+      "+set",
+      "vid_ref",
+      "gl",
+      "+set",
+      "gl_driver",
+      "libGL.so",
+      "+set",
+      "cd_nocd",
+      "1"
+    ],
+    "cwd": "/usr/games/quake2",
+    "console": true,
+    "env": {
+      "HOME": "/root",
+      "TERM": "linux"
+    }
+  },
+  "output": "window",
+  "notes": "id's Linux Quake II 3.20 with its 3dfx OpenGL renderer, ref_gl.so: it dlopens libGL.so and finds OpenGL and fxMesa's full-screen calls in it with dlsym. That libMesaGL.so.2 is made in JavaScript by MIRAGE (src/hle/fxmesa.js), its OpenGL drawn by PRISM's gl.js on WebGL2; keyboard and mouse are Debian 1.3's svgalib. Data: the March 1998 demo's pak0.pak, its licence beside it.",
+  "license": "https://ftp.fu-berlin.de/pc/games/idgames/idstuff/quake2/q2-314-demo-x86.exe",
+  "licenseName": "id Software's Quake II demo licence (license.txt in the demo archive): free electronic redistribution with the licence",
+  "caution": "The Quake II demo is id Software's, under its limited demo licence, not a free one: it may be passed on free of charge by electronic means, with its licence, for non-commercial use. MIRAGE never copies it: the page fetches id's archives unchanged.",
+  "tags": [
+    "game",
+    "OpenGL",
+    "3dfx",
+    "SVGAlib"
+  ],
+  "sound": true
+}

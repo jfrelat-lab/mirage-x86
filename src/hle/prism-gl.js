@@ -8,6 +8,7 @@ import { guestMemory } from './memory.js';
 import { gl as glTable, glu as gluTable } from './gl.js';
 import { asound } from './asound.js';
 import { sdl12 } from './sdl12.js';
+import { fxmesa, glide } from './fxmesa.js';
 
 /** An M as PRISM's environment modules take it, over a Linux guest's memory. */
 export function prismM(lx, mem) {
@@ -70,6 +71,9 @@ export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'as
       if (b) { if (frame && frame.close) frame.close(); frame = b; shown = false; }
     },
     swapReady() { return shown; },
+    // A display's gamma (fxMesa's, from Glide's SST_GAMMA): the page applies it to the picture.
+    gamma: 1,
+    setGamma(g) { backend.gamma = g; },
     nextEvent() { return null; },
     gl() { return 0; },
     d3d9() {
@@ -96,8 +100,8 @@ export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'as
     }
     return { soname: table.soname, links: table.links, fns };
   };
-  const make = { sdl12, gl: () => viaPrism(glTable()), glu: () => viaPrism(gluTable()), asound };
+  const make = { sdl12, gl: () => viaPrism(glTable()), glu: () => viaPrism(gluTable()), asound, fxmesa: () => fxmesa(viaPrism(glTable())), glide };
   const unknown = names.find((n) => !make[n]);
-  if (unknown) throw new Error(`machine.hle: no library '${unknown}' (sdl12, gl, glu, asound)`);
-  return { libs: names.map((n) => make[n]()), backend, frame: () => { shown = true; return frame; }, size: () => size, gl, M };
+  if (unknown) throw new Error(`machine.hle: no library '${unknown}' (sdl12, gl, glu, asound, fxmesa, glide)`);
+  return { libs: names.map((n) => make[n]()), backend, frame: () => { shown = true; return frame; }, size: () => size, gamma: () => backend.gamma, gl, M };
 }

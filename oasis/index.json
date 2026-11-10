@@ -86,6 +86,23 @@
     "sound": true
   },
   {
+    "name": "linux/glquake-1997",
+    "title": "GLQuake 0.97 for Linux (id Software, November 1997) — its 3dfx OpenGL, drawn by WebGL",
+    "world": "linux",
+    "year": 1997,
+    "author": "id Software, port by Dave 'Zoid' Kirsch",
+    "thumb": "oasis/thumbs/linux-glquake-1997.png",
+    "output": "window",
+    "caution": true,
+    "tags": [
+      "game",
+      "OpenGL",
+      "3dfx",
+      "SVGAlib"
+    ],
+    "sound": true
+  },
+  {
     "name": "linux/laminator-2009",
     "title": "Four Dollar Plastic Laminator — SVatG, 1K for Linux",
     "world": "linux",
@@ -199,6 +216,23 @@
     "caution": true,
     "tags": [
       "game",
+      "SVGAlib"
+    ],
+    "sound": true
+  },
+  {
+    "name": "linux/quake2-gl-1998",
+    "title": "Quake II 3.20 for Linux in OpenGL (ref_gl, 3dfx) — id Software, with the 1998 demo's data",
+    "world": "linux",
+    "year": 1998,
+    "author": "id Software, port by Dave 'Zoid' Kirsch",
+    "thumb": "oasis/thumbs/linux-quake2-gl-1998.png",
+    "output": "window",
+    "caution": true,
+    "tags": [
+      "game",
+      "OpenGL",
+      "3dfx",
       "SVGAlib"
     ],
     "sound": true

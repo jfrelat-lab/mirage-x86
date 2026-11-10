@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-10
 
+- **GLQuake and Quake II in OpenGL on Linux**: id's 3dfx builds of 1997 and 1998, written for a Voodoo
+  card, unmodified: their `libMesaGL.so.2` (Mesa on Glide, with the fxMesa calls that open the card's
+  full screen) is made in JavaScript and draws with PRISM's OpenGL on WebGL; keyboard and mouse are
+  SVGAlib's, as on a 1997 PC. Quake II's brightness comes through as the Voodoo took it, from the
+  `SST_GAMMA` the game puts in its environment. Around 30 to 40 frames a second in Chrome.
 - **Quake and Quake II for X11**: id's windowed Linux builds of 1997 and 1998, unmodified, in windows
   on XFree86 3.3 under twm, on the emulated Cirrus card (Quake 640x400, Quake II's `ref_softx`
   400x300); their demos and their menus.
