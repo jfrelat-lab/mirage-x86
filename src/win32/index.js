@@ -60,8 +60,9 @@ export function peHeader(b) {
  * leave the CPU at its entry point. `apis`: [{ dll, fns: { name: [sig, fn, { cdecl?, ordinal? }?] } }].
  * Returns { modules, x } — x the context the API functions get (guest memory, lx, backend, win).
  */
-export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', apis = [], backend = {} } = {}) {
+export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', apis = [], backend = {}, readFile = null } = {}) {
   const h = peHeader(exe);
+  readFile = readFile || apis.readFile || null;                    // the program's own DLLs, from its disk
   if (!h) throw new Error('mirage-win32: not a PE32 i386 executable');
   lx.prepareSpace();
   const wr = (va, bytes) => lx.wrBytes(va, bytes);
@@ -71,15 +72,19 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   const base = h.base >>> 0;
   lx.lazy.push([base, base + h.sizeImage]);
   const mapBytes = (va, bytes) => { lx.mapRange(va & ~0xfff, va + Math.max(bytes.length, 1), true); wr(va, bytes); };
-  // A section alignment below the page's (Crinkler's /TINYHEADER: no section at all, code in the
-  // headers) is one flat image: the whole file at the base, file offset = RVA, the rest of SizeOfImage
-  // zero (ReactOS's ExeFmtpCreateImageSection, the SectionAlignment < PAGE_SIZE case).
-  if (h.salign < PAGE) mapBytes(base, exe.subarray(0, Math.min(exe.length, h.sizeImage)));
-  else mapBytes(base, exe.subarray(0, Math.min(exe.length, h.sizeHeaders)));
-  for (const sec of h.salign < PAGE ? [] : h.sections) {
-    const raw = sec.raw & ~0x1ff, len = Math.min(Math.ceil((sec.rsize + (sec.raw & 0x1ff)) / 0x200) * 0x200, Math.max(0, exe.length - raw));
-    if (len > 0 && sec.rsize) mapBytes(base + sec.va, exe.subarray(raw, raw + len));
-  }
+  // An image at `at`: its headers, then each section at its RVA. A section alignment below the page's
+  // (Crinkler's /TINYHEADER: no section at all, code in the headers) is one flat image: the whole file
+  // at the base, file offset = RVA, the rest of SizeOfImage zero (ReactOS's ExeFmtpCreateImageSection,
+  // the SectionAlignment < PAGE_SIZE case).
+  const mapImage = (img, ih, at) => {
+    if (ih.salign < PAGE) { mapBytes(at, img.subarray(0, Math.min(img.length, ih.sizeImage))); return; }
+    mapBytes(at, img.subarray(0, Math.min(img.length, ih.sizeHeaders)));
+    for (const sec of ih.sections) {
+      const raw = sec.raw & ~0x1ff, len = Math.min(Math.ceil((sec.rsize + (sec.raw & 0x1ff)) / 0x200) * 0x200, Math.max(0, img.length - raw));
+      if (len > 0 && sec.rsize) mapBytes(at + sec.va, img.subarray(raw, raw + len));
+    }
+  };
+  mapImage(exe, h, base);
 
   // ---- the process heap, the stack, the TEB and the PEB -------------------------------------------
   // The heap: blocks of 8-byte multiples, each after an 8-byte header holding its size, a block freed
@@ -167,7 +172,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     if (!/\.[a-z0-9]+$/.test(key)) key += '.dll';
     if (modules.has(key)) return modules.get(key);
     const img = images.get(key);
-    if (!img) return null;
+    if (!img) return loadFile(key);
     const mb = BASES[key] || (0x60000000 + modules.size * 0x100000);
     const d = makeDll(img.name, img.fns, mb);
     mapBytes(mb, d.bytes);
@@ -180,26 +185,69 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   addEntry(exeMod, path, exeMod.name, { init: false });
   load('ntdll.dll'); load('kernel32.dll');
 
-  // ---- the import directory --------------------------------------------------------------------------
+  // ---- the import directory: each DLL an image names, loaded, its address table filled ------------------
   const rd32 = (va) => { const b = lx.rdBytes(va, 4); return (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0; };
-  const unresolved = [];
-  const imp = h.dirs[1];
-  if (imp && imp.rva) {
-    for (let d = base + imp.rva; ; d += 20) {
+  const bindImports = (ib, ih, who) => {
+    const unresolved = [], imp = ih.dirs[1];
+    if (!imp || !imp.rva) return;
+    for (let d = ib + imp.rva; ; d += 20) {
       const olt = rd32(d), nameRva = rd32(d + 12), iat = rd32(d + 16);
       if (!nameRva) break;
-      const dll = lx.rdStr(base + nameRva), mod = load(dll);
-      if (!mod) throw new Error(`mirage-win32: ${dll} is not made here (an import of ${exeMod.name})`);
+      const dll = lx.rdStr(ib + nameRva), mod = load(dll);
+      if (!mod) throw new Error(`mirage-win32: ${dll} is not made here (an import of ${who})`);
       for (let t = 0; ; t += 4) {
-        const e = rd32(base + (olt || iat) + t);
+        const e = rd32(ib + (olt || iat) + t);
         if (!e) break;
-        const fn = e & 0x80000000 ? mod.byOrdinal.get(e & 0xffff) : mod.exports.get(lx.rdStr(base + e + 2));
-        if (!fn) unresolved.push(`${dll}!${e & 0x80000000 ? '#' + (e & 0xffff) : lx.rdStr(base + e + 2)}`);
-        w32(base + iat + t, fn || 0);
+        const fn = e & 0x80000000 ? mod.byOrdinal.get(e & 0xffff) : mod.exports.get(lx.rdStr(ib + e + 2));
+        if (!fn) unresolved.push(`${dll}!${e & 0x80000000 ? '#' + (e & 0xffff) : lx.rdStr(ib + e + 2)}`);
+        w32(ib + iat + t, fn || 0);
       }
     }
-  }
-  if (unresolved.length) throw new Error(`mirage-win32: unresolved imports: ${unresolved.join(', ')}`);
+    if (unresolved.length) throw new Error(`mirage-win32: unresolved imports: ${unresolved.join(', ')}`);
+  };
+  /*
+   * A DLL of the program's own, from its disk (`readFile`): Quake II's ref_gl.dll, ref_soft.dll and
+   * gamex86.dll, which it loads with LoadLibrary and asks GetProcAddress for GetRefAPI and GetGameAPI.
+   * Mapped from 40000000h up, clear of the heap's segments and the DLLs made here, its base relocations
+   * applied (IMAGE_REL_BASED_HIGHLOW) when that is not the base it was linked for, its imports bound,
+   * its exports read. Its DllMain is LoadLibraryA's to call (src/win32/api.js): `init` is pending.
+   */
+  let dllNext = 0x40000000;
+  const loadFile = (key) => {
+    const img = readFile && readFile(key), ih = img && peHeader(img);
+    if (!ih) return null;
+    const size = (ih.sizeImage + 0xffff) & ~0xffff, at = dllNext >>> 0; dllNext += size;
+    lx.lazy.push([at, at + size]);
+    mapImage(img, ih, at);
+    const delta = (at - ih.base) | 0, rel = ih.dirs[5];
+    if (delta && rel && rel.rva) {
+      for (let blk = at + rel.rva, end = blk + rel.size; blk < end;) {
+        const page = rd32(blk), bsize = rd32(blk + 4);
+        if (!bsize) break;
+        for (let k = 8; k < bsize; k += 2) {
+          const b = lx.rdBytes(blk + k, 2), e = b[0] | b[1] << 8;
+          if (e >> 12 === 3) { const a = at + page + (e & 0xfff); w32(a, (rd32(a) + delta) >>> 0); }
+        }
+        blk += bsize;
+      }
+    }
+    const name = img.name || key, exports = new Map(), byOrdinal = new Map(), ex = ih.dirs[0];
+    if (ex && ex.rva) {
+      const d = at + ex.rva, ordBase = rd32(d + 16), nFuncs = rd32(d + 20), nNames = rd32(d + 24);
+      const funcs = at + rd32(d + 28), names = at + rd32(d + 32), ords = at + rd32(d + 36);
+      for (let i = 0; i < nFuncs; i++) { const r = rd32(funcs + 4 * i); if (r) byOrdinal.set(ordBase + i, at + r); }
+      for (let i = 0; i < nNames; i++) {
+        const b = lx.rdBytes(ords + 2 * i, 2), o = b[0] | b[1] << 8, r = rd32(funcs + 4 * o);
+        if (r) exports.set(lx.rdStr(at + rd32(names + 4 * i)), at + r);
+      }
+    }
+    const mod = { name: key, base: at, size, entry: ih.entry ? at + ih.entry : 0, exports, byOrdinal, file: true, init: !!ih.entry };
+    modules.set(key, mod);
+    addEntry(mod, `C:\\${key}`, key);
+    bindImports(at, ih, key);
+    return mod;
+  };
+  bindImports(base, h, exeMod.name);
 
   // ---- the API's context, and the stack at the entry point -----------------------------------------
   // ---- threads: each its TEB (below the first, as XP places them) and its stack, on lx.spawnThread --------

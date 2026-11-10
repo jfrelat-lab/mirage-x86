@@ -203,11 +203,17 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const kernel32 = {
     // Crinkler's header calls it once more on the byte after its list of DLL names, and takes the NULL
     // Windows answers as the list's end: only a name that looks like one is worth a line in the log.
+    // A DLL of the program's own (its disk) is mapped by the loader (src/win32/index.js); its DllMain
+    // -- and those of the DLLs it brought in -- run here, DLL_PROCESS_ATTACH, before LoadLibrary returns.
     LoadLibraryA: ['p', (x, name) => {
       const s = x.str(name, 256), m = x.win.load(s);
       if (!m && /^[\w.\\: -]{1,64}$/.test(s)) x.win.say(`LoadLibraryA("${s}"): not made here`);
-      return m ? m.base : 0;
+      if (!m) return 0;
+      const inits = [...x.win.modules.values()].filter((d) => d.file && d.init);
+      for (const d of inits) d.init = false;
+      return inits.length ? send(x, inits.map((d) => ({ fn: d.entry, args: [d.base, 1, 0] })), () => m.base, 4) : m.base;
     }],
+    FreeLibrary: ['p', () => 1],                                      // the image stays mapped: nothing calls into it again
     GetProcAddress: ['pp', (x, h, name) => {
       const m = x.win.moduleAt(h), what = name < 0x10000 ? name : x.str(name), r = m ? x.win.proc(m, what) : 0;
       if (!r) x.win.say(`GetProcAddress(${m ? m.name : h.toString(16)}, ${what}): none`);
@@ -361,7 +367,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     GetStartupInfoA: ['p', (x, p) => { x.write(p, new Uint8Array(68)); x.w32(p, 68); return 0; }],
     GetModuleFileNameA: ['ppu', (x, h, buf, n) => {
-      const m = h && h !== x.win.base ? x.win.moduleAt(h) : null, s = m ? `C:\\WINDOWS\\system32\\${m.name}` : x.win.path;
+      const m = h && h !== x.win.base ? x.win.moduleAt(h) : null, s = m ? (m.file ? `C:\\${m.name}` : `C:\\WINDOWS\\system32\\${m.name}`) : x.win.path;
       const k = Math.min(s.length, n - 1); if (n) x.write(buf, new TextEncoder().encode(s.slice(0, k) + '\0')); return k;
     }],
     // The environment: one variable, as a block of NUL-terminated strings ending in an empty one.
@@ -406,6 +412,33 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     RaiseException: ['uuup', (x, code) => { throw new Error(`mirage-win32: RaiseException(${code.toString(16)})`); }],
     UnhandledExceptionFilter: ['p', () => 1],                         // EXCEPTION_EXECUTE_HANDLER
     TerminateProcess: ['pu', (x, h, code) => { x.lx.exitProcess(code); return 1; }],
+    // ---- what Quake II's executable and its DLLs ask beyond WinQuake --------------------------------
+    // Thread-local slots, one table per thread; TlsAlloc hands out indices from 0, as XP's first free.
+    TlsAlloc: ['', () => (st.tlsNext = (st.tlsNext | 0) + 1) - 1],
+    TlsFree: ['u', () => 1],
+    TlsSetValue: ['up', (x, i, v) => { st.tls ||= new Map(); const id = x.lx.pid; if (!st.tls.has(id)) st.tls.set(id, new Map()); st.tls.get(id).set(i, v >>> 0); return 1; }],
+    TlsGetValue: ['u', (x, i) => (st.tls && st.tls.get(x.lx.pid) && st.tls.get(x.lx.pid).get(i)) || 0],
+    // Interlocked: one CPU at a time runs here, so a read and a write are atomic; the new value returned.
+    InterlockedIncrement: ['p', (x, p) => { const v = (x.r32(p) + 1) | 0; x.w32(p, v); return v; }],
+    InterlockedDecrement: ['p', (x, p) => { const v = (x.r32(p) - 1) | 0; x.w32(p, v); return v; }],
+    // The time: the guest's clock from the moment it started (lx.epoch), in UTC; the time zone is UTC.
+    GetSystemTime: ['p', (x, p) => { putSystemTime(x, p, new Date((x.lx.epoch + x.lx.mono()) * 1000)); return 0; }],
+    GetLocalTime: ['p', (x, p) => { putSystemTime(x, p, new Date((x.lx.epoch + x.lx.mono()) * 1000)); return 0; }],
+    GetTimeZoneInformation: ['p', (x, p) => { x.write(p, new Uint8Array(172)); return 0; }],   // TIME_ZONE_ID_UNKNOWN, no bias
+    FileTimeToSystemTime: ['pp', (x, ft, p) => { const t = (x.r32(ft + 4) * 4294967296 + x.r32(ft)) / 1e4 - 11644473600000; putSystemTime(x, p, new Date(t)); return 1; }],
+    FileTimeToLocalFileTime: ['pp', (x, a, b) => { x.w32(b, x.r32(a)); x.w32(b + 4, x.r32(a + 4)); return 1; }],
+    GlobalSize: ['p', (x, h) => x.win.heapSize(h)],
+    GetDriveTypeA: ['p', () => 3],                                    // DRIVE_FIXED: C:, the program's disk
+    MoveFileA: ['pp', (x, a, b) => { const f = st.disk.get(baseName(x.str(a))); if (!f) return 0; st.disk.delete(baseName(x.str(a))); st.disk.set(baseName(x.str(b)), f); return 1; }],
+    // A path on C:, whose root is the program's directory: "C:\\" and the name, the part after the last
+    // backslash pointed at.
+    GetFullPathNameA: ['pupp', (x, name, n, buf, part) => {
+      let p = x.str(name, 260).replace(/\//g, '\\'); if (!/^[a-z]:/i.test(p)) p = 'C:\\' + p.replace(/^\.?\\/, '');
+      if (n <= p.length) return p.length + 1;
+      x.write(buf, new TextEncoder().encode(p + '\0')); if (part) x.w32(part, buf + p.lastIndexOf('\\') + 1); return p.length;
+    }],
+    GetLocaleInfoA: ['uupi', () => 0], GetLocaleInfoW: ['uupi', () => 0],   // no locale data: the C runtime keeps the C locale
+    SetEnvironmentVariableW: ['pp', () => 1], FormatMessageA: ['uppuppp', () => 0],
     // The console of a text-mode program (WinQuake's dedicated server): there is none to open, and none
     // has input or a screen buffer to read. A program run in a window never asks.
     AllocConsole: ['', () => 0], FreeConsole: ['', () => 1],
@@ -424,6 +457,10 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       return ms === 0 ? 0x102 : x.waitUntil(x.lx.mono() + 0.001);
     }],
   };
+  // SYSTEMTIME: year, month, day of the week, day, hour, minute, second, millisecond.
+  function putSystemTime(x, p, d) {
+    [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDay(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()].forEach((v, i) => x.w16(p + 2 * i, v));
+  }
   // WIN32_FIND_DATAA for a file of the disk: archive, its size, its name.
   function findFill(x, fd, name) {
     x.write(fd, new Uint8Array(320)); x.w32(fd, 0x20); x.w32(fd + 32, st.disk.get(name).size);
@@ -443,14 +480,19 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     st.title = title ? (wide ? String.fromCharCode(...wideRead(x, title, -1, true)) : x.str(title, 256)) : '';
     const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
     if (st.classes.has(key)) st.wndProc = st.classes.get(key);
-    st.style = style; resize(w, h);
+    st.style = style; st.destroyed = false; st.shown = !!(style & 0x10000000); st.active = false; resize(w, h);   // a new window: WS_VISIBLE shows it
     // What CreateWindowEx sends before it returns: WM_NCCREATE and WM_CREATE with the CREATESTRUCT
     // made of its own arguments (on the caller's stack, in CREATESTRUCT's order reversed), then
     // WM_SIZE and WM_MOVE.
     const a = (x.cpu.reg[4] >>> 0) + 4, cs = x.win.heapAlloc(48);
     [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].forEach((k, i) => x.w32(cs + 4 * i, x.r32(a + 4 * k)));
-    return send(x, [[0x81, 0, cs], [0x01, 0, cs], [0x05, 0, sizeLp()], [0x03, 0, 0]], () => st.hwnd, 48);
+    // WS_VISIBLE: shown and activated before CreateWindowEx returns, as Windows does it -- Quake II
+    // creates its window visible and only takes the mouse once WM_ACTIVATE has said it is active.
+    const shown = st.shown ? (st.active = true, ACTIVATE) : [];
+    return send(x, [[0x81, 0, cs], [0x01, 0, cs], [0x05, 0, sizeLp()], [0x03, 0, 0], ...shown], () => st.hwnd, 48);
   };
+  // Showing and activating: WM_SHOWWINDOW, WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE (WA_ACTIVE), WM_SETFOCUS.
+  const ACTIVATE = [[0x18, 1, 0], [0x1c, 1, 0], [0x86, 1, 0], [0x06, 1, 0], [0x07, 0, 0]];
   const sizeLp = () => ((st.h & 0xffff) << 16 | (st.w & 0xffff)) >>> 0;
   /*
    * Messages Windows SENDS: the window procedure runs in the program before the API returns. The
@@ -460,14 +502,17 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
    * stdcall return would. Sends nest (a procedure calling an API that sends): each its frame.
    */
   st.sends = [];
-  const callProc = (x, [msg, wp, lp], ret) => {
-    const c = x.cpu; let sp = c.reg[4] >>> 0;
-    for (const v of [lp, wp, msg, st.hwnd]) { sp -= 4; x.w32(sp, v >>> 0); }
-    sp -= 4; x.w32(sp, ret); c.reg[4] = sp; c.eip = st.wndProc;
+  // A call into the program: a window message [msg, wp, lp] to the window's procedure, or { fn, args }
+  // (a DLL's DllMain), stdcall, returning into the stub.
+  const callProc = (x, m, ret) => {
+    const c = x.cpu, fn = Array.isArray(m) ? st.wndProc : m.fn, args = Array.isArray(m) ? [st.hwnd, ...m] : m.args;
+    let sp = c.reg[4] >>> 0;
+    for (const v of [...args].reverse()) { sp -= 4; x.w32(sp, v >>> 0); }
+    sp -= 4; x.w32(sp, ret); c.reg[4] = sp; c.eip = fn;
   };
   const back = (x) => x.win.proc(x.win.load('user32.dll'), 2600);
   const send = (x, msgs, result, pop) => {
-    if (!st.wndProc || !msgs.length) return result(0);
+    if (!msgs.length || (Array.isArray(msgs[0]) && !st.wndProc)) return result(0);
     const esp0 = x.cpu.reg[4] >>> 0;                                  // the caller's return address, its arguments above
     st.sends.push({ msgs: msgs.slice(1), result, pop, esp0 });
     callProc(x, msgs[0], back(x));
@@ -514,9 +559,9 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; wm.moveCursor(); return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
     // returns that the window was hidden. UpdateWindow paints it once (WM_PAINT).
     ShowWindow: ['pi', (x, hwnd, cmd) => {
-      if (hwnd !== st.hwnd || st.shown || cmd === 0) return st.shown ? 1 : 0;
-      st.shown = true; wm.dirty = true;
-      return send(x, [[0x18, 1, 0], [0x1c, 1, 0], [0x86, 1, 0], [0x06, 1, 0], [0x07, 0, 0]], () => 0, 8);
+      if (hwnd !== st.hwnd || st.active || cmd === 0) return st.shown ? 1 : 0;
+      const was = st.shown ? 1 : 0; st.shown = st.active = true; wm.dirty = true;
+      return send(x, ACTIVATE, () => was, 8);
     }],
     UpdateWindow: ['p', (x, hwnd) => (hwnd === st.hwnd ? send(x, [[0x0f, 0, 0]], () => 1, 4) : 1)],
     // A window moved or sized: its new size, unless SWP_NOSIZE (1). WinQuake's video modes resize its
@@ -584,12 +629,21 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // A message box is not shown; its caption and text go to the log, where an error says what it is.
     MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', () => 1], ValidateRect: ['pp', () => 1], // The window's end: WM_DESTROY, then WM_NCDESTROY; the program's other windows (dialogs) have no procedure here.
     DestroyWindow: ['p', (x, hwnd) => (hwnd === st.hwnd && !st.destroyed ? (st.destroyed = true, send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 1, 4)) : 1)],
-    LoadCursorA: ['pp', () => 0x10003], LoadIconA: ['pp', () => 0x10002], SetCursor: ['p', () => 0], AdjustWindowRect: ['pui', () => 1],
+    LoadCursorA: ['pp', () => 0x10003], LoadIconA: ['pp', () => 0x10002], SetCursor: ['p', () => 0], AdjustWindowRect: ['pui', (x, r, style, menu) => user32.AdjustWindowRectEx[1](x, r, style, menu, 0)],
     wsprintfA: ['ppp', NOT('user32', 'wsprintfA')[1], { cdecl: true }],
     // A program's own windows beyond the first (WinQuake's start-up dialog, made from its resources and
     // destroyed once the game window is up): a handle of their own, never on the screen here.
     CreateDialogParamA: ['pppp' + 'p', () => 0x10020],
     GetDlgItem: ['pi', (x, dlg, id) => 0x10100 + (id & 0xff)],      // a control of such a window: a handle of its own
+    // GWL_STYLE, GWL_EXSTYLE, GWL_WNDPROC of the window.
+    GetWindowLongA: ['pi', (x, hwnd, i) => (hwnd !== st.hwnd ? 0 : i === -16 ? st.style >>> 0 : i === -4 ? st.wndProc >>> 0 : 0)],
+    RegisterWindowMessageA: ['p', () => 0xc100 + (st.winMsgs = (st.winMsgs | 0) + 1)],
+    RegisterHotKey: ['piuu', () => 1], UnregisterHotKey: ['pi', () => 1], UnregisterClassA: ['pp', () => 1],
+    // No clipboard here: OpenClipboard fails, as when another program holds it.
+    OpenClipboard: ['p', () => 0], GetClipboardData: ['u', () => 0], CloseClipboard: ['', () => 1],
+    // The classic scheme's system colours (COLORREF, 0x00BBGGRR); setting them changes nothing here.
+    GetSysColor: ['i', (x, i) => ({ 1: 0xa56e3a, 2: 0x6a240a, 4: 0xc8d0d4, 5: 0xffffff, 6: 0x000000, 8: 0x000000, 9: 0xffffff, 15: 0xc8d0d4, 16: 0x808080, 18: 0x000000, 20: 0xffffff })[i] ?? 0],
+    SetSysColors: ['ipp', () => 1],
     GetActiveWindow: ['', () => st.hwnd], SetActiveWindow: ['p', () => st.hwnd], SetForegroundWindow: ['p', () => 1],
     SetFocus: ['p', () => st.hwnd], EnableWindow: ['pi', () => 0], MessageBeep: ['u', () => 1],
     SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1],
@@ -1139,6 +1193,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       st.msgs.push({ msg, wp: st.buttons, lp: clientLp() });
     },
   };
+  /** A file of the program's disk, by name (the loader's DLLs of the program's own), or null. */
+  tables.readFile = (name) => { const f = diskFile(name); return f && f.bytes ? f.bytes : null; };
   /** Where WebGL's picture goes on the screen, for a framed window (null: it is the whole screen). */
   tables.wm = { clientRect: () => (wm.framed() ? { ...wm.client(), screen: st.desk } : null) };
   return tables;
@@ -1157,17 +1213,24 @@ const SCAN_VK = (() => {
 const scanToVk = (scan, ext) => (ext && scan === 0x1c ? 0x0d : SCAN_VK[scan & 0x7f] || 0);
 
 /*
- * wsock32.dll, Winsock 1.1 by its ordinals (a program imports these by number): a machine with no
- * network. WSAStartup fails with WSASYSNOTREADY, as on a PC with no TCP/IP installed, and a program
- * gives its network up there -- WinQuake says "Winsock initialization failed" and plays alone. Every
- * socket call fails the same way; byte order and dotted addresses are only arithmetic, and answer.
+ * wsock32.dll, Winsock 1.1 by its ordinals (a program imports these by number): a machine on a network
+ * with nobody else on it. Winsock starts (version 1.1), sockets are made, bound and set, the machine's
+ * name ("mirage") resolves to 127.0.0.1; nothing ever arrives (recvfrom: WSAEWOULDBLOCK, select: none
+ * ready) and what is sent goes nowhere. Quake II stops at once if Winsock does not start, even to play
+ * alone, which goes through its own loopback; WinQuake makes its UDP socket and plays alone too.
+ * Connecting to anyone fails (WSAENETUNREACH). Byte order and dotted addresses are arithmetic.
  */
-const NONET = 10091;                                                  // WSASYSNOTREADY
+const WOULDBLOCK = 10035, UNREACH = 10051;
 const sw16 = (v) => ((v & 0xff) << 8) | ((v >> 8) & 0xff), sw32 = (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24)) >>> 0;
+let wsaErr = 0, sockNext = 0x100;
+const sockAddr = (x, p, n) => { if (!p) return; x.write(p, new Uint8Array(16)); x.w16(p, 2); x.write(p + 4, Uint8Array.of(127, 0, 0, 1)); if (n) x.w32(n, 16); };
+const fail = (e) => { wsaErr = e; return -1; };
 const wsock32 = {
-  accept: ['ppp', () => -1, { ordinal: 1 }], bind: ['ppi', () => -1, { ordinal: 2 }], closesocket: ['p', () => -1, { ordinal: 3 }],
-  connect: ['ppi', () => -1, { ordinal: 4 }], getpeername: ['ppp', () => -1, { ordinal: 5 }], getsockname: ['ppp', () => -1, { ordinal: 6 }],
-  getsockopt: ['piipp', () => -1, { ordinal: 7 }], htonl: ['u', (x, v) => sw32(v), { ordinal: 8 }], htons: ['u', (x, v) => sw16(v), { ordinal: 9 }],
+  accept: ['ppp', () => fail(WOULDBLOCK), { ordinal: 1 }], bind: ['ppi', () => 0, { ordinal: 2 }], closesocket: ['p', () => 0, { ordinal: 3 }],
+  connect: ['ppi', () => fail(UNREACH), { ordinal: 4 }], getpeername: ['ppp', () => fail(10057), { ordinal: 5 }],
+  getsockname: ['ppp', (x, s, p, n) => { sockAddr(x, p, n); return 0; }, { ordinal: 6 }],
+  getsockopt: ['piipp', (x, s, l, o, v, n) => { if (v) x.w32(v, 0); if (n) x.w32(n, 4); return 0; }, { ordinal: 7 }],
+  htonl: ['u', (x, v) => sw32(v), { ordinal: 8 }], htons: ['u', (x, v) => sw16(v), { ordinal: 9 }],
   inet_addr: ['p', (x, p) => {                                        // "a.b.c.d" in network order, INADDR_NONE otherwise
     const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(x.str(p, 32));
     return m && m.slice(1).every((n) => +n < 256) ? (+m[1] | +m[2] << 8 | +m[3] << 16 | +m[4] << 24) >>> 0 : 0xffffffff;
@@ -1176,17 +1239,35 @@ const wsock32 = {
     const b = new TextEncoder().encode(`${a & 255}.${(a >>> 8) & 255}.${(a >>> 16) & 255}.${a >>> 24}\0`);
     x.ntoaBuf ||= x.win.heapAlloc(16); x.write(x.ntoaBuf, b); return x.ntoaBuf;
   }, { ordinal: 11 }],
-  ioctlsocket: ['pip', () => -1, { ordinal: 12 }], listen: ['pi', () => -1, { ordinal: 13 }],
+  ioctlsocket: ['pip', (x, s, cmd, p) => { if (p && (cmd >>> 0) === 0x4004667f) x.w32(p, 0); return 0; }, { ordinal: 12 }],   // FIONBIO set; FIONREAD: nothing
+  listen: ['pi', () => 0, { ordinal: 13 }],
   ntohl: ['u', (x, v) => sw32(v), { ordinal: 14 }], ntohs: ['u', (x, v) => sw16(v), { ordinal: 15 }],
-  recv: ['ppii', () => -1, { ordinal: 16 }], recvfrom: ['ppiipp', () => -1, { ordinal: 17 }], select: ['ipppp', () => -1, { ordinal: 18 }],
-  send: ['ppii', () => -1, { ordinal: 19 }], sendto: ['ppiipi', () => -1, { ordinal: 20 }], setsockopt: ['piipi', () => -1, { ordinal: 21 }],
-  shutdown: ['pi', () => -1, { ordinal: 22 }], socket: ['iii', () => -1, { ordinal: 23 }],
-  gethostbyaddr: ['pii', () => 0, { ordinal: 51 }], gethostbyname: ['p', () => 0, { ordinal: 52 }], getprotobyname: ['p', () => 0, { ordinal: 53 }],
-  getprotobynumber: ['i', () => 0, { ordinal: 54 }], getservbyname: ['pp', () => 0, { ordinal: 55 }], getservbyport: ['ip', () => 0, { ordinal: 56 }],
-  gethostname: ['pi', () => -1, { ordinal: 57 }],
-  WSASetBlockingHook: ['p', () => 0, { ordinal: 109 }], WSAUnhookBlockingHook: ['', () => -1, { ordinal: 110 }],
-  WSAGetLastError: ['', () => NONET, { ordinal: 111 }], WSASetLastError: ['i', () => 0, { ordinal: 112 }],
-  WSACancelBlockingCall: ['', () => -1, { ordinal: 113 }], WSAIsBlocking: ['', () => 0, { ordinal: 114 }],
-  WSAStartup: ['up', () => NONET, { ordinal: 115 }], WSACleanup: ['', () => -1, { ordinal: 116 }],
+  recv: ['ppii', () => fail(WOULDBLOCK), { ordinal: 16 }], recvfrom: ['ppiipp', () => fail(WOULDBLOCK), { ordinal: 17 }],
+  select: ['ipppp', (x, n, r, w, e) => { for (const set of [r, e]) if (set) x.w32(set, 0); return w ? x.r32(w) : 0; }, { ordinal: 18 }],   // writable, never readable
+  send: ['ppii', (x, s, b, n) => n, { ordinal: 19 }], sendto: ['ppiipi', (x, s, b, n) => n, { ordinal: 20 }],
+  setsockopt: ['piipi', () => 0, { ordinal: 21 }], shutdown: ['pi', () => 0, { ordinal: 22 }],
+  socket: ['iii', () => sockNext++, { ordinal: 23 }],
+  // hostent { h_name, h_aliases, h_addrtype, h_length, h_addr_list }: this machine, 127.0.0.1, for any name.
+  gethostbyname: ['p', (x) => {
+    if (!x.hostent) {
+      const p = x.win.heapAlloc(64), name = p + 32, addr = p + 48, list = p + 24;
+      x.write(p, new Uint8Array(64)); x.write(name, new TextEncoder().encode('mirage\0')); x.write(addr, Uint8Array.of(127, 0, 0, 1));
+      x.w32(p, name); x.w32(p + 4, p + 20); x.w16(p + 8, 2); x.w16(p + 10, 4); x.w32(p + 12, list); x.w32(list, addr); x.hostent = p;
+    }
+    return x.hostent;
+  }, { ordinal: 52 }],
+  gethostbyaddr: ['pii', (x) => wsock32.gethostbyname[1](x), { ordinal: 51 }],
+  getprotobyname: ['p', () => 0, { ordinal: 53 }], getprotobynumber: ['i', () => 0, { ordinal: 54 }],
+  getservbyname: ['pp', () => 0, { ordinal: 55 }], getservbyport: ['ip', () => 0, { ordinal: 56 }],
+  gethostname: ['pi', (x, p, n) => { if (n < 7) return fail(10014); x.write(p, new TextEncoder().encode('mirage\0')); return 0; }, { ordinal: 57 }],
+  WSASetBlockingHook: ['p', () => 0, { ordinal: 109 }], WSAUnhookBlockingHook: ['', () => 0, { ordinal: 110 }],
+  WSAGetLastError: ['', () => wsaErr, { ordinal: 111 }], WSASetLastError: ['i', (x, e) => { wsaErr = e; return 0; }, { ordinal: 112 }],
+  WSACancelBlockingCall: ['', () => 0, { ordinal: 113 }], WSAIsBlocking: ['', () => 0, { ordinal: 114 }],
+  // WSADATA: wVersion 1.1, wHighVersion 1.1, the description, "Running", 32 sockets, 512-byte datagrams.
+  WSAStartup: ['up', (x, ver, p) => {
+    if (p) { x.write(p, new Uint8Array(400)); x.w16(p, 0x101); x.w16(p + 2, 0x101); x.write(p + 4, new TextEncoder().encode('MIRAGE Winsock 1.1\0')); x.write(p + 261, new TextEncoder().encode('Running\0')); x.w16(p + 390, 32); x.w16(p + 392, 512); }
+    return 0;
+  }, { ordinal: 115 }],
+  WSACleanup: ['', () => 0, { ordinal: 116 }],
   __WSAFDIsSet: ['pp', () => 0, { ordinal: 151 }],
 };

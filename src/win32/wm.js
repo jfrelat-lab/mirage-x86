@@ -51,6 +51,10 @@ export function windowManager(st) {
   // ---- drawing ------------------------------------------------------------------------------------
   const fill = (fb, S, x, y, w, h, c) => {
     const x0 = Math.max(0, x), x1 = Math.min(S.w, x + w), y0 = Math.max(0, y), y1 = Math.min(S.h, y + h);
+    // Nothing when the rectangle is off the screen: a negative end would count from the array's end
+    // (a window at x = -3, Quake II's 640x480 placed so its client area is the screen's corner, had
+    // its frame's left edge fill the whole screen white).
+    if (x1 <= x0) return;
     for (let j = y0; j < y1; j++) fb.fill(c, j * S.w + x0, j * S.w + x1);
   };
   // A raised edge, as DrawEdge(EDGE_RAISED) draws it: light then face on the top and left, dark then
@@ -121,9 +125,12 @@ export function windowManager(st) {
     if (!lx || !lx.fbView) return;
     uncover();
     if (!wm.framed()) {
-      if (client && !(client.w & 7) && client.w >= 320 && client.h >= 200) {
-        const fb = lx.fbView(client.w, client.h); fb.set(client.px.subarray(0, client.w * client.h));
-        wm.view = { fb, w: client.w, h: client.h }; cover();
+      // The screen the window's size, its width rounded up to the card's 8 pixels (black beyond).
+      if (client && client.w >= 1 && client.h >= 1) {
+        const W = Math.max(320, (client.w + 7) & ~7), H = Math.max(200, client.h), fb = lx.fbView(W, H);
+        if (W === client.w && H === client.h) fb.set(client.px.subarray(0, client.w * client.h));
+        else for (let j = 0; j < client.h; j++) fb.set(client.px.subarray(j * client.w, (j + 1) * client.w), j * W);
+        wm.view = { fb, w: W, h: H }; cover();
       }
       wm.dirty = true;
       return;

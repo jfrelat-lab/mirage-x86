@@ -4,6 +4,18 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-10
+
+- **Quake II runs in the browser**: id Software's demo of March 1998, unmodified, in a window on the
+  desktop, its sound included; the menu, the console, the screen sizes (`sw_mode`) and the mouse in
+  play work. It is the first program here that brings DLLs of its own: `quake2.exe` loads its
+  software renderer (`ref_soft.dll`) and the game (`gamex86.dll`) from its directory, and MIRAGE-WIN32
+  now maps them as Windows does — relocated, their imports bound, their `DllMain` run. Winsock now
+  starts, on a network with nobody else on it, since Quake II refuses to start without it.
+- **Windows, corrected along the way**: a window created visible is activated at once (Quake II only
+  takes the mouse once activated); `AdjustWindowRect` adds the frame; a window re-created after
+  another was destroyed is shown; a window partly off the screen no longer paints the desktop white.
+
 ## 2026-11-09
 
 - **GLQuake runs in the browser**: id Software's OpenGL Quake of August 1997, unmodified, its

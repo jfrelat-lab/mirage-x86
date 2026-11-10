@@ -4695,11 +4695,50 @@ const runLinux = (hex, argv) => {
     got = [hbm ? 'dib' : 'none', mc.vbe && `${mc.vbe.width}x${mc.vbe.height}`, fb(40, 20).toString(16), fb(41, 21).toString(16), fb(42, 20)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: an 8-bit DIB section, its colour table set, stretched to the window reaches the framebuffer', got, 'dib 320x200 123456 123456 0');
-  // Winsock on a machine with no network: WSAStartup says WSASYSNOTREADY; byte order and dotted addresses answer.
-  try { const { fn, str } = await w32(), w = (n) => fn('wsock32.dll', n);
-    got = [w('WSAStartup')(0x101, 0), w('htons')(0x1234).toString(16), w('inet_addr')(str('1.2.3.4')).toString(16)].join(' ');
+  // Winsock on a network with nobody on it: it starts (Quake II stops otherwise, even to play alone),
+  // a socket is made, nothing arrives (WSAEWOULDBLOCK), the machine's name is 127.0.0.1.
+  try { const { fn, str, x } = await w32(), w = (n) => fn('wsock32.dll', n), wd = x.win.heapAlloc(400), buf = x.win.heapAlloc(64);
+    const start = w('WSAStartup')(0x101, wd), sock = w('socket')(2, 2, 17), rx = w('recvfrom')(sock, buf, 64, 0, 0, 0), err = w('WSAGetLastError')();
+    const he = w('gethostbyname')(str('mirage')), ip = [...x.bytes(x.r32(x.r32(he + 12)), 4)].join('.');
+    got = [start, x.r16(wd).toString(16), sock > 0, rx, err, ip, w('htons')(0x1234).toString(16), w('inet_addr')(str('1.2.3.4')).toString(16)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: wsock32 without a network (WSAStartup 10091), htons, inet_addr', got, '10091 3412 4030201');
+  eq('win32: wsock32 on an empty network: WSAStartup 1.1, a socket, recvfrom WSAEWOULDBLOCK, 127.0.0.1, htons, inet_addr', got, '0 101 true -1 10035 127.0.0.1 3412 4030201');
+  // A DLL of the program's own, from its disk (Quake II's ref_soft.dll, gamex86.dll), made here: linked
+  // for 10000000h, mapped at 40000000h with its HIGHLOW relocation applied, its DllMain entered by
+  // LoadLibraryA (DLL_PROCESS_ATTACH, returning into user32's stub), its export found by GetProcAddress.
+  try {
+    const d = new Uint8Array(0x2000), dv = new DataView(d.buffer), put = (o, t) => d.set(new TextEncoder().encode(t + '\0'), o);
+    d[0] = 0x4d; d[1] = 0x5a; dv.setUint32(0x3c, 0x40, true); dv.setUint32(0x40, 0x4550, true);
+    dv.setUint16(0x44, 0x14c, true); dv.setUint16(0x46, 1, true); dv.setUint16(0x54, 0xe0, true); dv.setUint16(0x56, 0x2102, true);
+    const o = 0x58; dv.setUint16(o, 0x10b, true); dv.setUint32(o + 16, 0x1000, true); dv.setUint32(o + 28, 0x10000000, true);
+    dv.setUint32(o + 32, 0x1000, true); dv.setUint32(o + 36, 0x200, true); dv.setUint32(o + 56, 0x2000, true); dv.setUint32(o + 60, 0x400, true);
+    dv.setUint32(o + 92, 16, true); dv.setUint32(o + 96, 0x1200, true); dv.setUint32(o + 100, 0x60, true); dv.setUint32(o + 96 + 40, 0x1300, true); dv.setUint32(o + 100 + 40, 12, true);
+    const sec = o + 0xe0; put(sec, '.text'); dv.setUint32(sec + 8, 0x1000, true); dv.setUint32(sec + 12, 0x1000, true); dv.setUint32(sec + 16, 0x1000, true); dv.setUint32(sec + 20, 0x400, true); dv.setUint32(sec + 36, 0xe0000020, true);
+    const t = 0x400;                                                   // file offset of RVA 1000h
+    d.set([0xb8, 1, 0, 0, 0, 0xc2, 12, 0], t);                         // DllMain: mov eax, 1; ret 12
+    d.set([0xa1, 0, 0x11, 0, 0x10, 0xc3], t + 0x10);                   // GetAnswer: mov eax, [10001100h]; ret
+    dv.setUint32(t + 0x100, 42, true);
+    const e = t + 0x200; dv.setUint32(e + 12, 0x1240, true); dv.setUint32(e + 16, 1, true); dv.setUint32(e + 20, 1, true); dv.setUint32(e + 24, 1, true);
+    dv.setUint32(e + 28, 0x1228, true); dv.setUint32(e + 32, 0x1230, true); dv.setUint32(e + 36, 0x1238, true);
+    dv.setUint32(e + 0x28, 0x1010, true); dv.setUint32(e + 0x30, 0x1250, true); dv.setUint16(e + 0x38, 0, true); put(e + 0x40, 't.dll'); put(e + 0x50, 'GetAnswer');
+    const r = t + 0x300; dv.setUint32(r, 0x1000, true); dv.setUint32(r + 4, 12, true); dv.setUint16(r + 8, 0x3000 | 0x11, true);
+    const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const exe = Uint8Array.from((
+    '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
+    '000000000000000000004000040000000400000004000000000000000400000000000000000001004000000000000000' +
+    '0300000000001000001000000000100000100000000000000000000064a1300000008b400c8b400c8b008b008b58188b' +
+    '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
+    '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
+    const apis = win32Apis({ files: { 't.dll': d } }), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: traceBackend() });
+    const k = (n) => apis.find((m) => m.dll === 'kernel32.dll').fns[n][1], nm = x.win.heapAlloc(16); x.write(nm, new TextEncoder().encode('t.dll\0'));
+    k('LoadLibraryA')(x, nm);
+    const base = x.win.modules.get('t.dll').base, entered = mc.cpu.eip === base + 0x1000, args = [1, 2, 3].map((i) => x.r32((mc.cpu.reg[4] >>> 0) + 4 * i).toString(16));
+    const gn = x.win.heapAlloc(16); x.write(gn, new TextEncoder().encode('GetAnswer\0'));
+    const fnAt = k('GetProcAddress')(x, base, gn);
+    got = [base.toString(16), entered, args.join(','), (fnAt - base).toString(16), (x.r32(base + 0x1011) - base).toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a DLL from the program\'s disk: relocated to 40000000h, DllMain entered (hinst, 1, 0), its export found', got, '40000000 true 40000000,1,0 1010 1100');
   // A key: WM_KEYDOWN with the scancode in lParam's bits 16-23 (WinQuake's MapKey), then
   // DispatchMessageA enters the window's procedure with its four arguments, returning into the stub.
   try { const { mc, fn, x, apis, str } = await w32(), u = (n) => fn('user32.dll', n);
