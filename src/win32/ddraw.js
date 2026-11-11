@@ -49,6 +49,9 @@ export function ddrawApis(st, wm, send) {
   };
   const o = (p) => objs.get(p >>> 0);
   const mode = { w: 640, h: 480, bpp: 8 };
+  // The display: the program's mode once it set one (full screen), else the desktop, 32 bits as GDI
+  // reports it -- a windowed program's primary surface is the whole screen, its window somewhere on it.
+  const display = () => (st.modeSet ? mode : { w: st.desk.w, h: st.desk.h, bpp: 32 });
 
   // ---- surfaces: memory of the program's, a pitch rounded to 4 bytes ------------------------------
   const surface = (x, w, h, bpp, props = {}) => {
@@ -77,23 +80,33 @@ export function ddrawApis(st, wm, send) {
 
   // ---- the screen: the primary surface's pixels in the screen's colours ----------------------------
   const primary = () => [...objs.values()].find((s) => s.primary);
+  // Full screen the whole surface is the picture; on the desktop (no mode set) the window's client area
+  // is cut from it where the window is -- Cave Story in a window blits its frame there, through a clipper.
   const show = (x) => {
     const s = primary(); if (!s) return;
-    const raw = x.bytes(s.mem, s.pitch * s.h), px = new Uint32Array(s.w * s.h), B = s.bpp >> 3;
+    const c = s.desktop && !st.modeSet ? (wm.framed() ? wm.client() : { x: st.x | 0, y: st.y | 0, w: st.w, h: st.h }) : { x: 0, y: 0, w: s.w, h: s.h };
+    const px = new Uint32Array(c.w * c.h), B = s.bpp >> 3;
     const pal = s.palette && o(s.palette) ? o(s.palette).colors : null;
-    for (let y = 0; y < s.h; y++) for (let i = 0; i < s.w; i++) {
-      const a = y * s.pitch + i * B;
-      if (B === 1) px[y * s.w + i] = pal ? pal[raw[a]] : raw[a] * 0x010101;
-      else if (B === 2) { const v = raw[a] | raw[a + 1] << 8; px[y * s.w + i] = ((v >> 11) & 31) << 19 | ((v >> 5) & 63) << 10 | (v & 31) << 3; }   // 5:6:5
-      else px[y * s.w + i] = raw[a + 2] << 16 | raw[a + 1] << 8 | raw[a];
+    for (let j = 0; j < c.h; j++) {
+      const y = c.y + j; if (y < 0 || y >= s.h) continue;
+      const raw = x.bytes(s.mem + y * s.pitch, s.pitch);
+      for (let i = 0; i < c.w; i++) {
+        const X = c.x + i; if (X < 0 || X >= s.w) continue;
+        const a = X * B;
+        if (B === 1) px[j * c.w + i] = pal ? pal[raw[a]] : raw[a] * 0x010101;
+        else if (B === 2) { const v = raw[a] | raw[a + 1] << 8; px[j * c.w + i] = ((v >> 11) & 31) << 19 | ((v >> 5) & 63) << 10 | (v & 31) << 3; }   // 5:6:5
+        else px[j * c.w + i] = raw[a + 2] << 16 | raw[a + 1] << 8 | raw[a];
+      }
     }
-    wm.present(x.lx, { w: s.w, h: s.h, px });
+    wm.present(x.lx, { w: c.w, h: c.h, px });
   };
 
   // ---- copies between surfaces: same depth, nearest pixels when the sizes differ, a source colour key
   const copy = (x, dst, dr, src, sr, keyed) => {
-    const B = dst.bpp >> 3, sraw = x.bytes(src.mem, src.pitch * src.h), dw = dr.r - dr.l, dh = dr.b - dr.t, sw = sr.r - sr.l, sh = sr.b - sr.t;
+    const B = dst.bpp >> 3, dw = dr.r - dr.l, dh = dr.b - dr.t, sw = sr.r - sr.l, sh = sr.b - sr.t;
     if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
+    // The source's rows as they are read (a sprite is a few rows of a large sheet), each from its left edge.
+    const sl = Math.max(0, sr.l), rows = new Map(), row = (y) => { let r = rows.get(y); if (!r) rows.set(y, r = x.bytes(src.mem + y * src.pitch + sl * B, Math.max(0, Math.min(src.w, sr.r) - sl) * B)); return r; };
     const key = keyed && src.key !== null ? src.key : null;
     for (let j = 0; j < dh; j++) {
       const ty = dr.t + j; if (ty < 0 || ty >= dst.h) continue;
@@ -102,7 +115,8 @@ export function ddrawApis(st, wm, send) {
       const out = x.bytes(dst.mem + ty * dst.pitch + Math.max(0, dr.l) * B, Math.max(0, Math.min(dw, dst.w - dr.l)) * B);
       for (let i = 0; i < dw; i++) {
         const tx = dr.l + i; if (tx < 0 || tx >= dst.w) continue;
-        const sx = sr.l + Math.floor(i * sw / dw), a = sy * src.pitch + sx * B;
+        const sx = sr.l + Math.floor(i * sw / dw); if (sx < 0 || sx >= src.w) continue;
+        const sraw = row(sy), a = (sx - sl) * B;
         let v = 0; for (let k = 0; k < B; k++) v |= sraw[a + k] << (8 * k);
         if (key !== null && v === key) continue;
         for (let k = 0; k < B; k++) out[(tx - Math.max(0, dr.l)) * B + k] = (v >>> (8 * k)) & 255;
@@ -116,6 +130,37 @@ export function ddrawApis(st, wm, send) {
     if (r <= l) return;
     const row = new Uint8Array((r - l) * B); for (let i = 0; i < r - l; i++) for (let k = 0; k < B; k++) row[i * B + k] = (colour >>> (8 * k)) & 255;
     for (let y = Math.max(0, dr.t); y < Math.min(dst.h, dr.b); y++) x.write(dst.mem + y * dst.pitch + l * B, row);
+  };
+
+  // ---- a surface's DC (GetDC): GDI draws on its pixels -- a bitmap of the window manager's 0x00RRGGBB
+  // that src/win32/api.js's GDI loads from the surface before each call and stores back after, in the
+  // surface's format (8 bits: the nearest colour of its palette). Cave Story draws its pictures, loaded
+  // with LoadImage, onto its surfaces so, and its text with TextOut.
+  const toPx = (x, s, px) => {
+    const raw = x.bytes(s.mem, s.pitch * s.h), B = s.bpp >> 3, pal = B === 1 && s.palette && o(s.palette) ? o(s.palette).colors : null;
+    for (let y = 0; y < s.h; y++) for (let i = 0; i < s.w; i++) {
+      const a = y * s.pitch + i * B;
+      px[y * s.w + i] = B === 1 ? (pal ? pal[raw[a]] : raw[a] * 0x010101)
+        : B === 2 ? (() => { const v = raw[a] | raw[a + 1] << 8, r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31; return (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2); })()
+          : raw[a + 2] << 16 | raw[a + 1] << 8 | raw[a];
+    }
+  };
+  const fromPx = (x, s, px) => {
+    const B = s.bpp >> 3, out = new Uint8Array(s.pitch * s.h), pal = B === 1 && s.palette && o(s.palette) ? o(s.palette).colors : null, near = new Map();
+    const index = (c) => {
+      if (!pal) return ((c >> 16 & 255) * 77 + (c >> 8 & 255) * 151 + (c & 255) * 28) >> 8;
+      let k = near.get(c); if (k !== undefined) return k;
+      let best = 1e9; k = 0;
+      for (let i = 0; i < 256; i++) { const p = pal[i], d = ((p >> 16 & 255) - (c >> 16 & 255)) ** 2 + ((p >> 8 & 255) - (c >> 8 & 255)) ** 2 + ((p & 255) - (c & 255)) ** 2; if (d < best) { best = d; k = i; } }
+      near.set(c, k); return k;
+    };
+    for (let y = 0; y < s.h; y++) for (let i = 0; i < s.w; i++) {
+      const a = y * s.pitch + i * B, c = px[y * s.w + i];
+      if (B === 1) out[a] = index(c);
+      else if (B === 2) { const v = (c >> 19 & 31) << 11 | (c >> 10 & 63) << 5 | (c >> 3 & 31); out[a] = v & 255; out[a + 1] = v >> 8; }
+      else { out[a] = c & 255; out[a + 1] = c >> 8 & 255; out[a + 2] = c >> 16 & 255; }
+    }
+    x.write(s.mem, out);
   };
 
   const unknown = {
@@ -132,7 +177,7 @@ export function ddrawApis(st, wm, send) {
         Object.assign(mode, { w, h, bpp }); st.w = w; st.h = h; st.modeSet = true; wm.dirty = true; return DD_OK;
       },
       RestoreDisplayMode: () => { st.modeSet = false; wm.dirty = true; return DD_OK; },
-      GetDisplayMode: (x, self, p) => { putDesc(x, p, { w: mode.w, h: mode.h, bpp: mode.bpp, pitch: mode.w * (mode.bpp >> 3) }, 0); return DD_OK; },
+      GetDisplayMode: (x, self, p) => { const m = display(); putDesc(x, p, { w: m.w, h: m.h, bpp: m.bpp, pitch: m.w * (m.bpp >> 3) }, 0); return DD_OK; },
       // DDCAPS: the size the program says, everything else zero (no hardware acceleration to report).
       GetCaps: (x, self, drv, hel) => { for (const p of [drv, hel]) if (p) { const n = x.r32(p) || 316; x.write(p, new Uint8Array(n)); x.w32(p, n); } return DD_OK; },
       GetMonitorFrequency: (x, self, p) => { if (p) x.w32(p, 60); return DD_OK; },
@@ -148,14 +193,14 @@ export function ddrawApis(st, wm, send) {
       },
       // DDSURFACEDESC's flags at 4, height 8, width 12, back buffer count 20, pixel format 72, caps 104.
       CreateSurface: (x, self, d, pp) => {
-        const flags = x.r32(d + 4), caps = x.r32(d + 104);
+        const flags = x.r32(d + 4), caps = x.r32(d + 104), m = display();
         if (caps & DDSCAPS_PRIMARYSURFACE) {
-          const p = surface(x, mode.w, mode.h, mode.bpp, { primary: true });
-          if (flags & DDSD_BACKBUFFERCOUNT && x.r32(d + 20) && caps & DDSCAPS_FLIP) o(p).backBuffer = surface(x, mode.w, mode.h, mode.bpp, { back: true });
+          const p = surface(x, m.w, m.h, m.bpp, { primary: true, desktop: !st.modeSet });
+          if (flags & DDSD_BACKBUFFERCOUNT && x.r32(d + 20) && caps & DDSCAPS_FLIP) o(p).backBuffer = surface(x, m.w, m.h, m.bpp, { back: true });
           x.w32(pp, p); return DD_OK;
         }
-        const w = flags & DDSD_WIDTH ? x.r32(d + 12) : mode.w, h = flags & DDSD_HEIGHT ? x.r32(d + 8) : mode.h;
-        const bpp = flags & DDSD_PIXELFORMAT ? x.r32(d + 84) || mode.bpp : mode.bpp;
+        const w = flags & DDSD_WIDTH ? x.r32(d + 12) : m.w, h = flags & DDSD_HEIGHT ? x.r32(d + 8) : m.h;
+        const bpp = flags & DDSD_PIXELFORMAT ? x.r32(d + 84) || m.bpp : m.bpp;
         if (!w || !h || ![8, 16, 24, 32].includes(bpp)) return DDERR_INVALIDPARAMS;
         x.w32(pp, surface(x, w, h, bpp)); return DD_OK;
       },
@@ -202,6 +247,18 @@ export function ddrawApis(st, wm, send) {
       GetColorKey: (x, self, flags, k) => { const v = o(self).key; if (v === null) return DDERR_NOTFOUND; x.w32(k, v); x.w32(k + 4, v); return DD_OK; },
       SetPalette: (x, self, pal) => { const s = o(self); s.palette = pal >>> 0; if (pal && o(pal)) o(pal).ref++; if (s.primary) show(x); return DD_OK; },
       GetPalette: (x, self, pp) => { const p = o(self).palette; if (!p) return DDERR_NOTFOUND; o(p).ref++; x.w32(pp, p); return DD_OK; },
+      // GetDC(&hdc): a DC whose bitmap is the surface (above); ReleaseDC ends it, and shows the primary.
+      GetDC: (x, self, pdc) => {
+        const s = o(self); if (s.dc) return 0x8876021c;                // DDERR_DCALREADYCREATED
+        const px = new Uint32Array(s.w * s.h);
+        const bm = st.newHandle('bitmap', { w: s.w, h: s.h, px, load: (x) => toPx(x, s, px), store: (x) => { fromPx(x, s, px); if (s.primary) show(x); } });
+        const dc = st.newHandle('dc', {}); st.dcBitmaps.set(dc, bm);
+        s.dc = { dc, bm }; x.w32(pdc, dc); return DD_OK;
+      },
+      ReleaseDC: (x, self) => {
+        const s = o(self); if (!s.dc) return DDERR_INVALIDPARAMS;
+        st.dcBitmaps.delete(s.dc.dc); st.gdi.delete(s.dc.bm); st.gdi.delete(s.dc.dc); s.dc = null; return DD_OK;
+      },
       SetClipper: () => DD_OK, GetClipper: () => DDERR_NOTFOUND, IsLost: () => DD_OK, Restore: () => DD_OK,
       GetBltStatus: () => DD_OK, GetFlipStatus: () => DD_OK, Initialize: () => DD_OK,
     },

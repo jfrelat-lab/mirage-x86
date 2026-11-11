@@ -214,12 +214,19 @@ export function classicApis({ st }) {
       const r = findResource(x, mod || x.win.base, RT.BITMAP, resId(x, name)), d = r && decodeDib(x, r.at);
       return d ? st.newHandle('bitmap', d) : 0;
     }],
-    // LoadImageA(module, name, type, cx, cy, flags): a bitmap of the resources as LoadBitmapA's; an icon or
-    // a cursor the stock one LoadIconA and LoadCursorA give. A file (LR_LOADFROMFILE) is not read here.
+    // LoadImageA(module, name, type, cx, cy, flags): a bitmap of the resources as LoadBitmapA's, or of a
+    // .bmp file (LR_LOADFROMFILE: its BITMAPFILEHEADER, then the DIB -- Cave Story's pictures, .pbm files
+    // that are BMPs); an icon or a cursor the stock one LoadIconA and LoadCursorA give.
     LoadImageA: ['ppuiiu', (x, mod, name, type, cx, cy, flags) => {
       if (type === 1) return 0x10002;
       if (type === 2) return 0x10003;
-      return type === 0 && !(flags & 0x10) ? user32.LoadBitmapA[1](x, mod, name) : 0;
+      if (type !== 0) return 0;
+      if (!(flags & 0x10)) return user32.LoadBitmapA[1](x, mod, name);
+      const f = st.diskFile && st.diskFile(x.str(name, 260));
+      if (!f || !f.bytes || f.size < 54 || f.bytes[0] !== 0x42 || f.bytes[1] !== 0x4d) return 0;
+      const at = x.win.heapAlloc(f.size); x.write(at, f.bytes.subarray(0, f.size));
+      const d = decodeDib(x, at + 14); x.win.heapFree(at);
+      return d ? st.newHandle('bitmap', d) : 0;
     }],
     GetMenuCheckMarkDimensions: ['', () => (13 << 16) | 13],
     // Menus: handles a program builds and attaches (Jazz Jackrabbit 2's window has one), kept, not drawn --
@@ -323,14 +330,45 @@ export function classicApis({ st }) {
   // ---- version.dll: no version resource is read here (a program asks, and goes on without);
   // ---- ole32.dll: COM started, and no class registered (REGDB_E_CLASSNOTREG) -- Half-Life's engine
   // asks for DirectX's and the shell's objects, and does without.
+  // The program's own file is read (its VS_VERSIONINFO resource, RT_VERSION 16): Cave Story shows its
+  // version on its title screen from it. VerQueryValue answers "\\" (VS_FIXEDFILEINFO, after the
+  // block's header and its key L"VS_VERSION_INFO", on a 4-byte boundary); other files have none here.
+  const ownVersion = (x, f) => {
+    const name = x.str(f, 260).split('\\').pop().toLowerCase();
+    if (name !== x.win.path.split('\\').pop().toLowerCase()) return null;
+    return findResource(x, x.win.base, 16, 1);
+  };
   const version = {
-    GetFileVersionInfoSizeA: ['pp', (x, f, h) => { if (h) x.w32(h, 0); return 0; }],
-    GetFileVersionInfoA: ['puup', () => 0],
-    VerQueryValueA: ['pppp', () => 0],
+    GetFileVersionInfoSizeA: ['pp', (x, f, h) => { if (h) x.w32(h, 0); const r = ownVersion(x, f); return r ? r.size : 0; }],
+    GetFileVersionInfoA: ['puup', (x, f, h, n, buf) => { const r = ownVersion(x, f); if (!r) return 0; x.write(buf, x.bytes(r.at, Math.min(n, r.size))); return 1; }],
+    VerQueryValueA: ['pppp', (x, block, sub, pp, plen) => {
+      if (x.str(sub, 64) !== '\\' || x.r16(block + 2) < 52) return 0;
+      x.w32(pp, block + 40); x.w32(plen, 52); return 1;
+    }],
   };
   const ole32 = {
     CoInitialize: ['p', () => 0], CoInitializeEx: ['pu', () => 0], CoUninitialize: ['', () => 0],
     CoCreateInstance: ['ppupp', (x, clsid, outer, ctx, iid, pp) => { if (pp) x.w32(pp, 0); return 0x80040154; }],
   };
-  return { kernel32, user32, gdi32, advapi32, winmm, version, ole32 };
+  // ---- shlwapi.dll: the path helpers (Cave Story finds its data from its own path).
+  const shlwapi = {
+    // PathRemoveFileSpecA: the path less its last component ("C:\\dir\\a.exe" -> "C:\\dir"; a root stays).
+    PathRemoveFileSpecA: ['p', (x, p) => {
+      const s = x.str(p, 260), i = s.lastIndexOf('\\');
+      const t = i < 0 ? '' : i === 2 && s[1] === ':' ? s.slice(0, 3) : s.slice(0, i);
+      putStr(x, p, 261, t); return t !== s ? 1 : 0;
+    }],
+  };
+  // ---- shell32.dll: files dropped on the window (none ever is), and documents opened (none is: there
+  // is no shell to open them with -- SE_ERR_NOASSOC).
+  const shell32 = {
+    DragAcceptFiles: ['pi', () => 0], DragFinish: ['p', () => 0],
+    DragQueryFileA: ['pupu', () => 0],
+    ShellExecuteA: ['ppppppi', () => 31],
+  };
+  // ---- imm32.dll: no input method -- a window has no input context.
+  const imm32 = {
+    ImmGetContext: ['p', () => 0], ImmReleaseContext: ['pp', () => 1], ImmSetOpenStatus: ['pi', () => 0], ImmAssociateContext: ['pp', () => 0],
+  };
+  return { kernel32, user32, gdi32, advapi32, winmm, version, ole32, shlwapi, shell32, imm32 };
 }

@@ -72,7 +72,8 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     // WinQuake's id1/pak0.pak. An intro alone in its directory has none.
     const files = {}, dir = img.entry.run.replace(/\/[^/]*$/, '') || '/';
     (function walk(d) { for (const n of host.list(d)) { const p = `${d === '/' ? '' : d}/${n}`, st = host.lstat(p); if (st && st.type === 'dir') walk(p); else if (st && st.type === 'file' && p !== img.entry.run) files[n] = host.read(p); } })(dir);
-    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files });
+    // machine.codepage: the system's code page, 932 for a Japanese Windows (Cave Story's Shift-JIS text).
+    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files, codepage: m.codepage });
     w32in = apis.input; w32wm = apis.wm;
     win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
   } else if (m.hle) {

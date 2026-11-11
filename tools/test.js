@@ -4776,7 +4776,7 @@ const runLinux = (hex, argv) => {
 // WinQuake (id Software, 1997) on MIRAGE-WIN32: what it needed, each answered as Windows answers it.
 // The context comes from tools/win32/tinyhdr.asm's image (the test above); the functions are called
 // as the program's stubs call them.
-{ const w32 = async (args = '') => {
+{ const w32 = async (args = '', opts) => {
     const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const exe = Uint8Array.from((
     '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
@@ -4785,7 +4785,7 @@ const runLinux = (hex, argv) => {
     '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
     '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
-    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, args, backend: traceBackend() });
+    const apis = win32Apis(opts), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, args, backend: traceBackend() });
     const fn = (dll, name) => { const f = apis.find((d) => d.dll === dll).fns[name][1]; return (...a) => f(x, ...a); };
     const str = (t) => { const b = new TextEncoder().encode(t + '\0'), p = x.win.heapAlloc(b.length); x.write(p, b); return p; };
     return { mc, lx, x, apis, fn, str };
@@ -5048,7 +5048,79 @@ const runLinux = (hex, argv) => {
     x.w32(pe, 0x00ffffff); call('IDirectDrawPalette::SetEntries', pal, 0, 0, 1, pe);   // entry 0 white: the screen's 0s turn white at once
     got = [...a, fb(19, 11), fb(20, 11), fb(0, 0)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: DirectDraw 8-bit: Flip shows the back buffer in the palette\'s colours, a colour key, SetEntries at once', got, '320x200 320 123456 ffffff 123456 ffffff'); }
+  eq('win32: DirectDraw 8-bit: Flip shows the back buffer in the palette\'s colours, a colour key, SetEntries at once', got, '320x200 320 123456 ffffff 123456 ffffff');
+  // A surface's DC (Cave Story, 2004, draws its pictures and its text on its surfaces so): in a 16-bit
+  // mode, SetPixel through GetDC writes the surface's 5:6:5 and GetPixel reads it back as a COLORREF;
+  // a second GetDC before ReleaseDC is refused. With no mode set, the display is the desktop's.
+  try { const { x, apis, fn } = await w32(), dd = apis.find((d) => d.dll === 'ddraw.dll').fns, call = (n, ...a) => dd[n][1](x, ...a);
+    const pp = x.win.heapAlloc(4); call('DirectDrawCreate', 0, pp, 0); const ddo = x.r32(pp);
+    const dm = x.win.heapAlloc(108); x.w32(dm, 108); call('IDirectDraw::GetDisplayMode', ddo, dm);
+    const desk = [x.r32(dm + 12), x.r32(dm + 8), x.r32(dm + 84)].join('x');
+    call('IDirectDraw::SetDisplayMode', ddo, 640, 480, 16);
+    const d = x.win.heapAlloc(108); x.write(d, new Uint8Array(108)); x.w32(d, 108); x.w32(d + 4, 7); x.w32(d + 8, 2); x.w32(d + 12, 4); x.w32(d + 104, 0x40);
+    call('IDirectDraw::CreateSurface', ddo, d, pp, 0); const sf = x.r32(pp);
+    call('IDirectDrawSurface::GetDC', sf, pp); const dc = x.r32(pp), again = call('IDirectDrawSurface::GetDC', sf, pp) >>> 0;
+    fn('gdi32.dll', 'SetPixel')(dc, 1, 0, 0x0000ff); fn('gdi32.dll', 'SetPixel')(dc, 2, 1, 0xff0000);
+    const back = fn('gdi32.dll', 'GetPixel')(dc, 1, 0).toString(16);
+    call('IDirectDrawSurface::ReleaseDC', sf, dc);
+    call('IDirectDrawSurface::Lock', sf, 0, d, 1, 0); const bits = x.r32(d + 36), pitch = x.r32(d + 16);
+    got = [desk, again.toString(16), back, x.r16(bits + 2).toString(16), x.r16(bits + pitch + 4).toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: DirectDraw surface GetDC: GDI pixels in 5:6:5 and back; the desktop\'s mode before any is set', got, '1024x768x32 8876021c ff f800 1f');
+  // LoadImageA(LR_LOADFROMFILE): a .bmp of the program's disk (Cave Story's .pbm pictures) as a bitmap.
+  try { const bmp = new Uint8Array(54 + 8), v = new DataView(bmp.buffer);
+    bmp.set([0x42, 0x4d]); v.setUint32(2, bmp.length, true); v.setUint32(10, 54, true); v.setUint32(14, 40, true); v.setInt32(18, 2, true); v.setInt32(22, 1, true);
+    v.setUint16(26, 1, true); v.setUint16(28, 24, true); bmp.set([0x30, 0x20, 0x10, 0xff, 0xee, 0xdd], 54);   // two pixels, BGR
+    const { x, fn, str } = await w32('', { files: { 'pic.pbm': bmp } }), h = fn('user32.dll', 'LoadImageA')(0, str('data\\pic.pbm'), 0, 0, 0, 0x2010);
+    const bm = x.win.heapAlloc(24); fn('gdi32.dll', 'GetObjectA')(h, 24, bm);
+    got = [h !== 0, x.r32(bm + 4), x.r32(bm + 8)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: LoadImageA reads a .bmp file of the program\'s disk', got, 'true 2 1');
+  // DirectInput on a machine without a controller (Cave Story does not start without the object):
+  // DirectInputCreateA gives one, EnumDevices lists nothing, CreateDevice finds nothing.
+  try { const { x, apis } = await w32(), di = apis.find((d) => d.dll === 'dinput.dll').fns, call = (n, ...a) => di[n][1](x, ...a);
+    const pp = x.win.heapAlloc(4), r = call('DirectInputCreateA', 0x400000, 0x500, pp, 0), o = x.r32(pp);
+    got = [r, o !== 0, call('IDirectInputA::EnumDevices', o, 4, 0x1234, 0, 1), (call('IDirectInputA::CreateDevice', o, 0, pp, 0) >>> 0).toString(16), x.r32(pp)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: dinput, no controller: an object, no devices', got, '0 true 0 80040154 0');
+  // shlwapi's PathRemoveFileSpecA, kernel32's GetFileSize and SystemTimeToFileTime, and VerQueryValueA's
+  // root block (VS_FIXEDFILEINFO at 40, after L"VS_VERSION_INFO").
+  try { const { x, fn, str } = await w32('', { files: { 'f.dat': new Uint8Array(1234) } }), k = (n) => fn('kernel32.dll', n);
+    const p1 = str('C:\\dir\\Doukutsu.exe'), p2 = str('C:\\a.exe'); fn('shlwapi.dll', 'PathRemoveFileSpecA')(p1); fn('shlwapi.dll', 'PathRemoveFileSpecA')(p2);
+    const h = k('CreateFileA')(str('f.dat'), 0x80000000, 1, 0, 3, 0x80, 0), hi = x.win.heapAlloc(4), size = k('GetFileSize')(h, hi);
+    const t = x.win.heapAlloc(16); x.write(t, Uint8Array.of(0xd4, 7, 12, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0));   // 2004-12-01 00:00 (a Wednesday)
+    const ft = x.win.heapAlloc(8); k('SystemTimeToFileTime')(t, ft);
+    const blk = x.win.heapAlloc(96); x.write(blk, new Uint8Array(96)); x.w16(blk, 92); x.w16(blk + 2, 52);
+    const pv = x.win.heapAlloc(8), q = fn('version.dll', 'VerQueryValueA')(blk, str('\\'), pv, pv + 4);
+    got = [x.str(p1), x.str(p2), size, x.r32(hi), (x.r32(ft + 4) * 4294967296 + x.r32(ft)).toString(16), q, x.r32(pv) - blk, x.r32(pv + 4)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: PathRemoveFileSpecA, GetFileSize, SystemTimeToFileTime, VerQueryValueA "\\"', got, 'C:\\dir C:\\ 1234 0 1c4d738b3544000 1 40 52');
+  // A Japanese system (machine.codepage 932): GetACP, Shift-JIS lead bytes, MultiByteToWideChar of
+  // "あい", and text measured by characters, not bytes -- two of them, a DEFAULT_CHARSET font's.
+  try { const { x, fn, str } = await w32('', { codepage: 932 }), k = (n) => fn('kernel32.dll', n);
+    const cp = x.win.heapAlloc(20); k('GetCPInfo')(0, cp);
+    const s = x.win.heapAlloc(8); x.write(s, Uint8Array.of(0x82, 0xa0, 0x82, 0xa2, 0)); const w = x.win.heapAlloc(16), n = k('MultiByteToWideChar')(0, 0, s, 4, w, 8);
+    const dc = fn('gdi32.dll', 'CreateCompatibleDC')(0), f = fn('gdi32.dll', 'CreateFontA')(-20, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 1, str(''));
+    fn('gdi32.dll', 'SelectObject')(dc, f); const sz = x.win.heapAlloc(8); fn('gdi32.dll', 'GetTextExtentPoint32A')(dc, s, 4, sz);
+    got = [k('GetACP')(), x.r32(cp), [...x.bytes(cp + 6, 4)].map((b) => b.toString(16)).join('-'), n, x.r16(w).toString(16), x.r16(w + 2).toString(16), x.r32(sz)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: code page 932: GetACP, Shift-JIS lead bytes, MultiByteToWideChar, text by characters', got, '932 2 81-9f-e0-fc 2 3042 3044 20'); }
+// A sleep is its thread's: two threads asleep at once each wake at their own time (src/hle/index.js) --
+// Cave Story's main loop and its multimedia timer, which shared one deadline and spun.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024), v = new DataView(exe.buffer); exe.set([0x4d, 0x5a]); v.setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0], 0x40); v.setUint16(0x54, 0xe0, true); v.setUint16(0x58, 0x10b, true);
+    v.setUint32(0x58 + 28, 0x400000, true); v.setUint32(0x58 + 56, 0x1000, true); v.setUint32(0x58 + 60, 0x200, true);
+    const { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis: win32Apis(), backend: traceBackend() }), BLOCK = lx.BLOCK, at = (t) => { mc.cpu.cycles = Math.round(t * 1e8); };
+    at(1); lx.pid = 1; const a1 = x.sleep(0.5) === BLOCK; lx.pid = 2; lx.wake = null; const b1 = x.sleep(0.001) === BLOCK;
+    at(1.002); lx.wake = null; const b2 = x.sleep(0.001); lx.pid = 1; lx.wake = null; const a2 = x.sleep(0.5) === BLOCK;
+    at(1.5); lx.wake = null; const a3 = x.sleep(0.5);
+    got = [a1, b1, b2, a2, a3].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: x.sleep keeps each thread\'s deadline', got, 'true true 0 true 0'); }
+
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

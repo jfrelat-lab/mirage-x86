@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-11
 
+- **Cave Story (Pixel, 2004) runs on MIRAGE-WIN32**, the original Japanese freeware, full screen in 16
+  bits or in a window: DirectDraw surfaces GDI draws on (GetDC), a windowed program's primary surface the
+  whole desktop, bitmaps loaded from files, DirectInput with no controller, and a Japanese system's code
+  page (`machine.codepage: 932`) for its Shift-JIS text. Two threads asleep at once (its main loop and its
+  multimedia timer) no longer share one deadline: it spun, thirty times slower.
 - **The x87's FPTAN, FSIN, FCOS and FSINCOS clear C2** for an argument in range, as the real chip does.
   Microsoft's C runtime checks that flag after FPTAN; left set, `tan()` took its out-of-range path, and a
   program in Quake's single-precision mode got a NaN where its view's projection should be: Half-Life's

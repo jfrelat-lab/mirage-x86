@@ -9,6 +9,7 @@
 import { gl as glTable, glu as gluTable } from '../hle/gl.js';
 import { d3d9Apis } from './d3d9.js';
 import { dsoundApis } from './dsound.js';
+import { dinputApis } from './dinput.js';
 import { parseTrueType } from './truetype.js';
 import { parseSMF } from '../midi.js';
 import { windowManager } from './wm.js';
@@ -103,7 +104,9 @@ function windowState(fonts = {}) {
   st.dcFont = (hdc) => {
     const f = st.gdi.get(st.dcFonts.get(hdc));
     if (!f) return null;
-    const faces = [f.face.toLowerCase()];
+    // No face named: the font mapper's choice by pitch -- FIXED_PITCH (1) Courier New, else Arial; on a
+    // Japanese system MS Gothic first (Cave Story names none until its Config.dat does).
+    const faces = f.face ? [f.face.toLowerCase()] : [...(st.acp === 932 ? ['ms gothic'] : []), (f.pitch & 3) === 1 ? 'courier new' : 'arial'];
     if (FONT_SUBSTITUTES[faces[0]]) faces.push(FONT_SUBSTITUTES[faces[0]]);
     const key = faces.flatMap((face) => [f.weight >= 600 ? `${face}:bold` : null, face]).find((k) => k && fonts[k]);
     if (!key) return null;
@@ -128,8 +131,14 @@ function reAlloc(x, p, n, zero) {
   x.win.heapFree(p); return q;
 }
 
-export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
+export function win32Apis({ gl, glu, fonts, files = {}, codepage = 1252 } = {}) {
   const st = windowState(fonts);
+  // The system's code page (GetACP): 1252, a Western Windows XP's, or 932, a Japanese one's -- what the
+  // ANSI calls' bytes mean, Shift-JIS there (Cave Story's text, 2004). An image's `machine.codepage`.
+  st.acp = codepage === 932 ? 932 : 1252;
+  const sjis = new TextDecoder('shift_jis');
+  /** Bytes of the system's code page as UTF-16 code units. */
+  st.ansiDecode = (b) => (st.acp === 932 ? [...sjis.decode(b)].flatMap((c) => { const v = c.codePointAt(0); return v > 0xffff ? [0xd800 + ((v - 0x10000) >> 10), 0xdc00 + ((v - 0x10000) & 0x3ff)] : [v]; }) : [...b]);
   const wm = windowManager(st);                                       // the screen the window sits on (src/win32/wm.js)
   st.files = [];                                                      // handle - 4000h -> { f, pos }
   st.events = new Map(); st.dcBitmaps = new Map(); st.dcStates = new Map();
@@ -142,6 +151,13 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     const h = f.height || 16, ppem = h < 0 ? -h : Math.max(1, Math.round(h * em / (asc + desc)));
     const ascent = Math.round(asc * ppem / em), descent = Math.round(desc * ppem / em);
     return { font, ppem, ascent, descent, height: ascent + descent, avg: Math.max(1, Math.round(ppem / 2)), max: ppem, weight: f.weight || 400 };
+  };
+  // A string's characters as GDI draws it: the bytes of the font's character set -- SHIFTJIS_CHARSET
+  // (128), or DEFAULT_CHARSET (1) on a system whose code page is Shift-JIS, decoded as Shift-JIS; else
+  // each byte its own character (Windows-1252's letters are Unicode's below 256 but for 80-9F).
+  const textChars = (hdc, b) => {
+    const f = st.gdi.get(st.dcFonts.get(hdc)), cs = f ? f.charset : 1;
+    return cs === 128 || (cs === 1 && st.acp === 932) ? [...sjis.decode(b)].map((c) => c.codePointAt(0)) : [...b];
   };
   const fillRect = (bm, x0, y0, x1, y1, c) => {
     for (let y = Math.max(0, y0); y < Math.min(bm.h, y1); y++) bm.px.fill(c, y * bm.w + Math.max(0, x0), y * bm.w + Math.max(0, Math.min(bm.w, x1)));
@@ -194,6 +210,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   st.disk = new Map(Object.entries(files).map(([n, b]) => [n.toLowerCase(), { bytes: b, size: b.length }]));
   const baseName = (p) => p.replace(/^.*[\\/]/, '').toLowerCase();
   const diskFile = (p) => st.disk.get(baseName(p)) || (baseName(p) === 'gm.dls' ? { bytes: null, size: GM_DLS_SIZE } : null);
+  st.diskFile = diskFile;
   const openHandle = (f) => { st.files.push({ f, pos: 0 }); return 0x4000 + st.files.length - 1; };
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
@@ -353,6 +370,13 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     DeleteFileA: ['p', (x, pName) => (st.disk.delete(baseName(x.str(pName))) ? 1 : 0)],
     OutputDebugStringA: ['p', () => 0],
+    // GetFileSize: the low 32 bits returned, the high ones at `high` (0: no file here reaches 4 GB).
+    GetFileSize: ['pp', (x, h, high) => { const o = st.files[h - 0x4000]; if (!o) return 0xffffffff; if (high) x.w32(high, 0); return o.f.size >>> 0; }],
+    // SYSTEMTIME -> FILETIME (100 ns since 1601), the time taken as UTC.
+    SystemTimeToFileTime: ['pp', (x, p, ft) => {
+      const t = Date.UTC(x.r16(p), x.r16(p + 2) - 1, x.r16(p + 6), x.r16(p + 8), x.r16(p + 10), x.r16(p + 12), x.r16(p + 14));
+      const v = (BigInt(t) + 11644473600000n) * 10000n; x.w32(ft, Number(v & 0xffffffffn)); x.w32(ft + 4, Number(v >> 32n)); return 1;
+    }],
     SetEndOfFile: ['p', (x, h) => { const o = st.files[h - 0x4000]; if (!o) return 0; o.f.size = o.pos; return 1; }],
     FlushFileBuffers: ['p', () => 1],
     // A name on the program's disk is a file (FILE_ATTRIBUTE_ARCHIVE); the disk has no directories but
@@ -396,12 +420,19 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     GlobalLock: ['p', (x, h) => h], GlobalUnlock: ['p', () => 1],
     // Code pages: Windows-1252 for ANSI, 437 for OEM, one byte a character either way.
-    GetACP: ['', () => 1252], GetOEMCP: ['', () => 437],
-    GetCPInfo: ['up', (x, cp, p) => { x.write(p, new Uint8Array(20)); x.w32(p, 1); x.write(p + 4, Uint8Array.of(0x3f)); return 1; }],
+    GetACP: ['', () => st.acp], GetOEMCP: ['', () => (st.acp === 932 ? 932 : 437)],
+    // CPINFO: MaxCharSize, DefaultChar, LeadByte ranges -- Shift-JIS's lead bytes 81-9F and E0-FC.
+    GetCPInfo: ['up', (x, cp, p) => {
+      const dbcs = (cp === 0 || cp === 1 || cp === 3 ? st.acp : cp) === 932;
+      x.write(p, new Uint8Array(20)); x.w32(p, dbcs ? 2 : 1); x.write(p + 4, Uint8Array.of(dbcs ? 0x3f : 0x3f));
+      if (dbcs) x.write(p + 6, Uint8Array.of(0x81, 0x9f, 0xe0, 0xfc));
+      return 1;
+    }],
     MultiByteToWideChar: ['uupipi', (x, cp, flags, src, n, dst, max) => {
       const b = n < 0 ? x.bytes(src, x.str(src).length + 1) : x.bytes(src, n);
-      if (!max) return b.length;
-      const k = Math.min(b.length, max), w = new Uint8Array(k * 2); for (let i = 0; i < k; i++) w[2 * i] = b[i];
+      const u = (cp === 0 || cp === 1 || cp === 3 ? st.acp : cp) === 932 && st.acp === 932 ? st.ansiDecode(b) : [...b];
+      if (!max) return u.length;
+      const k = Math.min(u.length, max), w = new Uint8Array(k * 2); for (let i = 0; i < k; i++) { w[2 * i] = u[i] & 255; w[2 * i + 1] = u[i] >> 8; }
       x.write(dst, w); return k;
     }],
     WideCharToMultiByte: ['uupipipp', (x, cp, flags, src, n, dst, max) => {
@@ -1195,8 +1226,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   };
   // ---- gdi32 ---------------------------------------------------------------------------------------
   // Text drawn into a bitmap (ExtTextOutA), at the pen (X, Y), the cell's top.
-  const textOut = (x, bm, d, m, X, Y, opts, rect, str, n) => {
-    const text = x.bytes(str, Math.max(0, n)), bgr = (c) => ((c & 0xff) << 16) | (c & 0xff00) | ((c >>> 16) & 0xff);
+  const textOut = (x, bm, d, m, X, Y, opts, rect, str, n, hdc) => {
+    const text = textChars(hdc, x.bytes(str, Math.max(0, n))), bgr = (c) => ((c & 0xff) << 16) | (c & 0xff00) | ((c >>> 16) & 0xff);
     let width = 0;
     const glyphs = [...text].map((c) => { const g = m.font ? m.font.glyph(c, m.ppem) : null; const at = width; width += g ? g.cellIncX : m.avg; return { g, at }; });
     if (d.bkMode !== 1) fillRect(bm, X, Y, X + width, Y + m.height, bgr(d.bkColor));   // OPAQUE: the cells' background
@@ -1227,7 +1258,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     const bm = st.gdi.get(st.dcBitmaps.get(hdc));
     if (!bm || bm.kind !== 'bitmap' || bm.dib8) return null;          // drawing into an 8-bit section: not here
     if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
-    return { w: bm.w, h: bm.h, px: bm.px, done: () => { if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, false); } };
+    if (bm.load) bm.load(x);                                          // a DirectDraw surface's DC (src/win32/ddraw.js)
+    return { w: bm.w, h: bm.h, px: bm.px, done: () => { if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, false); if (bm.store) bm.store(x); } };
   };
   // A DC's pixels to read: (x, y) -> 0x00RRGGBB, or null.
   const source = (x, hdc) => {
@@ -1240,6 +1272,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       return { w: bm.w, h: bm.h, at: (X, Y) => c[raw[(bm.up ? bm.h - 1 - Y : Y) * stride + X]] };
     }
     if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
+    if (bm.load) bm.load(x);
     return { w: bm.w, h: bm.h, at: (X, Y) => bm.px[Y * bm.w + X] };
   };
   const blit = (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh) => {
@@ -1303,15 +1336,17 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     GetTextExtentPoint32A: ['ppip', (x, hdc, str, n, size) => {
       const m = textMetrics(hdc);
       let w = 0;
-      for (const c of x.bytes(str, Math.max(0, n))) w += m.font ? m.font.glyph(c, m.ppem).cellIncX : m.avg;
+      for (const c of textChars(hdc, x.bytes(str, Math.max(0, n)))) w += m.font ? m.font.glyph(c, m.ppem).cellIncX : m.avg;
       x.w32(size, w); x.w32(size + 4, m.height); return 1;
     }],
     ExtTextOutA: ['piiuppip', (x, hdc, X, Y, opts, rect, str, n) => {
       const bm = st.gdi.get(st.dcBitmaps.get(hdc)), d = dcState(hdc), m = textMetrics(hdc);
       if (!bm || bm.kind !== 'bitmap') return 1;
       if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);   // a DIB section: its pixels are the program's memory
-      const r = textOut(x, bm, d, m, X, Y, opts, rect, str, n);
+      if (bm.load) bm.load(x);                                          // a DirectDraw surface's DC
+      const r = textOut(x, bm, d, m, X, Y, opts, rect, str, n, hdc);
       if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, false);
+      if (bm.store) bm.store(x);
       return r;
     }],
     TextOutA: ['piipi', (x, hdc, X, Y, str, n) => gdi32.ExtTextOutA[1](x, hdc, X, Y, 0, 0, str, n)],
@@ -1392,6 +1427,12 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // Raster copies: SRCCOPY between DCs (a section selected in a memory DC, the window's own), the
     // stretch by nearest pixels; into the window they reach the screen (lx.fbShow). PatBlt fills
     // BLACKNESS and WHITENESS; other operations copy (WinQuake asks SRCCOPY only).
+    // A pixel: COLORREF (0x00BBGGRR) out and in, CLR_INVALID outside the DC. SetPixel returns the colour set.
+    GetPixel: ['pii', (x, hdc, X, Y) => { const s = source(x, hdc); if (!s || X < 0 || Y < 0 || X >= s.w || Y >= s.h) return 0xffffffff; const c = s.at(X, Y); return ((c & 255) << 16 | (c & 0xff00) | (c >> 16 & 255)) >>> 0; }],
+    SetPixel: ['piiu', (x, hdc, X, Y, cr) => {
+      const t = target(x, hdc); if (!t || X < 0 || Y < 0 || X >= t.w || Y >= t.h) return 0xffffffff;
+      t.px[Y * t.w + X] = (cr & 255) << 16 | (cr & 0xff00) | (cr >> 16 & 255); t.done(); return cr & 0xffffff;
+    }],
     BitBlt: ['piiiipiiu', (x, dst, dx, dy, w, h, src, sx, sy) => blit(x, dst, dx, dy, w, h, src, sx, sy, w, h)],
     StretchBlt: ['piiiipiiiiu', (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh) => blit(x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh)],
     PatBlt: ['piiiiu', (x, hdc, X, Y, w, h, rop) => {
@@ -1401,9 +1442,9 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       return 1;
     }],
     CreateFontA: ['iiiiiuuuuuuuup', (x, h, w, esc, orient, weight, italic, underline, strike, charset, outPrec, clipPrec, quality, pitch, face) =>
-      st.newHandle('font', { height: h, weight, face: x.str(face, 32) })],
-    // LOGFONTA: lfHeight at 0, lfWeight at 16, lfFaceName at 28.
-    CreateFontIndirectA: ['p', (x, p) => st.newHandle('font', { height: x.r32(p) | 0, weight: x.r32(p + 16), face: x.str(p + 28, 32) })],
+      st.newHandle('font', { height: h, weight, charset: charset & 255, pitch: pitch & 255, face: x.str(face, 32) })],
+    // LOGFONTA: lfHeight at 0, lfWeight at 16, lfCharSet at 23, lfFaceName at 28.
+    CreateFontIndirectA: ['p', (x, p) => st.newHandle('font', { height: x.r32(p) | 0, weight: x.r32(p + 16), charset: x.r8(p + 23), pitch: x.r8(p + 27), face: x.str(p + 28, 32) })],
   };
   // ---- opengl32 and glu32: src/hle/gl.js's GL, stdcall; wgl ------------------------------------------
   const opengl32 = { ...(gl || glTable().fns) };
@@ -1498,6 +1539,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // No joystick: none counted, and the one asked about is unplugged (JOYERR_UNPLUGGED).
     joyGetNumDevs: ['', () => 0], joyGetDevCapsA: ['upu', () => 167], joyGetPosEx: ['up', () => 167], joyGetPos: ['up', () => 167],
     timeGetTime: ['', (x) => ms(x)], timeBeginPeriod: ['u', () => 0], timeEndPeriod: ['u', () => 0],
+    // TIMECAPS: periods from 1 ms to a million.
+    timeGetDevCaps: ['pu', (x, p, n) => { if (!p || n < 8) return 97; x.w32(p, 1); x.w32(p + 4, 1000000); return 0; }],
     /*
      * timeSetEvent(delay, resolution, callback, user, flags): a multimedia timer, as winmm runs it -- a
      * thread of its own that sleeps the delay and calls the program's TimeProc(id, 0, user, 0, 0), once or
@@ -1815,6 +1858,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     { dll: 'winmm.dll', fns: winmm },
     ...d3d9Apis(st),
     dsoundApis(),
+    dinputApis(),
     ddrawApis(st, wm, send),
     { dll: 'wsock32.dll', fns: wsock32 },
     // comctl32: the common controls are registered (InitCommonControls, ordinal 17); none is drawn here.
@@ -1824,6 +1868,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     { dll: 'advapi32.dll', fns: classic.advapi32 },
     { dll: 'version.dll', fns: classic.version },
     { dll: 'ole32.dll', fns: classic.ole32 },                      // a registry in memory (src/win32/classic.js)
+    { dll: 'shlwapi.dll', fns: classic.shlwapi }, { dll: 'shell32.dll', fns: classic.shell32 }, { dll: 'imm32.dll', fns: classic.imm32 },
   ];
   /*
    * The visitor's input, as Windows posts it to the window: a key by its PC scancode (set 1; 0xE0-
