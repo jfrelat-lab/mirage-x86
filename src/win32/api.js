@@ -292,6 +292,9 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     TerminateThread: ['pu', () => 1], ResumeThread: ['p', () => 1], SuspendThread: ['p', () => 0],
     GetCurrentThreadId: ['', (x) => x.lx.pid], GetCurrentProcessId: ['', () => 0x100],
     SetThreadPriority: ['pi', () => 1], SetPriorityClass: ['pu', () => 1], GetCurrentThread: ['', () => 0xfffffffe], GetCurrentProcess: ['', () => 0xffffffff],
+    // DuplicateHandle: the same handle back (a pseudo-handle -- GetCurrentThread's -- stays one: every call here
+    // that takes a thread handle answers for the program's own threads alike).
+    DuplicateHandle: ['ppppuiu', (x, sp, h, dp, out) => { if (out) x.w32(out, h); return 1; }],
     GetCommandLineA: ['', (x) => (st.cmd ||= (() => { const b = new TextEncoder().encode(`"${x.win.path}"${x.win.args ? ' ' + x.win.args : ''}\0`), p = x.win.heapAlloc(b.length); x.write(p, b); return p; })())],   // the program's path quoted, then its arguments
     GetVersion: ['', () => 0x0a280105],                                 // 5.1, build 2600: Windows XP
     GetLastError: ['', () => 0], SetLastError: ['u', () => 0],
@@ -561,6 +564,11 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     const proc = st.classes.get(key) || systemProc(x, key);
     const hwnd = nextHwnd; nextHwnd += 4;
     const t = title ? (title < 0x10000 ? '' : wide ? String.fromCharCode(...wideRead(x, title, -1, true)) : x.str(title, 256)) : '';
+    // CW_USEDEFAULT (a top-level window's): the first cascade position, and a size of its own when that too
+    // is left to Windows -- Jazz Jackrabbit 2's game window, made after its splash.
+    const top = !(style & 0x40000000), dflt = (v) => top && (v | 0) === -0x80000000;
+    if (dflt(w)) { w = 640; h = 480; }
+    if (dflt(X)) { X = 22; Y = 22; }
     const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
       title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), ...extra };
     st.wins.set(hwnd, rec);
@@ -573,6 +581,17 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       () => hwnd, extra.pop ?? 48);
   };
   st.createOther = createOther;
+  // The main window gone and another top-level window shown: that one is the screen's from now on, as
+  // the window a program shows after its splash (Jazz Jackrabbit 2's, made while the splash was up).
+  const promote = (h) => {
+    const w = win(h);
+    if (!w || w.dead || (w.style & 0x40000000) || w.dialog || !w.proc) return;
+    const old = win(st.hwnd); if (old && old.main) st.wins.delete(st.hwnd);
+    w.main = true; st.hwnd = h; st.wndProc = w.proc; st.mainClass = w.cls; st.style = w.style; st.title = w.title;
+    st.x = w.x; st.y = w.y; st.destroyed = false; st.shown = false; st.active = false;
+    if (st.activeWin === h) st.activeWin = 0;
+    resize(w.w, w.h);
+  };
   // A top-level window other than the main one made the active one: WM_ACTIVATEAPP, WM_NCACTIVATE,
   // WM_ACTIVATE (WA_ACTIVE), WM_SETFOCUS -- once, until another is.
   const activateOther = (x, h, result, pop) => {
@@ -884,6 +903,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; wm.moveCursor(); return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
     // returns that the window was hidden. UpdateWindow paints it once (WM_PAINT).
     ShowWindow: ['pi', (x, hwnd, cmd) => {
+      if (hwnd !== st.hwnd && st.destroyed && cmd !== 0) promote(hwnd);
       if (hwnd !== st.hwnd) {
         const w = win(hwnd); if (!w) return 0;
         const was = w.visible ? 1 : 0; w.visible = cmd !== 0;
@@ -1114,7 +1134,19 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       return 1;
     }],
     // SPI_GETWORKAREA (30h): the screen; anything else asked is answered without change.
-    SystemParametersInfoA: ['uupu', (x, what, n, p) => { if (what === 0x30 && p) { x.w32(p, 0); x.w32(p + 4, 0); x.w32(p + 8, st.w); x.w32(p + 12, st.h); } return 1; }],
+    // SPI_GETWORKAREA (30h); SPI_GETNONCLIENTMETRICS (29h): XP's classic metrics -- 1-pixel borders,
+    // 18-pixel captions and menu bar, Tahoma 8 points (bold in captions) -- which Jazz Jackrabbit 2 draws
+    // its own caption with.
+    SystemParametersInfoA: ['uupu', (x, what, n, p) => {
+      if (what === 0x30 && p) { x.w32(p, 0); x.w32(p + 4, 0); x.w32(p + 8, st.w); x.w32(p + 12, st.h); }
+      if (what === 0x29 && p) {
+        const font = (at, bold) => { x.write(at, new Uint8Array(60)); x.w32(at, -11); x.w32(at + 16, bold ? 700 : 400); x.write(at + 28, new TextEncoder().encode('Tahoma\0')); };
+        x.w32(p, 340); [1, 16, 16, 18, 18].forEach((v, i) => x.w32(p + 4 + 4 * i, v)); font(p + 24, true);
+        x.w32(p + 84, 12); x.w32(p + 88, 15); font(p + 92, true);
+        x.w32(p + 152, 18); x.w32(p + 156, 18); font(p + 160, false); font(p + 220, false); font(p + 280, false);
+      }
+      return 1;
+    }],
     // The module's string table (RT_STRING); an empty string for an id it lacks.
     LoadStringA: ['pupi', (x, inst, id, buf, n) => {
       const s = loadString(x, inst || x.win.base, id) || '';
@@ -1464,8 +1496,35 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   };
   const winmm = {
     // No joystick: none counted, and the one asked about is unplugged (JOYERR_UNPLUGGED).
-    joyGetNumDevs: ['', () => 0], joyGetDevCapsA: ['upu', () => 167], joyGetPosEx: ['up', () => 167],
+    joyGetNumDevs: ['', () => 0], joyGetDevCapsA: ['upu', () => 167], joyGetPosEx: ['up', () => 167], joyGetPos: ['up', () => 167],
     timeGetTime: ['', (x) => ms(x)], timeBeginPeriod: ['u', () => 0], timeEndPeriod: ['u', () => 0],
+    /*
+     * timeSetEvent(delay, resolution, callback, user, flags): a multimedia timer, as winmm runs it -- a
+     * thread of its own that sleeps the delay and calls the program's TimeProc(id, 0, user, 0, 0), once or
+     * (TIME_PERIODIC) until timeKillEvent; with TIME_CALLBACK_EVENT_SET (10h) it sets that event instead.
+     * The thread is guest code made here, so the callback runs as any thread of the program, in turn with
+     * the others. Jazz Jackrabbit 2 mixes its sound so, a buffer of waveOut's at each tick.
+     */
+    timeSetEvent: ['uupuu', (x, delay, res, cb, user, flags) => {
+      const k32 = x.win.modules.get('kernel32.dll').exports, id = (st.mmTimers = (st.mmTimers | 0) + 1);
+      const data = x.win.heapAlloc(12), code = x.win.heapAlloc(96), b = [];
+      x.w32(data, 0); x.w32(data + 4, k32.get('Sleep')); x.w32(data + 8, k32.get('SetEvent'));
+      const d32 = (v) => b.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255);
+      const killed = () => { b.push(0x83, 0x3d); d32(data); b.push(0x00, 0x0f, 0x85); const at = b.length; d32(0); return at; };   // cmp [data],0; jne end
+      const ends = [killed()];
+      b.push(0x68); d32(Math.max(1, delay)); b.push(0xff, 0x15); d32(data + 4);                // Sleep(delay)
+      ends.push(killed());
+      if (flags & 0x30) { b.push(0x68); d32(cb); b.push(0xff, 0x15); d32(data + 8); }          // SetEvent(event)
+      else { b.push(0x6a, 0, 0x6a, 0, 0x68); d32(user); b.push(0x6a, 0, 0x68); d32(id); b.push(0xb8); d32(cb); b.push(0xff, 0xd0); }
+      if (flags & 1) { b.push(0xe9); d32(-(b.length + 4)); }                                     // TIME_PERIODIC: again
+      const end = b.length; b.push(0xc3);
+      for (const at of ends) { const r = end - (at + 4); b.splice(at, 4, r & 255, (r >>> 8) & 255, (r >>> 16) & 255, (r >>> 24) & 255); }
+      x.write(code, Uint8Array.from(b));
+      (st.mmTimer ||= new Map()).set(id, data);
+      x.win.createThread(code, 0);
+      return id;
+    }],
+    timeKillEvent: ['u', (x, id) => { const d = st.mmTimer && st.mmTimer.get(id); if (!d) return 97; x.w32(d, 1); st.mmTimer.delete(id); return 0; }],   // TIMERR_NOCANDO
     // midiOut: one device, MIRAGE's General MIDI synthesizer (src/midi.js), as Windows' MIDI mapper
     // sends to its GS synthesizer. Photon Race 2 (2008) plays its music so: short messages, no SysEx.
     midiOutGetNumDevs: ['', () => 1],
@@ -1520,6 +1579,13 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     sndPlaySoundA: ['pu', (x, p, flags) => playMemory(x, p, flags)],
     PlaySoundA: ['ppu', (x, p, mod, flags) => playMemory(x, p, flags)],
     waveOutGetNumDevs: ['', () => 1],
+    // WAVEOUTCAPSA: every PCM format of 8 and 16 bits at 11, 22 and 44 kHz (0xfff), stereo, volume control.
+    waveOutGetDevCapsA: ['upu', (x, dev, caps, size) => {
+      if (!caps || size < 52) return 11;
+      x.write(caps, new Uint8Array(52)); x.w16(caps, 1); x.w16(caps + 2, 2); x.w32(caps + 4, 0x0100);
+      x.write(caps + 8, new TextEncoder().encode('MIRAGE Wave Out\0')); x.w32(caps + 40, 0xfff); x.w16(caps + 44, 2); x.w32(caps + 48, 4);
+      return 0;
+    }],
     // waveOutOpen(&hwo, device, WAVEFORMATEX*, callback, instance, flags): PCM 8/16 bits or float, 1-2 channels.
     waveOutOpen: ['ppppuu', (x, ph, dev, wfx, cb, inst, flags) => {
       const tag = x.r16(wfx), ch = x.r16(wfx + 2), rate = x.r32(wfx + 4), align = x.r16(wfx + 12), bits = x.r16(wfx + 14);
@@ -1902,7 +1968,8 @@ const wsock32 = {
   select: ['ipppp', (x, n, r, w, e) => { for (const set of [r, e]) if (set) x.w32(set, 0); return w ? x.r32(w) : 0; }, { ordinal: 18 }],   // writable, never readable
   send: ['ppii', (x, s, b, n) => n, { ordinal: 19 }], sendto: ['ppiipi', (x, s, b, n) => n, { ordinal: 20 }],
   setsockopt: ['piipi', () => 0, { ordinal: 21 }], shutdown: ['pi', () => 0, { ordinal: 22 }],
-  socket: ['iii', () => sockNext++, { ordinal: 23 }],
+  // Internet sockets only: IPX's (AF_IPX, Jazz Jackrabbit 2's other network) on a machine without it.
+  socket: ['iii', (x, af) => (af === 2 ? sockNext++ : fail(10047)), { ordinal: 23 }],
   // hostent { h_name, h_aliases, h_addrtype, h_length, h_addr_list }: this machine, 127.0.0.1, for any name.
   gethostbyname: ['p', (x) => {
     if (!x.hostent) {
@@ -1916,6 +1983,11 @@ const wsock32 = {
   getprotobyname: ['p', () => 0, { ordinal: 53 }], getprotobynumber: ['i', () => 0, { ordinal: 54 }],
   getservbyname: ['pp', () => 0, { ordinal: 55 }], getservbyport: ['ip', () => 0, { ordinal: 56 }],
   gethostname: ['pi', (x, p, n) => { if (n < 7) return fail(10014); x.write(p, new TextEncoder().encode('mirage\0')); return 0; }, { ordinal: 57 }],
+  // The asynchronous calls: a socket's events as window messages, never posted (nothing arrives); a name
+  // looked up fails to start (WSAENETDOWN), as with no network.
+  WSAAsyncSelect: ['ppuu', () => 0, { ordinal: 101 }],
+  WSAAsyncGetHostByName: ['puppi', () => (fail(10050), 0), { ordinal: 103 }],
+  WSACancelAsyncRequest: ['p', () => 0, { ordinal: 108 }],
   WSASetBlockingHook: ['p', () => 0, { ordinal: 109 }], WSAUnhookBlockingHook: ['', () => 0, { ordinal: 110 }],
   WSAGetLastError: ['', () => wsaErr, { ordinal: 111 }], WSASetLastError: ['i', (x, e) => { wsaErr = e; return 0; }, { ordinal: 112 }],
   WSACancelBlockingCall: ['', () => 0, { ordinal: 113 }], WSAIsBlocking: ['', () => 0, { ordinal: 114 }],

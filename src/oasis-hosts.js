@@ -12,7 +12,21 @@
 // intros of 2003-2010 (oasis/images/linux/*-20xx.json), fetched as scene.org keeps them.
 // conspiracy.hu/files/: Conspiracy's own downloads, where its 2023 repack of luxo4k (2007) is.
 export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.net', 'yolp.omgwtf.ru',
-  'raw.githubusercontent.com/dominikfhnw/demoscene_releases/', 'ftp.scene.org/pub/', 'ftp.untergrund.net/users/parapete/', 'conspiracy.hu/files/'];
+  'raw.githubusercontent.com/dominikfhnw/demoscene_releases/', 'ftp.scene.org/pub/', 'ftp.untergrund.net/users/parapete/', 'conspiracy.hu/files/',
+  'archive.org/download/official-jj-2/'];
+
+/**
+ * An archive.org item's file where the archive serves it from, for an item OASIS_HOSTS names
+ * (archive.org/download/<item>/): one of its storage servers, <server>.us.archive.org/<n>/items/<item>/...,
+ * or, for a file inside a ZIP of the item, that server's view_archive.php?archive=/<n>/items/<item>/....
+ * official-jj-2: Epic's freely distributed Jazz Jackrabbit 2 files, its shareware installer among them.
+ */
+const archiveItem = (u) => {
+  if (!/^ia\d+\.us\.archive\.org$/.test(u.hostname)) return false;
+  const path = u.pathname === '/view_archive.php' ? u.searchParams.get('archive') || '' : u.pathname;
+  const m = /^\/\d+\/items\/([^/]+)\//.exec(path);
+  return !!m && !path.includes('/../') && OASIS_HOSTS.includes(`archive.org/download/${m[1]}/`);
+};
 
 /** The URL to fetch for `?url=`, or null when the relay must refuse it. */
 export function relayTarget(raw) {
@@ -21,6 +35,7 @@ export function relayTarget(raw) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
   if (u.username || u.password || u.port) return null;
   const at = u.hostname + u.pathname;
+  if (archiveItem(u)) return u.href;
   if (!OASIS_HOSTS.some((h) => (h.includes('/') ? at.startsWith(h) && !u.pathname.includes('/../') : u.hostname === h))) return null;
   return u.href;
 }

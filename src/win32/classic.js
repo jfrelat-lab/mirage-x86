@@ -89,6 +89,13 @@ export function classicApis({ st }) {
   };
   const putStr = (x, buf, n, s) => { if (!buf || n <= 0) return 0; const b = Uint8Array.from(s.slice(0, n - 1), (c) => c.charCodeAt(0) & 0xff); x.write(buf, b); x.w8(buf + b.length, 0); return b.length; };
   const lower = (s) => s.toLowerCase();
+  const menus = new Map();                                               // window -> its menu (SetMenu)
+  const menu = (m) => { const o = st.gdi.get(m); return o && o.kind === 'menu' ? o : null; };
+  const dropItem = (m, at, flags) => {
+    const mn = menu(m), i = !mn ? -1 : flags & 0x400 ? (at < mn.items.length ? at : -1) : mn.items.indexOf(at);
+    if (i < 0) return 0;
+    mn.items.splice(i, 1); return 1;
+  };
   const kernel32 = {
     GetProcessVersion: ['u', () => 0x00040000],                         // Windows 95's 4.0, for every process
     lstrlenA: ['p', (x, p) => (p ? x.str(p).length : 0)],
@@ -207,7 +214,33 @@ export function classicApis({ st }) {
       const r = findResource(x, mod || x.win.base, RT.BITMAP, resId(x, name)), d = r && decodeDib(x, r.at);
       return d ? st.newHandle('bitmap', d) : 0;
     }],
+    // LoadImageA(module, name, type, cx, cy, flags): a bitmap of the resources as LoadBitmapA's; an icon or
+    // a cursor the stock one LoadIconA and LoadCursorA give. A file (LR_LOADFROMFILE) is not read here.
+    LoadImageA: ['ppuiiu', (x, mod, name, type, cx, cy, flags) => {
+      if (type === 1) return 0x10002;
+      if (type === 2) return 0x10003;
+      return type === 0 && !(flags & 0x10) ? user32.LoadBitmapA[1](x, mod, name) : 0;
+    }],
     GetMenuCheckMarkDimensions: ['', () => (13 << 16) | 13],
+    // Menus: handles a program builds and attaches (Jazz Jackrabbit 2's window has one), kept, not drawn --
+    // a window's menu bar takes no room here.
+    // Their items are counted (a program empties a menu by deleting its first item until that fails), by
+    // command id: DeleteMenu/RemoveMenu by position (MF_BYPOSITION) or by id.
+    CreateMenu: ['', () => st.newHandle('menu', { items: [] })], CreatePopupMenu: ['', () => st.newHandle('menu', { items: [] })],
+    DestroyMenu: ['p', (x, m) => (menu(m) ? (st.gdi.delete(m), 1) : 0)],
+    DeleteMenu: ['puu', (x, m, at, flags) => dropItem(m, at, flags)], RemoveMenu: ['puu', (x, m, at, flags) => dropItem(m, at, flags)],
+    // MENUITEMINFOA: fMask's MIIM_ID (2) gives wID (at +16); fByPosition: `at` a position, else the item it goes before.
+    InsertMenuItemA: ['puip', (x, m, at, byPos, mii) => {
+      const mn = menu(m); if (!mn) return 0;
+      const id = x.r32(mii + 4) & 2 ? x.r32(mii + 16) : 0, i = byPos ? at : mn.items.indexOf(at);
+      mn.items.splice(i < 0 || i > mn.items.length ? mn.items.length : i, 0, id); return 1;
+    }],
+    AppendMenuA: ['pupp', (x, m, flags, id) => { const mn = menu(m); if (!mn) return 0; mn.items.push(flags & 0x10 ? 0 : id); return 1; }],
+    GetMenuItemCount: ['p', (x, m) => (menu(m) ? menu(m).items.length : -1)],
+    DrawMenuBar: ['p', () => 1],
+    SetMenu: ['pp', (x, h, m) => { menus.set(h, m); return 1; }], GetMenu: ['p', (x, h) => menus.get(h) || 0],
+    // Drawn controls' parts and icons: nothing drawn.
+    DrawFrameControl: ['ppuu', () => 1], DrawIconEx: ['piipiiupu', () => 1],
     WinHelpA: ['ppuu', () => 1],
     LockWindowUpdate: ['p', () => 1],
   };
@@ -220,6 +253,9 @@ export function classicApis({ st }) {
     ScaleViewportExtEx: ['piiiip', () => 1], ScaleWindowExtEx: ['piiiip', () => 1],
     DPtoLP: ['ppi', () => 1],
     PtVisible: ['pii', () => 1], RectVisible: ['pp', () => 1],
+    // Clipping regions: none kept -- a DC draws over its whole surface. GetClipRgn: the DC has none (0).
+    CreateRectRgnIndirect: ['p', () => st.newHandle('region', {})], GetClipRgn: ['pp', () => 0],
+    SelectClipRgn: ['pp', () => 2], ExcludeClipRect: ['piiii', () => 2], OffsetClipRgn: ['pii', () => 2],
   };
   // ---- advapi32: a registry in memory, for the run -- keys made and opened, values written and read
   // back (Half-Life's launcher keeps its settings under HKEY_LOCAL_MACHINE\Software\Valve and gives up

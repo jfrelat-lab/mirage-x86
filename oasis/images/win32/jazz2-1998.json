@@ -1,0 +1,24 @@
+{
+  "oasis": 1,
+  "title": "Jazz Jackrabbit 2 shareware 1.21 — Orange Games for Epic MegaGames, 1998",
+  "year": 1998,
+  "author": "Orange Games / Epic MegaGames",
+  "world": "win32",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "didi": "https://archive.org/download/official-jj-2/OfficialJJ2.zip/Shareware%2F1.21s%2FJAZZ2SWF.EXE",
+      "into": "jj2"
+    }
+  ],
+  "entry": {
+    "run": "/jj2/Jazz2.exe"
+  },
+  "output": "window",
+  "notes": "Jazz Jackrabbit 2, created by Orange Games and owned by Epic MegaGames, in its shareware version 1.21 of 1998: try-before-you-buy software, distributed here as Epic's licence (License.txt, beside it) asks, the complete package, unaltered. Its installer, JAZZ2SWF.EXE, is fetched from the Internet Archive's collection of Epic's freely released files and read, not run (src/didi.js: Epic's own format, one zlib stream across the files); the game is then the executable as Epic built it, with MIRAGE-WIN32 answering its Win32 calls in JavaScript: its frames are 8-bit DIB sections that StretchBlt puts in its window, its sound is mixed on a multimedia timer into waveOut, its menus and its splash are ordinary windows. Winsock and IPX report no network, so it plays alone.",
+  "thumb": "oasis/thumbs/win32-jazz2-1998.png",
+  "tags": ["Game", "Win32", "GDI", "waveOut"],
+  "sound": true
+}

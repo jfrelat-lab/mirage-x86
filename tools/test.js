@@ -3547,6 +3547,31 @@ const runLinux = (hex, argv) => {
     got = [files.map((f) => `${f.path}=${new TextDecoder().decode(f.bytes)}`).join(','), layer.map((f) => f.to).join(',')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('wise: an installer\'s files from its script, without running it', got, '%MAINDIR%\\a.txt=hello,%MAINDIR%\\sub\\b.txt=world!! /hl/a.txt,/hl/sub/b.txt'); }
+// src/didi.js: Epic MegaGames' installer (Jazz Jackrabbit 2's shareware, JAZZ2SWF.EXE) -- after the stub,
+// "DiDi", then a record per file whose blocks (a table of their sizes, each a CRC and deflate bytes) are
+// pieces of ONE zlib stream running across files, a new stream at a group's first file. A synthetic one:
+// a.txt (20000 bytes, two blocks) and HTML\\b.txt in one stream -- b's bytes backreferencing a's -- and
+// c.txt in a second.
+{ let got;
+  try { const { undidi, didiLayer } = await import('../src/didi.js'), z = await import('zlib');
+    const A = Buffer.from('0123456789abcdef'.repeat(1250)), B = Buffer.from('0123456789abcdef'.repeat(3) + '!'), C = Buffer.from('second stream');
+    const s1 = z.deflateSync(Buffer.concat([A, B])), s2 = z.deflateSync(C), cut = s1.length >> 1, cut2 = s1.length - 3;
+    const rec = (name, size, blocks) => {
+      const table = Buffer.alloc(2 * blocks.length), body = blocks.map((d) => Buffer.concat([Buffer.alloc(4), d]));
+      body.forEach((d, i) => table.writeUInt16LE(d.length, 2 * i));
+      const data = Buffer.concat([table, ...body]), h = Buffer.alloc(30);
+      h.write('FILE'); h.writeUInt32LE(size, 4); h.writeUInt32LE(data.length, 8); h.writeUInt16LE(name.length, 28);
+      return Buffer.concat([h, Buffer.from(name), data]);
+    };
+    const head = Buffer.alloc(0x80); head.write('MZ'); head.writeUInt32LE(0x40, 0x3c); head.write('PE', 0x40); head.writeUInt16LE(1, 0x46);
+    head.writeUInt32LE(0x80, 0x58 + 16);                                        // one section: 80h bytes from 0
+    const didi = Buffer.alloc(40); didi.write('DiDi');
+    const exe = new Uint8Array(Buffer.concat([head, didi, rec('a.txt', A.length, [s1.subarray(0, cut), s1.subarray(cut, cut2)]),
+      rec('HTML\\b.txt', B.length, [s1.subarray(cut2)]), rec('c.txt', C.length, [s2])]));
+    const files = undidi(exe), layer = didiLayer(exe, { didi: 'x', into: '/jj2' });
+    got = [files.map((f) => `${f.path}=${f.bytes.length}`).join(','), new TextDecoder().decode(files[1].bytes.slice(-1)), new TextDecoder().decode(files[2].bytes), layer.map((f) => f.to).join(',')].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('didi: an Epic installer\'s files, one zlib stream across them', got, 'a.txt=20000,HTML\\b.txt=49,c.txt=13 ! second stream /jj2/a.txt,/jj2/HTML/b.txt,/jj2/c.txt'); }
 // tools/linux/lazymap.asm: anonymous memory larger than the machine (Quake II's hunks) -- 32 MiB mmapped on
 // a 16 MiB machine, its ends written and read back, mprotect and write() on pages never touched, munmap.
 // 31 when all hold; committed whole at mmap, it ran out of physical memory.

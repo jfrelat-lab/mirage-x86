@@ -13,6 +13,7 @@
 //                                   a point (mouseAt), the left button down or up there
 //   MIRAGE_W32DIR=<dir>             the files beside it, by base name, on the program's own disk (src/win32/api.js)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
+//   MIRAGE_W32IPS=<n>               instructions per guest second (default 1e8)
 //   MIRAGE_W32TRACE=1|<file>        every API call as it is made (to stderr, or that file)
 //   MIRAGE_W32TRACEFROM=<seconds>   ... from that guest second on
 //   MIRAGE_W32FONTS=arial=<ttf>,arial:bold=<ttf>  TrueType fonts the program selects, as the page's machine.fonts
@@ -34,6 +35,8 @@ const [prog, ...args] = process.argv.slice(2);
 if (!prog) { console.error('usage: node tools/win32/run.mjs <program.exe>'); process.exit(2); }
 const exe = new Uint8Array(readFileSync(prog));
 const mc = new Machine({ memSize: win32Memory(exe), cpu: process.env.MIRAGE_CPU || '686' });
+// MIRAGE_W32IPS=<instructions per guest second>: the CPU's pace (default 1e8, the page measures its own).
+if (process.env.MIRAGE_W32IPS) mc.cyclesPerSecond = Number(process.env.MIRAGE_W32IPS);
 installBIOS(mc);
 try { mc.font = new Uint8Array(readFileSync(new URL('../../assets/vga-rom-8x16.bin', import.meta.url))); } catch { /* captions without letters */ }   // as the page loads it
 const lx = installLinux(mc, { onOutput: (fd, b) => (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(b)) });

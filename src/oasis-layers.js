@@ -19,6 +19,7 @@ import { installLinux } from './linux.js';
 import { unzip } from './zip.js';
 import { unlha } from './lha.js';
 import { wiseLayer } from './wise.js';
+import { didiLayer } from './didi.js';
 
 const S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFLNK = 0o120000;
 const enc = new TextEncoder();
@@ -230,6 +231,8 @@ export async function buildTree(img, io) {
     } else if (l.wise) {
       const inflate = async (d) => new Uint8Array(await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
       for (const f of await wiseLayer(await get(l.wise), l, inflate)) tree.file(norm(f.to), f.bytes);
+    } else if (l.didi) {
+      for (const f of didiLayer(await get(l.didi), l)) tree.file(norm(f.to), f.bytes);
     } else if (l.zip) {
       for (const f of await unzip(await get(l.zip))) tree.file(norm(f.path), f.bytes);
     } else if (l.gz) tree.file(l.to, await gunzip(await get(l.gz)));
