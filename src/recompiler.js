@@ -2261,20 +2261,20 @@ export class Recompiler {
             case 0xee: return fpush('0');                                  // FLDZ
             case 0xf0: return P(setSTe(0, `Math.expm1(${STe(0)}*Math.LN2)`));   // F2XM1 (expm1: no cancellation near 0)
             case 0xf1: P(setSTe(1, `${STe(1)}*Math.log2(${STe(0)})`)); return P(FPOP()); // FYL2X
-            case 0xf2: P(setSTe(0, `Math.tan(${STe(0)})`)); return fpush('1');         // FPTAN
+            case 0xf2: P(`cpu.ftrigCC(${STe(0)});`); P(setSTe(0, `Math.tan(${STe(0)})`)); return fpush('1');         // FPTAN (C2: src/fpu.js ftrigCC)
             case 0xf3: P(setSTe(1, `Math.atan2(${STe(1)},${STe(0)})`)); return P(FPOP()); // FPATAN
             case 0xf4: P('cpu.fxtract();'); return fsync();                          // FXTRACT (exponent, then push significand)
             case 0xf5: return P(setSTe(0, `cpu.frem1(${STe(0)},${STe(1)})`));   // FPREM1 (IEEE remainder)
             case 0xf8: return P(setSTe(0, `cpu.fprem(${STe(0)},${STe(1)})`));   // FPREM (truncating quotient, C0-C3)
             case 0xf9: P(setSTe(1, `${STe(1)}*cpu.flog2p1(${STe(0)})`)); return P(FPOP());   // FYL2XP1
             case 0xfa: return P(setSTe(0, `cpu.fprec(Math.sqrt(${STe(0)}))`));      // FSQRT (precision control applies)
-            case 0xfb: { const x = NT(); P(`var ${x}=${STe(0)};${setSTe(0, `Math.sin(${x})`)}`); return fpush(`Math.cos(${x})`); } // FSINCOS
+            case 0xfb: { const x = NT(); P(`var ${x}=${STe(0)};cpu.ftrigCC(${x});${setSTe(0, `Math.sin(${x})`)}`); return fpush(`Math.cos(${x})`); } // FSINCOS
             case 0xf6: if (FXC) { fd = (fd - 1) & 7; return P(`cpu.ftop=${stIdx(fd)};`); } return P('cpu.ftop=(cpu.ftop-1)&7;');                // FDECSTP (tags untouched)
             case 0xf7: if (FXC) { fd = (fd + 1) & 7; return P(`cpu.ftop=${stIdx(fd)};`); } return P('cpu.ftop=(cpu.ftop+1)&7;');                // FINCSTP
             case 0xfc: return P(setSTe(0, `cpu.f2i(${STe(0)})`));        // FRNDINT
             case 0xfd: return P(setSTe(0, `${STe(0)}*Math.pow(2,Math.trunc(${STe(1)}))`)); // FSCALE
-            case 0xfe: return P(setSTe(0, `Math.sin(${STe(0)})`));       // FSIN
-            case 0xff: return P(setSTe(0, `Math.cos(${STe(0)})`));       // FCOS
+            case 0xfe: P(`cpu.ftrigCC(${STe(0)});`); return P(setSTe(0, `Math.sin(${STe(0)})`));       // FSIN
+            case 0xff: P(`cpu.ftrigCC(${STe(0)});`); return P(setSTe(0, `Math.cos(${STe(0)})`));       // FCOS
           }
           return fb();
         case 0xd8: {                                                       // arith with ST(i), result to ST(0)

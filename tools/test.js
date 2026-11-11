@@ -2847,6 +2847,16 @@ const udRun = (gated) => {
   eq('FLDCW: single precision gives 1/3 rounded to 24 bits, double to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true');
   eq('...and the loop is not retranslated on each change of precision', mc.rec.stats.compiles < 30, true); }
 
+// ---- FPTAN, FSIN, FCOS, FSINCOS clear C2 for an operand in range ------------------------------------------
+// C2 left as FXAM had set it (a normal number) after FPTAN: Microsoft's C runtime tests C2 right after FPTAN
+// (out of range: reduce the argument), and Half-Life's R_ViewChanged, under Quake's single precision, got NaN
+// for its projection -- an engine running, its world never drawn. Each: fld1 / fxam / op / fnstsw ax / store.
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
+  mc.mem.blit(0x1000, Uint8Array.from('d9e8d9e5d9f2dfe0a34000dbe3d9e8d9e5d9fedfe0a34200dbe3d9e8d9e5d9ffdfe0a34400dbe3d9e8d9e5d9fbdfe0a34600dbe3f4'.match(/../g).map((x) => parseInt(x, 16))));
+  let n = 0; while (!cpu.halted && n++ < 100) mc.runSlice(1000);
+  eq('x87: FPTAN, FSIN, FCOS, FSINCOS clear C2 for an operand in range', [0x40, 0x42, 0x44, 0x46].map((a) => (mc.mem.dv.getUint16(0x1000 + a, true) & 0x400).toString(16)).join(), '0,0,0,0'); }
+
 // ---- one block under both precisions: checked when it is dispatched -----------------------------------
 // gcc 2.x converts a float to an int between two FLDCW: XFree86 3.3.2 and Mesa change the precision
 // thousands of times a second, and each change made every translated block revalidate. A block now says

@@ -4,6 +4,13 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-11
+
+- **The x87's FPTAN, FSIN, FCOS and FSINCOS clear C2** for an argument in range, as the real chip does.
+  Microsoft's C runtime checks that flag after FPTAN; left set, `tan()` took its out-of-range path, and a
+  program in Quake's single-precision mode got a NaN where its view's projection should be: Half-Life's
+  engine ran with nothing on the screen but its titles.
+
 ## 2026-11-10
 
 - **GLQuake and Quake II in OpenGL on Linux**: id's 3dfx builds of 1997 and 1998, written for a Voodoo

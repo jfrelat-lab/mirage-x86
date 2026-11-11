@@ -218,6 +218,12 @@ export function installFPU(cpu) {
    *  its only positive-value case by accident: for x > 0 every condition code is 0 either way. */
   cpu.ftst = () => setcc(ST(0), 0);
 
+  /** FPTAN, FSIN, FCOS, FSINCOS: C2 clear when the operand is in range (|x| < 2^63), set otherwise, and C1
+   *  clear. Microsoft's C runtime tests C2 right after FPTAN (`fnstsw ax; sahf; jp reduce`): left as an
+   *  earlier instruction had it, tan() took the out-of-range path, and Half-Life's R_ViewChanged, under
+   *  Quake's single precision, got NaN for its projection and drew nothing. (Out of range, a real x87
+   *  also leaves the stack as it was; that case computes here as in range.) */
+  cpu.ftrigCC = (x) => { cpu.fsw = (cpu.fsw & ~0x0600) | (Math.abs(x) >= 9223372036854775808 ? 0x0400 : 0); };
   cpu.ffree = (i) => { cpu.focc[(cpu.ftop + i) & 7] = 0; };
   /** A change to PRECISION CONTROL is folded into the emitted code at translation time (see the
    *  recompiler's FPREC24), so the blocks compiled under the old setting have to go. Rounding control
@@ -411,20 +417,20 @@ export function installFPU(cpu) {
           case 0xee: push(0); return;                       // fldz
           case 0xf0: setST(0, Math.expm1(ST(0) * Math.LN2)); return; // f2xm1: expm1, exact near 0 where 2^x-1 cancels
           case 0xf1: setST(1, ST(1) * Math.log2(ST(0))); pop(); return; // fyl2x
-          case 0xf2: { const t = Math.tan(ST(0)); setST(0, t); push(1); return; } // fptan
+          case 0xf2: { cpu.ftrigCC(ST(0)); const t = Math.tan(ST(0)); setST(0, t); push(1); return; } // fptan
           case 0xf3: { const r = Math.atan2(ST(1), ST(0)); setST(1, r); pop(); return; } // fpatan
           case 0xf4: cpu.fxtract(); return;                 // fxtract
           case 0xf5: setST(0, cpu.frem1(ST(0), ST(1))); return;   // fprem1 (IEEE remainder)
           case 0xf8: setST(0, cpu.fprem(ST(0), ST(1))); return;   // fprem (truncating quotient, C0-C3)
           case 0xf9: setST(1, ST(1) * cpu.flog2p1(ST(0))); pop(); return;   // fyl2xp1
           case 0xfa: setST(0, cpu.fprec(Math.sqrt(ST(0)))); return;    // fsqrt, rounded to the precision control as FADD is (SDM 8.1.5.2)
-          case 0xfb: { const x = ST(0); setST(0, Math.sin(x)); push(Math.cos(x)); return; } // fsincos → ST0=cos, ST1=sin
+          case 0xfb: { const x = ST(0); cpu.ftrigCC(x); setST(0, Math.sin(x)); push(Math.cos(x)); return; } // fsincos → ST0=cos, ST1=sin
           case 0xf6: cpu.ftop = (cpu.ftop - 1) & 7; return; // fdecstp (tags untouched)
           case 0xf7: cpu.ftop = (cpu.ftop + 1) & 7; return; // fincstp
           case 0xfc: setST(0, toInt(ST(0))); return;        // frndint
           case 0xfd: setST(0, ST(0) * Math.pow(2, Math.trunc(ST(1)))); return; // fscale
-          case 0xfe: setST(0, Math.sin(ST(0))); return;     // fsin
-          case 0xff: setST(0, Math.cos(ST(0))); return;     // fcos
+          case 0xfe: cpu.ftrigCC(ST(0)); setST(0, Math.sin(ST(0))); return;     // fsin
+          case 0xff: cpu.ftrigCC(ST(0)); setST(0, Math.cos(ST(0))); return;     // fcos
         }
         if (b !== 0xd0) missReg(op, b);                     // d0 is FNOP; the rest are reserved
         return;
