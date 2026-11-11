@@ -2856,6 +2856,16 @@ const udRun = (gated) => {
   mc.mem.blit(0x1000, Uint8Array.from('d9e8d9e5d9f2dfe0a34000dbe3d9e8d9e5d9fedfe0a34200dbe3d9e8d9e5d9ffdfe0a34400dbe3d9e8d9e5d9fbdfe0a34600dbe3f4'.match(/../g).map((x) => parseInt(x, 16))));
   let n = 0; while (!cpu.halted && n++ < 100) mc.runSlice(1000);
   eq('x87: FPTAN, FSIN, FCOS, FSINCOS clear C2 for an operand in range', [0x40, 0x42, 0x44, 0x46].map((a) => (mc.mem.dv.getUint16(0x1000 + a, true) & 0x400).toString(16)).join(), '0,0,0,0'); }
+// ---- FILD m64 / FISTP m64 copy 8 bytes exactly, through an FXCH ---------------------------------------------
+// The x87 holds a 64-bit integer whole; a float64 register rounds it past 2^53. Jazz Jackrabbit 2 copies its
+// video frames so (fild, fild, fxch, fistp, fistp), and the lowest byte of every eight came back wrong. Two
+// integers that round to the same double, exchanged, in a loop run 40 times (interpreted, then compiled).
+{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+  cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
+  mc.mem.blit(0x1000, Uint8Array.from('b92800dbe3df2e0001df2e0801d9c9df3e1001df3e1801e2eaf4'.match(/../g).map((x) => parseInt(x, 16))));
+  mc.mem.dv.setBigUint64(0x1100, 0x0123456789abcdefn, true); mc.mem.dv.setBigUint64(0x1108, 0x0123456789abcde1n, true);
+  let n = 0; while (!cpu.halted && n++ < 100) mc.runSlice(1000);
+  eq('x87: FILD m64 / FISTP m64 copy 8 bytes exactly, through an FXCH', [0x1110, 0x1118].map((a) => mc.mem.dv.getBigUint64(a, true).toString(16)).join(), '123456789abcdef,123456789abcde1'); }
 
 // ---- one block under both precisions: checked when it is dispatched -----------------------------------
 // gcc 2.x converts a float to an int between two FLDCW: XFree86 3.3.2 and Mesa change the precision

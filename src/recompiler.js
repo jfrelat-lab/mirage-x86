@@ -1382,6 +1382,7 @@ export class Recompiler {
      * from before it is not opened (see endJcc). MIRAGE_NOFXCACHE=1: cpu.ftop as before.
      */
     const FXC = !TIER2 && !NOFXCACHE;
+    let i64Seen = false;                  // a FILD/FISTP m64 earlier in this block: its FXCHs carry fpu.js's exact integers
     let fd = 0;
     const fcache = new Map(), fReads = [];               // slot -> { v, def }; [read at, defined at]
     const stIdx = (r) => (r === 0 ? 'F' : `(F+${r})&7`);
@@ -2151,6 +2152,7 @@ export class Recompiler {
     function emitFPUMem(op, reg, o) {
       const a = memAddr(o);
       const fb = () => { P(`cpu.fpuMem(${op},${reg},${a});`); fsync(); };
+      if (op === 0xdf && (reg === 5 || reg === 7)) i64Seen = true;
       const smc = (len) => `if(cp[${a}>>>12]|cp[(${AM(`${a}+${len - 1}`)})>>>12])m._dirty(${a},${len});`;
       // The inline forms index the physical DataView with the address; under paging it is LINEAR, and
       // the paged forms below translate it as the paged integer accesses do.
@@ -2246,7 +2248,12 @@ export class Recompiler {
       switch (op) {
         case 0xd9:
           if (b < 0xc8) return fpush(STe(rm));                              // FLD ST(i) (pre-push read)
-          if (b < 0xd0) { const t = NT(); P(`var ${t}=${STe(0)};${setSTe(0, STe(rm))}${setSTe(rm, t)}`); return; } // FXCH
+          if (b < 0xd0) {                                                    // FXCH, and the exact 64-bit integers FILD m64 left (fpu.js)
+            // Only in a block that loaded or stored one (Jazz Jackrabbit 2's copy loop): elsewhere an FXCH is
+            // the plain exchange, with nothing more to read (a check in every FXCH cost lattice 2.5%).
+            const t = NT(), p0 = FXC ? stIdx(fd & 7) : 'cpu.ftop', p1 = FXC ? stIdx((fd + rm) & 7) : `(cpu.ftop+${rm})&7`;
+            P(`var ${t}=${STe(0)};${setSTe(0, STe(rm))}${setSTe(rm, t)}${i64Seen ? `if(cpu.fx64.n)cpu.fx64.swap(${p0},${p1});` : ''}`); return;
+          }
           switch (b) {
             case 0xe0: return P(setSTe(0, `-${STe(0)}`));                // FCHS
             case 0xe1: return P(setSTe(0, `Math.abs(${STe(0)})`));       // FABS

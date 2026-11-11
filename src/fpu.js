@@ -97,16 +97,37 @@ export function installFPU(cpu) {
   // was a silent no-op: Borland's __ftol is `fistp qword`, so every float-to-long cast in a Borland
   // program returned whatever was already in the caller's stack slot. Wolf3D got SetupScaling(925)
   // instead of (360) that way and exhausted its heap building 462 scalers.
-  const i64 = (a) => Number(cpu.mem.paged ? pl(a, 8, (v, o) => v.getBigInt64(o, true)) : dv.getBigInt64(a & msk(), true));
-  const INDEF64 = -(2n ** 63n);   // x87's "integer indefinite", stored when the value will not fit
-  const i64s = (a, v) => {
-    const fits = v >= -9223372036854775808 && v < 9223372036854775808;   // false for NaN
-    if (!fits) cpu.fsw |= 0x01;                                          // IE: invalid operation
-    const n = fits ? BigInt(Math.trunc(v)) : INDEF64;
+  const i64big = (a) => (cpu.mem.paged ? pl(a, 8, (v, o) => v.getBigInt64(o, true)) : dv.getBigInt64(a & msk(), true));
+  const i64 = (a) => Number(i64big(a));
+  // A 64-bit integer as the x87 holds it: exactly, in its 64-bit significand -- which a float64 register
+  // cannot, beyond 2^53. Programs of the Pentium's time copied memory eight bytes at a time through the
+  // FPU (FILD m64, FISTP m64: Jazz Jackrabbit 2's video, a frame's rows), and rounded, the lowest byte
+  // of every eight came back wrong: a column in eight of the picture. So FILD m64 keeps the integer
+  // beside the register it loads, with the double it put there, and FISTP m64 stores that integer
+  // while the register still holds that double (moved by nothing, or by an exact operation that left
+  // it unchanged); anything else -- the register rewritten -- and the double is stored, as before.
+  // FXCH moves them with their values (the copy loops exchange two loads before storing them); x64n,
+  // how many there are, spares every other FXCH the call.
+  const x64 = new Array(8).fill(null), x64v = new Float64Array(8);
+  const x64s = cpu.fx64 = { n: 0, swap: (p, q) => { const n = x64[p], v = x64v[p]; x64[p] = x64[q]; x64v[p] = x64v[q]; x64[q] = n; x64v[q] = v; } };
+  const fild64 = (a) => { const n = i64big(a), v = Number(n); push(v); x64set(cpu.ftop, BigInt(v) === n ? null : n, v); };
+  const fistp64 = (a) => {
+    const p = cpu.ftop;
+    if (x64[p] !== null && st[p] === x64v[p]) i64store(a, x64[p]); else i64s(a, toInt(st[p]));
+    x64set(p, null, 0); pop();
+  };
+  const x64set = (p, n, v) => { if ((x64[p] === null) !== (n === null)) x64s.n += n === null ? -1 : 1; x64[p] = n; x64v[p] = v; };
+  const i64store = (a, n) => {
     if (cpu.mem.paged) return pwr(a, 8, (w, o) => w.setBigInt64(o, n, true));
     a &= msk();
     dv.setBigInt64(a, n, true);
     if (cp[a >>> 12] || cp[((a + 7) & msk()) >>> 12]) cpu.mem._dirty(a, 8);
+  };
+  const INDEF64 = -(2n ** 63n);   // x87's "integer indefinite", stored when the value will not fit
+  const i64s = (a, v) => {
+    const fits = v >= -9223372036854775808 && v < 9223372036854775808;   // false for NaN
+    if (!fits) cpu.fsw |= 0x01;                                          // IE: invalid operation
+    i64store(a, fits ? BigInt(Math.trunc(v)) : INDEF64);
   };
   /** 80-bit extended: an explicit 64-bit mantissa (no hidden bit) and a 15-bit exponent biased by
    *  16383. This model's registers are float64, so a store rounds to 53 bits of mantissa and a load
@@ -381,8 +402,8 @@ export function installFPU(cpu) {
         if (reg === 0) push(i16(a));
         else if (reg === 2) cpu.mem.w16(a, cpu.fi16(ST(0)) & 0xffff);
         else if (reg === 3) { cpu.mem.w16(a, cpu.fi16(ST(0)) & 0xffff); pop(); }
-        else if (reg === 5) push(i64(a));                   // fild m64
-        else if (reg === 7) { i64s(a, toInt(ST(0))); pop(); } // fistp m64 — Borland's __ftol
+        else if (reg === 5) fild64(a);                      // fild m64, exactly beside its register
+        else if (reg === 7) fistp64(a);                     // fistp m64 — Borland's __ftol
         else missMem(op, reg);                              // 4 fbld, 6 fbstp (packed BCD)
         return;
     }
@@ -402,7 +423,7 @@ export function installFPU(cpu) {
     switch (op) {
       case 0xd9:
         if (b < 0xc8) { push(ST(rm)); return; }             // fld st(i)  (reads pre-push ST)
-        if (b < 0xd0) { const t = ST(0); setST(0, ST(rm)); setST(rm, t); return; } // fxch
+        if (b < 0xd0) { const t = ST(0); setST(0, ST(rm)); setST(rm, t); if (x64s.n) x64s.swap(cpu.ftop, (cpu.ftop + rm) & 7); return; } // fxch
         switch (b) {
           case 0xe0: setST(0, -ST(0)); return;              // fchs
           case 0xe1: setST(0, Math.abs(ST(0))); return;     // fabs
@@ -455,7 +476,7 @@ export function installFPU(cpu) {
         return;
       case 0xdb:
         if (b < 0xe0) return fcmov(b, true);                                 // fcmovnb/ne/nbe/nu
-        if (b === 0xe3) { cpu.ftop = 0; cpu.fsw = 0; cpu.fcw = 0x037f; cpu.focc.fill(0); st.fill(0); return; }   // fninit
+        if (b === 0xe3) { cpu.ftop = 0; cpu.fsw = 0; cpu.fcw = 0x037f; cpu.focc.fill(0); st.fill(0); if (x64s.n) { x64.fill(null); x64s.n = 0; } return; }   // fninit (lattice runs it constantly: nothing more unless needed)
         if (b >= 0xe8 && b <= 0xef) return cmpi(ST(0), ST(b - 0xe8));        // fucomi st0,st(i)
         if (b >= 0xf0 && b <= 0xf7) return cmpi(ST(0), ST(b - 0xf0));        // fcomi  st0,st(i)
         if (b === 0xe2) { cpu.fsw &= ~0xff; return; }        // fnclex: the exception flags, ES and SF
