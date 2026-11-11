@@ -4786,7 +4786,7 @@ const runLinux = (hex, argv) => {
 // WinQuake (id Software, 1997) on MIRAGE-WIN32: what it needed, each answered as Windows answers it.
 // The context comes from tools/win32/tinyhdr.asm's image (the test above); the functions are called
 // as the program's stubs call them.
-{ const w32 = async (args = '') => {
+{ const w32 = async (args = '', opts = {}) => {
     const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const exe = Uint8Array.from((
     '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
@@ -4795,7 +4795,7 @@ const runLinux = (hex, argv) => {
     '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
     '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
-    const apis = win32Apis(), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, args, backend: traceBackend() });
+    const apis = win32Apis(opts), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, args, backend: traceBackend() });
     const fn = (dll, name) => { const f = apis.find((d) => d.dll === dll).fns[name][1]; return (...a) => f(x, ...a); };
     const str = (t) => { const b = new TextEncoder().encode(t + '\0'), p = x.win.heapAlloc(b.length); x.write(p, b); return p; };
     return { mc, lx, x, apis, fn, str };
@@ -5020,6 +5020,45 @@ const runLinux = (hex, argv) => {
     got = seen.join(' ') + ' ' + x.r32(done);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: WriteFile to the console reaches stdout and stderr', got, '1:hi 2:err 3');
+  // C: has directories (Abuse's art/, lisp/): a file by its path, ".." resolved, by its base name alone
+  // as before; a directory's attributes; FindFirstFileA in one directory.
+  try { const { fn, str, x } = await w32('', { files: { 'art/a.spe': Uint8Array.of(1, 2, 3), 'lisp/b.lsp': Uint8Array.of(9), 'top.txt': Uint8Array.of(7) } }), k = (n) => fn('kernel32.dll', n);
+    const open = (p) => ((k('CreateFileA')(str(p), 0x80000000, 1, 0, 3, 0x80, 0) >>> 0) !== 0xffffffff ? 1 : 0), fd = x.win.heapAlloc(320);
+    const attrs = ['C:\\art', 'C:\\sfx', 'C:\\art\\a.spe'].map((p) => k('GetFileAttributesA')(str(p)) >>> 0);
+    k('FindFirstFileA')(str('C:\\lisp\\*'), fd);
+    got = [open('C:\\art\\a.spe'), open('art/../art/a.spe'), open('a.spe'), ...attrs, x.str(fd + 44)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: C: has directories -- a file by its path, a directory\'s attributes, FindFirstFileA in one', got, '1 1 1 16 4294967295 32 b.lsp');
+  // The program's environment (entry.env: SDL's hints), by any case; a message-only window (HWND_MESSAGE:
+  // SDL 2's helper, made first) is never the main one; GetUpdateRect says what is due a WM_PAINT --
+  // SDL validates its window only then, and a WM_PAINT never validated came back forever.
+  try { const { fn, str, x } = await w32('', { env: { SDL_RENDER_DRIVER: 'software' } }), k = (n) => fn('kernel32.dll', n), u = (n) => fn('user32.dll', n);
+    const buf = x.win.heapAlloc(32), n1 = k('GetEnvironmentVariableA')(str('sdl_render_driver'), buf, 32), v = x.str(buf), n2 = k('GetEnvironmentVariableA')(str('NOPE'), buf, 32);
+    u('CreateWindowExA')(0, 0x1234, 0, 0, -0x80000000, -0x80000000, -0x80000000, -0x80000000, 0xfffffffd, 0, 0x400000, 0);
+    const main = u('CreateWindowExA')(0, str('game'), str('t'), 0x10cf0000, 0, 0, 320, 240, 0, 0, 0x400000, 0);
+    const active = u('GetActiveWindow')() === main, pop = u('CreateWindowExA')(0, 0x1235, 0, 0x80000000, 10, 10, 50, 40, 0, 0, 0x400000, 0), r = x.win.heapAlloc(16);
+    u('ShowWindow')(pop, 5);
+    const due = u('GetUpdateRect')(pop, r, 0), wh = [x.r32(r + 8), x.r32(r + 12)];
+    u('ValidateRect')(pop, 0);
+    got = [n1, v, n2, active, due, ...wh, u('GetUpdateRect')(pop, r, 0)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: the program\'s environment; a message-only window is not the main one; GetUpdateRect', got, '8 software 0 true 1 50 40 0');
+  // The Universal C Runtime (src/win32/ucrt.js): printf's conversions (flags, width, precision, %lld, %g),
+  // __stdio_common_vsprintf's seven arguments -- the options are 64 bits, the va_list comes last: with
+  // one too few every %s read a stray pointer ("Abuse version (null)") -- C99's snprintf length when it
+  // does not fit, and scanf.
+  try { const { apis, x, str } = await w32(), { cprintf, cscanf } = await import('../src/win32/ucrt.js');
+    const ap = x.win.heapAlloc(64), dv = new DataView(new ArrayBuffer(8)), dbl = (p, v) => { dv.setFloat64(0, v, true); x.w32(p, dv.getUint32(0, true)); x.w32(p + 4, dv.getUint32(4, true)); };
+    x.w32(ap, -5); dbl(ap + 4, Math.PI); x.w32(ap + 12, 0); x.w32(ap + 16, 256); x.w32(ap + 20, str('abc')); x.w32(ap + 24, 255); dbl(ap + 28, 0.0001); dbl(ap + 36, 1e20);
+    const s = cprintf(x, '%+04d|%8.3f|%lld|%-5s|%#x|%g|%g', ap);
+    const f = apis.find((d) => d.dll === 'ucrtbase.dll').fns.__stdio_common_vsprintf, buf = x.win.heapAlloc(16), ap2 = x.win.heapAlloc(8);
+    x.w32(ap2, 12345); x.w32(ap2 + 4, 678);
+    const n = f[1](x, 2, 0, buf, 6, str('%d-%d'), 0, ap2);
+    const out = x.win.heapAlloc(16), ap3 = x.win.heapAlloc(12); x.w32(ap3, out); x.w32(ap3 + 4, out + 4); x.w32(ap3 + 8, out + 8);
+    const k = cscanf(x, ' 42 x3.5 abc', '%d x%f %s', ap3);
+    got = [s, f[0].length, n, x.str(buf), k, x.r32(out), x.f32(out + 4), x.str(out + 8)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: the UCRT\'s printf and scanf, __stdio_common_vsprintf\'s arguments', got, '-005|   3.142|1099511627776|abc  |0xff|0.0001|1e+20 7 9 12345 3 42 3.5 abc');
   // A module's string table (RT_STRING): its resource directory, type, name, language, read from the
   // image in memory -- Half-Life's launcher takes every label of its menus there.
   try { const { fn, x } = await w32(), base = x.win.heapAlloc(0x400), w = (o, v) => x.w32(base + o, v), w16 = (o, v) => x.w16(base + o, v);
@@ -5059,6 +5098,94 @@ const runLinux = (hex, argv) => {
     got = [...a, fb(19, 11), fb(20, 11), fb(0, 0)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: DirectDraw 8-bit: Flip shows the back buffer in the palette\'s colours, a colour key, SetEntries at once', got, '320x200 320 123456 ffffff 123456 ffffff'); }
+// A PE made here, for the tests below: one section at RVA 1000h (code at 0, data from 400h, the import
+// tables from 600h, the exports from A00h), its imports [{ dll, names }], its exports { name: offset },
+// a TLS template. `code(at)` gets the addresses: at.iat['dll!name'], at.d(offset) the section's VAs.
+const mkPE = ({ base = 0x400000, dll = false, entry = 0, imports = [], exports = null, name = 't.dll', tls = null, code }) => {
+  const b = new Uint8Array(0x1200), v = new DataView(b.buffer), S = 0x200, va = (off) => base + 0x1000 + off, rva = (off) => 0x1000 + off;
+  const at = { iat: {}, d: va };
+  // The imports: descriptors, then each DLL's lookup table, address table and names.
+  let p = 0x600 + 20 * (imports.length + 1);
+  const desc = [];
+  for (const im of imports) {
+    const ilt = p; p += 4 * (im.names.length + 1); const iat = p; p += 4 * (im.names.length + 1);
+    const dn = p; b.set(new TextEncoder().encode(im.dll + '\0'), S + p); p += im.dll.length + 1;
+    im.names.forEach((n, i) => { const hn = p; b.set(new TextEncoder().encode('\0\0' + n + '\0'), S + p); p += n.length + 3; v.setUint32(S + ilt + 4 * i, rva(hn), true); v.setUint32(S + iat + 4 * i, rva(hn), true); at.iat[`${im.dll}!${n}`] = va(iat + 4 * i); });
+    desc.push([rva(ilt), rva(dn), rva(iat)]);
+  }
+  desc.forEach(([ilt, dn, iat], i) => { v.setUint32(S + 0x600 + 20 * i, ilt, true); v.setUint32(S + 0x600 + 20 * i + 12, dn, true); v.setUint32(S + 0x600 + 20 * i + 16, iat, true); });
+  if (exports) {                                                     // one name, one function each
+    const names = Object.keys(exports), e = 0xa00, f = e + 40, nm = f + 4 * names.length, od = nm + 4 * names.length;
+    let s = od + 2 * names.length;
+    v.setUint32(S + e + 12, rva(s), true); b.set(new TextEncoder().encode(name + '\0'), S + s); s += name.length + 1;
+    v.setUint32(S + e + 16, 1, true); v.setUint32(S + e + 20, names.length, true); v.setUint32(S + e + 24, names.length, true);
+    v.setUint32(S + e + 28, rva(f), true); v.setUint32(S + e + 32, rva(nm), true); v.setUint32(S + e + 36, rva(od), true);
+    names.forEach((n, i) => { v.setUint32(S + f + 4 * i, rva(exports[n]), true); v.setUint32(S + nm + 4 * i, rva(s), true); v.setUint16(S + od + 2 * i, i, true); b.set(new TextEncoder().encode(n + '\0'), S + s); s += n.length + 1; });
+  }
+  if (tls) {                                                         // the template at 4F0h, the directory at 480h, the index at 404h
+    b.set(tls, S + 0x4f0); [va(0x4f0), va(0x4f0 + tls.length), va(0x404), va(0x40c), 0, 0].forEach((w, i) => v.setUint32(S + 0x480 + 4 * i, w, true));
+  }
+  b.set(code(at), S);
+  // The headers: MZ, PE, i386, one section; PE32's optional header and its directories.
+  b.set([0x4d, 0x5a]); v.setUint32(0x3c, 0x40, true); b.set([0x50, 0x45], 0x40);
+  v.setUint16(0x44, 0x14c, true); v.setUint16(0x46, 1, true); v.setUint16(0x54, 0xe0, true); v.setUint16(0x56, dll ? 0x2102 : 0x102, true);
+  const o = 0x58;
+  v.setUint16(o, 0x10b, true); v.setUint32(o + 16, rva(entry), true); v.setUint32(o + 28, base, true); v.setUint32(o + 32, 0x1000, true); v.setUint32(o + 36, 0x200, true);
+  v.setUint16(o + 48, 4, true); v.setUint32(o + 56, 0x2000, true); v.setUint32(o + 60, 0x200, true); v.setUint16(o + 68, 3, true);
+  v.setUint32(o + 72, 0x100000, true); v.setUint32(o + 76, 0x1000, true); v.setUint32(o + 80, 0x100000, true); v.setUint32(o + 84, 0x1000, true); v.setUint32(o + 92, 16, true);
+  if (exports) { v.setUint32(o + 96, rva(0xa00), true); v.setUint32(o + 100, 0x200, true); }
+  if (imports.length) { v.setUint32(o + 104, rva(0x600), true); v.setUint32(o + 108, 20 * (imports.length + 1), true); }
+  if (tls) { v.setUint32(o + 96 + 8 * 9, rva(0x480), true); v.setUint32(o + 100 + 8 * 9, 24, true); }
+  const sh = o + 0xe0;
+  b.set(new TextEncoder().encode('.text'), sh); v.setUint32(sh + 8, 0x1000, true); v.setUint32(sh + 12, 0x1000, true); v.setUint32(sh + 16, 0x1000, true); v.setUint32(sh + 20, S, true); v.setUint32(sh + 36, 0xe0000060, true);
+  return b;
+};
+const le = (n) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+const runPE = async (exe, readFile) => {
+  const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+  const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
+  loadPE(lx, mc.mem, mc.cpu, exe, { apis: win32Apis(), readFile, backend: traceBackend() });
+  for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+  return lx.done ? lx.status : 'running';
+};
+// A DLL the program imports (Abuse's SDL2.dll) is initialized before the program's entry point -- its
+// DllMain(DLL_PROCESS_ATTACH) here sets a flag its export returns: run when first LoadLibrary'd, inside
+// one of its own functions, SDL2's C runtime set a new stack cookie under frames that had saved the old
+// one (__report_gsfailure, 0xC0000409). And static TLS: the program reads its __declspec(thread) value
+// through fs:[2Ch] and its index, as Visual C++'s thread-safe statics do. 100 * flag + the TLS value.
+{ let got;
+  try {
+    const lib = mkPE({ base: 0x50000000, dll: true, exports: { f: 0x20 }, code: (at) => Uint8Array.from([
+      0xc7, 0x05, ...le(at.d(0x400)), 1, 0, 0, 0, 0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0x00,          // DllMain: flag = 1; return TRUE
+      ...new Array(0x20 - 17).fill(0x90), 0xa1, ...le(at.d(0x400)), 0xc3]) });                  // f: return flag
+    const exe = mkPE({ imports: [{ dll: 't.dll', names: ['f'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], tls: Uint8Array.of(42, 0, 0, 0), code: (at) => Uint8Array.from([
+      0x64, 0xa1, 0x2c, 0, 0, 0, 0x8b, 0x0d, ...le(at.d(0x404)), 0x8b, 0x04, 0x88, 0x8b, 0x18,   // ebx = [ThreadLocalStoragePointer[_tls_index]]
+      0xff, 0x15, ...le(at.iat['t.dll!f']), 0x6b, 0xc0, 0x64, 0x01, 0xd8,                          // eax = f() * 100 + ebx
+      0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]) });
+    got = String(await runPE(exe, (k) => (k.toLowerCase() === 't.dll' ? lib : null)));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: an imported DLL\'s DllMain runs before the entry point; static TLS through fs:[2Ch]', got, '142'); }
+// SetWindowPos that sizes the main window sends WM_WINDOWPOSCHANGED, then WM_SIZE, as Windows does: SDL 2
+// takes a new size from the first (its fullscreen-desktop window kept a 640x480 framebuffer otherwise).
+// The window procedure logs the messages; the exit code (a byte) is the first after SetWindowPos plus
+// twice the second: 47h + 2 * 5.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'SetWindowPos'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const wc = at.d(0x440), cls = at.d(0x470), hwnd = at.d(0x478), log = at.d(0x410), cnt = at.d(0x430), proc = at.d(0x200);
+      const main = [0x68, ...le(wc), 0xff, 0x15, ...le(at.iat['user32.dll!RegisterClassA']),
+        0x6a, 0, 0x68, ...le(0x400000), 0x6a, 0, 0x6a, 0, 0x68, ...le(200), 0x68, ...le(300), 0x6a, 0, 0x6a, 0, 0x68, ...le(0xcf0000), 0x6a, 0, 0x68, ...le(cls), 0x6a, 0,
+        0xff, 0x15, ...le(at.iat['user32.dll!CreateWindowExA']), 0xa3, ...le(hwnd), 0xc7, 0x05, ...le(cnt), 0, 0, 0, 0,
+        0x6a, 0x14, 0x68, ...le(400), 0x68, ...le(500), 0x6a, 10, 0x6a, 10, 0x6a, 0, 0xff, 0x35, ...le(hwnd), 0xff, 0x15, ...le(at.iat['user32.dll!SetWindowPos']),
+        0xa1, ...le(log + 4), 0x01, 0xc0, 0x03, 0x05, ...le(log), 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const wndproc = [0x8b, 0x44, 0x24, 0x08, 0x8b, 0x0d, ...le(cnt), 0x83, 0xe1, 0x07, 0x89, 0x04, 0x8d, ...le(log), 0xff, 0x05, ...le(cnt), 0x31, 0xc0, 0xc2, 0x10, 0x00];
+      const img = new Uint8Array(0x500); img.set(main); img.set(wndproc, 0x200);
+      img.set(le(proc), 0x444); img.set(le(cls), 0x464); img.set(new TextEncoder().encode('wpc\0'), 0x470);   // WNDCLASSA: lpfnWndProc, lpszClassName
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SetWindowPos sends WM_WINDOWPOSCHANGED, then WM_SIZE', got, '51'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

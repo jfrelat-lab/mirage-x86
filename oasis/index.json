@@ -493,6 +493,22 @@
     "sound": true
   },
   {
+    "name": "win32/jazz2-1998",
+    "title": "Jazz Jackrabbit 2 shareware 1.21 — Orange Games for Epic MegaGames, 1998",
+    "world": "win32",
+    "year": 1998,
+    "author": "Orange Games / Epic MegaGames",
+    "thumb": "oasis/thumbs/win32-jazz2-1998.png",
+    "output": "window",
+    "tags": [
+      "Game",
+      "Win32",
+      "GDI",
+      "waveOut"
+    ],
+    "sound": true
+  },
+  {
     "name": "win32/luxo4k-2007",
     "title": "luxo4k — RGBA & Conspiracy, 4K for Windows",
     "world": "win32",

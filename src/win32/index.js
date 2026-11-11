@@ -215,6 +215,32 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
    * its exports read. Its DllMain is LoadLibraryA's to call (src/win32/api.js): `init` is pending.
    */
   let dllNext = 0x50000000;
+  const loaded = [];
+  /*
+   * Static TLS (__declspec(thread): Visual C++'s thread-safe statics, a C++ runtime's per-thread state):
+   * a module's TLS directory names its template (StartAddressOfRawData to EndAddressOfRawData, then
+   * SizeOfZeroFill zero bytes), where its index goes (AddressOfIndex) and its callbacks. Each thread
+   * gets a copy of every template, and TEB+2Ch (ThreadLocalStoragePointer) points to the array of them,
+   * by index -- the code reads fs:[2Ch], then [array + index * 4]. A module without one has none.
+   */
+  const tls = [];                                                     // { start, end, zero, callbacks, base }
+  const addTls = (at, ih) => {
+    const d = ih.dirs[9]; if (!d || !d.rva) return;
+    const t = at + d.rva, rec = { start: rd32(t), end: rd32(t + 4), zero: rd32(t + 16), callbacks: [], base: at };
+    w32(rd32(t + 8), tls.length);
+    for (let c = rd32(t + 12); c && rd32(c); c += 4) rec.callbacks.push(rd32(c));
+    tls.push(rec);
+  };
+  const tlsBlocks = (teb) => {
+    if (!tls.length) return;
+    const arr = heapAlloc(4 * tls.length);
+    tls.forEach((r, i) => {
+      const n = r.end - r.start, b = heapAlloc(Math.max(4, n + r.zero));
+      wr(b, lx.rdBytes(r.start, n)); if (r.zero) wr(b + n, new Uint8Array(r.zero));
+      w32(arr + 4 * i, b);
+    });
+    w32(teb + 0x2c, arr);
+  };
   const loadFile = (key) => {
     const img = readFile && readFile(key), ih = img && peHeader(img);
     if (!ih) return null;
@@ -253,9 +279,13 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
       if (lx.onOutput) lx.onOutput(2, new TextEncoder().encode(`mirage-win32: ${key} not loaded: ${e.message.replace(/^mirage-win32: /, '')}\n`));
       return null;
     }
+    addTls(at, ih); mod.tls = tls[tls.length - 1]?.base === at ? tls[tls.length - 1] : null;
+    loaded.push(mod);                                                 // its own imports first: the order DllMains run in
     return mod;
   };
   bindImports(base, h, exeMod.name);
+  addTls(base, h);
+  tlsBlocks(TEB);
 
   // ---- the API's context, and the stack at the entry point -----------------------------------------
   // ---- threads: each its TEB (below the first, as XP places them) and its stack, on lx.spawnThread --------
@@ -270,6 +300,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     const exitT = modules.get('kernel32.dll').exports.get('ExitThread') || 0;
     let sp = top - 16;
     w32(sp, exitT); w32(sp + 4, param >>> 0); w32(sp + 8, 0);
+    tlsBlocks(teb);
     const tid = lx.spawnThread({ eip: start, esp: sp, fsIndex: FS_SEL >> 3, fsBase: teb });
     w32(teb + 0x24, tid);
     return tid;
@@ -290,7 +321,25 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   let sp = STACK_TOP - 0x3c;                                          // XP leaves a little above ESP
   for (const v of [exit, 0, 0]) { w32(sp, v); sp += 4; }
   sp -= 12;
-  lx.enterUser(base + h.entry, sp, { fs: FS_SEL });
+  /*
+   * The program's own DLLs it imports (Abuse's SDL2.dll and SDL2_mixer.dll) are initialized before its
+   * entry point, as Windows' loader does it: each DllMain(DLL_PROCESS_ATTACH) in turn, a DLL's after
+   * those of the DLLs it imports. A DLL's C runtime starts there -- its stack cookie set, its globals
+   * built -- and a DllMain run later, inside one of its own functions, changed the cookie under a frame
+   * that had saved the old one. A stub of code made here makes the calls, then jumps to the entry point.
+   */
+  let start = base + h.entry;
+  // The TLS callbacks (a DLL's before its DllMain, the program's last) are called the same way.
+  const pending = loaded.filter((m) => m.init && m.entry), exeTls = tls.find((r) => r.base === base);
+  if (pending.length || (exeTls && exeTls.callbacks.length)) {
+    const code = [], d32 = (v) => code.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255);
+    const call = (b, fn) => { code.push(0x6a, 0x00, 0x6a, 0x01, 0x68); d32(b); code.push(0xb8); d32(fn); code.push(0xff, 0xd0); };   // fn(base, 1, 0)
+    for (const m of pending) { m.init = false; for (const c of m.tls ? m.tls.callbacks : []) call(m.base, c); call(m.base, m.entry); }
+    for (const c of exeTls ? exeTls.callbacks : []) call(base, c);
+    code.push(0xbb); d32(PEB); code.push(0xb8); d32(start); code.push(0xff, 0xe0);                                                            // EBX, EAX; jmp to the entry
+    start = heapAlloc(code.length); wr(start, Uint8Array.from(code));
+  }
+  lx.enterUser(start, sp, { fs: FS_SEL });
   cpu.reg[3] = PEB;                                                   // EBX: XP starts a process with the PEB there
   cpu.reg[0] = base + h.entry;                                        // EAX: the entry point
   cpu.fcw = 0x027f;                                                   // a Win32 process starts at 53 bits, not FNINIT's 0x037F

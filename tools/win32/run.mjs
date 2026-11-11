@@ -11,7 +11,8 @@
 //                                   2a- press and release (Shift held over the keys between)
 //   MIRAGE_W32MOUSE=10:98,10,down|10.2:398,210|10.4:up   the mouse on the screen at those guest seconds:
 //                                   a point (mouseAt), the left button down or up there
-//   MIRAGE_W32DIR=<dir>             the files beside it, by base name, on the program's own disk (src/win32/api.js)
+//   MIRAGE_W32ENV=NAME=value,...    the program's environment (GetEnvironmentVariable)
+//   MIRAGE_W32DIR=<dir>             the files beside it and below, by their path there, on the program's own disk (src/win32/api.js)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
 //   MIRAGE_W32IPS=<n>               instructions per guest second (default 1e8)
 //   MIRAGE_W32TRACE=1|<file>        every API call as it is made (to stderr, or that file)
@@ -63,10 +64,12 @@ const traceOut = (t) => { const b = Buffer.from(t); for (let o = 0; o < b.length
 const traceFrom = Number(process.env.MIRAGE_W32TRACEFROM) || 0;
 if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { if (traceFrom && lx.mono() < traceFrom) { if (t0) t0(name, args); return; } traceOut('w32 ' + lx.mono().toFixed(3) + ': ' + name + ' ' + args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) : a)).join(' ') + '\n'); if (t0) t0(name, args); }; }
 const files = {};
-if (process.env.MIRAGE_W32DIR) (function walk(d) { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else files[n] = new Uint8Array(readFileSync(p)); } })(process.env.MIRAGE_W32DIR);
+if (process.env.MIRAGE_W32DIR) (function walk(d, rel) { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p, rel + n + '/'); else files[rel + n] = new Uint8Array(readFileSync(p)); } })(process.env.MIRAGE_W32DIR, '');
 // MIRAGE_W32FONTS=arial=/path/Arial.ttf,arial:bold=/path/Arial Bold.ttf: TrueType fonts, as the page's machine.fonts.
 const fonts = process.env.MIRAGE_W32FONTS ? Object.fromEntries(process.env.MIRAGE_W32FONTS.split(',').map((e) => { const [k, f] = e.split('='); return [k.toLowerCase(), new Uint8Array(readFileSync(f))]; })) : undefined;
-const apis = win32Apis({ files, fonts });
+// MIRAGE_W32ENV=NAME=value,...: the program's environment (SDL's hints: SDL_RENDER_DRIVER=software).
+const env = Object.fromEntries((process.env.MIRAGE_W32ENV || '').split(',').filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
+const apis = win32Apis({ files, fonts, env });
 /*
  * MIRAGE_W32PROBE=goldsrc: what Half-Life's engine (sw.dll) and its game (hl.dll) say to each other through
  * their tables of function pointers, which no import trace sees. The engine's table, handed over by
@@ -242,20 +245,26 @@ if (PROBE) {
 }
 if (process.env.MIRAGE_W32STUBS) {
   // The import directory read here, as the loader reads it, and every name no table makes added as a
-  // function that throws: the run then stops at the first one called, and says which.
-  const b = exe, u32 = (o) => (b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24) >>> 0, u16 = (o) => b[o] | b[o + 1] << 8;
-  const pe = u32(0x3c), nsec = u16(pe + 6), opt = pe + 24, secs = opt + u16(pe + 20);
-  const off = (r) => { for (let i = 0; i < nsec; i++) { const sct = secs + i * 40, va = u32(sct + 12), raw = u32(sct + 20); if (r >= va && r < va + Math.max(u32(sct + 8), u32(sct + 16))) return r - va + raw; } return r; };
-  const str = (o) => { let e = o; while (b[e]) e++; return new TextDecoder('latin1').decode(b.subarray(o, e)); };
+  // function that throws: the run then stops at the first one called, and says which. The program's and
+  // those of its own DLLs (on its disk: Abuse's SDL2.dll), which are themselves loaded, not stubbed.
+  const own = new Map(Object.entries(files).filter(([n]) => /\.dll$/i.test(n)).map(([n, v]) => [basename(n).toLowerCase(), v]));
   const byDll = new Map(apis.map((a) => [a.dll.toLowerCase(), a]));
-  for (let d = off(u32(opt + 104)); u32(d + 12); d += 20) {
-    const dll = str(off(u32(d + 12)));
-    let mod = byDll.get(dll.toLowerCase());
-    if (!mod) { mod = { dll, fns: {} }; apis.push(mod); byDll.set(dll.toLowerCase(), mod); }
-    for (let t = off(u32(d) || u32(d + 16)); u32(t); t += 4) {
-      const v = u32(t), ord = v & 0x80000000 ? v & 0xffff : 0, name = ord ? `#${ord}` : str(off(v) + 2);
-      if (ord ? Object.values(mod.fns).some((f) => f[2] && f[2].ordinal === ord) : name in mod.fns) continue;
-      mod.fns[name] = ['', () => { throw new Error(`mirage-win32: ${dll}!${name} is called and not made yet`); }, ord ? { ordinal: ord, noName: true } : {}];
+  for (const b of [exe, ...own.values()]) {
+    const u32 = (o) => (b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24) >>> 0, u16 = (o) => b[o] | b[o + 1] << 8;
+    const pe = u32(0x3c), nsec = u16(pe + 6), opt = pe + 24, secs = opt + u16(pe + 20);
+    const off = (r) => { for (let i = 0; i < nsec; i++) { const sct = secs + i * 40, va = u32(sct + 12), raw = u32(sct + 20); if (r >= va && r < va + Math.max(u32(sct + 8), u32(sct + 16))) return r - va + raw; } return r; };
+    const str = (o) => { let e = o; while (b[e]) e++; return new TextDecoder('latin1').decode(b.subarray(o, e)); };
+    if (!u32(opt + 104)) continue;
+    for (let d = off(u32(opt + 104)); u32(d + 12); d += 20) {
+      const dll = str(off(u32(d + 12)));
+      if (own.has(dll.toLowerCase())) continue;
+      let mod = byDll.get(dll.toLowerCase());
+      if (!mod) { mod = { dll, fns: {} }; apis.push(mod); byDll.set(dll.toLowerCase(), mod); }
+      for (let t = off(u32(d) || u32(d + 16)); u32(t); t += 4) {
+        const v = u32(t), ord = v & 0x80000000 ? v & 0xffff : 0, name = ord ? `#${ord}` : str(off(v) + 2);
+        if (ord ? Object.values(mod.fns).some((f) => f[2] && f[2].ordinal === ord) : name in mod.fns) continue;
+        mod.fns[name] = ['', () => { throw new Error(`mirage-win32: ${dll}!${name} is called and not made yet`); }, ord ? { ordinal: ord, noName: true } : {}];
+      }
     }
   }
 }
