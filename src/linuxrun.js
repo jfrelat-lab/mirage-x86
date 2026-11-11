@@ -68,11 +68,11 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     const [glLib, gluLib] = hle.libs;
     // machine.fonts: the TrueType fonts it selects (D3DXCreateText), the visitor's or free ones (src/win32/fonts.js)
     const fonts = m.fonts ? await (await import('./win32/fonts.js')).pageFonts(m.fonts, (t) => onOutput(t + '\n')) : undefined;
-    // The files beside the program, and in the directories below it, on its own disk (by base name):
-    // WinQuake's id1/pak0.pak. An intro alone in its directory has none.
+    // The files beside the program, and in the directories below it, on its own disk (by their path
+    // there): WinQuake's id1/pak0.pak, Abuse's art/ and levels/. An intro alone in its directory has none.
     const files = {}, dir = img.entry.run.replace(/\/[^/]*$/, '') || '/';
-    (function walk(d) { for (const n of host.list(d)) { const p = `${d === '/' ? '' : d}/${n}`, st = host.lstat(p); if (st && st.type === 'dir') walk(p); else if (st && st.type === 'file' && p !== img.entry.run) files[n] = host.read(p); } })(dir);
-    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files });
+    (function walk(d, rel) { for (const n of host.list(d)) { const p = `${d === '/' ? '' : d}/${n}`, st = host.lstat(p); if (st && st.type === 'dir') walk(p, rel + n + '/'); else if (st && st.type === 'file' && p !== img.entry.run) files[rel + n] = host.read(p); } })(dir, '');
+    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files, env: img.entry.env || {} });   // entry.env: the program's environment (SDL's hints)
     w32in = apis.input; w32wm = apis.wm;
     win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
   } else if (m.hle) {

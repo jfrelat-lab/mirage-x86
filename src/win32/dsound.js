@@ -147,6 +147,12 @@ export function dsoundApis() {
     // DirectSoundCreate8(guid, ppDS8, outer) and DirectSoundCreate: the one device.
     DirectSoundCreate8: ['ppp', (x, guid, pp) => { x.w32(pp, make(x, 'IDirectSound8', {})); return S_OK; }, { ordinal: 11 }],
     DirectSoundCreate: ['ppp', (x, guid, pp) => { x.w32(pp, make(x, 'IDirectSound8', {})); return S_OK; }, { ordinal: 1 }],
+    // The devices, listed: none beyond the default one a NULL GUID opens (SDL 2 opens that one). No
+    // capture device: DSERR_NODRIVER. SDL 2 takes DirectSound only when all four are exported.
+    DirectSoundEnumerateA: ['pp', () => S_OK, { ordinal: 2 }], DirectSoundEnumerateW: ['pp', () => S_OK, { ordinal: 3 }],
+    DirectSoundCaptureCreate: ['ppp', () => 0x88780078, { ordinal: 6 }],
+    DirectSoundCaptureEnumerateA: ['pp', () => S_OK, { ordinal: 7 }], DirectSoundCaptureEnumerateW: ['pp', () => S_OK, { ordinal: 8 }],
+    DirectSoundCaptureCreate8: ['ppp', () => 0x88780078, { ordinal: 12 }],
   };
   let ord = 1000;
   for (const [iface, ms] of Object.entries(METHODS)) for (const [n, s] of ms) {

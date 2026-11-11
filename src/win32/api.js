@@ -14,6 +14,8 @@ import { parseSMF } from '../midi.js';
 import { windowManager } from './wm.js';
 import { ddrawApis } from './ddraw.js';
 import { classicApis, loadString, decodeDib, findResource, resId } from './classic.js';
+import { modernApis } from './modern.js';
+import { ucrtApis } from './ucrt.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
 
@@ -128,10 +130,11 @@ function reAlloc(x, p, n, zero) {
   x.win.heapFree(p); return q;
 }
 
-export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
+export function win32Apis({ gl, glu, fonts, files = {}, env = {} } = {}) {
   const st = windowState(fonts);
   const wm = windowManager(st);                                       // the screen the window sits on (src/win32/wm.js)
   st.files = [];                                                      // handle - 4000h -> { f, pos }
+  st.env = new Map(Object.entries(env).map(([k, v]) => [k.toUpperCase(), String(v)]));   // the environment beyond PATH (GetEnvironmentVariable)
   st.events = new Map(); st.dcBitmaps = new Map(); st.dcStates = new Map();
   const dcState = (hdc) => { let d = st.dcStates.get(hdc); if (!d) st.dcStates.set(hdc, d = { bkMode: 2, bkColor: 0xffffff, textColor: 0 }); return d; };
   // A DC's font in pixels: its em (lfHeight < 0 is the character height, > 0 the cell's), its ascent
@@ -191,9 +194,27 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     return n;
   };
   st.mci = new Map(); st.mciNext = 1; st.mciPlaying = 0;
-  st.disk = new Map(Object.entries(files).map(([n, b]) => [n.toLowerCase(), { bytes: b, size: b.length }]));
+  /*
+   * The program's disk, C:, its root the program's directory: `files` by their path there ("art/ant.spe",
+   * "id1/pak0.pak"), kept by that path in lower case with forward slashes. A name is looked up by its
+   * path first -- Abuse opens "art/fonts.spe" and "lisp/common.lsp" from directories of its own -- then
+   * by its base name alone, as the disk was before it had directories: Half-Life asks for
+   * "valve\\cl_dlls\\client.dll" from wherever it believes it was installed.
+   */
+  const relPath = (p) => {
+    const out = [];
+    for (const part of p.toLowerCase().replace(/\\/g, '/').replace(/^[a-z]:/, '').split('/')) {
+      if (part === '..') out.pop(); else if (part && part !== '.') out.push(part);
+    }
+    return out.join('/');
+  };
   const baseName = (p) => p.replace(/^.*[\\/]/, '').toLowerCase();
-  const diskFile = (p) => st.disk.get(baseName(p)) || (baseName(p) === 'gm.dls' ? { bytes: null, size: GM_DLS_SIZE } : null);
+  st.disk = new Map(Object.entries(files).map(([n, b]) => [relPath(n), { bytes: b, size: b.length }]));
+  const diskFile = (p) => st.disk.get(relPath(p)) || [...st.disk].find(([k]) => baseName(k) === baseName(p))?.[1]
+    || (baseName(p) === 'gm.dls' ? { bytes: null, size: GM_DLS_SIZE } : null);
+  // A directory of the disk: its root, or a path some file lies under.
+  const diskDir = (p) => { const k = relPath(p); return !k || [...st.disk.keys()].some((n) => n.startsWith(k + '/')); };
+  st.relPath = relPath; st.diskFile = diskFile; st.diskDir = diskDir;
   const openHandle = (f) => { st.files.push({ f, pos: 0 }); return 0x4000 + st.files.length - 1; };
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
@@ -317,11 +338,11 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     // CreateFileA(name, access, share, sa, disposition, flags, template)
     CreateFileA: ['puupuup', (x, pName, access, share, sa, disp) => {
-      const name = baseName(x.str(pName));
+      const name = x.str(pName);
       let f = diskFile(name);
       if (disp === 2 || disp === 5 || (!f && (disp === 1 || disp === 4))) {   // CREATE_ALWAYS, TRUNCATE_EXISTING, or made
         if (disp === 5 && !f) return -1;
-        f = { bytes: new Uint8Array(0), size: 0 }; st.disk.set(name, f);
+        f = { bytes: new Uint8Array(0), size: 0 }; st.disk.set(relPath(name), f);
       } else if (!f || disp === 1) return -1;                          // INVALID_HANDLE_VALUE
       return openHandle(f);
     }],
@@ -351,21 +372,24 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       o.pos = Math.max(0, (how === 1 ? o.pos : how === 2 ? o.f.size : 0) + dist);
       return o.pos;
     }],
-    DeleteFileA: ['p', (x, pName) => (st.disk.delete(baseName(x.str(pName))) ? 1 : 0)],
+    DeleteFileA: ['p', (x, pName) => { const f = diskFile(x.str(pName)), k = f && [...st.disk].find(([, v]) => v === f)?.[0]; return k ? (st.disk.delete(k), 1) : 0; }],
     OutputDebugStringA: ['p', () => 0],
     SetEndOfFile: ['p', (x, h) => { const o = st.files[h - 0x4000]; if (!o) return 0; o.f.size = o.pos; return 1; }],
     FlushFileBuffers: ['p', () => 1],
     // A name on the program's disk is a file (FILE_ATTRIBUTE_ARCHIVE); the disk has no directories but
     // its root, so anything else is not there.
-    GetFileAttributesA: ['p', (x, pName) => { const n = x.str(pName); return /^[a-z]:\\?$|^\.?[\\/]?$/i.test(n) ? 0x10 : diskFile(n) ? 0x20 : 0xffffffff; }],
+    GetFileAttributesA: ['p', (x, pName) => { const n = x.str(pName); return diskDir(n) ? 0x10 : diskFile(n) ? 0x20 : 0xffffffff; }],
     CreateDirectoryA: ['pp', () => 1],
     GetCurrentDirectoryA: ['up', (x, n, buf) => { if (n >= 4) x.write(buf, new TextEncoder().encode('C:\\\0')); return 3; }],
     GetSystemDirectoryA: ['pu', (x, buf, n) => { const s = 'C:\\WINDOWS\\system32'; if (n > s.length) x.write(buf, new TextEncoder().encode(s + '\0')); return s.length; }],
     // FindFirstFileA over the disk: '*' and '?' in the base name; WIN32_FIND_DATAA's attributes at 0,
     // size at 32 (low dword), name at 44. A search handle is 5000h up.
     FindFirstFileA: ['pp', (x, pPat, fd) => {
-      const pat = baseName(x.str(pPat)), re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
-      const list = [...st.disk.keys()].filter((n) => re.test(n));
+      // The pattern's directory, then its base name; a name with no directory of its own is found by base
+      // name anywhere, as the disk was before it had directories.
+      const full = x.str(pPat), pat = baseName(full), dir = relPath(full.replace(/[^\\/]*$/, '')), re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+      const inDir = [...st.disk.keys()].filter((n) => n.replace(/\/?[^/]*$/, '') === dir);
+      const list = (inDir.length ? inDir : [...st.disk.keys()]).filter((n) => re.test(baseName(n)));
       if (!list.length) return -1;
       st.finds ||= []; st.finds.push({ list, i: 0 });
       const h = 0x5000 + st.finds.length - 1; findFill(x, fd, list[0]); return h;
@@ -445,7 +469,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     FileTimeToLocalFileTime: ['pp', (x, a, b) => { x.w32(b, x.r32(a)); x.w32(b + 4, x.r32(a + 4)); return 1; }],
     GlobalSize: ['p', (x, h) => x.win.heapSize(h)],
     GetDriveTypeA: ['p', () => 3],                                    // DRIVE_FIXED: C:, the program's disk
-    MoveFileA: ['pp', (x, a, b) => { const f = st.disk.get(baseName(x.str(a))); if (!f) return 0; st.disk.delete(baseName(x.str(a))); st.disk.set(baseName(x.str(b)), f); return 1; }],
+    MoveFileA: ['pp', (x, a, b) => { const f = diskFile(x.str(a)), k = f && [...st.disk].find(([, v]) => v === f)?.[0]; if (!k) return 0; st.disk.delete(k); st.disk.set(relPath(x.str(b)), f); return 1; }],
     // A path on C:, whose root is the program's directory: "C:\\" and the name, the part after the last
     // backslash pointed at.
     GetFullPathNameA: ['pupp', (x, name, n, buf, part) => {
@@ -480,7 +504,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   // WIN32_FIND_DATAA for a file of the disk: archive, its size, its name.
   function findFill(x, fd, name) {
     x.write(fd, new Uint8Array(320)); x.w32(fd, 0x20); x.w32(fd + 32, st.disk.get(name).size);
-    x.write(fd + 44, new TextEncoder().encode(name.slice(0, 259) + '\0'));
+    x.write(fd + 44, new TextEncoder().encode(baseName(name).slice(0, 259) + '\0'));
   }
   // printf's formatting, the arguments read from `ap` on: %d %i %u %x %X %c %s %f %g %%, with flags,
   // width and precision (doubles take 8 bytes there, as cdecl's varargs lay them out).
@@ -532,6 +556,9 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // The main window, unless it is a child, or another class's while the main one lives (MFC's dialogs
     // beside its frame); the main class's again is the main window made anew (a game's new video mode).
     const k0 = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
+    // A message-only window (its parent HWND_MESSAGE, -3: SDL 2's helper window) is never shown, so never
+    // the main one: it receives messages and nothing else.
+    if (parent === 0xfffffffd) return createOther(x, cls, style & ~0x10000000, w, h, wide, X, Y, title, parent, menu, { messageOnly: true });
     if ((style & 0x40000000) || (st.mainMade && !st.destroyed && k0 !== st.mainClass)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
     st.mainMade = true; st.mainClass = k0;
     // Where it sits on the desktop (CW_USEDEFAULT: the first cascade position) and its caption.
@@ -817,6 +844,12 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   // Showing and activating: WM_SHOWWINDOW, WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE (WA_ACTIVE), WM_SETFOCUS.
   const ACTIVATE = [[0x18, 1, 0], [0x1c, 1, 0], [0x86, 1, 0], [0x06, 1, 0], [0x07, 0, 0]];
   const sizeLp = () => ((st.h & 0xffff) << 16 | (st.w & 0xffff)) >>> 0;
+  // A WINDOWPOS for WM_WINDOWPOSCHANGED: the main window, its place and outer size, the SWP_ flags.
+  const windowPos = (x, w, h, flags) => {
+    const p = st.windowPos ||= x.win.heapAlloc(28);
+    [st.hwnd, 0, st.x | 0, st.y | 0, w, h, flags].forEach((v, i) => x.w32(p + 4 * i, v >>> 0));
+    return p;
+  };
   /*
    * Messages Windows SENDS: the window procedure runs in the program before the API returns. The
    * procedure is entered with its four arguments and a return into user32's ordinal-only stub 2600
@@ -938,14 +971,16 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       if (!(flags & 2)) { st.x = X; st.y = Y; wm.dirty = true; }       // unless SWP_NOMOVE
       if (flags & 1) return 1;                                         // SWP_NOSIZE
       const w0 = st.w, h0 = st.h; resize(w, h);
-      return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 28) : 1;   // WM_SIZE, the client area's new size
+      // WM_WINDOWPOSCHANGED (its WINDOWPOS: where and how big, frame included), then WM_SIZE, the client
+      // area's new size: SDL 2 learns of a new size from the first, others from the second.
+      return st.w !== w0 || st.h !== h0 ? send(x, [[0x47, 0, windowPos(x, w, h, flags)], [0x05, 0, sizeLp()]], () => 1, 28) : 1;
     }],
     MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => {
       if (hwnd !== st.hwnd) return placeOther(x, hwnd, X, Y, w, h, 0, 24);
       if (deskMode()) { if (st.shown) uncoverRect(mainOrigin(), st.w, st.h); st.x = X; st.y = Y; st.w = Math.max(1, w); st.h = Math.max(1, h); invalidate(hwnd, true, true); return 1; }
       st.x = X; st.y = Y;
       const w0 = st.w, h0 = st.h; resize(w, h);
-      return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 24) : 1;
+      return st.w !== w0 || st.h !== h0 ? send(x, [[0x47, 0, windowPos(x, w, h, 0)], [0x05, 0, sizeLp()]], () => 1, 24) : 1;
     }],
     GetAsyncKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8001 : 0)],
     GetCursorPos: ['p', (x, p) => { x.w32(p, st.mouseX ?? (st.w >> 1)); x.w32(p + 4, st.mouseY ?? (st.h >> 1)); return 1; }],
@@ -1799,6 +1834,9 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   // The classic Windows 95 calls (src/win32/classic.js), under the names not answered above.
   const classic = classicApis({ st, wm, send });
   for (const [dll, t] of [[kernel32, classic.kernel32], [user32, classic.user32], [gdi32, classic.gdi32], [winmm, classic.winmm]]) for (const [k, v] of Object.entries(t || {})) if (!(k in dll)) dll[k] = v;
+  // The Unicode and post-XP calls (src/win32/modern.js), under the names still not answered.
+  const modern = modernApis({ st, kernel32, user32, gdi32, send });
+  for (const [dll, t] of [[kernel32, modern.kernel32], [user32, modern.user32], [gdi32, modern.gdi32], [winmm, modern.winmm]]) for (const [k, v] of Object.entries(t || {})) if (!(k in dll)) dll[k] = v;
   const tables = [
     { dll: 'msvcrt.dll', fns: msvcrt },
     { dll: 'ntdll.dll', fns: { RtlZeroMemory: ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }] } },
@@ -1821,9 +1859,15 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }] } },
     // The registry: empty. A key opens as not found (ERROR_FILE_NOT_FOUND), so nothing is read from it
     // or written to it, as on a machine where the program never ran.
-    { dll: 'advapi32.dll', fns: classic.advapi32 },
+    { dll: 'advapi32.dll', fns: { ...modern.advapi32, ...classic.advapi32 } },
     { dll: 'version.dll', fns: classic.version },
-    { dll: 'ole32.dll', fns: classic.ole32 },                      // a registry in memory (src/win32/classic.js)
+    { dll: 'ole32.dll', fns: { ...modern.ole32, ...classic.ole32 } },   // a registry in memory (src/win32/classic.js)
+    // What SDL 2 and a program of the 2010s reach for beyond them (src/win32/modern.js); Winsock 2 is
+    // Winsock 1.1's functions by the same ordinals.
+    { dll: 'shell32.dll', fns: modern.shell32 }, { dll: 'imm32.dll', fns: modern.imm32 }, { dll: 'setupapi.dll', fns: modern.setupapi },
+    { dll: 'oleaut32.dll', fns: modern.oleaut32 }, { dll: 'ws2_32.dll', fns: wsock32 },
+    // The Universal C Runtime and vcruntime140 of Visual C++ 2015 and later (src/win32/ucrt.js).
+    ...ucrtApis({ st, send }),
   ];
   /*
    * The visitor's input, as Windows posts it to the window: a key by its PC scancode (set 1; 0xE0-
