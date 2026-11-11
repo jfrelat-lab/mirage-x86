@@ -18,6 +18,7 @@ import { installBIOS } from './bios.js';
 import { installLinux } from './linux.js';
 import { unzip } from './zip.js';
 import { unlha } from './lha.js';
+import { wiseLayer } from './wise.js';
 
 const S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFLNK = 0o120000;
 const enc = new TextEncoder();
@@ -226,6 +227,9 @@ export async function buildTree(img, io) {
       const inner = (await unzip(await get(l.zip, l.lha))).find((f) => f.path.toLowerCase() === l.lha.toLowerCase());
       if (!inner) throw new Error(`oasis: ${l.lha} is not in ${l.zip}`);
       for (const f of unlha(inner.bytes)) { const to = l.files ? l.files[f.path] : f.path; if (to) tree.file(norm((l.into || '') + '/' + to), f.bytes); }
+    } else if (l.wise) {
+      const inflate = async (d) => new Uint8Array(await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      for (const f of await wiseLayer(await get(l.wise), l, inflate)) tree.file(norm(f.to), f.bytes);
     } else if (l.zip) {
       for (const f of await unzip(await get(l.zip))) tree.file(norm(f.path), f.bytes);
     } else if (l.gz) tree.file(l.to, await gunzip(await get(l.gz)));

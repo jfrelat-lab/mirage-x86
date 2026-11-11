@@ -3519,6 +3519,24 @@ const runLinux = (hex, argv) => {
     got = [lx.symbol('__environ').toString(16), lx.getenv('SST_GAMMA'), lx.getenv('B')].join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
   eq('linux: lx.getenv -- the environment through the ELF\'s __environ', got, '9000 1.6 '); }
+// src/wise.js: a Wise installer read without running it (Half-Life's Uplink demo, hluplink.exe) -- after
+// the stub's last section, raw deflate streams each followed by a CRC: the script, then the files, whose
+// offsets the script gives from where the first file's stream begins. A synthetic one: a PE header of one
+// section, a script naming two files (and a stray "%" that is no entry), the files.
+{ let got;
+  try { const { unwise, wiseLayer } = await import('../src/wise.js'), z = await import('zlib');
+    const crc = new Uint8Array(4), d1 = z.deflateRawSync(Buffer.from('hello')), d2 = z.deflateRawSync(Buffer.from('world!!'));
+    const entry = (name, start, end, size) => { const e = new Uint8Array(43 + name.length + 1), v = new DataView(e.buffer);
+      v.setUint32(3, start, true); v.setUint32(7, end, true); v.setUint32(15, size, true); e.set(Buffer.from(name), 43); return e; };
+    const script = Buffer.concat([Buffer.from('%TEMP% noise\0'), entry('%MAINDIR%\\a.txt', 0, d1.length + 4, 5), entry('%MAINDIR%\\sub\\b.txt', d1.length + 4, d1.length + d2.length + 8, 7)]);
+    const ds = z.deflateRawSync(script), head = new Uint8Array(0x80), hv = new DataView(head.buffer);
+    head.set([0x4d, 0x5a]); hv.setUint32(0x3c, 0x40, true); head.set([0x50, 0x45], 0x40); hv.setUint16(0x46, 1, true); hv.setUint16(0x54, 0, true);
+    hv.setUint32(0x58 + 16, 0x80, true); hv.setUint32(0x58 + 20, 0, true);   // one section: 80h bytes from 0
+    const exe = new Uint8Array(Buffer.concat([head, ds, crc, d1, crc, d2, crc]));
+    const files = await unwise(exe), layer = await wiseLayer(exe, { wise: 'x', into: '/hl' });
+    got = [files.map((f) => `${f.path}=${new TextDecoder().decode(f.bytes)}`).join(','), layer.map((f) => f.to).join(',')].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('wise: an installer\'s files from its script, without running it', got, '%MAINDIR%\\a.txt=hello,%MAINDIR%\\sub\\b.txt=world!! /hl/a.txt,/hl/sub/b.txt'); }
 // tools/linux/lazymap.asm: anonymous memory larger than the machine (Quake II's hunks) -- 32 MiB mmapped on
 // a 16 MiB machine, its ends written and read back, mprotect and write() on pages never touched, munmap.
 // 31 when all hold; committed whole at mmap, it ran out of physical memory.
@@ -4901,6 +4919,74 @@ const runLinux = (hex, argv) => {
     got = [sizes.join(','), typeof ogl.wglSwapBuffers[1], ogl.glDeleteTextures[0], ogl.glScissor[0]].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: the GL surface follows a new video mode at wglMakeCurrent; wglSwapBuffers; glDeleteTextures, glScissor', got, '640x480,800x600 function ip iiii');
+  // Half-Life's launcher (1999, MFC): its settings in a registry in memory -- a key made then opened by
+  // another spelling, a value written and read back (asked its size first), one missing, the subkeys listed.
+  try { const { fn, x, str } = await w32(), a = (n) => fn('advapi32.dll', n), out = x.win.heapAlloc(64), r = [];
+    r.push(a('RegCreateKeyExA')(0x80000002, str('Software\\Valve\\Half-Life'), 0, 0, 0, 0x20006, 0, out, out + 4), x.r32(out + 4));
+    const hk = x.r32(out); r.push(a('RegSetValueExA')(hk, str('Name'), 0, 1, str('Gordon'), 7)); a('RegCloseKey')(hk);
+    r.push(a('RegOpenKeyExA')(0x80000002, str('SOFTWARE\\valve\\half-life'), 0, 1, out));
+    const h2 = x.r32(out); x.w32(out + 8, 0); r.push(a('RegQueryValueExA')(h2, str('name'), 0, out + 12, 0, out + 8), x.r32(out + 8));
+    r.push(a('RegQueryValueExA')(h2, str('Name'), 0, out + 12, out + 16, out + 8), x.str(out + 16), a('RegQueryValueExA')(h2, str('Gone'), 0, 0, 0, 0));
+    r.push(a('RegCreateKeyExA')(0x80000002, str('Software\\Valve\\Half-Life'), 0, 0, 0, 0, 0, out, out + 4), x.r32(out + 4), a('RegOpenKeyExA')(0x80000002, str('Software\\Nobody'), 0, 1, out));
+    a('RegOpenKeyExA')(0x80000002, str('Software'), 0, 1, out); x.w32(out + 8, 32); r.push(a('RegEnumKeyExA')(x.r32(out), 0, out + 16, out + 8, 0, 0, 0, 0), x.str(out + 16), a('RegEnumKeyExA')(x.r32(out), 1, out + 16, out + 8, 0, 0, 0, 0));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a registry in memory -- keys made and opened, values set and read, subkeys listed', got, '0 1 0 0 0 7 0 Gordon 2 0 2 2 0 valve 259');
+  // WaitForSingleObject on an event: a second definition answering 0 had replaced the real one, so every
+  // wait returned at once and the launcher's sound thread spun, starving the game's.
+  try { const { fn } = await w32(), k = (n) => fn('kernel32.dll', n), ev = k('CreateEventA')(0, 0, 0, 0), r = [k('WaitForSingleObject')(ev, 0)];
+    k('SetEvent')(ev); r.push(k('WaitForSingleObject')(ev, 0), k('WaitForSingleObject')(ev, 0)); got = r.map((v) => v.toString(16)).join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: WaitForSingleObject waits for an event, auto-reset once taken', got, '102 0 102');
+  // Windows besides the main one: a child control by its id (MFC subclasses through GetDlgItem: a made-up
+  // handle per id fell on the dialog's own), its parent and class; the queue filtered by window and range.
+  try { const { fn, x, str } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28);
+    const main = u('CreateWindowExA')(0, 0, 0, 0x00cf0000, 0, 0, 320, 200, 0, 0);
+    const btn = u('CreateWindowExA')(0, 0, str('OK'), 0x50000000, 10, 20, 80, 24, main, 7);   // a class without procedure: made at once
+    u('PostMessageA')(main, 0x400, 1, 2); u('PostMessageA')(btn, 0x111, 3, 4);
+    const r = [u('GetDlgItem')(main, 7) === btn, u('GetDlgItem')(main, 8), u('GetParent')(btn) === main];
+    const t = x.win.heapAlloc(16); u('GetWindowTextA')(btn, t, 16); r.push(x.str(t));
+    r.push(u('PeekMessageA')(m, btn, 0, 0, 1), x.r32(m + 4).toString(16), u('PeekMessageA')(m, 0, 0x111, 0x111, 1), u('PeekMessageA')(m, 0, 0x400, 0x400, 1), x.r32(m + 4).toString(16), x.r32(m) === main);
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: child windows -- GetDlgItem by id, GetParent, their text; PeekMessage by window and range', got, 'true 0 true OK 1 111 0 1 400 true');
+  // DrawTextA with DT_WORDBREAK measures (DT_CALCRECT) the lines the words fill: Half-Life's message box
+  // drew its 105 characters on one line, out of its 320 pixels.
+  try { const { fn, x, str } = await w32(), u = (n) => fn('user32.dll', n), r = x.win.heapAlloc(16), hdc = 0x1001;
+    const h = (fmt, w) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, w); x.w32(r + 12, 100); return u('DrawTextA')(hdc, str('aaaa bbbb cccc'), -1, r, fmt); };
+    const one = h(0x400, 200), three = h(0x410, 40);
+    got = [three / one, x.r32(r + 8) <= 40].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: DrawTextA DT_WORDBREAK wraps at the rectangle\'s width', got, '3 true');
+  // A dialog's keyboard: Enter is IDOK, Escape IDCANCEL, each a WM_COMMAND posted to it; other keys not its.
+  try { const { fn, x, str } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28), q = x.win.heapAlloc(28);
+    const main = u('CreateWindowExA')(0, 0, 0, 0x00cf0000, 0, 0, 320, 200, 0, 0), btn = u('CreateWindowExA')(0, 0, 0, 0x50000000, 0, 0, 8, 8, main, 1);
+    const key = (vk) => { x.w32(m, btn); x.w32(m + 4, 0x100); x.w32(m + 8, vk); return u('IsDialogMessageA')(main, m); };
+    const r = [key(0x0d), key(0x41), key(0x1b)];
+    while (u('PeekMessageA')(q, 0, 0x111, 0x111, 1)) r.push(x.r32(q + 8));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: IsDialogMessageA -- Enter posts IDOK, Escape IDCANCEL', got, '1 0 1 1 2');
+  // The console's output (GetStdHandle(STD_OUTPUT_HANDLE), WriteFile): the process's stdout -- a Visual C++
+  // console program's printf.
+  try { const { fn, x, lx, str } = await w32(), k = (n) => fn('kernel32.dll', n), seen = [];
+    lx.onOutput = (fd, b) => seen.push(fd + ':' + new TextDecoder().decode(b));
+    const done = x.win.heapAlloc(4); k('WriteFile')(k('GetStdHandle')(-11), str('hi'), 2, done, 0); k('WriteFile')(k('GetStdHandle')(-12), str('err'), 3, done, 0);
+    got = seen.join(' ') + ' ' + x.r32(done);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: WriteFile to the console reaches stdout and stderr', got, '1:hi 2:err 3');
+  // A module's string table (RT_STRING): its resource directory, type, name, language, read from the
+  // image in memory -- Half-Life's launcher takes every label of its menus there.
+  try { const { fn, x } = await w32(), base = x.win.heapAlloc(0x400), w = (o, v) => x.w32(base + o, v), w16 = (o, v) => x.w16(base + o, v);
+    x.write(base, new Uint8Array(0x400)); w(0x3c, 0x40); w(0x40 + 24 + 96 + 16, 0x100);
+    const dir = (o, id, sub) => { w16(o + 14, 1); w(o + 16, id); w(o + 20, sub); };
+    dir(0x100, 6, 0x80000018); dir(0x118, 2, 0x80000030); dir(0x130, 0x409, 0x48);   // RT_STRING, block 2 (ids 16-31), a language
+    w(0x148, 0x200); w(0x14c, 0x40);
+    w16(0x200, 0); w16(0x202, 5); 'Hello'.split('').forEach((c, i) => w16(0x204 + 2 * i, c.charCodeAt(0)));   // id 16 empty, id 17 "Hello"
+    const buf = x.win.heapAlloc(32), n = fn('user32.dll', 'LoadStringA')(base, 17, buf, 32), m = fn('user32.dll', 'LoadStringA')(base, 40, buf + 16, 16);
+    got = [n, x.str(buf), m].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: LoadStringA reads the module\'s RT_STRING table', got, '5 Hello 0');
   // DirectDraw (src/win32/ddraw.js): an 8-bit display mode, a palette, a primary surface with a back
   // buffer; a pixel drawn into the back buffer reaches the screen at Flip, in the palette's colour; a
   // copy with a source colour key leaves the key's pixels alone; a palette changed shows at once.

@@ -21,7 +21,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, lstatSync, readlinkSync,
   symlinkSync, rmSync, mkdtempSync, copyFileSync, renameSync, chmodSync } from 'fs';
 import { createHash } from 'crypto';
-import { gunzipSync } from 'zlib';
+import { gunzipSync, inflateRawSync } from 'zlib';
 import { join, dirname, resolve, relative, basename, extname } from 'path';
 import { homedir, tmpdir, platform, userInfo } from 'os';
 import { spawn, spawnSync } from 'child_process';
@@ -60,7 +60,7 @@ const isUrl = (s) => /^https?:\/\//.test(s);
 const local = (s) => resolve(ROOT, s);
 const layerKey = (l) => createHash('sha256').update(JSON.stringify(l)).digest('hex').slice(0, 16);
 const cacheDir = (l) => join(CACHE, 'layers', layerKey(l));
-const needsPull = (l) => (l.tar || l.deb || l.docker || l.lha || l.busybox || l.member || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
+const needsPull = (l) => (l.tar || l.deb || l.docker || l.lha || l.wise || l.busybox || l.member || ((l.zip || l.file || l.gz) && isUrl(l.zip || l.file || l.gz)));
 
 async function fetchBytes(src) {
   if (!isUrl(src)) return readFileSync(local(src));
@@ -172,6 +172,13 @@ async function pullLayer(l) {
       mkdirSync(dirname(join(base, to)), { recursive: true }); writeFileSync(join(base, to), f.bytes);
     }
   }
+  else if (l.wise) {                    // a Wise installer's files (Half-Life's Uplink demo), read, not run
+    const { wiseLayer } = await import(join(ROOT, 'src', 'wise.js'));
+    const wb = isUrl(l.wise) ? await fetchBytes(l.wise) : readFileSync(local(l.wise));
+    for (const f of await wiseLayer(new Uint8Array(wb), l, async (d) => new Uint8Array(inflateRawSync(d)))) {
+      mkdirSync(dirname(join(dir, f.to)), { recursive: true }); writeFileSync(join(dir, f.to), f.bytes);
+    }
+  }
   else {                                                                       // a remote zip, file or gz
     const src = l.zip || l.file || l.gz, b = await fetchBytes(src);
     writeFileSync(join(dir, basename(src.split('?')[0]).replace(/\.gz$/, l.gz ? '' : '.gz')), l.gz ? gunzipSync(b) : b);
@@ -225,7 +232,7 @@ async function linuxRoot(img) {
     chain = chainStep(chain, l);
     if (l.run) dirs.push(await runLayer(l, { dirs: [...dirs], files, links, mkdirs }, runDir(chain)));
     else if (l.dir) dirs.push(local(l.dir));
-    else if (l.tar || l.deb || l.docker || l.lha || l.busybox || (l.zip && (l.member || l.files))) dirs.push(await pullLayer(l));
+    else if (l.tar || l.deb || l.docker || l.lha || l.wise || l.busybox || (l.zip && (l.member || l.files))) dirs.push(await pullLayer(l));
     else if (l.gz || l.file) {
       const src = l.gz || l.file;
       let host = needsPull(l) ? join(await pullLayer(l), basename(src.split('?')[0]).replace(/\.gz$/, '')) : local(src);

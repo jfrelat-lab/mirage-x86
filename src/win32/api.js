@@ -13,6 +13,7 @@ import { parseTrueType } from './truetype.js';
 import { parseSMF } from '../midi.js';
 import { windowManager } from './wm.js';
 import { ddrawApis } from './ddraw.js';
+import { classicApis, loadString, decodeDib, findResource, resId } from './classic.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
 
@@ -117,6 +118,16 @@ function windowState(fonts = {}) {
  *  may select, { "tahoma": bytes, "tahoma:bold": bytes } (src/win32/fonts.js finds them in a page).
  *  `files`: files a program may open (OpenFile), by lower-case base name, { "gm.dls": bytes }. */
 const GM_DLS_SIZE = 3440660;
+// A block grown in place when it fits, else moved: the old contents copied, what grows zeroed if asked.
+function reAlloc(x, p, n, zero) {
+  if (!p) { const q = x.win.heapAlloc(n); if (zero) x.write(q, new Uint8Array(n)); return q; }
+  const old = x.win.heapSize(p);
+  if (n <= old) return p;
+  const q = x.win.heapAlloc(n);
+  x.write(q, x.bytes(p, old)); if (zero) x.write(q + old, new Uint8Array(n - old));
+  x.win.heapFree(p); return q;
+}
+
 export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   const st = windowState(fonts);
   const wm = windowManager(st);                                       // the screen the window sits on (src/win32/wm.js)
@@ -236,16 +247,15 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     HeapAlloc: ['puu', (x, heap, flags, n) => { const p = x.win.heapAlloc(n); if (flags & 8) x.write(p, new Uint8Array(n)); return p; }],
     HeapFree: ['pup', (x, heap, flags, p) => { x.win.heapFree(p); return 1; }],
     HeapSize: ['pup', (x, heap, flags, p) => x.win.heapSize(p)],
-    HeapReAlloc: ['puup', (x, heap, flags, p, n) => {
-      const old = x.win.heapSize(p);
-      if (n <= old) return p;
-      const q = x.win.heapAlloc(n);
-      x.write(q, x.bytes(p, old)); if (flags & 8) x.write(q + old, new Uint8Array(n - old));
-      x.win.heapFree(p); return q;
-    }],
+    HeapReAlloc: ['puup', (x, heap, flags, p, n) => reAlloc(x, p, n, flags & 8)],
     GlobalAlloc: ['uu', (x, flags, n) => x.win.heapAlloc(n)],
     LocalAlloc: ['uu', (x, flags, n) => x.win.heapAlloc(n)],
     GlobalFree: ['p', () => 0], LocalFree: ['p', () => 0],
+    // LocalReAlloc / GlobalReAlloc(handle, size, flags): handles are pointers here (LMEM_FIXED), so as
+    // HeapReAlloc; LMEM_ZEROINIT (40h) zeroes what grows.
+    LocalReAlloc: ['puu', (x, p, n, flags) => reAlloc(x, p, n, flags & 0x40)],
+    GlobalReAlloc: ['puu', (x, p, n, flags) => reAlloc(x, p, n, flags & 0x40)],
+    LocalSize: ['p', (x, h) => x.win.heapSize(h)],
     // Threads run in turn with the main one (src/linux.js's queue: a switch at a call that waits, or
     // after 20 ms of the guest's time). A thread's handle is its id plus 2000h; it is signalled when it ends.
     CreateThread: ['pupupp', (x, attr, stack, fn, param, flags, pid) => {
@@ -286,7 +296,7 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     GetVersion: ['', () => 0x0a280105],                                 // 5.1, build 2600: Windows XP
     GetLastError: ['', () => 0], SetLastError: ['u', () => 0],
     SetUnhandledExceptionFilter: ['p', () => 0], SetErrorMode: ['u', () => 0],
-    CloseHandle: ['p', () => 1], WaitForSingleObject: ['pu', () => 0],
+    CloseHandle: ['p', () => 1],
     /*
      * Files: a small disk of the program's own, by base name. On it: those `files` names ({ "gm.dls":
      * bytes }), what the program writes (CreateFileA, WriteFile), and XP's system32\drivers\gm.dls
@@ -313,6 +323,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       return openHandle(f);
     }],
     WriteFile: ['ppupp', (x, h, buf, n, pDone) => {
+      // The console's output and error (GetStdHandle's 11h, 12h): the process's stdout and stderr.
+      if (h === 0x11 || h === 0x12) { if (x.lx.onOutput) x.lx.onOutput(h === 0x11 ? 1 : 2, x.bytes(buf, n)); if (pDone) x.w32(pDone, n); return 1; }
       const o = st.files[h - 0x4000];
       if (!o || !o.f.bytes) { if (pDone) x.w32(pDone, 0); return 0; }
       const f = o.f, end = o.pos + n;
@@ -467,15 +479,58 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     x.write(fd, new Uint8Array(320)); x.w32(fd, 0x20); x.w32(fd + 32, st.disk.get(name).size);
     x.write(fd + 44, new TextEncoder().encode(name.slice(0, 259) + '\0'));
   }
+  // printf's formatting, the arguments read from `ap` on: %d %i %u %x %X %c %s %f %g %%, with flags,
+  // width and precision (doubles take 8 bytes there, as cdecl's varargs lay them out).
+  function formatC(x, f, ap) {
+    let out = '';
+    for (let i = 0; i < f.length; i++) {
+      if (f[i] !== '%') { out += f[i]; continue; }
+      const m = /^([-+ 0#]*)(\d*)(?:\.(\d+))?(l|h)?([diuxXcsfg%])/.exec(f.slice(i + 1));
+      if (!m) { out += '%'; continue; }
+      i += m[0].length;
+      const [, flags, width, prec, , c] = m;
+      let v;
+      if (c === '%') v = '%';
+      else if (c === 'f' || c === 'g') { v = x.f64(ap).toFixed(prec === undefined ? 6 : +prec); ap += 8; }
+      else if (c === 's') { v = x.str(x.r32(ap)); if (prec !== undefined) v = v.slice(0, +prec); ap += 4; }
+      else if (c === 'c') { v = String.fromCharCode(x.r32(ap) & 255); ap += 4; }
+      else { const n = x.r32(ap); ap += 4; v = c === 'x' ? n.toString(16) : c === 'X' ? n.toString(16).toUpperCase() : c === 'u' ? String(n) : String(n | 0); if (prec !== undefined && c !== 'c') v = v.padStart(+prec, '0'); }
+      if (width) v = flags.includes('-') ? v.padEnd(+width) : v.padStart(+width, flags.includes('0') && c !== 's' ? '0' : ' ');
+      out += v;
+    }
+    return out;
+  }
   // ---- user32 --------------------------------------------------------------------------------------
   // Window classes by name and atom, and the window's procedure.
   st.classes = new Map();
   const registerClass = (x, proc, name) => {
     const atom = 0xc001 + (st.atoms = (st.atoms || 0) + 1) - 1;
     st.classes.set(atom, proc); if (name >= 0x10000) st.classes.set(x.str(name, 256).toLowerCase(), proc);
+    if (name >= 0x10000) st.classNames.set(atom, x.str(name, 256));
     return atom;
   };
-  const createWindow = (x, cls, style, w, h, wide, X, Y, title) => {
+  st.classNames = new Map(); st.classInfo = new Map();
+  const classInfo = (x, atom, name, bytes) => { st.classInfo.set(atom, bytes); if (name >= 0x10000) st.classInfo.set(x.str(name, 256).toLowerCase(), bytes); };
+  // The system's own classes: their procedure is DefWindowProcA's entry point (a dialog's, DefDlgProcA's),
+  // which a program may call, and replace with its own and call on (MFC subclasses every control).
+  const systemProc = (x, key) => {
+    // ... and a class nobody registered here (comctl32's SysAnimate32, ToolbarWindow32): DefWindowProcA's,
+    // which paints it as nothing and so validates it, rather than a WM_PAINT that never ends.
+    const name = key === '#32770' || key === 32770 ? 'DefDlgProcA' : typeof key === 'string' ? 'DefWindowProcA' : null;
+    return name ? x.win.proc(x.win.load('user32.dll'), name) : 0;
+  };
+  // ---- windows beyond the program's main one (a dialog, its controls, MFC's frames): each its record,
+  // its procedure, its parent and control id. The first top-level window is the one the screen shows.
+  st.wins = new Map(); st.hooks = new Map();
+  const win = (h) => st.wins.get(h);
+  const procOf = (h) => (h === st.hwnd ? st.wndProc : win(h) ? win(h).proc : 0);
+  let nextHwnd = 0x10100;
+  const createWindow = (x, cls, style, w, h, wide, X, Y, title, parent = 0, menu = 0) => {
+    // The main window, unless it is a child, or another class's while the main one lives (MFC's dialogs
+    // beside its frame); the main class's again is the main window made anew (a game's new video mode).
+    const k0 = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
+    if ((style & 0x40000000) || (st.mainMade && !st.destroyed && k0 !== st.mainClass)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
+    st.mainMade = true; st.mainClass = k0;
     // Where it sits on the desktop (CW_USEDEFAULT: the first cascade position) and its caption.
     st.x = X === -0x80000000 ? 22 : X; st.y = Y === -0x80000000 || X === -0x80000000 ? 22 : Y;
     st.title = title ? (wide ? String.fromCharCode(...wideRead(x, title, -1, true)) : x.str(title, 256)) : '';
@@ -490,7 +545,255 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // WS_VISIBLE: shown and activated before CreateWindowEx returns, as Windows does it -- Quake II
     // creates its window visible and only takes the mouse once WM_ACTIVATE has said it is active.
     const shown = st.shown ? (st.active = true, ACTIVATE) : [];
-    return send(x, [[0x81, 0, cs], [0x01, 0, cs], [0x05, 0, sizeLp()], [0x03, 0, 0], ...shown], () => st.hwnd, 48);
+    st.wins.set(st.hwnd, { hwnd: st.hwnd, main: true, cls: key, parent: 0, id: 0, ex: x.r32(a) });
+    return send(x, [...cbt(x, st.hwnd, cs), [0x81, 0, cs], [0x01, 0, cs], [0x05, 0, sizeLp()], [0x03, 0, 0], ...shown], () => st.hwnd, 48);
+  };
+  // WH_CBT's HCBT_CREATEWND (3), before WM_NCCREATE: MFC attaches its CWnd to the window there, and
+  // takes a creation it never heard of for one that failed.
+  const cbt = (x, hwnd, cs) => {
+    const hook = st.hooks.get(5); if (!hook) return [];
+    const p = x.win.heapAlloc(8); x.w32(p, cs); x.w32(p + 4, 0);
+    return [{ fn: hook, args: [3, hwnd, p] }];
+  };
+  /** A window that is not the main one: a child (a control), a dialog, a second top-level window. */
+  const createOther = (x, cls, style, w, h, wide, X, Y, title, parent, menu, extra = {}) => {
+    const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
+    const proc = st.classes.get(key) || systemProc(x, key);
+    const hwnd = nextHwnd; nextHwnd += 4;
+    const t = title ? (title < 0x10000 ? '' : wide ? String.fromCharCode(...wideRead(x, title, -1, true)) : x.str(title, 256)) : '';
+    const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
+      title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), ...extra };
+    st.wins.set(hwnd, rec);
+    if (!proc) return hwnd;
+    const a = (x.cpu.reg[4] >>> 0) + 4, cs = x.win.heapAlloc(48);
+    [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].forEach((k, i) => x.w32(cs + 4 * i, x.r32(a + 4 * k)));
+    if (extra.params !== undefined) x.w32(cs, extra.params);
+    const to = (m) => [m[0], m[1], m[2], hwnd];
+    return send(x, [...cbt(x, hwnd, cs), to([0x81, 0, cs]), to([0x01, 0, cs]), to([0x05, 0, ((rec.h & 0xffff) << 16 | (rec.w & 0xffff)) >>> 0]), to([0x03, 0, 0])],
+      () => hwnd, extra.pop ?? 48);
+  };
+  st.createOther = createOther;
+  // A top-level window other than the main one made the active one: WM_ACTIVATEAPP, WM_NCACTIVATE,
+  // WM_ACTIVATE (WA_ACTIVE), WM_SETFOCUS -- once, until another is.
+  const activateOther = (x, h, result, pop) => {
+    const w = win(h);
+    if (!w || w.main || h === st.hwnd || (w.style & 0x40000000) || st.activeWin === h) { if (h === st.hwnd) st.activeWin = 0; return result(); }
+    st.activeWin = h; st.focus = h;
+    return send(x, ACTIVATE.slice(1).map((m) => [...m, h]), () => result(), pop);
+  };
+  // ---- painting the windows that are not the main one, and a dialog that is ---------------------------
+  // The screen is the main window's client area (st.screen); another window draws there, at its place:
+  // a child at its parent's origin and its own offset, a popup (a dialog over the main one) at its
+  // screen position less the main window's. Its DC is 02000000h with its handle in the low bits.
+  st.invalid = new Set();
+  const isAncestor = (a, h) => { for (let w = win(h); w && !w.main; w = win(w.parent)) if (w.parent === a) return true; return false; };
+  // A dialog application lives on the desktop: its main dialog and its popups each where they are on
+  // the screen, the screen the whole desktop (st.deskPx) -- deskMode. Otherwise the screen is the main
+  // window's client area, framed on the desktop or alone (the games, the intros).
+  const deskMode = () => !!st.mainDialog && !st.modeSet;
+  const mainOrigin = () => (deskMode() ? { x: st.x | 0, y: st.y | 0 } : wm.framed() ? wm.client() : { x: 0, y: 0 });
+  /** The client area's top left on the screen. */
+  const screenOrigin = (h) => {
+    if (!h || h === st.hwnd) return mainOrigin();
+    const w = win(h); if (!w) return mainOrigin();
+    if (w.style & 0x40000000) { const o = screenOrigin(w.parent); return { x: o.x + w.x, y: o.y + w.y }; }
+    return { x: w.x | 0, y: w.y | 0 };
+  };
+  /** ... and in the buffer drawn on: the desktop's in deskMode, the main client area's otherwise. */
+  const originOf = (h) => { const o = screenOrigin(h); if (deskMode()) return o; const m = mainOrigin(); return { x: o.x - m.x, y: o.y - m.y }; };
+  const deskScreen = () => {
+    const D = st.desk;
+    if (!st.deskPx || st.deskPx.length !== D.w * D.h) st.deskPx = new Uint32Array(D.w * D.h).fill(0x3a6ea5);
+    return { w: D.w, h: D.h, px: st.deskPx };
+  };
+  // What a hidden or moved window leaves: the desktop there, and the windows that were under it to paint.
+  const uncoverRect = (o, W, H) => {
+    if (!deskMode()) return;
+    const sc = deskScreen();
+    for (let j = Math.max(0, o.y); j < Math.min(sc.h, o.y + H); j++) sc.px.fill(0x3a6ea5, j * sc.w + Math.max(0, o.x), j * sc.w + Math.max(0, Math.min(sc.w, o.x + W)));
+    for (const w of st.wins.values()) if (!w.dead && (w.main ? st.shown : w.visible && !(w.style & 0x40000000))) invalidate(w.hwnd, true, true);
+  };
+  const dcFor = (h) => (!h || h === st.hwnd ? st.hdc : (0x02000000 | (h & 0xffffff)) >>> 0);
+  const hwndOfDC = (hdc) => (hdc === st.hdc ? st.hwnd : ((hdc & 0xff000000) >>> 0) === 0x02000000 ? hdc & 0xffffff : 0);
+  const shown = (h) => { for (let w = win(h); w; w = win(w.parent)) { if (w.main) return st.shown; if (!w.visible || w.dead) return false; if (!(w.style & 0x40000000)) return true; } return false; };
+  // Invalidate: to be painted (WM_PAINT when the queue is empty), erased first if asked; with its children.
+  const invalidate = (h, erase, kids = false) => {
+    const w = win(h); if (!w) return;
+    st.invalid.add(h); if (erase) w.erase = true;
+    if (kids) for (const c of st.wins.values()) if (c.parent === h && !c.dead && (c.style & 0x40000000)) invalidate(c.hwnd, erase, true);
+  };
+  st.invalidate = invalidate;
+  // What is due a WM_PAINT, parents before their children, shown windows only.
+  const paintOrder = () => {
+    const depth = (h) => { let d = 0; for (let w = win(h); w && !w.main && (w.style & 0x40000000); w = win(w.parent)) d++; return d; };
+    return [...st.invalid].filter((h) => win(h) && shown(h)).sort((a, b) => depth(a) - depth(b));
+  };
+  st.paintDue = () => paintOrder()[0];
+  // A window's place changed (SetWindowPos, MoveWindow of a window that is not the main one): SWP_NOSIZE 1,
+  // SWP_NOMOVE 2, SWP_SHOWWINDOW 40h, SWP_HIDEWINDOW 80h; WM_SIZE when its size changed.
+  const placeOther = (x, hwnd, X, Y, w, h, flags, pop) => {
+    const o = win(hwnd); if (!o) return 0;
+    const parent = o.parent && win(o.parent) ? o.parent : st.hwnd;
+    if (!(o.style & 0x40000000) && o.visible) uncoverRect(screenOrigin(hwnd), o.w, o.h); else invalidate(parent, true, true);
+    if (!(flags & 2)) { o.x = X; o.y = Y; }
+    const sized = !(flags & 1) && (o.w !== w || o.h !== h);
+    if (!(flags & 1)) { o.w = w; o.h = h; }
+    if (flags & 0x40) o.visible = true; if (flags & 0x80) o.visible = false;
+    invalidate(hwnd, true, true);
+    return sized ? send(x, [[0x05, 0, ((o.h & 0xffff) << 16 | (o.w & 0xffff)) >>> 0, hwnd]], () => 1, pop) : 1;
+  };
+  // DefWindowProc's part for the windows made here: the system controls painted and clicked, the
+  // background erased with the class's brush, text set and got. undefined: the rest (below).
+  const ctlBrush = 0x01a00000 + 15;                                      // COLOR_3DFACE's
+  const defWindow = (x, hwnd, msg, wp, lp) => {
+    const w = win(hwnd); if (!w) return undefined;
+    if (w.main && !st.mainDialog) return undefined;                      // a game's or an intro's window: as it always was
+    switch (msg) {
+      case 0x0c: w.title = lp ? x.str(lp, 1024) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
+      case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, new TextEncoder().encode(t + '\0')); return t.length; }   // WM_GETTEXT
+      case 0x0e: return (w.title || '').length;                          // WM_GETTEXTLENGTH
+      case 0x30: w.font = wp; if (lp & 0xffff) invalidate(hwnd, true); return 0;   // WM_SETFONT
+      case 0x31: return w.font || 0;                                     // WM_GETFONT
+      case 0x14: {                                                       // WM_ERASEBKGND: the class's background
+        const info = st.classInfo.get(w.cls), br = w.cls === '#32770' ? ctlBrush : info ? (info[28] | info[29] << 8 | info[30] << 16 | info[31] << 24) >>> 0 : 0;
+        const c = brushColor(br); if (c === null || !br) return 0;
+        const t = target(x, wp); if (t) { fillRect(t, 0, 0, t.w, t.h, c); t.done(); } return 1;
+      }
+      case 0x132: case 0x133: case 0x134: case 0x135: case 0x136: case 0x137: case 0x138: return ctlBrush;   // WM_CTLCOLOR*: the face
+      case 0xf0: return w.checked | 0;                                   // BM_GETCHECK
+      case 0xf1: w.checked = wp; invalidate(hwnd, true); return 0;       // BM_SETCHECK
+      case 0xf2: return (w.checked | 0) | (w.pushed ? 4 : 0);            // BM_GETSTATE
+      case 0xf3: w.pushed = !!wp; invalidate(hwnd, true); return 0;      // BM_SETSTATE
+      case 0xf4: w.style = (w.style & ~0xffff) | (wp & 0xffff); if (lp) invalidate(hwnd, true); return 0;   // BM_SETSTYLE
+      case 0xf7: case 0x172: { const prev = w.imageHandle || 0; w.imageHandle = lp; invalidate(hwnd, true); return prev; }   // BM_SETIMAGE, STM_SETIMAGE
+      case 0xf6: case 0x173: return w.imageHandle || 0;                  // BM_GETIMAGE, STM_GETIMAGE
+      case 0x87: return w.cls === 'button' ? 0x2000 | ((w.style & 15) === 1 ? 0x10 : 0x20) : 0;   // WM_GETDLGCODE
+      case 0x0f: return paintControl(x, hwnd, w);                        // WM_PAINT
+      case 0x201: if (w.cls === 'button' && w.enabled !== false) { w.pushed = true; st.capture = hwnd; invalidate(hwnd, false); return 0; } break;   // WM_LBUTTONDOWN
+      case 0x202:                                                         // WM_LBUTTONUP: a click when it is let go over the button
+        if (w.cls === 'button' && w.pushed) {
+          w.pushed = false; st.capture = 0; invalidate(hwnd, false);
+          const X = (lp << 16) >> 16, Y = lp >> 16;
+          const type = w.style & 15;
+          if (type === 2 || type === 3) w.checked = w.checked ? 0 : 1;   // a check box toggles
+          if (X >= 0 && Y >= 0 && X < w.w && Y < w.h) return send(x, [[0x111, (0 << 16) | (w.id & 0xffff), hwnd, w.parent]], () => 0, 16);   // WM_COMMAND, BN_CLICKED
+          return 0;
+        }
+        break;
+      default: break;
+    }
+    return undefined;
+  };
+  // A system control's WM_PAINT: an owner-drawn button asks its parent (WM_DRAWITEM); a push button,
+  // a check box and a static are drawn here, text in the DC's colours after WM_CTLCOLOR* to the parent.
+  const paintControl = (x, hwnd, w) => {
+    st.invalid.delete(hwnd);
+    const hdc = dcFor(hwnd), type = w.style & 15;
+    if (w.cls === 'button' && type === 11) {                             // BS_OWNERDRAW
+      const dis = x.win.heapAlloc(48);
+      [4, w.id, 0, 1, (w.pushed ? 1 : 0) | (w.enabled === false ? 4 : 0) | (st.focus === hwnd ? 0x10 : 0), hwnd, hdc, 0, 0, w.w, w.h, 0].forEach((v, i) => x.w32(dis + 4 * i, v));
+      return send(x, [[0x2b, w.id, dis, w.parent]], () => 0, 16);       // WM_DRAWITEM
+    }
+    if (w.cls !== 'button' && w.cls !== 'static') return undefined;
+    const ctl = w.cls === 'static' ? 0x138 : 0x135;                       // WM_CTLCOLORSTATIC, WM_CTLCOLORBTN
+    return send(x, [[ctl, hdc, hwnd, w.parent]], (br) => { drawControl(x, hwnd, w, hdc, br); return 0; }, 16);
+  };
+  const drawControl = (x, hwnd, w, hdc, br) => {
+    const t = target(x, hdc); if (!t) return;
+    const type = w.style & 15, face = brushColor(br || ctlBrush) ?? 0xd4d0c8, d = dcState(hdc);
+    if (w.cls === 'static' && (type === 14 || type === 3)) {              // SS_BITMAP, SS_ICON: its picture
+      const bm = st.gdi.get(w.imageHandle);
+      if (bm && bm.px) for (let j = 0; j < Math.min(bm.h, t.h); j++) for (let i = 0; i < Math.min(bm.w, t.w); i++) t.px[j * t.w + i] = bm.px[j * bm.w + i];
+      t.done(); return;
+    }
+    if (br) fillRect(t, 0, 0, t.w, t.h, face);
+    if (w.cls === 'button' && (type === 0 || type === 1)) {               // a push button, raised or pressed
+      const lt = w.pushed ? 0x404040 : 0xffffff, dk = w.pushed ? 0xffffff : 0x404040;
+      fillRect(t, 0, 0, t.w, 1, lt); fillRect(t, 0, 0, 1, t.h, lt); fillRect(t, 0, t.h - 1, t.w, t.h, dk); fillRect(t, t.w - 1, 0, t.w, t.h, dk);
+    }
+    const text = (w.title || '').replace(/&(.)/g, '$1');
+    if (text) {
+      if (w.font) st.dcFonts.set(hdc, w.font);
+      const m = textMetrics(hdc), buf = x.win.heapAlloc(text.length + 1);
+      x.write(buf, Uint8Array.from(text, (c) => c.charCodeAt(0) & 255));
+      let width = 0; for (const ch of text) width += m.font ? m.font.glyph(ch.charCodeAt(0) & 255, m.ppem).cellIncX : m.avg;
+      const X = w.cls === 'button' && type <= 1 ? (t.w - width) >> 1 : (w.style & 3) === 1 ? (t.w - width) >> 1 : (w.style & 3) === 2 ? t.w - width : w.cls === 'button' ? 16 : 0;
+      const Y = w.cls === 'button' ? (t.h - m.height) >> 1 : 0;
+      const keep = d.bkMode; d.bkMode = 1; textOut(x, t, d, m, X, Y, 0, 0, buf, text.length); d.bkMode = keep;
+      x.win.heapFree(buf);
+    }
+    t.done();
+  };
+  /*
+   * A dialog from its template in memory (CreateDialogIndirectParam, and CreateDialogParam's resource):
+   * DLGTEMPLATE or DLGTEMPLATEEX, its controls after it, sizes in dialog units -- MS Sans Serif 8's,
+   * 6 x 13 pixels for 4 x 8 units. The dialog's procedure is DefDlgProcA's, which calls the program's
+   * DLGPROC; the windows are all made first, then what Windows sends goes as one sequence: to the
+   * dialog WM_NCCREATE and WM_CREATE, each control its own and WM_SETFONT, then WM_INITDIALOG.
+   */
+  const createDialog = (x, inst, tpl, parent, dlgProc, param, pop) => {
+    let p = tpl;
+    const u16 = () => { const v = x.r16(p); p += 2; return v; }, u32 = () => { const v = x.r32(p); p += 4; return v; }, i16 = () => (u16() << 16) >> 16;
+    const sz = () => { const c = x.r16(p); if (c === 0xffff) { p += 4; return x.r16(p - 2); } let t = ''; for (let ch; (ch = u16());) t += String.fromCharCode(ch); return t; };
+    const align = () => { p = (p + 3) & ~3; };
+    const ex = x.r16(tpl + 2) === 0xffff;
+    let style, exStyle, n;
+    if (ex) { p += 4; u32(); exStyle = u32(); style = u32(); n = u16(); } else { style = u32(); exStyle = u32(); n = u16(); }
+    const X = i16(), Y = i16(), cx = i16(), cy = i16(), menu = sz(), cls = sz(), title = sz();
+    if (style & 0x48) { u16(); if (ex) { u16(); u16(); } sz(); }        // DS_SETFONT / DS_SHELLFONT: size, (weight, italic, charset), face
+    const du = (v, axis) => Math.round(v * (axis ? 13 : 6) / (axis ? 8 : 4));
+    const dlg = nextHwnd; nextHwnd += 4;
+    const dProc = typeof cls === 'string' && cls ? st.classes.get(cls.toLowerCase()) || systemProc(x, '#32770') : systemProc(x, '#32770');
+    st.wins.set(dlg, { hwnd: dlg, cls: '#32770', proc: dProc, dlgProc, style: style >>> 0, parent, id: 0, x: du(X, 0), y: du(Y, 1), w: du(cx, 0), h: du(cy, 1),
+      title: typeof title === 'string' ? title : '', visible: false, enabled: true, long: new Map(), dialog: true, menu, erase: true });
+    // A program whose first window is a dialog (an MFC dialog application, Half-Life's launcher): that
+    // dialog is the window the screen shows, as a CreateWindowEx main window would be.
+    if (!st.mainMade && !parent) {
+      const w = win(dlg); w.main = true; st.mainMade = true; st.mainClass = '#32770'; st.mainDialog = true;
+      st.hwnd = dlg; st.wndProc = dProc; st.style = style >>> 0; st.title = w.title; st.x = w.x; st.y = w.y; st.destroyed = false; st.shown = false; st.active = false;
+      st.w = Math.max(1, w.w); st.h = Math.max(1, w.h); wm.dirty = true;
+    }
+    const kids = [];
+    for (let i = 0; i < n; i++) {
+      align();
+      let cs, cex, id;
+      if (ex) { u32(); cex = u32(); cs = u32(); } else { cs = u32(); cex = u32(); }
+      const kx = i16(), ky = i16(), kw = i16(), kh = i16();
+      id = ex ? u32() : u16();
+      const kc = sz(), kt = sz(), extra = u16(); p += extra;
+      const key = typeof kc === 'number' ? ({ 0x80: 'button', 0x81: 'edit', 0x82: 'static', 0x83: 'listbox', 0x84: 'scrollbar', 0x85: 'combobox' })[kc] || kc : kc.toLowerCase();
+      const h = nextHwnd; nextHwnd += 4;
+      st.wins.set(h, { hwnd: h, cls: key, proc: st.classes.get(key) || systemProc(x, key), style: (cs | 0x40000000) >>> 0, ex: cex, parent: dlg, id: id & 0xffff,
+        x: du(kx, 0), y: du(ky, 1), w: du(kw, 0), h: du(kh, 1), title: typeof kt === 'string' ? kt : '', image: typeof kt === 'number' ? kt : 0,
+        visible: !!(cs & 0x10000000), enabled: !(cs & 0x08000000), long: new Map() });
+      kids.push(h);
+    }
+    const csFor = (h) => {
+      const w = win(h), c = x.win.heapAlloc(48);
+      x.write(c, new Uint8Array(48)); x.w32(c, h === dlg ? param : 0); x.w32(c + 4, inst); x.w32(c + 12, w.parent);
+      x.w32(c + 16, w.h); x.w32(c + 20, w.w); x.w32(c + 24, w.y); x.w32(c + 28, w.x); x.w32(c + 32, w.style); x.w32(c + 44, w.ex | 0);
+      return c;
+    };
+    const sizeOf = (w) => ((w.h & 0xffff) << 16 | (w.w & 0xffff)) >>> 0;
+    const font = 0x01900010 + 17;                                           // DEFAULT_GUI_FONT
+    const born = (h) => { const c = csFor(h), w = win(h); return [...cbt(x, h, c), [0x81, 0, c, h], [0x01, 0, c, h], [0x05, 0, sizeOf(w), h], [0x03, 0, 0, h]]; };
+    const msgs = [...born(dlg), [0x30, font, 0, dlg], ...kids.flatMap((h) => [...born(h), [0x30, font, 0, h]]), [0x110, kids[0] || 0, param, dlg]];
+    return send(x, msgs, () => {
+      const w = win(dlg); if (w && (style & 0x10000000)) { w.visible = true; if (w.main) { st.shown = true; wm.dirty = true; } invalidate(dlg, true, true); }
+      if (w && st.dialogShown) st.dialogShown(dlg);
+      return dlg;
+    }, pop);
+  };
+  // Its end, and its children's: WM_DESTROY to it then to them, WM_NCDESTROY to them then to it.
+  const destroyOther = (x, hwnd, result, pop) => {
+    const w = win(hwnd); if (!w || w.dead) return result(0) && 0;
+    const all = (h) => [...st.wins.values()].filter((c) => c.parent === h && !c.dead).flatMap((c) => [c, ...all(c.hwnd)]);
+    const kids = all(hwnd);
+    w.dead = true; for (const c of kids) c.dead = true;
+    if (w.visible && !(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h);
+    if (st.focus === hwnd || kids.some((c) => c.hwnd === st.focus)) st.focus = 0;
+    return send(x, [[0x02, 0, 0, hwnd], ...kids.map((c) => [0x02, 0, 0, c.hwnd]), ...kids.reverse().map((c) => [0x82, 0, 0, c.hwnd]), [0x82, 0, 0, hwnd]],
+      (eax) => { st.wins.delete(hwnd); for (const c of kids) st.wins.delete(c.hwnd); return result(eax); }, pop);
   };
   // Showing and activating: WM_SHOWWINDOW, WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE (WA_ACTIVE), WM_SETFOCUS.
   const ACTIVATE = [[0x18, 1, 0], [0x1c, 1, 0], [0x86, 1, 0], [0x06, 1, 0], [0x07, 0, 0]];
@@ -506,14 +809,16 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   // A call into the program: a window message [msg, wp, lp] to the window's procedure, or { fn, args }
   // (a DLL's DllMain), stdcall, returning into the stub.
   const callProc = (x, m, ret) => {
-    const c = x.cpu, fn = Array.isArray(m) ? st.wndProc : m.fn, args = Array.isArray(m) ? [st.hwnd, ...m] : m.args;
+    const h = Array.isArray(m) ? (m[3] ?? st.hwnd) : 0;
+    const c = x.cpu, fn = Array.isArray(m) ? procOf(h) : m.fn, args = Array.isArray(m) ? [h, m[0], m[1], m[2]] : m.args;
     let sp = c.reg[4] >>> 0;
     for (const v of [...args].reverse()) { sp -= 4; x.w32(sp, v >>> 0); }
     sp -= 4; x.w32(sp, ret); c.reg[4] = sp; c.eip = fn;
   };
   const back = (x) => x.win.proc(x.win.load('user32.dll'), 2600);
   const send = (x, msgs, result, pop) => {
-    if (!msgs.length || (Array.isArray(msgs[0]) && !st.wndProc)) return result(0);
+    msgs = msgs.filter((m) => !Array.isArray(m) || procOf(m[3] ?? st.hwnd));
+    if (!msgs.length) return result(0);
     const esp0 = x.cpu.reg[4] >>> 0;                                  // the caller's return address, its arguments above
     st.sends.push({ msgs: msgs.slice(1), result, pop, esp0 });
     callProc(x, msgs[0], back(x));
@@ -533,13 +838,25 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = Math.max(1, w - 2 * b); st.h = Math.max(1, h - 2 * b - cap); }
     wm.dirty = true;
   };
-  const putMsg = (x, m, e) => { x.w32(m, st.hwnd); x.w32(m + 4, e.msg); x.w32(m + 8, e.wp); x.w32(m + 12, e.lp); x.w32(m + 16, e.time || 0); x.w32(m + 20, st.mouseX ?? 0); x.w32(m + 24, st.mouseY ?? 0); };
+  const firstMsg = (hwnd, min, max) => st.msgs.findIndex((e) => {
+    if ((min || max) && (e.msg < min || e.msg > max)) return false;
+    if (!hwnd || hwnd === 0xffffffff) return true;
+    let h = e.hwnd ?? st.hwnd; for (let n = 0; h && n < 64; n++) { if (h === hwnd) return true; h = win(h) && !win(h).main ? win(h).parent : 0; }
+    return false;
+  });
+  // WM_PAINT, which Windows makes when nothing is queued: for a window due one, within the filters.
+  const paintFor = (hwnd, min, max) => {
+    if ((min || max) && (0x0f < min || 0x0f > max)) return 0;
+    const h = st.paintDue && st.paintDue(); if (!h) return 0;
+    return !hwnd || hwnd === h || isAncestor(hwnd, h) ? h : 0;
+  };
+  const putMsg = (x, m, e) => { x.w32(m, e.hwnd ?? st.hwnd); x.w32(m + 4, e.msg); x.w32(m + 8, e.wp); x.w32(m + 12, e.lp); x.w32(m + 16, e.time || 0); x.w32(m + 20, st.mouseX ?? 0); x.w32(m + 24, st.mouseY ?? 0); };
   const user32 = {
     // The window: one, the size it was made or the display mode set; its DC and GL go to the backend.
     // The window: its client area is what a framed window keeps inside the frame AdjustWindowRectEx adds;
     // its procedure is its class's (by name or by atom), which DispatchMessageA calls.
-    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, false, X, Y, title)],
-    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h) => createWindow(x, cls, style, w, h, true, X, Y, title)],
+    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h, parent, menu) => createWindow(x, cls, style, w, h, false, X, Y, title, parent, menu)],
+    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h, parent, menu) => createWindow(x, cls, style, w, h, true, X, Y, title, parent, menu)],
     // A display mode: the screen becomes it and the program's window fills it (a full-screen program
     // draws at that size); NULL gives the desktop back, where a framed window sits.
     // CDS_TEST (2) only asks whether the mode would do: it would (DISP_CHANGE_SUCCESSFUL), nothing changes.
@@ -548,34 +865,64 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; st.modeSet = true; } else st.modeSet = false;
       wm.dirty = true; return 0;
     }],
-    SetWindowTextA: ['pp', (x, hwnd, t) => { if (hwnd === st.hwnd) { st.title = t ? x.str(t, 256) : ''; wm.redraw(); } return 1; }],
-    GetWindowTextA: ['ppi', (x, hwnd, buf, n) => { const t = hwnd === st.hwnd ? (st.title || '') : ''; if (n > 0) x.write(buf, new TextEncoder().encode(t.slice(0, n - 1) + '\0')); return Math.min(t.length, Math.max(0, n - 1)); }],
+    SetWindowTextA: ['pp', (x, hwnd, t) => { if (hwnd === st.hwnd) { st.title = t ? x.str(t, 256) : ''; wm.redraw(); } else if (win(hwnd)) win(hwnd).title = t ? x.str(t, 256) : ''; return 1; }],
+    GetWindowTextA: ['ppi', (x, hwnd, buf, n) => { const t = hwnd === st.hwnd ? (st.title || '') : win(hwnd) ? win(hwnd).title || '' : ''; if (n > 0) x.write(buf, new TextEncoder().encode(t.slice(0, n - 1) + '\0')); return Math.min(t.length, Math.max(0, n - 1)); }],
     // A point of the client area on the screen and back: the window's place and its frame.
-    ClientToScreen: ['pp', (x, hwnd, p) => { const c = wm.client(); x.w32(p, (x.r32(p) | 0) + c.x); x.w32(p + 4, (x.r32(p + 4) | 0) + c.y); return 1; }],
-    ScreenToClient: ['pp', (x, hwnd, p) => { const c = wm.client(); x.w32(p, (x.r32(p) | 0) - c.x); x.w32(p + 4, (x.r32(p + 4) | 0) - c.y); return 1; }],
-    GetDC: ['p', () => st.hdc], ReleaseDC: ['pp', () => 1],
+    ClientToScreen: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) + c.x); x.w32(p + 4, (x.r32(p + 4) | 0) + c.y); return 1; }],
+    ScreenToClient: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) - c.x); x.w32(p + 4, (x.r32(p + 4) | 0) - c.y); return 1; }],
+    // MapWindowPoints: from one window's client coordinates to another's (0: the screen).
+    MapWindowPoints: ['ppppu', (x, from, to, pts, n) => {
+      const a = from ? screenOrigin(from) : { x: 0, y: 0 }, b = to ? screenOrigin(to) : { x: 0, y: 0 }, dx = a.x - b.x, dy = a.y - b.y;
+      for (let i = 0; i < n; i++) { x.w32(pts + 8 * i, (x.r32(pts + 8 * i) | 0) + dx); x.w32(pts + 8 * i + 4, (x.r32(pts + 8 * i + 4) | 0) + dy); }
+      return ((dy & 0xffff) << 16 | (dx & 0xffff)) >>> 0;
+    }],
+    // A window's DC: the main window's own, or a view of the screen at the window's place (dcFor).
+    GetDC: ['p', (x, hwnd) => dcFor(hwnd)], ReleaseDC: ['pp', () => 1],
     // The cursor's display count (hidden below zero) and its confinement: a program that hides it and
     // clips it to its window has the mouse to itself, and the page captures the pointer for it.
     ShowCursor: ['i', (x, show) => { st.cursorCount = (st.cursorCount | 0) + (show ? 1 : -1); wm.moveCursor(); return st.cursorCount; }],
     SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; wm.moveCursor(); return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
     // returns that the window was hidden. UpdateWindow paints it once (WM_PAINT).
     ShowWindow: ['pi', (x, hwnd, cmd) => {
-      if (hwnd !== st.hwnd || st.active || cmd === 0) return st.shown ? 1 : 0;
+      if (hwnd !== st.hwnd) {
+        const w = win(hwnd); if (!w) return 0;
+        const was = w.visible ? 1 : 0; w.visible = cmd !== 0;
+        if (w.visible && !was) invalidate(hwnd, true, true);
+        else if (!w.visible && was) { if (!(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h); else invalidate(w.parent || st.hwnd, true, true); }
+        // SW_SHOWNORMAL 1, SW_SHOWMAXIMIZED 3, SW_SHOW 5, SW_RESTORE 9 activate a top-level window, shown or not.
+        if (w.visible && !(w.style & 0x40000000) && [1, 3, 5, 9].includes(cmd) && st.activeWin !== hwnd) {
+          st.activeWin = hwnd; st.focus = hwnd;
+          return send(x, [...(was ? [] : [[0x18, 1, 0, hwnd]]), ...ACTIVATE.slice(1).map((m) => [...m, hwnd])], () => was, 8);
+        }
+        return send(x, [[0x18, w.visible ? 1 : 0, 0, hwnd]], () => was, 8);
+      }
+      if (st.mainDialog && cmd !== 0 && !st.shown) invalidate(hwnd, true, true);
+      if (st.active || cmd === 0) return st.shown ? 1 : 0;
       const was = st.shown ? 1 : 0; st.shown = st.active = true; wm.dirty = true;
       return send(x, ACTIVATE, () => was, 8);
     }],
-    UpdateWindow: ['p', (x, hwnd) => (hwnd === st.hwnd ? send(x, [[0x0f, 0, 0]], () => 1, 4) : 1)],
+    UpdateWindow: ['p', (x, hwnd) => {
+      if (st.mainDialog || hwnd !== st.hwnd) { const due = paintOrder().filter((h) => h === hwnd || isAncestor(hwnd, h)); return due.length ? send(x, due.map((h) => [0x0f, 0, 0, h]), () => 1, 4) : 1; }
+      return send(x, [[0x0f, 0, 0]], () => 1, 4);
+    }],
     // A window moved or sized: its new size, unless SWP_NOSIZE (1). WinQuake's video modes resize its
     // window this way (vid_mode 2: 806x625 with its frame, an 800x600 picture).
     SetWindowPos: ['ppiiiiu', (x, hwnd, after, X, Y, w, h, flags) => {
-      if (hwnd !== st.hwnd) return 1;
+      if (hwnd !== st.hwnd) return placeOther(x, hwnd, X, Y, w, h, flags, 28);
+      if (deskMode()) {
+        if (st.shown) uncoverRect(mainOrigin(), st.w, st.h);
+        if (!(flags & 2)) { st.x = X; st.y = Y; } if (!(flags & 1)) { st.w = Math.max(1, w); st.h = Math.max(1, h); }
+        if (flags & 0x40) st.shown = true; if (flags & 0x80) st.shown = false;
+        invalidate(hwnd, true, true); return 1;
+      }
       if (!(flags & 2)) { st.x = X; st.y = Y; wm.dirty = true; }       // unless SWP_NOMOVE
       if (flags & 1) return 1;                                         // SWP_NOSIZE
       const w0 = st.w, h0 = st.h; resize(w, h);
       return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 28) : 1;   // WM_SIZE, the client area's new size
     }],
     MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => {
-      if (hwnd !== st.hwnd) return 1;
+      if (hwnd !== st.hwnd) return placeOther(x, hwnd, X, Y, w, h, 0, 24);
+      if (deskMode()) { if (st.shown) uncoverRect(mainOrigin(), st.w, st.h); st.x = X; st.y = Y; st.w = Math.max(1, w); st.h = Math.max(1, h); invalidate(hwnd, true, true); return 1; }
       st.x = X; st.y = Y;
       const w0 = st.w, h0 = st.h; resize(w, h);
       return st.w !== w0 || st.h !== h0 ? send(x, [[0x05, 0, sizeLp()]], () => 1, 24) : 1;
@@ -586,23 +933,29 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     GetKeyState: ['i', (x, vk) => (st.keys.has(vk) ? 0x8000 : 0)],
     // The message queue: what the visitor's keys and mouse put there (win32Apis(...).input). MSG is
     // hwnd, message, wParam, lParam, time, pt; PM_REMOVE (1) takes it off the queue.
+    // The filters: a window (its children's messages too) and a range of messages, both 0 for any.
     PeekMessageA: ['ppuuu', (x, m, hwnd, min, max, remove) => {
-      const peek = () => { if (!st.msgs.length) return 0; putMsg(x, m, st.msgs[0]); if (remove & 1) st.msgs.shift(); return 1; };
+      const peek = () => {
+        const i = firstMsg(hwnd, min, max);
+        if (i < 0) { const p = paintFor(hwnd, min, max); if (!p) return 0; putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; }
+        putMsg(x, m, st.msgs[i]); if (remove & 1) st.msgs.splice(i, 1); return 1;
+      };
       return st.pendingMove ? send(x, [[0x03, 0, takeMove()]], peek, 20) : peek();   // a window moved: WM_MOVE sent first
     }],
     PeekMessageW: ['ppuuu', (x, m, hwnd, min, max, remove) => user32.PeekMessageA[1](x, m, hwnd, min, max, remove)],
     // GetMessageA waits for one, as an idle window does (the call is made again when the time comes);
     // WM_QUIT (12h) makes it return 0.
-    GetMessageA: ['ppuu', (x, m) => {
+    GetMessageA: ['ppuu', (x, m, hwnd, min, max) => {
       if (st.pendingMove) { putMsg(x, m, { msg: 0x03, wp: 0, lp: takeMove() }); return 1; }
-      if (!st.msgs.length) return x.waitUntil(x.lx.mono() + 0.01);
-      const e = st.msgs.shift(); putMsg(x, m, e); return e.msg === 0x12 ? 0 : 1;
+      const i = firstMsg(hwnd, min, max);
+      if (i < 0) { const p = paintFor(hwnd, min, max); if (p) { putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; } return x.waitUntil(x.lx.mono() + 0.01); }
+      const e = st.msgs.splice(i, 1)[0]; putMsg(x, m, e); return e.msg === 0x12 ? 0 : 1;
     }],
     TranslateMessage: ['p', () => 0],
     // DispatchMessageA runs the window's procedure in the program: its four arguments pushed, its return
     // into this stub's `ret 4`, which then returns to the caller with what the procedure returned.
     DispatchMessageA: ['p', (x, m) => {
-      const proc = st.wndProc; if (!proc) return 0;
+      const proc = procOf(x.r32(m)); if (!proc) { if (x.r32(m + 4) === 0x0f) st.invalid.delete(x.r32(m)); return 0; }
       const c = x.cpu, args = [x.r32(m), x.r32(m + 4), x.r32(m + 8), x.r32(m + 12)];
       let sp = c.reg[4] >>> 0;
       for (const v of [c.eip >>> 0, ...args].reverse()) { sp -= 4; x.w32(sp, v); }
@@ -610,34 +963,88 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     // What a window does with a message its procedure passes on: WM_CLOSE destroys it (WM_DESTROY and
     // WM_NCDESTROY, sent); WM_SYSCOMMAND's SC_CLOSE posts WM_CLOSE. The rest needs nothing here.
-    DefWindowProcA: ['puuu', (x, hwnd, msg, wp) => {
+    DefWindowProcA: ['puuu', (x, hwnd, msg, wp, lp) => {
+      const r = defWindow(x, hwnd, msg, wp, lp);
+      if (r !== undefined) return r;
       if (msg === 0x10 && hwnd === st.hwnd && !st.destroyed) { st.destroyed = true; return send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 0, 16); }
+      if (msg === 0x10 && hwnd !== st.hwnd && win(hwnd)) return destroyOther(x, hwnd, () => 0, 16);
       if (msg === 0x112 && (wp & 0xfff0) === 0xf060) st.msgs.push({ msg: 0x10, wp: 0, lp: 0 });
       return 0;
     }],
     // WNDCLASSA: lpfnWndProc at 4, lpszClassName at 36; WNDCLASSEXA: at 8 and 40. An atom of its own each.
-    RegisterClassA: ['p', (x, wc) => registerClass(x, x.r32(wc + 4), x.r32(wc + 36))],
-    RegisterClassExA: ['p', (x, wc) => registerClass(x, x.r32(wc + 8), x.r32(wc + 40))],
+    RegisterClassA: ['p', (x, wc) => { const a = registerClass(x, x.r32(wc + 4), x.r32(wc + 36)); classInfo(x, a, x.r32(wc + 36), x.bytes(wc, 40)); return a; }],
+    RegisterClassExA: ['p', (x, wc) => { const a = registerClass(x, x.r32(wc + 8), x.r32(wc + 40)); classInfo(x, a, x.r32(wc + 40), x.bytes(wc + 4, 40)); return a; }],
+    // A class's WNDCLASSA as it was registered (the system's own: their procedure), or 0 when there is none.
+    GetClassInfoA: ['ppp', (x, inst, name, wc) => {
+      const key = name < 0x10000 ? name : x.str(name, 256).toLowerCase(), info = st.classInfo.get(key);
+      if (info) { x.write(wc, info); return 1; }
+      const proc = systemProc(x, key); if (!proc) return 0;
+      x.write(wc, new Uint8Array(40)); x.w32(wc + 4, proc); x.w32(wc + 36, name); return 1;
+    }],
     // SM_CXSCREEN, SM_CYSCREEN (the desktop, or the mode a program set), SM_CYCAPTION and the frames as
     // XP's classic style, the work area above a 30-pixel taskbar.
     GetSystemMetrics: ['i', (x, n) => {
       const S = st.modeSet ? { w: st.w, h: st.h } : st.desk;
       return ({ 0: S.w, 1: S.h, 4: 18, 5: 1, 6: 1, 7: 3, 8: 3, 32: 4, 33: 4, 16: S.w, 17: S.h - 30 - 19 })[n] ?? 0;
     }],
-    GetClientRect: ['pp', (x, hwnd, r) => { x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, st.w); x.w32(r + 12, st.h); return 1; }],
+    GetClientRect: ['pp', (x, hwnd, r) => { const w = hwnd !== st.hwnd && win(hwnd); x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, w ? w.w : st.w); x.w32(r + 12, w ? w.h : st.h); return 1; }],
     // The window on the screen, its frame included: where the program put it, or the visitor dragged it.
-    GetWindowRect: ['pp', (x, hwnd, r) => { const o = wm.outer(); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + o.w); x.w32(r + 12, o.y + o.h); return 1; }],
+    GetWindowRect: ['pp', (x, hwnd, r) => {
+      const w = hwnd !== st.hwnd && win(hwnd);
+      if (w) { const o = screenOrigin(hwnd); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + w.w); x.w32(r + 12, o.y + w.h); return 1; }
+      const o = st.mainDialog && !wm.framed() ? { x: 0, y: 0, w: st.w, h: st.h } : wm.outer(); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + o.w); x.w32(r + 12, o.y + o.h); return 1;
+    }],
     // A message box is not shown; its caption and text go to the log, where an error says what it is.
-    MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', () => 1], ValidateRect: ['pp', () => 1], // The window's end: WM_DESTROY, then WM_NCDESTROY; the program's other windows (dialogs) have no procedure here.
-    DestroyWindow: ['p', (x, hwnd) => (hwnd === st.hwnd && !st.destroyed ? (st.destroyed = true, send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 1, 4)) : 1)],
+    MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', () => 1], ValidateRect: ['pp', (x, h) => { st.invalid.delete(h || st.hwnd); return 1; }], // The window's end: WM_DESTROY, then WM_NCDESTROY; the program's other windows (dialogs) have no procedure here.
+    DestroyWindow: ['p', (x, hwnd) => {
+      if (hwnd === st.hwnd) return !st.destroyed ? (st.destroyed = true, send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 1, 4)) : 1;
+      return destroyOther(x, hwnd, () => 1, 4);
+    }],
     LoadCursorA: ['pp', () => 0x10003], LoadIconA: ['pp', () => 0x10002], SetCursor: ['p', () => 0], AdjustWindowRect: ['pui', (x, r, style, menu) => user32.AdjustWindowRectEx[1](x, r, style, menu, 0)],
-    wsprintfA: ['ppp', NOT('user32', 'wsprintfA')[1], { cdecl: true }],
+    // wsprintfA(buf, fmt, ...) (cdecl) and wvsprintfA(buf, fmt, va_list): at most 1024 characters, as Windows.
+    wsprintfA: ['pp', (x, buf, fmt) => { const out = formatC(x, x.str(fmt), (x.cpu.reg[4] >>> 0) + 12).slice(0, 1023); x.write(buf, new TextEncoder().encode(out + '\0')); return out.length; }, { cdecl: true }],
+    wvsprintfA: ['ppp', (x, buf, fmt, ap) => { const out = formatC(x, x.str(fmt), ap).slice(0, 1023); x.write(buf, new TextEncoder().encode(out + '\0')); return out.length; }],
     // A program's own windows beyond the first (WinQuake's start-up dialog, made from its resources and
     // destroyed once the game window is up): a handle of their own, never on the screen here.
-    CreateDialogParamA: ['pppp' + 'p', () => 0x10020],
-    GetDlgItem: ['pi', (x, dlg, id) => 0x10100 + (id & 0xff)],      // a control of such a window: a handle of its own
+    CreateDialogParamA: ['pppp' + 'p', (x, inst, name, parent, proc, param) => {
+      const r = findResource(x, inst || x.win.base, 5, resId(x, name));
+      return r ? createDialog(x, inst, r.at, parent, proc, param, 20) : 0x10020;
+    }],
+    // EndDialog: the dialog hidden and its result kept (a modal loop -- MFC's RunModalLoop -- ends on its own).
+    EndDialog: ['pi', (x, dlg, r) => {
+      const w = win(dlg); if (!w) return 0;
+      w.result = r; w.ended = true;
+      if (w.visible) { w.visible = false; if (!(w.style & 0x40000000)) uncoverRect(screenOrigin(dlg), w.w, w.h); }
+      return 1;
+    }],
+    // A dialog's keyboard: Enter is its default button (DM_GETDEFID's, else IDOK), Escape IDCANCEL, each
+    // a WM_COMMAND posted to it, and the key taken; anything else is the caller's to dispatch.
+    IsDialogMessageA: ['pp', (x, dlg, m) => {
+      const h = x.r32(m), msg = x.r32(m + 4), vk = x.r32(m + 8);
+      if (!win(dlg) || (h !== dlg && !isAncestor(dlg, h))) return 0;
+      if (msg === 0x100 && (vk === 0x0d || vk === 0x1b)) { st.msgs.push({ msg: 0x111, wp: vk === 0x0d ? 1 : 2, lp: 0, hwnd: dlg }); return 1; }
+      if ((msg === 0x102 || msg === 0x101) && (vk === 0x0d || vk === 0x1b)) return 1;
+      return 0;
+    }],
+    CreateDialogIndirectParamA: ['ppppp', (x, inst, tpl, parent, proc, param) => createDialog(x, inst, tpl, parent, proc, param, 20)],
+    // DefDlgProcA: the dialog's DLGPROC first; what it does not handle (FALSE) goes to DefWindowProc, what it
+    // does returns its DWL_MSGRESULT (WM_INITDIALOG and the messages that answer with a value: its own).
+    DefDlgProcA: ['puuu', (x, hwnd, msg, wp, lp) => {
+      const w = win(hwnd), fn = w && w.dlgProc;
+      if (!fn) return user32.DefWindowProcA[1](x, hwnd, msg, wp, lp);
+      return send(x, [{ fn, args: [hwnd, msg, wp, lp] }], (eax) => {
+        if (!eax) return user32.DefWindowProcA[1](x, hwnd, msg, wp, lp);
+        return [0x110, 0x19, 0x133, 0x134, 0x135, 0x136, 0x137, 0x138, 0x2b, 0x0f].includes(msg) ? eax : (w.long.get(0) ?? eax);
+      }, 16);
+    }],
+    // A dialog's control by its id; a window not made here (WinQuake's start-up dialog) has none.
+    GetDlgItem: ['pi', (x, dlg, id) => [...st.wins.values()].find((w) => w.parent === dlg && !w.dead && w.id === (id & 0xffff))?.hwnd || 0],
     // GWL_STYLE, GWL_EXSTYLE, GWL_WNDPROC of the window.
-    GetWindowLongA: ['pi', (x, hwnd, i) => (hwnd !== st.hwnd ? 0 : i === -16 ? st.style >>> 0 : i === -4 ? st.wndProc >>> 0 : 0)],
+    GetWindowLongA: ['pi', (x, hwnd, i) => {
+      if (hwnd === st.hwnd) return i === -16 ? st.style >>> 0 : i === -4 ? st.wndProc >>> 0 : i === 4 && win(hwnd) && win(hwnd).dlgProc !== undefined ? win(hwnd).dlgProc : (win(hwnd) && win(hwnd).long && win(hwnd).long.get(i)) || 0;
+      const w = win(hwnd); if (!w) return 0;
+      return i === -16 ? w.style : i === -4 ? w.proc >>> 0 : i === -12 ? w.id >>> 0 : i === -8 ? w.parent : i === 4 && w.dlgProc ? w.dlgProc : (w.long.get(i) || 0) >>> 0;
+    }],
     RegisterWindowMessageA: ['p', () => 0xc100 + (st.winMsgs = (st.winMsgs | 0) + 1)],
     RegisterHotKey: ['piuu', () => 1], UnregisterHotKey: ['pi', () => 1], UnregisterClassA: ['pp', () => 1],
     // No clipboard here: OpenClipboard fails, as when another program holds it.
@@ -645,16 +1052,47 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // The classic scheme's system colours (COLORREF, 0x00BBGGRR); setting them changes nothing here.
     GetSysColor: ['i', (x, i) => ({ 1: 0xa56e3a, 2: 0x6a240a, 4: 0xc8d0d4, 5: 0xffffff, 6: 0x000000, 8: 0x000000, 9: 0xffffff, 15: 0xc8d0d4, 16: 0x808080, 18: 0x000000, 20: 0xffffff })[i] ?? 0],
     SetSysColors: ['ipp', () => 1],
-    GetActiveWindow: ['', () => st.hwnd], SetActiveWindow: ['p', () => st.hwnd], SetForegroundWindow: ['p', () => 1],
-    SetFocus: ['p', () => st.hwnd], EnableWindow: ['pi', () => 0], MessageBeep: ['u', () => 1],
-    SetCapture: ['p', () => 0], ReleaseCapture: ['', () => 1],
+    // The active window: the main one, until another top-level window is shown or brought forward (Half-
+    // Life's engine window over its launcher), which then gets what Windows sends on activation -- its
+    // WM_ACTIVATEAPP and WM_ACTIVATE are what tell a game it may take the screen and the mouse.
+    GetActiveWindow: ['', () => st.activeWin || st.hwnd],
+    SetActiveWindow: ['p', (x, h) => activateOther(x, h, () => st.activeWin || st.hwnd, 4)],
+    SetForegroundWindow: ['p', (x, h) => activateOther(x, h, () => 1, 4)],
+    SetFocus: ['p', (x, h) => {
+      const prev = st.focus || st.hwnd; st.focus = h;
+      let top = h; while (win(top) && (win(top).style & 0x40000000) && !win(top).main) top = win(top).parent;   // its top-level window, made the active one
+      return win(top) && !win(top).main && top !== st.hwnd && st.activeWin !== top ? activateOther(x, top, () => prev, 4) : prev;
+    }],
+    EnableWindow: ['pi', (x, h, on) => { const w = win(h); if (!w) return 0; const was = w.enabled === false; if (w.enabled !== !!on) { w.enabled = !!on; invalidate(h, true); } return was ? 1 : 0; }],
+    MessageBeep: ['u', () => 1],
+    SetCapture: ['p', (x, h) => { const prev = st.capture || 0; st.capture = h && win(h) && !win(h).main ? h : 0; return prev; }],
+    ReleaseCapture: ['', () => { st.capture = 0; return 1; }],
     ClipCursor: ['p', (x, r) => { st.clip = r ? { l: x.r32(r) | 0, t: x.r32(r + 4) | 0, r: x.r32(r + 8) | 0, b: x.r32(r + 12) | 0 } : null; return 1; }],
-    InvalidateRect: ['ppi', () => 1], PostMessageA: ['puuu', (x, hwnd, msg, wp, lp) => { st.msgs.push({ msg, wp, lp }); return 1; }],
-    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp) => (hwnd === st.hwnd ? send(x, [[msg, wp, lp]], (eax) => eax, 16) : 0)], KillTimer: ['pu', () => 1],
+    InvalidateRect: ['ppi', (x, h, r, erase) => { if (st.mainDialog || (h && h !== st.hwnd)) invalidate(h || st.hwnd, !!erase); return 1; }], PostMessageA: ['puuu', (x, hwnd, msg, wp, lp) => { st.msgs.push({ msg, wp, lp, ...(hwnd && hwnd !== st.hwnd ? { hwnd } : {}) }); return 1; }],
+    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp) => (procOf(hwnd) ? send(x, [[msg, wp, lp, hwnd]], (eax) => eax, 16) : 0)], KillTimer: ['pu', () => 1],
     // GWL_STYLE (-16): the frame the window's size includes from now on (WinQuake's windowed and full-screen modes).
-    SetWindowLongA: ['pii', (x, hwnd, i, v) => { if (i === -16 && hwnd === st.hwnd) { const prev = st.style | 0; st.style = v; return prev; } return 0; }],
+    SetWindowLongA: ['pii', (x, hwnd, i, v) => {
+      if (hwnd === st.hwnd) {
+        if (i === -16) { const prev = st.style | 0; st.style = v; return prev; }
+        if (i === -4) { const prev = st.wndProc | 0; st.wndProc = v >>> 0; if (win(hwnd)) win(hwnd).proc = v >>> 0; return prev; }   // subclassed
+        if (i === 4 && win(hwnd) && win(hwnd).dlgProc !== undefined) { const w = win(hwnd), prev = w.dlgProc | 0; w.dlgProc = v >>> 0; return prev; }
+        const w = win(hwnd); if (!w) return 0; if (!w.long) w.long = new Map(); const prev = w.long.get(i) || 0; w.long.set(i, v); return prev;
+      }
+      const w = win(hwnd); if (!w) return 0;
+      const field = { [-16]: 'style', [-4]: 'proc', [-12]: 'id', [-8]: 'parent' }[i] || (i === 4 && w.dlgProc !== undefined ? 'dlgProc' : null);
+      if (field) { const prev = w[field] | 0; w[field] = v >>> 0; return prev; }
+      const prev = w.long.get(i) || 0; w.long.set(i, v); return prev;
+    }],
     // WM_PAINT's DC: the window's, the whole client area to paint (PAINTSTRUCT: hdc, fErase, rcPaint).
-    BeginPaint: ['pp', (x, hwnd, ps) => { x.write(ps, new Uint8Array(64)); x.w32(ps, st.hdc); x.w32(ps + 16, st.w); x.w32(ps + 20, st.h); return st.hdc; }],
+    // A window's DC to paint with, the whole client area its rcPaint; its update region validated, and
+    // erased first (WM_ERASEBKGND) when it was invalidated so.
+    BeginPaint: ['pp', (x, hwnd, ps) => {
+      const w = hwnd !== st.hwnd && win(hwnd), hdc = dcFor(hwnd), erase = (win(hwnd) || {}).erase;
+      x.write(ps, new Uint8Array(64)); x.w32(ps, hdc); x.w32(ps + 16, w ? w.w : st.w); x.w32(ps + 20, w ? w.h : st.h);
+      st.invalid.delete(hwnd); if (win(hwnd)) win(hwnd).erase = false;
+      if (erase && (st.mainDialog || w)) return send(x, [[0x14, hdc, 0, hwnd]], (r) => { x.w32(ps + 4, r ? 0 : 1); return hdc; }, 8);
+      return hdc;
+    }],
     EndPaint: ['pp', () => 1],
     // WINDOWPLACEMENT: its length at 0, then flags, show state, the two points and the normal rectangle.
     GetWindowPlacement: ['pp', (x, hwnd, p) => { x.write(p, new Uint8Array(44)); x.w32(p, 44); x.w32(p + 8, 1); x.w32(p + 36, st.w); x.w32(p + 40, st.h); return 1; }],
@@ -677,10 +1115,50 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     // SPI_GETWORKAREA (30h): the screen; anything else asked is answered without change.
     SystemParametersInfoA: ['uupu', (x, what, n, p) => { if (what === 0x30 && p) { x.w32(p, 0); x.w32(p + 4, 0); x.w32(p + 8, st.w); x.w32(p + 12, st.h); } return 1; }],
-    // No string resources are read here: an empty string, as for an id the table lacks.
-    LoadStringA: ['pupi', (x, inst, id, buf, n) => { if (n > 0) x.write(buf, Uint8Array.of(0)); return 0; }],
+    // The module's string table (RT_STRING); an empty string for an id it lacks.
+    LoadStringA: ['pupi', (x, inst, id, buf, n) => {
+      const s = loadString(x, inst || x.win.base, id) || '';
+      if (n <= 0) return 0;
+      const b = Uint8Array.from(s.slice(0, n - 1), (c) => c.charCodeAt(0) & 0xff); x.write(buf, b); x.w8(buf + b.length, 0); return b.length;
+    }],
     // No message ever arrives here, so it waits its time out (WAIT_TIMEOUT), as an idle window does.
     mirageReturn: ['', (x) => mirageReturn(x), { ordinal: 2600, noName: true }],
+    // Hooks: WH_CBT's (5) called as windows are made; the others (MFC's WH_MSGFILTER) kept, never called.
+    SetWindowsHookExA: ['ippu', (x, id, fn) => { st.hooks.set(id, fn); return 0x4000 + id; }],
+    UnhookWindowsHookEx: ['p', (x, h) => { st.hooks.delete(h - 0x4000); return 1; }],
+    CallNextHookEx: ['piuu', () => 0],
+    // What a window is, and where: the main one and the others alike.
+    IsWindow: ['p', (x, h) => (h === st.hwnd ? (st.destroyed ? 0 : 1) : win(h) && !win(h).dead ? 1 : 0)],
+    IsWindowVisible: ['p', (x, h) => (h === st.hwnd ? (st.shown ? 1 : 0) : win(h) && win(h).visible ? 1 : 0)],
+    IsWindowEnabled: ['p', (x, h) => (win(h) && win(h).enabled === false ? 0 : 1)],
+    IsIconic: ['p', () => 0], IsZoomed: ['p', () => 0],
+    GetParent: ['p', (x, h) => (win(h) ? win(h).parent : 0)],
+    IsChild: ['pp', (x, p, h) => { for (let w = win(h); w; w = win(w.parent)) if (w.parent === p) return 1; return 0; }],
+    GetDesktopWindow: ['', () => 0x10004], GetForegroundWindow: ['', () => st.activeWin || st.hwnd],
+    GetFocus: ['', () => st.focus || st.hwnd], GetCapture: ['', () => st.capture || 0],
+    GetLastActivePopup: ['p', (x, h) => h], GetTopWindow: ['p', (x, h) => [...st.wins.values()].find((w) => w.parent === h && !w.dead)?.hwnd || 0],
+    // GetWindow: GW_HWNDNEXT 2, GW_HWNDPREV 3, GW_OWNER 4, GW_CHILD 5, GW_HWNDFIRST 0, GW_HWNDLAST 1.
+    GetWindow: ['pu', (x, h, cmd) => {
+      if (cmd === 5) return [...st.wins.values()].find((w) => w.parent === h && !w.dead && !w.main)?.hwnd || 0;
+      if (cmd === 4) return win(h) ? win(h).parent : 0;
+      const w = win(h); if (!w) return 0;
+      const sib = [...st.wins.values()].filter((c) => c.parent === w.parent && !c.dead && !c.main), i = sib.indexOf(w);
+      return (cmd === 2 ? sib[i + 1] : cmd === 3 ? sib[i - 1] : cmd === 0 ? sib[0] : cmd === 1 ? sib[sib.length - 1] : null)?.hwnd || 0;
+    }],
+    GetDlgCtrlID: ['p', (x, h) => (win(h) ? win(h).id : 0)],
+    GetClassNameA: ['ppi', (x, h, buf, n) => {
+      const w = win(h), k = w ? w.cls : st.mainClass, name = typeof k === 'number' ? (st.classNames.get(k) || '#' + k) : k || '';
+      if (n <= 0) return 0; const t = name.slice(0, n - 1); x.write(buf, new TextEncoder().encode(t + '\0')); return t.length;
+    }],
+    GetWindowTextLengthA: ['p', (x, h) => (h === st.hwnd ? (st.title || '').length : win(h) ? (win(h).title || '').length : 0)],
+    CallWindowProcA: ['ppuuu', (x, fn, h, msg, wp, lp) => (fn ? send(x, [{ fn, args: [h, msg, wp, lp] }], (eax) => eax, 20) : 0)],
+    WindowFromPoint: ['ii', () => st.hwnd],
+    WindowFromDC: ['p', (x, hdc) => hwndOfDC(hdc) || st.hwnd],
+    GetWindowDC: ['p', () => st.hdc],
+    BringWindowToTop: ['p', () => 1], ShowOwnedPopups: ['pi', () => 1],
+    RedrawWindow: ['pppu', () => 1], ExcludeUpdateRgn: ['pp', () => 1],
+    FindWindowA: ['pp', () => 0],
+    DestroyCaret: ['', () => 1], ShowCaret: ['p', () => 1], HideCaret: ['p', () => 1],
     MsgWaitForMultipleObjects: ['upiuu', (x, n, handles, all, ms) => { if (!ms) return 0x102; const r = x.sleep(Math.min(ms, 1000) / 1000); return r === 0 ? 0x102 : r; }],
   };
   // ---- gdi32 ---------------------------------------------------------------------------------------
@@ -697,10 +1175,23 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   // The window's client area: what reaches the screen.
   const screen = () => { if (!st.screen || st.screen.w !== st.w || st.screen.h !== st.h) st.screen = { w: st.w, h: st.h, px: new Uint32Array(st.w * st.h) }; return st.screen; };
   const isWindowDC = (hdc) => hdc === st.hdc;
+  // Another window's DC: its rectangle of the screen, copied out to draw on and back when done.
+  const viewOf = (x, hdc) => {
+    const h = hwndOfDC(hdc), w = win(h); if (!w || (h === st.hwnd && !deskMode())) return null;
+    const sc = deskMode() ? deskScreen() : screen(), o = originOf(h), W = Math.max(0, h === st.hwnd ? st.w : w.w), H = Math.max(0, h === st.hwnd ? st.h : w.h), px = new Uint32Array(W * H);
+    for (let j = 0; j < H; j++) { const y = o.y + j; if (y < 0 || y >= sc.h) continue; for (let i = 0; i < W; i++) { const X = o.x + i; if (X >= 0 && X < sc.w) px[j * W + i] = sc.px[y * sc.w + X]; } }
+    return { w: W, h: H, px, o, sc };
+  };
   // Where a DC's drawing lands, as pixels { w, h, px } and done() to put them where they belong: the
   // screen for the window's DC, the selected bitmap (and a section's memory) for a memory DC.
   const target = (x, hdc) => {
-    if (isWindowDC(hdc)) { const sc = screen(); return { ...sc, done: () => wm.present(x.lx, sc) }; }
+    if (isWindowDC(hdc) && !deskMode()) { const sc = screen(); return { ...sc, done: () => wm.present(x.lx, sc) }; }
+    const v = viewOf(x, hdc);
+    if (v) return { w: v.w, h: v.h, px: v.px, done: () => {
+      const { sc, o } = v;
+      for (let j = 0; j < v.h; j++) { const y = o.y + j; if (y < 0 || y >= sc.h) continue; for (let i = 0; i < v.w; i++) { const X = o.x + i; if (X >= 0 && X < sc.w) sc.px[y * sc.w + X] = v.px[j * v.w + i]; } }
+      if (deskMode()) wm.presentDesk(x.lx, sc); else wm.present(x.lx, sc);
+    } };
     const bm = st.gdi.get(st.dcBitmaps.get(hdc));
     if (!bm || bm.kind !== 'bitmap' || bm.dib8) return null;          // drawing into an 8-bit section: not here
     if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
@@ -708,7 +1199,8 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
   };
   // A DC's pixels to read: (x, y) -> 0x00RRGGBB, or null.
   const source = (x, hdc) => {
-    if (isWindowDC(hdc)) { const sc = screen(); return { w: sc.w, h: sc.h, at: (X, Y) => sc.px[Y * sc.w + X] }; }
+    if (isWindowDC(hdc) && !deskMode()) { const sc = screen(); return { w: sc.w, h: sc.h, at: (X, Y) => sc.px[Y * sc.w + X] }; }
+    const v = viewOf(x, hdc); if (v) return { w: v.w, h: v.h, at: (X, Y) => v.px[Y * v.w + X] };
     const bm = st.gdi.get(st.dcBitmaps.get(hdc));
     if (!bm || bm.kind !== 'bitmap') return null;
     if (bm.dib8) {
@@ -746,10 +1238,13 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     }],
     // Fonts and device contexts: what a font names and the DC it is selected into, for D3DXCreateText
     // (st.dcFont) to find its outlines among the fonts the page handed over.
-    GetStockObject: ['i', () => 0x01900010], DeleteObject: ['p', (x, h) => { st.gdi.delete(h); return 1; }],
+    // Stock objects: WHITE_BRUSH 0 to BLACK_BRUSH 4, NULL_BRUSH 5, the pens 6-8, the fonts 10-17, each its handle.
+    GetStockObject: ['i', (x, i) => 0x01900010 + (i & 31)], DeleteObject: ['p', (x, h) => { st.gdi.delete(h); return 1; }],
     SelectObject: ['pp', (x, hdc, obj) => {
       const o = st.gdi.get(obj);
       if (o && o.kind === 'bitmap') { const prev = st.dcBitmaps.get(hdc) || 0x0185000f; st.dcBitmaps.set(hdc, obj); return prev; }   // DEFAULT_BITMAP's
+      if ((o && o.kind === 'brush') || (!o && obj >= 0x01a00000 && obj < 0x01a00020) || (obj >= 0x01900010 && obj <= 0x01900015)) { const d = dcState(hdc), prev = d.brush || 0x01900010; d.brush = obj; return prev; }
+      if ((o && o.kind === 'pen') || (obj >= 0x01900016 && obj <= 0x01900018)) { const d = dcState(hdc), prev = d.pen || 0x01b00017; d.pen = obj; return prev; }
       if (!o || o.kind !== 'font') return 0x01900010;
       const prev = st.dcFonts.get(hdc) || 0x018a0021;                 // the DC's first font: SYSTEM_FONT's
       st.dcFonts.set(hdc, obj); return prev;
@@ -1095,27 +1590,149 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     // sprintf(buf, fmt, ...): %d %i %u %x %X %c %s %f %%, with width and precision, the arguments read from
     // the caller's stack after the format (cdecl's varargs: doubles are 8 bytes there).
     sprintf: ['pp', (x, buf, fmt) => {
-      let ap = (x.cpu.reg[4] >>> 0) + 12, out = '';
-      const f = x.str(fmt);
-      for (let i = 0; i < f.length; i++) {
-        if (f[i] !== '%') { out += f[i]; continue; }
-        const m = /^([-+ 0#]*)(\d*)(?:\.(\d+))?(l|h)?([diuxXcsfg%])/.exec(f.slice(i + 1));
-        if (!m) { out += '%'; continue; }
-        i += m[0].length;
-        const [, flags, width, prec, , c] = m;
-        let v;
-        if (c === '%') v = '%';
-        else if (c === 'f' || c === 'g') { v = x.f64(ap).toFixed(prec === undefined ? 6 : +prec); ap += 8; }
-        else if (c === 's') { v = x.str(x.r32(ap)); ap += 4; }
-        else if (c === 'c') { v = String.fromCharCode(x.r32(ap) & 255); ap += 4; }
-        else { const n = x.r32(ap); ap += 4; v = c === 'x' ? n.toString(16) : c === 'X' ? n.toString(16).toUpperCase() : c === 'u' ? String(n) : String(n | 0); }
-        if (width) v = v.padStart(+width, flags.includes('0') && c !== 's' ? '0' : ' ');
-        out += v;
-      }
+      const out = formatC(x, x.str(fmt), (x.cpu.reg[4] >>> 0) + 12);
       x.write(buf, new TextEncoder().encode(out + '\0'));
       return out.length;
     }, cd],
   };
+  // ---- GDI's pens, brushes and shapes, and DIBs drawn straight to a DC (the classic applications') ----
+  const SYSCOLORS = { 0: 0xc8d0d4, 1: 0xa56e3a, 2: 0x6a240a, 3: 0x808080, 4: 0xc8d0d4, 5: 0xffffff, 6: 0, 7: 0, 8: 0, 9: 0xffffff, 10: 0xc8d0d4, 11: 0xc8d0d4,
+    12: 0x808080, 13: 0x6a240a, 14: 0xffffff, 15: 0xc8d0d4, 16: 0x808080, 17: 0x808080, 18: 0, 19: 0xc8d0d4, 20: 0xffffff, 21: 0x404040, 22: 0xc8d0d4, 23: 0, 24: 0xe1ffff };
+  const rgb = (c) => ((c & 0xff) << 16) | (c & 0xff00) | ((c >>> 16) & 0xff);   // COLORREF (00BBGGRR) -> 00RRGGBB
+  // A brush's colour: one made, a system colour's (GetSysColorBrush), a stock one; null for NULL_BRUSH.
+  const brushColor = (h) => {
+    const o = st.gdi.get(h); if (o && o.kind === 'brush') return o.color;
+    if (h >= 0x01a00000 && h < 0x01a00020) return rgb(SYSCOLORS[h - 0x01a00000] ?? 0);
+    if (h > 0 && h <= 31) return rgb(SYSCOLORS[h - 1] ?? 0);              // (COLOR_x + 1), a class's background
+    return ({ 0x01900010: 0xffffff, 0x01900011: 0xc0c0c0, 0x01900012: 0x808080, 0x01900013: 0x404040, 0x01900014: 0 })[h] ?? null;   // NULL_BRUSH (+5): none
+  };
+  const rectOf = (x, r) => [x.r32(r) | 0, x.r32(r + 4) | 0, x.r32(r + 8) | 0, x.r32(r + 12) | 0];
+  const line = (t, x0, y0, x1, y1, c) => {
+    const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    let e = dx + dy;
+    for (;;) {
+      if (x0 === x1 && y0 === y1) break;                                // LineTo leaves out its last point
+      if (x0 >= 0 && y0 >= 0 && x0 < t.w && y0 < t.h) t.px[y0 * t.w + x0] = c;
+      const e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; }
+    }
+  };
+  // A DIB given as its header and its bits apart (StretchDIBits, SetDIBitsToDevice, CreateDIBitmap): its
+  // pixels, through the decoder of packed DIBs.
+  const dibPixels = (x, bmi, bits) => {
+    const hs = x.r32(bmi), bpp = x.r16(bmi + 14), n = bpp <= 8 ? (x.r32(bmi + 32) || 1 << bpp) : (x.r32(bmi + 16) === 3 ? 3 : 0);
+    const w = x.r32(bmi + 4) | 0, h = Math.abs(x.r32(bmi + 8) | 0), stride = ((w * bpp + 31) >> 5) << 2, head = hs + 4 * n;
+    const packed = x.win.heapAlloc(head + stride * h);
+    x.write(packed, x.bytes(bmi, head)); x.write(packed + head, x.bytes(bits, stride * h));
+    const d = decodeDib(x, packed); x.win.heapFree(packed); return d;
+  };
+  const drawPixels = (x, hdc, d, dx, dy, dw, dh, sx, sy, sw, sh) => {
+    const t = target(x, hdc); if (!t || !d) return 0;
+    for (let j = 0; j < Math.abs(dh); j++) {
+      const ty = dy + j, syy = sy + Math.floor(j * sh / Math.abs(dh)); if (ty < 0 || ty >= t.h || syy < 0 || syy >= d.h) continue;
+      for (let i = 0; i < Math.abs(dw); i++) {
+        const tx = dx + i, sxx = sx + Math.floor(i * sw / Math.abs(dw)); if (tx < 0 || tx >= t.w || sxx < 0 || sxx >= d.w) continue;
+        t.px[ty * t.w + tx] = d.px[syy * d.w + sxx];
+      }
+    }
+    t.done(); return Math.abs(dh);
+  };
+  Object.assign(gdi32, {
+    CreateSolidBrush: ['u', (x, c) => st.newHandle('brush', { color: rgb(c) })],
+    CreatePen: ['iiu', (x, style, w, c) => st.newHandle('pen', { color: rgb(c), style, width: w })],
+    CreateBrushIndirect: ['p', (x, lb) => st.newHandle('brush', { color: rgb(x.r32(lb + 4)) })],
+    MoveToEx: ['piip', (x, hdc, X, Y, old) => { const d = dcState(hdc); if (old) { x.w32(old, d.penX | 0); x.w32(old + 4, d.penY | 0); } d.penX = X; d.penY = Y; return 1; }],
+    LineTo: ['pii', (x, hdc, X, Y) => {
+      const d = dcState(hdc), t = target(x, hdc), pen = st.gdi.get(d.pen);
+      if (t && !(pen && pen.style === 5)) { line(t, d.penX | 0, d.penY | 0, X, Y, pen ? pen.color : 0); t.done(); }   // PS_NULL draws nothing
+      d.penX = X; d.penY = Y; return 1;
+    }],
+    Rectangle: ['piiii', (x, hdc, l, tp, r, b) => {
+      const d = dcState(hdc), t = target(x, hdc); if (!t) return 1;
+      const fill = brushColor(d.brush ?? 0x01900010), pen = st.gdi.get(d.pen), pc = pen ? pen.color : 0;
+      if (fill !== null) fillRect(t, l + 1, tp + 1, r - 1, b - 1, fill);
+      if (!(pen && pen.style === 5)) { fillRect(t, l, tp, r, tp + 1, pc); fillRect(t, l, b - 1, r, b, pc); fillRect(t, l, tp, l + 1, b, pc); fillRect(t, r - 1, tp, r, b, pc); }
+      t.done(); return 1;
+    }],
+    // BITMAP (bmType, bmWidth, bmHeight, bmWidthBytes, bmPlanes, bmBitsPixel, bmBits) for a bitmap;
+    // LOGBRUSH for a brush; LOGPEN for a pen.
+    GetObjectA: ['pip', (x, h, n, p) => {
+      const o = st.gdi.get(h);
+      if (!o) return 0;
+      if (o.kind === 'bitmap') { if (!p) return 24; x.write(p, new Uint8Array(Math.min(n, 24))); x.w32(p + 4, o.w); x.w32(p + 8, o.h); x.w32(p + 12, o.w * 4); x.w16(p + 16, 1); x.w16(p + 18, 32); if (n >= 24) x.w32(p + 20, o.dib ? o.dib.bits : 0); return Math.min(n, 24); }
+      if (o.kind === 'brush') { if (!p) return 12; x.w32(p, 0); x.w32(p + 4, rgb(o.color)); x.w32(p + 8, 0); return 12; }
+      if (o.kind === 'pen') { if (!p) return 16; x.w32(p, o.style); x.w32(p + 4, o.width); x.w32(p + 8, 0); x.w32(p + 12, rgb(o.color)); return 16; }
+      return 0;
+    }],
+    GetCurrentObject: ['pu', (x, hdc, type) => { const d = dcState(hdc); return type === 1 ? d.pen || 0x01b00017 : type === 2 ? d.brush || 0x01900010 : type === 7 ? st.dcBitmaps.get(hdc) || 0x0185000f : type === 6 ? st.dcFonts.get(hdc) || 0x018a0021 : 0; }],
+    // A bitmap of the program's own bits: 1 bit (a mask) or as many as the screen's; zeroed without them.
+    CreateBitmap: ['iiuup', (x, w, h, planes, bpp, bits) => {
+      const px = new Uint32Array(Math.max(0, w * h));
+      if (bits && bpp === 1) { const stride = ((w + 15) >> 4) << 1, raw = x.bytes(bits, stride * h); for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) px[y * w + i] = (raw[y * stride + (i >> 3)] >> (7 - (i & 7))) & 1 ? 0xffffff : 0; }
+      return st.newHandle('bitmap', { w, h, px });
+    }],
+    CreateDIBitmap: ['ppupp' + 'u', (x, hdc, bih, init, bits, bmi) => {
+      const w = x.r32(bih + 4) | 0, h = Math.abs(x.r32(bih + 8) | 0);
+      const d = init & 4 && bits && bmi ? dibPixels(x, bmi, bits) : null;   // CBM_INIT
+      return st.newHandle('bitmap', d && d.w === w ? d : { w, h, px: new Uint32Array(Math.max(0, w * h)) });
+    }],
+    StretchDIBits: ['piiiiiiiippuu', (x, hdc, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi) => {
+      const d = dibPixels(x, bmi, bits); if (!d) return 0;
+      // The source rectangle counts from the DIB's bottom for a bottom-up DIB.
+      const syTop = (x.r32(bmi + 8) | 0) > 0 ? d.h - sy - sh : sy;
+      return drawPixels(x, hdc, d, dx, dy, dw, dh, sx, syTop, sw, sh);
+    }],
+    SetDIBitsToDevice: ['piiuuiiuuppu', (x, hdc, dx, dy, w, h, sx, sy, start, lines, bits, bmi) => {
+      const d = dibPixels(x, bmi, bits); if (!d) return 0;
+      const syTop = (x.r32(bmi + 8) | 0) > 0 ? d.h - sy - h : sy;
+      return drawPixels(x, hdc, d, dx, dy, w, h, sx, syTop, w, h);
+    }],
+    GetTextExtentPointA: ['ppip', (x, hdc, str, n, size) => gdi32.GetTextExtentPoint32A[1](x, hdc, str, n, size)],
+    CreateICA: ['pppp', () => st.hdc],
+  });
+  Object.assign(user32, {
+    FillRect: ['ppp', (x, hdc, r, hbr) => { const c = brushColor(hbr), t = target(x, hdc); if (t && c !== null) { const [l, tp, rr, b] = rectOf(x, r); fillRect(t, l, tp, rr, b, c); t.done(); } return 1; }],
+    FrameRect: ['ppp', (x, hdc, r, hbr) => {
+      const c = brushColor(hbr), t = target(x, hdc); if (!t || c === null) return 1;
+      const [l, tp, rr, b] = rectOf(x, r); fillRect(t, l, tp, rr, tp + 1, c); fillRect(t, l, b - 1, rr, b, c); fillRect(t, l, tp, l + 1, b, c); fillRect(t, rr - 1, tp, rr, b, c);
+      t.done(); return 1;
+    }],
+    DrawFocusRect: ['pp', () => 1],
+    // DrawTextA: its lines (and, with DT_WORDBREAK 10h, the words that fit the rectangle's width) placed
+    // as DT_CENTER (1) and DT_RIGHT (2) say; DT_VCENTER (4) and DT_BOTTOM (8) for DT_SINGLELINE (20h);
+    // DT_CALCRECT (400h) measures and draws nothing; "&x" is x unless DT_NOPREFIX (800h). Returns the height.
+    DrawTextA: ['ppipu', (x, hdc, str, n, r, fmt) => {
+      let s = n < 0 ? x.str(str) : String.fromCharCode(...x.bytes(str, n));
+      if (!(fmt & 0x800)) s = s.replace(/&(.)/g, '$1');
+      const m = textMetrics(hdc), [l, tp, rr, b] = rectOf(x, r);
+      const widthOf = (t) => { let w = 0; for (const ch of t) w += m.font ? m.font.glyph(ch.charCodeAt(0) & 255, m.ppem).cellIncX : m.avg; return w; };
+      const lines = [];
+      for (const para of fmt & 0x20 ? [s.replace(/[\r\n]/g, ' ')] : s.split(/\r?\n/)) {
+        if (!(fmt & 0x10)) { lines.push(para); continue; }
+        let cur = '';
+        for (const word of para.split(/(\s+)/)) {
+          if (cur && widthOf(cur + word) > rr - l && word.trim()) { lines.push(cur.trimEnd()); cur = word.trimStart(); } else cur += word;
+        }
+        lines.push(cur);
+      }
+      const height = lines.length * m.height, widest = Math.max(0, ...lines.map(widthOf));
+      if (fmt & 0x400) { x.w32(r + 8, l + (fmt & 0x10 ? Math.min(widest, rr - l) : widest)); x.w32(r + 12, tp + height); return height; }
+      const t = target(x, hdc); if (!t) return height;
+      const top = fmt & 0x20 && fmt & 4 ? tp + ((b - tp - m.height) >> 1) : fmt & 0x20 && fmt & 8 ? b - m.height : tp;
+      lines.forEach((line, i) => {
+        const w = widthOf(line), X = fmt & 1 ? l + ((rr - l - w) >> 1) : fmt & 2 ? rr - w : l;
+        const buf = x.win.heapAlloc(line.length + 1); x.write(buf, Uint8Array.from(line, (c) => c.charCodeAt(0) & 255));
+        textOut(x, t, dcState(hdc), m, X, top + i * m.height, 0, 0, buf, line.length); x.win.heapFree(buf);
+      });
+      t.done();
+      return height;
+    }],
+    // DrawTextExA: DrawTextA's, its DRAWTEXTPARAMS (tabs, margins) not used here.
+    DrawTextExA: ['ppipup', (x, hdc, str, n, r, fmt) => user32.DrawTextA[1](x, hdc, str, n, r, fmt)],
+    GetSysColor: ['i', (x, i) => SYSCOLORS[i] ?? 0],
+  });
+  // The classic Windows 95 calls (src/win32/classic.js), under the names not answered above.
+  const classic = classicApis({ st, wm, send });
+  for (const [dll, t] of [[kernel32, classic.kernel32], [user32, classic.user32], [gdi32, classic.gdi32], [winmm, classic.winmm]]) for (const [k, v] of Object.entries(t || {})) if (!(k in dll)) dll[k] = v;
   const tables = [
     { dll: 'msvcrt.dll', fns: msvcrt },
     { dll: 'ntdll.dll', fns: { RtlZeroMemory: ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }] } },
@@ -1138,8 +1755,9 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }] } },
     // The registry: empty. A key opens as not found (ERROR_FILE_NOT_FOUND), so nothing is read from it
     // or written to it, as on a machine where the program never ran.
-    { dll: 'advapi32.dll', fns: { RegOpenKeyExA: ['ppuup', () => 2], RegCreateKeyExA: ['ppupuuppp', () => 2], RegQueryValueExA: ['pppppp', () => 2],
-      RegSetValueExA: ['ppuupu', () => 2], RegCloseKey: ['p', () => 0] } },
+    { dll: 'advapi32.dll', fns: classic.advapi32 },
+    { dll: 'version.dll', fns: classic.version },
+    { dll: 'ole32.dll', fns: classic.ole32 },                      // a registry in memory (src/win32/classic.js)
   ];
   /*
    * The visitor's input, as Windows posts it to the window: a key by its PC scancode (set 1; 0xE0-
@@ -1155,6 +1773,32 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
    * cursor with SetCursorPos each frame and turns by the difference.
    */
   const clientLp = () => { const c = wm.client(); return ((((st.mouseY | 0) - c.y) & 0xffff) << 16 | (((st.mouseX | 0) - c.x) & 0xffff)) >>> 0; };
+  // The window under the pointer (main-window client coordinates): the one with the capture, else the
+  // highest visible popup there or the main window, down to its deepest visible child; null for the
+  // main window itself (its messages as before). A disabled window gets nothing.
+  const windowAt = (X, Y) => {
+    if (st.capture && win(st.capture)) return st.capture;
+    const size = (h) => (h === st.hwnd ? { w: st.w, h: st.h } : win(h));
+    const inside = (h, px, py) => { const w = size(h), o = screenOrigin(h); return px >= o.x && py >= o.y && px < o.x + w.w && py < o.y + w.h; };
+    const deepest = (h) => {
+      const kids = [...st.wins.values()].filter((c) => c.parent === h && !c.dead && c.visible && (c.style & 0x40000000) && inside(c.hwnd, X, Y));
+      return kids.length ? deepest(kids[kids.length - 1].hwnd) : h;
+    };
+    const pops = [...st.wins.values()].filter((w) => !w.main && !w.dead && w.visible && !(w.style & 0x40000000) && inside(w.hwnd, X, Y));
+    if (!pops.length && deskMode() && !(st.shown && inside(st.hwnd, X, Y))) return -1;   // the desktop
+    const h = deepest(pops.length ? pops[pops.length - 1].hwnd : st.hwnd);
+    for (let w = win(h); w; w = w.main || !(w.style & 0x40000000) ? null : win(w.parent)) if (w.enabled === false) return -1;   // up to its top-level window
+    return h === st.hwnd ? null : h;
+  };
+  // A mouse message to the window under the pointer, in its client coordinates.
+  const postMouse = (msg, wp) => {
+    const X = st.mouseX | 0, Y = st.mouseY | 0;                          // the screen's
+    const h = st.wins.size > 1 ? windowAt(X, Y) : null;
+    if (h === -1) return;
+    if (!h && !deskMode()) { st.msgs.push({ msg, wp, lp: clientLp() }); return; }
+    const o = screenOrigin(h || st.hwnd); if (!h) { st.msgs.push({ msg, wp, lp: (((Y - o.y) & 0xffff) << 16 | ((X - o.x) & 0xffff)) >>> 0 }); return; }
+    st.msgs.push({ msg, wp, lp: (((Y - o.y) & 0xffff) << 16 | ((X - o.x) & 0xffff)) >>> 0, hwnd: h });
+  };
   const captured = () => !!st.clip || (st.cursorCount | 0) < 0;
   // A drag moves the window where the visitor points; the move takes effect at the program's next
   // PeekMessage or GetMessage, which delivers WM_MOVE before anything else -- as Windows' drag loop
@@ -1171,20 +1815,22 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
     key(down, scan, ext = false) {
       const vk = scanToVk(scan, ext), alt = vk === 0x12;
       if (down) st.keys.add(vk); else st.keys.delete(vk);
-      st.msgs.push({ msg: (alt ? 0x104 : 0x100) + (down ? 0 : 1), wp: vk, lp: (1 | (scan & 0xff) << 16 | (ext ? 1 << 24 : 0) | (down ? 0 : 0xc0000000)) >>> 0 });
+      // To the window with the focus: the main one, or another (Half-Life's engine window, over its launcher).
+      const to = st.focus && st.focus !== st.hwnd && win(st.focus) && !win(st.focus).dead ? { hwnd: st.focus } : {};
+      st.msgs.push({ msg: (alt ? 0x104 : 0x100) + (down ? 0 : 1), wp: vk, lp: (1 | (scan & 0xff) << 16 | (ext ? 1 << 24 : 0) | (down ? 0 : 0xc0000000)) >>> 0, ...to });
     },
     captures: () => captured(),
     leave() { st.pointerIn = false; wm.moveCursor(); },             // the pointer left the screen: no cursor drawn
     mouseAt(X, Y) {                                                 // free: a point of the screen
       st.mouseX = X | 0; st.mouseY = Y | 0; st.pointerIn = true; wm.moveCursor();
       if (wm.drag) { wm.drag.x = X - wm.drag.dx; wm.drag.y = Y - wm.drag.dy; postMove(); return; }
-      if (!free() || wm.hit(X, Y) === 'client') st.msgs.push({ msg: 0x200, wp: st.buttons | 0, lp: clientLp() });
+      if (!free() || wm.hit(X, Y) === 'client') postMouse(0x200, st.buttons | 0);
     },
     mouseMove(dx, dy) {                                             // captured: a move
       let X = (st.mouseX ?? (st.w >> 1)) + dx, Y = (st.mouseY ?? (st.h >> 1)) + dy;
       if (st.clip) { X = Math.max(st.clip.l, Math.min(st.clip.r - 1, X)); Y = Math.max(st.clip.t, Math.min(st.clip.b - 1, Y)); }
       st.mouseX = X; st.mouseY = Y;
-      st.msgs.push({ msg: 0x200, wp: st.buttons | 0, lp: clientLp() });
+      postMouse(0x200, st.buttons | 0);
     },
     mouseButton(b, down) {                                          // 0 left, 1 right, 2 middle
       const X = st.mouseX | 0, Y = st.mouseY | 0;
@@ -1198,12 +1844,14 @@ export function win32Apis({ gl, glu, fonts, files = {} } = {}) {
       } else if (free() && wm.hit(X, Y) !== 'client') return;
       const bit = [1, 2, 0x10][b], msg = [0x201, 0x204, 0x207][b] + (down ? 0 : 1);
       st.buttons = down ? (st.buttons | 0) | bit : (st.buttons | 0) & ~bit;
-      st.msgs.push({ msg, wp: st.buttons, lp: clientLp() });
+      postMouse(msg, st.buttons);
     },
   };
   /** A file of the program's disk, by name (the loader's DLLs of the program's own), or null. */
   tables.readFile = (name) => { const f = diskFile(name); return f && f.bytes ? f.bytes : null; };
   /** Where WebGL's picture goes on the screen, for a framed window (null: it is the whole screen). */
+  // The windows as they are (tools/win32/run.mjs MIRAGE_W32WINS): handle, class, parent, id, place, style, title.
+  tables.windows = () => [...st.wins.values()].map((w) => ({ hwnd: w.hwnd.toString(16), cls: w.cls, parent: (w.parent || 0).toString(16), id: w.id, rect: [w.x, w.y, w.w, w.h], style: (w.style >>> 0).toString(16), visible: !!w.visible, title: w.title, image: w.image || undefined }));
   tables.wm = { clientRect: () => (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0 };   // GDI frames shown
   return tables;
 }

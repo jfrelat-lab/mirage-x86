@@ -148,6 +148,17 @@ export function windowManager(st) {
     }
     cover();
   };
+  /**
+   * A dialog application's screen: the desktop, its windows drawn on it where they are (src/win32/api.js
+   * deskMode), `desk` the whole of it.
+   */
+  wm.presentDesk = (lx, desk) => {
+    wm.lx = lx; wm.presented = (wm.presented | 0) + 1;
+    if (!lx || !lx.fbView) return;
+    uncover();
+    const fb = lx.fbView(desk.w, desk.h); fb.set(desk.px);
+    wm.view = { fb, w: desk.w, h: desk.h }; cover();
+  };
   /** Redraw now, from the host (a drag): the frame, and the client area as last drawn. */
   wm.redraw = () => { wm.dirty = true; if (wm.lx) wm.present(wm.lx, null); };
   return wm;

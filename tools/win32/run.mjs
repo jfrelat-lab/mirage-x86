@@ -13,10 +13,14 @@
 //                                   a point (mouseAt), the left button down or up there
 //   MIRAGE_W32DIR=<dir>             the files beside it, by base name, on the program's own disk (src/win32/api.js)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
-//   MIRAGE_W32TRACE=1               every API call as it is made
+//   MIRAGE_W32TRACE=1|<file>        every API call as it is made (to stderr, or that file)
+//   MIRAGE_W32TRACEFROM=<seconds>   ... from that guest second on
+//   MIRAGE_W32FONTS=arial=<ttf>,arial:bold=<ttf>  TrueType fonts the program selects, as the page's machine.fonts
+//   MIRAGE_W32DUMP=<name>,...       those files of the program's disk at the end (what it wrote)
+//   MIRAGE_W32WINS=1                the windows at the end: handle, class, parent, id, place, style, title
 //   MIRAGE_W32TEX=<dir>             every texture level as the program unlocks it: <dir>/NNNN.bin and index.json
 //   MIRAGE_W32WAV=<file.wav>        what waveOut played (and <file>.midi.wav what MIDI played: midiOut, MCI)
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, readdirSync, statSync, writeSync, openSync } from 'fs';
 import { basename, join } from 'path';
 import { Machine } from '../../src/machine.js';
 import { installLinux } from '../../src/linux.js';
@@ -46,10 +50,19 @@ if (TEX) {
     writeFileSync(`${TEX}/index.json`, JSON.stringify(texIndex, null, 1) + '\n');
   };
 }
-if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { console.error('w32:', name, args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) : a)).join(' ')); if (t0) t0(name, args); }; }
+// The trace written as it is made (writeSync): to a pipe, console.error queues in memory, and a launcher's
+// idle loop of millions of calls ran Node out of heap.
+// MIRAGE_W32TRACE=<file>: into that file instead of stderr.
+const traceFd = process.env.MIRAGE_W32TRACE && process.env.MIRAGE_W32TRACE !== '1' ? openSync(process.env.MIRAGE_W32TRACE, 'w') : 2;
+const traceOut = (t) => { const b = Buffer.from(t); for (let o = 0; o < b.length;) { try { o += writeSync(traceFd, b, o); } catch (e) { if (e.code !== 'EAGAIN') throw e; } } };
+// MIRAGE_W32TRACEFROM=<guest seconds>: only from then on (a launcher's first minute is millions of calls).
+const traceFrom = Number(process.env.MIRAGE_W32TRACEFROM) || 0;
+if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { if (traceFrom && lx.mono() < traceFrom) { if (t0) t0(name, args); return; } traceOut('w32 ' + lx.mono().toFixed(3) + ': ' + name + ' ' + args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) : a)).join(' ') + '\n'); if (t0) t0(name, args); }; }
 const files = {};
 if (process.env.MIRAGE_W32DIR) (function walk(d) { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else files[n] = new Uint8Array(readFileSync(p)); } })(process.env.MIRAGE_W32DIR);
-const apis = win32Apis({ files });
+// MIRAGE_W32FONTS=arial=/path/Arial.ttf,arial:bold=/path/Arial Bold.ttf: TrueType fonts, as the page's machine.fonts.
+const fonts = process.env.MIRAGE_W32FONTS ? Object.fromEntries(process.env.MIRAGE_W32FONTS.split(',').map((e) => { const [k, f] = e.split('='); return [k.toLowerCase(), new Uint8Array(readFileSync(f))]; })) : undefined;
+const apis = win32Apis({ files, fonts });
 if (process.env.MIRAGE_W32STUBS) {
   // The import directory read here, as the loader reads it, and every name no table makes added as a
   // function that throws: the run then stops at the first one called, and says which.
@@ -122,6 +135,10 @@ if (WAV) {
   writeFileSync(WAV, b); console.error(`mirage-win32: ${(n / 2 / wavRate).toFixed(1)} s of sound -> ${WAV}`);
   if (midiHeard.some((v) => v)) { writeFileSync(WAV.replace(/\.wav$/i, '') + '.midi.wav', writeWav(null, midiHeard, midiRate)); console.error(`mirage-win32: ${(midiHeard.length / 2 / midiRate).toFixed(1)} s of MIDI -> ${WAV.replace(/\.wav$/i, '')}.midi.wav`); }
 }
+// MIRAGE_W32DUMP=qconsole.log: a file of the program's disk at the end (what it wrote: Half-Life's -condebug log).
+if (process.env.MIRAGE_W32DUMP) for (const n of process.env.MIRAGE_W32DUMP.split(',')) { const f = apis.readFile(n); console.error(`w32 file ${n}:`, f ? Buffer.from(f).toString('latin1') : '(none)'); }
+// MIRAGE_W32WINS=1: the windows at the end, one a line.
+if (process.env.MIRAGE_W32WINS && apis.windows) for (const w of apis.windows()) console.error('w32 window:', JSON.stringify(w));
 const t = backend.summary();
 console.error('w32:', JSON.stringify({ mode: t.mode, frames: t.frames, calls: t.calls }));
 for (const s of t.shaders) console.error('w32 shader:\n' + s);

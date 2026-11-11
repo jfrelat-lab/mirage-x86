@@ -11,6 +11,11 @@
 const S_OK = 0, E_NOINTERFACE = 0x80004002, DSERR_INVALIDPARAM = 0x80070057;
 
 const UNK = 'QueryInterface:2 AddRef:0 Release:0';
+// A GUID as the registry writes it; the interfaces an object here is: IUnknown, IDirectSound(8), IDirectSoundBuffer(8).
+const guid = (x, p) => { const b = x.bytes(p, 16), h = (i, n) => [...b.slice(i, i + n)].reverse().map((v) => v.toString(16).padStart(2, '0')).join('');
+  return `${h(0, 4)}-${h(4, 2)}-${h(6, 2)}-${[...b.slice(8, 10)].map((v) => v.toString(16).padStart(2, '0')).join('')}-${[...b.slice(10)].map((v) => v.toString(16).padStart(2, '0')).join('')}`; };
+const SELF = new Set(['00000000-0000-0000-c000-000000000046', '279afa85-4981-11ce-a521-0020af0be560', '6825a449-7524-4d82-920f-50e36ab3ab1e',
+  '279afa83-4981-11ce-a521-0020af0be560', 'c50a7e93-f395-4834-9ef6-7fa99de50966']);
 const VTABLES = {
   IDirectSound8: `${UNK} CreateSoundBuffer:3 GetCaps:1 DuplicateSoundBuffer:2 SetCooperativeLevel:2 Compact:0
     GetSpeakerConfig:1 SetSpeakerConfig:1 Initialize:1 VerifyCertification:1`,
@@ -63,7 +68,14 @@ export function dsoundApis() {
     return { rate: f.rate, samples };
   };
   const unknown = {
-    QueryInterface: (x, self, riid, pp) => { if (pp) x.w32(pp, self); o(self).ref++; return S_OK; },   // IDirectSoundBuffer8 from a buffer: itself
+    // IUnknown, IDirectSoundBuffer and IDirectSoundBuffer8 from a buffer: itself; the rest (IDirectSoundNotify,
+    // IDirectSound3DBuffer, IKsPropertySet: Half-Life's engine asks) E_NOINTERFACE, so the program goes
+    // without, rather than calling a method a vtable here does not have.
+    QueryInterface: (x, self, riid, pp) => {
+      const g = guid(x, riid);
+      if (!SELF.has(g)) { if (pp) x.w32(pp, 0); x.win.say(`dsound: QueryInterface(${g}): no such interface here`); return E_NOINTERFACE; }
+      if (pp) x.w32(pp, self); o(self).ref++; return S_OK;
+    },
     AddRef: (x, self) => ++o(self).ref,
     Release: (x, self) => { const ob = o(self); if (!ob) return 0; if (--ob.ref > 0) return ob.ref; if (heard === ob) heard = null; objs.delete(self >>> 0); return 0; },
   };

@@ -246,7 +246,13 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     const mod = { name: key, base: at, size, entry: ih.entry ? at + ih.entry : 0, exports, byOrdinal, file: true, init: !!ih.entry };
     modules.set(key, mod);
     addEntry(mod, `C:\\${key}`, key);
-    bindImports(at, ih, key);
+    // A DLL whose imports are not all here does not load, as on Windows (ERROR_MOD_NOT_FOUND): Half-Life's
+    // launcher tries its 3dfx OpenGL driver, which needs glide2x.dll, and goes on without it.
+    try { bindImports(at, ih, key); } catch (e) {
+      modules.delete(key);
+      if (lx.onOutput) lx.onOutput(2, new TextEncoder().encode(`mirage-win32: ${key} not loaded: ${e.message.replace(/^mirage-win32: /, '')}\n`));
+      return null;
+    }
     return mod;
   };
   bindImports(base, h, exeMod.name);
