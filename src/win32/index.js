@@ -159,11 +159,13 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   // ---- the DLLs: images made from the API tables, mapped when first loaded -------------------------
   const table = [];                                                   // id -> { name, sig, fn }
   const images = new Map();                                           // lower-case name -> { name, fns }
+  const dataInits = []; let x = null;
+  const runDataInits = () => { for (const d of dataInits.splice(0)) w32(d.at, d.fn(x) >>> 0); };
   for (const api of apis) {
     const key = api.dll.toLowerCase();
     const fns = Object.entries(api.fns).map(([name, [sig, fn, opt = {}]]) => {
       table.push({ name: `${api.dll}!${name}`, sig, fn });
-      return { name: opt.noName ? null : name, ordinal: opt.ordinal, id: table.length - 1, pop: opt.cdecl ? null : argBytes(sig) };
+      return { name: opt.noName ? null : name, ordinal: opt.ordinal, id: table.length - 1, pop: opt.cdecl ? null : argBytes(sig), data: !!opt.data, keepEax: !!opt.keepEax };
     });
     images.set(key, { name: api.dll, fns });
   }
@@ -176,6 +178,10 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     const mb = BASES[key] || (0x60000000 + modules.size * 0x100000);
     const d = makeDll(img.name, img.fns, mb);
     mapBytes(mb, d.bytes);
+    // Its data exports: each function, given the API's context, gives the variable's value (once that
+    // context exists: the DLLs the program imports are mapped before it is made).
+    for (const f of img.fns) if (f.data) dataInits.push({ at: (mb + 0x1000 + img.fns.indexOf(f) * 10) >>> 0, fn: table[f.id].fn });
+    if (x) runDataInits();
     const mod = { name: img.name, base: mb, size: d.bytes.length, exports: d.exports, byOrdinal: d.byOrdinal };
     modules.set(key, mod);
     addEntry(mod, `C:\\WINDOWS\\system32\\${img.name}`, img.name);
@@ -313,8 +319,9 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     /** A line for the log: what a program asked that is not here. */
     say: (t) => { if (lx.onOutput) lx.onOutput(2, enc.encode(`mirage-win32: ${t}\n`)); },
   };
-  const x = hleDispatch(lx, mem, cpu, table, backend);
+  x = hleDispatch(lx, mem, cpu, table, backend);
   x.win = win;
+  runDataInits();
   // A thread starts with its return address on a stub of kernel32 that ends the process (XP's
   // BaseProcessStart calls ExitThread with what the entry point returned).
   const k32 = modules.get('kernel32.dll'), exit = k32.exports.get('ExitThread') || 0;

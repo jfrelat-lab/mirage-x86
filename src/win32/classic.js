@@ -80,7 +80,7 @@ export function decodeDib(x, at) {
   return { w, h, px };
 }
 
-export function classicApis({ st }) {
+export function classicApis({ st, wm }) {
   const atoms = new Map(), atomNames = new Map();                        // name (upper) -> atom, atom -> name
   const atomOf = (name) => {
     const k = name.toUpperCase();
@@ -89,13 +89,59 @@ export function classicApis({ st }) {
   };
   const putStr = (x, buf, n, s) => { if (!buf || n <= 0) return 0; const b = Uint8Array.from(s.slice(0, n - 1), (c) => c.charCodeAt(0) & 0xff); x.write(buf, b); x.w8(buf + b.length, 0); return b.length; };
   const lower = (s) => s.toLowerCase();
+  /*
+   * Menus: a handle each, its items { id, text, flags, sub } -- flags as MF_* has them (MF_GRAYED 1,
+   * MF_DISABLED 2, MF_CHECKED 8, MF_POPUP 10h, MF_SEPARATOR 800h), `sub` a popup's own menu. The main
+   * window's menu bar (st.menu) is drawn and used by the window manager (src/win32/wm.js); another
+   * window's is kept. An item is named by its position (MF_BYPOSITION, 400h) or by its command, found
+   * in the popups too, as Windows searches them.
+   */
   const menus = new Map();                                               // window -> its menu (SetMenu)
+  const mciVideos = new Map();                                           // an opened video's alias -> its device id
+  st.mciVideo = (id) => [...mciVideos.values()].includes(id);           // for mciSendCommandA (api.js)
   const menu = (m) => { const o = st.gdi.get(m); return o && o.kind === 'menu' ? o : null; };
-  const dropItem = (m, at, flags) => {
-    const mn = menu(m), i = !mn ? -1 : flags & 0x400 ? (at < mn.items.length ? at : -1) : mn.items.indexOf(at);
-    if (i < 0) return 0;
-    mn.items.splice(i, 1); return 1;
+  const newMenu = () => st.newHandle('menu', { items: [] });
+  /** The item `at` names in menu `m`: { list, i } (its menu's items and its index), or null. */
+  const itemOf = (m, at, flags) => {
+    const mn = menu(m); if (!mn) return null;
+    if (flags & 0x400) return at < mn.items.length ? { list: mn.items, i: at } : null;
+    for (let i = 0; i < mn.items.length; i++) {
+      const it = mn.items[i];
+      if (!(it.flags & 0x10) && it.id === (at & 0xffff)) return { list: mn.items, i };
+      if (it.flags & 0x10) { const r = itemOf(it.sub, at, flags); if (r) return r; }
+    }
+    return null;
   };
+  const dropItem = (m, at, flags) => { const r = itemOf(m, at, flags); if (!r) return 0; r.list.splice(r.i, 1); return 1; };
+  /** RT_MENU (4): MENUHEADER (version 0), then items -- a popup's flags (MF_POPUP) and text, its items
+   *  after it; a command's flags, id and text; MF_END (80h) the last of a level. Texts are UTF-16. */
+  const loadMenu = (x, inst, name) => {
+    const r = findResource(x, inst || x.win.base, 4, resId(x, name)); if (!r) return 0;
+    let p = r.at + 4 + x.r16(r.at + 2);
+    const wtext = () => { let t = ''; for (let c; (c = x.r16(p)); p += 2) t += String.fromCharCode(c); p += 2; return t; };
+    const level = () => {
+      const h = newMenu(), items = menu(h).items;
+      for (;;) {
+        const f = x.r16(p); p += 2;
+        if (f & 0x10) { const text = wtext(); items.push({ id: 0, text, flags: f & ~0x80, sub: level() }); }
+        else { const id = x.r16(p); p += 2; const text = wtext(); items.push({ id, text, flags: (f & ~0x80) | (!id && !text ? 0x800 : 0), sub: 0 }); }
+        if (f & 0x80) return h;
+      }
+    };
+    return level();
+  };
+  st.loadMenu = loadMenu;
+  /** A window's menu changed: the main window's bar is the window manager's to draw, the client area
+   *  under it the smaller (WM_SIZE), as Windows keeps the window's own rectangle. */
+  const setMenu = (h, m) => {
+    menus.set(h, m);
+    if (h !== st.hwnd) return 1;
+    const was = st.menu ? 19 : 0, now = m ? 19 : 0;
+    st.menu = m || 0;
+    if (was !== now) { st.h = Math.max(1, st.h + was - now); st.msgs.push({ msg: 0x05, wp: 0, lp: ((st.h & 0xffff) << 16 | (st.w & 0xffff)) >>> 0 }); }
+    wm.dirty = true; return 1;
+  };
+  st.setMenu = setMenu;
   const kernel32 = {
     GetProcessVersion: ['u', () => 0x00040000],                         // Windows 95's 4.0, for every process
     lstrlenA: ['p', (x, p) => (p ? x.str(p).length : 0)],
@@ -229,23 +275,71 @@ export function classicApis({ st }) {
       return d ? st.newHandle('bitmap', d) : 0;
     }],
     GetMenuCheckMarkDimensions: ['', () => (13 << 16) | 13],
-    // Menus: handles a program builds and attaches (Jazz Jackrabbit 2's window has one), kept, not drawn --
-    // a window's menu bar takes no room here.
-    // Their items are counted (a program empties a menu by deleting its first item until that fails), by
-    // command id: DeleteMenu/RemoveMenu by position (MF_BYPOSITION) or by id.
-    CreateMenu: ['', () => st.newHandle('menu', { items: [] })], CreatePopupMenu: ['', () => st.newHandle('menu', { items: [] })],
+    // Menus (above): made, loaded from the resources, filled, changed, attached to a window. A program
+    // empties a menu by deleting its first item until that fails (Jazz Jackrabbit 2).
+    CreateMenu: ['', () => newMenu()], CreatePopupMenu: ['', () => newMenu()],
+    LoadMenuA: ['pp', (x, inst, name) => loadMenu(x, inst, name)],
+    /*
+     * Keyboard accelerators (RT_ACCELERATOR, 9: ACCELTABLEENTRY's flags, key, command, 8 bytes each, 80h
+     * on the last): Minesweeper's F2 for a new game. TranslateAccelerator matches a key message (a
+     * virtual key with FVIRTKEY, 1, and its Shift 4, Ctrl 8 and Alt 10h held as the entry says; else a
+     * character) and posts WM_COMMAND with 1 in its high word, as from an accelerator.
+     */
+    LoadAcceleratorsA: ['pp', (x, inst, name) => {
+      const r = findResource(x, inst || x.win.base, 9, resId(x, name)); if (!r) return 0;
+      const keys = [];
+      for (let p = r.at; p < r.at + r.size; p += 8) { const f = x.r16(p); keys.push({ f, key: x.r16(p + 2), id: x.r16(p + 4) }); if (f & 0x80) break; }
+      return st.newHandle('accel', { keys });
+    }],
+    TranslateAcceleratorA: ['ppp', (x, hwnd, h, m) => {
+      const a = st.gdi.get(h), msg = x.r32(m + 4), wp = x.r32(m + 8);
+      if (!a || a.kind !== 'accel' || (msg !== 0x100 && msg !== 0x104 && msg !== 0x102)) return 0;
+      const held = (vk) => st.keys.has(vk);
+      const k = a.keys.find((e) => (e.f & 1
+        ? msg !== 0x102 && e.key === wp && !!(e.f & 4) === held(0x10) && !!(e.f & 8) === held(0x11) && !!(e.f & 0x10) === held(0x12)
+        : msg === 0x102 && e.key === wp));
+      if (!k) return 0;
+      st.msgs.push({ msg: 0x111, wp: (1 << 16 | k.id) >>> 0, lp: 0, ...(hwnd && hwnd !== st.hwnd ? { hwnd } : {}) });
+      return 1;
+    }],
     DestroyMenu: ['p', (x, m) => (menu(m) ? (st.gdi.delete(m), 1) : 0)],
     DeleteMenu: ['puu', (x, m, at, flags) => dropItem(m, at, flags)], RemoveMenu: ['puu', (x, m, at, flags) => dropItem(m, at, flags)],
-    // MENUITEMINFOA: fMask's MIIM_ID (2) gives wID (at +16); fByPosition: `at` a position, else the item it goes before.
+    // MENUITEMINFOA: fMask's MIIM_STATE (1) fState at +12, MIIM_ID (2) wID at +16, MIIM_SUBMENU (4)
+    // hSubMenu at +20, MIIM_TYPE (10h) fType at +8 and its text at +36; fByPosition: `at` a position.
     InsertMenuItemA: ['puip', (x, m, at, byPos, mii) => {
       const mn = menu(m); if (!mn) return 0;
-      const id = x.r32(mii + 4) & 2 ? x.r32(mii + 16) : 0, i = byPos ? at : mn.items.indexOf(at);
-      mn.items.splice(i < 0 || i > mn.items.length ? mn.items.length : i, 0, id); return 1;
+      const mask = x.r32(mii + 4), type = mask & 0x110 ? x.r32(mii + 8) : 0, data = x.r32(mii + 36);
+      const it = { id: mask & 2 ? x.r32(mii + 16) & 0xffff : 0, flags: (mask & 1 ? x.r32(mii + 12) & 0x0b : 0) | (type & 0x800), sub: mask & 4 ? x.r32(mii + 20) : 0,
+        text: mask & 0x50 && !(type & 0x804) && data ? x.str(data, 256) : '' };
+      if (it.sub) it.flags |= 0x10;
+      const r = byPos ? null : itemOf(m, at, 0), i = byPos ? at : r && r.list === mn.items ? r.i : mn.items.length;
+      mn.items.splice(Math.min(i, mn.items.length), 0, it); return 1;
     }],
-    AppendMenuA: ['pupp', (x, m, flags, id) => { const mn = menu(m); if (!mn) return 0; mn.items.push(flags & 0x10 ? 0 : id); return 1; }],
+    AppendMenuA: ['pupp', (x, m, flags, id, text) => {
+      const mn = menu(m); if (!mn) return 0;
+      mn.items.push({ id: flags & 0x10 ? 0 : id & 0xffff, sub: flags & 0x10 ? id : 0, flags: flags & 0x81b, text: flags & 0x804 || !text ? '' : x.str(text, 256) });
+      return 1;
+    }],
     GetMenuItemCount: ['p', (x, m) => (menu(m) ? menu(m).items.length : -1)],
-    DrawMenuBar: ['p', () => 1],
-    SetMenu: ['pp', (x, h, m) => { menus.set(h, m); return 1; }], GetMenu: ['p', (x, h) => menus.get(h) || 0],
+    GetSubMenu: ['pi', (x, m, pos) => { const mn = menu(m), it = mn && mn.items[pos]; return it && it.flags & 0x10 ? it.sub : 0; }],
+    GetMenuItemID: ['pi', (x, m, pos) => { const mn = menu(m), it = mn && mn.items[pos]; return !it ? -1 : it.flags & 0x10 ? -1 : it.id; }],
+    GetMenuState: ['puu', (x, m, at, flags) => { const r = itemOf(m, at, flags); return r ? r.list[r.i].flags & 0x81b : -1; }],
+    // The previous state, or -1 when there is no such item.
+    CheckMenuItem: ['puu', (x, m, at, flags) => {
+      const r = itemOf(m, at, flags); if (!r) return -1;
+      const it = r.list[r.i], was = it.flags & 8; it.flags = (it.flags & ~8) | (flags & 8); return was;
+    }],
+    EnableMenuItem: ['puu', (x, m, at, flags) => {
+      const r = itemOf(m, at, flags); if (!r) return -1;
+      const it = r.list[r.i], was = it.flags & 3; it.flags = (it.flags & ~3) | (flags & 3); if (m === st.menu) wm.dirty = true; return was;
+    }],
+    // An item of the main window's bar, where the window manager draws it (screen coordinates).
+    GetMenuItemRect: ['pppp', (x, hwnd, m, pos, r) => {
+      const b = m === st.menu && wm.menuItemRect && wm.menuItemRect(pos); if (!b) return 0;
+      x.w32(r, b.x); x.w32(r + 4, b.y); x.w32(r + 8, b.x + b.w); x.w32(r + 12, b.y + b.h); return 1;
+    }],
+    DrawMenuBar: ['p', () => { wm.dirty = true; return 1; }],
+    SetMenu: ['pp', (x, h, m) => setMenu(h, m)], GetMenu: ['p', (x, h) => (h === st.hwnd ? st.menu || 0 : menus.get(h) || 0)],
     // Drawn controls' parts and icons: nothing drawn.
     DrawFrameControl: ['ppuu', () => 1], DrawIconEx: ['piipiiupu', () => 1],
     WinHelpA: ['ppuu', () => 1],
@@ -323,9 +417,32 @@ export function classicApis({ st }) {
   // ---- winmm: MCI by strings. No CD drive: "open cdaudio" and the rest answer MCIERR_INVALID_DEVICE_NAME,
   // which a game takes for a machine without its music. The command goes to the log.
   const winmm = {
-    mciSendStringA: ['ppup', (x, cmd, ret, n) => { x.win.say(`mciSendStringA("${x.str(cmd, 200)}")`); if (ret && n) x.w8(ret, 0); return 263; }],
+    /*
+     * MCI's command strings: a video (an .avi, or type AVIVideo) is opened when its file is on the
+     * program's disk, and played at once to its end -- not shown here: "play ... notify" posts
+     * MM_MCINOTIFY (3B9h) with MCI_NOTIFY_SUCCESSFUL to the callback window, as when it has finished.
+     * Half-Life's intro: its launcher waits for that, and stopped on its own error box when the open
+     * failed. Status: "stopped", length 0. Anything else: no such device (263).
+     */
+    mciSendStringA: ['ppup', (x, cmd, ret, n, cb) => {
+      const s = x.str(cmd, 512).trim(), w = s.split(/\s+/), verb = (w[0] || '').toLowerCase(), put = (t) => { if (ret && n) putStr(x, ret, n, t); };
+      put('');
+      if (verb === 'open') {
+        const file = w[1] || '', ai = w.findIndex((t) => t.toLowerCase() === 'alias'), alias = (ai > 0 ? w[ai + 1] : file).toLowerCase();
+        const video = /\.avi$/i.test(file) || /\btype\s+avivideo\b/i.test(s);
+        if (!video || !(st.diskFile && st.diskFile(file))) { x.win.say(`mciSendStringA("${s}"): no such device`); return 263; }
+        mciVideos.set(alias, 0x100 + mciVideos.size + 1); put(String(mciVideos.get(alias))); return 0;
+      }
+      const id = mciVideos.get((w[1] || '').toLowerCase());
+      if (!id) { x.win.say(`mciSendStringA("${s}"): no such device`); return 263; }
+      if (verb === 'close') { mciVideos.delete(w[1].toLowerCase()); return 0; }
+      if (verb === 'play' && /\bnotify\b/i.test(s) && cb) st.msgs.push({ msg: 0x3b9, wp: 1, lp: id, ...(cb !== st.hwnd ? { hwnd: cb } : {}) });
+      if (verb === 'status') put(/\bmode\b/i.test(s) ? 'stopped' : /\bready\b/i.test(s) ? 'true' : '0');
+      if (verb === 'where') put('0 0 320 240');
+      return 0;
+    }],
     mciGetErrorStringA: ['upu', (x, err, buf, n) => putStr(x, buf, n, err === 263 ? 'The specified device is not open or is not recognized by MCI.' : 'MCI error ' + err) ? 1 : 0],
-    mciGetDeviceIDA: ['p', () => 0],
+    mciGetDeviceIDA: ['p', (x, name) => mciVideos.get(x.str(name, 128).toLowerCase()) || 0],
   };
   // ---- version.dll: no version resource is read here (a program asks, and goes on without);
   // ---- ole32.dll: COM started, and no class registered (REGDB_E_CLASSNOTREG) -- Half-Life's engine

@@ -6,13 +6,16 @@
 // A program finds them as it would Windows' own: through its import directory, GetProcAddress, or —
 // the 4K intros' packers (Crinkler) — by walking the PEB's module list to the export directory and
 // hashing the names there. Names are sorted, as GetProcAddress's binary search wants them.
+// A DATA export (msvcrt's _acmdln, a pointer a program reads where its import points) is a variable of
+// 4 bytes in its stub's place, its value set by the loader (index.js); the section is writable for them.
 import { HLE_BASE } from '../hle/elfso.js';
 
 const STUB = 10;                                          // B8 imm32, CD 80, C2 imm16 (or C3, padded)
 
 /**
  * The image of `name` at `base`: `fns` is [{ name, ordinal?, id, pop }] — pop the bytes a stdcall stub
- * pops (null for cdecl). Ordinals are the given ones, the others numbered after them from 1 up.
+ * pops (null for cdecl), `data` true for a variable, `keepEax` for a stub that pushes EAX before it
+ * traps (its own return is the function's to make). Ordinals are the given ones, the others numbered after them from 1 up.
  * Returns { bytes (the mapped image, SizeOfImage long), exports: Map name -> address }.
  */
 export function makeDll(name, fns, base) {
@@ -53,16 +56,21 @@ export function makeDll(name, fns, base) {
   put(sec, '.text');
   dv.setUint32(sec + 8, size - text, true); dv.setUint32(sec + 12, text, true);
   dv.setUint32(sec + 16, size - text, true); dv.setUint32(sec + 20, 0x400, true);
-  dv.setUint32(sec + 36, 0x60000020, true);                // code, execute, read
+  dv.setUint32(sec + 36, 0xe0000020, true);                // code, execute, read, write (data exports)
   // The stubs.
   const exports = new Map();
   withOrd.forEach((f, i) => {
     const o = stubs + i * STUB;
+    dv.setUint32(funcs + (f.ordinal - ordBase) * 4, o, true);
+    if (f.name) exports.set(f.name, (base + o) >>> 0);
+    if (f.data) return;                                    // a variable: 0 until the loader sets it
+    if (f.keepEax) {                                       // push eax first: what the caller had in EAX, for the function to read at [esp]
+      b[o] = 0x50; b[o + 1] = 0xb8; dv.setUint32(o + 2, HLE_BASE + f.id, true); b[o + 6] = 0xcd; b[o + 7] = 0x80; b[o + 8] = 0xc3; b[o + 9] = 0x90;
+      return;
+    }
     b[o] = 0xb8; dv.setUint32(o + 1, HLE_BASE + f.id, true); b[o + 5] = 0xcd; b[o + 6] = 0x80;
     if (f.pop === null || f.pop === undefined) { b[o + 7] = 0xc3; b[o + 8] = 0x90; b[o + 9] = 0x90; }
     else { b[o + 7] = 0xc2; dv.setUint16(o + 8, f.pop, true); }
-    dv.setUint32(funcs + (f.ordinal - ordBase) * 4, o, true);
-    if (f.name) exports.set(f.name, (base + o) >>> 0);
   });
   // The export directory (IMAGE_EXPORT_DIRECTORY).
   dv.setUint32(dir + 12, nameRva, true); dv.setUint32(dir + 16, ordBase, true);

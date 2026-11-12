@@ -374,6 +374,22 @@
     "sound": true
   },
   {
+    "name": "win32/abuse-1996",
+    "title": "Abuse — Crack dot Com, 1996; Xenoveritas' SDL 2 port 0.9.1 for Windows",
+    "world": "win32",
+    "year": 1996,
+    "author": "Crack dot Com / Xenoveritas",
+    "thumb": "oasis/thumbs/win32-abuse-1996.png",
+    "output": "window",
+    "tags": [
+      "Game",
+      "Win32",
+      "GDI",
+      "SDL 2"
+    ],
+    "sound": false
+  },
+  {
     "name": "win32/atrium-2008",
     "title": "Atrium — TBC & Loonies, 4K for Windows",
     "world": "win32",

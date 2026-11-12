@@ -4995,6 +4995,40 @@ const runLinux = (hex, argv) => {
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: child windows -- GetDlgItem by id, GetParent, their text; PeekMessage by window and range', got, 'true 0 true OK 1 111 0 1 400 true');
+  // Menus: a bar attached to the main window takes 19 pixels of its client area, the window's own
+  // rectangle kept (Minesweeper sizes its window for it); an item found by command inside its popup,
+  // checked and greyed, its previous state given back; a popup by position.
+  try { const { fn, x, str } = await w32(), u = (n) => fn('user32.dll', n), rc = x.win.heapAlloc(16), r = [];
+    const main = u('CreateWindowExA')(0, 0, 0, 0x00cf0000, 0, 0, 320, 240, 0, 0);
+    u('GetClientRect')(main, rc); const h0 = x.r32(rc + 12);
+    const bar = u('CreateMenu')(), pop = u('CreatePopupMenu')();
+    u('AppendMenuA')(pop, 0, 101, str('&Beginner')); u('AppendMenuA')(pop, 0x800, 0, 0); u('AppendMenuA')(pop, 0, 102, str('E&xit'));
+    u('AppendMenuA')(bar, 0x10, pop, str('&Game')); u('SetMenu')(main, bar);
+    u('GetClientRect')(main, rc); r.push(h0 - x.r32(rc + 12));
+    r.push(u('CheckMenuItem')(bar, 101, 8), u('GetMenuState')(bar, 101, 0) & 8, u('CheckMenuItem')(bar, 101, 0), u('EnableMenuItem')(bar, 102, 1), u('GetMenuState')(pop, 2, 0x400) & 3);
+    r.push(u('GetSubMenu')(bar, 0) === pop, u('GetMenuItemCount')(pop), u('CheckMenuItem')(bar, 999, 8));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a menu bar takes its 19 pixels; items by command in their popups, checked and greyed', got, '19 0 8 8 0 1 true 3 -1');
+  // SetROP2's R2_WHITE (16): a line drawn white whatever the pen -- Minesweeper's raised edges, black before.
+  try { const { mc, fn } = await w32(), g = (n) => fn('gdi32.dll', n);
+    fn('user32.dll', 'CreateWindowExA')(0, 0, 0, 0, 0, 0, 320, 200);
+    g('SetROP2')(0x1001, 16); g('MoveToEx')(0x1001, 0, 5, 0); g('LineTo')(0x1001, 10, 5);
+    const fb = (X, Y) => new Uint32Array(mc.mem.u8.buffer, mc.mem.u8.byteOffset + mc.vbeFbBase + (Y * 320 + X) * 4, 1)[0];
+    got = (fb(3, 5) & 0xffffff).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SetROP2 R2_WHITE draws a line white whatever the pen', got, 'ffffff');
+  // MCI's video: an .avi on the program's disk opened by a command string, its device id by its alias,
+  // and played to its end at once -- MM_MCINOTIFY, MCI_NOTIFY_SUCCESSFUL, posted to the callback window
+  // (Half-Life's launcher waits for it, and stopped on its error box when the open failed).
+  try { const { fn, x, str } = await w32('', { files: { 'intro.avi': new Uint8Array(64) } }), w = (n) => fn('winmm.dll', n), m = x.win.heapAlloc(28);
+    const main = fn('user32.dll', 'CreateWindowExA')(0, 0, 0, 0, 0, 0, 320, 200, 0, 0);
+    const r = [w('mciSendStringA')(str('open intro.avi type AVIVideo alias v wait'), 0, 0, 0), w('mciGetDeviceIDA')(str('v')) > 0,
+      w('mciSendStringA')(str('play v notify'), 0, 0, main), fn('user32.dll', 'PeekMessageA')(m, 0, 0, 0, 1), x.r32(m + 4).toString(16), x.r32(m + 8),
+      w('mciSendStringA')(str('open none.avi alias n'), 0, 0, 0)];
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: MCI opens a video on the disk and notifies its end', got, '0 true 0 1 3b9 1 263');
   // DrawTextA with DT_WORDBREAK measures (DT_CALCRECT) the lines the words fill: Half-Life's message box
   // drew its 105 characters on one line, out of its 320 pixels.
   try { const { fn, x, str } = await w32(), u = (n) => fn('user32.dll', n), r = x.win.heapAlloc(16), hdc = 0x1001;
@@ -5276,6 +5310,94 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: WH_KEYBOARD -- GetMessage hands a key message to the hook first', got, '41'); }
+// SendMessage gives the caller what the window procedure returned: the return stub (mirageReturn) set EAX
+// to its own number before it trapped, so every sent message's result was that number (a dialog's
+// procedure "handled" everything, and DefWindowProc never ran for it). The procedure returns 42h for
+// WM_USER; the exit code is SendMessage's result.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'SendMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const wc = at.d(0x440), cls = at.d(0x470), proc = at.d(0x200);
+      const main = [0x68, ...le(wc), 0xff, 0x15, ...le(at.iat['user32.dll!RegisterClassA']),
+        0x6a, 0, 0x68, ...le(0x400000), 0x6a, 0, 0x6a, 0, 0x68, ...le(200), 0x68, ...le(300), 0x6a, 0, 0x6a, 0, 0x68, ...le(0xcf0000), 0x6a, 0, 0x68, ...le(cls), 0x6a, 0,
+        0xff, 0x15, ...le(at.iat['user32.dll!CreateWindowExA']),
+        0x6a, 0, 0x6a, 0, 0x68, ...le(0x400), 0x50, 0xff, 0x15, ...le(at.iat['user32.dll!SendMessageA']),
+        0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const wndproc = [0x8b, 0x44, 0x24, 0x08, 0x3d, ...le(0x400), 0x75, 0x08, 0xb8, ...le(0x42), 0xc2, 0x10, 0x00, 0x31, 0xc0, 0xc2, 0x10, 0x00];
+      const img = new Uint8Array(0x500); img.set(main); img.set(wndproc, 0x200);
+      img.set(le(proc), 0x444); img.set(le(cls), 0x464); img.set(new TextEncoder().encode('smc\0'), 0x470);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SendMessage gives back what the window procedure returned', got, '42'); }
+// A modal dialog box: DialogBoxIndirectParamA on a template in memory, its procedure ending it with 2Ah
+// on WM_INITDIALOG; DialogBox returns that once its loop has run -- modalLoop, called on DialogBox's own
+// frame from the result of the sequence that made the dialog: a send within a send's result, which
+// found no return address on the stack while mirageReturn took the frame off first. The exit code is
+// DialogBox's result.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['DialogBoxIndirectParamA', 'EndDialog'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const tpl = at.d(0x440), proc = at.d(0x200);
+      const main = [0x6a, 0, 0x68, ...le(proc), 0x6a, 0, 0x68, ...le(tpl), 0x6a, 0, 0xff, 0x15, ...le(at.iat['user32.dll!DialogBoxIndirectParamA']),
+        0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      // cmp dword [esp+8], WM_INITDIALOG / jne +20 / EndDialog(hdlg, 2Ah) / mov eax, 1 / ret 16 / xor eax, eax / ret 16
+      const dlgproc = [0x81, 0x7c, 0x24, 0x08, ...le(0x110), 0x75, 0x14, 0x6a, 0x2a, 0xff, 0x74, 0x24, 0x08, 0xff, 0x15, ...le(at.iat['user32.dll!EndDialog']),
+        0xb8, ...le(1), 0xc2, 0x10, 0x00, 0x31, 0xc0, 0xc2, 0x10, 0x00];
+      const img = new Uint8Array(0x500); img.set(main); img.set(dlgproc, 0x200);
+      // DLGTEMPLATE: WS_POPUP | WS_VISIBLE, no controls, at (10, 10), 100 x 50 units; no menu, class or title.
+      img.set([...le(0x90000000), 0, 0, 0, 0, 0, 0, 10, 0, 10, 0, 100, 0, 50, 0, 0, 0, 0, 0, 0, 0], 0x440);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: DialogBoxIndirectParamA runs its modal loop and returns EndDialog\'s result', got, '2a'); }
+// SetTimer: WM_TIMER when it is due and nothing else is queued, its TIMERPROC called by DispatchMessage
+// (Minesweeper's clock never ran). A thread's timer of 50 ms; the loop takes and dispatches until the
+// procedure has counted three; the exit code is the count.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['SetTimer', 'GetMessageA', 'DispatchMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const msg = at.d(0x440), cnt = at.d(0x410), proc = at.d(0x200);
+      const main = [0x68, ...le(proc), 0x6a, 50, 0x6a, 0, 0x6a, 0, 0xff, 0x15, ...le(at.iat['user32.dll!SetTimer'])];
+      const loop = main.length;
+      main.push(0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...le(msg), 0xff, 0x15, ...le(at.iat['user32.dll!GetMessageA']),
+        0x68, ...le(msg), 0xff, 0x15, ...le(at.iat['user32.dll!DispatchMessageA']), 0x83, 0x3d, ...le(cnt), 3, 0x7c, 0);
+      main[main.length - 1] = (loop - main.length) & 255;
+      main.push(0xff, 0x35, ...le(cnt), 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4);
+      const tproc = [0xff, 0x05, ...le(cnt), 0xc2, 0x10, 0x00];
+      const img = new Uint8Array(0x500); img.set(main); img.set(tproc, 0x200);
+      return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SetTimer -- WM_TIMER when due, its TIMERPROC called by DispatchMessage', got, '3'); }
+// msvcrt's DATA exports: _acmdln, the command line, a variable the program reads where its import points
+// (a Visual C++ 6 program's start-up) -- the exit code its first character, the quote round its path.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'msvcrt.dll', names: ['_acmdln'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const main = [0xa1, ...le(at.iat['msvcrt.dll!_acmdln']), 0x8b, 0x00, 0x0f, 0xb6, 0x00, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: msvcrt.dll\'s _acmdln, a DATA export, the command line', got, '22'); }
+// A wait that is asked again with a new deadline once the old one has passed (GetMessage, 10 ms at a time
+// while nothing comes) takes the new one: the old, kept, gave the clock nowhere to go, and an idle window
+// waited two cycles at a time -- Minesweeper's 5 s, 500 million calls.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const exe = new Uint8Array(1024), v = new DataView(exe.buffer); exe.set([0x4d, 0x5a]); v.setUint32(0x3c, 0x40, true);
+    exe.set([0x50, 0x45, 0, 0, 0x4c, 1, 0, 0], 0x40); v.setUint16(0x54, 0xe0, true); v.setUint16(0x58, 0x10b, true);
+    v.setUint32(0x58 + 28, 0x400000, true); v.setUint32(0x58 + 56, 0x1000, true); v.setUint32(0x58 + 60, 0x200, true);
+    const { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis: win32Apis(), backend: traceBackend() }), at = (t) => { mc.cpu.cycles = Math.round(t * 1e8); };
+    at(1); lx.wake = null; x.waitUntil(1.01); at(1.02); x.waitUntil(1.03);
+    got = String(lx.wake);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: a wait asked again after its deadline takes the new one', got, '1.03'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a

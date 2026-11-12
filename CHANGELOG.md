@@ -10,10 +10,22 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   window on the Windows desktop: the Orange Games logo, the intro video, the menus, the demos and the
   game, with its sound. Its installer is read in the page, not run (Epic's own format, fetched from the
   Internet Archive's collection of Epic's freely released files).
+- **Abuse plays on MIRAGE-WIN32**: Crack dot Com's shooter of 1996 in Xenoveritas' SDL 2 port for
+  Windows (GPL, 2022), a Visual C++ 2022 program with its SDL DLLs beside it, fetched from its release.
 - **The x87 copies 64-bit integers exactly**: FILD and FISTP of a 64-bit integer kept only 53 bits, as
   a float64 does, and programs of the Pentium's time move memory eight bytes at a time through the FPU.
   Jazz Jackrabbit 2's video came out with one column in eight wrong.
 - **A Windows program's keyboard hook is called** (WH_KEYBOARD), as Jazz Jackrabbit 2 reads its keys.
+- **Windows' menus, dialog boxes and timers**: a window's menu bar is drawn under its caption and its
+  menus open, checked and greyed as the program says (Jazz Jackrabbit 2's Game, Video, Music and Help);
+  modal dialog boxes run with their edit fields and buttons over their window; timers tick; keyboard
+  accelerators work. Windows' own Minesweeper of Windows 2000 plays with them, run locally as a test --
+  Microsoft's, so not offered here.
+- **A window procedure's answer reaches the program**: every message MIRAGE sent a Windows program came
+  back with the same wrong result, so a dialog's default handling never ran. Half-Life's launcher now
+  goes through its intro to its menu (the video itself is not shown yet: it ends at once).
+- An idle Windows program no longer spins: waiting for a message took 150 seconds of a computer's time
+  for 5 of the program's.
 - Underneath, for programs to come: a Visual C++ 2015+ program's runtime (the Universal CRT) and the
   Unicode calls of the 2000s, an imported DLL's start before the program's, thread-local storage, folders
   on the program's disk, a Japanese system's code page, DirectDraw surfaces GDI draws on, DirectInput with

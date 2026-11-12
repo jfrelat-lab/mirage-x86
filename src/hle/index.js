@@ -44,7 +44,10 @@ export function hleDispatch(lx, mem, cpu, table, backend) {
     st0: () => cpu.fst[cpu.ftop],
     fpop: () => { const v = cpu.fst[cpu.ftop]; cpu.focc[cpu.ftop] = 0; cpu.ftop = (cpu.ftop + 1) & 7; return v; },
     // Wait as a system call waits: until the guest's clock reaches `t` (seconds, lx.mono).
-    waitUntil: (t) => { if (lx.mono() >= t) return 0; if (lx.wake === null) lx.wake = t; return BLOCK; },
+    // A deadline already passed is no longer the wait's: a call that waits again with a new one
+    // (GetMessage: 10 ms at a time while nothing comes) sets it, or the clock had nowhere to go and an
+    // idle window ran its wait two cycles at a time -- Minesweeper's 5 s, 500 million calls.
+    waitUntil: (t) => { const now = lx.mono(); if (now >= t) return 0; if (lx.wake === null || lx.wake <= now) lx.wake = t; return BLOCK; },
     // A sleep's deadline is its thread's: two threads sleeping at once (Cave Story's main loop and its
     // multimedia timer) each wait their own time, not whichever was asked first.
     sleep: (s) => {

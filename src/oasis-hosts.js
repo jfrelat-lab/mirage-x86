@@ -13,7 +13,13 @@
 // conspiracy.hu/files/: Conspiracy's own downloads, where its 2023 repack of luxo4k (2007) is.
 export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.net', 'yolp.omgwtf.ru',
   'raw.githubusercontent.com/dominikfhnw/demoscene_releases/', 'ftp.scene.org/pub/', 'ftp.untergrund.net/users/parapete/', 'conspiracy.hu/files/',
-  'archive.org/download/official-jj-2/'];
+  'archive.org/download/official-jj-2/',
+  // Abuse (Crack dot Com, 1996): Xenoveritas' GPL port, its Windows build a release of its GitHub repository.
+  'github.com/Xenoveritas/abuse/releases/download/'];
+
+/** Where a host above redirects to, for those files only: GitHub serves a release's file from its
+ *  storage, under the repository's number (Xenoveritas/abuse: 21053782). */
+export const OASIS_REDIRECTS = ['release-assets.githubusercontent.com/github-production-release-asset/21053782/'];
 
 /**
  * An archive.org item's file where the archive serves it from, for an item OASIS_HOSTS names
@@ -37,6 +43,7 @@ export function relayTarget(raw) {
   if (u.username || u.password || u.port) return null;
   const at = u.hostname + u.pathname;
   if (archiveItem(u)) return u.href;
+  if (OASIS_REDIRECTS.some((h) => at.startsWith(h)) && !u.pathname.includes('/../')) return u.href;
   if (!OASIS_HOSTS.some((h) => (h.includes('/') ? at.startsWith(h) && !u.pathname.includes('/../') : u.hostname === h))) return null;
   return u.href;
 }

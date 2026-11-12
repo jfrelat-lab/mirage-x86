@@ -6,6 +6,7 @@
 // A W function is its A twin wherever one exists: the UTF-16 string is copied to the heap as the
 // program's code page has it (Latin-1, as `wide` in api.js) and the A function answers; a string it
 // gives back is widened into the caller's buffer.
+import { cprintf } from './ucrt.js';
 
 /** UTF-16 at `p` (NUL-terminated, or `n` units) as a JavaScript string. */
 export const wstr = (x, p, n = -1) => {
@@ -20,7 +21,7 @@ export const wbytes = (s) => { const b = new Uint8Array(2 * s.length + 2); for (
 export const putW = (x, buf, n, s) => { if (!buf || n <= 0) return 0; const t = s.slice(0, n - 1); x.write(buf, wbytes(t)); return t.length; };
 const putA = (x, buf, n, s) => { if (!buf || n <= 0) return 0; const t = s.slice(0, n - 1); x.write(buf, Uint8Array.from(t + '\0', (c) => c.charCodeAt(0) & 0xff)); return t.length; };
 
-export function modernApis({ st, kernel32, user32, gdi32, send }) {
+export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, winmm }) {
   // A Latin-1 copy of a wide string on the heap, for the A function that answers its W twin; freed after.
   const withA = (x, w, fn) => {
     if (!w) return fn(0);
@@ -294,7 +295,79 @@ export function modernApis({ st, kernel32, user32, gdi32, send }) {
   const oleaut32 = { SysFreeString: ['p', () => 0, { ordinal: 6 }] };
   // ws2_32: Winsock 2 by the ordinals Winsock 1.1 gives the same functions (accept 1 ... WSAStartup 115)
   // -- wsock32's, a machine on a network with nobody else on it.
-  return { kernel32: k32, user32: u32, gdi32: g32, advapi32, shell32, imm32, setupapi, ole32, oleaut32 };
+  /*
+   * The Unicode twins Windows' own programs of NT and 2000 call (Minesweeper, Solitaire, FreeCell: their
+   * strings, menus, dialogs and settings in UTF-16). A resource named by a string is its A twin's name;
+   * one named by a number passes as it is.
+   */
+  const withAR = (x, p, fn) => (p < 0x10000 ? fn(p) : withA(x, p, fn));
+  const intoW = (x, buf, n, fn) => {                       // an A function's string result, widened into buf
+    if (!buf || n <= 0) return fn(0, 0);
+    const t = x.win.heapAlloc(n + 1);
+    try { const k = fn(t, n); putW(x, buf, n, x.str(t, Math.max(0, k))); return k; } finally { x.win.heapFree(t); }
+  };
+  Object.assign(k32, {
+    // Files by their Unicode names and 64-bit sizes and positions (none reaches 4 GB here); devices,
+    // overlapped I/O and other processes, none.
+    CreateFileW: ['puupuup', (x, w, acc, share, sa, disp, flags, tpl) => withA(x, w, (a) => A(kernel32, 'CreateFileA')(x, a, acc, share, sa, disp, flags, tpl))],
+    CreateDirectoryW: ['pp', (x, w, sa) => withA(x, w, (a) => A(kernel32, 'CreateDirectoryA')(x, a, sa))],
+    GetFileSizeEx: ['pp', (x, h, p) => { const lo = A(kernel32, 'GetFileSize')(x, h, 0); if (lo === 0xffffffff) return 0; x.w32(p, lo); x.w32(p + 4, 0); return 1; }],
+    SetFilePointerEx: ['piipu', (x, h, lo, hi, out, how) => { const r = A(kernel32, 'SetFilePointer')(x, h, lo, 0, how); if (r === -1) return 0; if (out) { x.w32(out, r); x.w32(out + 4, 0); } return 1; }],
+    CancelIo: ['p', () => 1], GetOverlappedResult: ['pppi', () => 0], DeviceIoControl: ['pupupupp', () => 0],
+    CreateToolhelp32Snapshot: ['uu', () => -1], Process32First: ['pp', () => 0], Process32Next: ['pp', () => 0],
+    // A semaphore: an event, signalled while its count is above zero (WaitForSingleObject takes one).
+    CreateSemaphoreW: ['piip', (x, sa, initial) => A(kernel32, 'CreateEventA')(x, 0, 0, initial > 0 ? 1 : 0, 0)],
+    ReleaseSemaphore: ['pip', (x, h, n, prev) => { if (prev) x.w32(prev, 0); return A(kernel32, 'SetEvent')(x, h); }],
+    GetCommandLineW: ['', (x) => (st.cmdW ||= (() => { const s = x.str(A(kernel32, 'GetCommandLineA')(x)), b = wbytes(s), p = x.win.heapAlloc(b.length); x.write(p, b); return p; })())],
+    GetProfileIntW: ['ppi', (x, sec, key, def) => def],
+    GetProfileStringW: ['ppppu', (x, sec, key, def, buf, n) => putW(x, buf, n, def ? wstr(x, def) : '')],
+    WriteProfileStringW: ['ppp', () => 1],
+    GetPrivateProfileIntW: ['ppip', (x, sec, key, def) => def],
+    GetPrivateProfileStringW: ['ppppup', (x, sec, key, def, buf, n) => putW(x, buf, n, def ? wstr(x, def) : '')],
+    WritePrivateProfileStringW: ['pppp', () => 1],
+    FindResourceW: ['ppp', (x, mod, name, type) => withAR(x, name, (n) => withAR(x, type, (t) => A(kernel32, 'FindResourceA')(x, mod, n, t)))],
+    lstrcpyW: ['pp', (x, d, s) => { x.write(d, wbytes(wstr(x, s))); return d; }],
+    lstrcpynW: ['ppi', (x, d, s, n) => { putW(x, d, n, wstr(x, s)); return d; }],
+    lstrcmpW: ['pp', (x, a, b) => { const s = wstr(x, a), t = wstr(x, b); return s < t ? -1 : s > t ? 1 : 0; }],
+    lstrcmpiW: ['pp', (x, a, b) => { const s = wstr(x, a).toLowerCase(), t = wstr(x, b).toLowerCase(); return s < t ? -1 : s > t ? 1 : 0; }],
+    lstrcatW: ['pp', (x, d, s) => { x.write(d, wbytes(wstr(x, d) + wstr(x, s))); return d; }],
+  });
+  Object.assign(u32, {
+    RegisterWindowMessageW: ['p', (x, w) => withA(x, w, (a) => A(user32, 'RegisterWindowMessageA')(x, a))],
+    LoadStringW: ['pupi', (x, inst, id, buf, n) => intoW(x, buf, n, (t, k) => A(user32, 'LoadStringA')(x, inst, id, t, k))],
+    MessageBoxW: ['pppu', (x, hwnd, text, cap, type) => withA(x, text, (t) => withA(x, cap, (c) => A(user32, 'MessageBoxA')(x, hwnd, t, c, type)))],
+    LoadImageW: ['ppuiiu', (x, inst, name, type, cx, cy, flags) => withAR(x, name, (n) => A(user32, 'LoadImageA')(x, inst, n, type, cx, cy, flags))],
+    LoadBitmapW: ['pp', (x, inst, name) => withAR(x, name, (n) => A(user32, 'LoadBitmapA')(x, inst, n))],
+    LoadMenuW: ['pp', (x, inst, name) => withAR(x, name, (n) => A(user32, 'LoadMenuA')(x, inst, n))],
+    LoadAcceleratorsW: ['pp', (x, inst, name) => withAR(x, name, (n) => A(user32, 'LoadAcceleratorsA')(x, inst, n))],
+    TranslateAcceleratorW: ['ppp', (x, hwnd, acc, msg) => A(user32, 'TranslateAcceleratorA')(x, hwnd, acc, msg)],
+    DialogBoxParamW: ['ppppp', (x, inst, name, parent, proc, param) => withAR(x, name, (n) => A(user32, 'DialogBoxParamA')(x, inst, n, parent, proc, param))],
+    SetDlgItemTextW: ['pip', (x, dlg, id, w) => withA(x, w, (a) => A(user32, 'SetDlgItemTextA')(x, dlg, id, a))],
+    GetDlgItemTextW: ['pipi', (x, dlg, id, buf, n) => intoW(x, buf, n, (t, k) => A(user32, 'GetDlgItemTextA')(x, dlg, id, t, k))],
+    WinHelpW: ['ppuu', () => 1],
+    // wsprintfW(buf, fmt, ...) (cdecl): at most 1024 characters, as Windows.
+    wsprintfW: ['pp', (x, buf, fmt) => { const out = cprintf(x, wstr(x, fmt), (x.cpu.reg[4] >>> 0) + 12, true).slice(0, 1023); x.write(buf, wbytes(out)); return out.length; }, { cdecl: true }],
+  });
+  Object.assign(g32, {
+    TextOutW: ['piipi', (x, hdc, X, Y, w, n) => { const s = wstr(x, w, n), p = x.win.heapAlloc(n + 1); try { x.write(p, Uint8Array.from(s, (c) => c.charCodeAt(0) & 0xff)); return A(gdi32, 'TextOutA')(x, hdc, X, Y, p, n); } finally { x.win.heapFree(p); } }],
+    GetTextExtentPoint32W: ['ppip', (x, hdc, w, n, size) => { const s = wstr(x, w, n), p = x.win.heapAlloc(n + 1); try { x.write(p, Uint8Array.from(s, (c) => c.charCodeAt(0) & 0xff)); return A(gdi32, 'GetTextExtentPoint32A')(x, hdc, p, n, size); } finally { x.win.heapFree(p); } }],
+    CreateICW: ['pppp', (x, drv) => withA(x, drv, (a) => A(gdi32, 'CreateDCA')(x, a, 0, 0, 0))],
+  });
+  // The registry's Unicode calls on classic.js's registry in memory: names narrowed; a REG_SZ value's
+  // data kept as the program wrote it (UTF-16), so read back by its W twin as it was.
+  if (reg) Object.assign(advapi32, {
+    RegCreateKeyExW: ['ppupuuppp', (x, hk, sub, r, cls, opt, sam, sa, out, disp) => withA(x, sub, (a) => reg.RegCreateKeyExA[1](x, hk, a, r, 0, opt, sam, sa, out, disp))],
+    RegCreateKeyW: ['ppp', (x, hk, sub, out) => withA(x, sub, (a) => reg.RegCreateKeyA[1](x, hk, a, out))],
+    RegOpenKeyExW: ['ppuup', (x, hk, sub, opt, sam, out) => withA(x, sub, (a) => reg.RegOpenKeyExA[1](x, hk, a, opt, sam, out))],
+    RegOpenKeyW: ['ppp', (x, hk, sub, out) => withA(x, sub, (a) => reg.RegOpenKeyA[1](x, hk, a, out))],
+    RegQueryValueExW: ['pppppp', (x, hk, name, r, type, data, cb) => withA(x, name, (a) => reg.RegQueryValueExA[1](x, hk, a, r, type, data, cb))],
+    RegSetValueExW: ['ppuupu', (x, hk, name, r, type, data, cb) => withA(x, name, (a) => reg.RegSetValueExA[1](x, hk, a, r, type, data, cb))],
+    RegDeleteValueW: ['pp', (x, hk, name) => withA(x, name, (a) => reg.RegDeleteValueA[1](x, hk, a))],
+  });
+  // ShellAbout: Windows' "About" box, not shown here (its caller's own About dialog is a dialog).
+  Object.assign(shell32, { ShellAboutW: ['pppp', (x) => { x.win.say('ShellAboutW: the About box, not shown'); return 1; }], ShellAboutA: ['pppp', (x) => { x.win.say('ShellAboutA: the About box, not shown'); return 1; }] });
+  const wmm = winmm ? { PlaySoundW: ['ppu', (x, name, mod, flags) => (flags & 4 ? A(winmm, 'PlaySoundA')(x, name, mod, flags) : withAR(x, name, (a) => A(winmm, 'PlaySoundA')(x, a, mod, flags)))] } : {};
+  return { kernel32: k32, user32: u32, gdi32: g32, winmm: wmm, advapi32, shell32, imm32, setupapi, ole32, oleaut32 };
 }
 
 

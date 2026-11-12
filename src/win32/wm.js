@@ -12,10 +12,16 @@
 // program learns it moved from WM_MOVE and GetWindowRect), the close button posts WM_CLOSE. What is
 // in the client area is the program's, and its mouse messages carry client coordinates.
 //
+// The main window's menu bar (st.menu, src/win32/classic.js) is the window manager's too: drawn under
+// the caption, a press on one of its items opens its popup over the window (the program told first, by
+// WM_INITMENU and WM_INITMENUPOPUP, so that its check marks are right), and a click on a command posts
+// WM_COMMAND with its id; anywhere else closes it.
+//
 // An OpenGL or Direct3D window's client area is drawn by WebGL, not here: the page puts that layer at
 // clientRect() over this screen (src/linuxrun.js), as a driver draws into its window's rectangle.
 
-const DESKTOP = 0x3a6ea5;                                   // the classic desktop's blue
+const DESKTOP = 0x3a6ea5;
+const MENU_H = 19;                                          // SM_CYMENU: the bar's height, its bottom line included                                   // the classic desktop's blue
 const FACE = 0xd4d0c8, LIGHT = 0xffffff, SHADOW = 0x808080, DARK = 0x404040;   // 3D objects
 const CAPTION_L = 0x0a246a, CAPTION_R = 0xa6caf0;           // the active caption's gradient
 // The standard arrow (IDC_ARROW), 12x19: 1 its black outline, 2 its white body.
@@ -28,8 +34,8 @@ export function windowManager(st) {
 
   /** The frame round the client area: border width and caption height, as AdjustWindowRectEx adds. */
   wm.frame = () => {
-    const s = st.style | 0;
-    return { b: s & 0xc00000 ? 3 : s & 0x800000 ? 1 : 0, cap: (s & 0xc00000) === 0xc00000 ? 19 : 0 };
+    const s = st.style | 0, captioned = (s & 0xc00000) === 0xc00000, menu = captioned && st.menu ? MENU_H : 0;
+    return { b: s & 0xc00000 ? 3 : s & 0x800000 ? 1 : 0, cap: (captioned ? 19 : 0) + menu, menu };
   };
   /** Shown framed on the desktop: a caption, visible, and no display mode of the program's own. */
   wm.framed = () => (st.style & 0xc00000) === 0xc00000 && !st.modeSet && !!st.shown && !st.destroyed;
@@ -39,11 +45,43 @@ export function windowManager(st) {
   const closeBox = () => { const c = caption(); return { x: c.x + c.w - 2 - 16, y: c.y + 2, w: 16, h: 14 }; };
   const inside = (r, X, Y) => X >= r.x && X < r.x + r.w && Y >= r.y && Y < r.y + r.h;
 
+  // ---- the menu bar and its popup -------------------------------------------------------------------
+  const menuItems = (h) => { const m = h && st.gdi && st.gdi.get(h); return m && m.kind === 'menu' ? m.items : []; };
+  const label = (t) => t.replace(/&(.)/g, '$1');            // "&Game" shows as Game (its mnemonic not underlined here)
+  wm.menuBar = () => { const o = wm.outer(), { b } = wm.frame(); return { x: o.x + b, y: o.y + b + 19, w: o.w - 2 * b, h: MENU_H }; };
+  /** The bar's items: where each is drawn, in screen coordinates. */
+  wm.menuLayout = () => {
+    if (!wm.frame().menu) return [];
+    const bar = wm.menuBar(); let X = bar.x + 1;
+    return menuItems(st.menu).map((it, i) => { const w = label(it.text.split('\t')[0]).length * 8 + 14, r = { i, it, x: X, y: bar.y + 1, w, h: MENU_H - 2 }; X += w; return r; });
+  };
+  wm.menuItemRect = (pos) => wm.menuLayout()[pos] || null;
+  /** The open popup: under item `i` of the bar, its rows (separators 8 pixels, items 18). */
+  wm.popup = null;
+  const popupRows = () => {
+    const p = wm.popup; if (!p) return null;
+    const items = menuItems(p.menu);
+    const cols = items.map((it) => { const [a, k = ''] = label(it.text).split('\t'); return { a, k }; });
+    const w = Math.max(80, ...cols.map((c) => (c.a.length + (c.k ? c.k.length + 3 : 0)) * 8 + 40));
+    let Y = p.y + 3;
+    const rows = items.map((it, i) => { const h = it.flags & 0x800 ? 8 : 18, r = { i, it, ...cols[i], y: Y, h }; Y += h; return r; });
+    return { x: p.x, y: p.y, w, h: Y - p.y + 3, rows };
+  };
+  /** Where a point is in the popup: its row's index, -1 inside it on no item, null outside. */
+  wm.popupHit = (X, Y) => {
+    const g = popupRows(); if (!g || !inside(g, X, Y)) return null;
+    const r = g.rows.find((q) => Y >= q.y && Y < q.y + q.h && !(q.it.flags & 0x800));
+    return r ? r.i : -1;
+  };
+  wm.openPopup = (i) => { const l = wm.menuLayout()[i]; if (!l || !(l.it.flags & 0x10)) return null; wm.popup = { bar: i, menu: l.it.sub, x: l.x, y: l.y + l.h + 1, hover: -1 }; wm.dirty = true; return wm.popup; };
+  wm.closePopup = () => { if (wm.popup) { wm.popup = null; wm.dirty = true; } };
+
   /** Where a point of the screen is: 'close', 'caption', 'client', 'frame' or 'desktop'. */
   wm.hit = (X, Y) => {
     if (!wm.framed()) return 'client';
     if (inside(closeBox(), X, Y)) return 'close';
     if (inside(caption(), X, Y)) return 'caption';
+    if (wm.frame().menu && inside(wm.menuBar(), X, Y)) return 'menu';
     if (inside(wm.client(), X, Y)) return 'client';
     return inside(wm.outer(), X, Y) ? 'frame' : 'desktop';
   };
@@ -92,7 +130,48 @@ export function windowManager(st) {
       fill(fb, S, k.x + 4 + i + d, k.y + 3 + i + d, 2, 1, 0);
       fill(fb, S, k.x + 9 - i + d, k.y + 3 + i + d, 2, 1, 0);
     }
+    if (wm.frame().menu) {
+      const bar = wm.menuBar(), open = wm.popup ? wm.popup.bar : -1;
+      for (const l of wm.menuLayout()) {
+        if (l.i === open) { fill(fb, S, l.x, l.y, l.w, 1, SHADOW); fill(fb, S, l.x, l.y, 1, l.h, SHADOW); fill(fb, S, l.x, l.y + l.h - 1, l.w, 1, LIGHT); fill(fb, S, l.x + l.w - 1, l.y, 1, l.h, LIGHT); }
+        text(fb, S, font, label(l.it.text.split('\t')[0]), l.x + 7, l.y + 1, l.w, l.it.flags & 3 ? SHADOW : 0);
+      }
+      fill(fb, S, bar.x, bar.y + bar.h - 1, bar.w, 1, FACE);
+    }
     fill(fb, S, wm.client().x, wm.client().y, st.w, st.h, 0);
+  };
+  /** The program's other top-level windows (src/win32/api.js popupLayers: a dialog), over its main one:
+   *  each its frame -- raised, its caption in the active gradient with its title -- and its pixels. */
+  const drawLayers = (fb, S, font) => {
+    for (const l of st.popupLayers ? st.popupLayers() : []) {
+      const W = l.w + 2 * l.b, H = l.h + 2 * l.b + l.cap;
+      fill(fb, S, l.x, l.y, W, H, FACE);
+      if (l.b >= 3) raised(fb, S, l.x, l.y, W, H, FACE, LIGHT);
+      if (l.cap) {
+        const cw = W - 2 * l.b;
+        for (let i = 0; i < cw; i++) fill(fb, S, l.x + l.b + i, l.y + l.b, 1, 18, lerp(CAPTION_L, CAPTION_R, cw > 1 ? i / (cw - 1) : 0) | 0);
+        text(fb, S, font, l.title, l.x + l.b + 4, l.y + l.b + 1, cw - 8, 0xffffff);
+      }
+      const cx = l.x + l.b, cy = l.y + l.b + l.cap;
+      for (let j = 0; j < l.h; j++) {
+        const Y = cy + j; if (Y < 0 || Y >= S.h) continue;
+        const x0 = Math.max(0, -cx), x1 = Math.min(l.w, S.w - cx);
+        if (x1 > x0) fb.set(l.px.subarray(j * l.w + x0, j * l.w + x1), Y * S.w + cx + x0);
+      }
+    }
+  };
+  /** The open popup, over everything but the cursor. */
+  const drawPopup = (fb, S, font) => {
+    const g = popupRows(); if (!g) return;
+    fill(fb, S, g.x, g.y, g.w, g.h, FACE); raised(fb, S, g.x, g.y, g.w, g.h, FACE, LIGHT);
+    for (const r of g.rows) {
+      if (r.it.flags & 0x800) { fill(fb, S, g.x + 3, r.y + 3, g.w - 6, 1, SHADOW); fill(fb, S, g.x + 3, r.y + 4, g.w - 6, 1, LIGHT); continue; }
+      const hot = r.i === wm.popup.hover && !(r.it.flags & 3), c = r.it.flags & 3 ? SHADOW : hot ? 0xffffff : 0;
+      if (hot) fill(fb, S, g.x + 3, r.y, g.w - 6, r.h, CAPTION_L);
+      if (r.it.flags & 8) [3, 4, 5, 4, 3, 2, 1].forEach((d, k) => fill(fb, S, g.x + 6 + k, r.y + 4 + d, 1, 3, c));   // the check mark
+      text(fb, S, font, r.a, g.x + 20, r.y + 1, g.w - 24, c);
+      if (r.k) text(fb, S, font, r.k, g.x + g.w - 8 - r.k.length * 8, r.y + 1, r.k.length * 8, c);
+    }
   };
 
   // ---- the cursor: drawn over everything, what it covers kept and put back before the screen changes
@@ -146,6 +225,8 @@ export function windowManager(st) {
       const x0 = Math.max(0, -r.x), x1 = Math.min(client.w, S.w - r.x);
       if (x1 > x0) fb.set(client.px.subarray(j * client.w + x0, j * client.w + x1), Y * S.w + r.x + x0);
     }
+    drawLayers(fb, S, lx.romFont && lx.romFont());
+    drawPopup(fb, S, lx.romFont && lx.romFont());
     cover();
   };
   /**

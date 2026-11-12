@@ -233,8 +233,8 @@ export async function buildTree(img, io) {
       for (const f of await wiseLayer(await get(l.wise), l, inflate)) tree.file(norm(f.to), f.bytes);
     } else if (l.didi) {
       for (const f of didiLayer(await get(l.didi), l)) tree.file(norm(f.to), f.bytes);
-    } else if (l.zip) {
-      for (const f of await unzip(await get(l.zip))) tree.file(norm(f.path), f.bytes);
+    } else if (l.zip) {                                // a whole ZIP, under `into` (Abuse's release: its files at the top)
+      for (const f of await unzip(await get(l.zip))) tree.file(norm((l.into ? l.into.replace(/\/$/, '') + '/' : '') + f.path), f.bytes);
     } else if (l.gz) tree.file(l.to, await gunzip(await get(l.gz)));
     else if (l.file) tree.file(l.to, await io.fetchBytes(l.file));
     else if (l.busybox) {

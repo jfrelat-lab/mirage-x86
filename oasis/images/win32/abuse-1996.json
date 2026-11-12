@@ -1,0 +1,25 @@
+{
+  "oasis": 1,
+  "title": "Abuse — Crack dot Com, 1996; Xenoveritas' SDL 2 port 0.9.1 for Windows",
+  "year": 1996,
+  "author": "Crack dot Com / Xenoveritas",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium4"
+  },
+  "layers": [
+    {
+      "zip": "https://github.com/Xenoveritas/abuse/releases/download/v0.9.1/Abuse-0.9.1-win32.zip",
+      "into": "abuse"
+    }
+  ],
+  "entry": {
+    "run": "/abuse/abuse.exe",
+    "env": { "SDL_RENDER_DRIVER": "software" }
+  },
+  "output": "window",
+  "notes": "Abuse, the side-scrolling shooter Crack dot Com released in 1996 and later put in the public domain (its data) with its engine's source, here in the Windows build of Xenoveritas' port to SDL 2 (version 0.9.1, 2022; GPL, its source at github.com/Xenoveritas/abuse), fetched from that project's release on GitHub. A Visual C++ 2022 program: the Universal C Runtime, SDL2.dll and SDL2_mixer.dll beside it, all answered by MIRAGE-WIN32 in JavaScript; SDL's software renderer draws into a DIB section BitBlt puts in its window (GDI). Built for SSE2, hence a Pentium 4. The release carries no sound effects, so it plays silent. Click the check mark once the grey ramp is set, then the title, the demo and a game.",
+  "thumb": "oasis/thumbs/win32-abuse-1996.png",
+  "tags": ["Game", "Win32", "GDI", "SDL 2"],
+  "sound": false
+}

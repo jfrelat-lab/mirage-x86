@@ -405,6 +405,32 @@ export function ucrtApis({ st, send }) {
     abs: ['i', (x, v) => Math.abs(v | 0), cd], labs: ['i', (x, v) => Math.abs(v | 0), cd],
     rand: ['', () => { st.crtSeed = (Math.imul(st.crtSeed ?? 1, 214013) + 2531011) >>> 0; return (st.crtSeed >>> 16) & 0x7fff; }, cd],
     srand: ['u', (x, s) => { st.crtSeed = s >>> 0; return 0; }, cd],
+    /*
+     * qsort and bsearch with the program's comparison function: each comparison a call into the program
+     * (a send), the next step taken from its result -- an insertion sort, element by element, and a
+     * binary search. SDL 2 imports them.
+     */
+    qsort: ['puup', (x, base, n, w, cmp) => {
+      const at = (k) => base + k * w, tmp = x.win.heapAlloc(Math.max(1, w));
+      const insert = (i, j) => {                                       // a[i] goes down past a[j] while it compares less
+        if (i >= n) { x.win.heapFree(tmp); return 0; }
+        if (j < 0) return insert(i + 1, i);
+        return send(x, [{ fn: cmp, args: [at(j), at(j + 1)] }], (r) => {
+          if ((r | 0) <= 0) return insert(i + 1, i);
+          x.write(tmp, x.bytes(at(j), w)); x.write(at(j), x.bytes(at(j + 1), w)); x.write(at(j + 1), x.bytes(tmp, w));
+          return insert(i, j - 1);
+        }, null);
+      };
+      return n > 1 ? insert(1, 0) : 0;
+    }, cd],
+    bsearch: ['ppuup', (x, key, base, n, w, cmp) => {
+      const look = (lo, hi) => {
+        if (lo >= hi) return 0;
+        const mid = (lo + hi) >>> 1, p = base + mid * w;
+        return send(x, [{ fn: cmp, args: [key, p] }], (r) => ((r | 0) === 0 ? p : (r | 0) < 0 ? look(lo, mid) : look(mid + 1, hi)), null);
+      };
+      return look(0, n);
+    }, cd],
   };
   const env = {
     getenv: ['p', (x, p) => (x.str(p).toUpperCase() === 'PATH' ? x.r32(args(x).env) + 5 : 0), cd],
