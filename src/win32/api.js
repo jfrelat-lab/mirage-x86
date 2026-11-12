@@ -932,6 +932,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const h = st.paintDue && st.paintDue(); if (!h) return 0;
     return !hwnd || hwnd === h || isAncestor(hwnd, h) ? h : 0;
   };
+  /*
+   * WH_KEYBOARD (2): a key message the program takes from its queue goes to its hook first, as Windows
+   * calls it from GetMessage and PeekMessage -- HC_ACTION (0) when the message is removed, HC_NOREMOVE (3)
+   * when only looked at -- with the key and the message's keystroke flags; a hook that returns non-zero
+   * has eaten it. Jazz Jackrabbit 2 reads its keyboard so. `then(eaten)` gives the call's result.
+   */
+  const keyHook = (x, e, code, then, pop) => {
+    const hook = st.hooks.get(2);
+    if (!hook || e.msg < 0x100 || e.msg > 0x105 || e.msg === 0x102 || e.msg === 0x103) return then(false);
+    return send(x, [{ fn: hook, args: [code, e.wp, e.lp] }], (eax) => then(eax !== 0), pop);
+  };
   const putMsg = (x, m, e) => { x.w32(m, e.hwnd ?? st.hwnd); x.w32(m + 4, e.msg); x.w32(m + 8, e.wp); x.w32(m + 12, e.lp); x.w32(m + 16, e.time || 0); x.w32(m + 20, st.mouseX ?? 0); x.w32(m + 24, st.mouseY ?? 0); };
   const user32 = {
     // The window: one, the size it was made or the display mode set; its DC and GL go to the backend.
@@ -1023,7 +1034,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const peek = () => {
         const i = firstMsg(hwnd, min, max);
         if (i < 0) { const p = paintFor(hwnd, min, max); if (!p) return 0; putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; }
-        putMsg(x, m, st.msgs[i]); if (remove & 1) st.msgs.splice(i, 1); return 1;
+        const e = st.msgs[i];
+        putMsg(x, m, e); if (remove & 1) st.msgs.splice(i, 1);
+        return keyHook(x, e, remove & 1 ? 0 : 3, (eat) => (eat && !(remove & 1) && st.msgs.splice(st.msgs.indexOf(e), 1), eat ? 0 : 1), 20);
       };
       return st.pendingMove ? send(x, [[0x03, 0, takeMove()]], peek, 20) : peek();   // a window moved: WM_MOVE sent first
     }],
@@ -1034,7 +1047,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (st.pendingMove) { putMsg(x, m, { msg: 0x03, wp: 0, lp: takeMove() }); return 1; }
       const i = firstMsg(hwnd, min, max);
       if (i < 0) { const p = paintFor(hwnd, min, max); if (p) { putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; } return x.waitUntil(x.lx.mono() + 0.01); }
-      const e = st.msgs.splice(i, 1)[0]; putMsg(x, m, e); return e.msg === 0x12 ? 0 : 1;
+      const e = st.msgs.splice(i, 1)[0]; putMsg(x, m, e);
+      return keyHook(x, e, 0, (eat) => (eat ? (x.w32(m + 4, 0), 1) : e.msg === 0x12 ? 0 : 1), 16);   // eaten: WM_NULL in its place
     }],
     TranslateMessage: ['p', () => 0],
     // DispatchMessageA runs the window's procedure in the program: its four arguments pushed, its return
@@ -1111,6 +1125,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if ((msg === 0x102 || msg === 0x101) && (vk === 0x0d || vk === 0x1b)) return 1;
       return 0;
     }],
+    // A dialog's control sent a message by its id (the dialog's GetDlgItem, then SendMessageA).
+    SendDlgItemMessageA: ['piuuu', (x, dlg, id, msg, wp, lp) => user32.SendMessageA[1](x, user32.GetDlgItem[1](x, dlg, id), msg, wp, lp)],
+    // A modal dialog box: not made here -- -1, as when its template cannot be made into a window. Jazz
+    // Jackrabbit 2 opens one from its menus only (its Help's "About").
+    DialogBoxParamA: ['ppppp', (x, inst, name) => { x.win.say(`DialogBoxParamA(${resId(x, name)}): no modal dialogs here`); return -1; }],
     CreateDialogIndirectParamA: ['ppppp', (x, inst, tpl, parent, proc, param) => createDialog(x, inst, tpl, parent, proc, param, 20)],
     // DefDlgProcA: the dialog's DLGPROC first; what it does not handle (FALSE) goes to DefWindowProc, what it
     // does returns its DWL_MSGRESULT (WM_INITDIALOG and the messages that answer with a value: its own).

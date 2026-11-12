@@ -4,13 +4,23 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-12
+
+- **Jazz Jackrabbit 2 plays on MIRAGE-WIN32**: Epic MegaGames' shareware of 1998, unmodified, in its
+  window on the Windows desktop: the Orange Games logo, the intro video, the menus, the demos and the
+  game, with its sound. Its installer is read in the page, not run (Epic's own format, fetched from the
+  Internet Archive's collection of Epic's freely released files).
+- **The x87 copies 64-bit integers exactly**: FILD and FISTP of a 64-bit integer kept only 53 bits, as
+  a float64 does, and programs of the Pentium's time move memory eight bytes at a time through the FPU.
+  Jazz Jackrabbit 2's video came out with one column in eight wrong.
+- **A Windows program's keyboard hook is called** (WH_KEYBOARD), as Jazz Jackrabbit 2 reads its keys.
+- Underneath, for programs to come: a Visual C++ 2015+ program's runtime (the Universal CRT) and the
+  Unicode calls of the 2000s, an imported DLL's start before the program's, thread-local storage, folders
+  on the program's disk, a Japanese system's code page, DirectDraw surfaces GDI draws on, DirectInput with
+  no controller, multimedia timers, and two threads asleep at once no longer sharing one deadline.
+
 ## 2026-11-11
 
-- **Cave Story (Pixel, 2004) runs on MIRAGE-WIN32**, the original Japanese freeware, full screen in 16
-  bits or in a window: DirectDraw surfaces GDI draws on (GetDC), a windowed program's primary surface the
-  whole desktop, bitmaps loaded from files, DirectInput with no controller, and a Japanese system's code
-  page (`machine.codepage: 932`) for its Shift-JIS text. Two threads asleep at once (its main loop and its
-  multimedia timer) no longer share one deadline: it spun, thirty times slower.
 - **The x87's FPTAN, FSIN, FCOS and FSINCOS clear C2** for an argument in range, as the real chip does.
   Microsoft's C runtime checks that flag after FPTAN; left set, `tan()` took its out-of-range path, and a
   program in Quake's single-precision mode got a NaN where its view's projection should be: Half-Life's

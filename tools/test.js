@@ -5258,6 +5258,24 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: SetWindowPos sends WM_WINDOWPOSCHANGED, then WM_SIZE', got, '51'); }
+// WH_KEYBOARD: a key message GetMessage takes from the queue goes to the program's hook first, with its key
+// (Jazz Jackrabbit 2 reads its keyboard so; installed and never called, its menus took no key). The hook
+// keeps its wParam; the exit code is it: 41h, the A key.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['SetWindowsHookExA', 'PostMessageA', 'GetMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const msg = at.d(0x440), log = at.d(0x410), proc = at.d(0x200);
+      const main = [0x6a, 0, 0x6a, 0, 0x68, ...le(proc), 0x6a, 2, 0xff, 0x15, ...le(at.iat['user32.dll!SetWindowsHookExA']),
+        0x68, ...le(0x1e0001), 0x6a, 0x41, 0x68, ...le(0x100), 0x6a, 0, 0xff, 0x15, ...le(at.iat['user32.dll!PostMessageA']),
+        0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...le(msg), 0xff, 0x15, ...le(at.iat['user32.dll!GetMessageA']),
+        0xff, 0x35, ...le(log), 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const hook = [0x8b, 0x44, 0x24, 0x08, 0xa3, ...le(log), 0x31, 0xc0, 0xc2, 0x0c, 0x00];
+      const img = new Uint8Array(0x500); img.set(main); img.set(hook, 0x200);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: WH_KEYBOARD -- GetMessage hands a key message to the hook first', got, '41'); }
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a
