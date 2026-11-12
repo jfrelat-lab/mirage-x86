@@ -22,7 +22,8 @@ export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.n
  * official-jj-2: Epic's freely distributed Jazz Jackrabbit 2 files, its shareware installer among them.
  */
 const archiveItem = (u) => {
-  if (!/^ia\d+\.us\.archive\.org$/.test(u.hostname)) return false;
+  // ia600805.us.archive.org, dn710401.ca.archive.org: the archive's storage servers, by datacentre.
+  if (!/^[a-z]{2}\d+\.[a-z]{2}\.archive\.org$/.test(u.hostname)) return false;
   const path = u.pathname === '/view_archive.php' ? u.searchParams.get('archive') || '' : u.pathname;
   const m = /^\/\d+\/items\/([^/]+)\//.exec(path);
   return !!m && !path.includes('/../') && OASIS_HOSTS.includes(`archive.org/download/${m[1]}/`);
