@@ -5043,6 +5043,21 @@ const runLinux = (hex, argv) => {
     got = (fb(3, 5) & 0xffffff).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: SetROP2 R2_WHITE draws a line white whatever the pen', got, 'ffffff');
+  // A DIB with a BITMAPCOREHEADER (OS/2's 12 bytes: 16-bit sizes, RGBTRIPLE colours), as Windows' own
+  // cards.dll keeps its cards -- 2 x 1, 1 bit, colour 0 blue and 1 yellow, the pixels 1 then 0.
+  try { const { x } = await w32(), { decodeDib } = await import('../src/win32/classic.js'), p = x.win.heapAlloc(32);
+    x.write(p, Uint8Array.of(12, 0, 0, 0, 2, 0, 1, 0, 1, 0, 1, 0, 0xff, 0, 0, 0, 0xff, 0xff, 0x80, 0, 0, 0));
+    const d = decodeDib(x, p); got = d ? [d.w, d.h, ...d.px].map((v) => v.toString(16)).join(' ') : 'none';
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a DIB with a BITMAPCOREHEADER (cards.dll\'s cards)', got, '2 1 ffff00 ff');
+  // PatBlt PATCOPY: the DC's brush -- FreeCell's cells, filled green, were left black.
+  try { const { mc, fn } = await w32(), g = (n) => fn('gdi32.dll', n);
+    fn('user32.dll', 'CreateWindowExA')(0, 0, 0, 0, 0, 0, 320, 200);
+    g('SelectObject')(0x1001, g('CreateSolidBrush')(0x007f00)); g('PatBlt')(0x1001, 0, 0, 10, 10, 0xf00021);
+    const fb = (X, Y) => new Uint32Array(mc.mem.u8.buffer, mc.mem.u8.byteOffset + mc.vbeFbBase + (Y * 320 + X) * 4, 1)[0];
+    got = (fb(5, 5) & 0xffffff).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: PatBlt PATCOPY fills with the DC\'s brush', got, '7f00');
   // MCI's video: an .avi on the program's disk opened by a command string, its device id by its alias,
   // and played to its end at once -- MM_MCINOTIFY, MCI_NOTIFY_SUCCESSFUL, posted to the callback window
   // (Half-Life's launcher waits for it, and stopped on its error box when the open failed).
@@ -5356,6 +5371,28 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: SendMessage gives back what the window procedure returned', got, '42'); }
+// An overlapped window placed by Windows (CW_USEDEFAULT) gets WM_SIZE when first shown, not from
+// CreateWindowEx: Solitaire makes its game after CreateWindowEx returns, and a WM_SIZE sent before read
+// through a null pointer. The procedure counts WM_SIZE; the exit code is 16 x the count after
+// CreateWindowEx, plus the count after ShowWindow: 01h.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'ShowWindow'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const wc = at.d(0x440), cls = at.d(0x470), hwnd = at.d(0x478), cnt = at.d(0x430), res = at.d(0x434), proc = at.d(0x200);
+      const main = [0x68, ...le(wc), 0xff, 0x15, ...le(at.iat['user32.dll!RegisterClassA']),
+        0x6a, 0, 0x68, ...le(0x400000), 0x6a, 0, 0x6a, 0, 0x68, ...le(200), 0x68, ...le(300), 0x6a, 0, 0x68, ...le(0x80000000), 0x68, ...le(0xcf0000), 0x6a, 0, 0x68, ...le(cls), 0x6a, 0,
+        0xff, 0x15, ...le(at.iat['user32.dll!CreateWindowExA']), 0xa3, ...le(hwnd),
+        0xa1, ...le(cnt), 0xc1, 0xe0, 0x04, 0xa3, ...le(res),
+        0x6a, 1, 0xff, 0x35, ...le(hwnd), 0xff, 0x15, ...le(at.iat['user32.dll!ShowWindow']),
+        0xa1, ...le(res), 0x03, 0x05, ...le(cnt), 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const wndproc = [0x83, 0x7c, 0x24, 0x08, 0x05, 0x75, 0x06, 0xff, 0x05, ...le(cnt), 0x31, 0xc0, 0xc2, 0x10, 0x00];
+      const img = new Uint8Array(0x500); img.set(main); img.set(wndproc, 0x200);
+      img.set(le(proc), 0x444); img.set(le(cls), 0x464); img.set(new TextEncoder().encode('nsz\0'), 0x470);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a CW_USEDEFAULT window gets WM_SIZE when first shown, not from CreateWindowEx', got, '1'); }
 // A modal dialog box: DialogBoxIndirectParamA on a template in memory, its procedure ending it with 2Ah
 // on WM_INITDIALOG; DialogBox returns that once its loop has run -- modalLoop, called on DialogBox's own
 // frame from the result of the sequence that made the dialog: a send within a send's result, which

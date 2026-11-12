@@ -56,14 +56,18 @@ export function loadString(x, base, id) {
 
 /**
  * A packed DIB in memory (BITMAPINFOHEADER, its colour table, its bits: a bitmap resource, a .bmp after
- * its file header) as { w, h, px }: 0x00RRGGBB, top row first. 1, 4, 8, 24 and 32 bits, uncompressed.
+ * its file header) as { w, h, px }: 0x00RRGGBB, top row first. 1, 4, 8, 16, 24 and 32 bits, uncompressed.
  */
 export function decodeDib(x, at) {
-  const hs = x.r32(at), w = x.r32(at + 4) | 0, h0 = x.r32(at + 8) | 0, bpp = x.r16(at + 14), comp = x.r32(at + 16);
-  if (hs < 40 || w <= 0 || !h0 || comp !== 0 && comp !== 3) return null;
-  const h = Math.abs(h0), n = bpp <= 8 ? (x.r32(at + 32) || 1 << bpp) : 0, pal = new Uint32Array(256);
-  for (let i = 0; i < n; i++) pal[i] = x.r32(at + hs + 4 * i) & 0xffffff;
-  const bits = at + hs + 4 * n + (comp === 3 ? 12 : 0), stride = ((w * bpp + 31) >> 5) << 2, raw = x.bytes(bits, stride * h), px = new Uint32Array(w * h);
+  // BITMAPCOREHEADER (12 bytes, OS/2 1.x's): 16-bit sizes, RGBTRIPLE colours -- Windows' own cards.dll keeps
+  // its cards so. BITMAPINFOHEADER (40 and up) otherwise.
+  const core = x.r32(at) === 12;
+  const hs = x.r32(at), w = core ? x.r16(at + 4) : x.r32(at + 4) | 0, h0 = core ? x.r16(at + 6) : x.r32(at + 8) | 0;
+  const bpp = core ? x.r16(at + 10) : x.r16(at + 14), comp = core ? 0 : x.r32(at + 16), cs = core ? 3 : 4;
+  if ((hs < 40 && !core) || w <= 0 || !h0 || comp !== 0 && comp !== 3) return null;
+  const h = Math.abs(h0), n = bpp <= 8 ? ((core ? 0 : x.r32(at + 32)) || 1 << bpp) : 0, pal = new Uint32Array(256);
+  for (let i = 0; i < n; i++) pal[i] = (x.r8(at + hs + cs * i + 2) << 16) | (x.r8(at + hs + cs * i + 1) << 8) | x.r8(at + hs + cs * i);
+  const bits = at + hs + cs * n + (comp === 3 ? 12 : 0), stride = ((w * bpp + 31) >> 5) << 2, raw = x.bytes(bits, stride * h), px = new Uint32Array(w * h);
   for (let r = 0; r < h; r++) {
     const y = h0 > 0 ? h - 1 - r : r, o = r * stride;
     for (let i = 0; i < w; i++) {

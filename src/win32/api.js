@@ -619,7 +619,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // creates its window visible and only takes the mouse once WM_ACTIVATE has said it is active.
     const shown = st.shown ? (st.active = true, ACTIVATE) : [];
     st.wins.set(st.hwnd, { hwnd: st.hwnd, main: true, cls: key, parent: 0, id: 0, ex: x.r32(a), erase: true });   // its first WM_PAINT erases
-    return send(x, [...cbt(x, st.hwnd, cs), [0x81, 0, cs], [0x01, 0, cs], [0x05, 0, sizeLp()], [0x03, 0, 0], ...shown], () => st.hwnd, 48);
+    // An overlapped window placed by Windows (CW_USEDEFAULT) gets its WM_SIZE and WM_MOVE when first shown,
+    // not from CreateWindowEx (Wine's WIN_NEED_SIZE): Solitaire makes its game after CreateWindowEx returns,
+    // and its WM_SIZE, sent before, read through a pointer still null.
+    st.needSize = X === -0x80000000 && !(style & 0xc0000000) && !shown.length;
+    const sized = st.needSize ? [] : [[0x05, 0, sizeLp()], [0x03, 0, 0]];
+    return send(x, [...cbt(x, st.hwnd, cs), [0x81, 0, cs], [0x01, 0, cs], ...sized, ...shown], () => st.hwnd, 48);
   };
   // WH_CBT's HCBT_CREATEWND (3), before WM_NCCREATE: MFC attaches its CWnd to the window there, and
   // takes a creation it never heard of for one that failed.
@@ -1101,7 +1106,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (st.mainDialog && cmd !== 0 && !st.shown) invalidate(hwnd, true, true);
       if (st.active || cmd === 0) return st.shown ? 1 : 0;
       const was = st.shown ? 1 : 0; st.shown = st.active = true; wm.dirty = true;
-      return send(x, ACTIVATE, () => was, 8);
+      const sized = st.needSize ? [[0x05, 0, sizeLp()], [0x03, 0, 0]] : []; st.needSize = false;   // its first showing: WM_SIZE, WM_MOVE (above)
+      return send(x, [...ACTIVATE.slice(0, 1), ...sized, ...ACTIVATE.slice(1)], () => was, 8);
     }],
     UpdateWindow: ['p', (x, hwnd) => {
       if (st.mainDialog || hwnd !== st.hwnd) { const due = paintOrder().filter((h) => h === hwnd || isAncestor(hwnd, h)); return due.length ? send(x, due.map((h) => [0x0f, 0, 0, h]), () => 1, 4) : 1; }
@@ -1658,11 +1664,19 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     BitBlt: ['piiiipiiu', (x, dst, dx, dy, w, h, src, sx, sy) => blit(x, dst, dx, dy, w, h, src, sx, sy, w, h)],
     StretchBlt: ['piiiipiiiiu', (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh) => blit(x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh)],
+    // PatBlt: BLACKNESS, WHITENESS; PATCOPY (F00021h) the DC's brush -- FreeCell's cells, filled green before
+    // their edges are drawn; PATINVERT (5A0049h) the brush XORed in; DSTINVERT (550009h) the pixels inverted.
     PatBlt: ['piiiiu', (x, hdc, X, Y, w, h, rop) => {
-      const c = rop === 0x42 ? 0 : rop === 0xff0062 ? 0xffffff : null;
-      if (c === null) return 1;
-      const t = target(x, hdc); if (t) { fillRect(t, X, Y, X + w, Y + h, c); t.done(); }
-      return 1;
+      const brush = () => brushColor(dcState(hdc).brush ?? 0x01900010);
+      const c = rop === 0x42 ? 0 : rop === 0xff0062 ? 0xffffff : rop === 0xf00021 ? brush() : null;
+      if (w < 0) { X += w; w = -w; } if (h < 0) { Y += h; h = -h; }
+      const t = (c !== null || rop === 0x5a0049 || rop === 0x550009) && target(x, hdc); if (!t) return 1;
+      if (c !== null) fillRect(t, X, Y, X + w, Y + h, c);
+      else {
+        const k = rop === 0x550009 ? 0xffffff : brush() ?? 0;
+        for (let j = Math.max(0, Y); j < Math.min(t.h, Y + h); j++) for (let i = Math.max(0, X); i < Math.min(t.w, X + w); i++) t.px[j * t.w + i] ^= k;
+      }
+      t.done(); return 1;
     }],
     CreateFontA: ['iiiiiuuuuuuuup', (x, h, w, esc, orient, weight, italic, underline, strike, charset, outPrec, clipPrec, quality, pitch, face) =>
       st.newHandle('font', { height: h, weight, charset: charset & 255, pitch: pitch & 255, face: x.str(face, 32) })],
