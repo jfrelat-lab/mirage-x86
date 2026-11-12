@@ -18,6 +18,7 @@
 //   MIRAGE_W32TRACE=1|<file>        every API call as it is made (to stderr, or that file)
 //   MIRAGE_W32TRACEFROM=<seconds>   ... from that guest second on
 //   MIRAGE_W32FONTS=arial=<ttf>,arial:bold=<ttf>  TrueType fonts the program selects, as the page's machine.fonts
+//   MIRAGE_W32CODEPAGE=932          the system's code page (machine.codepage): Shift-JIS, a Japanese Windows'
 //   MIRAGE_W32DUMP=<name>,...       those files of the program's disk at the end (what it wrote)
 //   MIRAGE_W32MEMDUMP=<mod>:<rva>:<size>@<s>,<s>:<prefix>  a module's bytes at those guest seconds
 //   MIRAGE_W32WINS=1                the windows at the end: handle, class, parent, id, place, style, title
@@ -69,7 +70,8 @@ if (process.env.MIRAGE_W32DIR) (function walk(d, rel) { for (const n of readdirS
 const fonts = process.env.MIRAGE_W32FONTS ? Object.fromEntries(process.env.MIRAGE_W32FONTS.split(',').map((e) => { const [k, f] = e.split('='); return [k.toLowerCase(), new Uint8Array(readFileSync(f))]; })) : undefined;
 // MIRAGE_W32ENV=NAME=value,...: the program's environment (SDL's hints: SDL_RENDER_DRIVER=software).
 const env = Object.fromEntries((process.env.MIRAGE_W32ENV || '').split(',').filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
-const apis = win32Apis({ files, fonts, env });
+// MIRAGE_W32CODEPAGE=932: a Japanese Windows' code page (an image's machine.codepage).
+const apis = win32Apis({ files, fonts, env, codepage: Number(process.env.MIRAGE_W32CODEPAGE) || undefined });
 /*
  * MIRAGE_W32PROBE=goldsrc: what Half-Life's engine (sw.dll) and its game (hl.dll) say to each other through
  * their tables of function pointers, which no import trace sees. The engine's table, handed over by

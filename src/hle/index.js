@@ -45,13 +45,19 @@ export function hleDispatch(lx, mem, cpu, table, backend) {
     fpop: () => { const v = cpu.fst[cpu.ftop]; cpu.focc[cpu.ftop] = 0; cpu.ftop = (cpu.ftop + 1) & 7; return v; },
     // Wait as a system call waits: until the guest's clock reaches `t` (seconds, lx.mono).
     waitUntil: (t) => { if (lx.mono() >= t) return 0; if (lx.wake === null) lx.wake = t; return BLOCK; },
-    sleep: (s) => { if (ctx.until === undefined) ctx.until = lx.mono() + s; const r = x.waitUntil(ctx.until); if (r !== BLOCK) ctx.until = undefined; return r; },
+    // A sleep's deadline is its thread's: two threads sleeping at once (Cave Story's main loop and its
+    // multimedia timer) each wait their own time, not whichever was asked first.
+    sleep: (s) => {
+      const k = lx.pid; let u = ctx.until.get(k);
+      if (u === undefined) ctx.until.set(k, u = lx.mono() + s);
+      const r = x.waitUntil(u); if (r !== BLOCK) ctx.until.delete(k); return r;
+    },
     // The entry point of a function by name, where the program can call it: glXGetProcAddress.
     entry: (name) => (byName.has(name) && x.entries ? x.entries(byName.get(name)) : 0),
     // A function's id, for code made here that traps into it (sdl12.js's audio and thread loops).
     idOf: (name) => byName.get(name),
   };
-  ctx = {};
+  ctx = { until: new Map() };
   lx.hle = (id) => {
     const f = table[id];
     if (!f) return -38;                                       // ENOSYS
