@@ -138,7 +138,7 @@ export function classicApis({ st, wm }) {
    *  under it the smaller (WM_SIZE), as Windows keeps the window's own rectangle. */
   const setMenu = (h, m) => {
     menus.set(h, m);
-    if (h !== st.hwnd) return 1;
+    if (h !== st.hwnd) { const o = st.wins && st.wins.get(h); if (o) o.bar = m || 0; return 1; }   // its bar, for when it is the screen's
     const was = st.menu ? 19 : 0, now = m ? 19 : 0;
     st.menu = m || 0;
     if (was !== now) { st.h = Math.max(1, st.h + was - now); st.msgs.push({ msg: 0x05, wp: 0, lp: ((st.h & 0xffff) << 16 | (st.w & 0xffff)) >>> 0 }); }
@@ -342,7 +342,7 @@ export function classicApis({ st, wm }) {
       x.w32(r, b.x); x.w32(r + 4, b.y); x.w32(r + 8, b.x + b.w); x.w32(r + 12, b.y + b.h); return 1;
     }],
     DrawMenuBar: ['p', () => { wm.dirty = true; return 1; }],
-    SetMenu: ['pp', (x, h, m) => setMenu(h, m)], GetMenu: ['p', (x, h) => (h === st.hwnd ? st.menu || 0 : menus.get(h) || 0)],
+    SetMenu: ['pp', (x, h, m) => setMenu(h, m)], GetMenu: ['p', (x, h) => (h === st.hwnd ? st.menu || 0 : menus.get(h) || (st.wins && st.wins.get(h) || {}).bar || 0)],
     // Drawn controls' parts and icons: nothing drawn.
     DrawFrameControl: ['ppuu', () => 1], DrawIconEx: ['piipiiupu', () => 1],
     WinHelpA: ['ppuu', () => 1],
@@ -398,6 +398,11 @@ export function classicApis({ st, wm }) {
     RegCreateKeyA: ['ppp', (x, hk, sub, out) => create(x, hk, sub, out, 0)],
     RegOpenKeyExA: ['ppuup', (x, hk, sub, opt, sam, out) => open(x, hk, sub, out)],
     RegOpenKeyA: ['ppp', (x, hk, sub, out) => open(x, hk, sub, out)],
+    // RegQueryValueA(key, subkey, buf, &size): the subkey's default value, as a string.
+    RegQueryValueA: ['pppp', (x, hk, sub, buf, cb) => {
+      const t = x.win.heapAlloc(4);
+      try { const r = sub && x.r8(sub) ? open(x, hk, sub, t) : (x.w32(t, hk), 0); if (r) return r; return query(x, x.r32(t), 0, 0, buf, cb); } finally { x.win.heapFree(t); }
+    }],
     RegCloseKey: ['p', (x, hk) => { handles.delete(hk); return 0; }],
     RegFlushKey: ['p', () => 0],
     RegQueryValueExA: ['pppppp', (x, hk, name, r, type, data, cb) => query(x, hk, name, type, data, cb)],

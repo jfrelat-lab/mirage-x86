@@ -19,8 +19,8 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 - **Windows' menus, dialog boxes and timers**: a window's menu bar is drawn under its caption and its
   menus open, checked and greyed as the program says (Jazz Jackrabbit 2's Game, Video, Music and Help);
   modal dialog boxes run with their edit fields and buttons over their window; timers tick; keyboard
-  accelerators work. Windows' own Minesweeper, Solitaire and FreeCell of Windows 2000 play with them, run
-  locally as tests -- Microsoft's, so not offered here.
+  accelerators work. Windows' own Minesweeper, Solitaire, FreeCell and 3D Pinball of Windows 2000 play with them,
+  run locally as tests -- Microsoft's, so not offered here.
 - **A window procedure's answer reaches the program**: every message MIRAGE sent a Windows program came
   back with the same wrong result, so a dialog's default handling never ran.
 - **Videos through MCI**: an AVI a Windows program plays with MCI (8-bit, uncompressed or Microsoft

@@ -390,6 +390,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       o.pos += k; if (pRead) x.w32(pRead, k);
       return 1;
     }],
+    // Windows 3.x's file calls, kept by Win32 (Pinball reads its table and its sounds so): _lopen's mode
+    // OF_READ 0, OF_WRITE 1, OF_READWRITE 2; HFILE_ERROR (-1) when the file is not there. _hread/_hwrite are
+    // _lread/_lwrite beyond 64 KB.
+    _lopen: ['pi', (x, pName, mode) => { const f = diskFile(x.str(pName)); return f ? openHandle(f) : -1; }],
+    _lcreat: ['pi', (x, pName) => kernel32.CreateFileA[1](x, pName, 0x40000000, 0, 0, 2, 0x80, 0)],
+    _lclose: ['p', (x, h) => (st.files[h - 0x4000] ? 0 : -1)],
+    _lread: ['ppu', (x, h, buf, n) => { const r = x.win.heapAlloc(4); try { return kernel32.ReadFile[1](x, h, buf, n, r, 0) ? x.r32(r) : -1; } finally { x.win.heapFree(r); } }],
+    _lwrite: ['ppu', (x, h, buf, n) => { const r = x.win.heapAlloc(4); try { return kernel32.WriteFile[1](x, h, buf, n, r, 0) ? x.r32(r) : -1; } finally { x.win.heapFree(r); } }],
+    _hread: ['ppu', (x, h, buf, n) => kernel32._lread[1](x, h, buf, n)], _hwrite: ['ppu', (x, h, buf, n) => kernel32._lwrite[1](x, h, buf, n)],
+    _llseek: ['pii', (x, h, off, origin) => kernel32.SetFilePointer[1](x, h, off, 0, origin)],
     SetFilePointer: ['pipu', (x, h, dist, pHigh, how) => {
       const o = st.files[h - 0x4000];
       if (!o) return -1;                                               // INVALID_SET_FILE_POINTER
@@ -607,8 +617,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (st.classes.has(key)) st.wndProc = st.classes.get(key);
     // Its menu bar: the one CreateWindowEx was given, else its class's (WNDCLASS's lpszMenuName, at 32 of
     // what classInfo keeps, its hInstance at 16), loaded from the resources.
-    const info = st.classInfo && st.classInfo.get(key), cm = info && (info[32] | info[33] << 8 | info[34] << 16 | info[35] << 24) >>> 0;
-    st.menu = menu || (cm && st.loadMenu ? st.loadMenu(x, (info[16] | info[17] << 8 | info[18] << 16 | info[19] << 24) >>> 0, cm) : 0);
+    st.menu = menu || classMenu(x, key);
     st.style = style; st.destroyed = false; st.shown = !!(style & 0x10000000); st.active = false; resize(w, h);   // a new window: WS_VISIBLE shows it
     // What CreateWindowEx sends before it returns: WM_NCCREATE and WM_CREATE with the CREATESTRUCT
     // made of its own arguments (on the caller's stack, in CREATESTRUCT's order reversed), then
@@ -634,6 +643,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return [{ fn: hook, args: [3, hwnd, p] }];
   };
   /** A window that is not the main one: a child (a control), a dialog, a second top-level window. */
+  // A class's menu (WNDCLASS's lpszMenuName, at 32 of what classInfo keeps, its hInstance at 16), loaded.
+  const classMenu = (x, key) => {
+    const info = st.classInfo && st.classInfo.get(key), cm = info && (info[32] | info[33] << 8 | info[34] << 16 | info[35] << 24) >>> 0;
+    return cm && st.loadMenu ? st.loadMenu(x, (info[16] | info[17] << 8 | info[18] << 16 | info[19] << 24) >>> 0, cm) : 0;
+  };
   const createOther = (x, cls, style, w, h, wide, X, Y, title, parent, menu, extra = {}) => {
     const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
     const proc = st.classes.get(key) || systemProc(x, key);
@@ -644,7 +658,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const top = !(style & 0x40000000), dflt = (v) => top && (v | 0) === -0x80000000;
     if (dflt(w)) { w = 640; h = 480; }
     if (dflt(X)) { X = 22; Y = 22; }
-    const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
+    const bar = style & 0x40000000 ? 0 : menu || classMenu(x, key);  // a top-level window's menu bar, kept for when it is the screen's
+    const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, bar, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
       title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), ...extra };
     st.wins.set(hwnd, rec);
     if (!proc) return hwnd;
@@ -696,8 +711,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const promote = (h) => {
     const w = win(h);
     if (!w || w.dead || (w.style & 0x40000000) || w.dialog || !w.proc) return;
-    const old = win(st.hwnd); if (old && old.main) st.wins.delete(st.hwnd);
-    w.main = true; st.hwnd = h; st.wndProc = w.proc; st.mainClass = w.cls; st.style = w.style; st.title = w.title;
+    // The main window left: gone (destroyed), or still there and an ordinary top-level window from now on
+    // (a splash, its place and size as it had them).
+    const old = win(st.hwnd);
+    if (old && old.main && st.destroyed) st.wins.delete(st.hwnd);
+    else if (old && old.main) Object.assign(old, { main: false, proc: st.wndProc, style: st.style >>> 0, x: st.x | 0, y: st.y | 0, w: st.w, h: st.h, title: st.title || '', visible: !!st.shown, enabled: true, long: old.long || new Map() });
+    w.main = true; st.hwnd = h; st.wndProc = w.proc; st.mainClass = w.cls; st.style = w.style; st.title = w.title; st.menu = w.bar || 0;
     st.x = w.x; st.y = w.y; st.destroyed = false; st.shown = false; st.active = false;
     if (st.activeWin === h) st.activeWin = 0;
     resize(w.w, w.h);
@@ -1088,7 +1107,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; wm.moveCursor(); return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
     // returns that the window was hidden. UpdateWindow paints it once (WM_PAINT).
     ShowWindow: ['pi', (x, hwnd, cmd) => {
-      if (hwnd !== st.hwnd && st.destroyed && cmd !== 0) promote(hwnd);
+      // The main window gone -- or only a splash (a popup without a caption) -- and a captioned top-level
+      // window shown: that one is the screen's (Pinball's table after its 1-pixel splash).
+      const splash = !st.destroyed && (st.style & 0x80000000) && (st.style & 0xc00000) !== 0xc00000 && !st.mainDialog;
+      if (hwnd !== st.hwnd && cmd !== 0 && (st.destroyed || (splash && win(hwnd) && (win(hwnd).style & 0xc00000) === 0xc00000))) promote(hwnd);
       if (hwnd !== st.hwnd) {
         const w = win(hwnd); if (!w) return 0;
         const was = w.visible ? 1 : 0; w.visible = cmd !== 0;
@@ -1217,9 +1239,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return ({ 0: S.w, 1: S.h, 2: 16, 3: 16, 4: 18, 5: 1, 6: 1, 7: 3, 8: 3, 9: 16, 10: 16, 11: 32, 12: 32, 13: 32, 14: 32, 15: 19, 20: 16, 21: 16,
         30: 18, 31: 18, 32: 4, 33: 4, 45: 2, 46: 2, 49: 16, 50: 16, 16: S.w, 17: S.h - 30 - 19 })[n] ?? 0;
     }],
-    GetClientRect: ['pp', (x, hwnd, r) => { const w = hwnd !== st.hwnd && win(hwnd); x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, w ? w.w : st.w); x.w32(r + 12, w ? w.h : st.h); return 1; }],
+    // The desktop's (GetDesktopWindow, 10004h): the screen -- Pinball centres its window by it.
+    GetClientRect: ['pp', (x, hwnd, r) => { if (hwnd === 0x10004) { const D = st.modeSet ? { w: st.w, h: st.h } : st.desk; x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, D.w); x.w32(r + 12, D.h); return 1; }
+      const w = hwnd !== st.hwnd && win(hwnd); x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, w ? w.w : st.w); x.w32(r + 12, w ? w.h : st.h); return 1; }],
     // The window on the screen, its frame included: where the program put it, or the visitor dragged it.
     GetWindowRect: ['pp', (x, hwnd, r) => {
+      if (hwnd === 0x10004) return user32.GetClientRect[1](x, hwnd, r);
       const w = hwnd !== st.hwnd && win(hwnd);
       if (w) { const o = screenOrigin(hwnd); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + w.w); x.w32(r + 12, o.y + w.h); return 1; }
       const o = st.mainDialog && !wm.framed() ? { x: 0, y: 0, w: st.w, h: st.h } : wm.outer(); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + o.w); x.w32(r + 12, o.y + o.h); return 1;
@@ -1652,6 +1677,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return 1;
     }],
     GetSystemPaletteEntries: ['puup', () => 0],                       // no palette on this screen
+    // A palette's entries read and changed (PALETTEENTRY: red, green, blue, flags), and its size changed;
+    // the entries a palette has: 256 here, whatever LOGPALETTE asked (Pinball's grows and fills it).
+    GetPaletteEntries: ['puup', (x, hpal, start, n, pe) => {
+      const p = st.gdi.get(hpal); if (!p || p.kind !== 'palette') return 0;
+      if (!pe) return p.size || 256;
+      let k = 0; for (; k < n && start + k < 256; k++) { const c = p.colors[start + k]; x.w32(pe + 4 * k, ((c >> 16) & 255) | (c & 0xff00) | ((c & 255) << 16)); }
+      return k;
+    }],
+    SetPaletteEntries: ['puup', (x, hpal, start, n, pe) => (gdi32.AnimatePalette[1](x, hpal, start, n, pe) ? Math.min(n, 256 - start) : 0)],
+    ResizePalette: ['pu', (x, hpal, n) => { const p = st.gdi.get(hpal); if (!p || p.kind !== 'palette') return 0; p.size = Math.min(256, n); return 1; }],
     SetSystemPaletteUse: ['pu', () => 1], GetSystemPaletteUse: ['p', () => 1],   // SYSPAL_STATIC
     // Raster copies: SRCCOPY between DCs (a section selected in a memory DC, the window's own), the
     // stretch by nearest pixels; into the window they reach the screen (lx.fbShow). PatBlt fills
@@ -1851,7 +1886,43 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return next;
   };
   st.videoTick = videoTick;
+  /*
+   * mmio: RIFF files read chunk by chunk (Pinball's sounds). A file of the program's disk, its position kept;
+   * MMCKINFO is ckid, cksize, fccType, dwDataOffset, dwFlags. mmioDescend finds a chunk (MMIO_FINDCHUNK 10h
+   * by its id, MMIO_FINDRIFF 20h / MMIO_FINDLIST 40h by its form type) within its parent, or the next one;
+   * mmioAscend goes past the chunk's end (and its pad byte).
+   */
+  const mmios = new Map(); let mmioNext = 0x6100;
+  const mmio = {
+    mmioOpenA: ['ppu', (x, pName, info, flags) => {
+      if (flags & 0x1003) return 0;                                   // MMIO_WRITE, MMIO_READWRITE, MMIO_CREATE: no
+      const f = pName && diskFile(x.str(pName)); if (!f || !f.bytes) { if (info) x.w32(info + 12, 257); return 0; }   // MMIOERR_FILENOTFOUND
+      mmios.set(++mmioNext, { f, pos: 0 }); return mmioNext;
+    }],
+    mmioClose: ['pu', (x, h) => (mmios.delete(h) ? 0 : 5)],
+    mmioRead: ['ppi', (x, h, buf, n) => {
+      const m = mmios.get(h); if (!m) return -1;
+      const k = Math.max(0, Math.min(n, m.f.size - m.pos)); x.write(buf, m.f.bytes.subarray(m.pos, m.pos + k)); m.pos += k; return k;
+    }],
+    mmioSeek: ['pii', (x, h, off, origin) => { const m = mmios.get(h); if (!m) return -1; m.pos = Math.max(0, (origin === 1 ? m.pos : origin === 2 ? m.f.size : 0) + off); return m.pos; }],
+    mmioDescend: ['pppu', (x, h, ck, parent, flags) => {
+      const m = mmios.get(h); if (!m) return 5;
+      const b = m.f.bytes, end = parent ? x.r32(parent + 12) + x.r32(parent + 4) : m.f.size, u32 = (o) => (b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24) >>> 0;
+      const want = x.r32(ck), wantType = x.r32(ck + 8);
+      for (let at = m.pos; at + 8 <= end; at += 8 + ((u32(at + 4) + 1) & ~1)) {
+        const id = u32(at), size = u32(at + 4), list = id === 0x46464952 || id === 0x5453494c;   // 'RIFF', 'LIST'
+        const type = list ? u32(at + 8) : 0;
+        const ok = flags & 0x20 ? id === 0x46464952 && type === wantType : flags & 0x40 ? id === 0x5453494c && type === wantType : flags & 0x10 ? id === want : true;
+        if (!ok) continue;
+        x.w32(ck, id); x.w32(ck + 4, size); x.w32(ck + 8, type); x.w32(ck + 12, at + 8); x.w32(ck + 16, 0);
+        m.pos = at + 8 + (list ? 4 : 0); return 0;
+      }
+      return 0x101;                                                   // MMIOERR_CHUNKNOTFOUND
+    }],
+    mmioAscend: ['ppu', (x, h, ck) => { const m = mmios.get(h); if (!m) return 5; m.pos = x.r32(ck + 12) + ((x.r32(ck + 4) + 1) & ~1); return 0; }],
+  };
   const winmm = {
+    ...mmio,
     // No joystick: none counted, and the one asked about is unplugged (JOYERR_UNPLUGGED).
     joyGetNumDevs: ['', () => 0], joyGetDevCapsA: ['upu', () => 167], joyGetPosEx: ['up', () => 167], joyGetPos: ['up', () => 167],
     timeGetTime: ['', (x) => ms(x)], timeBeginPeriod: ['u', () => 0], timeEndPeriod: ['u', () => 0],
@@ -2096,11 +2167,18 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   };
   // A DIB given as its header and its bits apart (StretchDIBits, SetDIBitsToDevice, CreateDIBitmap): its
   // pixels, through the decoder of packed DIBs.
-  const dibPixels = (x, bmi, bits) => {
+  // DIB_PAL_COLORS (usage 1): its colour table is 16-bit indices into the palette selected in the DC --
+  // Pinball's table, drawn by StretchDIBits so: made RGBQUADs of that palette's entries first.
+  const dibPixels = (x, bmi, bits, usage = 0, hdc = 0) => {
     const hs = x.r32(bmi), bpp = x.r16(bmi + 14), n = bpp <= 8 ? (x.r32(bmi + 32) || 1 << bpp) : (x.r32(bmi + 16) === 3 ? 3 : 0);
     const w = x.r32(bmi + 4) | 0, h = Math.abs(x.r32(bmi + 8) | 0), stride = ((w * bpp + 31) >> 5) << 2, head = hs + 4 * n;
     const packed = x.win.heapAlloc(head + stride * h);
-    x.write(packed, x.bytes(bmi, head)); x.write(packed + head, x.bytes(bits, stride * h));
+    x.write(packed, x.bytes(bmi, hs));
+    if (usage === 1 && bpp <= 8) {
+      const pal = st.gdi.get(dcState(hdc).palette), colors = pal && pal.kind === 'palette' ? pal.colors : new Uint32Array(256);
+      for (let i = 0; i < n; i++) x.w32(packed + hs + 4 * i, colors[x.r16(bmi + hs + 2 * i) & 255]);
+    } else x.write(packed + hs, x.bytes(bmi + hs, 4 * n));
+    x.write(packed + head, x.bytes(bits, stride * h));
     const d = decodeDib(x, packed); x.win.heapFree(packed); return d;
   };
   const drawPixels = (x, hdc, d, dx, dy, dw, dh, sx, sy, sw, sh) => {
@@ -2188,14 +2266,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const d = init & 4 && bits && bmi ? dibPixels(x, bmi, bits) : null;   // CBM_INIT
       return st.newHandle('bitmap', d && d.w === w ? d : { w, h, px: new Uint32Array(Math.max(0, w * h)) });
     }],
-    StretchDIBits: ['piiiiiiiippuu', (x, hdc, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi) => {
-      const d = dibPixels(x, bmi, bits); if (!d) return 0;
+    StretchDIBits: ['piiiiiiiippuu', (x, hdc, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi, usage) => {
+      const d = dibPixels(x, bmi, bits, usage, hdc); if (!d) return 0;
       // The source rectangle counts from the DIB's bottom for a bottom-up DIB.
       const syTop = (x.r32(bmi + 8) | 0) > 0 ? d.h - sy - sh : sy;
       return drawPixels(x, hdc, d, dx, dy, dw, dh, sx, syTop, sw, sh);
     }],
-    SetDIBitsToDevice: ['piiuuiiuuppu', (x, hdc, dx, dy, w, h, sx, sy, start, lines, bits, bmi) => {
-      const d = dibPixels(x, bmi, bits); if (!d) return 0;
+    SetDIBitsToDevice: ['piiuuiiuuppu', (x, hdc, dx, dy, w, h, sx, sy, start, lines, bits, bmi, usage) => {
+      const d = dibPixels(x, bmi, bits, usage, hdc); if (!d) return 0;
       const syTop = (x.r32(bmi + 8) | 0) > 0 ? d.h - sy - h : sy;
       return drawPixels(x, hdc, d, dx, dy, w, h, sx, syTop, w, h);
     }],

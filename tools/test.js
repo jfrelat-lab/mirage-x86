@@ -5058,6 +5058,32 @@ const runLinux = (hex, argv) => {
     got = (fb(5, 5) & 0xffffff).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: PatBlt PATCOPY fills with the DC\'s brush', got, '7f00');
+  // Pinball's: the desktop's rectangle (its window centred by it, not by a 1-pixel splash); its table drawn by
+  // StretchDIBits with DIB_PAL_COLORS (the colour table 16-bit indices into the DC's palette); its sounds
+  // read through mmio (a RIFF WAVE's data chunk found by mmioDescend) and its files by Windows 3.x's _lopen,
+  // _llseek and _lread; and its captioned window the screen's once shown over that splash.
+  try { const wav = Uint8Array.from([...new TextEncoder().encode('RIFF'), 22, 0, 0, 0, ...new TextEncoder().encode('WAVEfmt '), 2, 0, 0, 0, 9, 9, ...new TextEncoder().encode('data'), 2, 0, 0, 0, 0x77, 0x88]);
+    const { mc, fn, x, str, apis } = await w32('', { files: { 's.wav': wav, 'a.dat': Uint8Array.of(1, 2, 3, 4, 5, 6) } }), u = (n) => fn('user32.dll', n), g = (n) => fn('gdi32.dll', n), r = [];
+    const rc = x.win.heapAlloc(16); u('GetWindowRect')(u('GetDesktopWindow')(), rc); r.push(x.r32(rc + 8), x.r32(rc + 12));
+    const cls = (name) => { const wc = x.win.heapAlloc(40); x.write(wc, new Uint8Array(40)); x.w32(wc + 4, x.win.proc(x.win.load('user32.dll'), 'DefWindowProcA')); x.w32(wc + 36, str(name)); u('RegisterClassA')(wc); return str(name); };
+    const splash = u('CreateWindowExA')(0, cls('pbsplash'), 0, 0x80000000, -10, -10, 1, 1, 0, 0);
+    const lp = x.win.heapAlloc(8); x.write(lp, Uint8Array.of(0, 3, 2, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56, 0)); const pal = g('CreatePalette')(lp);
+    u('CreateWindowExA')(0, cls('pbgame'), str('t'), 0x00cf0000, 0, 0, 100, 100, 0, 0);   // sent its messages: its handle from the list
+    const game = parseInt(apis.windows().find((v) => v.cls === 'pbgame').hwnd, 16); u('ShowWindow')(game, 1);
+    r.push(apis.wm.clientRect() !== null);                               // framed: the captioned window is the screen's
+    const dc = u('GetDC')(game); g('SelectPalette')(dc, pal, 0);
+    const bmi = x.win.heapAlloc(48); x.write(bmi, new Uint8Array(48)); x.w32(bmi, 40); x.w32(bmi + 4, 1); x.w32(bmi + 8, 1); x.w16(bmi + 12, 1); x.w16(bmi + 14, 8); x.w32(bmi + 32, 2); x.w16(bmi + 40, 0); x.w16(bmi + 42, 1);
+    const bits = x.win.heapAlloc(4); x.write(bits, Uint8Array.of(1, 0, 0, 0));
+    g('StretchDIBits')(dc, 0, 0, 1, 1, 0, 0, 1, 1, bits, bmi, 1, 0xcc0020);
+    const c = apis.wm.clientRect(), fb = new Uint32Array(mc.mem.u8.buffer, mc.mem.u8.byteOffset + mc.vbeFbBase + (c.y * 1024 + c.x) * 4, 1)[0];
+    r.push((fb & 0xffffff).toString(16));
+    const w = (n) => fn('winmm.dll', n), ck = x.win.heapAlloc(20), dk = x.win.heapAlloc(20), m = w('mmioOpenA')(str('s.wav'), 0, 0);
+    x.w32(ck + 8, 0x45564157); w('mmioDescend')(m, ck, 0, 0x20); x.w32(dk, 0x61746164); const found = w('mmioDescend')(m, dk, ck, 0x10);
+    const buf = x.win.heapAlloc(4); r.push(found, x.r32(dk + 4), w('mmioRead')(m, buf, 4), x.r8(buf).toString(16), x.r8(buf + 1).toString(16));
+    const k = (n) => fn('kernel32.dll', n), h = k('_lopen')(str('a.dat'), 0); k('_llseek')(h, 2, 0); r.push(k('_lread')(h, buf, 3), [...x.bytes(buf, 3)].join(''), k('_lopen')(str('none'), 0));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Pinball\'s -- the desktop\'s rectangle, a window shown over a splash, DIB_PAL_COLORS, mmio, _lopen/_lread', got, '1024 768 true 123456 0 2 2 77 88 3 345 -1');
   // MCI's video: an .avi on the program's disk opened by a command string, its device id by its alias,
   // and played to its end at once -- MM_MCINOTIFY, MCI_NOTIFY_SUCCESSFUL, posted to the callback window
   // (Half-Life's launcher waits for it, and stopped on its error box when the open failed).
