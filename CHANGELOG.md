@@ -22,8 +22,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   accelerators work. Windows' own Minesweeper of Windows 2000 plays with them, run locally as a test --
   Microsoft's, so not offered here.
 - **A window procedure's answer reaches the program**: every message MIRAGE sent a Windows program came
-  back with the same wrong result, so a dialog's default handling never ran. Half-Life's launcher now
-  goes through its intro to its menu (the video itself is not shown yet: it ends at once).
+  back with the same wrong result, so a dialog's default handling never ran.
+- **Videos through MCI**: an AVI a Windows program plays with MCI (8-bit, uncompressed or Microsoft
+  RLE, with PCM sound) is decoded in JavaScript and drawn into its window on the program's clock, its
+  sound played; Escape breaks it where the program says so. Half-Life's intro plays so (run locally).
 - An idle Windows program no longer spins: waiting for a message took 150 seconds of a computer's time
   for 5 of the program's.
 - Underneath, for programs to come: a Visual C++ 2015+ program's runtime (the Universal CRT) and the

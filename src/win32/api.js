@@ -16,6 +16,7 @@ import { windowManager } from './wm.js';
 import { ddrawApis } from './ddraw.js';
 import { classicApis, loadString, decodeDib, findResource, resId } from './classic.js';
 import { modernApis } from './modern.js';
+import { parseAvi, decodeFrame } from './avi.js';
 import { ucrtApis } from './ucrt.js';
 
 const NOT = (dll, name, sig = '') => [sig, () => { throw new Error(`mirage-win32: ${dll}!${name} is not implemented`); }];
@@ -1138,6 +1139,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // hwnd, message, wParam, lParam, time, pt; PM_REMOVE (1) takes it off the queue.
     // The filters: a window (its children's messages too) and a range of messages, both 0 for any.
     PeekMessageA: ['ppuuu', (x, m, hwnd, min, max, remove) => {
+      if (st.videoTick) st.videoTick(x);                              // a playing video's frame due (MCI)
       const peek = () => {
         const i = firstMsg(hwnd, min, max);
         if (i < 0) {
@@ -1160,7 +1162,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (i < 0) {
         const p = paintFor(hwnd, min, max); if (p) { putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; }
         const t = timerFor(x, hwnd, min, max); if (t) { putMsg(x, m, t); return 1; }
-        return x.waitUntil(Math.min(x.lx.mono() + 0.01, timerNext()));
+        const vn = st.videoTick ? st.videoTick(x) : Infinity;        // a playing video: its next frame's time
+        if (firstMsg(hwnd, min, max) >= 0) return user32.GetMessageA[1](x, m, hwnd, min, max);   // ...or its end, notified: taken now
+        return x.waitUntil(Math.min(x.lx.mono() + 0.01, timerNext(), vn));
       }
       const e = st.msgs.splice(i, 1)[0]; putMsg(x, m, e);
       return keyHook(x, e, 0, (eat) => (eat ? (x.w32(m + 4, 0), 1) : e.msg === 0x12 ? 0 : 1), 16);   // eaten: WM_NULL in its place
@@ -1754,6 +1758,85 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }
     return 0;
   };
+  /*
+   * MCI's videos (mciSendStringA in src/win32/classic.js, mciSendCommandA below): an AVI on the program's
+   * disk (src/win32/avi.js: 8-bit, uncompressed or RLE8, PCM sound), played on the guest's clock -- each
+   * GetMessage and PeekMessage takes it to the frame now due and draws that into its window (the one given
+   * as its parent, or "window ... handle"), at the client area's corner; its sound through PlaySound's
+   * player. At its end, or stopped, MM_MCINOTIFY (3B9h) goes to the window that asked to be told:
+   * MCI_NOTIFY_SUCCESSFUL (1) at the end, MCI_NOTIFY_ABORTED (4) when stopped. A file in another codec plays
+   * as nothing, at once (said in the log).
+   */
+  const videos = new Map(); let videoNext = 0x100;
+  st.video = {
+    has: (id) => videos.has(id),
+    open: (x, file, parent) => {
+      const f = diskFile(file); if (!f || !f.bytes) return 0;
+      const avi = parseAvi(f.bytes.subarray(0, f.size));
+      if (!avi) x.win.say(`MCI: ${file}: not a video this player draws (8-bit, uncompressed or RLE8)`);
+      const id = ++videoNext;
+      videos.set(id, { avi, parent: parent || st.hwnd, idx: avi ? new Uint8Array(avi.w * avi.h) : null, pal: avi ? avi.palette.slice() : null, at: 0, t0: 0, playing: false, notify: 0 });
+      return id;
+    },
+    window: (id, h) => { const v = videos.get(id); if (v && h) v.parent = h; },
+    dest: (id, r) => { const v = videos.get(id); if (v && r.length === 4 && r.every((n) => Number.isFinite(n))) v.dest = r; },
+    breakKey: (id, vk) => { const v = videos.get(id); if (v) v.breakKey = vk; },
+    broken: (id) => { const v = videos.get(id); return !!(v && v.breakKey && st.keys.has(v.breakKey)); },
+    waiting: (id) => !!(videos.get(id) || {}).waiting,
+    waited: (id) => { const v = videos.get(id); if (v) v.waiting = false; },
+    tick: (x) => videoTick(x),
+    playing: (id) => !!(videos.get(id) || {}).playing,
+    size: (id) => { const v = videos.get(id); return v && v.avi ? [v.avi.w, v.avi.h] : [0, 0]; },
+    play: (x, id, notify, wait = false) => {
+      const v = videos.get(id); if (!v) return;
+      v.notify = notify; v.playing = true; v.waiting = wait; v.t0 = x.lx.mono() - (v.at * (v.avi ? v.avi.usPerFrame : 0)) / 1e6;
+      if (!v.avi) { endVideo(x, id, 1); return; }
+      const a = v.avi.audio;
+      if (a) {                                            // its sound: a RIFF WAVE of it in memory, through PlaySound's player
+        const n = a.data.length, al = a.ch * a.bits / 8;
+        if (!v.wave) {
+          const p = v.wave = x.win.heapAlloc(44 + n);
+          x.write(p, new TextEncoder().encode('RIFF')); x.w32(p + 4, 36 + n); x.write(p + 8, new TextEncoder().encode('WAVEfmt '));
+          x.w32(p + 16, 16); x.w16(p + 20, 1); x.w16(p + 22, a.ch); x.w32(p + 24, a.rate); x.w32(p + 28, a.rate * al); x.w16(p + 32, al); x.w16(p + 34, a.bits);
+          x.write(p + 36, new TextEncoder().encode('data')); x.w32(p + 40, n); x.write(p + 44, a.data);
+        }
+        playMemory(x, v.wave, 5);                         // SND_ASYNC | SND_MEMORY
+      }
+      videoTick(x);
+    },
+    stop: (x, id) => { const v = videos.get(id); if (v && v.playing) endVideo(x, id, 4); },
+    close: (x, id) => { const v = videos.get(id); if (!v) return; if (v.playing) endVideo(x, id, 4); videos.delete(id); },
+  };
+  const endVideo = (x, id, code) => {
+    const v = videos.get(id); if (!v) return;
+    v.playing = false; if (v.avi && v.avi.audio) playMemory(x, 0, 0);
+    if (v.notify) st.msgs.push({ msg: 0x3b9, wp: code, lp: id, ...(v.notify !== st.hwnd ? { hwnd: v.notify } : {}) });
+    v.notify = 0;
+  };
+  /** The playing videos taken to the frame now due, the last one drawn; the time the next is due. */
+  const videoTick = (x) => {
+    let next = Infinity;
+    for (const [id, v] of videos) {
+      if (!v.playing || !v.avi) continue;
+      const a = v.avi, due = Math.min(a.frames.length, Math.floor((x.lx.mono() - v.t0) * 1e6 / a.usPerFrame) + 1);
+      if (due <= v.at) { next = Math.min(next, v.t0 + v.at * a.usPerFrame / 1e6); continue; }
+      while (v.at < due) decodeFrame(a.frames[v.at++], v.idx, a.w, a.h, v.pal);
+      // At its destination ("put ... destination at x y w h"), scaled to it; else at the corner, its own size.
+      const t = target(x, dcFor(v.parent === st.hwnd ? 0 : v.parent));
+      if (t) {
+        const [dx, dy, dw, dh] = v.dest || [0, 0, a.w, a.h];
+        for (let j = 0; j < dh; j++) {
+          const Y = dy + j, sy = Math.floor(j * a.h / dh); if (Y < 0 || Y >= t.h) continue;
+          for (let i = 0; i < dw; i++) { const X = dx + i; if (X >= 0 && X < t.w) t.px[Y * t.w + X] = v.pal[v.idx[sy * a.w + Math.floor(i * a.w / dw)]]; }
+        }
+        t.done();
+      }
+      if (v.at >= a.frames.length) endVideo(x, id, 1);
+      else next = Math.min(next, v.t0 + v.at * a.usPerFrame / 1e6);
+    }
+    return next;
+  };
+  st.videoTick = videoTick;
   const winmm = {
     // No joystick: none counted, and the one asked about is unplugged (JOYERR_UNPLUGGED).
     joyGetNumDevs: ['', () => 0], joyGetDevCapsA: ['upu', () => 167], joyGetPosEx: ['up', () => 167], joyGetPos: ['up', () => 167],
@@ -1827,8 +1910,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // A video opened by mciSendStringA (src/win32/classic.js): played at once to its end -- MCI_PLAY with
       // MCI_NOTIFY (1) posts MM_MCINOTIFY, MCI_NOTIFY_SUCCESSFUL, to the window in its parameters' first
       // field; its other commands (window, put, where, stop, close) do nothing.
-      if (st.mciVideo && st.mciVideo(dev)) {
-        if (msg === 0x806 && flags & 1 && parms && x.r32(parms)) { const cb = x.r32(parms); st.msgs.push({ msg: 0x3b9, wp: 1, lp: dev, ...(cb !== st.hwnd ? { hwnd: cb } : {}) }); }
+      if (st.video.has(dev)) {
+        if (msg === 0x806) st.video.play(x, dev, flags & 1 && parms ? x.r32(parms) : 0);   // MCI_PLAY, MCI_NOTIFY's window first in its parameters
+        else if (msg === 0x808 || msg === 0x809) st.video.stop(x, dev);                    // MCI_STOP, MCI_PAUSE
+        else if (msg === 0x804) st.video.close(x, dev);                                     // MCI_CLOSE
+        else if (msg === 0x841 && flags & 0x10000 && parms) st.video.window(dev, x.r32(parms + 4));   // MCI_WINDOW, MCI_DGV_WINDOW_HWND
         return 0;
       }
       const ev = st.mci.get(dev);

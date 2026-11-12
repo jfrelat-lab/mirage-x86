@@ -97,8 +97,7 @@ export function classicApis({ st, wm }) {
    * in the popups too, as Windows searches them.
    */
   const menus = new Map();                                               // window -> its menu (SetMenu)
-  const mciVideos = new Map();                                           // an opened video's alias -> its device id
-  st.mciVideo = (id) => [...mciVideos.values()].includes(id);           // for mciSendCommandA (api.js)
+  const mciVideos = new Map();                                           // an opened video's alias -> its device id (st.video's, api.js)
   const menu = (m) => { const o = st.gdi.get(m); return o && o.kind === 'menu' ? o : null; };
   const newMenu = () => st.newHandle('menu', { items: [] });
   /** The item `at` names in menu `m`: { list, i } (its menu's items and its index), or null. */
@@ -418,27 +417,41 @@ export function classicApis({ st, wm }) {
   // which a game takes for a machine without its music. The command goes to the log.
   const winmm = {
     /*
-     * MCI's command strings: a video (an .avi, or type AVIVideo) is opened when its file is on the
-     * program's disk, and played at once to its end -- not shown here: "play ... notify" posts
-     * MM_MCINOTIFY (3B9h) with MCI_NOTIFY_SUCCESSFUL to the callback window, as when it has finished.
-     * Half-Life's intro: its launcher waits for that, and stopped on its own error box when the open
-     * failed. Status: "stopped", length 0. Anything else: no such device (263).
+     * MCI's command strings for a video (an .avi, or type AVIVideo): "open <file> [type avivideo] [alias a]
+     * [parent <hwnd>] ...", "window a handle <hwnd>", "play a [notify]", "stop", "close", "status a mode",
+     * "where". The video itself is st.video's (api.js: an AVI decoded and drawn into the window, its sound
+     * played, MM_MCINOTIFY at its end). Anything else: no such device (263).
      */
     mciSendStringA: ['ppup', (x, cmd, ret, n, cb) => {
       const s = x.str(cmd, 512).trim(), w = s.split(/\s+/), verb = (w[0] || '').toLowerCase(), put = (t) => { if (ret && n) putStr(x, ret, n, t); };
+      const after = (k) => { const i = w.findIndex((t) => t.toLowerCase() === k); return i > 0 ? w[i + 1] : undefined; };
       put('');
       if (verb === 'open') {
-        const file = w[1] || '', ai = w.findIndex((t) => t.toLowerCase() === 'alias'), alias = (ai > 0 ? w[ai + 1] : file).toLowerCase();
+        const file = w[1] || '', alias = (after('alias') || file).toLowerCase();
         const video = /\.avi$/i.test(file) || /\btype\s+avivideo\b/i.test(s);
-        if (!video || !(st.diskFile && st.diskFile(file))) { x.win.say(`mciSendStringA("${s}"): no such device`); return 263; }
-        mciVideos.set(alias, 0x100 + mciVideos.size + 1); put(String(mciVideos.get(alias))); return 0;
+        const id = video ? st.video.open(x, file, Number(after('parent')) || 0) : 0;
+        if (!id) { x.win.say(`mciSendStringA("${s}"): no such device`); return 263; }
+        mciVideos.set(alias, id); put(String(id)); return 0;
       }
       const id = mciVideos.get((w[1] || '').toLowerCase());
       if (!id) { x.win.say(`mciSendStringA("${s}"): no such device`); return 263; }
-      if (verb === 'close') { mciVideos.delete(w[1].toLowerCase()); return 0; }
-      if (verb === 'play' && /\bnotify\b/i.test(s) && cb) st.msgs.push({ msg: 0x3b9, wp: 1, lp: id, ...(cb !== st.hwnd ? { hwnd: cb } : {}) });
-      if (verb === 'status') put(/\bmode\b/i.test(s) ? 'stopped' : /\bready\b/i.test(s) ? 'true' : '0');
-      if (verb === 'where') put('0 0 320 240');
+      if (verb === 'close') { st.video.close(x, id); mciVideos.delete(w[1].toLowerCase()); return 0; }
+      // "play ... wait" returns at the video's end (or its break key, "break ... on <vk>": Half-Life's Escape),
+      // the call waiting frame after frame -- each time it runs again the video goes on, not anew.
+      if (verb === 'play' && /\bwait\b/i.test(s)) {
+        if (!st.video.waiting(id)) st.video.play(x, id, /\bnotify\b/i.test(s) ? cb : 0, true);
+        const next = st.video.tick(x);
+        if (st.video.playing(id) && !st.video.broken(id)) return x.waitUntil(Math.min(next, x.lx.mono() + 0.05));
+        if (st.video.playing(id)) st.video.stop(x, id);
+        st.video.waited(id); return 0;
+      }
+      if (verb === 'play') st.video.play(x, id, /\bnotify\b/i.test(s) ? cb : 0);
+      if (verb === 'break' && after('on')) st.video.breakKey(id, Number(after('on')));
+      if (verb === 'put' && /\bdestination\b/i.test(s)) { const i = w.findIndex((t) => t.toLowerCase() === 'at'); if (i > 0) st.video.dest(id, w.slice(i + 1, i + 5).map(Number)); }
+      if (verb === 'stop' || verb === 'pause') st.video.stop(x, id);
+      if (verb === 'window' && after('handle')) st.video.window(id, Number(after('handle')));
+      if (verb === 'status') put(/\bmode\b/i.test(s) ? (st.video.playing(id) ? 'playing' : 'stopped') : /\bready\b/i.test(s) ? 'true' : '0');
+      if (verb === 'where') put('0 0 ' + st.video.size(id).join(' '));
       return 0;
     }],
     mciGetErrorStringA: ['upu', (x, err, buf, n) => putStr(x, buf, n, err === 263 ? 'The specified device is not open or is not recognized by MCI.' : 'MCI error ' + err) ? 1 : 0],

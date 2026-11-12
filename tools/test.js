@@ -3582,6 +3582,31 @@ const runLinux = (hex, argv) => {
     got = [files.map((f) => `${f.path}=${f.bytes.length}`).join(','), new TextDecoder().decode(files[1].bytes.slice(-1)), new TextDecoder().decode(files[2].bytes), layer.map((f) => f.to).join(',')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('didi: an Epic installer\'s files, one zlib stream across them', got, 'a.txt=20000,HTML\\b.txt=49,c.txt=13 ! second stream /jj2/a.txt,/jj2/HTML/b.txt,/jj2/c.txt'); }
+// src/win32/avi.js: an AVI as MCI's video plays it -- RIFF AVI, its 8-bit stream's palette, its RLE8 frames
+// drawn over the one before (a run, literal bytes padded to a word, a jump, a line's end), a palette change,
+// its PCM sound put end to end. Half-Life's intro is one. A synthetic 6 x 2 one: frame 1 a run of 3 and 3
+// literal bytes, then a jump to the second line; frame 2 changes one pixel of the first line only.
+{ let got;
+  try { const { parseAvi, decodeFrame } = await import('../src/win32/avi.js');
+    const ck = (id, body) => { const b = new Uint8Array(8 + body.length + (body.length & 1)); b.set(new TextEncoder().encode(id)); new DataView(b.buffer).setUint32(4, body.length, true); b.set(body, 8); return b; };
+    const list = (t, ...parts) => ck('LIST', Uint8Array.from([...new TextEncoder().encode(t), ...parts.flatMap((p) => [...p])]));
+    const u32 = (...v) => { const b = new Uint8Array(4 * v.length), d = new DataView(b.buffer); v.forEach((n, i) => d.setUint32(4 * i, n, true)); return b; };
+    const avih = ck('avih', u32(40000, 0, 0, 0, 2, 0, 1, 0, 6, 2, 0, 0, 0, 0));
+    const bih = new Uint8Array(40 + 8), bv = new DataView(bih.buffer);
+    bv.setUint32(0, 40, true); bv.setInt32(4, 6, true); bv.setInt32(8, 2, true); bv.setUint16(12, 1, true); bv.setUint16(14, 8, true); bv.setUint32(16, 1, true); bv.setUint32(32, 2, true);
+    bih.set([0x00, 0x00, 0xff, 0, 0xff, 0x00, 0x00, 0], 40);                                  // colours 0 red, 1 blue
+    const vstrl = list('strl', ck('strh', Uint8Array.from([...new TextEncoder().encode('vidsmrle'), ...new Uint8Array(48)])), ck('strf', bih));
+    const astrl = list('strl', ck('strh', Uint8Array.from([...new TextEncoder().encode('auds'), ...new Uint8Array(52)])), ck('strf', Uint8Array.of(1, 0, 1, 0, 0x22, 0x56, 0, 0, 0x22, 0x56, 0, 0, 1, 0, 8, 0)));
+    // RLE8 rows are bottom-up: the DIB's first row is the picture's last.
+    const f1 = Uint8Array.of(3, 1, 0, 3, 0, 1, 0, 0, 0, 0, 6, 1, 0, 1);              // bottom: 1 1 1 0 1 0; end of line; top: 1 x6; end
+    const f2 = Uint8Array.of(0, 2, 2, 1, 1, 0, 0, 1);                                 // jump to (2, 1) -- the top line -- one pixel of 0; end
+    const movi = list('movi', ck('00dc', f1), ck('01wb', Uint8Array.of(10, 20)), ck('00pc', Uint8Array.of(1, 1, 0, 0, 0x11, 0x22, 0x33, 0)), ck('00dc', f2), ck('01wb', Uint8Array.of(30)));
+    const riff = ck('RIFF', Uint8Array.from([...new TextEncoder().encode('AVI '), ...list('hdrl', avih, vstrl, astrl), ...movi]));
+    const a = parseAvi(riff), idx = new Uint8Array(12), pal = a.palette.slice();
+    for (const f of a.frames) decodeFrame(f, idx, a.w, a.h, pal);
+    got = [a.w, a.h, a.codec, a.frames.map((f) => f.kind).join(''), [...idx].join(''), pal[0].toString(16), pal[1].toString(16), [...a.audio.data].join('.')].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('avi: RIFF AVI, RLE8 over the frame before, a palette change, its PCM', got, '6 2 rle8 dcpcdc 110111111010 ff0000 112233 10.20.30'); }
 // tools/linux/lazymap.asm: anonymous memory larger than the machine (Quake II's hunks) -- 32 MiB mmapped on
 // a 16 MiB machine, its ends written and read back, mprotect and write() on pages never touched, munmap.
 // 31 when all hold; committed whole at mmap, it ran out of physical memory.
