@@ -865,12 +865,27 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const ctl = w.cls === 'static' ? 0x138 : 0x135;                       // WM_CTLCOLORSTATIC, WM_CTLCOLORBTN
     return send(x, [[ctl, hdc, hwnd, w.parent]], (br) => { drawControl(x, hwnd, w, hdc, br); return 0; }, 16);
   };
+  /** An icon of a module's resources (RT_GROUP_ICON 14 -> its first RT_ICON 3: a DIB twice its height, its
+   *  colours then its AND mask) as a bitmap with a `mask` (1: transparent). */
+  const loadIcon = (x, base, id) => {
+    const g = findResource(x, base, 14, id); if (!g || x.r16(g.at + 4) < 1) return 0;
+    const r = findResource(x, base, 3, x.r16(g.at + 6 + 12)); if (!r) return 0;
+    const at = r.at, h2 = x.r32(at + 8), head = x.win.heapAlloc(r.size); x.write(head, x.bytes(at, r.size)); x.w32(head + 8, h2 >> 1);
+    const d = decodeDib(x, head); x.win.heapFree(head); if (!d) return 0;
+    const bpp = x.r16(at + 14), n = bpp <= 8 ? (x.r32(at + 32) || 1 << bpp) : 0, colours = at + x.r32(at) + 4 * n;
+    const xs = ((d.w * bpp + 31) >> 5) << 2, ms = ((d.w + 31) >> 5) << 2, mask = new Uint8Array(d.w * d.h), m = colours + xs * d.h;
+    for (let j = 0; j < d.h; j++) for (let i = 0; i < d.w; i++) mask[(d.h - 1 - j) * d.w + i] = (x.r8(m + j * ms + (i >> 3)) >> (7 - (i & 7))) & 1;
+    return st.newHandle('bitmap', { ...d, mask });
+  };
   const drawControl = (x, hwnd, w, hdc, br) => {
     const t = target(x, hdc); if (!t) return;
     const type = w.style & 15, face = brushColor(br || ctlBrush) ?? 0xd4d0c8, d = dcState(hdc);
     if (w.cls === 'static' && (type === 14 || type === 3)) {              // SS_BITMAP, SS_ICON: its picture
+      // An icon named in the template by its resource id (Spider's cards beside its difficulties): loaded
+      // from the program's RT_GROUP_ICON, its first image, its transparent pixels left as they are.
+      if (type === 3 && w.image && !st.gdi.get(w.imageHandle)) w.imageHandle = loadIcon(x, x.win.base, w.image);
       const bm = st.gdi.get(w.imageHandle);
-      if (bm && bm.px) for (let j = 0; j < Math.min(bm.h, t.h); j++) for (let i = 0; i < Math.min(bm.w, t.w); i++) t.px[j * t.w + i] = bm.px[j * bm.w + i];
+      if (bm && bm.px) for (let j = 0; j < Math.min(bm.h, t.h); j++) for (let i = 0; i < Math.min(bm.w, t.w); i++) { const c = bm.px[j * bm.w + i]; if (!bm.mask || !bm.mask[j * bm.w + i]) t.px[j * t.w + i] = c; }
       t.done(); return;
     }
     if (br) fillRect(t, 0, 0, t.w, t.h, face);
@@ -878,6 +893,20 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       fillRect(t, 0, 0, t.w, t.h, 0xffffff);
       fillRect(t, 0, 0, t.w, 1, 0x808080); fillRect(t, 0, 0, 1, t.h, 0x808080); fillRect(t, 0, t.h - 1, t.w, t.h, 0xd4d0c8); fillRect(t, t.w - 1, 0, t.w, t.h, 0xd4d0c8);
       fillRect(t, 1, 1, t.w - 1, 2, 0x404040); fillRect(t, 1, 1, 2, t.h - 1, 0x404040);
+    }
+    // A check box (2, 3) or a radio button (4, 9): its box or its circle at the left, white and sunken, its
+    // mark as BM_SETCHECK left it.
+    const box = w.cls === 'button' && [2, 3, 4, 9, 5, 6].includes(type) && type !== 7;
+    if (box) {
+      const by = (t.h - 13) >> 1, round = type === 4 || type === 9;
+      if (round) {
+        for (let j = 0; j < 12; j++) for (let i = 0; i < 12; i++) { const r = Math.hypot(i - 5.5, j - 5.5); if (r <= 6) t.px[(by + j) * t.w + i] = r > 5 ? (i + j < 11 ? 0x808080 : 0xffffff) : r > 4 ? (i + j < 11 ? 0x404040 : 0xd4d0c8) : 0xffffff; }
+        if (w.checked) for (let j = 4; j < 8; j++) for (let i = 4; i < 8; i++) if (Math.hypot(i - 5.5, j - 5.5) < 2.3) t.px[(by + j) * t.w + i] = 0;
+      } else {
+        fillRect(t, 0, by, 13, by + 13, 0xffffff); fillRect(t, 0, by, 12, by + 1, 0x808080); fillRect(t, 0, by, 1, by + 12, 0x808080);
+        fillRect(t, 1, by + 1, 11, by + 2, 0x404040); fillRect(t, 1, by + 1, 2, by + 11, 0x404040);
+        if (w.checked) [3, 4, 5, 4, 3, 2, 1].forEach((dy, k) => fillRect(t, 3 + k, by + 3 + dy, 4 + k, by + 6 + dy, 0));
+      }
     }
     if (w.cls === 'button' && (type === 0 || type === 1)) {               // a push button, raised or pressed
       const lt = w.pushed ? 0x404040 : 0xffffff, dk = w.pushed ? 0xffffff : 0x404040;
@@ -889,7 +918,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const m = textMetrics(hdc), buf = x.win.heapAlloc(text.length + 1);
       x.write(buf, Uint8Array.from(text, (c) => c.charCodeAt(0) & 255));
       let width = 0; for (const ch of text) width += m.font ? m.font.glyph(ch.charCodeAt(0) & 255, m.ppem).cellIncX : m.avg;
-      const X = w.cls === 'edit' ? 4 : w.cls === 'button' && type <= 1 ? (t.w - width) >> 1 : (w.style & 3) === 1 ? (t.w - width) >> 1 : (w.style & 3) === 2 ? t.w - width : w.cls === 'button' ? 16 : 0;
+      const X = w.cls === 'edit' ? 4 : w.cls === 'button' ? (type <= 1 ? (t.w - width) >> 1 : 16) : (w.style & 3) === 1 ? (t.w - width) >> 1 : (w.style & 3) === 2 ? t.w - width : 0;
       const Y = w.cls === 'button' || w.cls === 'edit' ? (t.h - m.height) >> 1 : 0;
       const keep = d.bkMode; d.bkMode = 1; textOut(x, t, d, m, X, Y, 0, 0, buf, text.length); d.bkMode = keep;
       x.win.heapFree(buf);
@@ -2017,7 +2046,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return 0;
     }],
     sndPlaySoundA: ['pu', (x, p, flags) => playMemory(x, p, flags)],
-    PlaySoundA: ['ppu', (x, p, mod, flags) => playMemory(x, p, flags)],
+    PlaySoundA: ['ppu', (x, p, mod, flags) => playMemory(x, p, flags), { ordinal: 2 }],   // winmm's ordinal 2 (Spider imports it so)
     waveOutGetNumDevs: ['', () => 1],
     // WAVEOUTCAPSA: every PCM format of 8 and 16 bits at 11, 22 and 44 kHz (0xfff), stereo, volume control.
     waveOutGetDevCapsA: ['upu', (x, dev, caps, size) => {
@@ -2328,8 +2357,19 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // The Unicode and post-XP calls (src/win32/modern.js), under the names still not answered.
   const modern = modernApis({ st, kernel32, user32, gdi32, send, advapi32: classic.advapi32, winmm });
   for (const [dll, t] of [[kernel32, modern.kernel32], [user32, modern.user32], [gdi32, modern.gdi32], [winmm, modern.winmm]]) for (const [k, v] of Object.entries(t || {})) if (!(k in dll)) dll[k] = v;
+  kernel32.RtlZeroMemory = ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }];   // kernel32's, forwarded to ntdll's (Spider imports it so)
   const tables = [
     { dll: 'msvcrt.dll', fns: msvcrt },
+    /*
+     * crtdll.dll, the C runtime of Windows NT 3.x's own programs (NT 3.51's Solitaire): msvcrt's functions
+     * under its names -- __GetMainArgs, and _acmdln_dll, _fmode_dll, _commode_dll as DATA exports. SEH's
+     * _local_unwind2 sets the frame's try level and runs no __finally block (none is called here);
+     * _global_unwind2 unwinds nothing.
+     */
+    { dll: 'crtdll.dll', fns: { srand: msvcrt.srand, rand: msvcrt.rand, time: msvcrt.time, exit: msvcrt.exit, _exit: msvcrt._exit, _initterm: msvcrt._initterm,
+      _XcptFilter: msvcrt._XcptFilter, __GetMainArgs: msvcrt.__getmainargs, _acmdln_dll: msvcrt._acmdln,
+      _fmode_dll: ['', () => 0, { data: true }], _commode_dll: ['', () => 0, { data: true }],
+      _local_unwind2: ['pi', (x, frame, level) => { x.w32(frame + 12, level); return 0; }, { cdecl: true }], _global_unwind2: ['p', () => 0, { cdecl: true }] } },
     { dll: 'ntdll.dll', fns: { RtlZeroMemory: ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }] } },
     { dll: 'kernel32.dll', fns: kernel32 },
     // lz32: Crinkler imports its ordinal 4 (LZClose) so that the loader maps it, and kernel32 with it.

@@ -218,7 +218,8 @@ export function windowManager(st) {
     const S = st.desk, fb = lx.fbView(S.w, S.h);
     wm.view = { fb, w: S.w, h: S.h };
     if (wm.dirty) { wm.draw(fb, S, lx.romFont && lx.romFont()); wm.dirty = false; client = client || st.screen || null; }
-    if (!client) { cover(); return; }
+    // No pixels of its own yet (Spider asks its difficulty before it draws): its dialogs and menu still go on top.
+    if (!client) { drawLayers(fb, S, lx.romFont && lx.romFont()); drawPopup(fb, S, lx.romFont && lx.romFont()); cover(); return; }
     const r = wm.client();
     for (let j = 0; j < client.h; j++) {
       const Y = r.y + j; if (Y < 0 || Y >= S.h) continue;

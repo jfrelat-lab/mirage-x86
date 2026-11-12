@@ -265,6 +265,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   const APPDATA = 'C:' + String.fromCharCode(92) + 'APPDATA';
   const shell32 = {
     SHGetFolderPathW: ['pipup', (x, hwnd, csidl, tok, flags, buf) => { putW(x, buf, 260, APPDATA); return 0; }],
+    SHGetSpecialFolderPathA: ['ppii', (x, hwnd, buf, csidl) => { putA(x, buf, 260, APPDATA); return 1; }],
     SHGetFolderPathA: ['pipup', (x, hwnd, csidl, tok, flags, buf) => { putA(x, buf, 260, APPDATA); return 0; }],
     // SHGetKnownFolderPath(id, flags, token, &path): a path the caller frees with CoTaskMemFree.
     SHGetKnownFolderPath: ['pupp', (x, id, flags, tok, out) => { const b = wbytes(APPDATA), p = x.win.heapAlloc(b.length); x.write(p, b); x.w32(out, p); return 0; }],

@@ -5472,6 +5472,17 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: msvcrt.dll\'s _acmdln, a DATA export, the command line', got, '22'); }
+// crtdll.dll, the C runtime of Windows NT 3.x's programs (NT 3.51's Solitaire): msvcrt's under its own names,
+// _acmdln_dll a DATA export as msvcrt's _acmdln -- its first character the quote round the program's path.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'crtdll.dll', names: ['_acmdln_dll'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const main = [0xa1, ...le(at.iat['crtdll.dll!_acmdln_dll']), 0x8b, 0x00, 0x0f, 0xb6, 0x00, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: crtdll.dll\'s _acmdln_dll, NT 3.x\'s C runtime', got, '22'); }
 // A wait that is asked again with a new deadline once the old one has passed (GetMessage, 10 ms at a time
 // while nothing comes) takes the new one: the old, kept, gave the clock nowhere to go, and an idle window
 // waited two cycles at a time -- Minesweeper's 5 s, 500 million calls.
