@@ -5563,7 +5563,16 @@ const runPE = async (exe, readFile) => {
       urls.every((u) => relayTarget(u) !== null), relayTarget('https://raw.githubusercontent.com/someone/else/main/x'),
       relayTarget('https://ftp.scene.org/elsewhere/x'), OASIS_HOSTS.every((h) => [...used, ...urls].some((u) => (u.split('://')[1] || '').startsWith(h)))].map(String).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis-fetch relays only the hosts the images and examples use, and every one of them', got, 'true null null null null true true null null true'); }
+  eq('oasis-fetch relays only the hosts the images and examples use, and every one of them', got, 'true null null null null true true null null true');
+  // An archive.org item an entry names, where the archive redirects: a storage server of either
+  // datacentre (ia...us, dn...ca), a file in a ZIP through view_archive.php; another item, or another
+  // host with the item's path, refused.
+  try { const { relayTarget } = await import('../src/oasis-hosts.js');
+    got = ['https://ia600805.us.archive.org/7/items/official-jj-2/OfficialJJ2.zip', 'https://dn710401.ca.archive.org/0/items/official-jj-2/x.zip',
+      'https://ia600805.us.archive.org/view_archive.php?archive=/7/items/official-jj-2/OfficialJJ2.zip&file=a', 'https://dn710401.ca.archive.org/0/items/someone-else/x.zip',
+      'https://evil.example/0/items/official-jj-2/x.zip'].map((u) => relayTarget(u) !== null).join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis-fetch: an archive.org item\'s storage servers, either datacentre', got, 'true true true false false'); }
 // A `zip` layer with `files`: the members it names, each put where it says (an intro's dropper out of
 // its party archive, oasis/images/linux/ribbon-2009.json); a member that is not there is said so.
 { let got;
