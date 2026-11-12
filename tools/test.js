@@ -5058,6 +5058,21 @@ const runLinux = (hex, argv) => {
     got = (fb(5, 5) & 0xffffff).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: PatBlt PATCOPY fills with the DC\'s brush', got, '7f00');
+  // Typing: TranslateMessage posts WM_CHAR after a key that types one (Shift for capitals); an edit control
+  // adds it, Backspace takes one off, EM_SETSEL 0, -1 then a character replaces the text (Minesweeper's
+  // Custom Field: its height typed in).
+  try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), r = [], m = x.win.heapAlloc(28);
+    const main = u('CreateWindowExA')(0, 0, 0, 0x00cf0000, 0, 0, 200, 100, 0, 0);
+    u('CreateWindowExA')(0, str('edit'), str('ab'), 0x50010000, 10, 10, 60, 20, main, 5);
+    const ed = parseInt(apis.windows().find((v) => v.cls === 'edit').hwnd, 16), def = (msg, wp, lp = 0) => u('DefWindowProcA')(ed, msg, wp, lp);
+    const text = () => { const b = x.win.heapAlloc(16); u('GetWindowTextA')(ed, b, 16); return x.str(b); };
+    def(0x102, 0x63); r.push(text()); def(0x102, 8); r.push(text()); def(0xb1, 0, -1); def(0x102, 0x78); r.push(text());
+    x.write(m, new Uint8Array(28)); x.w32(m, ed); x.w32(m + 4, 0x100); x.w32(m + 8, 0x41);
+    r.push(u('TranslateMessage')(m)); u('PeekMessageA')(m, 0, 0, 0, 1); r.push(x.r32(m + 4).toString(16), String.fromCharCode(x.r32(m + 8)));
+    apis.input.key(true, 0x2a); x.w32(m + 4, 0x100); x.w32(m + 8, 0x41); u('TranslateMessage')(m); u('PeekMessageA')(m, 0, 0, 0, 1); r.push(String.fromCharCode(x.r32(m + 8)));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: TranslateMessage\'s WM_CHAR; an edit control typed in, Backspace, EM_SETSEL', got, 'abc ab x 1 102 a A');
   // Pinball's: the desktop's rectangle (its window centred by it, not by a 1-pixel splash); its table drawn by
   // StretchDIBits with DIB_PAL_COLORS (the colour table 16-bit indices into the DC's palette); its sounds
   // read through mmio (a RIFF WAVE's data chunk found by mmioDescend) and its files by Windows 3.x's _lopen,

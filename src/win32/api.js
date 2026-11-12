@@ -110,8 +110,9 @@ function windowState(fonts = {}) {
   // The outlines of the font selected into `hdc` (src/win32/truetype.js), or null: `fonts` holds a face's
   // .ttf under its lower-case name ("tahoma", "tahoma:bold" for a weight of 600 or more).
   const parsed = new Map();
+  // A DC with no font selected draws in SYSTEM_FONT (GetStockObject 13), as Windows' do: Spider's score.
   st.dcFont = (hdc) => {
-    const f = st.gdi.get(st.dcFonts.get(hdc));
+    const f = st.gdi.get(st.dcFonts.get(hdc) ?? 0x0190001d);
     if (!f) return null;
     // No face named: the font mapper's choice by pitch -- FIXED_PITCH (1) Courier New, else Arial; on a
     // Japanese system MS Gothic first (Cave Story names none until its Config.dat does).
@@ -157,7 +158,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // A DC's font in pixels: its em (lfHeight < 0 is the character height, > 0 the cell's), its ascent
   // and descent as the font's win metrics give them.
   const textMetrics = (hdc) => {
-    const f = st.gdi.get(st.dcFonts.get(hdc)) || { height: 16, weight: 400 }, font = st.dcFont(hdc);
+    const f = st.gdi.get(st.dcFonts.get(hdc) ?? 0x0190001d) || { height: 16, weight: 400 }, font = st.dcFont(hdc);
     const asc = font ? font.winAscent : 0.8, desc = font ? font.winDescent : 0.2, em = font ? font.em : 1;
     const h = f.height || 16, ppem = h < 0 ? -h : Math.max(1, Math.round(h * em / (asc + desc)));
     const ascent = Math.round(asc * ppem / em), descent = Math.round(desc * ppem / em);
@@ -829,7 +830,24 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       case 0xf6: case 0x173: return w.imageHandle || 0;                  // BM_GETIMAGE, STM_GETIMAGE
       case 0x87: return w.cls === 'button' ? 0x2000 | ((w.style & 15) === 1 ? 0x10 : 0x20) : 0;   // WM_GETDLGCODE
       case 0x0f: return paintControl(x, hwnd, w);                        // WM_PAINT
-      case 0x201: if (w.cls === 'button' && w.enabled !== false) { w.pushed = true; st.capture = hwnd; invalidate(hwnd, false); return 0; } break;   // WM_LBUTTONDOWN
+      /*
+       * An edit control's typing: WM_CHAR adds a character (replacing the text when it is all selected, as on
+       * getting the focus), Backspace takes the last off; EM_SETSEL 0, -1 selects all. Its parent hears
+       * EN_CHANGE (300h). The caret is always at the end.
+       */
+      case 0x102: if (w.cls === 'edit') {
+        const t = w.selAll ? '' : w.title || '';
+        if (wp === 8) w.title = w.selAll ? '' : t.slice(0, -1);
+        else if (wp >= 32 && wp < 256 && !(w.style & 0x800)) { if (w.style & 0x2000 && !(wp >= 48 && wp <= 57)) return 0; w.title = t + String.fromCharCode(wp); }   // ES_READONLY, ES_NUMBER
+        else return 0;
+        w.selAll = false; invalidate(hwnd, true);
+        st.msgs.push({ msg: 0x111, wp: (0x300 << 16 | (w.id & 0xffff)) >>> 0, lp: hwnd, hwnd: w.parent });
+        return 0;
+      } break;
+      case 0xb1: if (w.cls === 'edit') { w.selAll = wp === 0 && (lp | 0) === -1; invalidate(hwnd, true); return 1; } break;   // EM_SETSEL
+      case 0xc5: if (w.cls === 'edit') return 0; break;                  // EM_LIMITTEXT
+      case 0x201: if (w.cls === 'edit') { st.focus = hwnd; w.selAll = false; invalidate(hwnd, true); return 0; }   // a click: the focus, the caret at the end
+        if (w.cls === 'button' && w.enabled !== false) { w.pushed = true; st.capture = hwnd; invalidate(hwnd, false); return 0; } break;   // WM_LBUTTONDOWN
       case 0x202:                                                         // WM_LBUTTONUP: a click when it is let go over the button
         if (w.cls === 'button' && w.pushed) {
           w.pushed = false; st.capture = 0; invalidate(hwnd, false);
@@ -920,7 +938,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       let width = 0; for (const ch of text) width += m.font ? m.font.glyph(ch.charCodeAt(0) & 255, m.ppem).cellIncX : m.avg;
       const X = w.cls === 'edit' ? 4 : w.cls === 'button' ? (type <= 1 ? (t.w - width) >> 1 : 16) : (w.style & 3) === 1 ? (t.w - width) >> 1 : (w.style & 3) === 2 ? t.w - width : 0;
       const Y = w.cls === 'button' || w.cls === 'edit' ? (t.h - m.height) >> 1 : 0;
-      const keep = d.bkMode; d.bkMode = 1; textOut(x, t, d, m, X, Y, 0, 0, buf, text.length); d.bkMode = keep;
+      // An edit control with the focus and its text all selected: white on the selection's blue.
+      const sel = w.cls === 'edit' && w.selAll && st.focus === hwnd, ink = d.textColor;
+      if (sel) { fillRect(t, X, Y, X + width, Y + m.height, 0x0a246a); d.textColor = 0xffffff; }
+      const keep = d.bkMode; d.bkMode = 1; textOut(x, t, d, m, X, Y, 0, 0, buf, text.length); d.bkMode = keep; d.textColor = ink;
       x.win.heapFree(buf);
     }
     t.done();
@@ -988,8 +1009,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const sizeOf = (w) => ((w.h & 0xffff) << 16 | (w.w & 0xffff)) >>> 0;
     const font = 0x01900010 + 17;                                           // DEFAULT_GUI_FONT
     const born = (h) => { const c = csFor(h), w = win(h); return [...cbt(x, h, c), [0x81, 0, c, h], [0x01, 0, c, h], [0x05, 0, sizeOf(w), h], [0x03, 0, 0, h]]; };
-    const msgs = [...born(dlg), [0x30, font, 0, dlg], ...kids.flatMap((h) => [...born(h), [0x30, font, 0, h]]), [0x110, kids[0] || 0, param, dlg]];
-    return send(x, msgs, () => {
+    // WM_INITDIALOG's wParam: the first control with WS_TABSTOP (10000h), which has the focus when the dialog
+    // procedure returns TRUE -- an edit control's text then all selected, as typing replaces it.
+    const first = kids.find((h) => win(h).style & 0x10000 && win(h).visible && win(h).enabled) || kids[0] || 0;
+    const msgs = [...born(dlg), [0x30, font, 0, dlg], ...kids.flatMap((h) => [...born(h), [0x30, font, 0, h]]), [0x110, first, param, dlg]];
+    return send(x, msgs, (init) => {
+      if (init && first && win(first)) { st.focus = first; if (win(first).cls === 'edit') win(first).selAll = true; }
       const w = win(dlg); if (w && (style & 0x10000000)) { w.visible = true; if (w.main) { st.shown = true; wm.dirty = true; } invalidate(dlg, true, true); }
       if (w && st.dialogShown) st.dialogShown(dlg);
       return then(dlg);
@@ -1226,7 +1251,24 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const e = st.msgs.splice(i, 1)[0]; putMsg(x, m, e);
       return keyHook(x, e, 0, (eat) => (eat ? (x.w32(m + 4, 0), 1) : e.msg === 0x12 ? 0 : 1), 16);   // eaten: WM_NULL in its place
     }],
-    TranslateMessage: ['p', () => 0],
+    /*
+     * TranslateMessage: a key that types a character posts WM_CHAR (102h) after its WM_KEYDOWN, as Windows'
+     * US layout makes it -- letters with Shift or Caps Lock, digits and their shifted signs, space, Enter,
+     * Backspace, Tab, Escape and the punctuation keys. It returns whether it posted one.
+     */
+    TranslateMessage: ['p', (x, m) => {
+      if (x.r32(m + 4) !== 0x100) return 0;
+      const vk = x.r32(m + 8), shift = st.keys.has(0x10), caps = !!st.capsLock;
+      let c = null;
+      if (vk >= 0x41 && vk <= 0x5a) c = shift !== caps ? vk : vk + 32;
+      else if (vk >= 0x30 && vk <= 0x39) c = shift ? ')!@#$%^&*('.charCodeAt(vk - 0x30) : vk;
+      else if (vk >= 0x60 && vk <= 0x69) c = vk - 0x30;                                 // the keypad's digits
+      else if ([0x20, 0x0d, 0x08, 0x09, 0x1b].includes(vk)) c = vk;
+      else { const p = { 0xba: ';:', 0xbb: '=+', 0xbc: ',<', 0xbd: '-_', 0xbe: '.>', 0xbf: '/?', 0xc0: '`~', 0xdb: '[{', 0xdc: '\\|', 0xdd: ']}', 0xde: "'\"" }[vk]; if (p) c = p.charCodeAt(shift ? 1 : 0); }
+      if (c === null || st.keys.has(0x11) || st.keys.has(0x12)) return 0;
+      st.msgs.unshift({ msg: 0x102, wp: c, lp: x.r32(m + 12), hwnd: x.r32(m) });
+      return 1;
+    }],
     // DispatchMessageA runs the window's procedure in the program: its four arguments pushed, its return
     // into this stub's `ret 4`, which then returns to the caller with what the procedure returned.
     DispatchMessageA: ['p', (x, m) => {
@@ -1314,6 +1356,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const h = x.r32(m), msg = x.r32(m + 4), vk = x.r32(m + 8);
       if (!win(dlg) || (h !== dlg && !isAncestor(dlg, h))) return 0;
       if (msg === 0x100 && (vk === 0x0d || vk === 0x1b)) { st.msgs.push({ msg: 0x111, wp: vk === 0x0d ? 1 : 2, lp: 0, hwnd: dlg }); return 1; }
+      // Tab (Shift+Tab back): the focus to the next control with WS_TABSTOP, an edit control's text selected.
+      if (msg === 0x100 && vk === 0x09) {
+        const stops = [...st.wins.values()].filter((c) => c.parent === dlg && !c.dead && c.visible && c.enabled !== false && c.style & 0x10000);
+        if (stops.length) {
+          const i = stops.findIndex((c) => c.hwnd === st.focus), next = stops[(i + (st.keys.has(0x10) ? stops.length - 1 : 1) + (i < 0 ? stops.length : 0)) % stops.length];
+          const prev = win(st.focus); st.focus = next.hwnd; if (next.cls === 'edit') next.selAll = true;
+          invalidate(next.hwnd, true); if (prev) invalidate(prev.hwnd, true);
+        }
+        return 1;
+      }
+      if ((msg === 0x102 || msg === 0x101) && vk === 0x09) return 1;
       if ((msg === 0x102 || msg === 0x101) && (vk === 0x0d || vk === 0x1b)) return 1;
       return 0;
     }],
