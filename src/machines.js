@@ -267,6 +267,9 @@ async function linux(world = 'linux') {
   // On Windows the same list is the desktop's size: a game's 640x480 window fills more of the screen on
   // an 800x600 desktop than on 1024x768. A change starts the program again on the new desktop.
   const fbKey = isLinux ? 'mirage.linux.fb' : 'mirage.win32.desktop';
+  // Windows' screen is its desktop until the program's first picture (the canvas is empty while the layers
+  // come and the program starts): the classic blue, not a black screen of another size.
+  if (!isLinux) canvas.style.background = '#3a6ea5';
   fbSel.hidden = false; openBtn.hidden = !isLinux;
   if (!isLinux) fbSel.title = 'The Windows desktop\'s size: a change starts the program again';
   try { const f = localStorage.getItem(fbKey); if (f && [...fbSel.options].some((o) => o.value === f)) fbSel.value = f; } catch { /* storage refused */ }

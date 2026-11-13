@@ -6,6 +6,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-13
 
+- **Splash screens sit on the Windows desktop**: a window with no caption that a program places in the
+  screen's middle (Jazz Jackrabbit 2's Epic banner) is shown there, on the desktop, not stretched over the
+  whole screen; the screen is the desktop's blue while a Windows program starts, not black; and 3D
+  Pinball's table no longer waits two seconds behind a grey screen once its splash is gone.
 - **A Windows program that quits leaves the desktop and its icon**: once it has ended well, the Windows
   machine shows the desktop with the program's own icon in its corner; a click starts it again. A program
   that ends in an error keeps its last picture and the message.

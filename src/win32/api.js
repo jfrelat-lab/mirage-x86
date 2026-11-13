@@ -614,7 +614,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if ((style & 0x40000000) || (st.mainMade && !st.destroyed && k0 !== st.mainClass)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
     st.mainMade = true; st.mainClass = k0;
     // Where it sits on the desktop (CW_USEDEFAULT: the first cascade position) and its caption.
-    st.x = X === -0x80000000 ? 22 : X; st.y = Y === -0x80000000 || X === -0x80000000 ? 22 : Y;
+    st.x = X === -0x80000000 ? 22 : X; st.y = Y === -0x80000000 || X === -0x80000000 ? 22 : Y; st.placed = X !== -0x80000000;
     st.title = title ? (wide ? String.fromCharCode(...wideRead(x, title, -1, true)) : x.str(title, 256)) : '';
     const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
     if (st.classes.has(key)) st.wndProc = st.classes.get(key);
@@ -799,7 +799,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   };
   // What a hidden or moved window leaves: the desktop there, and the windows that were under it to paint.
   const uncoverRect = (o, W, H) => {
-    if (!deskMode()) { wm.dirty = true; return; }                       // a layer gone: the screen composed again
+    if (!deskMode()) { wm.redraw(); return; }                          // a layer gone: the screen composed again, now (Pinball's splash, destroyed while the table loads for 2 s)
     const sc = deskScreen();
     for (let j = Math.max(0, o.y); j < Math.min(sc.h, o.y + H); j++) sc.px.fill(0x3a6ea5, j * sc.w + Math.max(0, o.x), j * sc.w + Math.max(0, Math.min(sc.w, o.x + W)));
     for (const w of st.wins.values()) if (!w.dead && (w.main ? st.shown : w.visible && !(w.style & 0x40000000))) invalidate(w.hwnd, true, true);
@@ -1229,7 +1229,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         if (flags & 0x40) st.shown = true; if (flags & 0x80) st.shown = false;
         invalidate(hwnd, true, true); return 1;
       }
-      if (!(flags & 2)) { st.x = X; st.y = Y; wm.dirty = true; }       // unless SWP_NOMOVE
+      if (!(flags & 2)) { st.x = X; st.y = Y; st.placed = true; wm.dirty = true; }   // unless SWP_NOMOVE
       if (flags & 1) return 1;                                         // SWP_NOSIZE
       const w0 = st.w, h0 = st.h; resize(w, h);
       // WM_WINDOWPOSCHANGED (its WINDOWPOS: where and how big, frame included), then WM_SIZE, the client
@@ -1239,7 +1239,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => {
       if (hwnd !== st.hwnd) return placeOther(x, hwnd, X, Y, w, h, 0, 24);
       if (deskMode()) { if (st.shown) uncoverRect(mainOrigin(), st.w, st.h); st.x = X; st.y = Y; st.w = Math.max(1, w); st.h = Math.max(1, h); invalidate(hwnd, true, true); return 1; }
-      st.x = X; st.y = Y;
+      st.x = X; st.y = Y; st.placed = true;
       const w0 = st.w, h0 = st.h; resize(w, h);
       return st.w !== w0 || st.h !== h0 ? send(x, [[0x47, 0, windowPos(x, w, h, 0)], [0x05, 0, sizeLp()]], () => 1, 24) : 1;
     }],

@@ -38,7 +38,12 @@ export function windowManager(st) {
     return { b: s & 0xc00000 ? 3 : s & 0x800000 ? 1 : 0, cap: (captioned ? 19 : 0) + menu, menu };
   };
   /** Shown framed on the desktop: a caption, visible, and no display mode of the program's own. */
-  wm.framed = () => (st.style & 0xc00000) === 0xc00000 && !st.modeSet && !!st.shown && !st.destroyed;
+  wm.captioned = () => (st.style & 0xc00000) === 0xc00000;
+  // ...or a window with no caption the program put somewhere on the desktop, smaller than it: a splash (Jazz
+  // Jackrabbit 2's Epic banner, 600x120 in the screen's middle) is on the desktop, not the whole screen.
+  // A popup at the corner, or as big as the screen, is the screen (the intros, full-screen games).
+  const splash = () => !!st.placed && ((st.x | 0) > 0 || (st.y | 0) > 0) && st.w < st.desk.w && st.h < st.desk.h;
+  wm.framed = () => (wm.captioned() || splash()) && !st.modeSet && !!st.shown && !st.destroyed;
   wm.outer = () => { const { b, cap } = wm.frame(); return { x: st.x | 0, y: st.y | 0, w: st.w + 2 * b, h: st.h + 2 * b + cap }; };
   wm.client = () => { const { b, cap } = wm.frame(); return { x: (st.x | 0) + b, y: (st.y | 0) + b + cap, w: st.w, h: st.h }; };
   const caption = () => { const o = wm.outer(), { b } = wm.frame(); return { x: o.x + b, y: o.y + b, w: o.w - 2 * b, h: 18 }; };
@@ -79,6 +84,7 @@ export function windowManager(st) {
   /** Where a point of the screen is: 'close', 'caption', 'client', 'frame' or 'desktop'. */
   wm.hit = (X, Y) => {
     if (!wm.framed()) return 'client';
+    if (!wm.captioned()) return inside(wm.client(), X, Y) ? 'client' : 'desktop';
     if (inside(closeBox(), X, Y)) return 'close';
     if (inside(caption(), X, Y)) return 'caption';
     if (wm.frame().menu && inside(wm.menuBar(), X, Y)) return 'menu';
@@ -120,6 +126,7 @@ export function windowManager(st) {
     const o = wm.outer(), { b } = wm.frame();
     fill(fb, S, o.x, o.y, o.w, o.h, FACE);
     if (b >= 3) raised(fb, S, o.x, o.y, o.w, o.h, FACE, LIGHT);
+    if (!wm.captioned()) { fill(fb, S, wm.client().x, wm.client().y, st.w, st.h, 0); return; }   // a splash: no caption
     const c = caption();
     for (let i = 0; i < c.w; i++) fill(fb, S, c.x + i, c.y, 1, c.h, lerp(CAPTION_L, CAPTION_R, c.w > 1 ? i / (c.w - 1) : 0) | 0);
     text(fb, S, font, st.title || '', c.x + 4, c.y + 1, c.w - 26, 0xffffff);
