@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-13
 
+- **WinQuake through DirectDraw**: SciTech MGL looks for `system32\ddraw.dll` on the disk before it offers
+  DirectDraw's modes, and found nothing there, so WinQuake fell back to GDI; a DLL made here is now found
+  in the system directory. Then MGL asked the primary surface for its back buffer with
+  `EnumAttachedSurfaces`, which never called back, and asked again forever. WinQuake's page now starts it
+  without `-dibonly`: full screen through DirectDraw at 320x200, the windowed modes still in Video Options.
 - **List boxes, combo boxes and group boxes in Windows dialogs**: a drop-down list opens on a click and a
   click chooses, the arrow keys move along it; a group box is its frame and caption, the controls inside it
   showing and taking the clicks; a static's long text breaks into lines. 3D Pinball's Player Controls opens

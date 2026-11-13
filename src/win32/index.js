@@ -312,6 +312,8 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     return tid;
   };
   const win = {
+    /** Whether a system DLL of that name is made here (ddraw.dll, dsound.dll...): it is "in" system32. */
+    made: (name) => images.has(name.toLowerCase().replace(/^.*[\\/]/, '')),
     base, path, args, modules, load, heapAlloc, heapFree, heapSize, peb: PEB, teb: TEB, createThread,
     /** GetProcAddress: an export by name or ordinal, 0 when there is none. */
     proc: (mod, name) => (typeof name === 'number' ? mod.byOrdinal.get(name) : mod.exports.get(name)) || 0,

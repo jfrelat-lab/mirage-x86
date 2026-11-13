@@ -215,7 +215,17 @@ export function ddrawApis(st, wm, send) {
     },
     IDirectDrawSurface: {
       GetAttachedSurface: (x, self, caps, pp) => { const b = o(self).backBuffer; if (!b) return DDERR_NOTFOUND; o(b).ref++; x.w32(pp, b); return DD_OK; },
-      AddAttachedSurface: () => DD_OK, DeleteAttachedSurface: () => DD_OK, EnumAttachedSurfaces: () => DD_OK,
+      AddAttachedSurface: () => DD_OK, DeleteAttachedSurface: () => DD_OK,
+      // The surfaces attached (a primary's back buffer), each to the program's callback (stdcall: the
+      // surface, its description, the context), AddRef'd as Windows hands them. SciTech MGL (WinQuake)
+      // finds its back buffer so, and asked again and again while none came.
+      EnumAttachedSurfaces: (x, self, ctx, cb) => {
+        const b = o(self).backBuffer;
+        if (!b || !cb) return DD_OK;
+        o(b).ref++;
+        const d = x.win.heapAlloc(108); x.w32(d, 108); putDesc(x, d, o(b), 0);
+        return send(x, [{ fn: cb, args: [b, d, ctx] }], () => DD_OK, 12);
+      },
       GetSurfaceDesc: (x, self, p) => { putDesc(x, p, o(self), 0); return DD_OK; },
       GetPixelFormat: (x, self, p) => { putFormat(x, p, o(self).bpp); return DD_OK; },
       GetCaps: (x, self, p) => { const s = o(self); x.w32(p, s.primary ? DDSCAPS_PRIMARYSURFACE : s.back ? DDSCAPS_BACKBUFFER : DDSCAPS_OFFSCREENPLAIN); return DD_OK; },

@@ -24,12 +24,11 @@
     }
   ],
   "entry": {
-    "run": "/quake/winquake.exe",
-    "args": ["-dibonly"]
+    "run": "/quake/winquake.exe"
   },
   "output": "window",
-  "notes": "id Software's native Windows Quake, released on 21 March 1997 (wq100.zip, from id's own FTP), with the shareware episode's data (quake106.zip). The executable as id built it: Visual C++'s runtime, SciTech MGL linked in, DirectSound, Winsock. MIRAGE-WIN32 answers its Win32 calls in JavaScript, with no Windows: its software renderer draws into an 8-bit DIB section that StretchBlt puts on the screen (-dibonly: windowed, no DirectDraw or VESA), its sound goes through DirectSound, and Winsock reports a machine with no network, so it plays alone. Click the picture to capture the mouse.",
+  "notes": "id Software's native Windows Quake, released on 21 March 1997 (wq100.zip, from id's own FTP), with the shareware episode's data (quake106.zip). The executable as id built it: Visual C++'s runtime, SciTech MGL linked in, DirectSound, Winsock. MIRAGE-WIN32 answers its Win32 calls in JavaScript, with no Windows: its software renderer draws through SciTech MGL into DirectDraw surfaces, full screen at 320x200 by default (Options, Video Options: other DirectDraw modes, or the windowed ones, an 8-bit DIB section StretchBlt puts on the screen), its sound goes through DirectSound, and Winsock reports a machine with no network, so it plays alone. Click the picture to capture the mouse.",
   "thumb": "oasis/thumbs/win32-winquake-1997.png",
-  "tags": ["Game", "Win32", "GDI", "DirectSound"],
+  "tags": ["Game", "Win32", "DirectDraw", "GDI", "DirectSound"],
   "sound": true
 }

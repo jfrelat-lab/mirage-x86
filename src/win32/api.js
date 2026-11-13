@@ -242,6 +242,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // A directory of the disk: its root, or a path some file lies under.
   const diskDir = (p) => { const k = relPath(p); return !k || [...st.disk.keys()].some((n) => n.startsWith(k + '/')); };
   st.relPath = relPath; st.diskFile = diskFile; st.diskDir = diskDir;
+  // A name in the system directory (system32, or 95's SYSTEM) of a DLL made here, with no wildcard.
+  const sysDll = (x, p) => /^windows\/system(32)?\/[^/*?]+$/.test(relPath(p)) && !!x.win.made && x.win.made(baseName(p));
   const openHandle = (f) => { st.files.push({ f, pos: 0 }); return 0x4000 + st.files.length - 1; };
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
@@ -423,7 +425,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     FlushFileBuffers: ['p', () => 1],
     // A name on the program's disk is a file (FILE_ATTRIBUTE_ARCHIVE); the disk has no directories but
     // its root, so anything else is not there.
-    GetFileAttributesA: ['p', (x, pName) => { const n = x.str(pName); return diskDir(n) ? 0x10 : diskFile(n) ? 0x20 : 0xffffffff; }],
+    GetFileAttributesA: ['p', (x, pName) => { const n = x.str(pName); return diskDir(n) ? 0x10 : diskFile(n) || sysDll(x, n) ? 0x20 : 0xffffffff; }],
     CreateDirectoryA: ['pp', () => 1],
     GetCurrentDirectoryA: ['up', (x, n, buf) => { if (n >= 4) x.write(buf, new TextEncoder().encode('C:\\\0')); return 3; }],
     GetSystemDirectoryA: ['pu', (x, buf, n) => { const s = 'C:\\WINDOWS\\system32'; if (n > s.length) x.write(buf, new TextEncoder().encode(s + '\0')); return s.length; }],
@@ -434,7 +436,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // name anywhere, as the disk was before it had directories.
       const full = x.str(pPat), pat = baseName(full), dir = relPath(full.replace(/[^\\/]*$/, '')), re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
       const inDir = [...st.disk.keys()].filter((n) => n.replace(/\/?[^/]*$/, '') === dir);
-      const list = (inDir.length ? inDir : [...st.disk.keys()]).filter((n) => re.test(baseName(n)));
+      let list = (inDir.length ? inDir : [...st.disk.keys()]).filter((n) => re.test(baseName(n)));
+      // A DLL made here, asked for by its name in the system directory: there. SciTech MGL (WinQuake)
+      // looks for system32\ddraw.dll before it offers DirectDraw's modes.
+      if (!list.length && sysDll(x, full)) list = [`windows/system32/${pat.toLowerCase()}`];
       if (!list.length) return -1;
       st.finds ||= []; st.finds.push({ list, i: 0 });
       const h = 0x5000 + st.finds.length - 1; findFill(x, fd, list[0]); return h;
@@ -555,7 +560,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   }
   // WIN32_FIND_DATAA for a file of the disk: archive, its size, its name.
   function findFill(x, fd, name) {
-    x.write(fd, new Uint8Array(320)); x.w32(fd, 0x20); x.w32(fd + 32, st.disk.get(name).size);
+    x.write(fd, new Uint8Array(320)); x.w32(fd, 0x20); x.w32(fd + 32, st.disk.has(name) ? st.disk.get(name).size : 0x10000);
     x.write(fd + 44, new TextEncoder().encode(baseName(name).slice(0, 259) + '\0'));
   }
   // printf's formatting, the arguments read from `ap` on: %d %i %u %x %X %c %s %f %g %%, with flags,

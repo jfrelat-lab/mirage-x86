@@ -656,6 +656,7 @@
     "tags": [
       "Game",
       "Win32",
+      "DirectDraw",
       "GDI",
       "DirectSound"
     ],

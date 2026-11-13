@@ -5626,6 +5626,21 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: msvcrt.dll\'s _acmdln, a DATA export, the command line', got, '22'); }
+// A DLL made here is in the system directory: SciTech MGL (WinQuake) looks for system32\ddraw.dll with
+// FindFirstFileA before it offers DirectDraw's modes, and found nothing there. The exit code is the
+// handle's high bits (a search handle, 5000h up) -- FFFFFFFFh, INVALID_HANDLE_VALUE, when it is not found.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['FindFirstFileA', 'ExitProcess'] }], code: (at) => {
+      const name = at.d(0x400), fd = at.d(0x300);
+      const main = [0x68, ...le(fd), 0x68, ...le(name), 0xff, 0x15, ...le(at.iat['kernel32.dll!FindFirstFileA']),
+        0xc1, 0xe8, 0x0c, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); img.set(new TextEncoder().encode('C:\\WINDOWS\\system32\\ddraw.dll\0'), 0x400);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: FindFirstFileA finds a DLL made here in the system directory', got, '5'); }
 // crtdll.dll, the C runtime of Windows NT 3.x's programs (NT 3.51's Solitaire): msvcrt's under its own names,
 // _acmdln_dll a DATA export as msvcrt's _acmdln -- its first character the quote round the program's path.
 { let got;
