@@ -5546,6 +5546,55 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: BitBlt SRCAND, a 1-bit bitmap in the destination DC\'s colours', got, '80'); }
+// SendDlgItemMessageA takes its own five arguments off the stack (20 bytes) when the control's procedure is
+// the program's: it went through SendMessageA's 16, and 3D Pinball's Player Controls, filling six combo
+// boxes, lost four bytes a call until its stack ran out. A dialog with one control of the program's class;
+// the exit code is how far ESP moved over the call (0).
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateDialogIndirectParamA', 'SendDlgItemMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const wc = at.d(0x300), cls = at.d(0x380), tpl = at.d(0x400), proc = at.d(0x200), dproc = at.d(0x210);
+      const main = [0x68, ...le(wc), 0xff, 0x15, ...le(at.iat['user32.dll!RegisterClassA']),
+        0x6a, 0, 0x68, ...le(dproc), 0x6a, 0, 0x68, ...le(tpl), 0x68, ...le(0x400000), 0xff, 0x15, ...le(at.iat['user32.dll!CreateDialogIndirectParamA']),
+        0x89, 0xe3,                                                                              // mov ebx, esp
+        0x6a, 0, 0x6a, 0, 0x68, ...le(0x400), 0x6a, 7, 0x50, 0xff, 0x15, ...le(at.iat['user32.dll!SendDlgItemMessageA']),
+        0x29, 0xe3, 0x53, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];          // sub ebx, esp; ExitProcess(ebx)
+      const img = new Uint8Array(0x500); img.set(main);
+      img.set([0x31, 0xc0, 0xc2, 0x10, 0x00], 0x200); img.set([0x31, 0xc0, 0xc2, 0x10, 0x00], 0x210);
+      img.set(le(proc), 0x304); img.set(le(cls), 0x324); img.set(new TextEncoder().encode('tst\0'), 0x380);
+      const u16 = (...v) => v.flatMap((n) => [n & 255, (n >> 8) & 255]);
+      img.set([...le(0x80000000), ...le(0), ...u16(1, 0, 0, 50, 50, 0, 0, 0),                       // DLGTEMPLATE (hidden), one control
+        ...le(0x50000000), ...le(0), ...u16(0, 0, 10, 10, 7), ...u16(116, 115, 116, 0), ...u16(0, 0)], 0x400);   // the control: id 7, class "tst"
+      return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SendDlgItemMessageA to a program\'s control leaves the stack as it found it', got, '0'); }
+// A combo box keeps its items and its selection (CB_ADDSTRING, CB_SETCURSEL, CB_GETCOUNT, CB_GETCURSEL): they
+// went to DefWindowProc, which answered 0 to all. Two items, the second chosen; the exit code is
+// 16 * count + selection, 21h.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'SendMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const wc = at.d(0x440), cls = at.d(0x470), cb = at.d(0x480), a = at.d(0x490), b = at.d(0x494), proc = at.d(0x200);
+      const cw = at.iat['user32.dll!CreateWindowExA'], sm = at.iat['user32.dll!SendMessageA'];
+      const send = (msg, wp, lp) => [0x68, ...le(lp), 0x68, ...le(wp), 0x68, ...le(msg), 0x56, 0xff, 0x15, ...le(sm)];
+      const main = [0x68, ...le(wc), 0xff, 0x15, ...le(at.iat['user32.dll!RegisterClassA']),
+        0x6a, 0, 0x68, ...le(0x400000), 0x6a, 0, 0x6a, 0, 0x6a, 100, 0x68, ...le(200), 0x6a, 0, 0x6a, 0, 0x68, ...le(0x90000000), 0x6a, 0, 0x68, ...le(cls), 0x6a, 0,
+        0xff, 0x15, ...le(cw),
+        0x6a, 0, 0x68, ...le(0x400000), 0x6a, 1, 0x50, 0x6a, 100, 0x6a, 80, 0x6a, 0, 0x6a, 0, 0x68, ...le(0x50000003), 0x6a, 0, 0x68, ...le(cb), 0x6a, 0,
+        0xff, 0x15, ...le(cw), 0x89, 0xc6,                                                        // esi = the combo box
+        ...send(0x143, 0, a), ...send(0x143, 0, b), ...send(0x14e, 1, 0),
+        ...send(0x146, 0, 0), 0xc1, 0xe0, 4, 0x89, 0xc3, ...send(0x147, 0, 0), 0x01, 0xd8,
+        0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); img.set([0x31, 0xc0, 0xc2, 0x10, 0x00], 0x200);
+      img.set(le(proc), 0x444); img.set(le(cls), 0x464); img.set(new TextEncoder().encode('cbt\0'), 0x470);
+      img.set(new TextEncoder().encode('combobox\0'), 0x480); img.set(new TextEncoder().encode('a\0'), 0x490); img.set(new TextEncoder().encode('b\0'), 0x494);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a combo box keeps its items and its selection', got, '21'); }
 // SetTimer: WM_TIMER when it is due and nothing else is queued, its TIMERPROC called by DispatchMessage
 // (Minesweeper's clock never ran). A thread's timer of 50 ms; the loop takes and dispatches until the
 // procedure has counted three; the exit code is the count.

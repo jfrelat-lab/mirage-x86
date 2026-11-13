@@ -839,6 +839,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const defWindow = (x, hwnd, msg, wp, lp) => {
     const w = win(hwnd); if (!w) return undefined;
     if (w.main && !st.mainDialog && msg !== 0x14) return undefined;      // a game's or an intro's window: as it always was, but erased with its class's brush
+    if ((w.cls === 'combobox' || w.cls === 'listbox') && LIST_OPS[w.cls][msg]) return listOp(x, hwnd, w, LIST_OPS[w.cls][msg], wp, lp);
+    if (w.cls === 'combobox' || w.cls === 'listbox') { const r = listInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
     switch (msg) {
       case 0x0c: w.title = lp ? x.str(lp, 1024) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
       case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, new TextEncoder().encode(t + '\0')); return t.length; }   // WM_GETTEXT
@@ -892,6 +894,118 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }
     return undefined;
   };
+  /*
+   * List boxes and combo boxes (3D Pinball's Player Controls, a drop-down list of keys for each flipper):
+   * their items -- text and a DWORD each, sorted when the style says -- as the LB_ and CB_ messages keep
+   * them, the selection, and its text as a combo box's own. A drop-down's list opens under its field on a
+   * click and a click on an item chooses it (CBN_SELCHANGE to the parent); the arrow keys move the choice.
+   */
+  const LIST_OPS = {
+    combobox: { 0x143: 'add', 0x144: 'del', 0x146: 'count', 0x147: 'getsel', 0x148: 'gettext', 0x149: 'textlen', 0x14a: 'insert', 0x14b: 'reset', 0x14c: 'find',
+      0x14d: 'select', 0x14e: 'setsel', 0x14f: 'show', 0x150: 'getdata', 0x151: 'setdata', 0x157: 'dropped', 0x158: 'findexact' },
+    listbox: { 0x180: 'add', 0x181: 'insert', 0x182: 'del', 0x184: 'reset', 0x186: 'setsel', 0x188: 'getsel', 0x189: 'gettext', 0x18a: 'textlen', 0x18b: 'count',
+      0x18c: 'select', 0x18f: 'find', 0x199: 'getdata', 0x19a: 'setdata', 0x1a2: 'findexact' },
+  };
+  const isDrop = (w) => w.cls === 'combobox' && (w.style & 3) !== 1;     // CBS_DROPDOWN, CBS_DROPDOWNLIST: a field and a list that opens
+  const notifyParent = (w, code) => st.msgs.push({ msg: 0x111, wp: ((code << 16) | (w.id & 0xffff)) >>> 0, lp: w.hwnd, hwnd: w.parent });
+  const listOp = (x, hwnd, w, op, wp, lp) => {
+    const items = (w.items ||= []), combo = w.cls === 'combobox', n = items.length, i = wp | 0;
+    const strs = !(w.style & 0x30) || (w.style & (combo ? 0x200 : 0x40));   // owner-drawn without HASSTRINGS: lParam is the item's data
+    const sorted = w.style & (combo ? 0x100 : 2);
+    const pick = (k) => { w.sel = k; if (combo) w.title = k >= 0 && items[k] ? items[k].text : ''; invalidate(hwnd, true); return k; };
+    const find = (exact) => {
+      const want = strs ? x.str(lp, 1024).toLowerCase() : null;
+      for (let k = 1; k <= n; k++) { const j = (i + k + n) % n, it = items[j]; if (strs ? (exact ? it.text.toLowerCase() === want : it.text.toLowerCase().startsWith(want)) : it.data === lp) return j; }
+      return -1;
+    };
+    switch (op) {
+      case 'add': case 'insert': {
+        const it = { text: strs ? x.str(lp, 1024) : '', data: strs ? 0 : lp };
+        let at = op === 'insert' ? (i < 0 || i > n ? n : i) : n;
+        if (op === 'add' && sorted && strs) { at = items.findIndex((o) => o.text.toLowerCase() > it.text.toLowerCase()); if (at < 0) at = n; }
+        items.splice(at, 0, it); if ((w.sel ?? -1) >= at) w.sel++; invalidate(hwnd, true); return at;
+      }
+      case 'del': if (i < 0 || i >= n) return -1; items.splice(i, 1); if (w.sel === i) pick(-1); else if (w.sel > i) w.sel--; invalidate(hwnd, true); return items.length;
+      case 'reset': items.length = 0; pick(-1); return 0;
+      case 'count': return n;
+      case 'getsel': return w.sel ?? -1;
+      case 'setsel': return i >= 0 && i < n ? pick(i) : (pick(-1), combo || i !== -1 ? -1 : 0);
+      case 'gettext': if (i < 0 || i >= n) return -1; if (!strs) { x.w32(lp, items[i].data); return 4; } x.write(lp, new TextEncoder().encode(items[i].text + '\0')); return items[i].text.length;
+      case 'textlen': return i < 0 || i >= n ? -1 : strs ? items[i].text.length : 4;
+      case 'find': return find(false);
+      case 'findexact': return find(true);
+      case 'select': { const k = find(false); return k < 0 ? -1 : pick(k); }
+      case 'getdata': return i < 0 || i >= n ? -1 : items[i].data >>> 0;
+      case 'setdata': if (i < 0 || i >= n) return -1; items[i].data = lp >>> 0; return 1;
+      case 'dropped': return w.dropped ? 1 : 0;
+      case 'show': if (!!wp !== !!w.dropped) toggleDrop(w, !!wp); return 1;
+      default: return 0;
+    }
+  };
+  const toggleDrop = (w, open) => {
+    w.dropped = open;
+    if (open) { st.focus = w.hwnd; st.capture = w.hwnd; } else { if (st.capture === w.hwnd) st.capture = 0; invalidate(w.parent, true, true); }
+    invalidate(w.hwnd, true);
+  };
+  const listInput = (x, hwnd, w, msg, wp, lp) => {
+    const X = (lp << 16) >> 16, Y = lp >> 16, items = w.items || [], rowH = w.rowH || 16;
+    const choose = (k) => { if (k < 0 || k >= items.length || k === w.sel) return; w.sel = k; if (w.cls === 'combobox') w.title = items[k].text; invalidate(hwnd, true); notifyParent(w, 1); };   // CBN_SELCHANGE, LBN_SELCHANGE
+    if (msg === 0x201) {                                                  // WM_LBUTTONDOWN
+      st.focus = hwnd;
+      if (w.cls === 'listbox') { choose(Math.floor((Y - 2) / rowH) + (w.top | 0)); return 0; }
+      if (!isDrop(w)) return 0;
+      if (!w.dropped) { if (Y < (w.fieldH || 21)) { toggleDrop(w, true); notifyParent(w, 7); } return 0; }   // CBN_DROPDOWN
+      const inList = X >= 0 && X < w.w && Y >= (w.fieldH || 21) && Y < w.h;
+      if (inList) choose(Math.floor((Y - (w.fieldH || 21) - 1) / rowH));
+      toggleDrop(w, false); notifyParent(w, 8);                           // CBN_CLOSEUP
+      return 0;
+    }
+    if (msg === 0x202 || msg === 0x200) return 0;
+    if (msg === 0x100 && (wp === 0x26 || wp === 0x28)) { choose(Math.max(0, Math.min(items.length - 1, (w.sel ?? -1) + (wp === 0x28 ? 1 : -1)))); return 0; }   // Up, Down
+    if (msg === 0x100 && (wp === 0x0d || wp === 0x1b) && w.dropped) { toggleDrop(w, false); return 0; }
+    if (msg === 0x87) return 0x01 | 0x04;                                // WM_GETDLGCODE: DLGC_WANTARROWS | DLGC_WANTCHARS
+    return undefined;
+  };
+  // A list's or a combo box's face: a sunken white field, the drop-down's button with its arrow, the items.
+  const drawList = (x, hwnd, w, hdc) => {
+    const t = target(x, hdc); if (!t) return;
+    if (w.font) st.dcFonts.set(hdc, w.font);
+    const m = textMetrics(hdc), d = dcState(hdc), rowH = (w.rowH = Math.max(12, m.height + 2)), items = w.items || [];
+    const put = (str, X, Y, ink) => {
+      if (!str) return; const buf = x.win.heapAlloc(str.length + 1); x.write(buf, Uint8Array.from(str, (c) => c.charCodeAt(0) & 255));
+      const keep = [d.bkMode, d.textColor]; d.bkMode = 1; d.textColor = ink; textOut(x, t, d, m, X, Y, 0, 0, buf, str.length); [d.bkMode, d.textColor] = keep; x.win.heapFree(buf);
+    };
+    const sunken = (x0, y0, x1, y1) => {
+      fillRect(t, x0, y0, x1, y1, 0xffffff);
+      fillRect(t, x0, y0, x1, y0 + 1, 0x808080); fillRect(t, x0, y0, x0 + 1, y1, 0x808080); fillRect(t, x0, y1 - 1, x1, y1, 0xffffff); fillRect(t, x1 - 1, y0, x1, y1, 0xffffff);
+      fillRect(t, x0 + 1, y0 + 1, x1 - 1, y0 + 2, 0x404040); fillRect(t, x0 + 1, y0 + 1, x0 + 2, y1 - 1, 0x404040);
+    };
+    const row = (k, Y, x0, x1) => {
+      const on = k === w.sel && (w.cls === 'listbox' || w.dropped || st.focus === hwnd);
+      if (on) fillRect(t, x0, Y, x1, Y + rowH, 0x0a246a);
+      put(items[k] ? items[k].text : '', x0 + 2, Y + 1, on ? 0xffffff : 0);
+    };
+    if (!isDrop(w)) {
+      sunken(0, 0, t.w, t.h);
+      const vis = Math.max(1, Math.floor((t.h - 4) / rowH));
+      if ((w.sel ?? -1) >= 0) w.top = Math.max(0, Math.min(w.sel, Math.max(w.top | 0, w.sel - vis + 1)));
+      for (let k = w.top | 0, Y = 2; k < items.length && Y + rowH <= t.h - 2; k++, Y += rowH) row(k, Y, 2, t.w - 2);
+      t.done(); return;
+    }
+    const fh = (w.fieldH = Math.min(t.h, m.height + 8));
+    sunken(0, 0, t.w, fh);
+    const bx = t.w - 2 - 16;                                              // the button: raised, a black arrow down
+    fillRect(t, bx, 2, t.w - 2, fh - 2, 0xd4d0c8);
+    fillRect(t, bx, 2, t.w - 2, 3, 0xffffff); fillRect(t, bx, 2, bx + 1, fh - 2, 0xffffff); fillRect(t, bx, fh - 3, t.w - 2, fh - 2, 0x404040); fillRect(t, t.w - 3, 2, t.w - 2, fh - 2, 0x404040);
+    const ax = bx + 4, ay = (fh >> 1) - 2; for (let k = 0; k < 4; k++) fillRect(t, ax + k, ay + k, ax + 7 - k, ay + k + 1, 0);
+    if (w.sel >= 0) row(w.sel, (fh - rowH) >> 1, 3, bx - 1);
+    if (w.dropped) {
+      const lh = Math.min(t.h - fh, items.length * rowH + 2);
+      fillRect(t, 0, fh, t.w, fh + lh, 0); fillRect(t, 1, fh + 1, t.w - 1, fh + lh - 1, 0xffffff);
+      for (let k = 0, Y = fh + 1; k < items.length && Y + rowH <= fh + lh; k++, Y += rowH) row(k, Y, 1, t.w - 1);
+    }
+    t.done();
+  };
   // A system control's WM_PAINT: an owner-drawn button asks its parent (WM_DRAWITEM); a push button,
   // a check box and a static are drawn here, text in the DC's colours after WM_CTLCOLOR* to the parent.
   const paintControl = (x, hwnd, w) => {
@@ -906,6 +1020,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // (a dialog) erased with its brush (WM_ERASEBKGND) and validated, as DefWindowProc's BeginPaint does --
     // left due, it was painted again and again.
     if (w.cls === 'edit') return send(x, [[0x133, hdc, hwnd, w.parent]], () => { drawControl(x, hwnd, w, hdc, 0); return 0; }, 16);   // WM_CTLCOLOREDIT
+    if (w.cls === 'combobox' || w.cls === 'listbox') return send(x, [[w.cls === 'listbox' ? 0x134 : 0x133, hdc, hwnd, w.parent]], () => { drawList(x, hwnd, w, hdc); return 0; }, 16);
     if (w.cls !== 'button' && w.cls !== 'static') {
       if (!w.erase) return 0;
       w.erase = false; return send(x, [[0x14, hdc, 0, hwnd]], () => 0, 16);
@@ -936,7 +1051,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (bm && bm.px) for (let j = 0; j < Math.min(bm.h, t.h); j++) for (let i = 0; i < Math.min(bm.w, t.w); i++) { const c = bm.px[j * bm.w + i]; if (!bm.mask || !bm.mask[j * bm.w + i]) t.px[j * t.w + i] = c; }
       t.done(); return;
     }
-    if (br) fillRect(t, 0, 0, t.w, t.h, face);
+    // A group box (BS_GROUPBOX) is a frame and its caption, the controls inside it showing through: filled, it
+    // hid them (3D Pinball's Player Controls, its two group boxes made after the controls they hold).
+    const group = w.cls === 'button' && type === 7;
+    if (br && !group) fillRect(t, 0, 0, t.w, t.h, face);
+    if (group) {
+      if (w.font) st.dcFonts.set(hdc, w.font);
+      const top = textMetrics(hdc).height >> 1;
+      fillRect(t, 0, top, t.w - 1, top + 1, 0x808080); fillRect(t, 0, top, 1, t.h - 1, 0x808080); fillRect(t, 0, t.h - 2, t.w - 1, t.h - 1, 0x808080); fillRect(t, t.w - 2, top, t.w - 1, t.h - 1, 0x808080);
+      fillRect(t, 1, top + 1, t.w - 2, top + 2, 0xffffff); fillRect(t, 1, top + 1, 2, t.h - 2, 0xffffff); fillRect(t, 0, t.h - 1, t.w, t.h, 0xffffff); fillRect(t, t.w - 1, top, t.w, t.h, 0xffffff);
+    }
     if (w.cls === 'edit') {                                               // white, in a sunken edge (WS_EX_CLIENTEDGE's or WS_BORDER's)
       fillRect(t, 0, 0, t.w, t.h, 0xffffff);
       fillRect(t, 0, 0, t.w, 1, 0x808080); fillRect(t, 0, 0, 1, t.h, 0x808080); fillRect(t, 0, t.h - 1, t.w, t.h, 0xd4d0c8); fillRect(t, t.w - 1, 0, t.w, t.h, 0xd4d0c8);
@@ -965,13 +1089,30 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (w.font) st.dcFonts.set(hdc, w.font);
       const m = textMetrics(hdc), buf = x.win.heapAlloc(text.length + 1);
       x.write(buf, Uint8Array.from(text, (c) => c.charCodeAt(0) & 255));
-      let width = 0; for (const ch of text) width += m.font ? m.font.glyph(ch.charCodeAt(0) & 255, m.ppem).cellIncX : m.avg;
-      const X = w.cls === 'edit' ? 4 : w.cls === 'button' ? (type <= 1 ? (t.w - width) >> 1 : 16) : (w.style & 3) === 1 ? (t.w - width) >> 1 : (w.style & 3) === 2 ? t.w - width : 0;
-      const Y = w.cls === 'button' || w.cls === 'edit' ? (t.h - m.height) >> 1 : 0;
-      // An edit control with the focus and its text all selected: white on the selection's blue.
-      const sel = w.cls === 'edit' && w.selAll && st.focus === hwnd, ink = d.textColor;
-      if (sel) { fillRect(t, X, Y, X + width, Y + m.height, 0x0a246a); d.textColor = 0xffffff; }
-      const keep = d.bkMode; d.bkMode = 1; textOut(x, t, d, m, X, Y, 0, 0, buf, text.length); d.bkMode = keep; d.textColor = ink;
+      const widthOf = (str) => { let n = 0; for (const ch of str) n += m.font ? m.font.glyph(ch.charCodeAt(0) & 255, m.ppem).cellIncX : m.avg; return n; };
+      // A static's text (SS_LEFT, SS_CENTER, SS_RIGHT) breaks between words to its width, as DrawText's
+      // DT_WORDBREAK: Pinball's instructions, "Left Table Bump" on two lines.
+      const lines = [];
+      if (w.cls === 'static' && (w.style & 15) <= 2) {
+        for (const para of text.split(/\r?\n/)) {
+          let line = '';
+          for (const word of para.split(' ')) { const next = line ? line + ' ' + word : word; if (line && widthOf(next) > t.w) { lines.push(line); line = word; } else line = next; }
+          lines.push(line);
+        }
+      } else lines.push(text);
+      const ink = d.textColor;
+      lines.forEach((ln, k) => {
+        const width = widthOf(ln);
+        const X = w.cls === 'edit' ? 4 : group ? 8 : w.cls === 'button' ? (type <= 1 ? (t.w - width) >> 1 : 16) : (w.style & 3) === 1 ? (t.w - width) >> 1 : (w.style & 3) === 2 ? t.w - width : 0;
+        const Y = group ? 0 : w.cls === 'button' || w.cls === 'edit' ? (t.h - m.height) >> 1 : k * m.height;
+        if (Y >= t.h) return;
+        if (group) fillRect(t, X - 2, 0, X + width + 2, m.height, face);
+        // An edit control with the focus and its text all selected: white on the selection's blue.
+        const sel = w.cls === 'edit' && w.selAll && st.focus === hwnd;
+        if (sel) { fillRect(t, X, Y, X + width, Y + m.height, 0x0a246a); d.textColor = 0xffffff; }
+        x.write(buf, Uint8Array.from(ln, (c) => c.charCodeAt(0) & 255));
+        const keep = d.bkMode; d.bkMode = 1; textOut(x, t, d, m, X, Y, 0, 0, buf, ln.length); d.bkMode = keep; d.textColor = ink;
+      });
       x.win.heapFree(buf);
     }
     t.done();
@@ -1404,7 +1545,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return 0;
     }],
     // A dialog's control sent a message by its id (the dialog's GetDlgItem, then SendMessageA).
-    SendDlgItemMessageA: ['piuuu', (x, dlg, id, msg, wp, lp) => user32.SendMessageA[1](x, user32.GetDlgItem[1](x, dlg, id), msg, wp, lp)],
+    // Its own five arguments' bytes taken off (20): through SendMessageA's 16, Pinball's Player Controls lost four a call -- 49,000 calls, its stack.
+    SendDlgItemMessageA: ['piuuu', (x, dlg, id, msg, wp, lp) => user32.SendMessageA[1](x, user32.GetDlgItem[1](x, dlg, id), msg, wp, lp, 20)],
     /*
      * A modal dialog box (Minesweeper's Custom Field and Best Times): the dialog made as CreateDialog
      * makes it, shown, its owner disabled; then, in the caller's place, a loop of the program's own
@@ -1508,7 +1650,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ClipCursor: ['p', (x, r) => { st.clip = r ? { l: x.r32(r) | 0, t: x.r32(r + 4) | 0, r: x.r32(r + 8) | 0, b: x.r32(r + 12) | 0 } : null; return 1; }],
     // InvalidateRect: a WM_PAINT due, the main window's too (Minesweeper's new game).
     InvalidateRect: ['ppi', (x, h, r, erase) => { invalidate(h || st.hwnd, !!erase); return 1; }], PostMessageA: ['puuu', (x, hwnd, msg, wp, lp) => { st.msgs.push({ msg, wp, lp, ...(hwnd && hwnd !== st.hwnd ? { hwnd } : {}) }); return 1; }],
-    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp) => (procOf(hwnd) ? send(x, [[msg, wp, lp, hwnd]], (eax) => eax, 16) : 0)], KillTimer: ['pu', (x, hwnd, id) => (st.timers.delete(`${hwnd}:${id}`) ? 1 : 0)],
+    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp, pop = 16) => (procOf(hwnd) ? send(x, [[msg, wp, lp, hwnd]], (eax) => eax, pop) : 0)], KillTimer: ['pu', (x, hwnd, id) => (st.timers.delete(`${hwnd}:${id}`) ? 1 : 0)],
     // GWL_STYLE (-16): the frame the window's size includes from now on (WinQuake's windowed and full-screen modes).
     SetWindowLongA: ['pii', (x, hwnd, i, v) => {
       if (hwnd === st.hwnd) {
@@ -2589,10 +2731,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // main window itself (its messages as before). A disabled window gets nothing.
   const windowAt = (X, Y) => {
     if (st.capture && win(st.capture)) return st.capture;
-    const size = (h) => (h === st.hwnd ? { w: st.w, h: st.h } : win(h));
+    const size = (h) => { if (h === st.hwnd) return { w: st.w, h: st.h }; const w = win(h); return w && isDrop(w) && !w.dropped ? { w: w.w, h: Math.min(w.h, w.fieldH || 21) } : w; };
     const inside = (h, px, py) => { const w = size(h), o = screenOrigin(h); return px >= o.x && py >= o.y && px < o.x + w.w && py < o.y + w.h; };
     const deepest = (h) => {
-      const kids = [...st.wins.values()].filter((c) => c.parent === h && !c.dead && c.visible && (c.style & 0x40000000) && inside(c.hwnd, X, Y));
+      // A group box, and a static without SS_NOTIFY, let the mouse through to what is under them (HTTRANSPARENT).
+      const clear = (c) => (c.cls === 'button' && (c.style & 15) === 7) || (c.cls === 'static' && !(c.style & 0x100));
+      const kids = [...st.wins.values()].filter((c) => c.parent === h && !c.dead && c.visible && (c.style & 0x40000000) && !clear(c) && inside(c.hwnd, X, Y)).sort((a, b) => !!a.dropped - !!b.dropped);
       return kids.length ? deepest(kids[kids.length - 1].hwnd) : h;
     };
     const pops = [...st.wins.values()].filter((w) => !w.main && !w.dead && w.visible && !(w.style & 0x40000000) && inside(w.hwnd, X, Y));

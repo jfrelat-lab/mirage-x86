@@ -6,6 +6,10 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-13
 
+- **List boxes, combo boxes and group boxes in Windows dialogs**: a drop-down list opens on a click and a
+  click chooses, the arrow keys move along it; a group box is its frame and caption, the controls inside it
+  showing and taking the clicks; a static's long text breaks into lines. 3D Pinball's Player Controls opens
+  and works -- it crashed: a message to a dialog's control left four bytes on the stack each time.
 - **GDI's raster operations and monochrome bitmaps**: BitBlt and StretchBlt combine their source with what
   is there (AND, OR, XOR...) instead of copying it, and a black-and-white bitmap takes the colours of the DC
   it is drawn on -- Solitaire's empty places are the felt's green with their dotted outline, not white. A
