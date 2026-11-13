@@ -6,6 +6,11 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-13
 
+- **GDI's raster operations and monochrome bitmaps**: BitBlt and StretchBlt combine their source with what
+  is there (AND, OR, XOR...) instead of copying it, and a black-and-white bitmap takes the colours of the DC
+  it is drawn on -- Solitaire's empty places are the felt's green with their dotted outline, not white. A
+  window that clips its children no longer draws over them: a card dragged over Solitaire's status bar left
+  green there.
 - **Splash screens sit on the Windows desktop**: a window with no caption that a program places in the
   screen's middle (Jazz Jackrabbit 2's Epic banner) is shown there, on the desktop, not stretched over the
   whole screen; the screen is the desktop's blue while a Windows program starts, not black; and 3D

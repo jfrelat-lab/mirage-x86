@@ -261,6 +261,8 @@ export function classicApis({ st, wm }) {
     // A bitmap of the module's resources (RT_BITMAP: a DIB without its file header), as a GDI bitmap.
     LoadBitmapA: ['pp', (x, mod, name) => {
       const r = findResource(x, mod || x.win.base, RT.BITMAP, resId(x, name)), d = r && decodeDib(x, r.at);
+      // A 1-bit DIB is a monochrome bitmap: drawn onto colour in the DC's text and background colours.
+      if (d) d.mono = (x.r32(r.at) === 12 ? x.r16(r.at + 10) : x.r16(r.at + 14)) === 1;
       return d ? st.newHandle('bitmap', d) : 0;
     }],
     // LoadImageA(module, name, type, cx, cy, flags): a bitmap of the resources as LoadBitmapA's, or of a

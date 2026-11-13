@@ -1637,10 +1637,28 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     for (let j = 0; j < H; j++) { const y = o.y + j; if (y < 0 || y >= sc.h) continue; for (let i = 0; i < W; i++) { const X = o.x + i; if (X >= 0 && X < sc.w) px[j * W + i] = sc.px[y * sc.w + X]; } }
     return { w: W, h: H, px, o, sc };
   };
+  // WS_CLIPCHILDREN: what the main window draws does not reach its children -- their pixels put back once
+  // it has drawn (Solitaire's card, dragged or flying over its status bar, left green there). A function
+  // that restores them, or null when there is nothing to keep.
+  const clipKids = (sc) => {
+    if (!(st.style & 0x2000000)) return null;
+    const kids = [...st.wins.values()].filter((c) => c.parent === st.hwnd && !c.dead && c.visible && (c.style & 0x40000000) && c.w > 0 && c.h > 0);
+    if (!kids.length) return null;
+    const saved = kids.map((c) => {
+      const x0 = Math.max(0, c.x | 0), y0 = Math.max(0, c.y | 0), x1 = Math.min(sc.w, (c.x | 0) + c.w), y1 = Math.min(sc.h, (c.y | 0) + c.h);
+      if (x1 <= x0 || y1 <= y0) return null;
+      const rows = []; for (let y = y0; y < y1; y++) rows.push(sc.px.slice(y * sc.w + x0, y * sc.w + x1));
+      return { x0, y0, rows };
+    }).filter(Boolean);
+    return () => { for (const r of saved) r.rows.forEach((row, j) => sc.px.set(row, (r.y0 + j) * sc.w + r.x0)); };
+  };
   // Where a DC's drawing lands, as pixels { w, h, px } and done() to put them where they belong: the
   // screen for the window's DC, the selected bitmap (and a section's memory) for a memory DC.
   const target = (x, hdc) => {
-    if (isWindowDC(hdc) && !deskMode()) { const sc = screen(); return { ...sc, done: () => wm.present(x.lx, sc) }; }
+    if (isWindowDC(hdc) && !deskMode()) {
+      const sc = screen(), keep = clipKids(sc);
+      return { ...sc, done: () => { if (keep) keep(); wm.present(x.lx, sc); } };
+    }
     const v = viewOf(x, hdc);
     // A hidden window's DC on the desktop draws nothing there, as on Windows: Half-Life's launcher blackens its
     // main dialog before it is shown, which left a black rectangle under the intro.
@@ -1668,18 +1686,32 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }
     if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
     if (bm.load) bm.load(x);
-    return { w: bm.w, h: bm.h, at: (X, Y) => bm.px[Y * bm.w + X] };
+    return { w: bm.w, h: bm.h, mono: !!bm.mono, at: (X, Y) => bm.px[Y * bm.w + X] };
   };
-  const blit = (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh) => {
+  const rgbOf = (c) => ((c & 255) << 16) | (c & 0xff00) | ((c >>> 16) & 255);   // COLORREF -> 0x00RRGGBB
+  /*
+   * BitBlt and StretchBlt: the source's pixels combined with the destination's as the raster operation says --
+   * SRCCOPY, SRCAND, SRCPAINT, SRCINVERT, NOTSRCCOPY, SRCERASE, NOTSRCERASE, MERGEPAINT; one that takes no
+   * source (BLACKNESS, PATCOPY...) is PatBlt's. A monochrome bitmap onto a colour DC (cards.dll's empty
+   * place, its 1-bit DIB under SRCAND) is in the destination's colours: 1 its background, 0 its text.
+   */
+  const ROPS = { 0xcc0020: (s) => s, 0x8800c6: (s, d) => s & d, 0xee0086: (s, d) => s | d, 0x660046: (s, d) => s ^ d, 0x330008: (s) => ~s & 0xffffff,
+    0x440328: (s, d) => s & ~d & 0xffffff, 0x1100a6: (s, d) => ~(s | d) & 0xffffff, 0xbb0226: (s, d) => (~s | d) & 0xffffff };
+  const blit = (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh, rop = 0xcc0020) => {
+    rop >>>= 0;
+    if (!ROPS[rop] && [0x42, 0xff0062, 0x550009, 0xf00021, 0x5a0049].includes(rop)) return gdi32.PatBlt[1](x, dst, dx, dy, dw, dh, rop);
+    const op = ROPS[rop] || ROPS[0xcc0020];
     const s = source(x, src), t = target(x, dst);
     if (!s || !t || !dw || !dh) return 1;
+    const d = s.mono && dcState(dst), one = d ? rgbOf(d.bkColor) : 0, zero = d ? rgbOf(d.textColor) : 0;
+    const pick = s.mono ? (X, Y) => { const v = s.at(X, Y); return ((v >> 16 & 255) + (v >> 8 & 255) + (v & 255)) >= 384 ? one : zero; } : s.at;
     for (let j = 0; j < Math.abs(dh); j++) {
       const ty = dy + (dh < 0 ? -j : j); if (ty < 0 || ty >= t.h) continue;
       const syy = sy + Math.floor(j * sh / Math.abs(dh)); if (syy < 0 || syy >= s.h) continue;
       for (let i = 0; i < Math.abs(dw); i++) {
         const tx = dx + (dw < 0 ? -i : i); if (tx < 0 || tx >= t.w) continue;
         const sxx = sx + Math.floor(i * sw / Math.abs(dw)); if (sxx < 0 || sxx >= s.w) continue;
-        t.px[ty * t.w + tx] = s.at(sxx, syy);
+        t.px[ty * t.w + tx] = op(pick(sxx, syy), t.px[ty * t.w + tx]);
       }
     }
     t.done(); return 1;
@@ -1849,8 +1881,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const t = target(x, hdc); if (!t || X < 0 || Y < 0 || X >= t.w || Y >= t.h) return 0xffffffff;
       t.px[Y * t.w + X] = (cr & 255) << 16 | (cr & 0xff00) | (cr >> 16 & 255); t.done(); return cr & 0xffffff;
     }],
-    BitBlt: ['piiiipiiu', (x, dst, dx, dy, w, h, src, sx, sy) => blit(x, dst, dx, dy, w, h, src, sx, sy, w, h)],
-    StretchBlt: ['piiiipiiiiu', (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh) => blit(x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh)],
+    BitBlt: ['piiiipiiu', (x, dst, dx, dy, w, h, src, sx, sy, rop) => blit(x, dst, dx, dy, w, h, src, sx, sy, w, h, rop)],
+    StretchBlt: ['piiiipiiiiu', (x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh, rop) => blit(x, dst, dx, dy, dw, dh, src, sx, sy, sw, sh, rop)],
     // PatBlt: BLACKNESS, WHITENESS; PATCOPY (F00021h) the DC's brush -- FreeCell's cells, filled green before
     // their edges are drawn; PATINVERT (5A0049h) the brush XORed in; DSTINVERT (550009h) the pixels inverted.
     PatBlt: ['piiiiu', (x, hdc, X, Y, w, h, rop) => {
@@ -2415,7 +2447,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     CreateBitmap: ['iiuup', (x, w, h, planes, bpp, bits) => {
       const px = new Uint32Array(Math.max(0, w * h));
       if (bits && bpp === 1) { const stride = ((w + 15) >> 4) << 1, raw = x.bytes(bits, stride * h); for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) px[y * w + i] = (raw[y * stride + (i >> 3)] >> (7 - (i & 7))) & 1 ? 0xffffff : 0; }
-      return st.newHandle('bitmap', { w, h, px });
+      return st.newHandle('bitmap', { w, h, px, mono: bpp === 1 && planes === 1 });
     }],
     CreateDIBitmap: ['ppupp' + 'u', (x, hdc, bih, init, bits, bmi) => {
       const w = x.r32(bih + 4) | 0, h = Math.abs(x.r32(bih + 8) | 0);

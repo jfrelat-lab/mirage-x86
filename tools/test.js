@@ -5495,6 +5495,57 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a hidden window\'s DC draws nothing on the desktop', got, '3a'); }
+// WS_CLIPCHILDREN: the main window's drawing does not reach its children (Solitaire's card dragged over its
+// status bar left green there). A 200x100 popup with a 50x20 static child at (10, 10); PatBlt WHITENESS over
+// the whole main window; the exit code is the low byte of the child's pixel, still black (0).
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'GetDC'] }, { dll: 'gdi32.dll', names: ['PatBlt', 'GetPixel'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const wc = at.d(0x440), cls = at.d(0x470), stc = at.d(0x480), proc = at.d(0x200), cw = at.iat['user32.dll!CreateWindowExA'];
+      const main = [0x68, ...le(wc), 0xff, 0x15, ...le(at.iat['user32.dll!RegisterClassA']),
+        0x6a, 0, 0x68, ...le(0x400000), 0x6a, 0, 0x6a, 0, 0x6a, 100, 0x68, ...le(200), 0x6a, 0, 0x6a, 0, 0x68, ...le(0x92000000), 0x6a, 0, 0x68, ...le(cls), 0x6a, 0,
+        0xff, 0x15, ...le(cw), 0x89, 0xc6,                                                       // esi = main
+        0x6a, 0, 0x6a, 0, 0x6a, 0, 0x56, 0x6a, 20, 0x6a, 50, 0x6a, 10, 0x6a, 10, 0x68, ...le(0x50000000), 0x6a, 0, 0x68, ...le(stc), 0x6a, 0,
+        0xff, 0x15, ...le(cw), 0x89, 0xc7,                                                       // edi = the child
+        0x56, 0xff, 0x15, ...le(at.iat['user32.dll!GetDC']),
+        0x68, ...le(0xff0062), 0x6a, 100, 0x68, ...le(200), 0x6a, 0, 0x6a, 0, 0x50, 0xff, 0x15, ...le(at.iat['gdi32.dll!PatBlt']),
+        0x57, 0xff, 0x15, ...le(at.iat['user32.dll!GetDC']),
+        0x6a, 5, 0x6a, 5, 0x50, 0xff, 0x15, ...le(at.iat['gdi32.dll!GetPixel']),
+        0x25, 0xff, 0, 0, 0, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); img.set([0x31, 0xc0, 0xc2, 0x10, 0x00], 0x200);
+      img.set(le(proc), 0x444); img.set(le(cls), 0x464); img.set(new TextEncoder().encode('clp\0'), 0x470); img.set(new TextEncoder().encode('static\0'), 0x480);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: WS_CLIPCHILDREN -- the main window\'s drawing leaves its children as they were', got, '0'); }
+// BitBlt's raster operation, and a monochrome bitmap in the destination's colours (cards.dll draws an empty
+// place as a 1-bit bitmap under SRCAND over the felt; it came out white -- copied, its bits white). A
+// white 8x8 1-bit bitmap, SRCAND onto an 8x8 colour bitmap whose left half is white and right half black,
+// the destination's background colour 80h (red): left (1, 1) is 80h (the bit's colour AND white), right
+// (5, 1) is 0 (AND black). The exit code is their sum.
+{ let got;
+  try {
+    const g = (n) => `gdi32.dll!${n}`;
+    const exe = mkPE({ imports: [{ dll: 'gdi32.dll', names: ['CreateBitmap', 'CreateCompatibleDC', 'CreateCompatibleBitmap', 'SelectObject', 'PatBlt', 'SetBkColor', 'BitBlt', 'GetPixel'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const bits = at.d(0x440), call = (n) => [0xff, 0x15, ...le(at.iat[g(n)])];
+      const main = [0x6a, 0, ...call('CreateCompatibleDC'), 0x89, 0xc6,                                  // esi = the 1-bit bitmap's DC
+        0x68, ...le(bits), 0x6a, 1, 0x6a, 1, 0x6a, 8, 0x6a, 8, ...call('CreateBitmap'), 0x50, 0x56, ...call('SelectObject'),
+        0x6a, 0, ...call('CreateCompatibleDC'), 0x89, 0xc7,                                                   // edi = the colour one
+        0x6a, 8, 0x6a, 8, 0x57, ...call('CreateCompatibleBitmap'), 0x50, 0x57, ...call('SelectObject'),
+        0x68, ...le(0xff0062), 0x6a, 8, 0x6a, 8, 0x6a, 0, 0x6a, 0, 0x57, ...call('PatBlt'),                   // white
+        0x6a, 0x42, 0x6a, 8, 0x6a, 4, 0x6a, 0, 0x6a, 4, 0x57, ...call('PatBlt'),                              // its right half black
+        0x68, ...le(0x80), 0x57, ...call('SetBkColor'),
+        0x68, ...le(0x8800c6), 0x6a, 0, 0x6a, 0, 0x56, 0x6a, 8, 0x6a, 8, 0x6a, 0, 0x6a, 0, 0x57, ...call('BitBlt'),
+        0x6a, 1, 0x6a, 1, 0x57, ...call('GetPixel'), 0x89, 0xc3,
+        0x6a, 1, 0x6a, 5, 0x57, ...call('GetPixel'), 0x01, 0xd8,
+        0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); img.fill(0xff, 0x440, 0x450);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: BitBlt SRCAND, a 1-bit bitmap in the destination DC\'s colours', got, '80'); }
 // SetTimer: WM_TIMER when it is due and nothing else is queued, its TIMERPROC called by DispatchMessage
 // (Minesweeper's clock never ran). A thread's timer of 50 ms; the loop takes and dispatches until the
 // procedure has counted three; the exit code is the count.
