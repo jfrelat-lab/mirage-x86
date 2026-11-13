@@ -6,6 +6,18 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-13
 
+- **StarCraft's shareware installer runs, and the game starts**: Blizzard's installer (1998) shows its menu
+  -- drawing into an 8-bit DIB section now lands in its memory, as indices of its own colours; it was
+  ignored, and the menu, composed in one, never showed -- then its licence, the install directory (a tree
+  view, the shell's desktop folder and allocator as COM objects with nothing in them, Explorer's folders
+  in the registry), and installs the game, its fonts encrypted into its MPQ (`ddraw.dll` has XP's
+  version; DirectX's version is in the registry). The game then opens its archive: a DLL loaded with the
+  program gets a non-NULL `lpvReserved` in its `DllMain`, as Windows passes it -- Storm.dll, given NULL,
+  believed itself loaded by `LoadLibrary` and recomputed its MPQ crypt table with another seed, and no
+  file of its archives was found. It sets its 640x480 mode and stops on its first file read through
+  Storm's loading thread. Some 40 calls more (dates and times, disk space, `crtdll.dll` with msvcrt's
+  C functions, registry enumeration, text extents). `tools/win32/run.mjs`: `MIRAGE_W32STUBS=list`,
+  `MIRAGE_W32DUMPDIR`, `MIRAGE_W32MEMDUMP=abs:...`.
 - **WinQuake through DirectDraw**: SciTech MGL looks for `system32\ddraw.dll` on the disk before it offers
   DirectDraw's modes, and found nothing there, so WinQuake fell back to GDI; a DLL made here is now found
   in the system directory. Then MGL asked the primary surface for its back buffer with

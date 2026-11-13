@@ -3,6 +3,7 @@
 //
 //   node tools/win32/run.mjs <program.exe> [arguments...]
 //   MIRAGE_W32STUBS=1               an import MIRAGE-WIN32 does not make yet stops the run, named, when called
+//                                   (=list: each such import also named at the start)
 //                                   (the loader itself refuses it): what a program calls, in its order
 //   MIRAGE_W32SHOTS=5,10 MIRAGE_W32SHOTPREFIX=/tmp/w   the screen (a GDI window's, on the card's framebuffer)
 //                                   at those guest seconds: <prefix>-<s>s.png
@@ -20,7 +21,8 @@
 //   MIRAGE_W32FONTS=arial=<ttf>,arial:bold=<ttf>  TrueType fonts the program selects, as the page's machine.fonts
 //   MIRAGE_W32CODEPAGE=932          the system's code page (machine.codepage): Shift-JIS, a Japanese Windows'
 //   MIRAGE_W32DUMP=<name>,...       those files of the program's disk at the end (what it wrote)
-//   MIRAGE_W32MEMDUMP=<mod>:<rva>:<size>@<s>,<s>:<prefix>  a module's bytes at those guest seconds
+//   MIRAGE_W32DUMPDIR=<dir>         ... written into that directory, as bytes, instead
+//   MIRAGE_W32MEMDUMP=<mod>:<rva>:<size>@<s>,<s>:<prefix>  a module's bytes at those guest seconds; <mod> "abs": an address
 //   MIRAGE_W32WINS=1                the windows at the end: handle, class, parent, id, place, style, title
 //   MIRAGE_W32TEX=<dir>             every texture level as the program unlocks it: <dir>/NNNN.bin and index.json
 //   MIRAGE_W32WAV=<file.wav>        what waveOut played (and <file>.midi.wav what MIDI played: midiOut, MCI)
@@ -267,6 +269,7 @@ if (process.env.MIRAGE_W32STUBS) {
         const v = u32(t), ord = v & 0x80000000 ? v & 0xffff : 0, name = ord ? `#${ord}` : str(off(v) + 2);
         if (ord ? Object.values(mod.fns).some((f) => f[2] && f[2].ordinal === ord) : name in mod.fns) continue;
         mod.fns[name] = ['', () => { throw new Error(`mirage-win32: ${dll}!${name} is called and not made yet`); }, ord ? { ordinal: ord, noName: true } : {}];
+        if (process.env.MIRAGE_W32STUBS === 'list') process.stderr.write(`mirage-win32: not made yet: ${dll}!${name}\n`);
       }
     }
   }
@@ -311,7 +314,7 @@ const MEMDUMP = (() => { const v = process.env.MIRAGE_W32MEMDUMP; if (!v) return
   return { mod, rva: parseInt(rva, 16), size: parseInt(size, 16), times: times.split(',').map(Number), prefix, n: 0 }; })();
 while (!lx.done && mc.cpu.cycles < LIMIT) {
   if (MEMDUMP && MEMDUMP.times.length && lx.mono() >= MEMDUMP.times[0]) {
-    MEMDUMP.times.shift(); const m = loaded.x.win.modules.get(MEMDUMP.mod), out = Buffer.alloc(4 + MEMDUMP.size);
+    MEMDUMP.times.shift(); const m = MEMDUMP.mod === "abs" ? { base: 0 } : loaded.x.win.modules.get(MEMDUMP.mod), out = Buffer.alloc(4 + MEMDUMP.size);
     if (m) { out.writeUInt32LE(m.base, 0); Buffer.from(loaded.x.bytes(m.base + MEMDUMP.rva, MEMDUMP.size)).copy(out, 4); }
     const file = `${MEMDUMP.prefix}${++MEMDUMP.n}.bin`; writeFileSync(file, out); console.error(`mirage-win32: ${MEMDUMP.mod} at ${lx.mono().toFixed(1)} s -> ${file}`);
   }
@@ -335,7 +338,12 @@ if (WAV) {
   if (midiHeard.some((v) => v)) { writeFileSync(WAV.replace(/\.wav$/i, '') + '.midi.wav', writeWav(null, midiHeard, midiRate)); console.error(`mirage-win32: ${(midiHeard.length / 2 / midiRate).toFixed(1)} s of MIDI -> ${WAV.replace(/\.wav$/i, '')}.midi.wav`); }
 }
 // MIRAGE_W32DUMP=qconsole.log: a file of the program's disk at the end (what it wrote: Half-Life's -condebug log).
-if (process.env.MIRAGE_W32DUMP) for (const n of process.env.MIRAGE_W32DUMP.split(',')) { const f = apis.readFile(n); console.error(`w32 file ${n}:`, f ? Buffer.from(f).toString('latin1') : '(none)'); }
+// MIRAGE_W32DUMPDIR=<dir>: those files written there instead, as bytes, by their base name (an installer's).
+if (process.env.MIRAGE_W32DUMP) for (const n of process.env.MIRAGE_W32DUMP.split(',')) {
+  const f = apis.readFile(n), dir = process.env.MIRAGE_W32DUMPDIR;
+  if (dir && f) { const { writeFileSync, mkdirSync } = await import('node:fs'); mkdirSync(dir, { recursive: true }); writeFileSync(`${dir}/${n.replace(/^.*[\\/]/, '')}`, f); console.error(`w32 file ${n}: ${f.length} bytes`); }
+  else console.error(`w32 file ${n}:`, f ? (dir ? '' : Buffer.from(f).toString('latin1')) : '(none)');
+}
 if (PROBE && probes.counts) console.error('probe counts:', JSON.stringify(Object.fromEntries(probes.counts)));
 if (PROBE && probes.sprCounts) console.error('probe hud draws:', JSON.stringify(probes.sprCounts));
 // MIRAGE_W32BLOCKS=<preferred lo>-<preferred hi>@<module>: the blocks translated there so far (executed at least

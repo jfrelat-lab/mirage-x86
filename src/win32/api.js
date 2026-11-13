@@ -846,6 +846,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (w.main && !st.mainDialog && msg !== 0x14) return undefined;      // a game's or an intro's window: as it always was, but erased with its class's brush
     if ((w.cls === 'combobox' || w.cls === 'listbox') && LIST_OPS[w.cls][msg]) return listOp(x, hwnd, w, LIST_OPS[w.cls][msg], wp, lp);
     if (w.cls === 'combobox' || w.cls === 'listbox') { const r = listInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
+    // A tree view (SysTreeView32): its items kept as handles, none drawn yet. TVM_INSERTITEM gives each a
+    // handle (the StarCraft installer's folder tree stops, "exp1: Error 0", on NULL), TVM_DELETEITEM and
+    // the others answer as an empty tree does.
+    if (w.cls === 'systreeview32' && msg >= 0x1100 && msg < 0x1200) {
+      if (msg === 0x1100 || msg === 0x1132) return (w.treeNext = (w.treeNext || 0x1000) + 1);   // TVM_INSERTITEMA/W
+      if (msg === 0x1101) return 1;                                                               // TVM_DELETEITEM
+      return 0;
+    }
     switch (msg) {
       case 0x0c: w.title = lp ? x.str(lp, 1024) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
       case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, new TextEncoder().encode(t + '\0')); return t.length; }   // WM_GETTEXT
@@ -1816,7 +1824,29 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (deskMode()) wm.presentDesk(x.lx, sc); else if (sc === st.screen) wm.present(x.lx, sc); else { wm.dirty = true; wm.present(x.lx, null); }
     } };
     const bm = st.gdi.get(st.dcBitmaps.get(hdc));
-    if (!bm || bm.kind !== 'bitmap' || bm.dib8) return null;          // drawing into an 8-bit section: not here
+    if (!bm || bm.kind !== 'bitmap') return null;
+    // An 8-bit section: its indices as colours, and what the drawing changed back into indices of its own
+    // table (the same colour's first index, or the nearest). The StarCraft installer composes its menu in
+    // one and BitBlts it into another, the screen's.
+    if (bm.dib8) {
+      const { bits, stride } = bm.dib8, raw = x.bytes(bits, stride * bm.h), c = bm.colors, w = bm.w, h = bm.h;
+      const row = (Y) => (bm.up ? h - 1 - Y : Y) * stride, px = new Uint32Array(w * h);
+      for (let Y = 0; Y < h; Y++) { const r = row(Y); for (let X = 0; X < w; X++) px[Y * w + X] = c[raw[r + X]]; }
+      const was = px.slice();
+      return { w, h, px, done: () => {
+        const near = new Map();
+        for (let i = 255; i >= 0; i--) near.set(c[i], i);
+        const index = (v) => {
+          let k = near.get(v); if (k !== undefined) return k;
+          let best = Infinity; k = 0;
+          for (let i = 0; i < 256; i++) { const d = ((c[i] >> 16 & 255) - (v >> 16 & 255)) ** 2 + ((c[i] >> 8 & 255) - (v >> 8 & 255)) ** 2 + ((c[i] & 255) - (v & 255)) ** 2; if (d < best) { best = d; k = i; } }
+          near.set(v, k); return k;
+        };
+        let lo = h, hi = -1;
+        for (let Y = 0; Y < h; Y++) { const r = row(Y); for (let X = 0; X < w; X++) { const q = Y * w + X; if (px[q] !== was[q]) { raw[r + X] = index(px[q]); lo = Math.min(lo, r); hi = Math.max(hi, r); } } }
+        if (hi >= 0) x.write(bits + lo, raw.subarray(lo, hi + stride));
+      } };
+    }
     if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
     if (bm.load) bm.load(x);                                          // a DirectDraw surface's DC (src/win32/ddraw.js)
     return { w: bm.w, h: bm.h, px: bm.px, done: () => { if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, false); if (bm.store) bm.store(x); } };
@@ -2469,6 +2499,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     isdigit: ub.isdigit,
     // sprintf(buf, fmt, ...): %d %i %u %x %X %c %s %f %%, with width and precision, the arguments read from
     // the caller's stack after the format (cdecl's varargs: doubles are 8 bytes there).
+    vsprintf: ['ppp', (x, buf, fmt, ap) => { const out = formatC(x, x.str(fmt), ap); x.write(buf, new TextEncoder().encode(out + '\0')); return out.length; }, cd],
+    // _fullpath: a relative path below C:\ (the program's directory), in a buffer of the program's or one allocated.
+    _fullpath: ['ppu', (x, buf, rel, n) => {
+      const r = x.str(rel), full = /^[a-z]:/i.test(r) ? r : 'C:\\' + r.replace(/^[\\/]+/, '').replace(/\//g, '\\');
+      if (buf && full.length >= n) return 0;
+      const p = buf || x.win.heapAlloc(full.length + 1); x.write(p, new TextEncoder().encode(full + '\0')); return p;
+    }, cd],
     sprintf: ['pp', (x, buf, fmt) => {
       const out = formatC(x, x.str(fmt), (x.cpu.reg[4] >>> 0) + 12);
       x.write(buf, new TextEncoder().encode(out + '\0'));
@@ -2663,6 +2700,60 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // The Unicode and post-XP calls (src/win32/modern.js), under the names still not answered.
   const modern = modernApis({ st, kernel32, user32, gdi32, send, advapi32: classic.advapi32, winmm });
   for (const [dll, t] of [[kernel32, modern.kernel32], [user32, modern.user32], [gdi32, modern.gdi32], [winmm, modern.winmm]]) for (const [k, v] of Object.entries(t || {})) if (!(k in dll)) dll[k] = v;
+  /*
+   * StarCraft's calls (1998): the date and time as an English Windows writes them (the clock's, or the
+   * SYSTEMTIME given), one drive with room on it, no other process to start (CreateProcess and LoadModule
+   * fail), text measured a character at a time, regions that are never kept (src/win32/classic.js).
+   */
+  const nowParts = (x, p) => {
+    if (p) return { y: x.r16(p), mo: x.r16(p + 2), d: x.r16(p + 6), h: x.r16(p + 8), mi: x.r16(p + 10), s: x.r16(p + 12) };
+    const t = new Date((x.lx.now ? x.lx.now() : Math.floor(Date.now() / 1000)) * 1000);
+    return { y: t.getFullYear(), mo: t.getMonth() + 1, d: t.getDate(), h: t.getHours(), mi: t.getMinutes(), s: t.getSeconds() };
+  };
+  const putOut = (x, buf, n, str) => { if (!n) return str.length + 1; if (n <= str.length) return 0; x.write(buf, new TextEncoder().encode(str + '\0')); return str.length + 1; };
+  const two = (v) => String(v).padStart(2, '0');
+  Object.assign(kernel32, {
+    GetDateFormatA: ['uupppi', (x, lcid, flags, date, fmt, buf, n) => { const t = nowParts(x, date); return putOut(x, buf, n, `${t.mo}/${t.d}/${String(t.y).slice(-2)}`); }],
+    GetTimeFormatA: ['uupppi', (x, lcid, flags, time, fmt, buf, n) => { const t = nowParts(x, time); return putOut(x, buf, n, `${t.h % 12 || 12}:${two(t.mi)}:${two(t.s)} ${t.h < 12 ? 'AM' : 'PM'}`); }],
+    GetLogicalDriveStringsA: ['up', (x, n, buf) => { if (n >= 5) x.write(buf, new TextEncoder().encode('C:\\\0\0')); return 4; }],
+    // 512-byte sectors, 8 to a cluster: 256 MiB free of 512.
+    GetDiskFreeSpaceA: ['ppppp', (x, root, spc, bps, free, total) => { if (spc) x.w32(spc, 8); if (bps) x.w32(bps, 512); if (free) x.w32(free, 0x10000); if (total) x.w32(total, 0x20000); return 1; }],
+    VirtualLock: ['pu', () => 1], VirtualUnlock: ['pu', () => 1],
+    CreateProcessA: ['pppppiuppp', () => 0], GetExitCodeProcess: ['pp', () => 0], LoadModule: ['pp', () => 2],
+    GetTempPathA: ['up', (x, n, buf) => putOut(x, buf, n, 'C:\\') - 1],
+    // Its installer's: no named event exists to open; files moved (MoveFileEx: MoveFile's, a delayed move
+    // done at once); Windows' directory; a short name the long one (8.3 names are not kept here).
+    OpenEventA: ['uip', () => 0],
+    MoveFileExA: ['ppu', (x, a, b) => (b ? kernel32.MoveFileA[1](x, a, b) : kernel32.DeleteFileA[1](x, a))],
+    GetWindowsDirectoryA: ['pu', (x, buf, n) => { const w = 'C:\\WINDOWS'; if (n > w.length) x.write(buf, new TextEncoder().encode(w + '\0')); return w.length; }],
+    SetVolumeLabelA: ['pp', () => 1], RemoveDirectoryA: ['p', () => 1],
+    GetShortPathNameA: ['ppu', (x, a, b, n) => { const t = x.str(a); if (n > t.length) x.write(b, new TextEncoder().encode(t + '\0')); return t.length; }],
+    GetTempFileNameA: ['ppup', (x, path, pre, u, buf) => { const k = u || 1; x.write(buf, new TextEncoder().encode(`${x.str(path).replace(/\\?$/, '\\')}${x.str(pre, 3)}${k.toString(16).toUpperCase()}.TMP\0`)); return k; }],
+  });
+  for (const [k, v] of Object.entries({
+    DestroyAcceleratorTable: ['p', () => 1], ExitWindowsEx: ['uu', () => 0], WaitForInputIdle: ['pu', () => 0], EnumWindows: ['pp', () => 1], FindWindowExA: ['pppp', () => 0],
+    DrawEdge: ['ppuu', () => 1], CreateCursor: ['piiiipp', () => st.newHandle('cursor', {})], DestroyCursor: ['p', () => 1],
+    GetUpdateRgn: ['ppi', () => 1],                                    // NULLREGION: nothing waits to be painted
+    GetClassLongA: ['pi', () => 0], SetClassLongA: ['pii', () => 0],
+  })) if (!(k in user32)) user32[k] = v;
+  const extent = (x, hdc, str, n) => { const sz = x.win.heapAlloc(8); gdi32.GetTextExtentPoint32A[1](x, hdc, str, n, sz); const w = x.r32(sz), h = x.r32(sz + 4); x.win.heapFree(sz); return { w, h }; };
+  for (const [k, v] of Object.entries({
+    // How many characters fit in `max` pixels, and each one's right edge.
+    GetTextExtentExPointA: ['ppiippp', (x, hdc, str, n, max, fit, dx, size) => {
+      let k = 0;
+      for (let i = 1; i <= n; i++) { const w = extent(x, hdc, str, i).w; if (dx) x.w32(dx + 4 * (i - 1), w); if (w <= max) k = i; }
+      if (fit) x.w32(fit, k);
+      const all = extent(x, hdc, str, n); x.w32(size, all.w); x.w32(size + 4, all.h); return 1;
+    }],
+    // ABC: no overhang -- each character's advance is its B.
+    GetCharABCWidthsA: ['puup', (x, hdc, first, last, abc) => {
+      const c = x.win.heapAlloc(2);
+      for (let ch = first; ch <= last; ch++) { x.w8(c, ch); x.w32(abc + 12 * (ch - first), 0); x.w32(abc + 12 * (ch - first) + 4, extent(x, hdc, c, 1).w); x.w32(abc + 12 * (ch - first) + 8, 0); }
+      x.win.heapFree(c); return 1;
+    }],
+    SetTextAlign: ['pu', () => 0], GetRegionData: ['pup', () => 0], RectInRegion: ['pp', () => 1],
+  })) if (!(k in gdi32)) gdi32[k] = v;
+  if (!winmm.waveOutGetID) winmm.waveOutGetID = ['pp', (x, h, p) => { if (p) x.w32(p, 0); return 0; }];
   kernel32.RtlZeroMemory = ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }];   // kernel32's, forwarded to ntdll's (Spider imports it so)
   const tables = [
     { dll: 'msvcrt.dll', fns: msvcrt },
@@ -2672,7 +2763,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
      * _local_unwind2 sets the frame's try level and runs no __finally block (none is called here);
      * _global_unwind2 unwinds nothing.
      */
-    { dll: 'crtdll.dll', fns: { srand: msvcrt.srand, rand: msvcrt.rand, time: msvcrt.time, exit: msvcrt.exit, _exit: msvcrt._exit, _initterm: msvcrt._initterm,
+    { dll: 'crtdll.dll', fns: { ...Object.assign({}, ...ucrt.map((t) => t.fns)), ...msvcrt, srand: msvcrt.srand, rand: msvcrt.rand, time: msvcrt.time, exit: msvcrt.exit, _exit: msvcrt._exit, _initterm: msvcrt._initterm,
       _XcptFilter: msvcrt._XcptFilter, __GetMainArgs: msvcrt.__getmainargs, _acmdln_dll: msvcrt._acmdln,
       _fmode_dll: ['', () => 0, { data: true }], _commode_dll: ['', () => 0, { data: true }],
       _local_unwind2: ['pi', (x, frame, level) => { x.w32(frame + 12, level); return 0; }, { cdecl: true }], _global_unwind2: ['p', () => 0, { cdecl: true }] } },
@@ -2839,7 +2930,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     },
   };
   /** A file of the program's disk, by name (the loader's DLLs of the program's own), or null. */
-  tables.readFile = (name) => { const f = diskFile(name); return f && f.bytes ? f.bytes : null; };
+  tables.readFile = (name) => { const f = diskFile(name); return f && f.bytes ? f.bytes.subarray(0, f.size) : null; };
   /** Where WebGL's picture goes on the screen, for a framed window (null: it is the whole screen). */
   // The windows as they are (tools/win32/run.mjs MIRAGE_W32WINS): handle, class, parent, id, place, style, title.
   tables.windows = () => [...st.wins.values()].map((w) => ({ hwnd: w.hwnd.toString(16), cls: w.cls, parent: (w.parent || 0).toString(16), id: w.id, rect: [w.x, w.y, w.w, w.h], style: (w.style >>> 0).toString(16), visible: !!w.visible, title: w.title, image: w.image || undefined }));

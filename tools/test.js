@@ -4990,7 +4990,8 @@ const runLinux = (hex, argv) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: the GL surface follows a new video mode at wglMakeCurrent; wglSwapBuffers; glDeleteTextures, glScissor', got, '640x480,800x600 function ip iiii');
   // Half-Life's launcher (1999, MFC): its settings in a registry in memory -- a key made then opened by
-  // another spelling, a value written and read back (asked its size first), one missing, the subkeys listed.
+  // another spelling, a value written and read back (asked its size first), one missing, the subkeys listed
+  // (Software's first is Microsoft, made with the registry: DirectX's key).
   try { const { fn, x, str } = await w32(), a = (n) => fn('advapi32.dll', n), out = x.win.heapAlloc(64), r = [];
     r.push(a('RegCreateKeyExA')(0x80000002, str('Software\\Valve\\Half-Life'), 0, 0, 0, 0x20006, 0, out, out + 4), x.r32(out + 4));
     const hk = x.r32(out); r.push(a('RegSetValueExA')(hk, str('Name'), 0, 1, str('Gordon'), 7)); a('RegCloseKey')(hk);
@@ -4998,7 +4999,7 @@ const runLinux = (hex, argv) => {
     const h2 = x.r32(out); x.w32(out + 8, 0); r.push(a('RegQueryValueExA')(h2, str('name'), 0, out + 12, 0, out + 8), x.r32(out + 8));
     r.push(a('RegQueryValueExA')(h2, str('Name'), 0, out + 12, out + 16, out + 8), x.str(out + 16), a('RegQueryValueExA')(h2, str('Gone'), 0, 0, 0, 0));
     r.push(a('RegCreateKeyExA')(0x80000002, str('Software\\Valve\\Half-Life'), 0, 0, 0, 0, 0, out, out + 4), x.r32(out + 4), a('RegOpenKeyExA')(0x80000002, str('Software\\Nobody'), 0, 1, out));
-    a('RegOpenKeyExA')(0x80000002, str('Software'), 0, 1, out); x.w32(out + 8, 32); r.push(a('RegEnumKeyExA')(x.r32(out), 0, out + 16, out + 8, 0, 0, 0, 0), x.str(out + 16), a('RegEnumKeyExA')(x.r32(out), 1, out + 16, out + 8, 0, 0, 0, 0));
+    a('RegOpenKeyExA')(0x80000002, str('Software'), 0, 1, out); x.w32(out + 8, 32); r.push(a('RegEnumKeyExA')(x.r32(out), 1, out + 16, out + 8, 0, 0, 0, 0), x.str(out + 16), a('RegEnumKeyExA')(x.r32(out), 2, out + 16, out + 8, 0, 0, 0, 0));
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a registry in memory -- keys made and opened, values set and read, subkeys listed', got, '0 1 0 0 0 7 0 Gordon 2 0 2 2 0 valve 259');
@@ -5352,6 +5353,41 @@ const runPE = async (exe, readFile) => {
     got = String(await runPE(exe, (k) => (k.toLowerCase() === 't.dll' ? lib : null)));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: an imported DLL\'s DllMain runs before the entry point; static TLS through fs:[2Ch]', got, '142'); }
+// A DLL loaded with the program has a DllMain's lpvReserved that is not NULL (Windows passes its start-up
+// CONTEXT); NULL is LoadLibrary's. StarCraft's Storm.dll recomputes its MPQ crypt table with another seed
+// when it believes itself loaded dynamically, and then finds no file in its archives. The DllMain keeps
+// lpvReserved != 0; the export returns it; the exit code is that.
+{ let got;
+  try {
+    const lib = mkPE({ base: 0x50000000, dll: true, exports: { f: 0x20 }, code: (at) => Uint8Array.from([
+      0x8b, 0x44, 0x24, 0x0c, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0, 0xa3, ...le(at.d(0x400)),   // flag = lpvReserved != 0
+      0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0x00, ...new Array(0x20 - 25).fill(0x90), 0xa1, ...le(at.d(0x400)), 0xc3]) });
+    const exe = mkPE({ imports: [{ dll: 't.dll', names: ['f'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => Uint8Array.from([
+      0xff, 0x15, ...le(at.iat['t.dll!f']), 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]) });
+    got = String(await runPE(exe, (k) => (k.toLowerCase() === 't.dll' ? lib : null)));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: an imported DLL\'s DllMain gets a non-NULL lpvReserved', got, '1'); }
+// Drawing into an 8-bit DIB section lands in its memory, as indices of its own colour table: a 4x1 section
+// (grey 80h at index 1), PatBlt with a grey brush over it; the exit code is the first pixel's index. The
+// StarCraft installer composes its menu in one, and nothing it drew there showed.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'gdi32.dll', names: ['CreateCompatibleDC', 'CreateDIBSection', 'SelectObject', 'CreateSolidBrush', 'PatBlt'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const bmi = at.d(0x400), pbits = at.d(0x3f0);  // the image is 500h bytes: the section's header at 400h
+      const main = [0x6a, 0, 0xff, 0x15, ...le(at.iat['gdi32.dll!CreateCompatibleDC']), 0x89, 0xc6,           // esi = memory DC
+        0x6a, 0, 0x6a, 0, 0x68, ...le(pbits), 0x6a, 0, 0x68, ...le(bmi), 0x56, 0xff, 0x15, ...le(at.iat['gdi32.dll!CreateDIBSection']),
+        0x50, 0x56, 0xff, 0x15, ...le(at.iat['gdi32.dll!SelectObject']),
+        0x68, ...le(0x808080), 0xff, 0x15, ...le(at.iat['gdi32.dll!CreateSolidBrush']), 0x50, 0x56, 0xff, 0x15, ...le(at.iat['gdi32.dll!SelectObject']),
+        0x68, ...le(0xf00021), 0x6a, 1, 0x6a, 4, 0x6a, 0, 0x6a, 0, 0x56, 0xff, 0x15, ...le(at.iat['gdi32.dll!PatBlt']),   // PATCOPY
+        0xa1, ...le(pbits), 0x0f, 0xb6, 0x00, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main);
+      // BITMAPINFOHEADER: 4 x 1, 8 bits, 2 colours used; RGBQUADs black, grey 80h.
+      img.set([40, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x80, 0x80, 0], 0x400);
+      return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: drawing into an 8-bit DIB section writes its colour indices', got, '1'); }
 // SetWindowPos that sizes the main window sends WM_WINDOWPOSCHANGED, then WM_SIZE, as Windows does: SDL 2
 // takes a new size from the first (its fullscreen-desktop window kept a 640x480 framebuffer otherwise).
 // The window procedure logs the messages; the exit code (a byte) is the first after SetWindowPos plus

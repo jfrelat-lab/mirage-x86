@@ -342,7 +342,12 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   const pending = loaded.filter((m) => m.init && m.entry), exeTls = tls.find((r) => r.base === base);
   if (pending.length || (exeTls && exeTls.callbacks.length)) {
     const code = [], d32 = (v) => code.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255);
-    const call = (b, fn) => { code.push(0x6a, 0x00, 0x6a, 0x01, 0x68); d32(b); code.push(0xb8); d32(fn); code.push(0xff, 0xd0); };   // fn(base, 1, 0)
+    // lpvReserved: not NULL for a DLL loaded with the program (Windows passes its start-up CONTEXT, here a
+    // zeroed one in the PEB's page, past the PEB: the heap is left as it was), NULL only for LoadLibrary's.
+    // Storm.dll (StarCraft) tells the two apart: loaded dynamically, it recomputed its MPQ crypt table with
+    // another seed, and no file of an archive was found.
+    const ctx = PEB + 0xc00;
+    const call = (b, fn) => { code.push(0x68); d32(ctx); code.push(0x6a, 0x01, 0x68); d32(b); code.push(0xb8); d32(fn); code.push(0xff, 0xd0); };   // fn(base, 1, ctx)
     for (const m of pending) { m.init = false; for (const c of m.tls ? m.tls.callbacks : []) call(m.base, c); call(m.base, m.entry); }
     for (const c of exeTls ? exeTls.callbacks : []) call(base, c);
     code.push(0xbb); d32(PEB); code.push(0xb8); d32(start); code.push(0xff, 0xe0);                                                            // EBX, EAX; jmp to the entry

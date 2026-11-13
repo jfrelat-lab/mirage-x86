@@ -392,6 +392,18 @@ export function classicApis({ st, wm }) {
   const openKey = (x, path, out) => { const h = nextKey; nextKey += 4; handles.set(h, path); if (out) x.w32(out, h); return 0; };
   const make = (path) => { const parts = path.split('\\'); for (let i = 1; i <= parts.length; i++) { const p = parts.slice(0, i).join('\\'); if (!keys.has(p)) keys.set(p, { values: new Map() }); } };
   for (const r of Object.values(ROOTS)) make(r.toLowerCase());
+  // The shell's folders, as a fresh Windows 98 sets them (an installer puts its shortcuts in Programs),
+  // and DirectX's version.
+  // Value names are kept in lower case, as valueName reads them.
+  {
+    const SF = { desktop: 'C:\\WINDOWS\\Desktop', programs: 'C:\\WINDOWS\\Start Menu\\Programs', 'start menu': 'C:\\WINDOWS\\Start Menu', startup: 'C:\\WINDOWS\\Start Menu\\Programs\\StartUp', personal: 'C:\\My Documents', fonts: 'C:\\WINDOWS\\Fonts' };
+    for (const k of ['hkcu\\software\\microsoft\\windows\\currentversion\\explorer\\shell folders', 'hkcu\\software\\microsoft\\windows\\currentversion\\explorer\\user shell folders']) {
+      make(k); for (const [n, v] of Object.entries(SF)) keys.get(k).values.set(n, { type: 1, data: new TextEncoder().encode(v + '\0') });
+    }
+    // DirectX's version, as XP's DirectX 9.0c writes it: installers read it before they ask for DirectX.
+    make('hklm\\software\\microsoft\\directx');
+    keys.get('hklm\\software\\microsoft\\directx').values.set('version', { type: 1, data: new TextEncoder().encode('4.09.00.0904\0') });
+  }
   const create = (x, hk, sub, out, disp) => {
     const p = pathOf(x, hk, sub); if (!p) return 6;                      // ERROR_INVALID_HANDLE
     const had = keys.has(p); make(p); if (disp) x.w32(disp, had ? 2 : 1);
@@ -437,6 +449,33 @@ export function classicApis({ st, wm }) {
       if (room <= n.length) return 234;
       x.write(name, new TextEncoder().encode(n + '\0')); x.w32(cb, n.length); return 0;
     }],
+    RegEnumKeyA: ['pupu', (x, hk, i, name, n) => { const t = x.win.heapAlloc(4); x.w32(t, n); try { return advapi32.RegEnumKeyExA[1](x, hk, i, name, t); } finally { x.win.heapFree(t); } }],
+    // The values one by one: name, type, data (ERROR_NO_MORE_ITEMS after the last).
+    RegEnumValueA: ['pupppppp', (x, hk, i, name, cbName, r, type, data, cb) => {
+      const k = keys.get(handles.get(hk) || (ROOTS[hk >>> 0] || '').toLowerCase()), all = k ? [...k.values] : [];
+      if (i >= all.length) return 259;
+      const [n, v] = all[i];
+      if (x.r32(cbName) <= n.length) return 234;
+      x.write(name, new TextEncoder().encode(n + '\0')); x.w32(cbName, n.length);
+      if (type) x.w32(type, v.type);
+      if (cb) { const room = x.r32(cb); x.w32(cb, v.data.length); if (data) { if (room < v.data.length) return 234; x.write(data, v.data); } }
+      return 0;
+    }],
+    // The key's counts: subkeys and values, and their longest names and data.
+    RegQueryInfoKeyA: ['pppppppppppp', (x, hk, cls, cbCls, r, nSub, maxSub, maxCls, nVal, maxName, maxData) => {
+      const p = handles.get(hk) || (ROOTS[hk >>> 0] || '').toLowerCase(), k = keys.get(p);
+      const kids = [...keys.keys()].filter((q) => q.startsWith(p + '\\') && !q.slice(p.length + 1).includes('\\')).map((q) => q.slice(p.length + 1));
+      const vals = k ? [...k.values] : [];
+      if (cls && cbCls) { x.w8(cls, 0); x.w32(cbCls, 0); }
+      const put = (q, v) => { if (q) x.w32(q, v); };
+      put(nSub, kids.length); put(maxSub, Math.max(0, ...kids.map((q) => q.length))); put(maxCls, 0);
+      put(nVal, vals.length); put(maxName, Math.max(0, ...vals.map(([n]) => n.length))); put(maxData, Math.max(0, ...vals.map(([, v]) => v.data.length)));
+      return 0;
+    }],
+    // Privileges (an installer's, to restart Windows): a token that holds none, and nothing to adjust.
+    OpenProcessToken: ['pup', (x, proc, acc, out) => { x.w32(out, st.newHandle('token', {})); return 1; }],
+    LookupPrivilegeValueA: ['ppp', (x, sys, name, luid) => { x.w32(luid, 0x13); x.w32(luid + 4, 0); return 1; }],
+    AdjustTokenPrivileges: ['pipupp', () => 1],
   };
   // ---- winmm: MCI by strings. No CD drive: "open cdaudio" and the rest answer MCIERR_INVALID_DEVICE_NAME,
   // which a game takes for a machine without its music. The command goes to the log.
@@ -488,9 +527,23 @@ export function classicApis({ st, wm }) {
   // The program's own file is read (its VS_VERSIONINFO resource, RT_VERSION 16): Cave Story shows its
   // version on its title screen from it. VerQueryValue answers "\\" (VS_FIXEDFILEINFO, after the
   // block's header and its key L"VS_VERSION_INFO", on a 4-byte boundary); other files have none here.
+  // A DLL made here has the version of XP SP3's (DirectX's 5.3.2600.5512, the others 5.1.2600.5512): a
+  // VS_VERSIONINFO of its fixed part alone. The StarCraft installer reads ddraw.dll's before it installs.
+  const madeVersions = new Map();
+  const madeVersion = (x, name) => {
+    if (!x.win.made || !x.win.made(name)) return null;
+    if (madeVersions.has(name)) return madeVersions.get(name);
+    const at = x.win.heapAlloc(92), b = new Uint8Array(92), v = new DataView(b.buffer);
+    v.setUint16(0, 92, true); v.setUint16(2, 52, true);
+    [...'VS_VERSION_INFO'].forEach((c, i) => v.setUint16(6 + 2 * i, c.charCodeAt(0), true));
+    const ms = /^(ddraw|dsound|dinput|d3d)/.test(name) ? 0x50003 : 0x50001;
+    [0xfeef04bd, 0x10000, ms, 0x0a281588, ms, 0x0a281588, 0x3f, 0, 0x40004, 2, 0, 0, 0].forEach((w, i) => v.setUint32(40 + 4 * i, w >>> 0, true));
+    x.write(at, b);
+    const r = { at, size: 92 }; madeVersions.set(name, r); return r;
+  };
   const ownVersion = (x, f) => {
     const name = x.str(f, 260).split('\\').pop().toLowerCase();
-    if (name !== x.win.path.split('\\').pop().toLowerCase()) return null;
+    if (name !== x.win.path.split('\\').pop().toLowerCase()) return madeVersion(x, name);
     return findResource(x, x.win.base, 16, 1);
   };
   const version = {
@@ -515,12 +568,61 @@ export function classicApis({ st, wm }) {
     }],
   };
   // ---- shell32.dll: files dropped on the window (none ever is), and documents opened (none is: there
-  // is no shell to open them with -- SE_ERR_NOASSOC).
+  // is no shell to open them with -- SE_ERR_NOASSOC, and FindExecutable finds no program for them).
   const shell32 = {
     DragAcceptFiles: ['pi', () => 0], DragFinish: ['p', () => 0],
     DragQueryFileA: ['pupu', () => 0],
     ShellExecuteA: ['ppppppi', () => 31],
+    // The shell's allocator (the process heap's) and its namespace: a desktop folder with nothing in it
+    // (COM objects below). The StarCraft installer fills its folder tree from it, and stopped when there was
+    // none ("exp1: Error 0"). A file's information: none (0).
+    SHGetMalloc: ['p', (x, pp) => { x.w32(pp, shellObj(x, 'IMalloc')); return 0; }],
+    SHGetDesktopFolder: ['p', (x, pp) => { x.w32(pp, shellObj(x, 'IShellFolder')); return 0; }],
+    SHGetFileInfoA: ['pupuu', () => 0],
+    FindExecutableA: ['ppp', (x, f, d, out) => { if (out) x.w8(out, 0); return 31; }],
+    // The special folders (CSIDL): none to give -- E_FAIL, and no path from a list there is not.
+    SHGetSpecialFolderLocation: ['pip', (x, h, csidl, pp) => { if (pp) x.w32(pp, 0); return 0x80004005; }],
+    SHGetPathFromIDListA: ['pp', (x, l, out) => { if (out) x.w8(out, 0); return 0; }],
   };
+  /*
+   * The shell's COM objects, made as ddraw.js makes DirectDraw's: a pointer to a vtable of shell32's
+   * exports named "Interface::Method". IMalloc allocates on the heap; the desktop's IShellFolder lists no
+   * item (its IEnumIDList ends at once, S_FALSE), is named "Desktop", and binds to nothing (E_FAIL).
+   */
+  const E_FAIL = 0x80004005, SHELL_VT = {
+    IMalloc: 'Alloc:1 Realloc:2 Free:1 GetSize:1 DidAlloc:1 HeapMinimize:0',
+    IShellFolder: 'ParseDisplayName:6 EnumObjects:3 BindToObject:4 BindToStorage:4 CompareIDs:3 CreateViewObject:3 GetAttributesOf:3 GetUIObjectOf:6 GetDisplayNameOf:3 SetNameOf:5',
+    IEnumIDList: 'Next:3 Skip:1 Reset:0 Clone:1',
+  };
+  const shellVt = new Map();
+  const shellObj = (x, iface) => {
+    if (!shellVt.has(iface)) {
+      const mod = x.win.load('shell32.dll'), ms = ['QueryInterface', 'AddRef', 'Release', ...SHELL_VT[iface].split(' ').map((t) => t.split(':')[0])];
+      const v = x.win.heapAlloc(4 * ms.length); ms.forEach((n, i) => x.w32(v + 4 * i, mod.exports.get(`${iface}::${n}`)));
+      shellVt.set(iface, v);
+    }
+    const p = x.win.heapAlloc(8); x.w32(p, shellVt.get(iface)); return p;
+  };
+  const SHELL_IMPL = {
+    IMalloc: { Alloc: (x, self, n) => x.win.heapAlloc(n), Realloc: (x, self, p, n) => { const q = x.win.heapAlloc(n); if (p) x.write(q, x.bytes(p, n)); return q; },
+      Free: () => 0, GetSize: () => -1, DidAlloc: () => -1, HeapMinimize: () => 0 },
+    IShellFolder: {
+      EnumObjects: (x, self, hwnd, flags, pp) => { x.w32(pp, shellObj(x, 'IEnumIDList')); return 0; },
+      CompareIDs: () => 0, GetAttributesOf: () => 0,
+      // STRRET_CSTR (2): the name in the structure itself, at 4.
+      GetDisplayNameOf: (x, self, pidl, flags, sr) => { x.w32(sr, 2); x.write(sr + 4, new TextEncoder().encode('Desktop\0')); return 0; },
+    },
+    IEnumIDList: { Next: (x, self, n, items, got) => { if (got) x.w32(got, 0); return 1; }, Skip: () => 1, Reset: () => 0 },
+  };
+  for (const [iface, list] of Object.entries(SHELL_VT)) {
+    let ord = 2000 + Object.keys(shell32).length;
+    const all = [['QueryInterface', 2], ['AddRef', 0], ['Release', 0], ...list.split(' ').map((t) => t.split(':'))];
+    for (const [n, k] of all) {
+      const f = n === 'QueryInterface' ? (x, self, iid, pp) => { x.w32(pp, self); return 0; } : n === 'AddRef' || n === 'Release' ? () => 1
+        : (SHELL_IMPL[iface][n] || ((x, self, ...a) => { const pp = { BindToObject: a[3], BindToStorage: a[3], CreateViewObject: a[2], Clone: a[0] }[n]; if (pp) x.w32(pp, 0); return E_FAIL; }));
+      shell32[`${iface}::${n}`] = ['p' + 'u'.repeat(+k), f, { ordinal: ord++ }];
+    }
+  }
   // ---- imm32.dll: no input method -- a window has no input context.
   const imm32 = {
     ImmGetContext: ['p', () => 0], ImmReleaseContext: ['pp', () => 1], ImmSetOpenStatus: ['pi', () => 0], ImmAssociateContext: ['pp', () => 0],
