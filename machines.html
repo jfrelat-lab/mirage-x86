@@ -106,7 +106,13 @@
 
   /* A chooser drawn over the screen, in the idiom of the machine. */
   .over { position: absolute; inset: 0; overflow: auto; }
-  .over[hidden] { display: none; }   /* a chooser's display (grid) would otherwise keep it over the screen */
+  .over[hidden] { display: none; }
+  /* A Windows program ended: the classic desktop, its icon in the top left corner as Explorer puts them. */
+  .desk { background: #3a6ea5; padding: 12px; }
+  .deskicon { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 84px; padding: 4px; background: none; border: 1px dotted transparent; color: #fff; font: 12px/1.3 Tahoma, Arial, sans-serif; text-shadow: 1px 1px 0 #000; cursor: pointer; }
+  .deskicon img, .deskicon i { width: 32px; height: 32px; image-rendering: pixelated; }
+  .deskicon i { display: block; background: #d4d0c8; border: 1px solid #fff; box-shadow: 1px 1px 0 #404040; }
+  .deskicon:hover span, .deskicon:focus span { background: #0a246a; } .deskicon:focus { border-color: #fff; outline: none; }   /* a chooser's display (grid) would otherwise keep it over the screen */
   /* A file dragged over the Linux machine: where it will land. */
   #stage.dropping::after { content: "Drop a Linux program (i386 ELF) to run it"; position: absolute; inset: 0; display: grid; place-items: center;
     background: rgba(0, 0, 0, .75); color: var(--ink); font: 16px ui-monospace, Menlo, monospace; border: 2px dashed var(--acc, #3fd0a0); }

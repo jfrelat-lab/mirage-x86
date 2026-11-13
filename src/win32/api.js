@@ -2662,7 +2662,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   /** Where WebGL's picture goes on the screen, for a framed window (null: it is the whole screen). */
   // The windows as they are (tools/win32/run.mjs MIRAGE_W32WINS): handle, class, parent, id, place, style, title.
   tables.windows = () => [...st.wins.values()].map((w) => ({ hwnd: w.hwnd.toString(16), cls: w.cls, parent: (w.parent || 0).toString(16), id: w.id, rect: [w.x, w.y, w.w, w.h], style: (w.style >>> 0).toString(16), visible: !!w.visible, title: w.title, image: w.image || undefined }));
-  tables.wm = { clientRect: () => (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0 };   // GDI frames shown
+  tables.wm = { clientRect: () => (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0,
+    // The program's icon (its first RT_GROUP_ICON's first image): { w, h, px 0x00RRGGBB, mask 1 transparent }, or null.
+    icon: (x) => { try { const b = st.gdi.get(loadIcon(x, x.win.base, null)); return b && b.px ? { w: b.w, h: b.h, px: b.px, mask: b.mask } : null; } catch { return null; } } };   // GDI frames shown
   return tables;
 }
 

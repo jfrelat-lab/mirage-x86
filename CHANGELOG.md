@@ -6,6 +6,9 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-13
 
+- **A Windows program that quits leaves the desktop and its icon**: once it has ended well, the Windows
+  machine shows the desktop with the program's own icon in its corner; a click starts it again. A program
+  that ends in an error keeps its last picture and the message.
 - **Windows' message boxes are shown**: MessageBox opens a box over its window and waits for a button
   (OK, Yes, No...), Enter pressing the one with the focus. It was only written in the log, so FreeCell's
   "That move is not allowed." went unseen.

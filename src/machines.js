@@ -330,15 +330,36 @@ async function linux(world = 'linux') {
   over.className = 'over term'; over.hidden = false;
   // Start an image on the canvas from its manifest and a file tree: the OASIS server's (/oasis-fs) or
   // one this page built itself from the layers (src/oasis-layers.js, through the oasis-fetch relay).
-  const start = async (m, img, host) => {
-    let lastLine = '';
+  // A Windows program that ended well (status 0): the desktop, its icon on it, as Windows leaves it -- a
+  // click on the icon starts it again, on a new machine (`again`). Ended otherwise, its last picture stays
+  // with the message, which says what went wrong.
+  const desktop = (m, s, again) => {
+    const ic = s.programIcon && s.programIcon();
+    let src = '';
+    if (ic) {
+      const c = document.createElement('canvas'); c.width = ic.w; c.height = ic.h;
+      const g = c.getContext('2d'), d = g.createImageData(ic.w, ic.h);
+      for (let i = 0; i < ic.w * ic.h; i++) { const p = ic.px[i]; d.data.set([(p >> 16) & 255, (p >> 8) & 255, p & 255, ic.mask && ic.mask[i] ? 0 : 255], 4 * i); }
+      g.putImageData(d, 0, 0); src = c.toDataURL();
+    }
+    over.className = 'over desk'; over.hidden = false;
+    over.innerHTML = `<button type="button" class="deskicon" title="Start it again">${src ? `<img src="${src}" alt="">` : '<i></i>'}<span>${esc(m.title.split(' — ')[0])}</span></button>`;
+    const b = over.querySelector('button');
+    b.onclick = () => { over.hidden = true; again(); };
+    b.focus();
+  };
+  const start = async (m, img, host, again = null) => {
+    let lastLine = '', s = null;
     try {
       const user = isLinux ? linuxUser(img) : null;              // a Linux account; Win32 has none
       if (!isLinux) img = { ...img, machine: { ...img.machine, desktop: fbSel.value } };
       if (user) log(`user: ${user}`);
-      const s = await startLinux({ canvas, img, host, user,
+      s = await startLinux({ canvas, img, host, user,
         onOutput: (t) => { logOutput(t); lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
-        onStatus: (t) => { status.textContent = t; if (/^exited/.test(t)) { setState('exited', ''); log(t); } } });
+        onStatus: (t) => {
+          status.textContent = t;
+          if (/^exited/.test(t)) { setState('exited', ''); log(t); if (!isLinux && again && /^exited with status 0$/.test(t) && s) desktop(m, s, again); }
+        } });
       session = { pause: s.pause, audio: s.audio };
       syncSound();                                                    // chosen from the list: the click came before
       window.mirage = s;
@@ -399,7 +420,7 @@ async function linux(world = 'linux') {
       try { tree = await buildTree(img, io); } catch (e) { log(String(e.message || e)); setState('failed', 'err'); return needs(m, String(e.message || e)); }
       log(`the tree is built (${tree.nodes.size} paths, ${((performance.now() - t0) / 1000).toFixed(1)} s); starting ${img.entry && img.entry.run}`);
       status.textContent = `starting ${m.title}…`;
-      await start(m, img, tree.host());
+      await start(m, img, tree.host(), () => runHere(m));
     };
     const items = [...introItems, ...listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => runHere(m) }))];
     shelf(shelfTitle, items, params.get('prog') || params.get('run'));
@@ -414,7 +435,7 @@ async function linux(world = 'linux') {
     over.hidden = true;
     status.textContent = `starting ${m.title}… (the first run fetches the image's layers)`;
     const img = await (await fetch(`/oasis-image.json?img=${encodeURIComponent(m.name)}`)).json();
-    await start(m, img, oasisHost(m.name));
+    await start(m, img, oasisHost(m.name), () => run(m));
   };
   const items = [...introItems, ...images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => run(m) }))];
   shelf(shelfTitle, items, params.get('prog') || params.get('run') || 'linux/mirage');

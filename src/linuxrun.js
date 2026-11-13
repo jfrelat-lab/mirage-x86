@@ -61,7 +61,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   lx.host = host;
   // machine.hle: libraries made in JavaScript in /usr/lib — ["sdl12", "gl", "glu", "asound"], the GL ones
   // PRISM's (src/hle/prism-gl.js) — for the Linux OpenGL intros of 2003-2010.
-  let hle = null, w32in = null, w32wm = null;
+  let hle = null, w32in = null, w32wm = null, w32loaded = null;
   if (win32) {
     const [{ prismLibraries }, { win32Apis }] = await Promise.all([import('./hle/prism-gl.js'), import('./win32/api.js')]);
     hle = await prismLibraries(lx, mc.mem, ['gl', 'glu']);
@@ -78,7 +78,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     // Japanese Windows (Cave Story's Shift-JIS text).
     const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files, env: img.entry.env || {}, codepage: m.codepage, desk: m.desktop });
     w32in = apis.input; w32wm = apis.wm;
-    win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
+    w32loaded = win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
   } else if (m.hle) {
     const [{ installHLE }, { prismLibraries }] = await Promise.all([import('./hle/index.js'), import('./hle/prism-gl.js')]);
     hle = await prismLibraries(lx, mc.mem, m.hle);
@@ -239,6 +239,8 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   return {
     mc, lx, audio, hle,
     w32: w32in ? { input: w32in, wm: w32wm } : null,                   // a Windows program's input, for tests that drive the page
+    /** A Windows program's icon once it has ended, for the desktop the page shows then (src/machines.js). */
+    programIcon: () => (w32wm && w32loaded ? w32wm.icon(w32loaded.x) : null),
     pause(on) { paused = on; },
     stop() {
       stopped = true; cancelAnimationFrame(raf); canvas.style.filter = ''; keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove);
