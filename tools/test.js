@@ -5456,6 +5456,25 @@ const runPE = async (exe, readFile) => {
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: DialogBoxIndirectParamA runs its modal loop and returns EndDialog\'s result', got, '2a'); }
+// MessageBox is a modal dialog: its loop runs until a button ends it, its result that button's id (it
+// returned IDOK at once, unseen -- FreeCell's "That move is not allowed."), and its default button has the
+// focus, so Enter is that button. MB_YESNO; a 50 ms timer's procedure posts Enter to the focused window;
+// the exit code is MessageBox's result, IDYES.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['SetTimer', 'MessageBoxA', 'GetFocus', 'PostMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const proc = at.d(0x200), text = at.d(0x440);
+      const main = [0x68, ...le(proc), 0x6a, 50, 0x6a, 0, 0x6a, 0, 0xff, 0x15, ...le(at.iat['user32.dll!SetTimer']),
+        0x6a, 4, 0x68, ...le(text), 0x68, ...le(text), 0x6a, 0, 0xff, 0x15, ...le(at.iat['user32.dll!MessageBoxA']),
+        0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      // PostMessageA(GetFocus(), WM_KEYDOWN, VK_RETURN, 0); ret 16
+      const tproc = [0xff, 0x15, ...le(at.iat['user32.dll!GetFocus']), 0x6a, 0, 0x6a, 0x0d, 0x68, ...le(0x100), 0x50, 0xff, 0x15, ...le(at.iat['user32.dll!PostMessageA']), 0xc2, 0x10, 0x00];
+      const img = new Uint8Array(0x500); img.set(main); img.set(tproc, 0x200); img.set(new TextEncoder().encode('Sure?\0'), 0x440);
+      return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: MessageBox is modal; Enter is its focused default button (IDYES)', got, '6'); }
 // SetTimer: WM_TIMER when it is due and nothing else is queued, its TIMERPROC called by DispatchMessage
 // (Minesweeper's clock never ran). A thread's timer of 50 ms; the loop takes and dispatches until the
 // procedure has counted three; the exit code is the count.

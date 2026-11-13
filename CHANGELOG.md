@@ -4,6 +4,16 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-13
+
+- **Windows' message boxes are shown**: MessageBox opens a box over its window and waits for a button
+  (OK, Yes, No...), Enter pressing the one with the focus. It was only written in the log, so FreeCell's
+  "That move is not allowed." went unseen.
+- **The Windows desktop's size is the visitor's choice**: 640x480 to 1920x1080 beside the Windows
+  machine's buttons, 1024x768 as before; a game's 640x480 window fills more of the screen on 800x600.
+- **A Windows program can read its own file**: the page left the program's .exe out of its disk, and
+  Half-Life's launcher, which reads itself to check it, stopped at "Could not validate Half-Life".
+
 ## 2026-11-12
 
 - **Jazz Jackrabbit 2 plays on MIRAGE-WIN32**: Epic MegaGames' shareware of 1998, unmodified, in its

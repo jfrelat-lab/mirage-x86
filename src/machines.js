@@ -264,9 +264,16 @@ async function linux(world = 'linux') {
   // /w/<name>, as tools/linux/run.mjs runs one, on a framebuffer of the size chosen beside the button
   // (the sizecoding intros of the 2020s draw for one size). Nothing leaves the browser.
   const fbSel = $('fbSel'), openBtn = $('openBtn'), openFile = $('openFile'), stage = $('stage');
-  fbSel.hidden = !isLinux; openBtn.hidden = !isLinux;
-  try { const f = localStorage.getItem('mirage.linux.fb'); if (f && [...fbSel.options].some((o) => o.value === f)) fbSel.value = f; } catch { /* storage refused */ }
-  fbSel.onchange = () => { try { localStorage.setItem('mirage.linux.fb', fbSel.value); } catch { /* storage refused */ } };
+  // On Windows the same list is the desktop's size: a game's 640x480 window fills more of the screen on
+  // an 800x600 desktop than on 1024x768. A change starts the program again on the new desktop.
+  const fbKey = isLinux ? 'mirage.linux.fb' : 'mirage.win32.desktop';
+  fbSel.hidden = false; openBtn.hidden = !isLinux;
+  if (!isLinux) fbSel.title = 'The Windows desktop\'s size: a change starts the program again';
+  try { const f = localStorage.getItem(fbKey); if (f && [...fbSel.options].some((o) => o.value === f)) fbSel.value = f; } catch { /* storage refused */ }
+  fbSel.onchange = () => {
+    try { localStorage.setItem(fbKey, fbSel.value); } catch { /* storage refused */ }
+    if (!isLinux && new URLSearchParams(location.search).get('run')) location.reload();
+  };
   const runBytes = async (title, fileName, bytes, fb, from, id = null) => {
     if (window.mirage && window.mirage.stop) window.mirage.stop();
     session = null;
@@ -327,6 +334,7 @@ async function linux(world = 'linux') {
     let lastLine = '';
     try {
       const user = isLinux ? linuxUser(img) : null;              // a Linux account; Win32 has none
+      if (!isLinux) img = { ...img, machine: { ...img.machine, desktop: fbSel.value } };
       if (user) log(`user: ${user}`);
       const s = await startLinux({ canvas, img, host, user,
         onOutput: (t) => { logOutput(t); lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },

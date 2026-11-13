@@ -142,7 +142,7 @@ function reAlloc(x, p, n, zero) {
   x.win.heapFree(p); return q;
 }
 
-export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252 } = {}) {
+export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null } = {}) {
   const st = windowState(fonts);
   // The system's code page (GetACP): 1252, a Western Windows XP's, or 932, a Japanese one's -- what the
   // ANSI calls' bytes mean, Shift-JIS there (Cave Story's text, 2004). An image's `machine.codepage`.
@@ -151,6 +151,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   /** Bytes of the system's code page as UTF-16 code units. */
   st.ansiDecode = (b) => (st.acp === 932 ? [...sjis.decode(b)].flatMap((c) => { const v = c.codePointAt(0); return v > 0xffff ? [0xd800 + ((v - 0x10000) >> 10), 0xdc00 + ((v - 0x10000) & 0x3ff)] : [v]; }) : [...b]);
   const wm = windowManager(st);                                       // the screen the window sits on (src/win32/wm.js)
+  // The desktop's size, "800x600" (the page's choice, an image's machine.desktop): 1024x768 otherwise.
+  { const [dw, dh] = String(desk || '').split('x').map(Number); if (dw >= 320 && dh >= 200) st.desk = { w: dw, h: dh }; }
   st.files = [];                                                      // handle - 4000h -> { f, pos }
   st.env = new Map(Object.entries(env).map(([k, v]) => [k.toUpperCase(), String(v)]));   // the environment beyond PATH (GetEnvironmentVariable)
   st.events = new Map(); st.dcBitmaps = new Map(); st.dcStates = new Map();
@@ -695,9 +697,31 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     x.write(code, Uint8Array.from(b));
     return (st.modalLoop = code);
   };
+  /*
+   * MessageBox: a modal dialog made here -- its text (one static, lines as the text breaks them), its
+   * buttons as the type's low nibble says (MB_OK, OKCANCEL, ABORTRETRYIGNORE, YESNOCANCEL, YESNO,
+   * RETRYCANCEL), the first the default; centred on its owner, its caption the given one. It returns the
+   * button's id, and the text goes to the log too. FreeCell's "That move is not allowed." is one.
+   */
+  const MB_BUTTONS = [[[1, 'OK']], [[1, 'OK'], [2, 'Cancel']], [[3, '&Abort'], [4, '&Retry'], [5, '&Ignore']], [[6, '&Yes'], [7, '&No'], [2, 'Cancel']], [[6, '&Yes'], [7, '&No']], [[4, '&Retry'], [2, 'Cancel']]];
+  const messageBox = (x, owner, text, caption, type) => {
+    x.win.say(`MessageBox("${caption}"): ${text}`);
+    const buttons = MB_BUTTONS[type & 15] || MB_BUTTONS[0], lines = text.split(/\r?\n/);
+    const tw = Math.min(280, Math.max(40, ...lines.map((l) => l.length * 4 + 8))), th = 8 * lines.length;
+    const bw = buttons.length * 56 - 6, cx = Math.max(tw + 20, bw + 20), by = 10 + th + 10, cy = by + 14 + 8;
+    const parts = [], u16 = (v) => parts.push(v & 255, (v >> 8) & 255), u32 = (v) => { u16(v & 0xffff); u16(v >>> 16); };
+    const wstrz = (t) => { for (const c of t) u16(c.charCodeAt(0)); u16(0); }, align = () => { while (parts.length & 3) parts.push(0); };
+    u32(0x80c80880); u32(0); u16(1 + buttons.length); u16(0); u16(0); u16(cx); u16(cy); u16(0); u16(0); wstrz(caption);   // DS_CENTER | DS_MODALFRAME, a caption
+    align(); u32(0x50000000); u32(0); u16(10); u16(10); u16(tw); u16(th); u16(0xffff); u16(0xffff); u16(0x0082); wstrz(text); u16(0);   // the text
+    buttons.forEach(([id, label], i) => {
+      align(); u32(0x50010000 | (i ? 0 : 1)); u32(0); u16(((cx - bw) >> 1) + 56 * i); u16(by); u16(50); u16(14); u16(id); u16(0xffff); u16(0x0080); wstrz(label); u16(0);
+    });
+    const tpl = x.win.heapAlloc(parts.length); x.write(tpl, Uint8Array.from(parts));
+    return createDialog(x, 0, tpl, owner || st.hwnd, 0, 0, 16, (dlg) => { const w = win(dlg); if (w) w.msgBox = buttons.map(([id]) => id); return modal(x, dlg, owner || st.hwnd, 16); });
+  };
   // The dialog made: shown, its owner disabled, and modalLoop(data) called in DialogBox's place (a send
-  // on DialogBox's own frame), its result DialogBox's.
-  const modal = (x, dlg, owner) => {
+  // on DialogBox's own frame), its result DialogBox's (`pop`: DialogBox's argument bytes, MessageBox's 16).
+  const modal = (x, dlg, owner, pop = 20) => {
     const w = win(dlg); if (!w) return -1;
     const data = x.win.heapAlloc(40); x.write(data, new Uint8Array(40)); x.w32(data + 4, dlg);
     w.modal = data;
@@ -705,7 +729,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (!w.visible && !w.ended) { w.visible = true; invalidate(dlg, true, true); }
     const o = owner && win(owner); if (o) o.enabled = false;
     w.modalOwner = owner;
-    return send(x, [{ fn: modalLoop(x), args: [data] }], (eax) => eax, 20);
+    // Activated, it has the focus: its first control with WS_TABSTOP (a message box's default button) unless
+    // its procedure put it inside already -- Enter and Escape reach it.
+    if (st.focus !== dlg && !isAncestor(dlg, st.focus)) {
+      const first = [...st.wins.values()].find((c) => c.parent === dlg && !c.dead && c.visible && c.enabled !== false && c.style & 0x10000);
+      st.focus = first ? first.hwnd : dlg;
+    }
+    return send(x, [{ fn: modalLoop(x), args: [data] }], (eax) => eax, pop);
   };
   // The main window gone and another top-level window shown: that one is the screen's from now on, as
   // the window a program shows after its splash (Jazz Jackrabbit 2's, made while the splash was up).
@@ -1321,7 +1351,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const o = st.mainDialog && !wm.framed() ? { x: 0, y: 0, w: st.w, h: st.h } : wm.outer(); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + o.w); x.w32(r + 12, o.y + o.h); return 1;
     }],
     // A message box is not shown; its caption and text go to the log, where an error says what it is.
-    MessageBoxA: ['pppu', (x, hwnd, text, cap) => { x.win.say(`MessageBoxA("${cap ? x.str(cap, 128) : ''}"): ${text ? x.str(text, 1024) : ''}`); return 1; }], SetTimer: ['puup', (x, hwnd, id, every, fn) => {
+    MessageBoxA: ['pppu', (x, hwnd, text, cap, type) => messageBox(x, hwnd, text ? x.str(text, 1024) : '', cap ? x.str(cap, 128) : 'Error', type)], SetTimer: ['puup', (x, hwnd, id, every, fn) => {
       // A timer: WM_TIMER when it is due and nothing else is queued (Minesweeper's clock); a window's by its id,
       // a thread's (no window) by a new one. USER_TIMER_MINIMUM: 10 ms.
       if (!hwnd) id = st.timerNext = (st.timerNext || 0x7000) + 1;
@@ -1350,12 +1380,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (w.visible) { w.visible = false; if (!(w.style & 0x40000000)) uncoverRect(screenOrigin(dlg), w.w, w.h); }
       return 1;
     }],
-    // A dialog's keyboard: Enter is its default button (DM_GETDEFID's, else IDOK), Escape IDCANCEL, each
-    // a WM_COMMAND posted to it, and the key taken; anything else is the caller's to dispatch.
+    // A dialog's keyboard: Enter is the push button with the focus (a message box's Yes), else IDOK; Escape
+    // IDCANCEL, each a WM_COMMAND posted to it, and the key taken; anything else is the caller's to dispatch.
     IsDialogMessageA: ['pp', (x, dlg, m) => {
       const h = x.r32(m), msg = x.r32(m + 4), vk = x.r32(m + 8);
       if (!win(dlg) || (h !== dlg && !isAncestor(dlg, h))) return 0;
-      if (msg === 0x100 && (vk === 0x0d || vk === 0x1b)) { st.msgs.push({ msg: 0x111, wp: vk === 0x0d ? 1 : 2, lp: 0, hwnd: dlg }); return 1; }
+      if (msg === 0x100 && (vk === 0x0d || vk === 0x1b)) {
+        const f = win(st.focus), id = vk === 0x1b ? 2 : f && f.parent === dlg && f.cls === 'button' && !(f.style & 0xe) && f.id ? f.id : 1;
+        st.msgs.push({ msg: 0x111, wp: id, lp: 0, hwnd: dlg }); return 1;
+      }
       // Tab (Shift+Tab back): the focus to the next control with WS_TABSTOP, an edit control's text selected.
       if (msg === 0x100 && vk === 0x09) {
         const stops = [...st.wins.values()].filter((c) => c.parent === dlg && !c.dead && c.visible && c.enabled !== false && c.style & 0x10000);
@@ -1388,6 +1421,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // does returns its DWL_MSGRESULT (WM_INITDIALOG and the messages that answer with a value: its own).
     DefDlgProcA: ['puuu', (x, hwnd, msg, wp, lp) => {
       const w = win(hwnd), fn = w && w.dlgProc;
+      // A message box's buttons end it with their id; Escape (IDCANCEL) is its only button's when it has
+      // no Cancel (MB_OK), and nothing for Yes/No.
+      if (w && w.msgBox && msg === 0x111 && !(wp >>> 16)) {
+        let id = wp & 0xffff; if (!w.msgBox.includes(id)) { if (w.msgBox.length !== 1) return 0; id = w.msgBox[0]; }
+        return user32.EndDialog[1](x, hwnd, id);
+      }
       if (!fn) return user32.DefWindowProcA[1](x, hwnd, msg, wp, lp);
       return send(x, [{ fn, args: [hwnd, msg, wp, lp] }], (eax) => {
         if (!eax) return user32.DefWindowProcA[1](x, hwnd, msg, wp, lp);
