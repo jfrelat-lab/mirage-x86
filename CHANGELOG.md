@@ -13,6 +13,12 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
   machine's buttons, 1024x768 as before; a game's 640x480 window fills more of the screen on 800x600.
 - **A Windows program can read its own file**: the page left the program's .exe out of its disk, and
   Half-Life's launcher, which reads itself to check it, stopped at "Could not validate Half-Life".
+- **Windows programs have a text font in the page**: a program whose image names no font drew no text in
+  its dialogs, buttons and message boxes; DejaVu Sans now stands in for Arial, as the font mapper's last choice.
+- **Dialogs over a full-screen Windows program**: a dialog over a program that set its own display mode
+  (Half-Life's launcher, at 640x480) was made and never drawn, the program waiting on it.
+- Drawing into a Windows program's window that is not shown yet leaves the desktop as it was (a black
+  rectangle stayed under Half-Life's intro).
 
 ## 2026-11-12
 

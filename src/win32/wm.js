@@ -142,8 +142,11 @@ export function windowManager(st) {
   };
   /** The program's other top-level windows (src/win32/api.js popupLayers: a dialog), over its main one:
    *  each its frame -- raised, its caption in the active gradient with its title -- and its pixels. */
-  const drawLayers = (fb, S, font) => {
-    for (const l of st.popupLayers ? st.popupLayers() : []) {
+  // (dx, dy): where the screen's origin is in `fb` -- the main client area's corner negated when the screen is
+  // the window alone (a program that set a display mode: Half-Life's launcher and its difficulty dialog).
+  const drawLayers = (fb, S, font, dx = 0, dy = 0) => {
+    for (const l0 of st.popupLayers ? st.popupLayers() : []) {
+      const l = dx || dy ? { ...l0, x: l0.x + dx, y: l0.y + dy } : l0;
       const W = l.w + 2 * l.b, H = l.h + 2 * l.b + l.cap;
       fill(fb, S, l.x, l.y, W, H, FACE);
       if (l.b >= 3) raised(fb, S, l.x, l.y, W, H, FACE, LIGHT);
@@ -205,11 +208,15 @@ export function windowManager(st) {
     if (!lx || !lx.fbView) return;
     uncover();
     if (!wm.framed()) {
-      // The screen the window's size, its width rounded up to the card's 8 pixels (black beyond).
+      // The screen the window's size, its width rounded up to the card's 8 pixels (black beyond); its
+      // dialogs over it where they are on the screen, the window's client area at the screen's corner.
+      const layers = st.popupLayers ? st.popupLayers() : [];
+      if (!client && layers.length) client = st.screen || null;
       if (client && client.w >= 1 && client.h >= 1) {
         const W = Math.max(320, (client.w + 7) & ~7), H = Math.max(200, client.h), fb = lx.fbView(W, H);
         if (W === client.w && H === client.h) fb.set(client.px.subarray(0, client.w * client.h));
         else for (let j = 0; j < client.h; j++) fb.set(client.px.subarray(j * client.w, (j + 1) * client.w), j * W);
+        if (layers.length) { const r = wm.client(); drawLayers(fb, { w: W, h: H }, lx.romFont && lx.romFont(), -r.x, -r.y); }
         wm.view = { fb, w: W, h: H }; cover();
       }
       wm.dirty = true;

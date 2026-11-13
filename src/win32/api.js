@@ -1642,6 +1642,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const target = (x, hdc) => {
     if (isWindowDC(hdc) && !deskMode()) { const sc = screen(); return { ...sc, done: () => wm.present(x.lx, sc) }; }
     const v = viewOf(x, hdc);
+    // A hidden window's DC on the desktop draws nothing there, as on Windows: Half-Life's launcher blackens its
+    // main dialog before it is shown, which left a black rectangle under the intro.
+    if (v && deskMode() && !shown(hwndOfDC(hdc))) return { w: v.w, h: v.h, px: v.px, done: () => {} };
     if (v) return { w: v.w, h: v.h, px: v.px, done: () => {
       const { sc, o } = v;
       for (let j = 0; j < v.h; j++) { const y = o.y + j; if (y < 0 || y >= sc.h) continue; for (let i = 0; i < v.w; i++) { const X = o.x + i; if (X >= 0 && X < sc.w) sc.px[y * sc.w + X] = v.px[j * v.w + i]; } }

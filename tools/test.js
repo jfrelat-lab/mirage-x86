@@ -5475,6 +5475,26 @@ const runPE = async (exe, readFile) => {
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: MessageBox is modal; Enter is its focused default button (IDYES)', got, '6'); }
+// A hidden window's DC draws nothing on the desktop: Half-Life's launcher blackens its main dialog (PatBlt
+// BLACKNESS) before showing it, and a black rectangle stayed under its intro. A dialog application's
+// main dialog, made hidden; the exit code is the red of the pixel read back, the desktop's (3Ah).
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['CreateDialogIndirectParamA', 'GetDC'] }, { dll: 'gdi32.dll', names: ['PatBlt', 'GetPixel'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const tpl = at.d(0x440), proc = at.d(0x200);
+      const main = [0x6a, 0, 0x68, ...le(proc), 0x6a, 0, 0x68, ...le(tpl), 0x68, ...le(0x400000), 0xff, 0x15, ...le(at.iat['user32.dll!CreateDialogIndirectParamA']),
+        0x50, 0xff, 0x15, ...le(at.iat['user32.dll!GetDC']), 0x89, 0xc3,
+        0x6a, 0x42, 0x6a, 50, 0x6a, 50, 0x6a, 0, 0x6a, 0, 0x53, 0xff, 0x15, ...le(at.iat['gdi32.dll!PatBlt']),
+        0x6a, 5, 0x6a, 5, 0x53, 0xff, 0x15, ...le(at.iat['gdi32.dll!GetPixel']),
+        0x25, 0xff, 0, 0, 0, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); img.set([0x31, 0xc0, 0xc2, 0x10, 0x00], 0x200);
+      // DLGTEMPLATE: WS_POPUP, not visible, no controls, at (10, 10), 100 x 50 units.
+      img.set([...le(0x80000000), 0, 0, 0, 0, 0, 0, 10, 0, 10, 0, 100, 0, 50, 0, 0, 0, 0, 0, 0, 0], 0x440);
+      return img;
+    } });
+    got = (await runPE(exe)).toString(16);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a hidden window\'s DC draws nothing on the desktop', got, '3a'); }
 // SetTimer: WM_TIMER when it is due and nothing else is queued, its TIMERPROC called by DispatchMessage
 // (Minesweeper's clock never ran). A thread's timer of 50 ms; the loop takes and dispatches until the
 // procedure has counted three; the exit code is the count.

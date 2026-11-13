@@ -25,16 +25,17 @@ export function faceNames(family) {
 
 /**
  * `families` (["Tahoma"]) as win32Apis's `fonts`: { "tahoma": bytes, "tahoma:bold": bytes }. `say(text)`
- * tells which font each one is.
+ * tells which font each one is. `local` false: the free stand-in at once, the visitor not asked -- the
+ * default text face every Windows program gets (its dialogs, buttons and message boxes).
  */
-export async function pageFonts(families, say = () => {}) {
+export async function pageFonts(families, say = () => {}, local0 = true) {
   const out = {};
   for (const family of families) {
     const key = family.toLowerCase(), [regular, bold, free] = faceNames(family);
     const wanted = [[key, regular, `${free}.ttf`], [`${key}:bold`, bold, `${free}-Bold.ttf`]];
     let local = [];
     try {
-      if (typeof window !== 'undefined' && window.queryLocalFonts) local = await window.queryLocalFonts({ postscriptNames: wanted.map((w) => w[1]) });
+      if (local0 && typeof window !== 'undefined' && window.queryLocalFonts) local = await window.queryLocalFonts({ postscriptNames: wanted.map((w) => w[1]) });
     } catch (e) { say(`fonts: ${family} from this computer: ${e.message || e}`); }
     for (const [k, name, file] of wanted) {
       const f = local.find((l) => l.postscriptName === name);

@@ -67,7 +67,8 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     hle = await prismLibraries(lx, mc.mem, ['gl', 'glu']);
     const [glLib, gluLib] = hle.libs;
     // machine.fonts: the TrueType fonts it selects (D3DXCreateText), the visitor's or free ones (src/win32/fonts.js)
-    const fonts = m.fonts ? await (await import('./win32/fonts.js')).pageFonts(m.fonts, (t) => onOutput(t + '\n')) : undefined;
+    // Without any, DejaVu Sans as Arial, where the font mapper ends: a dialog's text, a button's, a message box's.
+    const fonts = await (await import('./win32/fonts.js')).pageFonts(m.fonts || ['Arial'], (t) => onOutput(t + '\n'), !!m.fonts);
     // The files beside the program, and in the directories below it, on its own disk (by their path
     // there): WinQuake's id1/pak0.pak, Abuse's art/ and levels/. The program's own file among them, as on
     // Windows: Half-Life's launcher reads itself to validate ("Could not validate Half-Life" without it).
