@@ -1410,6 +1410,23 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return 1;
     }],
     FlashWindow: ['pi', () => 0],
+    SetScrollPos: ['piii', () => 0],
+    // DeferWindowPos: each move made at once (the result is the same: windows in their new places).
+    BeginDeferWindowPos: ['i', () => 0x7100], EndDeferWindowPos: ['p', () => 1],
+    DeferWindowPos: ['pppiiiiu', (x, h, hwnd, after, X, Y, w, hh, flags) => { const o = win(hwnd); if (o && hwnd !== st.hwnd) { if (!(flags & 2)) { o.x = X; o.y = Y; } if (!(flags & 1)) { o.w = w; o.h = hh; } invalidate(o.parent || st.hwnd, true, true); } return h; }],
+    // Text with tabs: drawn as TextOut draws it (tab stops not expanded); its extent as GetTextExtentPoint32's.
+    TabbedTextOutA: ['piipiipi', (x, hdc, X, Y, s, n) => { gdi32.TextOutA[1](x, hdc, X, Y, s, n); const sz = x.win.heapAlloc(8); gdi32.GetTextExtentPoint32A[1](x, hdc, s, n, sz); const r = (x.r16(sz + 4) << 16) | x.r16(sz); x.win.heapFree(sz); return r; }],
+    GetTabbedTextExtentA: ['ppiip', (x, hdc, s, n) => { const sz = x.win.heapAlloc(8); gdi32.GetTextExtentPoint32A[1](x, hdc, s, n, sz); const r = (x.r16(sz + 4) << 16) | x.r16(sz); x.win.heapFree(sz); return r; }],
+    GrayStringA: ['pppiiiiii', () => 1],                               // drawn by a callback of the program's: not here
+    // DDE's packed lParams: an atom pair packed as is, unpacked into its words.
+    ReuseDDElParam: ['puuuu', (x, lp, msgIn, msgOut, lo, hi) => ((hi & 0xffff) << 16 | (lo & 0xffff)) >>> 0],
+    UnpackDDElParam: ['uupp', (x, msg, lp, plo, phi) => { if (plo) x.w32(plo, lp & 0xffff); if (phi) x.w32(phi, lp >>> 16); return 1; }],
+    // The next (or previous) control with WS_TABSTOP in a dialog, after `h`.
+    GetNextDlgTabItem: ['ppi', (x, dlg, h, prev) => {
+      const stops = [...st.wins.values()].filter((c) => c.parent === dlg && !c.dead && c.visible && c.enabled !== false && c.style & 0x10000);
+      if (!stops.length) return 0; const i = stops.findIndex((c) => c.hwnd === h);
+      return stops[(i + (prev ? stops.length - 1 : 1) + (i < 0 ? stops.length : 0)) % stops.length].hwnd;
+    }],
     // WaitMessage: until something is queued, as GetMessage waits.
     WaitMessage: ['', (x) => (st.msgs.length || st.pendingMove || (st.paintDue && st.paintDue()) ? 1 : x.waitUntil(x.lx.mono() + 0.01))],
     // GetKeyNameTextA(lParam, buf, n): the key's name, from its scancode (bits 16-23) and extended bit (24).
@@ -1667,6 +1684,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       x.write(tm, new Uint8Array(56));
       [m.height, m.ascent, m.descent, m.height - m.ppem, 0, m.avg, m.max, m.weight].forEach((v, i) => x.w32(tm + 4 * i, v));
       x.write(tm + 44, Uint8Array.of(32, 255, 31, 32));               // first, last, default, break character
+      return 1;
+    }],
+    // Printing: no job starts here (SP_ERROR); the abort procedure is kept, never called.
+    StartDocA: ['pp', () => -1], StartPage: ['p', () => -1], EndPage: ['p', () => -1], EndDoc: ['p', () => -1], AbortDoc: ['p', () => -1], SetAbortProc: ['pp', () => 1],
+    // The clip box: the DC's whole surface (no clipping region is kept), SIMPLEREGION; IntersectClipRect likewise.
+    GetClipBox: ['pp', (x, hdc, r) => { const t = source(x, hdc), w = t ? t.w : st.w, h = t ? t.h : st.h; x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, w); x.w32(r + 12, h); return 2; }],
+    IntersectClipRect: ['piiii', () => 2],
+    // GetCharWidthA: each character's advance in the DC's font.
+    GetCharWidthA: ['puup', (x, hdc, first, last, out) => {
+      const m = textMetrics(hdc);
+      for (let c = first; c <= last; c++) x.w32(out + 4 * (c - first), m.font ? m.font.glyph(c & 255, m.ppem).cellIncX : m.avg);
       return 1;
     }],
     GetTextExtentPoint32A: ['ppip', (x, hdc, str, n, size) => {
@@ -1976,6 +2004,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    */
   const mmios = new Map(); let mmioNext = 0x6100;
   const mmio = {
+    // The buffered side of mmio (MMIOINFO's own buffer): not here -- no buffer is given (cchBuffer 0), so a
+    // program reads with mmioRead; advancing one fails (MMIOERR_CANNOTEXPAND).
+    mmioGetInfo: ['ppu', (x, h, info) => { if (!mmios.has(h)) return 5; x.write(info, new Uint8Array(72)); x.w32(info + 68, h); return 0; }],
+    mmioSetInfo: ['ppu', () => 0], mmioAdvance: ['ppu', () => 0x108],
     mmioOpenA: ['ppu', (x, pName, info, flags) => {
       if (flags & 0x1003) return 0;                                   // MMIO_WRITE, MMIO_READWRITE, MMIO_CREATE: no
       const f = pName && diskFile(x.str(pName)); if (!f || !f.bytes) { if (info) x.w32(info + 12, 257); return 0; }   // MMIOERR_FILENOTFOUND
@@ -2441,7 +2473,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ddrawApis(st, wm, send),
     { dll: 'wsock32.dll', fns: wsock32 },
     // comctl32: the common controls are registered (InitCommonControls, ordinal 17); none is drawn here.
-    { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }] } },
+    { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }], ImageList_Destroy: ['p', () => 1] } },
+    /*
+     * The common dialogs and the printers of a machine with neither: a file dialog, a find or print dialog
+     * is cancelled at once (FALSE, CommDlgExtendedError 0: the user cancelled), no printer opens, a print job
+     * does not start (SP_ERROR). MFC programs (Half-Life's launcher) import them all.
+     */
+    { dll: 'comdlg32.dll', fns: { GetOpenFileNameA: ['p', () => 0], GetSaveFileNameA: ['p', () => 0], PrintDlgA: ['p', () => 0], FindTextA: ['p', () => 0], ReplaceTextA: ['p', () => 0],
+      CommDlgExtendedError: ['', () => 0],
+      GetFileTitleA: ['ppu', (x, path, buf, n) => { const t = x.str(path, 260).split(/[\\/:]/).pop(); if (!buf || n <= t.length) return t.length + 1; x.write(buf, new TextEncoder().encode(t + '\0')); return 0; }] } },
+    { dll: 'winspool.drv', fns: { OpenPrinterA: ['ppp', (x, name, ph) => { if (ph) x.w32(ph, 0); return 0; }], ClosePrinter: ['p', () => 1], DocumentPropertiesA: ['pppppu', () => -1] } },
     // The registry: empty. A key opens as not found (ERROR_FILE_NOT_FOUND), so nothing is read from it
     // or written to it, as on a machine where the program never ran.
     { dll: 'advapi32.dll', fns: { ...modern.advapi32, ...classic.advapi32 } },

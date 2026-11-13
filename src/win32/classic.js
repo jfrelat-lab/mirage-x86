@@ -324,6 +324,20 @@ export function classicApis({ st, wm }) {
       return 1;
     }],
     GetMenuItemCount: ['p', (x, m) => (menu(m) ? menu(m).items.length : -1)],
+    // InsertMenuA (before an item, by position or command) and ModifyMenuA (an item replaced); an item's text.
+    InsertMenuA: ['puupp', (x, m, at, flags, id, text) => {
+      const mn = menu(m); if (!mn) return 0;
+      const it = { id: flags & 0x10 ? 0 : id & 0xffff, sub: flags & 0x10 ? id : 0, flags: flags & 0x81b, text: flags & 0x804 || !text ? '' : x.str(text, 256) };
+      const r = at === 0xffffffff ? null : itemOf(m, at, flags), list = r ? r.list : mn.items;
+      list.splice(r ? r.i : list.length, 0, it); return 1;
+    }],
+    ModifyMenuA: ['puupp', (x, m, at, flags, id, text) => {
+      const r = itemOf(m, at, flags); if (!r) return 0;
+      r.list[r.i] = { id: flags & 0x10 ? 0 : id & 0xffff, sub: flags & 0x10 ? id : 0, flags: flags & 0x81b, text: flags & 0x804 || !text ? '' : x.str(text, 256) };
+      if (m === st.menu) wm.dirty = true; return 1;
+    }],
+    GetMenuStringA: ['puupu', (x, m, at, buf, n, flags) => { const r = itemOf(m, at, flags); return r ? putStr(x, buf, n, r.list[r.i].text) || r.list[r.i].text.length * !buf : 0; }],
+    SetMenuItemBitmaps: ['puupp', () => 1],                             // check-mark bitmaps: the standard mark kept
     GetSubMenu: ['pi', (x, m, pos) => { const mn = menu(m), it = mn && mn.items[pos]; return it && it.flags & 0x10 ? it.sub : 0; }],
     GetMenuItemID: ['pi', (x, m, pos) => { const mn = menu(m), it = mn && mn.items[pos]; return !it ? -1 : it.flags & 0x10 ? -1 : it.id; }],
     GetMenuState: ['puu', (x, m, at, flags) => { const r = itemOf(m, at, flags); return r ? r.list[r.i].flags & 0x81b : -1; }],
