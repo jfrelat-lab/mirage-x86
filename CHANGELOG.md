@@ -6,6 +6,12 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-14
 
+- **StarCraft's first mission won, in the page**: three supply depots, a refinery, 100 of gas -- "You
+  are victorious!", then its score screen. The page no longer locks the pointer for a program that only
+  hides and clips the cursor: StarCraft draws its own where the visitor points, and a click locked the
+  pointer instead of reaching it (in a pane that refuses the lock, no click reached it at all). Locked
+  now is a program that also keeps putting the cursor back, as WinQuake and Half-Life do to aim.
+
 - **StarCraft plays**: units selected, moved with the right button, a Command Center building an SCV,
   minerals mined and brought back, its sound and voices. `VirtualFree` released nothing and
   `VirtualAlloc` never handed a region out again: StarCraft allocates and frees 64 KiB some twelve

@@ -4841,6 +4841,15 @@ const runLinux = (hex, argv) => {
     got = [b === a, x.r32(b + 0x100), c - a, x.r32(c)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: VirtualFree gives a region back for VirtualAlloc, cleared; MEM_DECOMMIT clears its pages', got, 'true 0 65536 0');
+  // The pointer is locked for a game that aims (it hides the cursor and keeps putting it back), not for
+  // StarCraft, which hides and clips it but draws its own where the visitor points.
+  try { const { fn, x, apis } = await w32(), u = (n) => fn('user32.dll', n), r = x.win.heapAlloc(16);
+    [0, 0, 640, 480].forEach((v, i) => x.w32(r + 4 * i, v)); u('ShowCursor')(0); u('ClipCursor')(r);
+    const before = apis.input.captures();
+    for (let i = 0; i < 8; i++) u('SetCursorPos')(320, 240);
+    got = before + ' ' + apis.input.captures();
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: the pointer is captured for a program that recentres the cursor, not one that only clips it', got, 'false true');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');

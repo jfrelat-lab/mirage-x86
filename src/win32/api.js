@@ -1371,7 +1371,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // The cursor's display count (hidden below zero) and its confinement: a program that hides it and
     // clips it to its window has the mouse to itself, and the page captures the pointer for it.
     ShowCursor: ['i', (x, show) => { st.cursorCount = (st.cursorCount | 0) + (show ? 1 : -1); wm.moveCursor(); return st.cursorCount; }],
-    SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; wm.moveCursor(); return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
+    SetCursorPos: ['ii', (x, X, Y) => { st.mouseX = X; st.mouseY = Y; st.warps = (st.warps | 0) + 1; wm.moveCursor(); return 1; }], // The first ShowWindow: WM_SHOWWINDOW, the application and the window activated, the focus; it
     // returns that the window was hidden. UpdateWindow paints it once (WM_PAINT).
     ShowWindow: ['pi', (x, hwnd, cmd) => {
       // The main window gone -- or only a splash (a popup without a caption) -- and a captioned top-level
@@ -2854,8 +2854,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    * The mouse comes two ways. Free, it is where the visitor points on the screen (mouseAt): over the
    * window's frame the window manager answers -- the caption drags the window, the close button
    * posts WM_CLOSE -- and over its client area the program gets WM_MOUSEMOVE and button messages in
-   * client coordinates. Captured -- the program hid the cursor or clipped it to its window, as a game
-   * does to aim; captures() tells the page to lock the pointer -- its moves are added to the cursor
+   * client coordinates. Captured -- the program hid the cursor or clipped it to its window and keeps
+   * putting it back, as a game does to aim; captures() tells the page to lock the pointer -- its moves are added to the cursor
    * (mouseMove), kept inside the clip, and every button is the program's: WinQuake recentres the
    * cursor with SetCursorPos each frame and turns by the difference.
    */
@@ -2888,7 +2888,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const o = screenOrigin(h || st.hwnd); if (!h) { st.msgs.push({ msg, wp, lp: (((Y - o.y) & 0xffff) << 16 | ((X - o.x) & 0xffff)) >>> 0 }); return; }
     st.msgs.push({ msg, wp, lp: (((Y - o.y) & 0xffff) << 16 | ((X - o.x) & 0xffff)) >>> 0, hwnd: h });
   };
-  const captured = () => !!st.clip || (st.cursorCount | 0) < 0;
+  // Hidden or clipped AND put back by the program, again and again: a game that aims by the difference.
+  // StarCraft hides Windows' cursor and clips it to its screen, but draws its own where the visitor
+  // points -- locking the pointer gave it moves scaled by the page instead, and a pane that refuses
+  // the lock no click at all. It sets the cursor's place three times; WinQuake does so every frame.
+  const captured = () => (!!st.clip || (st.cursorCount | 0) < 0) && (st.warps | 0) >= 8;
   // A drag moves the window where the visitor points; the move takes effect at the program's next
   // PeekMessage or GetMessage, which delivers WM_MOVE before anything else -- as Windows' drag loop
   // sends it -- so a program learns of it before it looks: WinQuake compares GetWindowRect with the
