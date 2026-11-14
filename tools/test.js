@@ -5003,6 +5003,23 @@ const runLinux = (hex, argv) => {
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a registry in memory -- keys made and opened, values set and read, subkeys listed', got, '0 1 0 0 0 7 0 Gordon 2 0 2 2 0 valve 259');
+  // The last error is kept: Storm.dll (StarCraft) sets ERROR_IO_PENDING and reads it back while its
+  // loading thread reads a file -- 0 back, and the load had failed. A file not found leaves 2.
+  try { const { fn, str } = await w32(), k = (n) => fn('kernel32.dll', n);
+    k('SetLastError')(0x3e5); const a = k('GetLastError')();
+    const h = k('CreateFileA')(str('C:\\nowhere.dat'), 0x80000000, 1, 0, 3, 0, 0);
+    got = [a, h | 0, k('GetLastError')()].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SetLastError and GetLastError keep the last error; a file not found sets 2', got, '997 -1 2');
+  // WaitForMultipleObjects with bWaitAll waits for all of them, and takes each auto-reset event then:
+  // StarCraft waits so for its loads, and went on after the first, drawing a sprite not read yet.
+  try { const { fn, x } = await w32(), k = (n) => fn('kernel32.dll', n), hs = x.win.heapAlloc(8);
+    const e1 = k('CreateEventA')(0, 0, 0, 0), e2 = k('CreateEventA')(0, 0, 0, 0); x.w32(hs, e1); x.w32(hs + 4, e2);
+    k('SetEvent')(e1); const one = k('WaitForMultipleObjects')(2, hs, 1, 0).toString(16);
+    k('SetEvent')(e2); const both = k('WaitForMultipleObjects')(2, hs, 1, 0).toString(16), after = k('WaitForMultipleObjects')(2, hs, 0, 0).toString(16);
+    got = [one, both, after].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: WaitForMultipleObjects with bWaitAll waits for every object', got, '102 0 102');
   // WaitForSingleObject on an event: a second definition answering 0 had replaced the real one, so every
   // wait returned at once and the launcher's sound thread spun, starving the game's.
   try { const { fn } = await w32(), k = (n) => fn('kernel32.dll', n), ev = k('CreateEventA')(0, 0, 0, 0), r = [k('WaitForSingleObject')(ev, 0)];

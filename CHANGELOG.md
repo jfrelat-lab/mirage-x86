@@ -4,6 +4,17 @@ What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), and in MIR
 newest first. The site is updated continuously, so entries are dated rather than versioned. Every
 change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-14
+
+- **StarCraft reaches its first mission**: the main menu, a player made, the Terran prequel's text, its
+  briefing, then the mission's map, units and interface. `GetLastError` answered 0 whatever was set:
+  Storm.dll sets ERROR_IO_PENDING itself while its loading thread reads a file and reads it back, and a
+  0 there was "unknown error 0x00000000" (each thread now keeps its last error; a file not found leaves
+  2). `WaitForMultipleObjects` ignored bWaitAll and returned at the first object signalled: the game,
+  waiting for all its loads, drew a sprite not read yet and faulted. Blizzard's network providers
+  (`standard.snp`, `battle.snp`) load: the serial port calls (none), `GetComputerNameA`, `GetDCEx`,
+  `CharLowerBuffA`, `CreatePatternBrush`.
+
 ## 2026-11-13
 
 - **StarCraft's shareware installer runs, and the game starts**: Blizzard's installer (1998) shows its menu

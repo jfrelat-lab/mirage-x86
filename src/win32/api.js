@@ -244,6 +244,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   st.relPath = relPath; st.diskFile = diskFile; st.diskDir = diskDir;
   // A name in the system directory (system32, or 95's SYSTEM) of a DLL made here, with no wildcard.
   const sysDll = (x, p) => /^windows\/system(32)?\/[^/*?]+$/.test(relPath(p)) && !!x.win.made && x.win.made(baseName(p));
+  const setError = (x, e) => { (st.lastError ||= new Map()).set(x.lx.pid, e >>> 0); };
   const openHandle = (f) => { st.files.push({ f, pos: 0 }); return 0x4000 + st.files.length - 1; };
   const ms = (x) => Math.floor(x.lx.mono() * 1000);
   // ---- kernel32 ----------------------------------------------------------------------------------
@@ -348,7 +349,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     DuplicateHandle: ['ppppuiu', (x, sp, h, dp, out) => { if (out) x.w32(out, h); return 1; }],
     GetCommandLineA: ['', (x) => (st.cmd ||= (() => { const b = new TextEncoder().encode(`"${x.win.path}"${x.win.args ? ' ' + x.win.args : ''}\0`), p = x.win.heapAlloc(b.length); x.write(p, b); return p; })())],   // the program's path quoted, then its arguments
     GetVersion: ['', () => 0x0a280105],                                 // 5.1, build 2600: Windows XP
-    GetLastError: ['', () => 0], SetLastError: ['u', () => 0],
+    // The last error, a thread's own: what SetLastError put there, or a call made here that failed. Storm.dll
+    // (StarCraft) sets ERROR_IO_PENDING itself and reads it back before it waits for a file being loaded:
+    // with 0 back, the read had "failed" ("unknown error 0x00000000").
+    GetLastError: ['', (x) => (st.lastError && st.lastError.get(x.lx.pid)) || 0],
+    SetLastError: ['u', (x, e) => { setError(x, e); return 0; }],
     SetUnhandledExceptionFilter: ['p', () => 0], SetErrorMode: ['u', () => 0],
     CloseHandle: ['p', () => 1],
     /*
@@ -371,9 +376,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const name = x.str(pName);
       let f = diskFile(name);
       if (disp === 2 || disp === 5 || (!f && (disp === 1 || disp === 4))) {   // CREATE_ALWAYS, TRUNCATE_EXISTING, or made
-        if (disp === 5 && !f) return -1;
+        if (disp === 5 && !f) { setError(x, 2); return -1; }
         f = { bytes: new Uint8Array(0), size: 0 }; st.disk.set(relPath(name), f);
-      } else if (!f || disp === 1) return -1;                          // INVALID_HANDLE_VALUE
+      } else if (!f || disp === 1) { setError(x, f ? 80 : 2); return -1; }   // INVALID_HANDLE_VALUE: ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND
       return openHandle(f);
     }],
     WriteFile: ['ppupp', (x, h, buf, n, pDone) => {
@@ -546,11 +551,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // Memory shared with a parent process (WinQuake's -HFILE, from id's launcher): no file mapping here.
     MapViewOfFile: ['puuuu', () => 0], UnmapViewOfFile: ['p', () => 1],
     // The first of several objects to be signalled: an event set, or a thread ended, as WaitForSingleObject.
+    // Any of them (the first signalled), or with bWaitAll all of them at once -- StarCraft waits so for
+    // its loads, and went on with the first one done, drawing a sprite not read yet.
     WaitForMultipleObjects: ['upiu', (x, n, hs, all, ms) => {
-      for (let i = 0; i < n; i++) {
-        const h = x.r32(hs + 4 * i), ev = st.events.get(h);
-        if (ev ? ev.set : h >= 0x2000 && h < 0x3000 && x.lx.threadExits.has(h - 0x2000)) { if (ev && !ev.manual) ev.set = false; return i; }
-      }
+      const hs_ = Array.from({ length: n }, (_, i) => x.r32(hs + 4 * i));
+      const ready = (h) => { const ev = st.events.get(h); return ev ? ev.set : h >= 0x2000 && h < 0x3000 && x.lx.threadExits.has(h - 0x2000); };
+      const take = (h) => { const ev = st.events.get(h); if (ev && !ev.manual) ev.set = false; };
+      if (all) { if (hs_.every(ready)) { hs_.forEach(take); return 0; } }
+      else for (let i = 0; i < n; i++) if (ready(hs_[i])) { take(hs_[i]); return i; }
       return ms === 0 ? 0x102 : x.waitUntil(x.lx.mono() + 0.001);
     }],
   };
@@ -2721,6 +2729,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     VirtualLock: ['pu', () => 1], VirtualUnlock: ['pu', () => 1],
     CreateProcessA: ['pppppiuppp', () => 0], GetExitCodeProcess: ['pp', () => 0], LoadModule: ['pp', () => 2],
     GetTempPathA: ['up', (x, n, buf) => putOut(x, buf, n, 'C:\\') - 1],
+    // Blizzard's network providers (standard.snp, battle.snp): no serial port to set (the modem and
+    // direct-cable games fail, as with none), the machine's name, the system's locale (US English).
+    SetCommState: ['pp', () => 0], GetCommState: ['pp', () => 0], SetCommTimeouts: ['pp', () => 0],
+    GetComputerNameA: ['pp', (x, buf, pn) => { const n = 'MIRAGE'; if (x.r32(pn) <= n.length) { x.w32(pn, n.length + 1); return 0; } x.write(buf, new TextEncoder().encode(n + '\0')); x.w32(pn, n.length); return 1; }],
+    GetSystemDefaultLCID: ['', () => 0x409], SetFileTime: ['pppp', () => 1],
     // Its installer's: no named event exists to open; files moved (MoveFileEx: MoveFile's, a delayed move
     // done at once); Windows' directory; a short name the long one (8.3 names are not kept here).
     OpenEventA: ['uip', () => 0],
@@ -2731,6 +2744,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetTempFileNameA: ['ppup', (x, path, pre, u, buf) => { const k = u || 1; x.write(buf, new TextEncoder().encode(`${x.str(path).replace(/\\?$/, '\\')}${x.str(pre, 3)}${k.toString(16).toUpperCase()}.TMP\0`)); return k; }],
   });
   for (const [k, v] of Object.entries({
+    GetDCEx: ['ppu', (x, hwnd) => user32.GetDC[1](x, hwnd)],
+    CharLowerBuffA: ['pu', (x, p, n) => { const b = x.bytes(p, n); for (let i = 0; i < n; i++) if (b[i] >= 65 && b[i] <= 90) b[i] += 32; x.write(p, b); return n; }],
     DestroyAcceleratorTable: ['p', () => 1], ExitWindowsEx: ['uu', () => 0], WaitForInputIdle: ['pu', () => 0], EnumWindows: ['pp', () => 1], FindWindowExA: ['pppp', () => 0],
     DrawEdge: ['ppuu', () => 1], CreateCursor: ['piiiipp', () => st.newHandle('cursor', {})], DestroyCursor: ['p', () => 1],
     GetUpdateRgn: ['ppi', () => 1],                                    // NULLREGION: nothing waits to be painted
@@ -2751,6 +2766,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       for (let ch = first; ch <= last; ch++) { x.w8(c, ch); x.w32(abc + 12 * (ch - first), 0); x.w32(abc + 12 * (ch - first) + 4, extent(x, hdc, c, 1).w); x.w32(abc + 12 * (ch - first) + 8, 0); }
       x.win.heapFree(c); return 1;
     }],
+    // A pattern brush: its bitmap's first pixel, as a solid one.
+    CreatePatternBrush: ['p', (x, hbm) => { const bm = st.gdi.get(hbm), c = bm && bm.px ? bm.px[0] : 0x808080; return gdi32.CreateSolidBrush[1](x, ((c & 255) << 16) | (c & 0xff00) | ((c >>> 16) & 255)); }],
     SetTextAlign: ['pu', () => 0], GetRegionData: ['pup', () => 0], RectInRegion: ['pp', () => 1],
   })) if (!(k in gdi32)) gdi32[k] = v;
   if (!winmm.waveOutGetID) winmm.waveOutGetID = ['pp', (x, h, p) => { if (p) x.w32(p, 0); return 0; }];
