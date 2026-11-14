@@ -4833,6 +4833,14 @@ const runLinux = (hex, argv) => {
     got = String(va + 0x400000 <= big || big + 0x1000000 <= va);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: VirtualAlloc\'s region and a 16 MiB HeapAlloc do not overlap', got, 'true');
+  // A region released is handed out again, its bytes zero: StarCraft's twelve thousand 64 KiB regions,
+  // never reused, climbed onto storm.dll's code at 50000000h.
+  try { const { fn, x } = await w32(), va = (...a) => fn('kernel32.dll', 'VirtualAlloc')(...a), vf = (...a) => fn('kernel32.dll', 'VirtualFree')(...a);
+    const a = va(0, 0x10000, 0x3000, 4); x.w32(a + 0x100, 0x12345678); vf(a, 0, 0x8000);
+    const b = va(0, 0x8000, 0x3000, 4), c = va(0, 0x10000, 0x3000, 4); x.w32(c, 7); vf(c, 0x1000, 0x4000);
+    got = [b === a, x.r32(b + 0x100), c - a, x.r32(c)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: VirtualFree gives a region back for VirtualAlloc, cleared; MEM_DECOMMIT clears its pages', got, 'true 0 65536 0');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');

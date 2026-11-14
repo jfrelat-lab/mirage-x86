@@ -204,6 +204,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.phys = phys;                                                         // a guest address's byte in memory, or -1
   lx.BLOCK = BLOCK;                                                       // what a call that waits answers (src/hle)
   lx.wrBytes = (va, b) => wrBytes(va, b);
+  // VirtualFree (src/win32/api.js): MEM_DECOMMIT gives the pages' frames back, the range still reserved
+  // (touched again, it reads as zeros); MEM_RELEASE (`unreserve`) forgets the reservation too.
+  lx.release = (a, b, unres) => { unmapRange(a >>> 0, b >>> 0); if (unres) unreserve(a >>> 0, b >>> 0); };
 
   // ---- descriptors -------------------------------------------------------------------------------
   const setDesc = (index, base, limit, access, flags) => {

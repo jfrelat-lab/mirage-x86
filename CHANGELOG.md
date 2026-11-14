@@ -6,6 +6,13 @@ change is in the [commit history](https://github.com/jfrelat-lab/mirage-x86/comm
 
 ## 2026-11-14
 
+- **StarCraft plays**: units selected, moved with the right button, a Command Center building an SCV,
+  minerals mined and brought back, its sound and voices. `VirtualFree` released nothing and
+  `VirtualAlloc` never handed a region out again: StarCraft allocates and frees 64 KiB some twelve
+  thousand times by its first mission, its regions climbed onto storm.dll's code, which read as zeros
+  -- a derail a minute into the mission. A region released is now reused, and MEM_DECOMMIT clears its pages.
+  `tools/win32/run.mjs` presses the right button too (`rdown`, `rup`).
+
 - **StarCraft reaches its first mission**: the main menu, a player made, the Terran prequel's text, its
   briefing, then the mission's map, units and interface. `GetLastError` answered 0 whatever was set:
   Storm.dll sets ERROR_IO_PENDING itself while its loading thread reads a file and reads it back, and a

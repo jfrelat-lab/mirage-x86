@@ -12,6 +12,7 @@
 //                                   2a- press and release (Shift held over the keys between)
 //   MIRAGE_W32MOUSE=10:98,10,down|10.2:398,210|10.4:up   the mouse on the screen at those guest seconds:
 //                                   a point (mouseAt), the left button down or up there
+//                                   (rdown, rup: the right button)
 //   MIRAGE_W32ENV=NAME=value,...    the program's environment (GetEnvironmentVariable)
 //   MIRAGE_W32DIR=<dir>             the files beside it and below, by their path there, on the program's own disk (src/win32/api.js)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
@@ -322,8 +323,9 @@ while (!lx.done && mc.cpu.cycles < LIMIT) {
   while (KEYS.length && mc.cpu.cycles >= KEYS[0].at * SEC) { const k = KEYS.shift(); apis.input.key(k.down, k.scan, k.ext); }
   while (MOUSE.length && mc.cpu.cycles >= MOUSE[0].at * SEC) {
     const { a } = MOUSE.shift();
-    if (a[0] === 'up' || a[0] === 'down') apis.input.mouseButton(0, a[0] === 'down');
-    else { apis.input.mouseAt(Number(a[0]), Number(a[1])); if (a[2]) apis.input.mouseButton(0, a[2] === 'down'); }
+    const press = (w) => apis.input.mouseButton(w[0] === 'r' ? 1 : 0, w.endsWith('down'));   // down/up, rdown/rup
+    if (/^r?(up|down)$/.test(a[0])) press(a[0]);
+    else { apis.input.mouseAt(Number(a[0]), Number(a[1])); if (a[2]) press(a[2]); }
   }
   mc.runSlice(200000); record();
   while (SHOTS.length && mc.cpu.cycles >= SHOTS[0] * SEC) await shot(SHOTS.shift());

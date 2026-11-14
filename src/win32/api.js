@@ -262,7 +262,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // VirtualAlloc's regions, above the heap's segments (10000000h to 30000000h, src/win32/index.js): they
   // began at 10000000h, inside the heap, and WinQuake's 16 MiB from HeapAlloc fell on the 4 MiB its C
   // runtime had reserved there -- "Z_CheckHeap: next block doesn't have proper back link".
+  // A region released (VirtualFree, MEM_RELEASE) is handed out again, first fit: StarCraft allocates and
+  // frees 64 KiB twelve thousand times by its first mission, and regions never reused climbed past
+  // 50000000h, where its DLLs are -- storm.dll's code read as zeros under the fresh pages.
   let vaNext = 0x30000000;
+  const vaRegions = new Map(), vaFree = [];                          // base -> size; [base, size], by base
   const kernel32 = {
     // Crinkler's header calls it once more on the byte after its list of DLL names, and takes the NULL
     // Windows answers as the list's end: only a name that looks like one is worth a line in the log.
@@ -291,8 +295,25 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     Sleep: ['u', (x, n) => { if (n === 0) { x.lx.yieldAfter = true; return 0; } return x.sleep(n / 1000); }],
     QueryPerformanceFrequency: ['p', (x, p) => { x.w32(p, 3579545); x.w32(p + 4, 0); return 1; }],   // XP's ACPI PM timer
     QueryPerformanceCounter: ['p', (x, p) => { const t = Math.floor(x.lx.mono() * 3579545); x.w32(p, t >>> 0); x.w32(p + 4, Math.floor(t / 4294967296)); return 1; }],
-    VirtualAlloc: ['puuu', (x, addr, size) => { const p = addr || vaNext; if (!addr) vaNext += Math.ceil(size / 0x10000) * 0x10000; x.lx.lazy.push([p, p + size]); return p; }],
-    VirtualFree: ['puu', () => 1],
+    VirtualAlloc: ['puuu', (x, addr, size) => {
+      if (addr) { if (![...vaRegions].some(([b, n]) => addr >= b && addr < b + n)) x.lx.lazy.push([addr, addr + size]); return addr; }
+      const n = Math.ceil(size / 0x10000) * 0x10000, i = vaFree.findIndex(([, m]) => m >= n);
+      let p;
+      if (i >= 0) { p = vaFree[i][0]; if (vaFree[i][1] === n) vaFree.splice(i, 1); else vaFree[i] = [p + n, vaFree[i][1] - n]; }
+      else { p = vaNext; vaNext += n; }
+      vaRegions.set(p, n); x.lx.lazy.push([p, p + n]); return p;
+    }],
+    // MEM_DECOMMIT (4000h): those pages' contents go; MEM_RELEASE (8000h, size 0): the whole region.
+    VirtualFree: ['puu', (x, addr, size, type) => {
+      const n = vaRegions.get(addr);
+      if (type & 0x8000) {
+        if (n === undefined) return 1;
+        vaRegions.delete(addr); x.lx.release(addr, addr + n, true);
+        vaFree.push([addr, n]); vaFree.sort((a, b) => a[0] - b[0]);
+        for (let i = vaFree.length - 1; i > 0; i--) if (vaFree[i - 1][0] + vaFree[i - 1][1] === vaFree[i][0]) { vaFree[i - 1][1] += vaFree[i][1]; vaFree.splice(i, 1); }
+      } else if (type & 0x4000 && size && [...vaRegions].some(([b, m]) => addr >= b && addr < b + m)) x.lx.release(addr & ~0xfff, Math.ceil((addr + size) / 0x1000) * 0x1000, false);
+      return 1;
+    }],
     VirtualProtect: ['puup', (x, a, s, prot, old) => { if (old) x.w32(old, 0x40); return 1; }],
     GetProcessHeap: ['', (x) => x.lx.rdBytes && x.r32(x.win.peb + 0x18)],
     // HEAP_ZERO_MEMORY (8): a block handed out again is cleared; a new one is zero already.
