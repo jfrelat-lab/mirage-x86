@@ -4965,6 +4965,13 @@ const runLinux = (hex, argv) => {
     got = mc.dsp.drain().samples.join(',');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: two sound sources are mixed at 44.1 kHz', got, '1500,1500,1500,1500');
+  // A wait on an event nobody sets ends with WAIT_TIMEOUT once its time is up: GameMaker 8 paces its frames so,
+  // and froze when the machine ran slower than its frame. Before then the wait goes on (the call made again).
+  try { const { fn, lx, mc } = await w32(), k = (n) => fn('kernel32.dll', n), ev = k('CreateEventA')(0, 0, 0, 0);
+    const a = k('WaitForSingleObject')(ev, 50) === lx.BLOCK; mc.cpu.cycles += 1e7;
+    got = [a, k('WaitForSingleObject')(ev, 50).toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: WaitForSingleObject on an unset event times out when its time is up', got, 'true 102');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');

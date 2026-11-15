@@ -7,6 +7,7 @@
 //   KEYS="6:Enter,9:ArrowLeft" presses those keys at those seconds (Wolf3D's sign-on, Unreal's menu);
 //   DOWNLOADS=<dir> keeps the page's downloads (the Record button's video, clicked with EVALS);
 //   SHOT=<file.png> takes a screenshot at the end; SHOTS=20,40 SHOTPREFIX=/tmp/x one at each of those seconds.
+//   DIAG=<js expression> DIAGFROM=<s> prints its value each second.
 //   KEYS items are separated by '|' when one holds a comma; "12:type=cd \\games\\liquiwar\n" types text.
 //   Works on dos.html (window.mirage is the app) and boot.html (window.mirage is the session).
 //
@@ -104,6 +105,8 @@ for (let s = 1; s <= SECS; s++) {
     await send('DOM.setFileInputFiles', { nodeId: q.result.nodeId, files: [path] }); }
   for (const c of CLICKS) if (c.t === s) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: c.x, y: c.y }); await sleep(200); if (c.to) await drag(c); else await click(c.x, c.y); }
   if (process.env.STATUS) console.log('status', s, JSON.stringify(await evaluate("(document.getElementById('status') || {}).textContent")));
+  // DIAG=<js expression>: its value each second (from DIAGFROM=<s> on), printed as JSON -- a machine's state the status line does not show.
+  if (process.env.DIAG && s >= Number(process.env.DIAGFROM || 0)) console.log('diag', s, JSON.stringify(await evaluate(process.env.DIAG)));
   for (const k of KEYS) if (k.t === s) { if (k.key.startsWith('type=')) await typeText(k.key.slice(5)); else await press(k.key); }
   // PROBE=<s>: from that second, count port reads/writes and sample CS:IP and the mode for 5 s.
   if (Number(process.env.PROBE) === s) await evaluate(`(() => { const m = window.mirage.machine || window.mirage.mc, c = m.cpu; window.__io = new Map(); window.__ip = new Map();

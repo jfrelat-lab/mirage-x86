@@ -268,6 +268,24 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // 50000000h, where its DLLs are -- storm.dll's code read as zeros under the fresh pages.
   let vaNext = 0x30000000;
   const vaRegions = new Map(), vaFree = [];                          // base -> size; [base, size], by base
+  /*
+   * A wait's time-out: WAIT_TIMEOUT (102h) once `ms` have passed since the wait began, a millisecond at a
+   * time otherwise (the call is made again until then), INFINITE (FFFFFFFFh) never. The deadline is the
+   * waiting thread's, as Sleep's: an event nobody sets was waited on for ever -- GameMaker 8 paces its frames
+   * by waiting on one with the rest of the frame's time, and froze when the machine ran slower than that.
+   */
+  const waits = new Map();                                            // thread -> deadline (guest seconds)
+  const done = (x) => { waits.delete(x.lx.pid); };
+  const timedWait = (x, ms) => {
+    if (ms === 0) return 0x102;
+    const now = x.lx.mono();
+    if (ms !== 0xffffffff) {
+      let end = waits.get(x.lx.pid); if (end === undefined) waits.set(x.lx.pid, end = now + ms / 1000);
+      if (now >= end) { done(x); return 0x102; }
+      return x.waitUntil(Math.min(now + 0.001, end));
+    }
+    return x.waitUntil(now + 0.001);
+  };
   const kernel32 = {
     // Crinkler's header calls it once more on the byte after its list of DLL names, and takes the NULL
     // Windows answers as the list's end: only a name that looks like one is worth a line in the log.
@@ -354,13 +372,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     WaitForSingleObject: ['pu', (x, h, ms) => {
       const ev = st.events.get(h);
       if (ev) {                                                       // an event: signalled, or wait for SetEvent
-        if (ev.set) { if (!ev.manual) ev.set = false; return 0; }
-        return ms === 0 ? 0x102 : x.waitUntil(x.lx.mono() + 0.001);
+        if (ev.set) { done(x); if (!ev.manual) ev.set = false; return 0; }
+        return timedWait(x, ms);
       }
       if (h < 0x2000 || h >= 0x3000) return 0;
-      if (x.lx.threadExits.has(h - 0x2000)) return 0;                 // WAIT_OBJECT_0
-      if (ms === 0) return 0x102;                                     // WAIT_TIMEOUT
-      return x.waitUntil(x.lx.mono() + 0.001);                        // waits, a millisecond at a time, the others running
+      if (x.lx.threadExits.has(h - 0x2000)) { done(x); return 0; }    // WAIT_OBJECT_0
+      return timedWait(x, ms);                                        // waits, a millisecond at a time, the others running
     }],
     // Events (handle 3000h up) and critical sections, for programs whose threads hand work over (.kkrieger
     // generates its textures on one). A critical section is owned by a thread: CRITICAL_SECTION's
@@ -595,9 +612,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const hs_ = Array.from({ length: n }, (_, i) => x.r32(hs + 4 * i));
       const ready = (h) => { const ev = st.events.get(h); return ev ? ev.set : h >= 0x2000 && h < 0x3000 && x.lx.threadExits.has(h - 0x2000); };
       const take = (h) => { const ev = st.events.get(h); if (ev && !ev.manual) ev.set = false; };
-      if (all) { if (hs_.every(ready)) { hs_.forEach(take); return 0; } }
-      else for (let i = 0; i < n; i++) if (ready(hs_[i])) { take(hs_[i]); return i; }
-      return ms === 0 ? 0x102 : x.waitUntil(x.lx.mono() + 0.001);
+      if (all) { if (hs_.every(ready)) { done(x); hs_.forEach(take); return 0; } }
+      else for (let i = 0; i < n; i++) if (ready(hs_[i])) { done(x); take(hs_[i]); return i; }
+      return timedWait(x, ms);
     }],
   };
   // SYSTEMTIME: year, month, day of the week, day, hour, minute, second, millisecond.
