@@ -4931,6 +4931,14 @@ const runLinux = (hex, argv) => {
     got = [a, b, rec.device.last.setViewport[0].width].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a viewport larger than the render target is refused, a fitting one set', got, '8876086c 0 320');
+  // A message posted to a thread is that thread's: OpenAL's mixer is told so a waveOut buffer is done, and
+  // another thread's GetMessage took it.
+  try { const { fn, x } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28);
+    u('PostThreadMessageA')(999, 0x402, 0, 0); u('PostThreadMessageA')(x.lx.pid, 0x401, 0, 0);
+    const r = [u('PeekMessageA')(m, 0, 0, 0, 1), x.r32(m + 4).toString(16), u('PeekMessageA')(m, 0, 0, 0, 1)];
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a thread takes the messages posted to it, not another thread\'s', got, '1 401 0');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');
@@ -5539,6 +5547,24 @@ const runPE = async (exe, readFile) => {
     got = String(await runPE(exe, () => null));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: an import a made DLL does not make yet loads, and only its call stops the program', got, '5'); }
+// waveOut tells the program a buffer is done as its callback asks -- here an event (CALLBACK_EVENT), which
+// winmm's thread sets: the program writes 3 ms, waits on the event, and finds its header WHDR_DONE (7).
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['CreateEventA', 'WaitForSingleObject', 'ExitProcess'] }, { dll: 'winmm.dll', names: ['waveOutOpen', 'waveOutPrepareHeader', 'waveOutWrite'] }], code: (at) => {
+      const c = new Uint8Array(0x580), k = (n) => le(at.iat[`kernel32.dll!${n}`]), w = (n) => le(at.iat[`winmm.dll!${n}`]), WFX = at.d(0x400), HWO = at.d(0x420), HDR = at.d(0x440);
+      c.set([0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0xff, 0x15, ...k('CreateEventA'), 0x89, 0xc6,
+        0x68, 0, 0, 5, 0, 0x6a, 0, 0x56, 0x68, ...le(WFX), 0x6a, 0xff, 0x68, ...le(HWO), 0xff, 0x15, ...w('waveOutOpen'),
+        0x6a, 0x20, 0x68, ...le(HDR), 0xff, 0x35, ...le(HWO), 0xff, 0x15, ...w('waveOutPrepareHeader'),
+        0x6a, 0x20, 0x68, ...le(HDR), 0xff, 0x35, ...le(HWO), 0xff, 0x15, ...w('waveOutWrite'),
+        0x68, 0xe8, 3, 0, 0, 0x56, 0xff, 0x15, ...k('WaitForSingleObject'),                       // a second at most
+        0xa1, ...le(HDR + 16), 0x83, 0xe0, 0x01, 0x83, 0xc0, 0x06, 0x50, 0xff, 0x15, ...k('ExitProcess'), 0xf4]);
+      c.set([1, 0, 1, 0, 0x44, 0xac, 0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0, 0, 0], 0x400);          // WAVEFORMATEX: PCM, mono, 44.1 kHz, 16 bits
+      c.set([...le(at.d(0x480)), ...le(256)], 0x440);                                              // WAVEHDR: 128 samples
+      return c; } });
+    got = String(await runPE(exe, () => null));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: waveOut sets the program\'s event when its buffer is done (CALLBACK_EVENT)', got, '7'); }
 // Drawing into an 8-bit DIB section lands in its memory, as indices of its own colour table: a 4x1 section
 // (grey 80h at index 1), PatBlt with a grey brush over it; the exit code is the first pixel's index. The
 // StarCraft installer composes its menu in one, and nothing it drew there showed.

@@ -146,7 +146,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     DispatchMessageW: ['p', (x, m) => A(user32, 'DispatchMessageA')(x, m)],
     PostMessageW: ['puuu', (x, h, m, wp, lp) => A(user32, 'PostMessageA')(x, h, m, wp, lp)],
     SendMessageW: ['puuu', (x, h, m, wp, lp) => A(user32, 'SendMessageA')(x, h, m, wp, lp)],
-    PostThreadMessageW: ['uuuu', (x, t, m, wp, lp) => { st.msgs.push({ msg: m, wp, lp, hwnd: 0 }); return 1; }],
+    PostThreadMessageW: ['uuuu', (x, t, m, wp, lp) => A(user32, 'PostThreadMessageA')(x, t, m, wp, lp)],
     GetWindowLongW: ['pi', (x, h, i) => A(user32, 'GetWindowLongA')(x, h, i)],
     SetWindowLongW: ['pii', (x, h, i, v) => A(user32, 'SetWindowLongA')(x, h, i, v)],
     SetPropW: ['ppp', (x, h, n, v) => nameA(x, n, (a) => A(user32, 'SetPropA')(x, h, a, v))],

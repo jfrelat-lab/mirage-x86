@@ -666,7 +666,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // component that needs a window) is never the main one: made as such, each made the last one anew,
     // under its handle, and the timers on them stopped one another.
     if ((ex & 0x80) && !w && !h && !(style & 0x10000000)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
-    st.mainMade = true; st.mainClass = k0;
+    st.mainMade = true; st.mainClass = k0; if (st.guiTid === undefined) st.guiTid = x.lx.pid;
     // A main window of no size, never shown (Delphi's TApplication window): the program's windows are its
     // forms, each a top-level window on the desktop -- a dialog application's desktop (deskMode).
     if (!w && !h && !(style & 0x10000000)) st.mainDialog = true;
@@ -709,6 +709,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return cm && st.loadMenu ? st.loadMenu(x, (info[16] | info[17] << 8 | info[18] << 16 | info[19] << 24) >>> 0, cm) : 0;
   };
   const createOther = (x, cls, style, w, h, wide, X, Y, title, parent, menu, extra = {}) => {
+    if (st.guiTid === undefined) st.guiTid = x.lx.pid;
     const key = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
     const proc = st.classes.get(key) || systemProc(x, key);
     const hwnd = nextHwnd; nextHwnd += 4;
@@ -1395,7 +1396,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (w > 0 && h > 0 && w < 8192 && h < 8192) { st.w = Math.max(1, w - 2 * b); st.h = Math.max(1, h - 2 * b - cap); }
     wm.dirty = true;
   };
-  const firstMsg = (hwnd, min, max) => st.msgs.findIndex((e) => {
+  /*
+   * Each thread its queue. A message posted to a thread (PostThreadMessage: OpenAL's mixer, told so a
+   * buffer of waveOut's is done) is that thread's alone; the windows' messages, their paints and timers are
+   * the thread's that made them (st.guiTid) -- another thread's GetMessage took the GUI's WM_TIMER.
+   */
+  const guiThread = (x) => st.guiTid === undefined || x.lx.pid === st.guiTid;
+  const firstMsg = (hwnd, min, max, x) => st.msgs.findIndex((e) => {
+    if (e.tid !== undefined ? e.tid !== x.lx.pid : !guiThread(x)) return false;
     if ((min || max) && (e.msg < min || e.msg > max)) return false;
     if (!hwnd || hwnd === 0xffffffff) return true;
     let h = e.hwnd ?? st.hwnd; for (let n = 0; h && n < 64; n++) { if (h === hwnd) return true; h = win(h) && !win(h).main ? win(h).parent : 0; }
@@ -1531,8 +1539,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     PeekMessageA: ['ppuuu', (x, m, hwnd, min, max, remove) => {
       if (st.videoTick) st.videoTick(x);                              // a playing video's frame due (MCI)
       const peek = () => {
-        const i = firstMsg(hwnd, min, max);
+        const i = firstMsg(hwnd, min, max, x);
         if (i < 0) {
+          if (!guiThread(x)) return 0;
           const p = paintFor(hwnd, min, max); if (p) { putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; }
           const t = timerFor(x, hwnd, min, max, !!(remove & 1)); if (t) { putMsg(x, m, t); return 1; }
           return 0;
@@ -1548,12 +1557,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // WM_QUIT (12h) makes it return 0.
     GetMessageA: ['ppuu', (x, m, hwnd, min, max) => {
       if (st.pendingMove) { putMsg(x, m, { msg: 0x03, wp: 0, lp: takeMove() }); return 1; }
-      const i = firstMsg(hwnd, min, max);
+      const i = firstMsg(hwnd, min, max, x);
       if (i < 0) {
+        if (!guiThread(x)) return x.waitUntil(x.lx.mono() + 0.005);
         const p = paintFor(hwnd, min, max); if (p) { putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; }
         const t = timerFor(x, hwnd, min, max); if (t) { putMsg(x, m, t); return 1; }
         const vn = st.videoTick ? st.videoTick(x) : Infinity;        // a playing video: its next frame's time
-        if (firstMsg(hwnd, min, max) >= 0) return user32.GetMessageA[1](x, m, hwnd, min, max);   // ...or its end, notified: taken now
+        if (firstMsg(hwnd, min, max, x) >= 0) return user32.GetMessageA[1](x, m, hwnd, min, max);   // ...or its end, notified: taken now
         return x.waitUntil(Math.min(x.lx.mono() + 0.01, timerNext(), vn));
       }
       const e = st.msgs.splice(i, 1)[0]; putMsg(x, m, e);
@@ -2241,8 +2251,33 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const retire = (x, upTo) => {                                         // headers played to their end: WHDR_DONE
     while (wave.queue.length && wave.queue[0].end <= upTo) {
       const h = wave.queue.shift();
-      if (h.hdr) x.w32(h.hdr + 16, (x.r32(h.hdr + 16) | 1) & ~0x10);
+      if (h.hdr) { x.w32(h.hdr + 16, (x.r32(h.hdr + 16) | 1) & ~0x10); if (wave.cbType) wave.done.push(h.hdr); }
     }
+  };
+  /*
+   * waveOut's notifications: a header done is told to the program as its callback asks -- a function
+   * called with WOM_DONE (3BDh), an event set, a thread or a window posted MM_WOM_DONE -- by a thread of
+   * its own, guest code made here, as winmm's: it waits in MIRAGE_waveDone for the next header to end.
+   * OpenAL's software device (wrap_oal's waveOut path: the Undertale demo's music) refills a buffer only
+   * when told; with nothing told it played four buffers, a fifth of a second, and was silent after.
+   */
+  const waveNotifier = (x) => {
+    const gen = wave.gen = (wave.gen | 0) + 1, exp = (dll, n) => x.win.modules.get(dll).exports.get(n);
+    x.win.load('user32.dll');
+    const data = x.win.heapAlloc(16), code = x.win.heapAlloc(64), b = [];
+    [exp('winmm.dll', 'MIRAGE_waveDone'), exp('kernel32.dll', 'SetEvent'), exp('user32.dll', 'PostThreadMessageA'), exp('user32.dll', 'PostMessageA')].forEach((v, i) => x.w32(data + 4 * i, v));
+    const d32 = (v) => b.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255);
+    b.push(0x68); d32(gen); b.push(0xff, 0x15); d32(data);                              // loop: eax = MIRAGE_waveDone(gen)
+    b.push(0x85, 0xc0, 0x0f, 0x84); const jz = b.length; d32(0);                         // test eax, eax; jz end
+    const post = (slot) => { b.push(0x50, 0x68); d32(0x5001); b.push(0x68); d32(0x3bd); b.push(0x68); d32(wave.cb); b.push(0xff, 0x15); d32(data + slot); };
+    if (wave.cbType === 0x30000) { b.push(0x6a, 0, 0x50, 0x68); d32(wave.inst); b.push(0x68); d32(0x3bd); b.push(0x68); d32(0x5001); b.push(0xb8); d32(wave.cb); b.push(0xff, 0xd0); }
+    else if (wave.cbType === 0x50000) { b.push(0x68); d32(wave.cb); b.push(0xff, 0x15); d32(data + 4); }
+    else post(wave.cbType === 0x20000 ? 8 : 12);
+    b.push(0xe9); d32(-(b.length + 4));                                                  // jmp loop
+    const end = b.length; b.push(0xc3);
+    const r = end - (jz + 4); b.splice(jz, 4, r & 255, (r >>> 8) & 255, (r >>> 16) & 255, (r >>> 24) & 255);
+    x.write(code, Uint8Array.from(b));
+    x.win.createThread(code, 0);
   };
   const drain = () => {
     const x = wave.x;
@@ -2539,8 +2574,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const tag = x.r16(wfx), ch = x.r16(wfx + 2), rate = x.r32(wfx + 4), align = x.r16(wfx + 12), bits = x.r16(wfx + 14);
       if (!(tag === 1 && (bits === 8 || bits === 16)) && !(tag === 3 && bits === 32) || ch < 1 || ch > 2) return 32;   // WAVERR_BADFORMAT
       if (flags & 1) return 0;                                         // WAVE_FORMAT_QUERY
-      Object.assign(wave, { fmt: { tag, ch, rate, bits, align: align || ch * bits / 8 }, queue: [], total: 0, consumed: 0, t0: null, x });
+      Object.assign(wave, { fmt: { tag, ch, rate, bits, align: align || ch * bits / 8 }, queue: [], total: 0, consumed: 0, t0: null, x,
+        cb, inst, cbType: flags & 0x70000, done: [], closed: false });
       x.lx.setSoundSource(drain);
+      if (wave.cbType) waveNotifier(x);
       if (ph) x.w32(ph, 0x5001);
       return 0;
     }],
@@ -2573,7 +2610,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return 0;
     }],
     waveOutReset: ['p', (x) => { retire(x, Infinity); wave.queue = []; wave.total = wave.consumed = played(x.lx.mono()); return 0; }],
-    waveOutClose: ['p', () => 0], waveOutSetVolume: ['pu', () => 0], waveOutPause: ['p', () => 0], waveOutRestart: ['p', () => 0],
+    waveOutClose: ['p', () => { wave.closed = true; return 0; }],
+    // The notifier's wait (waveNotifier): the next header done, 0 once the device is closed or opened anew.
+    MIRAGE_waveDone: ['u', (x, gen) => {
+      if (gen !== wave.gen || wave.closed || !wave.fmt) return 0;
+      if (wave.t0 !== null) retire(x, played(x.lx.mono()));
+      if (wave.done.length) return wave.done.shift();
+      const now = x.lx.mono(), next = wave.queue.length && wave.t0 !== null ? wave.t0 + wave.queue[0].end / bps() : now + 0.01;
+      return x.waitUntil(Math.max(next, now + 0.001));
+    }],
+    waveOutSetVolume: ['pu', () => 0], waveOutPause: ['p', () => 0], waveOutRestart: ['p', () => 0],
   };
   // ---- msvcrt: the C runtime (cdecl), what an intro reaches for -------------------------------------
   // The Universal CRT (src/win32/ucrt.js), whose start-up msvcrt's shares.
@@ -2920,6 +2966,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    */
   const copyStr = (x, a, b, n) => { if (a !== b) x.write(b, x.bytes(a, n ?? x.str(a).length + 1)); return 1; };   // one code page here
   for (const [k, v] of Object.entries({
+    PostThreadMessageA: ['uuuu', (x, t, m, wp, lp) => { st.msgs.push({ msg: m, wp, lp, hwnd: 0, tid: t }); return 1; }],
     GetKeyboardType: ['i', (x, n) => [4, 0, 12][n] ?? 0],
     OemToCharA: ['pp', (x, a, b) => copyStr(x, a, b)], CharToOemA: ['pp', (x, a, b) => copyStr(x, a, b)],
     OemToCharBuffA: ['ppu', (x, a, b, n) => copyStr(x, a, b, n)], CharToOemBuffA: ['ppu', (x, a, b, n) => copyStr(x, a, b, n)],
