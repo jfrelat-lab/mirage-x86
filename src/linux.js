@@ -820,7 +820,23 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   machine.dsp = { drain: () => { const samples = dsp.pcm; dsp.pcm = []; return { rate: dsp.rate, samples }; } };
   // Another sound device in the card's place (src/win32's waveOut): the mixer pulls from `drain`.
-  lx.setSoundSource = (drain) => { machine.dsp = { drain }; };
+  // Sound sources in the card's place, by name (src/win32's: waveOut's and DirectSound's 'main', DirectMusic's
+  // 'dmusic'). One alone is pulled as it is; several are mixed at 44.1 kHz, each resampled to it.
+  const sources = new Map();
+  const mixed = () => {
+    if (sources.size === 1) return [...sources.values()][0]();
+    const parts = [...sources.values()].map((d) => d()), out = [];
+    for (const { rate, samples } of parts) {
+      const n = Math.floor(samples.length / 2 * 44100 / rate);
+      for (let i = 0; i < n; i++) {
+        const k = Math.min(samples.length / 2 - 1, Math.floor(i * rate / 44100));
+        out[2 * i] = (out[2 * i] || 0) + samples[2 * k]; out[2 * i + 1] = (out[2 * i + 1] || 0) + samples[2 * k + 1];
+      }
+    }
+    for (let i = 0; i < out.length; i++) out[i] = Math.max(-32768, Math.min(32767, out[i] || 0));
+    return { rate: 44100, samples: out };
+  };
+  lx.setSoundSource = (drain, name = 'main') => { sources.set(name, drain); machine.dsp = { drain: mixed }; };
   // General MIDI (src/midi.js), made when a program first opens it (MIRAGE-WIN32's midiOut*).
   let midiClocked = false;
   lx.midi = () => {

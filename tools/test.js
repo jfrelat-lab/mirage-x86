@@ -4939,6 +4939,32 @@ const runLinux = (hex, argv) => {
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a thread takes the messages posted to it, not another thread\'s', got, '1 401 0');
+  // DirectMusic, as GameMaker 8 plays a sound: the loader and the performance made by CoCreateInstance, a
+  // wave in memory loaded as a segment (DMUS_OBJ_MEMORY), played as a segment of its own, heard.
+  try { const { fn, x, mc } = await w32(), co = fn('ole32.dll', 'CoCreateInstance'), dm = (n) => fn('dmusic.dll', n);
+    const guid = (g) => { const p = x.win.heapAlloc(16), h = g.replace(/-/g, ''), b = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15]; b.forEach((k, i) => x.w8(p + i, parseInt(h.substr(2 * k, 2), 16))); return p; };
+    const out = x.win.heapAlloc(16), n = 2205, wav = new Uint8Array(44 + n * 2), v = new DataView(wav.buffer);
+    wav.set(new TextEncoder().encode('RIFF'), 0); v.setUint32(4, 36 + n * 2, true); wav.set(new TextEncoder().encode('WAVEfmt '), 8); v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 44100, true); v.setUint32(28, 88200, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    wav.set(new TextEncoder().encode('data'), 36); v.setUint32(40, n * 2, true); for (let i = 0; i < n; i++) v.setInt16(44 + 2 * i, 8000, true);
+    const mem = x.win.heapAlloc(wav.length); x.write(mem, wav);
+    const r = [co(guid('d2ac2892-b39b-11d1-8704-00600893b1bd'), 0, 3, guid('19e7c08c-0a44-4e6a-a116-595a7cd5de8c'), out)]; const loader = x.r32(out);
+    r.push(co(guid('d2ac2881-b39b-11d1-8704-00600893b1bd'), 0, 3, guid('679c4137-c62e-4147-b2b4-9d569acb254c'), out)); const perf = x.r32(out);
+    const desc = x.win.heapAlloc(848); x.write(desc, new Uint8Array(848)); x.w32(desc, 848); x.w32(desc + 4, 0x400); x.w32(desc + 832, wav.length); x.w32(desc + 840, mem);
+    r.push(dm('IDirectMusicLoader8::GetObject')(loader, desc, guid('c6784488-41a3-418f-aa15-b35093ba42d4'), out)); const seg = x.r32(out);
+    r.push(dm('IDirectMusicPerformance8::PlaySegmentEx')(perf, seg, 0, 0, 0x80, 0, 0, out, 0, 0), dm('IDirectMusicPerformance8::IsPlaying')(perf, seg, 0));
+    mc.dsp.drain(); mc.cpu.cycles += 2e6; const samples = mc.dsp.drain().samples;
+    r.push(samples.length > 0 && samples.every((s2) => s2 === 8000));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: DirectMusic plays a wave loaded from memory as a segment', got, '0 0 0 0 0 true');
+  // Two sound sources at once (waveOut's music, DirectMusic's sounds) are mixed, each at its own rate.
+  try { const { lx, mc } = await w32();
+    lx.setSoundSource(() => ({ rate: 44100, samples: [1000, 1000, 1000, 1000] }));
+    lx.setSoundSource(() => ({ rate: 22050, samples: [500, 500] }), 'dmusic');
+    got = mc.dsp.drain().samples.join(',');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: two sound sources are mixed at 44.1 kHz', got, '1500,1500,1500,1500');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');

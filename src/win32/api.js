@@ -8,6 +8,7 @@
 // before running, so a missing name is a crash with no name, a present one a message that names it.
 import { gl as glTable, glu as gluTable } from '../hle/gl.js';
 import { d3d9Apis } from './d3d9.js';
+import { dmusicApis } from './dmusic.js';
 import { dsoundApis } from './dsound.js';
 import { dinputApis } from './dinput.js';
 import { parseTrueType } from './truetype.js';
@@ -3073,6 +3074,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     { dll: 'glu32.dll', fns: glu32 },
     { dll: 'winmm.dll', fns: winmm },
     ...d3d9Apis(st),
+    ...dmusicApis(st, (name) => tables.readFile(name)),
     dsoundApis(),
     dinputApis(),
     ddrawApis(st, wm, send),

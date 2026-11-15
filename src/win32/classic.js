@@ -596,6 +596,8 @@ export function classicApis({ st, wm }) {
     // Internet Explorer's WebBrowser control (an inert one, below); any other class is not registered.
     CoCreateInstance: ['ppupp', (x, clsid, outer, ctx, iid, pp) => {
       if (pp) x.w32(pp, 0);
+      const made = st.coClasses && st.coClasses.get(guid(x, clsid));   // DirectMusic's (src/win32/dmusic.js)
+      if (made) return made(x, iid, pp);
       if (guid(x, clsid) !== CLSID_WEBBROWSER) return 0x80040154;   // REGDB_E_CLASSNOTREG
       const o = oleControl(x); return OLE_IMPL.IUnknown.QueryInterface(x, o, iid, pp);
     }],
