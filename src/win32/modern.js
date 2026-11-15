@@ -251,8 +251,6 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     GetDeviceGammaRamp: ['pp', (x, hdc, p) => { if (st.gammaRamp) x.write(p, st.gammaRamp); else for (let c = 0; c < 3; c++) for (let i = 0; i < 256; i++) x.w16(p + 512 * c + 2 * i, i * 257); return 1; }],
     SetDeviceGammaRamp: ['pp', (x, hdc, p) => { st.gammaRamp = x.bytes(p, 1536); return 1; }],
     GetICMProfileW: ['ppp', () => 0], GetPixelFormat: ['p', () => 0],
-    // Regions: a handle each, not kept -- a window's region and the clipping it would make are not drawn here.
-    CreateRectRgn: ['iiii', () => st.newHandle('region', {})], CombineRgn: ['pppi', () => 2],   // SIMPLEREGION
   };
   // advapi32: the user, and the registry's Unicode keys -- none of which is there (ERROR_FILE_NOT_FOUND).
   const advapi32 = {

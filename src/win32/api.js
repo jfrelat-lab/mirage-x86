@@ -17,6 +17,7 @@ import { windowManager } from './wm.js';
 import { ddrawApis } from './ddraw.js';
 import { classicApis, loadString, decodeDib, findResource, resId } from './classic.js';
 import { modernApis } from './modern.js';
+import { regionApis } from './region.js';
 import { parseAvi, decodeFrame } from './avi.js';
 import { ucrtApis } from './ucrt.js';
 
@@ -133,6 +134,11 @@ function windowState(fonts = {}) {
  *  may select, { "tahoma": bytes, "tahoma:bold": bytes } (src/win32/fonts.js finds them in a page).
  *  `files`: files a program may open (OpenFile), by lower-case base name, { "gm.dls": bytes }. */
 const GM_DLS_SIZE = 3440660;
+// A string read a byte a character (x.str) written back the same way, in the program's code page: through
+// TextEncoder, a window's "©" came back as UTF-8's two bytes ("Â©" on Diablo's title screen).
+// x.str decodes as Windows-1252 (WHATWG's "latin1"): 80h-9Fh are characters beyond 255 ("€"), mapped back.
+const CP1252 = new Map([...new TextDecoder('latin1').decode(Uint8Array.from({ length: 32 }, (_, i) => 0x80 + i))].map((c, i) => [c.charCodeAt(0), 0x80 + i]));
+const ansi = (s) => Uint8Array.from(s, (c) => { const u = c.charCodeAt(0); return u < 256 ? u : CP1252.get(u) ?? 0x3f; });
 // A block grown in place when it fits, else moved: the old contents copied, what grows zeroed if asked.
 function reAlloc(x, p, n, zero) {
   if (!p) { const q = x.win.heapAlloc(n); if (zero) x.write(q, new Uint8Array(n)); return q; }
@@ -470,7 +476,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       o.pos = Math.max(0, (how === 1 ? o.pos : how === 2 ? o.f.size : 0) + dist);
       return o.pos;
     }],
-    DeleteFileA: ['p', (x, pName) => { const f = diskFile(x.str(pName)), k = f && [...st.disk].find(([, v]) => v === f)?.[0]; return k ? (st.disk.delete(k), 1) : 0; }],
+    // Only the file at that path: diskFile's fallback by name found Diablo's setup itself when it cleaned up
+    // a file of the same name elsewhere, and the setup could not read its own archive any more.
+    DeleteFileA: ['p', (x, pName) => { const k = relPath(x.str(pName)); if (st.disk.has(k)) { st.disk.delete(k); return 1; } setError(x, 2); return 0; }],
     OutputDebugStringA: ['p', () => 0],
     // GetFileSize: the low 32 bits returned, the high ones at `high` (0: no file here reaches 4 GB).
     GetFileSize: ['pp', (x, h, high) => { const o = st.files[h - 0x4000]; if (!o) return 0xffffffff; if (high) x.w32(high, 0); return o.f.size >>> 0; }],
@@ -863,9 +871,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    */
   const popFrame = (w) => { const s = w.style | 0; return { b: s & 0xc00000 || s & 0x80 ? 3 : s & 0x800000 ? 1 : 0, cap: (s & 0xc00000) === 0xc00000 ? 19 : 0 }; };
   const topOf = (h) => { let w = win(h); while (w && !w.main && (w.style & 0x40000000)) w = win(w.parent); return w; };
-  const layerOf = (w) => { if (!w.layer || w.layer.w !== w.w || w.layer.h !== w.h) w.layer = { w: Math.max(1, w.w), h: Math.max(1, w.h), px: new Uint32Array(Math.max(1, w.w) * Math.max(1, w.h)).fill(0xd4d0c8) }; return w.layer; };
+  // Over a program that set a display mode (DirectDraw full screen), a window shows what is under it
+  // where it has not drawn, as on Windows: its pixels start see-through (top byte set), and the window
+  // manager copies only what was drawn. Storm's dialogs (Diablo's menus) draw their pictures into the
+  // DirectDraw surface and only their text through GDI.
+  const layerOf = (w) => {
+    if (!w.layer || w.layer.w !== w.w || w.layer.h !== w.h) { const see = !!st.modeSet; w.layer = { w: Math.max(1, w.w), h: Math.max(1, w.h), see, px: new Uint32Array(Math.max(1, w.w) * Math.max(1, w.h)).fill(see ? 0xff000000 : 0xd4d0c8) }; }
+    return w.layer;
+  };
   st.popupLayers = () => (deskMode() ? [] : [...st.wins.values()].filter((w) => !w.main && !w.dead && w.visible && !(w.style & 0x40000000) && w.layer)
-    .map((w) => ({ x: w.x | 0, y: w.y | 0, ...popFrame(w), title: w.title || '', w: w.layer.w, h: w.layer.h, px: w.layer.px })));
+    .map((w) => ({ x: w.x | 0, y: w.y | 0, ...popFrame(w), title: w.title || '', w: w.layer.w, h: w.layer.h, px: w.layer.px, see: w.layer.see })));
   /** ... and in the buffer drawn on: the desktop's in deskMode, the main client area's otherwise. */
   const originOf = (h) => { const o = screenOrigin(h); if (deskMode()) return o; const m = mainOrigin(); return { x: o.x - m.x, y: o.y - m.y }; };
   const deskScreen = () => {
@@ -927,7 +942,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }
     switch (msg) {
       case 0x0c: w.title = lp ? x.str(lp, 1024) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
-      case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, new TextEncoder().encode(t + '\0')); return t.length; }   // WM_GETTEXT
+      case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, ansi(t + '\0')); return t.length; }   // WM_GETTEXT
       case 0x0e: return (w.title || '').length;                          // WM_GETTEXTLENGTH
       case 0x30: w.font = wp; if (lp & 0xffff) invalidate(hwnd, true); return 0;   // WM_SETFONT
       case 0x31: return w.font || 0;                                     // WM_GETFONT
@@ -1014,7 +1029,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       case 'count': return n;
       case 'getsel': return w.sel ?? -1;
       case 'setsel': return i >= 0 && i < n ? pick(i) : (pick(-1), combo || i !== -1 ? -1 : 0);
-      case 'gettext': if (i < 0 || i >= n) return -1; if (!strs) { x.w32(lp, items[i].data); return 4; } x.write(lp, new TextEncoder().encode(items[i].text + '\0')); return items[i].text.length;
+      case 'gettext': if (i < 0 || i >= n) return -1; if (!strs) { x.w32(lp, items[i].data); return 4; } x.write(lp, ansi(items[i].text + '\0')); return items[i].text.length;
       case 'textlen': return i < 0 || i >= n ? -1 : strs ? items[i].text.length : 4;
       case 'find': return find(false);
       case 'findexact': return find(true);
@@ -1230,6 +1245,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       st.hwnd = dlg; st.wndProc = dProc; st.style = style >>> 0; st.title = w.title; st.x = w.x; st.y = w.y; st.destroyed = false; st.shown = false; st.active = false;
       st.w = Math.max(1, w.w); st.h = Math.max(1, w.h); wm.dirty = true;
     }
+    // A dialog over a main window not shown yet: the screen is the desktop, where the dialog sits (Diablo's
+    // setup asks for its directory before it shows its window).
+    else if (st.mainMade && !st.shown && !st.destroyed && !st.mainDialog && !(style & 0x40000000) && (!parent || parent === st.hwnd)) { st.mainDialog = true; wm.dirty = true; }
     // Its place, when not the main window and not in a dialog application's desktop: the template's x and y
     // from its owner's client area (DS_ABSALIGN, 1: from the screen's corner), or centred on the owner
     // (DS_CENTER, 800h), as Windows places a dialog.
@@ -1477,7 +1495,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       wm.dirty = true; return 0;
     }],
     SetWindowTextA: ['pp', (x, hwnd, t) => { if (hwnd === st.hwnd) { st.title = t ? x.str(t, 256) : ''; wm.redraw(); } else if (win(hwnd)) win(hwnd).title = t ? x.str(t, 256) : ''; return 1; }],
-    GetWindowTextA: ['ppi', (x, hwnd, buf, n) => { const t = hwnd === st.hwnd ? (st.title || '') : win(hwnd) ? win(hwnd).title || '' : ''; if (n > 0) x.write(buf, new TextEncoder().encode(t.slice(0, n - 1) + '\0')); return Math.min(t.length, Math.max(0, n - 1)); }],
+    GetWindowTextA: ['ppi', (x, hwnd, buf, n) => { const t = hwnd === st.hwnd ? (st.title || '') : win(hwnd) ? win(hwnd).title || '' : ''; if (n > 0) x.write(buf, ansi(t.slice(0, n - 1) + '\0')); return Math.min(t.length, Math.max(0, n - 1)); }],
     // A point of the client area on the screen and back: the window's place and its frame.
     ClientToScreen: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) + c.x); x.w32(p + 4, (x.r32(p + 4) | 0) + c.y); return 1; }],
     ScreenToClient: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) - c.x); x.w32(p + 4, (x.r32(p + 4) | 0) - c.y); return 1; }],
@@ -1521,7 +1539,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     UpdateWindow: ['p', (x, hwnd) => {
       if (st.mainDialog || hwnd !== st.hwnd) { const due = paintOrder().filter((h) => h === hwnd || isAncestor(hwnd, h)); return due.length ? send(x, due.map((h) => [0x0f, 0, 0, h]), () => 1, 4) : 1; }
-      return send(x, [[0x0f, 0, 0]], () => 1, 4);
+      // A main window not shown has nothing to paint: Diablo's setup paints with a palette its loading
+      // thread makes, and asserts when painted before (UpdateWindow after ShowWindow(SW_HIDE)).
+      return st.shown ? send(x, [[0x0f, 0, 0]], () => 1, 4) : 1;
     }],
     // A window moved or sized: its new size, unless SWP_NOSIZE (1). WinQuake's video modes resize its
     // window this way (vid_mode 2: 806x625 with its frame, an 800x600 picture).
@@ -1621,6 +1641,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     DefWindowProcA: ['puuu', (x, hwnd, msg, wp, lp) => {
       const r = defWindow(x, hwnd, msg, wp, lp);
       if (r !== undefined) return r;
+      // WM_PAINT left to Windows validates the window, as BeginPaint and EndPaint would: Diablo's procedure
+      // passes it on, and its message loop got it again for ever, never idle to run the game.
+      if (msg === 0x0f) { st.invalid.delete(hwnd); return 0; }
       if (msg === 0x10 && hwnd === st.hwnd && !st.destroyed) { st.destroyed = true; return send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 0, 16); }
       if (msg === 0x10 && hwnd !== st.hwnd && win(hwnd)) return destroyOther(x, hwnd, () => 0, 16);
       if (msg === 0x112 && (wp & 0xfff0) === 0xf060) st.msgs.push({ msg: 0x10, wp: 0, lp: 0 });
@@ -1670,8 +1693,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     LoadCursorA: ['pp', () => 0x10003], LoadIconA: ['pp', () => 0x10002], SetCursor: ['p', () => 0], AdjustWindowRect: ['pui', (x, r, style, menu) => user32.AdjustWindowRectEx[1](x, r, style, menu, 0)],
     // wsprintfA(buf, fmt, ...) (cdecl) and wvsprintfA(buf, fmt, va_list): at most 1024 characters, as Windows.
-    wsprintfA: ['pp', (x, buf, fmt) => { const out = formatC(x, x.str(fmt), (x.cpu.reg[4] >>> 0) + 12).slice(0, 1023); x.write(buf, new TextEncoder().encode(out + '\0')); return out.length; }, { cdecl: true }],
-    wvsprintfA: ['ppp', (x, buf, fmt, ap) => { const out = formatC(x, x.str(fmt), ap).slice(0, 1023); x.write(buf, new TextEncoder().encode(out + '\0')); return out.length; }],
+    wsprintfA: ['pp', (x, buf, fmt) => { const out = formatC(x, x.str(fmt), (x.cpu.reg[4] >>> 0) + 12).slice(0, 1023); x.write(buf, ansi(out + '\0')); return out.length; }, { cdecl: true }],
+    wvsprintfA: ['ppp', (x, buf, fmt, ap) => { const out = formatC(x, x.str(fmt), ap).slice(0, 1023); x.write(buf, ansi(out + '\0')); return out.length; }],
     // A program's own windows beyond the first (WinQuake's start-up dialog, made from its resources and
     // destroyed once the game window is up): a handle of their own, never on the screen here.
     CreateDialogParamA: ['pppp' + 'p', (x, inst, name, parent, proc, param) => {
@@ -1726,8 +1749,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     CreateDialogIndirectParamA: ['ppppp', (x, inst, tpl, parent, proc, param) => createDialog(x, inst, tpl, parent, proc, param, 20)],
     // DefDlgProcA: the dialog's DLGPROC first; what it does not handle (FALSE) goes to DefWindowProc, what it
     // does returns its DWL_MSGRESULT (WM_INITDIALOG and the messages that answer with a value: its own).
+    // A window of a class of its own made with CreateWindowEx (Storm's SDlgDialog, Diablo's screens) keeps
+    // its DLGPROC at DWL_DLGPROC (4) of its extra bytes, as a template's dialog does.
     DefDlgProcA: ['puuu', (x, hwnd, msg, wp, lp) => {
-      const w = win(hwnd), fn = w && w.dlgProc;
+      const w = win(hwnd), fn = w && (w.dlgProc || w.long.get(4));
       // A message box's buttons end it with their id; Escape (IDCANCEL) is its only button's when it has
       // no Cancel (MB_OK), and nothing for Yes/No.
       if (w && w.msgBox && msg === 0x111 && !(wp >>> 16)) {
@@ -2193,6 +2218,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetSystemPaletteEntries: ['puup', () => 0],                       // no palette on this screen
     // A palette's entries read and changed (PALETTEENTRY: red, green, blue, flags), and its size changed;
     // the entries a palette has: 256 here, whatever LOGPALETTE asked (Pinball's grows and fills it).
+    // The entry nearest a COLORREF (0x00bbggrr), by the sum of squares as Windows matches: Diablo's.
+    GetNearestPaletteIndex: ['pu', (x, hpal, cr) => {
+      const p = st.gdi.get(hpal); if (!p || p.kind !== 'palette') return 0xffffffff;
+      const r = cr & 255, g = (cr >> 8) & 255, b = (cr >> 16) & 255, n = Math.min(p.size || 256, 256);
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < n; i++) { const c = p.colors[i], d = (((c >> 16) & 255) - r) ** 2 + (((c >> 8) & 255) - g) ** 2 + ((c & 255) - b) ** 2; if (d < bd) { bd = d; best = i; } }
+      return best;
+    }],
+    GdiSetBatchLimit: ['u', () => 20],                                // the previous limit: GDI draws at once here
     GetPaletteEntries: ['puup', (x, hpal, start, n, pe) => {
       const p = st.gdi.get(hpal); if (!p || p.kind !== 'palette') return 0;
       if (!pe) return p.size || 256;
@@ -2803,7 +2837,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // A window DC's origin on the screen: its client area's corner.
     GetDCOrgEx: ['pp', (x, hdc, p) => { const o = isWindowDC(hdc) ? screenOrigin(st.hwnd) : (hdc >>> 24) === 2 && win(hdc & 0xffffff) ? screenOrigin(hdc & 0xffffff) : { x: 0, y: 0 }; x.w32(p, o.x); x.w32(p + 4, o.y); return 1; }],
     GetLayout: ['p', () => 0], SetLayout: ['pu', () => 0],             // left to right
-    SetRectRgn: ['piiii', () => 1], GdiFlush: ['', () => 1],
+    GdiFlush: ['', () => 1],
     GetBkMode: ['p', (x, hdc) => dcState(hdc).bkMode], GetTextColor: ['p', (x, hdc) => dcState(hdc).textColor], GetBkColor: ['p', (x, hdc) => dcState(hdc).bkColor],
     // LineDDA: the program's callback for each point of the line (its last excluded), in turn.
     LineDDA: ['iiiipp', (x, x0, y0, x1, y1, fn, data) => {
@@ -2910,6 +2944,18 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetSysColor: ['i', (x, i) => SYSCOLORS[i] ?? 0],
   });
   user32.InvertRect = gdi32.InvertRect; delete gdi32.InvertRect;     // user32's, drawn with gdi32's pixels
+  // Regions (src/win32/region.js): a window waits to be painted whole, or not at all -- as much of it as
+  // is on the screen, as Windows clips an update region: Diablo's 640x482 menus blit through theirs into
+  // the 640x480 DirectDraw surface, and two rows more overwrote what lay after it.
+  const updateRect = (h) => {
+    if (!st.invalid.has(h)) return null;
+    const w = h === st.hwnd ? { w: st.w, h: st.h } : win(h); if (!w) return null;
+    const o = screenOrigin(h), S = st.modeSet ? { w: st.w, h: st.h } : st.desk;
+    const r = [Math.max(0, -o.x), Math.max(0, -o.y), Math.min(w.w | 0, S.w - o.x), Math.min(w.h | 0, S.h - o.y)];
+    return r[2] > r[0] && r[3] > r[1] ? r : null;
+  };
+  const regions = regionApis(st, updateRect);
+  Object.assign(gdi32, regions.gdi32); Object.assign(user32, regions.user32);
   // The classic Windows 95 calls (src/win32/classic.js), under the names not answered above.
   const classic = classicApis({ st, wm, send });
   for (const [dll, t] of [[kernel32, classic.kernel32], [user32, classic.user32], [gdi32, classic.gdi32], [winmm, classic.winmm]]) for (const [k, v] of Object.entries(t || {})) if (!(k in dll)) dll[k] = v;
@@ -2956,7 +3002,6 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     CharLowerBuffA: ['pu', (x, p, n) => { const b = x.bytes(p, n); for (let i = 0; i < n; i++) if (b[i] >= 65 && b[i] <= 90) b[i] += 32; x.write(p, b); return n; }],
     DestroyAcceleratorTable: ['p', () => 1], ExitWindowsEx: ['uu', () => 0], WaitForInputIdle: ['pu', () => 0], EnumWindows: ['pp', () => 1], FindWindowExA: ['pppp', () => 0],
     DrawEdge: ['ppuu', () => 1], CreateCursor: ['piiiipp', () => st.newHandle('cursor', {})], DestroyCursor: ['p', () => 1],
-    GetUpdateRgn: ['ppi', () => 1],                                    // NULLREGION: nothing waits to be painted
     GetClassLongA: ['pi', () => 0], SetClassLongA: ['pii', () => 0],
   })) if (!(k in user32)) user32[k] = v;
   const extent = (x, hdc, str, n) => { const sz = x.win.heapAlloc(8); gdi32.GetTextExtentPoint32A[1](x, hdc, str, n, sz); const w = x.r32(sz), h = x.r32(sz + 4); x.win.heapFree(sz); return { w, h }; };
@@ -2976,7 +3021,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     // A pattern brush: its bitmap's first pixel, as a solid one.
     CreatePatternBrush: ['p', (x, hbm) => { const bm = st.gdi.get(hbm), c = bm && bm.px ? bm.px[0] : 0x808080; return gdi32.CreateSolidBrush[1](x, ((c & 255) << 16) | (c & 0xff00) | ((c >>> 16) & 255)); }],
-    SetTextAlign: ['pu', () => 0], GetRegionData: ['pup', () => 0], RectInRegion: ['pp', () => 1],
+    SetTextAlign: ['pu', () => 0],
   })) if (!(k in gdi32)) gdi32[k] = v;
   /*
    * GameMaker 8's runner (Delphi, 2009; the Undertale demo, 2013): the VCL's start-up asks the keyboard's

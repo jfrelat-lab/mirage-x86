@@ -374,7 +374,7 @@ export function classicApis({ st, wm }) {
     DPtoLP: ['ppi', () => 1],
     PtVisible: ['pii', () => 1], RectVisible: ['pp', () => 1],
     // Clipping regions: none kept -- a DC draws over its whole surface. GetClipRgn: the DC has none (0).
-    CreateRectRgnIndirect: ['p', () => st.newHandle('region', {})], GetClipRgn: ['pp', () => 0],
+    GetClipRgn: ['pp', () => 0],
     SelectClipRgn: ['pp', () => 2], ExcludeClipRect: ['piiii', () => 2], OffsetClipRgn: ['pii', () => 2],
   };
   // ---- advapi32: a registry in memory, for the run -- keys made and opened, values written and read

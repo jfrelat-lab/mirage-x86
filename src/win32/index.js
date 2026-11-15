@@ -93,12 +93,14 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   // XP's does, below the program); then segments of 256 MiB from 10000000h. A program that frees what
   // it allocates (.kkrieger's texture generator, megabytes at a time) stays in the memory it had; with
   // no reuse and no bound the heap grew into the image at 400000h and overwrote the program.
-  // Blocks of 64 KiB and more have pages of their own, from 20000000h: freed, the pages go back to the
-  // machine and the span joins its free neighbours, to be handed out again first fit. A GameMaker game
-  // loading a room allocates tens of megabytes of buffers of sizes that never repeat; kept on the lists
-  // by size, they ran the machine out of memory a minute into the Undertale demo.
+  // Blocks above XP's VirtualMemoryThreshold (7F000h, 508 KiB) have pages of their own, from 20000000h,
+  // as XP gives them: freed, the pages go back to the machine and the span joins its free neighbours, to
+  // be handed out again first fit. A GameMaker game loading a room allocates tens of megabytes of buffers
+  // of sizes that never repeat; kept on the lists by size, they ran the machine out of memory a minute
+  // into the Undertale demo. Smaller blocks stay readable once freed, as in XP's heap: Diablo reads one
+  // after freeing it (from 64 KiB, its pages read as zeros and it called address 4).
   const segments = [[HEAP, Math.min(HEAP + HEAP_SIZE, base > HEAP ? base : HEAP + HEAP_SIZE)], [0x10000000, 0x20000000]];
-  const BIG = 0x10000, BIG_BASE = 0x20000000, BIG_END = 0x30000000;
+  const BIG = 0x7f000, BIG_BASE = 0x20000000, BIG_END = 0x30000000;
   for (const [a, b] of [...segments, [BIG_BASE, BIG_END]]) lx.lazy.push([a, b]);
   let seg = 0, heapNext = HEAP + 8;
   const freeBySize = new Map();

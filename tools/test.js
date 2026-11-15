@@ -5172,6 +5172,46 @@ const runLinux = (hex, argv) => {
     got = `${new Set(at).size} block place`;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: big heap blocks freed give their memory back and are reused', got, '1 block place');
+  // Regions kept as rectangles: Storm (Diablo's menus) combines them and paints through GetRegionData's
+  // rectangles -- with every region empty, it read rectangles from a block of no size.
+  try { const { fn, x } = await w32(), g = (n) => fn('gdi32.dll', n), a = g('CreateRectRgn')(0, 0, 10, 10), b = g('CreateRectRgn')(5, 5, 15, 15), d = g('CreateRectRgn')(0, 0, 0, 0);
+    const r = [g('CombineRgn')(d, a, b, 2), g('GetRegionData')(d, 0, 0), g('CombineRgn')(d, a, b, 4), g('GetRegionData')(d, 0, 0), g('CombineRgn')(d, a, b, 1)];
+    const buf = x.win.heapAlloc(64); g('GetRegionData')(d, 64, buf); r.push([0, 1, 2, 3].map((i) => x.r32(buf + 32 + 4 * i)).join(','));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: regions combined (or, difference, and) and read back as rectangles', got, '3 80 3 64 2 5,5,10,10');
+  // DeleteFileA deletes the file at that path only: found by its name elsewhere, Diablo's setup deleted
+  // itself while it cleaned up, and could not read its own archive any more.
+  try { const { fn, str } = await w32(), k = (n) => fn('kernel32.dll', n);
+    k('CloseHandle')(k('CreateFileA')(str('C:\\a\\x.dat'), 0x40000000, 0, 0, 2, 0, 0));
+    const del = k('DeleteFileA')(str('C:\\b\\x.dat')), h = k('CreateFileA')(str('C:\\a\\x.dat'), 0x80000000, 1, 0, 3, 0, 0);
+    got = `${del} ${h === -1 || h === 0xffffffff ? 'gone' : 'kept'}`;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: DeleteFileA deletes the file at that path only', got, '0 kept');
+  // A window's text comes back in the program's code page ("\xa9" one byte, not UTF-8's two: Diablo's
+  // title screen read "A-circumflex, copyright"); a palette's nearest entry; a window waits to be painted
+  // as far as the screen goes, and WM_PAINT left to DefWindowProc validates it (Diablo's message loop
+  // got WM_PAINT for ever).
+  try { const { fn, x } = await w32(), u = (n) => fn('user32.dll', n), g = (n) => fn('gdi32.dll', n), t = x.win.heapAlloc(8), buf = x.win.heapAlloc(16), box = x.win.heapAlloc(16);
+    x.write(t, Uint8Array.of(0xa9, 0x80, 0x31, 0));
+    const main = u('CreateWindowExA')(0, 0, t, 0x10000000, 0, 0, 320, 200);
+    u('GetWindowTextA')(main, buf, 16); const text = [0, 1, 2].map((i) => x.r8(buf + i).toString(16)).join(',');
+    const pop = u('CreateWindowExA')(0, 0, 0, 0x90000000, 1000, 0, 100, 50, main);
+    const lp = x.win.heapAlloc(12); x.write(lp, Uint8Array.of(0, 3, 2, 0, 255, 0, 0, 0, 0, 0, 255, 0)); const pal = g('CreatePalette')(lp);
+    const near = [g('GetNearestPaletteIndex')(pal, 0x0a0afa), g('GetNearestPaletteIndex')(pal, 0xc80000)].join(',');
+    const rg = g('CreateRectRgn')(0, 0, 0, 0); u('InvalidateRect')(pop, 0, 0); u('GetUpdateRgn')(pop, rg, 0); g('GetRgnBox')(rg, box); const right = x.r32(box + 8);
+    u('InvalidateRect')(main, 0, 0); const before = u('GetUpdateRgn')(main, rg, 0); u('DefWindowProcA')(main, 0x0f, 0, 0); const after = u('GetUpdateRgn')(main, rg, 0);
+    got = [text, near, right, before, after].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: window text in the code page, nearest palette entry, update region on the screen, validated by DefWindowProc', got, 'a9,80,31 0,1 24 2 1');
+  // The stand-ins for Arial, Times New Roman and Courier New measure a line as Windows does: their win
+  // metrics set to their hhea ones (Arimo's raised 2136/797 made a 17-pixel Arial line 25 pixels high).
+  try { const { windowsMetrics } = await import('../src/win32/fonts.js'), b = new Uint8Array(176), dv = new DataView(b.buffer);
+    dv.setUint16(4, 2); [['hhea', 44, 36], ['OS/2', 80, 96]].forEach(([tag, off, len], i) => { for (let j = 0; j < 4; j++) b[12 + 16 * i + j] = tag.charCodeAt(j); dv.setUint32(12 + 16 * i + 8, off); dv.setUint32(12 + 16 * i + 12, len); });
+    dv.setInt16(44 + 4, 1854); dv.setInt16(44 + 6, -434); dv.setUint16(80 + 74, 2136); dv.setUint16(80 + 76, 797);
+    windowsMetrics(b); got = `${dv.getUint16(80 + 74)} ${dv.getUint16(80 + 76)}`;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a metric-compatible font measures its lines by its hhea metrics', got, '1854 434');
   // Windows besides the main one: a child control by its id (MFC subclasses through GetDlgItem: a made-up
   // handle per id fell on the dialog's own), its parent and class; the queue filtered by window and range.
   try { const { fn, x, str } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28);

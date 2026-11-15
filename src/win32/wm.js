@@ -155,7 +155,8 @@ export function windowManager(st) {
     for (const l0 of st.popupLayers ? st.popupLayers() : []) {
       const l = dx || dy ? { ...l0, x: l0.x + dx, y: l0.y + dy } : l0;
       const W = l.w + 2 * l.b, H = l.h + 2 * l.b + l.cap;
-      fill(fb, S, l.x, l.y, W, H, FACE);
+      if (!l.see) fill(fb, S, l.x, l.y, W, H, FACE);
+      else if (l.b || l.cap) { fill(fb, S, l.x, l.y, W, l.b + l.cap, FACE); fill(fb, S, l.x, l.y + H - l.b, W, l.b, FACE); fill(fb, S, l.x, l.y, l.b, H, FACE); fill(fb, S, l.x + W - l.b, l.y, l.b, H, FACE); }
       if (l.b >= 3) raised(fb, S, l.x, l.y, W, H, FACE, LIGHT);
       if (l.cap) {
         const cw = W - 2 * l.b;
@@ -166,7 +167,9 @@ export function windowManager(st) {
       for (let j = 0; j < l.h; j++) {
         const Y = cy + j; if (Y < 0 || Y >= S.h) continue;
         const x0 = Math.max(0, -cx), x1 = Math.min(l.w, S.w - cx);
-        if (x1 > x0) fb.set(l.px.subarray(j * l.w + x0, j * l.w + x1), Y * S.w + cx + x0);
+        if (x1 <= x0) continue;
+        if (!l.see) { fb.set(l.px.subarray(j * l.w + x0, j * l.w + x1), Y * S.w + cx + x0); continue; }
+        for (let i = x0, o = Y * S.w + cx; i < x1; i++) { const v = l.px[j * l.w + i]; if (!(v >>> 24)) fb[o + i] = v; }   // see-through where not drawn
       }
     }
   };
