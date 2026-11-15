@@ -17,6 +17,7 @@
 //   MIRAGE_W32DIR=<dir>             the files beside it and below, by their path there, on the program's own disk (src/win32/api.js)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
 //   MIRAGE_W32IPS=<n>               instructions per guest second (default 1e8)
+//   MIRAGE_W32MEM=<MiB>             the machine's RAM at least that (default: 64 MiB and the image, a power of two)
 //   MIRAGE_W32TRACE=1|<file>        every API call as it is made (to stderr, or that file)
 //   MIRAGE_W32TRACEFROM=<seconds>   ... from that guest second on
 //   MIRAGE_W32FONTS=arial=<ttf>,arial:bold=<ttf>  TrueType fonts the program selects, as the page's machine.fonts
@@ -39,7 +40,7 @@ import { traceBackend } from '../../src/hle/trace.js';
 const [prog, ...args] = process.argv.slice(2);
 if (!prog) { console.error('usage: node tools/win32/run.mjs <program.exe>'); process.exit(2); }
 const exe = new Uint8Array(readFileSync(prog));
-const mc = new Machine({ memSize: win32Memory(exe), cpu: process.env.MIRAGE_CPU || '686' });
+const mc = new Machine({ memSize: win32Memory(exe, Number(process.env.MIRAGE_W32MEM) || 0), cpu: process.env.MIRAGE_CPU || '686' });
 // MIRAGE_W32IPS=<instructions per guest second>: the CPU's pace (default 1e8, the page measures its own).
 if (process.env.MIRAGE_W32IPS) mc.cyclesPerSecond = Number(process.env.MIRAGE_W32IPS);
 installBIOS(mc);
@@ -361,6 +362,8 @@ if (process.env.MIRAGE_W32WINS && apis.windows) for (const w of apis.windows()) 
 const t = backend.summary();
 console.error('w32:', JSON.stringify({ mode: t.mode, frames: t.frames, calls: t.calls }));
 for (const s of t.shaders) console.error('w32 shader:\n' + s);
+// What Direct3D 9, 8 or 11 asked of the device model (src/win32/d3d9.js's recorder), call by call.
+if (t.d3d) console.error('w32 d3d:', JSON.stringify(t.d3d));
 if (!lx.done) { console.error(SECS ? `mirage-win32: stopped after ${SECS} guest seconds` : `mirage-win32: still running after ${LIMIT} cycles`); process.exit(SECS ? 0 : 124); }
 if (lx.signal) {
   const f = lx.faultInfo;

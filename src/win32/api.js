@@ -9,6 +9,7 @@
 import { gl as glTable, glu as gluTable } from '../hle/gl.js';
 import { d3d9Apis } from './d3d9.js';
 import { dmusicApis } from './dmusic.js';
+import { d3d11Apis } from './d3d11.js';
 import { dsoundApis } from './dsound.js';
 import { dinputApis } from './dinput.js';
 import { parseTrueType } from './truetype.js';
@@ -3193,8 +3194,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     { dll: 'shlwapi.dll', fns: classic.shlwapi }, { dll: 'setupapi.dll', fns: modern.setupapi },
     { dll: 'oleaut32.dll', fns: modern.oleaut32 }, { dll: 'ws2_32.dll', fns: wsock32 },
     // The Universal C Runtime and vcruntime140 of Visual C++ 2015 and later (src/win32/ucrt.js).
+    // Direct3D 11 and DXGI (src/win32/d3d11.js); wininet, dwmapi, gdiplus, dbghelp (src/win32/modern.js).
+    ...d3d11Apis(st), ...modern.dlls,
     ...ucrt,
   ];
+  for (const [dll, fns] of Object.entries(modern.into)) { const t = tables.find((e) => e.dll === dll); for (const k in fns) if (!(k in t.fns)) t.fns[k] = fns[k]; }
   /*
    * The visitor's input, as Windows posts it to the window: a key by its PC scancode (set 1; 0xE0-
    * prefixed keys `ext`) as WM_KEYDOWN / WM_KEYUP (Alt as WM_SYSKEY*), the scancode in lParam's bits

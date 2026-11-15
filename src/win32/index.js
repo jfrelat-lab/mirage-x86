@@ -30,9 +30,11 @@ export const BASES = { 'ntdll.dll': 0x7c900000, 'kernel32.dll': 0x7c800000, 'use
   'advapi32.dll': 0x77dd0000, 'd3d9.dll': 0x4fdd0000, 'dsound.dll': 0x73f10000, 'shell32.dll': 0x7c9c0000, 'ole32.dll': 0x774e0000 };
 
 /** The RAM a machine needs for `exe`: 64 MiB and its whole SizeOfImage, which a Crinkler intro touches
- *  much of (its decompressor's hash tables live there), as a power of two. */
-export function win32Memory(exe) {
-  const h = peHeader(exe), want = (64 << 20) + (h ? h.sizeImage : 0);
+ *  much of (its decompressor's hash tables live there), as a power of two; at least `minMiB` when given
+ *  (an image's machine.mem: a game of the 2010s -- GameMaker Studio 2's Deltarune -- decodes its texture
+ *  pages into hundreds of MiB). */
+export function win32Memory(exe, minMiB = 0) {
+  const h = peHeader(exe), want = Math.max((64 << 20) + (h ? h.sizeImage : 0), minMiB * 1048576);
   let m = 64 << 20; while (m < want) m *= 2;
   return Math.min(m, 1024 << 20);
 }
@@ -123,9 +125,29 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     if (i + 1 < bigFree.length && bigFree[i + 1][0] === b) bigFree[i][1] = bigFree.splice(i + 1, 1)[0][1];
     if (i > 0 && bigFree[i - 1][1] === a) bigFree[i - 1][1] = bigFree.splice(i, 1)[0][1];
   };
+  // Freed blocks from 64 KiB up to the big ones', by address, joined with their free neighbours: one is
+  // handed out first fit, split when what is left is itself as large. GameMaker Studio 2's runner
+  // (Deltarune) allocates and frees hundreds of megabytes of 128-500 KiB buffers whose sizes never
+  // repeat while it loads; reused only at their own size, they filled the heap.
+  const MID = 0x10000, midFree = [];
+  const midPut = (p, size) => {
+    let i = midFree.findIndex(([q]) => q > p); if (i < 0) i = midFree.length;
+    midFree.splice(i, 0, [p, size]);
+    const join = (k) => { const [a, s] = midFree[k], [b, t] = midFree[k + 1]; if (a + s + 8 !== b) return false; midFree[k][1] = s + 8 + t; hw32(a - 8, s + 8 + t); midFree.splice(k + 1, 1); return true; };
+    if (i + 1 < midFree.length) join(i);
+    if (i > 0) join(i - 1);
+  };
+  const midTake = (size) => {
+    const i = midFree.findIndex(([, s]) => s >= size);
+    if (i < 0) return 0;
+    const [p, s] = midFree.splice(i, 1)[0];
+    if (s - size - 8 >= MID) { hw32(p - 8, size); hw32(p + size, s - size - 8); midPut(p + size + 8, s - size - 8); }
+    return p;
+  };
   const heapAlloc = (n) => {
     const size = Math.ceil(Math.max(n, 1) / 8) * 8, free = freeBySize.get(size);
     if (size >= BIG) return bigAlloc(size);
+    if (size >= MID) { const p = midTake(size); if (p) return p; }
     if (free && free.length) return free.pop();
     while (heapNext + size > segments[seg][1]) {
       if (++seg >= segments.length) throw new Error(`mirage-win32: the heap is full (${n} bytes asked)`);
@@ -140,6 +162,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     if (!p) return;
     if (p >= BIG_BASE && p < BIG_END) { bigRelease(p); return; }
     const size = heapSize(p);
+    if (size >= MID) { midPut(p, size); return; }
     if (!freeBySize.has(size)) freeBySize.set(size, []);
     freeBySize.get(size).push(p);
   };

@@ -42,7 +42,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   const exe = win32 ? host.read((img.entry || {}).run) : null;
   if (win32 && !exe) throw new Error(`${(img.entry || {}).run}: not in the image`);
   const win32Mod = win32 ? await import('./win32/index.js') : null;
-  const ram = win32 ? win32Mod.win32Memory(exe) : (m.mem || 64) << 20;
+  const ram = win32 ? win32Mod.win32Memory(exe, m.mem || 0) : (m.mem || 64) << 20;
   // A Cirrus has its 32 MiB aperture above the RAM, as on a PCI bus (src/bios.js): the address space
   // twice the RAM (a power of two).
   const mc = new Machine({ memSize: m.vga === 'cirrus' ? Math.max(ram * 2, 64 << 20) : ram, ramSize: ram, cpu: m.cpu || '686' });

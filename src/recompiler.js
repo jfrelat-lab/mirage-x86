@@ -2665,6 +2665,34 @@ export class Recompiler {
         }
         // CVTSI2SD, CVTTSD2SI, CVTSD2SI: as their single-precision twins below, on the low double.
         if (k === 'F22a') { const o = modrm(); P(`cpu.xmm.d[${o.reg * 2}]=${rmR(o, 32)}|0;`); return; }
+        // MOVMSKPS / MOVMSKPD r32, xmm: the lanes' sign bits, the rest of the register zero. GameMaker Studio
+        // 2's runner (MSVC's SSE2 pow and exp) tests its arguments so.
+        if (k === '50' || k === '6650') {
+          const o = modrm(), b = o.rm * 4;
+          if (!o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          P(p66 ? `r[${o.reg}]=((cpu.xmm.i32[${b + 1}]>>>31)|((cpu.xmm.i32[${b + 3}]>>>31)<<1))>>>0;`
+            : `r[${o.reg}]=((cpu.xmm.i32[${b}]>>>31)|((cpu.xmm.i32[${b + 1}]>>>31)<<1)|((cpu.xmm.i32[${b + 2}]>>>31)<<2)|((cpu.xmm.i32[${b + 3}]>>>31)<<3))>>>0;`);
+          return;
+        }
+        // PEXTRW r32, xmm, imm8 (a word, zero-extended); PINSRW xmm, r32/m16, imm8; PMOVMSKB r32, xmm (the
+        // sixteen bytes' sign bits): the SSE2 forms of MMX's.
+        if (k === '66c5' || k === '66d7') {
+          const o = modrm();
+          if (!o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
+          if (op2 === 0xc5) { const i = f8() & 7; P(`r[${o.reg}]=cpu.xmm.u8[${o.rm * 16 + 2 * i}]|(cpu.xmm.u8[${o.rm * 16 + 2 * i + 1}]<<8);`); return; }
+          const t = NT(); P(`var ${t}=0;for(var q=0;q<16;q++)${t}|=(cpu.xmm.u8[${o.rm * 16}+q]>>>7)<<q;r[${o.reg}]=${t};`); return;
+        }
+        // PSHUFLW / PSHUFHW xmm, xmm/m128, imm8: the low (high) four words shuffled, the other half copied.
+        if (k === 'F270' || k === 'F370') {
+          const o = modrm(), s = xmmSrc(o, 16), imm = f8(), w = NT(), hi = k === 'F370' ? 8 : 0;
+          P(`var ${w}=cpu.xmm.u8.slice(${s * 16},${s * 16 + 16});cpu.xmm.u8.set(${w},${o.reg * 16});`);
+          for (let i = 0; i < 4; i++) { const from = hi + 2 * ((imm >> (2 * i)) & 3); P(`cpu.xmm.u8[${o.reg * 16 + hi + 2 * i}]=${w}[${from}];cpu.xmm.u8[${o.reg * 16 + hi + 2 * i + 1}]=${w}[${from + 1}];`); }
+          return;
+        }
+        if (k === '66c4') {
+          const o = modrm(), v = NT(); P(`var ${v}=${rmR(o, o.isReg ? 32 : 16)};`);
+          const i = f8() & 7; P(`cpu.xmm.u8[${o.reg * 16 + 2 * i}]=${v}&255;cpu.xmm.u8[${o.reg * 16 + 2 * i + 1}]=(${v}>>>8)&255;`); return;
+        }
         if (k === 'F22c' || k === 'F22d') {
           const o = modrm(), src = xmmSrc(o, 8), v = NT(), t = NT();
           P(`var ${v}=cpu.xmm.d[${src * 2}];`);

@@ -33,6 +33,8 @@ export const SSE = {
   PSLLD: 84, PSRLD: 85, PSRAD: 86, PSLLQ: 87, PSRLQ: 88, PSLLDQ: 89, PSRLDQ: 90,
   PUNPCKLDQ: 91, PUNPCKHDQ: 92, PUNPCKLQDQ: 93, PUNPCKHQDQ: 94, PCMPGTD: 95, PADDW: 96, PSUBW: 97,
   PMULLW: 98, PUNPCKLBW: 99, PUNPCKLWD: 100, PSRAW: 101, PSRLW: 102, PSLLW: 103, PMULUDQ: 104,
+  // SSE2 bytes and words: the C runtime's string functions (strchr, strlen, memchr of Visual C++ 2015+).
+  PCMPEQB: 105, PCMPEQW: 106, PCMPGTB: 107, PCMPGTW: 108, PMINUB: 109, PMAXUB: 110, PADDB: 111, PSUBB: 112, PUNPCKHBW: 113, PUNPCKHWD: 114,
 };
 
 /**
@@ -57,6 +59,8 @@ export const SSE_TABLE = {
   // SSE2: integers on XMM
   '66db': [SSE.PAND, X], '66df': [SSE.PANDN, X], '66eb': [SSE.POR, X], '66ef': [SSE.XORPS, X], '66fe': [SSE.PADDD, X], '66fa': [SSE.PSUBD, X],
   '66d4': [SSE.PADDQ, X], '66fb': [SSE.PSUBQ, X], '66fd': [SSE.PADDW, X], '66f9': [SSE.PSUBW, X], '66d5': [SSE.PMULLW, X], 6666: [SSE.PCMPGTD, X],
+  '6674': [SSE.PCMPEQB, X], '6675': [SSE.PCMPEQW, X], '6664': [SSE.PCMPGTB, X], '6665': [SSE.PCMPGTW, X], '66da': [SSE.PMINUB, X],
+  '66de': [SSE.PMAXUB, X], '66fc': [SSE.PADDB, X], '66f8': [SSE.PSUBB, X], '6668': [SSE.PUNPCKHBW, X], '6669': [SSE.PUNPCKHWD, X],
   '66f4': [SSE.PMULUDQ, X], 6660: [SSE.PUNPCKLBW, X], 6661: [SSE.PUNPCKLWD, X], 6662: [SSE.PUNPCKLDQ, X], '666a': [SSE.PUNPCKHDQ, X],
   '666c': [SSE.PUNPCKLQDQ, X], '666d': [SSE.PUNPCKHQDQ, X], 6670: [SSE.PSHUFD, X, 1],
   '66d1': [SSE.PSRLW, X], '66d2': [SSE.PSRLD, X], '66d3': [SSE.PSRLQ, X], '66e1': [SSE.PSRAW, X], '66e2': [SSE.PSRAD, X],
@@ -335,6 +339,16 @@ export function installSSE(cpu) {
         const a = BigInt.asUintN(64, (BigInt(u32[D + 2 * k + 1]) << 32n) | BigInt(u32[D + 2 * k])), b = BigInt.asUintN(64, (BigInt(u32[S + 2 * k + 1]) << 32n) | BigInt(u32[S + 2 * k]));
         const r = BigInt.asUintN(64, code === SSE.PADDQ ? a + b : a - b); u32[D + 2 * k] = Number(r & 0xffffffffn); u32[D + 2 * k + 1] = Number(r >> 32n);
       } return;
+      case SSE.PCMPEQB: for (let k = 0; k < 16; k++) u8[D * 4 + k] = u8[D * 4 + k] === u8[S * 4 + k] ? 255 : 0; return;
+      case SSE.PCMPEQW: for (let k = 0; k < 8; k++) u16[D * 2 + k] = u16[D * 2 + k] === u16[S * 2 + k] ? 0xffff : 0; return;
+      case SSE.PCMPGTB: for (let k = 0; k < 16; k++) u8[D * 4 + k] = (u8[D * 4 + k] << 24 >> 24) > (u8[S * 4 + k] << 24 >> 24) ? 255 : 0; return;
+      case SSE.PCMPGTW: for (let k = 0; k < 8; k++) u16[D * 2 + k] = i16[D * 2 + k] > i16[S * 2 + k] ? 0xffff : 0; return;
+      case SSE.PMINUB: for (let k = 0; k < 16; k++) u8[D * 4 + k] = Math.min(u8[D * 4 + k], u8[S * 4 + k]); return;
+      case SSE.PMAXUB: for (let k = 0; k < 16; k++) u8[D * 4 + k] = Math.max(u8[D * 4 + k], u8[S * 4 + k]); return;
+      case SSE.PADDB: for (let k = 0; k < 16; k++) u8[D * 4 + k] = u8[D * 4 + k] + u8[S * 4 + k]; return;
+      case SSE.PSUBB: for (let k = 0; k < 16; k++) u8[D * 4 + k] = u8[D * 4 + k] - u8[S * 4 + k]; return;
+      case SSE.PUNPCKHBW: { const a = u8.slice(D * 4 + 8, D * 4 + 16), b = u8.slice(S * 4 + 8, S * 4 + 16); for (let k = 0; k < 8; k++) { u8[D * 4 + 2 * k] = a[k]; u8[D * 4 + 2 * k + 1] = b[k]; } return; }
+      case SSE.PUNPCKHWD: { const a = u16.slice(D * 2 + 4, D * 2 + 8), b = u16.slice(S * 2 + 4, S * 2 + 8); for (let k = 0; k < 4; k++) { u16[D * 2 + 2 * k] = a[k]; u16[D * 2 + 2 * k + 1] = b[k]; } return; }
       case SSE.PMULUDQ: for (let k = 0; k < 2; k++) {
         const r = BigInt(u32[D + 2 * k]) * BigInt(u32[S + 2 * k]); u32[D + 2 * k] = Number(r & 0xffffffffn); u32[D + 2 * k + 1] = Number(r >> 32n);
       } return;

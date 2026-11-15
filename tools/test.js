@@ -4306,6 +4306,32 @@ const runLinux = (hex, argv) => {
     got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex'), bits('pentium4'), bits('pentium3'), bits('686')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('SSE: every instruction as Docker i386 computes it; CPUID says SSE on pentium3 and 4, SSE2 on pentium4', got, '327 1b56ec01dd414cd0ebc0eb572a890e1b 11 01 00'); }
+// The SSE2 that MSVC 2015+'s runtime uses where SSE2 is (GameMaker Studio 2's runner, Deltarune): MOVMSKPD
+// and MOVMSKPS (pow's and exp's argument checks), PEXTRW, PSHUFLW, PCMPEQB and PMOVMSKB (strchr, strlen).
+// The values by hand from Intel's definitions; real-mode code on a 'pentium4'.
+{ let got;
+  try { const mc = new Machine({ memSize: 1 << 20, cpu: 'pentium4' }), cpu = mc.cpu;
+    cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x200); cpu.setSeg(ES, 0x200); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
+    mc.mem.blit(0x100 * 16, Uint8Array.from([
+      0xf3, 0x0f, 0x6f, 0x06, 0x00, 0x00,              // movdqu xmm0, [0]: -1.5, 2.0
+      0xf3, 0x0f, 0x6f, 0x0e, 0x10, 0x00,              // movdqu xmm1, [10h]
+      0x66, 0x0f, 0x50, 0xc0,                          // movmskpd eax, xmm0
+      0x0f, 0x50, 0xd9,                                // movmskps ebx, xmm1
+      0x66, 0x0f, 0xc5, 0xc9, 0x06,                    // pextrw ecx, xmm1, 6
+      0xf2, 0x0f, 0x70, 0xd1, 0x1b,                    // pshuflw xmm2, xmm1, 1Bh
+      0x66, 0x0f, 0x74, 0xc1,                          // pcmpeqb xmm0, xmm1
+      0x66, 0x0f, 0xd7, 0xd0,                          // pmovmskb edx, xmm0
+      0xf3, 0x0f, 0x7f, 0x16, 0x20, 0x00,              // movdqu [20h], xmm2
+      0xf4]));
+    const data = new Uint8Array(32), dv = new DataView(data.buffer);
+    dv.setFloat64(0, -1.5, true); dv.setFloat64(8, 2.0, true);
+    data.set([0, 0, 0, 0x80, 1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 4, 0, 5, 0], 16);
+    mc.mem.blit(0x2000, data);
+    for (let i = 0; i < 100 && !cpu.halted; i++) mc.rec.step();
+    const r32 = (a) => mc.mem.r32(a) >>> 0;
+    got = [cpu.reg[0], cpu.reg[3], cpu.reg[1], cpu.reg[2].toString(16), r32(0x2020).toString(16), r32(0x2024).toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('SSE2: MOVMSKPD, MOVMSKPS, PEXTRW, PSHUFLW, PCMPEQB and PMOVMSKB', got, '1 5 4 2027 10000 8000'); }
 // tools/linux/repstr.asm: REP STOS and REP MOVS under paging -- bytes, words, dwords, across page
 // boundaries, at an odd address, backwards, copies overlapping either way -- give Docker i386's
 // checksum, and the forward ones run a page at a time, not through a memory helper an element
@@ -4883,6 +4909,15 @@ const runLinux = (hex, argv) => {
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a made DLL\'s version block -- its translation, its strings, its fixed info; nothing found, NULL', got, '1 4b00409 1 5.3.2600.5512 1 feef04bd 52 0 0');
+  // The Unicode twins: the same block by a UTF-16 name; a text value where the block has it, in UTF-16.
+  try { const { fn, x } = await w32(), v = (n) => fn('version.dll', n), out = x.win.heapAlloc(8);
+    const w = (s) => { const p = x.win.heapAlloc(2 * s.length + 2); for (let i = 0; i <= s.length; i++) x.w16(p + 2 * i, i < s.length ? s.charCodeAt(i) : 0); return p; };
+    const n = v('GetFileVersionInfoSizeW')(w('ddraw.dll'), 0), blk = x.win.heapAlloc(n); v('GetFileVersionInfoW')(w('ddraw.dll'), 0, n, blk);
+    const r = [n > 0, v('VerQueryValueW')(blk, w('\\StringFileInfo\\040904B0\\FileVersion'), out, out + 4)];
+    r.push(Array.from({ length: x.r32(out + 4) - 1 }, (_, i) => String.fromCharCode(x.r16(x.r32(out) + 2 * i))).join(''));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: GetFileVersionInfoW and VerQueryValueW by Unicode names, a text value in UTF-16', got, 'true 1 5.3.2600.5512');
   // FindNextFileA's end is ERROR_NO_MORE_FILES; a pattern with no file, ERROR_FILE_NOT_FOUND: OpenAL's router
   // loops over system32's drivers until the first, and looped for ever (the Undertale demo).
   try { const { fn, x, str } = await w32('', { files: { 'a.txt': new Uint8Array(3) } }), k = (n) => fn('kernel32.dll', n), fd = x.win.heapAlloc(320);
@@ -4972,6 +5007,127 @@ const runLinux = (hex, argv) => {
     got = [a, k('WaitForSingleObject')(ev, 50).toString(16)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: WaitForSingleObject on an unset event times out when its time is up', got, 'true 102');
+  // A waitable timer is signalled when its due time (relative, in 100 ns) has passed, and an auto-reset one
+  // waits again for its next period: GameMaker Studio 2's runner (Deltarune) makes one.
+  try { const { fn, lx, mc, x } = await w32(), k = (n) => fn('kernel32.dll', n), due = x.win.heapAlloc(8);
+    const t = k('CreateWaitableTimerW')(0, 0, 0); x.w32(due, -500000 >>> 0); x.w32(due + 4, 0xffffffff);   // 50 ms from now
+    const r = [k('SetWaitableTimer')(t, due, 100, 0, 0, 0), k('WaitForSingleObject')(t, 0).toString(16)];
+    mc.cpu.cycles += 6e6; r.push(k('WaitForSingleObject')(t, 0), k('WaitForSingleObject')(t, 0).toString(16));
+    mc.cpu.cycles += 1e7; r.push(k('WaitForSingleObject')(t, 0), k('WaitForSingleObject')(t, 20) === lx.BLOCK);
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a waitable timer signals at its due time, then at each period', got, '1 102 0 102 0 true');
+  // Files by their Unicode names: FindFirstFileW's WIN32_FIND_DATAW (the name widened at 44), and
+  // GetFileAttributesExW's size; a name not there is INVALID_FILE_ATTRIBUTES' failure.
+  try { const { fn, x } = await w32('', { files: { 'data.win': new Uint8Array(1234) } }), k = (n) => fn('kernel32.dll', n), fd = x.win.heapAlloc(600), ad = x.win.heapAlloc(36);
+    const w = (s) => { const p = x.win.heapAlloc(2 * s.length + 2); for (let i = 0; i <= s.length; i++) x.w16(p + 2 * i, i < s.length ? s.charCodeAt(i) : 0); return p; };
+    const h = k('FindFirstFileW')(w('C:\\*.win'), fd), name = Array.from({ length: 8 }, (_, i) => String.fromCharCode(x.r16(fd + 44 + 2 * i))).join('');
+    const r = [h > 0, name, x.r32(fd + 32), k('GetFileAttributesExW')(w('C:\\data.win'), 0, ad), x.r32(ad).toString(16), x.r32(ad + 32), k('GetFileAttributesExW')(w('C:\\none.win'), 0, ad)];
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: FindFirstFileW and GetFileAttributesExW name and size a file by its Unicode name', got, 'true data.win 1234 1 20 1234 0');
+  // A machine with no network and no compositor: wininet opens a session and resolves no name
+  // (ERROR_INTERNET_NAME_NOT_RESOLVED), dwmapi says composition is off, getaddrinfo finds no host.
+  try { const { fn, x, str } = await w32(), p = x.win.heapAlloc(8), k = (n) => fn('kernel32.dll', n);
+    const r = [fn('wininet.dll', 'InternetGetConnectedState')(p, 0), x.r32(p).toString(16)];
+    const s = fn('wininet.dll', 'InternetOpenA')(str('GameMaker'), 0, 0, 0, 0);
+    r.push(s !== 0, fn('wininet.dll', 'InternetConnectA')(s, str('example.com'), 80, 0, 0, 3, 0, 0), k('GetLastError')());
+    r.push(fn('dwmapi.dll', 'DwmIsCompositionEnabled')(p), x.r32(p), (fn('dwmapi.dll', 'DwmGetCompositionTimingInfo')(0, p) >>> 0).toString(16));
+    r.push(fn('ws2_32.dll', 'getaddrinfo')(str('example.com'), 0, 0, p), fn('gdiplus.dll', 'GdiplusStartup')(p, 0, 0));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: wininet offline, no compositor, no host found, GDI+ started', got, '0 20 true 0 12007 0 0 80263001 11001 0');
+  // Heap blocks of 64 KiB and more, freed, are handed out again first fit, split, and joined with their
+  // free neighbours: GameMaker Studio 2 loads through hundreds of MiB of such buffers whose sizes never
+  // repeat, which filled the heap.
+  try { const { fn, x } = await w32(), k = (n) => fn('kernel32.dll', n), heap = x.r32(x.win.peb + 0x18);
+    const a = k('HeapAlloc')(heap, 0, 0x30000), b = k('HeapAlloc')(heap, 0, 0x30000); k('HeapAlloc')(heap, 0, 16);
+    k('HeapFree')(heap, 0, a); k('HeapFree')(heap, 0, b);
+    const c = k('HeapAlloc')(heap, 0, 0x40000), e2 = k('HeapAlloc')(heap, 0, 0x18000);
+    got = [c === a, k('HeapSize')(heap, 0, c).toString(16), e2 === c + 0x40008, k('HeapSize')(heap, 0, e2).toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: freed heap blocks of 64 KiB and up are joined, reused first fit and split', got, 'true 40000 true 20000');
+  // Direct3D 11 at feature level 9_3 on the Direct3D 9 device model, as GameMaker Studio 2 (Deltarune) asks
+  // for it: the factory from the device (IDXGIDevice -> adapter -> factory), a swap chain of its window's
+  // size, its buffer as the render target. A shader runs as its Aon9 chunk's vs_2_0 / ps_2_0 tokens; the
+  // input layout is TEXCOORDn by the register the vertex shader's ISGN gives each semantic; a draw copies
+  // the constant buffer into the c registers its mapping names (an int variable, RDEF says, as a float)
+  // and sets c0, the half-pixel fix, for the viewport.
+  try { const { fn, x, str } = await w32(), d = (n) => fn('d3d11.dll', n), g = (n) => fn('dxgi.dll', n), u = (n) => fn('user32.dll', n);
+    const calls = [], dev9 = new Proxy({}, { get: (t, k) => (...a) => { calls.push([k, ...a]); return /^(create|get)/.test(k) ? calls.length : 0; } });
+    x.backend.d3d9 = () => ({ createDevice: (p) => { calls.push(['createDevice', p.width, p.height]); return dev9; } });
+    const mem = (n) => { const p = x.win.heapAlloc(n); x.write(p, new Uint8Array(n)); return p; }, put = (b) => { const p = mem(b.length); x.write(p, b); return p; };
+    const guid = (s) => { const p = mem(16), h = s.replace(/-/g, ''); [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15].forEach((k, i) => x.w8(p + i, parseInt(h.substr(2 * k, 2), 16))); return p; };
+    const le = (...w) => new Uint8Array(new Uint32Array(w).buffer);
+    const cat = (...a) => { const o = new Uint8Array(a.reduce((s, b) => s + b.length, 0)); let i = 0; for (const b of a) { o.set(b, i); i += b.length; } return o; };
+    const dxbc = (chunks) => {
+      const parts = Object.entries(chunks).map(([t, b]) => cat(new TextEncoder().encode(t), le(b.length), b));
+      let off = 32 + 4 * parts.length; const offs = parts.map((p) => { const o = off; off += p.length; return o; });
+      return cat(new TextEncoder().encode('DXBC'), new Uint8Array(16), le(1, off, parts.length, ...offs), ...parts);
+    };
+    // Aon9: size, version, tokens' size and offset, (count, offset) of the cb, loop, ?, sampler and runtime mappings.
+    const aon9 = (ver, cb, smp, fix, tokens) => {
+      const at = 0x24, cbB = cb.flatMap((m) => [...new Uint8Array(new Uint16Array(m).buffer), 0, 0, 0, 0]), smB = smp.flat(), fxB = fix ? [0, 0, 0, 0] : [];
+      const tok = 0x24 + cbB.length + smB.length + fxB.length, hw = (n, o) => [n & 255, n >> 8, o & 255, o >> 8];
+      return cat(le(tok + 8, ver, 8, tok), Uint8Array.from([...hw(cb.length, at), ...hw(0, tok), ...hw(0, tok), ...hw(smp.length, at + cbB.length), ...hw(fix ? 1 : 0, at + cbB.length + smB.length),
+        ...cbB, ...smB, ...fxB]), le(...tokens));
+    };
+    const isgn = cat(le(2, 8, 56, 0, 0, 3, 0, 0x707, 65, 0, 0, 3, 1, 0x303), new TextEncoder().encode('POSITION\0TEXCOORD\0'));
+    // RDEF: one cbuffer "C" at b0 of two variables, v (float4) at 0 and on (int) at 16.
+    const rdef = cat(le(1, 28, 1, 52, 0xfffe0400, 0, 0), le(132, 2, 84, 32, 0, 0), le(132, 0, 0, 0, 0, 0, 1, 0), le(134, 0, 16, 2, 140, 0, 136, 16, 4, 2, 156, 0),
+      new TextEncoder().encode('C\0v\0on\0\0'), new Uint8Array(new Uint16Array([1, 3, 1, 4, 0, 0, 0, 0, 0, 2, 1, 1, 0, 0, 0, 0]).buffer));
+    const vs = dxbc({ Aon9: aon9(0xfffe0200, [[0, 0, 2, 2]], [], true, [0xfffe0200, 0xffff]), RDEF: rdef, ISGN: isgn });
+    const ps = dxbc({ Aon9: aon9(0xffff0200, [], [[0, 1, 2, 0]], false, [0xffff0200, 0xffff]) });
+    const out = mem(16), lvl = mem(4), levels = put(le(0xb000, 0x9300));
+    u('CreateWindowExA')(0, 0, 0, 0x80000000, 0, 0, 320, 200);
+    const r = [d('D3D11CreateDevice')(0, 1, 0, 0, levels, 2, 7, out, lvl, out + 4), x.r32(lvl).toString(16)]; const dev = x.r32(out), ctx = x.r32(out + 4);
+    r.push(d('ID3D11Device::QueryInterface')(dev, guid('54ec77fa-1377-44e6-8c32-88fd5f44c84c'), out)); const dxdev = x.r32(out);
+    g('IDXGIDevice1::GetAdapter')(dxdev, out); g('IDXGIAdapter1::GetParent')(x.r32(out), guid('7b7166ec-21c7-44ae-b21a-c9ae321ae369'), out); const fac = x.r32(out);
+    const sd = mem(60); x.w32(sd + 16, 28); x.w32(sd + 28, 1); x.w32(sd + 36, 0x20); x.w32(sd + 40, 1); x.w32(sd + 48, 1);
+    r.push(g('IDXGIFactory1::CreateSwapChain')(fac, dxdev, sd, out)); const sc = x.r32(out);
+    g('IDXGISwapChain::GetBuffer')(sc, 0, guid('6f15aaf2-d208-4e89-9ab4-489535d34f9c'), out); d('ID3D11Device::CreateRenderTargetView')(dev, x.r32(out), 0, out); const rtv = x.r32(out);
+    d('ID3D11Device::CreateVertexShader')(dev, put(vs), vs.length, 0, out); const hvs = x.r32(out);
+    d('ID3D11Device::CreatePixelShader')(dev, put(ps), ps.length, 0, out); const hps = x.r32(out);
+    const els = mem(56); x.w32(els, str('POSITION')); x.w32(els + 8, 6); x.w32(els + 28, str('TEXCOORD')); x.w32(els + 36, 16); x.w32(els + 44, 0xffffffff);
+    d('ID3D11Device::CreateInputLayout')(dev, els, 2, put(vs), vs.length, out); const lay = x.r32(out);
+    const bd = mem(24); x.w32(bd, 60); x.w32(bd + 8, 1); const init = mem(12); x.w32(init, mem(60));
+    d('ID3D11Device::CreateBuffer')(dev, bd, init, out); const vb = x.r32(out);
+    x.w32(bd, 32); x.w32(bd + 8, 4); x.w32(init, put(cat(new Uint8Array(new Float32Array([1, 2, 3, 4]).buffer), le(1, 0, 0, 0))));
+    d('ID3D11Device::CreateBuffer')(dev, bd, init, out); const cbuf = x.r32(out);
+    const c = (n) => fn('d3d11.dll', 'ID3D11DeviceContext::' + n), arr = (...v) => put(le(...v));
+    c('OMSetRenderTargets')(ctx, 1, arr(rtv), 0); c('IASetInputLayout')(ctx, lay); c('IASetVertexBuffers')(ctx, 0, 1, arr(vb), arr(20), arr(0));
+    c('IASetPrimitiveTopology')(ctx, 4); c('VSSetShader')(ctx, hvs, 0, 0); c('PSSetShader')(ctx, hps, 0, 0); c('VSSetConstantBuffers')(ctx, 0, 1, arr(cbuf));
+    c('RSSetViewports')(ctx, 1, put(new Uint8Array(new Float32Array([0, 0, 320, 200, 0, 1]).buffer))); c('Draw')(ctx, 3, 0);
+    r.push(g('IDXGISwapChain::Present')(sc, 0, 0));
+    const of = (k) => calls.filter((v) => v[0] === k);
+    r.push(of('createDevice')[0].slice(1).join('x'), Array.from(of('createVertexShader')[0][1], (v) => v.toString(16)).join(','),
+      of('createVertexDeclaration')[0][1].map((e) => [e.offset, e.type, e.usage, e.usageIndex].join(':')).join(','),
+      of('setVertexShaderConstantF').map((v) => v[1] + '=' + Array.from(v[2], (f) => +f.toFixed(4)).join(',')).join(' '),
+      of('setSamplerState').length > 0, of('drawPrimitive')[0].slice(1).join(','), of('present').length);
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Direct3D 11 at level 9_3 -- swap chain, Aon9 shaders, input layout, constants, a draw, a present', got,
+    '0 9300 0 0 0 320x200 fffe0200,ffff 0:2:5:0,12:1:5:1 2=1,2,3,4,1,0,0,0 0=-0.0031,0.005,0,0 true 4,0,1 1');
+  // A 2D texture's level goes to the model whole, in its D3D9 format (R8G8B8A8 as A8B8G8R8): its initial data
+  // at creation, then again with a box written into it (PRISM's model writes levels, not rectangles).
+  try { const { fn, x } = await w32(), d = (n) => fn('d3d11.dll', n), writes = [];
+    const dev9 = new Proxy({}, { get: (t, k) => (...a) => { if (k === 'textureWrite') writes.push([a[2], Array.from(a[3]), a[4]]); if (k === 'createTexture') writes.push(['create', ...a]); return /^(create|get)/.test(k) ? 1 : 0; } });
+    x.backend.d3d9 = () => ({ createDevice: () => dev9 });
+    const out = x.win.heapAlloc(16), td = x.win.heapAlloc(44), init = x.win.heapAlloc(12), px = x.win.heapAlloc(32), box = x.win.heapAlloc(24);
+    d('D3D11CreateDevice')(0, 1, 0, 0, 0, 0, 7, out, 0, out + 4); const dev = x.r32(out), ctx = x.r32(out + 4);
+    [4, 2, 1, 1, 28, 1, 0, 0, 8, 0, 0].forEach((v, i) => x.w32(td + 4 * i, v));
+    for (let i = 0; i < 32; i++) x.w8(px + i, i); x.w32(init, px); x.w32(init + 4, 16);
+    d('ID3D11Device::CreateTexture2D')(dev, td, init, out); const tex = x.r32(out);
+    x.w32(px, 0xaabbccdd); [1, 1, 0, 2, 2, 1].forEach((v, i) => x.w32(box + 4 * i, v));
+    d('ID3D11DeviceContext::UpdateSubresource')(ctx, tex, 0, box, px, 4, 0);
+    got = [writes[0].slice(1, 6).join(','), writes.length, writes[1][1].length, writes[1][1].slice(16, 24).join(','), writes[2][1].slice(16, 24).join(','), writes[2][2]].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a Direct3D 11 texture is written to the model a whole level at a time, a box into its bytes', got, '4,2,1,0,32 3 32 16,17,18,19,20,21,22,23 16,17,18,19,221,204,187,170 16');
+  // MIRAGE_W32MEM / an image's machine.mem: the RAM at least that.
+  try { const { win32Memory } = await import('../src/win32/index.js'), exe = new Uint8Array(64);
+    got = [win32Memory(exe) >> 20, win32Memory(exe, 300) >> 20, win32Memory(exe, 4096) >> 20].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a machine of at least the RAM asked, a power of two up to 1 GiB', got, '64 512 1024');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');

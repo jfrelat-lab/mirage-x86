@@ -365,8 +365,179 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   });
   // ShellAbout: Windows' "About" box, not shown here (its caller's own About dialog is a dialog).
   Object.assign(shell32, { ShellAboutW: ['pppp', (x) => { x.win.say('ShellAboutW: the About box, not shown'); return 1; }], ShellAboutA: ['pppp', (x) => { x.win.say('ShellAboutA: the About box, not shown'); return 1; }] });
+  /*
+   * What a GameMaker Studio 2 runner (Deltarune, 2018) calls at start-up beyond the above: files found and
+   * described by their Unicode names, the console it has none of, waitable timers, the interlocked lists,
+   * Vista's locale names. A W function is its A twin's, as above.
+   */
+  // WIN32_FIND_DATAA (320 bytes: the name at 44, the short name at 304) widened into WIN32_FIND_DATAW
+  // (592: the name at 44, 260 WCHARs, the short name at 564).
+  const findW = (x, fd, fn) => {
+    const t = x.win.heapAlloc(320);
+    try {
+      const r = fn(t);
+      if (r !== -1 && r !== 0) { x.write(fd, x.bytes(t, 44)); x.write(fd + 44, new Uint8Array(548)); putW(x, fd + 44, 260, x.str(t + 44, 260)); putW(x, fd + 564, 14, x.str(t + 304, 14)); }
+      return r;
+    } finally { x.win.heapFree(t); }
+  };
+  // An SLIST_HEADER: Next, then Depth and Sequence (16 bits each).
+  const slistPush = (x, head, e) => { const first = x.r32(head); x.w32(e, first); x.w32(head, e); x.w16(head + 4, x.r16(head + 4) + 1); x.w16(head + 6, x.r16(head + 6) + 1); return first; };
+  // A waitable timer: an event whose signal is its due time passed (kernel32's WaitForSingleObject reads
+  // `set`); an auto-reset one, once waited on, waits for its next period, or for ever.
+  const timer = (x, manual) => {
+    const t = { manual: !!manual, due: Infinity, period: 0, fired: false };
+    Object.defineProperty(t, 'set', {
+      get: () => t.fired || x.lx.mono() >= t.due,
+      set: (v) => { if (v) { t.fired = true; return; } t.fired = false; if (x.lx.mono() >= t.due) t.due = t.period ? Math.max(t.due + t.period, x.lx.mono()) : Infinity; },
+    });
+    const h = 0x3000 + st.events.size; st.events.set(h, t); return h;
+  };
+  Object.assign(k32, {
+    FindFirstFileW: ['pp', (x, pat, fd) => findW(x, fd, (t) => withA(x, pat, (a) => A(kernel32, 'FindFirstFileA')(x, a, t)))],
+    FindNextFileW: ['pp', (x, h, fd) => findW(x, fd, (t) => A(kernel32, 'FindNextFileA')(x, h, t))],
+    // FindFirstFileEx(name, FindExInfoStandard or Basic, data, search op, filter, flags): FindFirstFile's.
+    FindFirstFileExW: ['pupupu', (x, pat, level, fd) => findW(x, fd, (t) => withA(x, pat, (a) => A(kernel32, 'FindFirstFileA')(x, a, t)))],
+    FindFirstFileExA: ['pupupu', (x, pat, level, fd) => A(kernel32, 'FindFirstFileA')(x, pat, fd)],
+    GetFileAttributesW: ['p', (x, w) => withA(x, w, (a) => A(kernel32, 'GetFileAttributesA')(x, a))],
+    SetFileAttributesW: ['pu', () => 1],
+    // WIN32_FILE_ATTRIBUTE_DATA: the attributes, three FILETIMEs and the size, as WIN32_FIND_DATA begins.
+    GetFileAttributesExW: ['pup', (x, w, level, out) => withA(x, w, (a) => {
+      const attr = A(kernel32, 'GetFileAttributesA')(x, a);
+      if (attr === 0xffffffff) return 0;
+      x.write(out, new Uint8Array(36)); x.w32(out, attr);
+      if (attr & 0x10) return 1;
+      const t = x.win.heapAlloc(320);
+      try { if (A(kernel32, 'FindFirstFileA')(x, a, t) !== -1) x.write(out + 4, x.bytes(t + 4, 32)); } finally { x.win.heapFree(t); }
+      return 1;
+    })],
+    GetCurrentDirectoryW: ['up', (x, n, buf) => { const s = 'C:' + String.fromCharCode(92); if (n > s.length) putW(x, buf, n, s); return n > s.length ? s.length : s.length + 1; }],
+    SetCurrentDirectoryW: ['p', (x, w) => withA(x, w, (a) => A(kernel32, 'SetCurrentDirectoryA')(x, a))],
+    GetFullPathNameW: ['pupp', (x, w, n, buf, part) => withA(x, w, (a) => {
+      const t = x.win.heapAlloc(520);
+      try {
+        const k = A(kernel32, 'GetFullPathNameA')(x, a, 520, t, 0), s = x.str(t, k);
+        if (n <= s.length) return s.length + 1;
+        putW(x, buf, n, s); if (part) x.w32(part, buf + 2 * (s.lastIndexOf(String.fromCharCode(92)) + 1)); return s.length;
+      } finally { x.win.heapFree(t); }
+    })],
+    DeleteFileW: ['p', (x, w) => withA(x, w, (a) => A(kernel32, 'DeleteFileA')(x, a))],
+    RemoveDirectoryW: ['p', (x, w) => withA(x, w, (a) => A(kernel32, 'RemoveDirectoryA')(x, a))],
+    MoveFileExW: ['ppu', (x, a, b, flags) => withA(x, a, (pa) => withA(x, b, (pb) => A(kernel32, 'MoveFileExA')(x, pa, pb, flags)))],
+    GetTempPathW: ['up', (x, n, buf) => { const s = 'C:' + String.fromCharCode(92); if (n > s.length) putW(x, buf, n, s); return n > s.length ? s.length : s.length + 1; }],
+    GetDriveTypeW: ['p', () => 3],
+    // OSVERSIONINFOW (276 bytes, 284 the Ex): Windows XP SP2, as GetVersionExA.
+    GetVersionExW: ['p', (x, p) => {
+      const n = x.r32(p); if (n < 276) return 0;
+      x.write(p + 4, new Uint8Array(n - 4)); x.w32(p + 4, 5); x.w32(p + 8, 1); x.w32(p + 12, 2600); x.w32(p + 16, 2);
+      putW(x, p + 20, 128, 'Service Pack 2'); if (n >= 284) x.w16(p + 276, 2);
+      return 1;
+    }],
+    // %NAME% replaced by the environment's value (as GetEnvironmentVariable has it); the characters with the NUL.
+    ExpandEnvironmentStringsW: ['ppu', (x, src, dst, n) => {
+      const s = wstr(x, src).replace(/%([^%]+)%/g, (m, k) => { const K = k.toUpperCase(), v = K === 'PATH' ? 'C:\\WINDOWS\\system32' : st.env.get(K); return v === undefined ? m : v; });
+      if (dst && n > s.length) putW(x, dst, n, s);
+      return s.length + 1;
+    }],
+    GetTimeFormatW: ['uupppi', (x, lcid, flags, time, fmt, buf, n) => (n ? intoW(x, buf, n, (t, k) => A(kernel32, 'GetTimeFormatA')(x, lcid, flags, time, 0, t, k)) : A(kernel32, 'GetTimeFormatA')(x, lcid, flags, time, 0, 0, 0))],
+    GetDateFormatW: ['uupppi', (x, lcid, flags, date, fmt, buf, n) => (n ? intoW(x, buf, n, (t, k) => A(kernel32, 'GetDateFormatA')(x, lcid, flags, date, 0, t, k)) : A(kernel32, 'GetDateFormatA')(x, lcid, flags, date, 0, 0, 0))],
+    // The time zone is UTC here: the local time is the time given.
+    SystemTimeToTzSpecificLocalTime: ['ppp', (x, tz, utc, local) => { x.write(local, x.bytes(utc, 16)); return 1; }],
+    CreateProcessW: ['pppppiuppp', () => 0],
+    CreateWaitableTimerW: ['pip', (x, sa, manual) => timer(x, manual)],
+    CreateWaitableTimerExW: ['ppuu', (x, sa, name, flags) => timer(x, flags & 1)],
+    // SetWaitableTimer(timer, &due, period ms, ...): a due time below zero is relative, in 100 ns; above,
+    // a FILETIME, taken as now (no clock of the guest's reaches it).
+    SetWaitableTimer: ['ppipp' + 'i', (x, h, due, period) => {
+      const t = st.events.get(h); if (!t || !('due' in t)) return 0;
+      const lo = x.r32(due), hi = x.r32(due + 4) | 0, v = hi * 4294967296 + lo;
+      t.fired = false; t.period = period > 0 ? period / 1000 : 0; t.due = x.lx.mono() + (v < 0 ? -v / 1e7 : 0);
+      return 1;
+    }],
+    CancelWaitableTimer: ['p', (x, h) => { const t = st.events.get(h); if (t && 'due' in t) { t.due = Infinity; t.fired = false; } return 1; }],
+    // CreateEventExW(sa, name, flags, access): CREATE_EVENT_MANUAL_RESET 1, CREATE_EVENT_INITIAL_SET 2.
+    CreateEventExW: ['ppuu', (x, sa, name, flags) => A(kernel32, 'CreateEventA')(x, sa, flags & 1, flags & 2 ? 1 : 0, 0)],
+    // No console: none to read, to write or to show.
+    GetConsoleMode: ['pp', () => 0], GetConsoleCP: ['', () => 437], GetConsoleWindow: ['', () => 0],
+    ReadConsoleW: ['ppupp', (x, h, buf, n, read) => { if (read) x.w32(read, 0); return 0; }],
+    WriteConsoleW: ['ppupp', (x, h, buf, n, written) => { if (written) x.w32(written, 0); return 0; }],
+    PeekNamedPipe: ['pppppp', () => 0],
+    HeapWalk: ['pp', () => 0], HeapValidate: ['pup', () => 1],
+    InterlockedPushEntrySList: ['pp', (x, head, e) => slistPush(x, head, e)],
+    InterlockedPopEntrySList: ['p', (x, head) => { const first = x.r32(head); if (first) { x.w32(head, x.r32(first)); x.w16(head + 4, x.r16(head + 4) - 1); } return first; }],
+    InterlockedFlushSList: ['p', (x, head) => { const first = x.r32(head); x.w32(head, 0); x.w16(head + 4, 0); return first; }],
+    QueryDepthSList: ['p', (x, head) => x.r16(head + 4)],
+    RtlCaptureStackBackTrace: ['uupp', () => 0],
+    // One locale, US English, by its Vista name and LCID.
+    EnumSystemLocalesW: ['pu', () => 1],
+    LocaleNameToLCID: ['pu', () => 0x409],
+    LCMapStringEx: ['pupipippp', (x, name, flags, src, n, dst, max) => A(kernel32, 'LCMapStringW')(x, 0x409, flags, src, n, dst, max)],
+  });
+  Object.assign(u32, {
+    keybd_event: ['uuuu', () => 0], SetProcessDPIAware: ['', () => 1],
+    IsDialogMessageW: ['pp', (x, dlg, m) => A(user32, 'IsDialogMessageA')(x, dlg, m)],
+    ChangeDisplaySettingsW: ['pu', (x, dm, flags) => u32.ChangeDisplaySettingsExW[1](x, 0, dm, 0, flags, 0)],
+    CreateDialogParamW: ['ppppp', (x, inst, name, parent, proc, param) => withAR(x, name, (n) => A(user32, 'CreateDialogParamA')(x, inst, n, parent, proc, param))],
+    // Dialog units to pixels: MS Sans Serif 8's base units, 6 by 13 (x/4, y/8 of them).
+    MapDialogRect: ['pp', (x, dlg, r) => { for (let i = 0; i < 4; i++) { const v = x.r32(r + 4 * i) | 0; x.w32(r + 4 * i, i & 1 ? Math.trunc(v * 13 / 8) : Math.trunc(v * 6 / 4)); } return 1; }],
+  });
+  Object.assign(ole32, {
+    // Not made: a caller marshalling between apartments does without (one apartment here).
+    CoCreateFreeThreadedMarshaler: ['pp', (x, outer, pp) => { if (pp) x.w32(pp, 0); return 0x80004001; }],   // E_NOTIMPL
+    // StringFromGUID2(guid, buf, n): "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}", its characters with the NUL.
+    StringFromGUID2: ['ppi', (x, g, buf, n) => {
+      const b = x.bytes(g, 16), h = (i, k) => [...b.slice(i, i + k)].map((v) => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+      const r = (i, k) => h(i, k).match(/../g).reverse().join('');
+      const s = `{${r(0, 4)}-${r(4, 2)}-${r(6, 2)}-${h(8, 2)}-${h(10, 6)}}`;
+      if (n <= s.length) return 0; putW(x, buf, n, s); return s.length + 1;
+    }],
+  });
+  Object.assign(shell32, { SHBrowseForFolderA: ['p', () => 0], SHBrowseForFolderW: ['p', () => 0] });
+  const comdlg32 = { GetOpenFileNameW: ['p', () => 0], GetSaveFileNameW: ['p', () => 0] };
   const wmm = winmm ? { PlaySoundW: ['ppu', (x, name, mod, flags) => (flags & 4 ? A(winmm, 'PlaySoundA')(x, name, mod, flags) : withAR(x, name, (a) => A(winmm, 'PlaySoundA')(x, a, mod, flags)))] } : {};
-  return { kernel32: k32, user32: u32, gdi32: g32, winmm: wmm, advapi32, shell32, imm32, setupapi, ole32, oleaut32 };
+  /*
+   * The DLLs a GameMaker Studio 2 runner links beside its graphics: a machine with no network (wininet
+   * opens a session and resolves no name: ERROR_INTERNET_NAME_NOT_RESOLVED; ws2_32's getaddrinfo:
+   * WSAHOST_NOT_FOUND), no compositor (dwmapi, Windows XP's: composition off), GDI+ started and asked
+   * nothing, no symbols and no crash dumps (dbghelp).
+   */
+  const NO_NAME = 12007;
+  const net = (x, e) => { A(kernel32, 'SetLastError')(x, e); return 0; };
+  const wininet = {
+    InternetGetConnectedState: ['pu', (x, flags) => { if (flags) x.w32(flags, 0x20); return 0; }],   // INTERNET_CONNECTION_OFFLINE
+    InternetOpenA: ['puppu', () => 0xcc01], InternetOpenW: ['puppu', () => 0xcc01],
+    InternetConnectA: ['ppuppuuu', (x) => net(x, NO_NAME)], InternetConnectW: ['ppuppuuu', (x) => net(x, NO_NAME)],
+    InternetOpenUrlA: ['pppuuu', (x) => net(x, NO_NAME)], InternetOpenUrlW: ['pppuuu', (x) => net(x, NO_NAME)],
+    HttpOpenRequestA: ['ppppppuu', (x) => net(x, NO_NAME)], HttpSendRequestA: ['ppupu', (x) => net(x, NO_NAME)],
+    HttpEndRequestW: ['ppuu', (x) => net(x, NO_NAME)], HttpQueryInfoA: ['puppp', (x) => net(x, NO_NAME)],
+    InternetReadFile: ['ppup', (x, h, buf, n, read) => { if (read) x.w32(read, 0); return net(x, NO_NAME); }],
+    InternetWriteFile: ['ppup', (x, h, buf, n, written) => { if (written) x.w32(written, 0); return net(x, NO_NAME); }],
+    InternetCloseHandle: ['p', () => 1],
+    InternetCrackUrlA: ['puup', (x) => net(x, 12006)],              // ERROR_INTERNET_UNRECOGNIZED_SCHEME
+    InternetCanonicalizeUrlA: ['pppu', (x) => net(x, 12006)],
+  };
+  const ws2_32 = {
+    getaddrinfo: ['pppp', (x, node, svc, hints, out) => { if (out) x.w32(out, 0); return 11001; }],   // WSAHOST_NOT_FOUND
+    freeaddrinfo: ['p', () => 0], WSAAddressToStringA: ['puppp', () => -1],
+  };
+  const dwmapi = {
+    DwmIsCompositionEnabled: ['p', (x, p) => { if (p) x.w32(p, 0); return 0; }],
+    DwmGetCompositionTimingInfo: ['pp', () => 0x80263001],        // DWM_E_COMPOSITIONDISABLED
+    DwmFlush: ['', () => 0x80263001], DwmEnableMMCSS: ['i', () => 0], DwmSetWindowAttribute: ['pupu', () => 0x80263001],
+    DwmExtendFrameIntoClientArea: ['pp', () => 0x80263001], DwmEnableComposition: ['u', () => 0],
+  };
+  const gdiplus = {
+    GdiplusStartup: ['ppp', (x, token, input, output) => { if (token) x.w32(token, 1); if (output) x.write(output, new Uint8Array(8)); return 0; }],   // Ok
+    GdiplusShutdown: ['p', () => 0],
+  };
+  const dbghelp = {
+    SymInitialize: ['ppi', () => 1], SymCleanup: ['p', () => 1], SymSetOptions: ['u', (x, o) => o], SymGetOptions: ['', () => 0],
+    SymFromAddr: ['puupp', (x) => net(x, 487)],                     // ERROR_INVALID_ADDRESS: no symbols
+    MiniDumpWriteDump: ['puppppp', (x) => net(x, 50)],              // ERROR_NOT_SUPPORTED
+  };
+  return { kernel32: k32, user32: u32, gdi32: g32, winmm: wmm, advapi32, shell32, imm32, setupapi, ole32, oleaut32,
+    // Added to api.js's tables of those DLLs, under the names they do not answer.
+    into: { 'comdlg32.dll': comdlg32, 'ws2_32.dll': ws2_32 },
+    dlls: [{ dll: 'wininet.dll', fns: wininet }, { dll: 'dwmapi.dll', fns: dwmapi }, { dll: 'gdiplus.dll', fns: gdiplus }, { dll: 'dbghelp.dll', fns: dbghelp }] };
 }
 
 

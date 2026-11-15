@@ -591,6 +591,23 @@ export function classicApis({ st, wm }) {
       x.w32(pp, n.vo); if (plen) x.w32(plen, n.vlen); return 1;
     }],
   };
+  // The Unicode twins: the file's name narrowed; a text value given back where it is in the block (UTF-16),
+  // its length in characters (GameMaker Studio 2 asks its own file's).
+  const narrowed = (x, w, fn) => {
+    let s = ''; for (let i = 0; i < 260; i++) { const c = x.r16(w + 2 * i); if (!c) break; s += String.fromCharCode(c & 0xff); }
+    const p = x.win.heapAlloc(s.length + 1); x.write(p, Uint8Array.from(s + '\0', (c) => c.charCodeAt(0)));
+    try { return fn(p); } finally { x.win.heapFree(p); }
+  };
+  Object.assign(version, {
+    GetFileVersionInfoSizeW: ['pp', (x, f, h) => narrowed(x, f, (a) => version.GetFileVersionInfoSizeA[1](x, a, h))],
+    GetFileVersionInfoW: ['puup', (x, f, h, n, buf) => narrowed(x, f, (a) => version.GetFileVersionInfoA[1](x, a, h, n, buf))],
+    VerQueryValueW: ['pppp', (x, block, sub, pp, plen) => {
+      let path = ''; for (let i = 0; i < 256; i++) { const c = x.r16(sub + 2 * i); if (!c) break; path += String.fromCharCode(c); }
+      const n = verFind(x, block, path);
+      if (!n || (!n.vlen && n.type !== 1)) { x.w32(pp, 0); if (plen) x.w32(plen, 0); return 0; }
+      x.w32(pp, n.vo); if (plen) x.w32(plen, n.vlen); return 1;
+    }],
+  });
   const ole32 = {
     CoInitialize: ['p', () => 0], CoInitializeEx: ['pu', () => 0], CoUninitialize: ['', () => 0],
     // Internet Explorer's WebBrowser control (an inert one, below); any other class is not registered.
