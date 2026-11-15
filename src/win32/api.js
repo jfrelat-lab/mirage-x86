@@ -17,7 +17,7 @@ import { windowManager } from './wm.js';
 import { ddrawApis } from './ddraw.js';
 import { classicApis, loadString, decodeDib, findResource, resId } from './classic.js';
 import { modernApis } from './modern.js';
-import { regionApis } from './region.js';
+import { regionApis, combine } from './region.js';
 import { parseAvi, decodeFrame } from './avi.js';
 import { ucrtApis } from './ucrt.js';
 
@@ -687,11 +687,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // A message-only window (its parent HWND_MESSAGE, -3: SDL 2's helper window) is never shown, so never
     // the main one: it receives messages and nothing else.
     if (parent === 0xfffffffd) return createOther(x, cls, style & ~0x10000000, w, h, wide, X, Y, title, parent, menu, { messageOnly: true });
-    if ((style & 0x40000000) || (st.mainMade && !st.destroyed && k0 !== st.mainClass)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
+    if ((style & 0x40000000) || (st.mainMade && !st.destroyed && k0 !== st.mainClass)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu, { ex: ex >>> 0 });
     // An invisible tool window of no size (WS_EX_TOOLWINDOW: Delphi's AllocateHWnd, one per TTimer and per
     // component that needs a window) is never the main one: made as such, each made the last one anew,
     // under its handle, and the timers on them stopped one another.
-    if ((ex & 0x80) && !w && !h && !(style & 0x10000000)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
+    if ((ex & 0x80) && !w && !h && !(style & 0x10000000)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu, { ex: ex >>> 0 });
     st.mainMade = true; st.mainClass = k0; if (st.guiTid === undefined) st.guiTid = x.lx.pid;
     // A main window of no size, never shown (Delphi's TApplication window): the program's windows are its
     // forms, each a top-level window on the desktop -- a dialog application's desktop (deskMode).
@@ -748,6 +748,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const bar = style & 0x40000000 ? 0 : menu || classMenu(x, key);  // a top-level window's menu bar, kept for when it is the screen's
     const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, bar, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
       title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), ...extra };
+    if (rec.ex) rec.long.set(-20, rec.ex);                            // GWL_EXSTYLE: what it was made with
     st.wins.set(hwnd, rec);
     if (!proc) return hwnd;
     const a = (x.cpu.reg[4] >>> 0) + 4, cs = x.win.heapAlloc(48);
@@ -850,6 +851,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // screen position less the main window's. Its DC is 02000000h with its handle in the low bits.
   st.invalid = new Set();
   const isAncestor = (a, h) => { for (let w = win(h); w && !w.main; w = win(w.parent)) if (w.parent === a) return true; return false; };
+  // WM_ACTIVATE (active) and WM_SETFOCUS left to the dialog manager: the focus back where it was in the
+  // dialog, else on its first enabled WS_TABSTOP control -- Diablo's class list (Storm makes its dialogs
+  // itself) had none, and Enter chose no class.
+  const dlgFocus = (dlg) => {
+    const w = win(dlg); if (!w || (st.focus && st.focus !== dlg && isAncestor(dlg, st.focus))) return;
+    const kept = w.lastFocus && win(w.lastFocus) && !win(w.lastFocus).dead && isAncestor(dlg, w.lastFocus) ? w.lastFocus : 0;
+    const first = [...st.wins.values()].find((c) => c.parent === dlg && !c.dead && c.visible && c.enabled !== false && (c.style & 0x10000));
+    const to = kept || (first && first.hwnd); if (to) { st.focus = to; w.lastFocus = to; }
+  };
   // A dialog application lives on the desktop: its main dialog and its popups each where they are on
   // the screen, the screen the whole desktop (st.deskPx) -- deskMode. Otherwise the screen is the main
   // window's client area, framed on the desktop or alone (the games, the intros).
@@ -890,7 +900,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   };
   // What a hidden or moved window leaves: the desktop there, and the windows that were under it to paint.
   const uncoverRect = (o, W, H) => {
-    if (!deskMode()) { wm.redraw(); return; }                          // a layer gone: the screen composed again, now (Pinball's splash, destroyed while the table loads for 2 s)
+    // A layer gone: the screen composed again, now (Pinball's splash, destroyed while the table loads for
+    // 2 s); over a display mode, the windows it covered paint again what it hid (Diablo's class notice).
+    if (!deskMode()) { wm.redraw(); if (st.modeSet) for (const w of st.wins.values()) if (!w.main && !w.dead && w.visible && !(w.style & 0x40000000)) invalidate(w.hwnd, true, true); return; }
     const sc = deskScreen();
     for (let j = Math.max(0, o.y); j < Math.min(sc.h, o.y + H); j++) sc.px.fill(0x3a6ea5, j * sc.w + Math.max(0, o.x), j * sc.w + Math.max(0, Math.min(sc.w, o.x + W)));
     for (const w of st.wins.values()) if (!w.dead && (w.main ? st.shown : w.visible && !(w.style & 0x40000000))) invalidate(w.hwnd, true, true);
@@ -1301,7 +1313,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     w.dead = true; for (const c of kids) c.dead = true;
     if (w.modal && w.modalOwner && win(w.modalOwner)) win(w.modalOwner).enabled = true;   // a modal dialog's owner again
     if (w.visible && !(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h);
-    if (st.focus === hwnd || kids.some((c) => c.hwnd === st.focus)) st.focus = 0;
+    // The focus it held goes back to its owner, where the owner's had been (the dialog manager keeps it):
+    // Diablo's class notice closed, and the keys went to the hidden main window, the class list deaf.
+    if (st.focus === hwnd || kids.some((c) => c.hwnd === st.focus)) {
+      const owner = !(w.style & 0x40000000) && topOf(w.parent), back = owner && !owner.main && win(owner.lastFocus) && !win(owner.lastFocus).dead && (owner.lastFocus === owner.hwnd || isAncestor(owner.hwnd, owner.lastFocus)) ? owner.lastFocus : 0;
+      st.focus = back || (owner && !owner.main ? owner.hwnd : 0); if (owner && !owner.main) st.activeWin = owner.hwnd;
+    }
     return send(x, [[0x02, 0, 0, hwnd], ...kids.map((c) => [0x02, 0, 0, c.hwnd]), ...kids.reverse().map((c) => [0x82, 0, 0, c.hwnd]), [0x82, 0, 0, hwnd]],
       (eax) => { st.wins.delete(hwnd); for (const c of kids) st.wins.delete(c.hwnd); return result(eax); }, pop);
   };
@@ -1752,15 +1769,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // A window of a class of its own made with CreateWindowEx (Storm's SDlgDialog, Diablo's screens) keeps
     // its DLGPROC at DWL_DLGPROC (4) of its extra bytes, as a template's dialog does.
     DefDlgProcA: ['puuu', (x, hwnd, msg, wp, lp) => {
-      const w = win(hwnd), fn = w && (w.dlgProc || w.long.get(4));
+      const w = win(hwnd), fn = w && (w.dlgProc || (w.long && w.long.get(4)));
       // A message box's buttons end it with their id; Escape (IDCANCEL) is its only button's when it has
       // no Cancel (MB_OK), and nothing for Yes/No.
       if (w && w.msgBox && msg === 0x111 && !(wp >>> 16)) {
         let id = wp & 0xffff; if (!w.msgBox.includes(id)) { if (w.msgBox.length !== 1) return 0; id = w.msgBox[0]; }
         return user32.EndDialog[1](x, hwnd, id);
       }
-      if (!fn) return user32.DefWindowProcA[1](x, hwnd, msg, wp, lp);
+      if (!fn) { if (msg === 0x07 || (msg === 0x06 && (wp & 0xffff))) dlgFocus(hwnd); return user32.DefWindowProcA[1](x, hwnd, msg, wp, lp); }
       return send(x, [{ fn, args: [hwnd, msg, wp, lp] }], (eax) => {
+        if (!eax && (msg === 0x07 || (msg === 0x06 && (wp & 0xffff)))) dlgFocus(hwnd);
         if (!eax) return user32.DefWindowProcA[1](x, hwnd, msg, wp, lp);
         return [0x110, 0x19, 0x133, 0x134, 0x135, 0x136, 0x137, 0x138, 0x2b, 0x0f].includes(msg) ? eax : (w.long.get(0) ?? eax);
       }, 16);
@@ -1832,6 +1850,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     SetFocus: ['p', (x, h) => {
       const prev = st.focus || st.hwnd; st.focus = h;
       let top = h; while (win(top) && (win(top).style & 0x40000000) && !win(top).main) top = win(top).parent;   // its top-level window, made the active one
+      if (win(top)) win(top).lastFocus = h;                             // given back when a window over it closes
       return win(top) && !win(top).main && top !== st.hwnd && st.activeWin !== top ? activateOther(x, top, () => prev, 4) : prev;
     }],
     EnableWindow: ['pi', (x, h, on) => { const w = win(h); if (!w) return 0; const was = w.enabled === false; if (w.enabled !== !!on) { w.enabled = !!on; invalidate(h, true); } return was ? 1 : 0; }],
@@ -2947,14 +2966,25 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // Regions (src/win32/region.js): a window waits to be painted whole, or not at all -- as much of it as
   // is on the screen, as Windows clips an update region: Diablo's 640x482 menus blit through theirs into
   // the 640x480 DirectDraw surface, and two rows more overwrote what lay after it.
-  const updateRect = (h) => {
-    if (!st.invalid.has(h)) return null;
-    const w = h === st.hwnd ? { w: st.w, h: st.h } : win(h); if (!w) return null;
+  // Nor what the top-level windows above it cover (made after its own, shown): Diablo's class notice
+  // over the hero screen, whose list Storm painted over the notice through a region that had it all.
+  const updateRects = (h) => {
+    if (!st.invalid.has(h)) return [];
+    const w = h === st.hwnd ? { w: st.w, h: st.h } : win(h); if (!w) return [];
     const o = screenOrigin(h), S = st.modeSet ? { w: st.w, h: st.h } : st.desk;
     const r = [Math.max(0, -o.x), Math.max(0, -o.y), Math.min(w.w | 0, S.w - o.x), Math.min(w.h | 0, S.h - o.y)];
-    return r[2] > r[0] && r[3] > r[1] ? r : null;
+    if (r[2] <= r[0] || r[3] <= r[1]) return [];
+    let rs = [r], above = false;
+    const top = topOf(h), topH = top ? (top.main ? st.hwnd : top.hwnd) : st.hwnd;
+    for (const v of st.wins.values()) {
+      if (v.hwnd === topH) { above = true; continue; }
+      if (!above || v.main || v.dead || !v.visible || (v.style & 0x40000000) || (((v.long && v.long.get(-20)) ?? v.ex) & 0x20)) continue;   // WS_EX_TRANSPARENT hides nothing
+      const c = screenOrigin(v.hwnd), f = popFrame(v);
+      rs = combine(rs, [[c.x - f.b - o.x, c.y - f.b - f.cap - o.y, c.x + (v.w | 0) + f.b - o.x, c.y + (v.h | 0) + f.b - o.y]], 4);
+    }
+    return rs;
   };
-  const regions = regionApis(st, updateRect);
+  const regions = regionApis(st, updateRects);
   Object.assign(gdi32, regions.gdi32); Object.assign(user32, regions.user32);
   // The classic Windows 95 calls (src/win32/classic.js), under the names not answered above.
   const classic = classicApis({ st, wm, send });

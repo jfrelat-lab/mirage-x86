@@ -5204,6 +5204,21 @@ const runLinux = (hex, argv) => {
     got = [text, near, right, before, after].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: window text in the code page, nearest palette entry, update region on the screen, validated by DefWindowProc', got, 'a9,80,31 0,1 24 2 1');
+  // Windows over windows (Diablo's screens, Storm's dialogs made with CreateWindowEx): a window's update
+  // region leaves out what a window above it covers -- not a WS_EX_TRANSPARENT one --; the dialog manager
+  // puts the focus on a dialog's first tab stop on WM_SETFOCUS; a window closed gives the focus back to
+  // the control of its owner that had it.
+  try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), g = (n) => fn('gdi32.dll', n), box = x.win.heapAlloc(16), dlg = str('sdlgdialog');
+    const make = (...a) => { u('CreateWindowExA')(...a); return parseInt(apis.windows().at(-1).hwnd, 16); };   // made through the guest: its handle from the list
+    u('CreateWindowExA')(0, 0, 0, 0x10000000, 0, 0, 320, 200);
+    const a = make(0, dlg, 0, 0x90000000, 0, 0, 100, 100, 0), btn = make(0, str('button'), 0, 0x50010000, 10, 10, 20, 20, a);
+    make(0x20, dlg, 0, 0x90000000, 0, 0, 100, 100, a); make(0, dlg, 0, 0x90000000, 50, 0, 100, 100, a);
+    const rg = g('CreateRectRgn')(0, 0, 0, 0); u('InvalidateRect')(a, 0, 0); const kind = u('GetUpdateRgn')(a, rg, 0); g('GetRgnBox')(rg, box);
+    u('DefDlgProcA')(a, 0x07, 0, 0); const first = u('GetFocus')() === btn;
+    const d = make(0, dlg, 0, 0x90000000, 0, 0, 10, 10, a); u('SetFocus')(d); u('DestroyWindow')(d); const back = u('GetFocus')() === btn;
+    got = [kind, x.r32(box + 8), first, back].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: covered windows left out of an update region, a dialog\'s first tab stop focused, the focus given back', got, '2 50 true true');
   // The stand-ins for Arial, Times New Roman and Courier New measure a line as Windows does: their win
   // metrics set to their hhea ones (Arimo's raised 2136/797 made a 17-pixel Arial line 25 pixels high).
   try { const { windowsMetrics } = await import('../src/win32/fonts.js'), b = new Uint8Array(176), dv = new DataView(b.buffer);
