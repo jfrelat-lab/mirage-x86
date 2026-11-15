@@ -17,6 +17,7 @@
 // Oracles: Windows XP's structures as Wine and ReactOS document them (winternl.h, ntdll/loader.c);
 // the same .exe under Wine in Docker i386.
 import { makeDll } from './dll.js';
+import { HLE_BASE } from '../hle/elfso.js';
 import { hleDispatch, argBytes } from '../hle/index.js';
 
 const PAGE = 0x1000;
@@ -193,6 +194,20 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
 
   // ---- the import directory: each DLL an image names, loaded, its address table filled ------------------
   const rd32 = (va) => { const b = lx.rdBytes(va, 4); return (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0; };
+  /*
+   * A function of a DLL made here that the tables do not make yet: a stub of its own, in a page of them,
+   * that stops the program when it is called and names the function. Windows' DLLs have every function a
+   * program imports, and a program imports many it never calls -- a Delphi program, the VCL's two hundred.
+   * A DLL that is not here at all still fails to load, as on Windows (Half-Life's launcher counts on it).
+   */
+  let missingAt = 0, missingEnd = 0;
+  const missing = (what) => {
+    if (missingAt + 10 > missingEnd) { missingAt = missingEnd || 0x5ff00000; missingEnd = missingAt + 0x1000; lx.mapRange(missingAt, missingEnd, true); }
+    table.push({ name: what, sig: '', fn: () => { throw new Error(`mirage-win32: ${what} is called and not made yet`); } });
+    const at = missingAt; missingAt += 10;
+    wr(at, Uint8Array.of(0xb8, ...[0, 8, 16, 24].map((k) => ((HLE_BASE + table.length - 1) >>> k) & 255), 0xcd, 0x80, 0xc3, 0x90, 0x90));
+    return at;
+  };
   const bindImports = (ib, ih, who) => {
     const unresolved = [], imp = ih.dirs[1];
     if (!imp || !imp.rva) return;
@@ -204,8 +219,10 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
       for (let t = 0; ; t += 4) {
         const e = rd32(ib + (olt || iat) + t);
         if (!e) break;
-        const fn = e & 0x80000000 ? mod.byOrdinal.get(e & 0xffff) : mod.exports.get(lx.rdStr(ib + e + 2));
-        if (!fn) unresolved.push(`${dll}!${e & 0x80000000 ? '#' + (e & 0xffff) : lx.rdStr(ib + e + 2)}`);
+        let fn = e & 0x80000000 ? mod.byOrdinal.get(e & 0xffff) : mod.exports.get(lx.rdStr(ib + e + 2));
+        const what = `${dll}!${e & 0x80000000 ? '#' + (e & 0xffff) : lx.rdStr(ib + e + 2)}`;
+        if (!fn && images.has(mod.name.toLowerCase())) fn = missing(what);
+        if (!fn) unresolved.push(what);
         w32(ib + iat + t, fn || 0);
       }
     }

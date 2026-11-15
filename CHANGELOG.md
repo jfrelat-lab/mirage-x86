@@ -6,8 +6,8 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 ## 2026-11-15
 
 - **Jazz Jackrabbit 2 plays again**: it stopped at start since 2026-11-13.
-- **Programs written in Delphi start on the Windows machine**: GameMaker 8's runner loads the Undertale demo
-  up to its graphics, which need Direct3D 8 (next).
+- **Programs written in Delphi start on the Windows machine**: GameMaker 8's runner loads the Undertale demo.
+- **Direct3D 8**: the Windows machine runs programs that draw with it (GameMaker 8's games).
 
 ## 2026-11-14
 

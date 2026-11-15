@@ -76,6 +76,41 @@ const VTABLES = {
   ID3DXMatrixStack: `${UNK} Pop:0 Push:0 LoadIdentity:0 LoadMatrix:1 MultMatrix:1 MultMatrixLocal:1 RotateAxis:pf RotateAxisLocal:pf
     RotateYawPitchRoll:fff RotateYawPitchRollLocal:fff Scale:fff ScaleLocal:fff Translate:fff TranslateLocal:fff GetTop:0`,
 };
+/*
+ * Direct3D 8's interfaces (d3d8.h, Wine's include/ the oracle): the same device model under other vtables.
+ * Their methods translate what differs -- D3DPRESENT_PARAMETERS without MultiSampleQuality, D3DCAPS8 and
+ * D3DADAPTER_IDENTIFIER8 shorter, the sampler states still texture stage states, a vertex shader handle
+ * that is an FVF, SetIndices' base vertex index -- and call Direct3D 9's (IMPL8 below). GameMaker 8's
+ * runner (2009; the Undertale demo) draws with them, fixed function and textures.
+ */
+const BASETEX8 = `${RES} SetLOD:1 GetLOD:0 GetLevelCount:0`;
+Object.assign(VTABLES, {
+  IDirect3D8: `${UNK} RegisterSoftwareDevice:1 GetAdapterCount:0 GetAdapterIdentifier:3 GetAdapterModeCount:1 EnumAdapterModes:3
+    GetAdapterDisplayMode:2 CheckDeviceType:5 CheckDeviceFormat:6 CheckDeviceMultiSampleType:5 CheckDepthStencilMatch:5
+    GetDeviceCaps:3 GetAdapterMonitor:1 CreateDevice:6`,
+  IDirect3DDevice8: `${UNK} TestCooperativeLevel:0 GetAvailableTextureMem:0 ResourceManagerDiscardBytes:1 GetDirect3D:1 GetDeviceCaps:1
+    GetDisplayMode:1 GetCreationParameters:1 SetCursorProperties:3 SetCursorPosition:3 ShowCursor:1 CreateAdditionalSwapChain:2
+    Reset:1 Present:4 GetBackBuffer:3 GetRasterStatus:1 SetGammaRamp:2 GetGammaRamp:1 CreateTexture:7 CreateVolumeTexture:8
+    CreateCubeTexture:6 CreateVertexBuffer:5 CreateIndexBuffer:5 CreateRenderTarget:6 CreateDepthStencilSurface:5
+    CreateImageSurface:4 CopyRects:5 UpdateTexture:2 GetFrontBuffer:1 SetRenderTarget:2 GetRenderTarget:1
+    GetDepthStencilSurface:1 BeginScene:0 EndScene:0 Clear:upuufu SetTransform:2 GetTransform:2 MultiplyTransform:2
+    SetViewport:1 GetViewport:1 SetMaterial:1 GetMaterial:1 SetLight:2 GetLight:2 LightEnable:2 GetLightEnable:2
+    SetClipPlane:2 GetClipPlane:2 SetRenderState:2 GetRenderState:2 BeginStateBlock:0 EndStateBlock:1 ApplyStateBlock:1
+    CaptureStateBlock:1 DeleteStateBlock:1 CreateStateBlock:2 SetClipStatus:1 GetClipStatus:1 GetTexture:2 SetTexture:2
+    GetTextureStageState:3 SetTextureStageState:3 ValidateDevice:1 GetInfo:3 SetPaletteEntries:2 GetPaletteEntries:2
+    SetCurrentTexturePalette:1 GetCurrentTexturePalette:1 DrawPrimitive:3 DrawIndexedPrimitive:5 DrawPrimitiveUP:4
+    DrawIndexedPrimitiveUP:8 ProcessVertices:5 CreateVertexShader:4 SetVertexShader:1 GetVertexShader:1 DeleteVertexShader:1
+    SetVertexShaderConstant:3 GetVertexShaderConstant:3 GetVertexShaderDeclaration:3 GetVertexShaderFunction:3
+    SetStreamSource:3 GetStreamSource:3 SetIndices:2 GetIndices:2 CreatePixelShader:2 SetPixelShader:1 GetPixelShader:1
+    DeletePixelShader:1 SetPixelShaderConstant:3 GetPixelShaderConstant:3 GetPixelShaderFunction:3 DrawRectPatch:3
+    DrawTriPatch:3 DeletePatch:1`,
+  IDirect3DTexture8: `${BASETEX8} GetLevelDesc:2 GetSurfaceLevel:2 LockRect:4 UnlockRect:1 AddDirtyRect:1`,
+  IDirect3DCubeTexture8: `${BASETEX8} GetLevelDesc:2 GetCubeMapSurface:3 LockRect:5 UnlockRect:2 AddDirtyRect:2`,
+  IDirect3DSurface8: `${UNK} GetDevice:1 SetPrivateData:4 GetPrivateData:3 FreePrivateData:1 GetContainer:2 GetDesc:1 LockRect:3 UnlockRect:0`,
+  IDirect3DSwapChain8: `${UNK} Present:4 GetBackBuffer:3`,
+  IDirect3DVertexBuffer8: `${RES} Lock:4 Unlock:0 GetDesc:1`,
+  IDirect3DIndexBuffer8: `${RES} Lock:4 Unlock:0 GetDesc:1`,
+});
 const sigOf = (s) => 'p' + (/^\d+$/.test(s) ? 'u'.repeat(+s) : s);
 /*
  * D3DX9_24..43.DLL'S EXPORTS, in the order that numbers them: each version exports its names with
@@ -327,22 +362,26 @@ export function d3d9Apis(st) {
     if (arena > arenaEnd) { x.lx.mapRange(arenaEnd, arena, true); arenaEnd = arena; }
     return p;
   };
+  // An object of a Direct3D 8 device (props.v8, or its device's) is made with the interface's 8 vtable,
+  // d3d8.dll's; `base` keeps the 9 name the methods below test.
   const make = (x, iface, props = {}) => {
+    const base = iface, v8 = props.v8 ?? (props.devPtr && objs.get(props.devPtr >>> 0) ? !!objs.get(props.devPtr >>> 0).v8 : false);
+    if (v8 && METHODS[iface.replace(/9$/, '8')]) iface = iface.replace(/9$/, '8');
     if (!vtables.has(iface)) {
-      const mod = x.win.load('d3d9.dll'), ms = METHODS[iface], v = x.win.heapAlloc(ms.length * 4);
+      const mod = x.win.load(/8$/.test(iface) ? 'd3d8.dll' : 'd3d9.dll'), ms = METHODS[iface], v = x.win.heapAlloc(ms.length * 4);
       ms.forEach(([n], i) => x.w32(v + 4 * i, mod.exports.get(`${iface}::${n}`)));
       vtables.set(iface, v);
     }
     const p = x.win.heapAlloc(16);
     x.w32(p, vtables.get(iface));
-    objs.set(p, { iface, ref: 1, ...props });
+    objs.set(p, { iface, base, ref: 1, ...props, v8 });
     return p;
   };
   const o = (p) => objs.get(p >>> 0);
   const h = (p) => (p ? o(p)?.h ?? 0 : 0);
   const byHandle = (x, dev, hd, iface, props) => {
     if (!hd) return 0;
-    for (const [p, ob] of objs) if (ob.h === hd && ob.iface === iface) { ob.ref++; return p; }
+    for (const [p, ob] of objs) if (ob.h === hd && ob.base === iface && ob.dev === dev) { ob.ref++; return p; }
     return make(x, iface, { h: hd, dev, ...props });
   };
   const floats = (x, p, n) => { const f = new Float32Array(n); for (let i = 0; i < n; i++) f[i] = x.f32(p + 4 * i); return f; };
@@ -378,7 +417,7 @@ export function d3d9Apis(st) {
     GetDevice: (x, self, pp) => { const d = o(self).devPtr; o(d).ref++; x.w32(pp, d); return S_OK; },
     SetPrivateData: () => S_OK, GetPrivateData: () => D3DERR_NOTAVAILABLE, FreePrivateData: () => S_OK,
     SetPriority: () => 0, GetPriority: () => 0, PreLoad: () => 0,
-    GetType: (x, self) => ({ IDirect3DSurface9: 1, IDirect3DTexture9: 3, IDirect3DCubeTexture9: 5, IDirect3DVertexBuffer9: 6, IDirect3DIndexBuffer9: 7 })[o(self).iface],
+    GetType: (x, self) => ({ IDirect3DSurface9: 1, IDirect3DTexture9: 3, IDirect3DCubeTexture9: 5, IDirect3DVertexBuffer9: 6, IDirect3DIndexBuffer9: 7 })[o(self).base],
     SetLOD: () => 0, GetLOD: () => 0, GetLevelCount: (x, self) => o(self).levels,
     SetAutoGenFilterType: () => S_OK, GetAutoGenFilterType: () => 2, GenerateMipSubLevels: () => 0,
   };
@@ -463,8 +502,8 @@ export function d3d9Apis(st) {
       x.w32(pp, b.mem + off); return S_OK;
     },
     Unlock: (x, self) => { const b = o(self), [off, n] = b.lock; b.dev.bufferWrite(b.h, off, x.bytes(b.mem + off, n)); return S_OK; },
-    GetDesc: (x, self, p) => { const b = o(self); x.write(p, new Uint8Array(24)); x.w32(p, b.format); x.w32(p + 4, b.iface === 'IDirect3DVertexBuffer9' ? 6 : 7);
-      x.w32(p + 8, b.usage); x.w32(p + 12, b.pool); x.w32(p + 16, b.length); if (b.iface === 'IDirect3DVertexBuffer9') x.w32(p + 20, b.fvf); return S_OK; },
+    GetDesc: (x, self, p) => { const b = o(self); x.write(p, new Uint8Array(24)); x.w32(p, b.format); x.w32(p + 4, b.base === 'IDirect3DVertexBuffer9' ? 6 : 7);
+      x.w32(p + 8, b.usage); x.w32(p + 12, b.pool); x.w32(p + 16, b.length); if (b.base === 'IDirect3DVertexBuffer9') x.w32(p + 20, b.fvf); return S_OK; },
   };
   const shaderObj = {
     GetDevice: resource.GetDevice,
@@ -488,14 +527,14 @@ export function d3d9Apis(st) {
     GetDeviceCaps: (x, self, ad, type, p) => { x.write(p, model(x).getDeviceCaps()); return S_OK; },
     GetAdapterMonitor: () => 1,
     // D3DPRESENT_PARAMETERS: a windowed device's zero size is its window's client area.
-    CreateDevice: (x, self, ad, type, hwnd, flags, pp, ppDev) => {
+    CreateDevice: (x, self, ad, type, hwnd, flags, pp, ppDev, v8 = false) => {
       const r = (k) => x.r32(pp + 4 * k), windowed = !!r(8);
       let w = r(0), hh = r(1);
       if (!w || !hh) { w = st.w || 640; hh = st.h || 480; x.w32(pp, w); x.w32(pp + 4, hh); }
       const params = { width: w, height: hh, backBufferFormat: r(2) || 22, backBufferCount: r(3) || 1, autoDepthStencilFormat: r(9) ? r(10) : 0, windowed, presentInterval: r(13) };
       if (x.backend.setVideoMode) x.backend.setVideoMode(w, hh, false);
       const dev = model(x).createDevice(params);
-      const p = make(x, 'IDirect3DDevice9', { dev, d3d: self, params, created: [ad, type, hwnd, flags] });
+      const p = make(x, 'IDirect3DDevice9', { dev, d3d: self, params, created: [ad, type, hwnd, flags], v8 });
       o(p).devPtr = p;
       o(self).ref++;
       x.w32(ppDev, p); return S_OK;
@@ -1160,6 +1199,102 @@ export function d3d9Apis(st) {
     ...d3dxMath(),
   };
 
+  // ---- Direct3D 8: Direct3D 9's methods, with what differs translated (see VTABLES' note) ----------------
+  // The texture stage states that became sampler states: ADDRESSU..MAXANISOTROPY, ADDRESSW.
+  const SAMPLER8 = { 13: 1, 14: 2, 15: 4, 16: 5, 17: 6, 18: 7, 19: 8, 20: 9, 21: 10, 25: 3 };
+  let scratch = 0;
+  const scratchAt = (x) => (scratch ||= x.win.heapAlloc(64));
+  // D3DCAPS8: D3DCAPS9's first 212 bytes; vertex shader 1.1, pixel shader 1.4.
+  const caps8 = (x) => { const c = model(x).getDeviceCaps().slice(0, 212), v = new DataView(c.buffer); v.setUint32(196, 0xfffe0101, true); v.setUint32(204, 0xffff0104, true); return c; };
+  // D3DSURFACE_DESC8: D3DSURFACE_DESC9's offsets, with the size in bytes at 16 (D3D9's multisample type there).
+  const withSize = (x, p) => { const w = x.r32(p + 24), hh = x.r32(p + 28); x.w32(p + 16, w * hh * (BPP[x.r32(p)] || 4)); x.w32(p + 20, 0); return S_OK; };
+  const d3d8 = {
+    RegisterSoftwareDevice: () => E_FAIL, GetAdapterCount: () => 1,
+    GetAdapterIdentifier: (x, self, ad, fl, p) => { x.write(p, new Uint8Array(1068)); x.write(p, new TextEncoder().encode('prism')); x.write(p + 512, new TextEncoder().encode('PRISM Direct3D 8 on WebGL2')); return S_OK; },
+    GetAdapterModeCount: () => 1,
+    EnumAdapterModes: (x, self, ad, i, p) => d3d9.GetAdapterDisplayMode(x, self, ad, p),
+    GetAdapterDisplayMode: d3d9.GetAdapterDisplayMode, CheckDeviceType: d3d9.CheckDeviceType, CheckDeviceFormat: d3d9.CheckDeviceFormat,
+    CheckDeviceMultiSampleType: (x, self, ad, type, fmt, win, ms) => (ms <= 1 ? S_OK : D3DERR_NOTAVAILABLE),
+    CheckDepthStencilMatch: () => S_OK, GetAdapterMonitor: () => 1,
+    GetDeviceCaps: (x, self, ad, type, p) => { x.write(p, caps8(x)); return S_OK; },
+    // D3DPRESENT_PARAMETERS8 laid out as Direct3D 9's (MultiSampleQuality 0 after MultiSampleType), and the
+    // size a windowed device took written back.
+    CreateDevice: (x, self, ad, type, hwnd, flags, pp, ppDev) => {
+      const q = scratchAt(x), r = (k) => x.r32(pp + 4 * k);
+      [r(0), r(1), r(2), r(3), r(4), 0, r(5), r(6), r(7), r(8), r(9), r(10), r(11), r(12)].forEach((v, i) => x.w32(q + 4 * i, v));
+      const hr = d3d9.CreateDevice(x, self, ad, type, hwnd, flags, q, ppDev, true);
+      x.w32(pp, x.r32(q)); x.w32(pp + 4, x.r32(q + 4));
+      return hr;
+    },
+  };
+  const device8 = {
+    TestCooperativeLevel: device.TestCooperativeLevel, GetAvailableTextureMem: device.GetAvailableTextureMem, ResourceManagerDiscardBytes: () => S_OK,
+    GetDirect3D: device.GetDirect3D, GetDeviceCaps: (x, self, p) => { x.write(p, caps8(x)); return S_OK; },
+    GetDisplayMode: (x, self, p) => device.GetDisplayMode(x, self, 0, p), GetCreationParameters: device.GetCreationParameters,
+    SetCursorProperties: () => S_OK, SetCursorPosition: () => 0, ShowCursor: () => 0,
+    Reset: device.Reset, Present: device.Present,
+    GetBackBuffer: (x, self, i, type, pp) => device.GetBackBuffer(x, self, 0, i, type, pp),
+    GetRasterStatus: (x, self, p) => device.GetRasterStatus(x, self, 0, p),
+    SetGammaRamp: () => 0, GetGammaRamp: (x, self, p) => device.GetGammaRamp(x, self, 0, p),
+    CreateTexture: (x, self, w, hh, l, u, f, pool, pp) => device.CreateTexture(x, self, w, hh, l, u, f, pool, pp),
+    CreateCubeTexture: (x, self, e, l, u, f, pool, pp) => device.CreateCubeTexture(x, self, e, l, u, f, pool, pp),
+    CreateVertexBuffer: (x, self, n, u, fvf, pool, pp) => device.CreateVertexBuffer(x, self, n, u, fvf, pool, pp),
+    CreateIndexBuffer: (x, self, n, u, f, pool, pp) => device.CreateIndexBuffer(x, self, n, u, f, pool, pp),
+    CreateRenderTarget: (x, self, w, hh, f, ms, lockable, pp) => device.CreateRenderTarget(x, self, w, hh, f, ms, 0, lockable, pp),
+    CreateDepthStencilSurface: (x, self, w, hh, f, ms, pp) => device.CreateDepthStencilSurface(x, self, w, hh, f, ms, 0, 0, pp),
+    CreateImageSurface: (x, self, w, hh, f, pp) => device.CreateOffscreenPlainSurface(x, self, w, hh, f, 2, pp),
+    // CopyRects: each source rectangle to a point of the destination, the same size (all of it when none is given).
+    CopyRects: (x, self, src, pRects, n, dst, pPts) => {
+      const rect = (p) => [x.r32(p) | 0, x.r32(p + 4) | 0, x.r32(p + 8) | 0, x.r32(p + 12) | 0];
+      if (!pRects || !n) return D(self).stretchRect(h(src), null, h(dst), null, 0) || S_OK;
+      for (let i = 0; i < n; i++) {
+        const r = rect(pRects + 16 * i), X = pPts ? x.r32(pPts + 8 * i) | 0 : r[0], Y = pPts ? x.r32(pPts + 8 * i + 4) | 0 : r[1];
+        D(self).stretchRect(h(src), r, h(dst), [X, Y, X + r[2] - r[0], Y + r[3] - r[1]], 0);
+      }
+      return S_OK;
+    },
+    // SetRenderTarget(target or NULL to keep it, depth stencil or NULL for none).
+    SetRenderTarget: (x, self, rt, zs) => { if (rt) device.SetRenderTarget(x, self, 0, rt); return device.SetDepthStencilSurface(x, self, zs); },
+    GetRenderTarget: (x, self, pp) => device.GetRenderTarget(x, self, 0, pp), GetDepthStencilSurface: device.GetDepthStencilSurface,
+    BeginScene: device.BeginScene, EndScene: device.EndScene, Clear: device.Clear,
+    SetTransform: device.SetTransform, GetTransform: device.GetTransform, MultiplyTransform: device.MultiplyTransform,
+    SetViewport: device.SetViewport, GetViewport: device.GetViewport, SetMaterial: device.SetMaterial, GetMaterial: device.GetMaterial,
+    SetLight: device.SetLight, GetLight: device.GetLight, LightEnable: device.LightEnable, GetLightEnable: device.GetLightEnable,
+    SetClipPlane: () => S_OK, SetClipStatus: () => S_OK,
+    SetRenderState: (x, self, s2, v) => (s2 === 47 ? S_OK : device.SetRenderState(x, self, s2, v)),   // D3DRS_ZBIAS: not D3D9's
+    GetRenderState: device.GetRenderState,
+    // State blocks: tokens that record nothing.
+    BeginStateBlock: () => S_OK, EndStateBlock: (x, self, p) => { x.w32(p, 1); return S_OK; }, CreateStateBlock: (x, self, t, p) => { x.w32(p, 1); return S_OK; },
+    ApplyStateBlock: () => S_OK, CaptureStateBlock: () => S_OK, DeleteStateBlock: () => S_OK,
+    SetTexture: (x, self, stage, t) => { (o(self).tex8 ??= [])[stage] = t; return device.SetTexture(x, self, stage, t); },
+    GetTexture: (x, self, stage, pp) => { const t = (o(self).tex8 || [])[stage] || 0; if (t && o(t)) o(t).ref++; x.w32(pp, t); return S_OK; },
+    SetTextureStageState: (x, self, stage, t, v) => { (o(self).tss8 ??= new Map()).set(stage * 64 + t, v >>> 0); return SAMPLER8[t] ? device.SetSamplerState(x, self, stage, SAMPLER8[t], v) : device.SetTextureStageState(x, self, stage, t, v); },
+    GetTextureStageState: (x, self, stage, t, p) => { x.w32(p, (o(self).tss8 && o(self).tss8.get(stage * 64 + t)) || 0); return S_OK; },
+    ValidateDevice: device.ValidateDevice, GetInfo: () => 1,                                  // S_FALSE: nothing to tell
+    SetPaletteEntries: () => S_OK, SetCurrentTexturePalette: () => S_OK,
+    DrawPrimitive: device.DrawPrimitive, DrawPrimitiveUP: device.DrawPrimitiveUP, DrawIndexedPrimitiveUP: device.DrawIndexedPrimitiveUP,
+    // The base vertex index came with SetIndices.
+    DrawIndexedPrimitive: (x, self, type, minIndex, numVerts, start, n) => device.DrawIndexedPrimitive(x, self, type, o(self).base8 | 0, minIndex, numVerts, start, n),
+    SetIndices: (x, self, b, baseVertex) => { o(self).base8 = baseVertex | 0; return device.SetIndices(x, self, b); },
+    SetStreamSource: (x, self, n, b, stride) => device.SetStreamSource(x, self, n, b, 0, stride),
+    // A vertex shader handle that is an FVF: the fixed function, with that vertex. Programmable shaders are
+    // not here yet (CreateVertexShader: its declaration and vs_1_1 tokens).
+    SetVertexShader: (x, self, hnd) => { o(self).vs8 = hnd; device.SetVertexShader(x, self, 0); return device.SetFVF(x, self, hnd); },
+    GetVertexShader: (x, self, p) => { x.w32(p, o(self).vs8 | 0); return S_OK; },
+    SetPixelShader: (x, self, hnd) => (hnd ? NOT('IDirect3DDevice8', 'SetPixelShader')() : device.SetPixelShader(x, self, 0)),
+  };
+  const texture8 = { ...resource, ...texture, GetLevelDesc: (x, self, l, p) => { texture.GetLevelDesc(x, self, l, p); return withSize(x, p); } };
+  const cube8 = { ...resource, ...cube, GetLevelDesc: (x, self, l, p) => { cube.GetLevelDesc(x, self, l, p); return withSize(x, p); } };
+  const surface8 = { ...resource, ...surface, GetDesc: (x, self, p) => { surface.GetDesc(x, self, p); return withSize(x, p); } };
+  const swapChain8 = {
+    Present: (x, self, a, b, c, d) => device.Present(x, o(self).devPtr, a, b, c, d),
+    GetBackBuffer: (x, self, i, type, pp) => device.GetBackBuffer(x, o(self).devPtr, 0, i, type, pp),
+  };
+  const IMPL8 = {
+    IDirect3D8: d3d8, IDirect3DDevice8: device8, IDirect3DTexture8: texture8, IDirect3DCubeTexture8: cube8, IDirect3DSurface8: surface8,
+    IDirect3DSwapChain8: swapChain8, IDirect3DVertexBuffer8: { ...resource, ...buffer }, IDirect3DIndexBuffer8: { ...resource, ...buffer },
+  };
+
   // ---- the DLLs: each method a stub of d3d9.dll's, named for its interface ------------------------------
   const IMPL = {
     IDirect3D9: d3d9, IDirect3DDevice9: device, IDirect3DTexture9: { ...resource, ...texture }, IDirect3DCubeTexture9: { ...resource, ...cube }, IDirect3DSwapChain9: swapChain, IDirect3DSurface9: { ...resource, ...surface },
@@ -1172,12 +1307,13 @@ export function d3d9Apis(st) {
     D3DPERF_BeginEvent: ['up', () => 0], D3DPERF_EndEvent: ['', () => 0], D3DPERF_SetMarker: ['up', () => 0], D3DPERF_GetStatus: ['', () => 0],
     D3DPERF_SetOptions: ['u', () => 0],
   };
+  const fns8 = { Direct3DCreate8: ['u', (x, sdk) => make(x, 'IDirect3D8', { v8: true })] };
   let ord = 1000;
   for (const [iface, ms] of Object.entries(METHODS)) for (const [n, s] of ms) {
-    const f = unknown[n] || IMPL[iface][n] || NOT(iface, n);
-    fns[`${iface}::${n}`] = [sigOf(s), f, { ordinal: ord++ }];
+    const v8 = /8$/.test(iface), f = unknown[n] || (v8 ? IMPL8 : IMPL)[iface][n] || NOT(iface, n);
+    (v8 ? fns8 : fns)[`${iface}::${n}`] = [sigOf(s), f, { ordinal: ord++ }];
   }
-  const out = [{ dll: 'd3d9.dll', fns }];
+  const out = [{ dll: 'd3d9.dll', fns }, { dll: 'd3d8.dll', fns: fns8 }];
   for (let v = 24; v <= 43; v++) out.push({ dll: `d3dx9_${v}.dll`, fns: d3dxExports(v, d3dx, NOT) });
   out.push({ dll: 'dx8vb.dll', fns: dx8vbExports({ ...d3dx, ...d3dxVectorMath() }, NOT) });
   return out;

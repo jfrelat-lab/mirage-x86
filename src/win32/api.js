@@ -480,11 +480,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // A DLL made here, asked for by its name in the system directory: there. SciTech MGL (WinQuake)
       // looks for system32\ddraw.dll before it offers DirectDraw's modes.
       if (!list.length && sysDll(x, full)) list = [`windows/system32/${pat.toLowerCase()}`];
-      if (!list.length) return -1;
+      if (!list.length) { setError(x, 2); return -1; }                   // ERROR_FILE_NOT_FOUND
       st.finds ||= []; st.finds.push({ list, i: 0 });
       const h = 0x5000 + st.finds.length - 1; findFill(x, fd, list[0]); return h;
     }],
-    FindNextFileA: ['pp', (x, h, fd) => { const s = st.finds && st.finds[h - 0x5000]; if (!s || ++s.i >= s.list.length) return 0; findFill(x, fd, s.list[s.i]); return 1; }],
+    // The end of the list is ERROR_NO_MORE_FILES (18): OpenAL's router looks for its drivers with a loop
+    // that ends on it, and looped for ever on the last error left there.
+    FindNextFileA: ['pp', (x, h, fd) => { const s = st.finds && st.finds[h - 0x5000]; if (!s || ++s.i >= s.list.length) { setError(x, 18); return 0; } findFill(x, fd, s.list[s.i]); return 1; }],
     FindClose: ['p', () => 1],
     GetFileType: ['p', (x, h) => (h >= 0x4000 && h < 0x5000 ? 1 : h >= 0x10 && h <= 0x12 ? 2 : 0)],   // DISK, CHAR (the console), UNKNOWN
     GetStdHandle: ['i', (x, n) => (n >= -12 && n <= -10 ? 0x10 + (-10 - n) : -1)],                     // 10h input, 11h output, 12h error
@@ -2986,9 +2988,20 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ImageList_SetOverlayImage: ['pii', () => 1], ImageList_Copy: ['pipiu', () => 1],
     ImageList_GetIcon: ['piu', () => 0], ImageList_BeginDrag: ['piii', () => 1], ImageList_EndDrag: ['', () => 0],
   };
+  // A driver message (DRV_QUERYDEVICEINTERFACE...: OpenAL asks the device's name): MMSYSERR_NOTSUPPORTED.
+  for (const k of ['waveOutMessage', 'waveInMessage', 'midiOutMessage']) if (!winmm[k]) winmm[k] = ['puuu', () => 8];
   if (!winmm.waveOutGetID) winmm.waveOutGetID = ['pp', (x, h, p) => { if (p) x.w32(p, 0); return 0; }];
   kernel32.RtlZeroMemory = ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }];   // kernel32's, forwarded to ntdll's (Spider imports it so)
+  // msimg32.dll (gradients, alpha blending, transparent blits) -- a Delphi program imports it; mpr.dll's
+  // network connections: none (ERROR_NOT_CONNECTED).
+  const msimg32 = {
+    GradientFill: ['ppupuu', () => 1],
+    AlphaBlend: ['piiiipiiiiu', (x, d, dx, dy, dw, dh, s, sx, sy, sw, sh) => gdi32.StretchBlt[1](x, d, dx, dy, dw, dh, s, sx, sy, sw, sh, 0xcc0020)],
+    TransparentBlt: ['piiiipiiiiu', (x, d, dx, dy, dw, dh, s, sx, sy, sw, sh) => gdi32.StretchBlt[1](x, d, dx, dy, dw, dh, s, sx, sy, sw, sh, 0xcc0020)],
+  };
+  const mpr = { WNetGetConnectionA: ['ppp', () => 2250] };
   const tables = [
+    { dll: 'msimg32.dll', fns: msimg32 }, { dll: 'mpr.dll', fns: mpr },
     { dll: 'msvcrt.dll', fns: msvcrt },
     /*
      * crtdll.dll, the C runtime of Windows NT 3.x's own programs (NT 3.51's Solitaire): msvcrt's functions

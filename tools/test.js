@@ -4883,6 +4883,28 @@ const runLinux = (hex, argv) => {
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a made DLL\'s version block -- its translation, its strings, its fixed info; nothing found, NULL', got, '1 4b00409 1 5.3.2600.5512 1 feef04bd 52 0 0');
+  // FindNextFileA's end is ERROR_NO_MORE_FILES; a pattern with no file, ERROR_FILE_NOT_FOUND: OpenAL's router
+  // loops over system32's drivers until the first, and looped for ever (the Undertale demo).
+  try { const { fn, x, str } = await w32('', { files: { 'a.txt': new Uint8Array(3) } }), k = (n) => fn('kernel32.dll', n), fd = x.win.heapAlloc(320);
+    const h = k('FindFirstFileA')(str('C:\\*.txt'), fd), r = [h > 0, k('FindNextFileA')(h, fd), k('GetLastError')()];
+    r.push(k('FindFirstFileA')(str('C:\\*.none'), fd) | 0, k('GetLastError')());
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: FindNextFileA ends with ERROR_NO_MORE_FILES; no match is ERROR_FILE_NOT_FOUND', got, 'true 0 18 -1 2');
+  // Direct3D 8 over the Direct3D 9 device model: D3DPRESENT_PARAMETERS8 (a windowed device of no size takes
+  // its window's), the sampler states still texture stage states, SetIndices' base vertex index,
+  // D3DSURFACE_DESC8's size in bytes.
+  try { const { fn, x } = await w32(), { recordD3D9 } = await import('../src/win32/d3d9.js'), rec = recordD3D9(); x.backend.d3d9 = () => rec;
+    const d = (n) => fn('d3d8.dll', n), u = (n) => fn('user32.dll', n), pp = x.win.heapAlloc(64), out = x.win.heapAlloc(64);
+    u('CreateWindowExA')(0, 0, 0, 0x80000000, 0, 0, 320, 200); x.write(pp, new Uint8Array(64)); x.w32(pp + 8, 22); x.w32(pp + 28, 1);
+    const d3d = d('Direct3DCreate8')(220); d('IDirect3D8::CreateDevice')(d3d, 0, 1, 0, 0x40, pp, out); const dev = x.r32(out);
+    d('IDirect3DDevice8::SetTextureStageState')(dev, 0, 16, 2); d('IDirect3DDevice8::SetTextureStageState')(dev, 0, 1, 4);
+    d('IDirect3DDevice8::SetIndices')(dev, 0, 7); d('IDirect3DDevice8::DrawIndexedPrimitive')(dev, 4, 0, 4, 0, 2);
+    d('IDirect3DDevice8::CreateTexture')(dev, 16, 8, 1, 0, 21, 1, out); d('IDirect3DTexture8::GetLevelDesc')(x.r32(out), 0, pp + 64 - 32);
+    const L = rec.device.last, c = L.createDevice[0];
+    got = [c.width, c.height, c.windowed, L.setSamplerState.join(','), L.setTextureStageState.join(','), L.drawIndexedPrimitive.join(','), x.r32(pp + 32 + 16), x.r32(pp + 32 + 24)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Direct3D 8 -- its present parameters, sampler states, base vertex index, surface size', got, '320 200 true 0,5,2 0,1,4 4,7,0,4,0,2 512 16');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');
@@ -5482,6 +5504,15 @@ const runPE = async (exe, readFile) => {
     got = String(await runPE(exe, (k) => ({ 'a.dll': a, 'b.dll': b })[k.toLowerCase()] || null));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: LoadLibrary runs a DLL\'s DllMain after those of the DLLs it imports', got, '1'); }
+// A function a program imports from a DLL made here that the tables do not make: the program loads, and
+// stops only if it calls it (a Delphi program imports two hundred of the VCL's it never calls).
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['NoSuchFunctionHere', 'ExitProcess'] }], code: (at) => Uint8Array.from([
+      0x6a, 5, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]) });
+    got = String(await runPE(exe, () => null));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: an import a made DLL does not make yet loads, and only its call stops the program', got, '5'); }
 // Drawing into an 8-bit DIB section lands in its memory, as indices of its own colour table: a 4x1 section
 // (grey 80h at index 1), PatBlt with a grey brush over it; the exit code is the first pixel's index. The
 // StarCraft installer composes its menu in one, and nothing it drew there showed.
