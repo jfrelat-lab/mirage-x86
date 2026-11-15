@@ -593,6 +593,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetTimeZoneInformation: ['p', (x, p) => { x.write(p, new Uint8Array(172)); return 0; }],   // TIME_ZONE_ID_UNKNOWN, no bias
     FileTimeToSystemTime: ['pp', (x, ft, p) => { const t = (x.r32(ft + 4) * 4294967296 + x.r32(ft)) / 1e4 - 11644473600000; putSystemTime(x, p, new Date(t)); return 1; }],
     FileTimeToLocalFileTime: ['pp', (x, a, b) => { x.w32(b, x.r32(a)); x.w32(b + 4, x.r32(a + 4)); return 1; }],
+    LocalFileTimeToFileTime: ['pp', (x, a, b) => { x.w32(b, x.r32(a)); x.w32(b + 4, x.r32(a + 4)); return 1; }],
+    // A FAT date and time (an archive's: Quake III's demo installer) as a FILETIME: the year from 1980,
+    // the seconds in twos.
+    DosDateTimeToFileTime: ['uup', (x, d, t, ft) => {
+      const ms = Date.UTC(1980 + ((d >> 9) & 127), ((d >> 5) & 15) - 1, d & 31, (t >> 11) & 31, (t >> 5) & 63, (t & 31) * 2);
+      const v = (BigInt(ms) + 11644473600000n) * 10000n; x.w32(ft, Number(v & 0xffffffffn)); x.w32(ft + 4, Number(v >> 32n)); return 1;
+    }],
     GlobalSize: ['p', (x, h) => x.win.heapSize(h)],
     GetDriveTypeA: ['p', () => 3],                                    // DRIVE_FIXED: C:, the program's disk
     MoveFileA: ['pp', (x, a, b) => { const f = diskFile(x.str(a)), k = f && [...st.disk].find(([, v]) => v === f)?.[0]; if (!k) return 0; st.disk.delete(k); st.disk.set(relPath(x.str(b)), f); return 1; }],
@@ -1551,7 +1558,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       }
       if (st.mainDialog && cmd !== 0 && !st.shown) invalidate(hwnd, true, true);
       if (st.active || cmd === 0) return st.shown ? 1 : 0;
-      const was = st.shown ? 1 : 0; st.shown = st.active = true; wm.dirty = true;
+      // Shown framed: the desktop and its frame drawn now, at the desktop's size -- a program that draws only
+      // through Direct3D (Deltarune) never presents through GDI, and the screen kept its swap chain's size.
+      const was = st.shown ? 1 : 0; st.shown = st.active = true; wm.dirty = true; if (!was && wm.framed()) wm.present(x.lx, null);
       const sized = st.needSize ? [[0x05, 0, sizeLp()], [0x03, 0, 0]] : []; st.needSize = false;   // its first showing: WM_SIZE, WM_MOVE (above)
       return send(x, [...ACTIVATE.slice(0, 1), ...sized, ...ACTIVATE.slice(1)], () => was, 8);
     }],

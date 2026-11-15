@@ -5375,6 +5375,21 @@ const runLinux = (hex, argv) => {
     got = [kind, x.r32(box + 8), first, back].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: covered windows left out of an update region, a dialog\'s first tab stop focused, the focus given back', got, '2 50 true true');
+  // A captioned main window shown is drawn framed on the desktop at once, at the desktop's size: Deltarune
+  // draws only through Direct3D, never presents through GDI, and the screen kept its swap chain's 640x480
+  // with the window's picture placed for 1024x768 -- too large, off to the right.
+  try { const { fn, mc, lx } = await w32(), u = (n) => fn('user32.dll', n);
+    lx.setFb(640, 480); const main = u('CreateWindowExA')(0, 0, 0, 0xca0000, 100, 100, 320, 200); u('ShowWindow')(main, 5);
+    got = `${mc.vbe.width}x${mc.vbe.height}`;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a framed main window shown puts the desktop on the screen at its size', got, '1024x768');
+  // A FAT date and time as a FILETIME (Quake III's demo installer dates the files it unpacks so): 1999-12-02
+  // 10:30:20 there and back.
+  try { const { fn, x } = await w32(), k = (n) => fn('kernel32.dll', n), ft = x.win.heapAlloc(8), stm = x.win.heapAlloc(16);
+    k('DosDateTimeToFileTime')(((1999 - 1980) << 9) | (12 << 5) | 2, (10 << 11) | (30 << 5) | 10, ft); k('FileTimeToSystemTime')(ft, stm);
+    got = [0, 2, 6, 8, 10, 12].map((o) => x.r16(stm + o)).join(',');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: DosDateTimeToFileTime', got, '1999,12,2,10,30,20');
   // The stand-ins for Arial, Times New Roman and Courier New measure a line as Windows does: their win
   // metrics set to their hhea ones (Arimo's raised 2136/797 made a 17-pixel Arial line 25 pixels high).
   try { const { windowsMetrics } = await import('../src/win32/fonts.js'), b = new Uint8Array(176), dv = new DataView(b.buffer);

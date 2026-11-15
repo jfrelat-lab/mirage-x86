@@ -640,6 +640,7 @@ export function classicApis({ st, wm }) {
     SHGetMalloc: ['p', (x, pp) => { x.w32(pp, shellObj(x, 'IMalloc')); return 0; }],
     SHGetDesktopFolder: ['p', (x, pp) => { x.w32(pp, shellObj(x, 'IShellFolder')); return 0; }],
     SHGetFileInfoA: ['pupuu', () => 0],
+    SHChangeNotify: ['uupp', () => 0],                                 // no shell to tell (an installer's new shortcuts)
     FindExecutableA: ['ppp', (x, f, d, out) => { if (out) x.w8(out, 0); return 31; }],
     // The special folders (CSIDL): none to give -- E_FAIL, and no path from a list there is not.
     SHGetSpecialFolderLocation: ['pip', (x, h, csidl, pp) => { if (pp) x.w32(pp, 0); return 0x80004005; }],
