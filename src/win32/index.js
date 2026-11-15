@@ -93,15 +93,37 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   // XP's does, below the program); then segments of 256 MiB from 10000000h. A program that frees what
   // it allocates (.kkrieger's texture generator, megabytes at a time) stays in the memory it had; with
   // no reuse and no bound the heap grew into the image at 400000h and overwrote the program.
-  const segments = [[HEAP, Math.min(HEAP + HEAP_SIZE, base > HEAP ? base : HEAP + HEAP_SIZE)]];
-  for (let s = 0x10000000; s < 0x30000000; s += 0x10000000) segments.push([s, s + 0x10000000]);
-  for (const [a, b] of segments) lx.lazy.push([a, b]);
+  // Blocks of 64 KiB and more have pages of their own, from 20000000h: freed, the pages go back to the
+  // machine and the span joins its free neighbours, to be handed out again first fit. A GameMaker game
+  // loading a room allocates tens of megabytes of buffers of sizes that never repeat; kept on the lists
+  // by size, they ran the machine out of memory a minute into the Undertale demo.
+  const segments = [[HEAP, Math.min(HEAP + HEAP_SIZE, base > HEAP ? base : HEAP + HEAP_SIZE)], [0x10000000, 0x20000000]];
+  const BIG = 0x10000, BIG_BASE = 0x20000000, BIG_END = 0x30000000;
+  for (const [a, b] of [...segments, [BIG_BASE, BIG_END]]) lx.lazy.push([a, b]);
   let seg = 0, heapNext = HEAP + 8;
   const freeBySize = new Map();
+  const bigFree = [[BIG_BASE, BIG_END]];                             // free spans, by address
   const hw32 = (va, v) => lx.wrBytes(va, Uint8Array.of(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255));
   const hr32 = (va) => { const b = lx.rdBytes(va, 4); return (b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24) >>> 0; };
+  const bigAlloc = (size) => {
+    const len = Math.ceil((size + 16) / PAGE) * PAGE, i = bigFree.findIndex(([a, b]) => b - a >= len);
+    if (i < 0) throw new Error(`mirage-win32: the heap is full (${size} bytes asked)`);
+    const a = bigFree[i][0];
+    if (bigFree[i][1] - a === len) bigFree.splice(i, 1); else bigFree[i][0] += len;
+    hw32(a + 8, size);
+    return a + 16;
+  };
+  const bigRelease = (p) => {
+    const a = p - 16, b = a + Math.ceil((heapSize(p) + 16) / PAGE) * PAGE;
+    lx.release(a, b, false);                                         // still reserved: touched again, zeros
+    let i = bigFree.findIndex(([s]) => s > a); if (i < 0) i = bigFree.length;
+    bigFree.splice(i, 0, [a, b]);
+    if (i + 1 < bigFree.length && bigFree[i + 1][0] === b) bigFree[i][1] = bigFree.splice(i + 1, 1)[0][1];
+    if (i > 0 && bigFree[i - 1][1] === a) bigFree[i - 1][1] = bigFree.splice(i, 1)[0][1];
+  };
   const heapAlloc = (n) => {
     const size = Math.ceil(Math.max(n, 1) / 8) * 8, free = freeBySize.get(size);
+    if (size >= BIG) return bigAlloc(size);
     if (free && free.length) return free.pop();
     while (heapNext + size > segments[seg][1]) {
       if (++seg >= segments.length) throw new Error(`mirage-win32: the heap is full (${n} bytes asked)`);
@@ -114,6 +136,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   const heapSize = (p) => (p ? hr32(p - 8) : 0);
   const heapFree = (p) => {
     if (!p) return;
+    if (p >= BIG_BASE && p < BIG_END) { bigRelease(p); return; }
     const size = heapSize(p);
     if (!freeBySize.has(size)) freeBySize.set(size, []);
     freeBySize.get(size).push(p);

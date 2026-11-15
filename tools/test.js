@@ -5165,6 +5165,13 @@ const runLinux = (hex, argv) => {
     k('SetEvent')(ev); r.push(k('WaitForSingleObject')(ev, 0), k('WaitForSingleObject')(ev, 0)); got = r.map((v) => v.toString(16)).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: WaitForSingleObject waits for an event, auto-reset once taken', got, '102 0 102');
+  // Big heap blocks freed give their memory back, their place handed out again whatever the size asked:
+  // the Undertale demo's buffers of sizes that never repeat ran a 128 MiB machine out of memory.
+  try { const { fn } = await w32(), k = (n) => fn('kernel32.dll', n), at = [];
+    for (let i = 0; i < 24; i++) { const p = k('HeapAlloc')(0x140000, 8, (8 << 20) + i * 4096); at.push(p); k('HeapFree')(0x140000, 0, p); }
+    got = `${new Set(at).size} block place`;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: big heap blocks freed give their memory back and are reused', got, '1 block place');
   // Windows besides the main one: a child control by its id (MFC subclasses through GetDlgItem: a made-up
   // handle per id fell on the dialog's own), its parent and class; the queue filtered by window and range.
   try { const { fn, x, str } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28);
