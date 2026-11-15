@@ -54,9 +54,9 @@ const rect = (l, t, r, b) => (r > l && b > t ? [[l, t, r, b]] : []);
 const kind = (rs) => (!rs.length ? NULLREGION : rs.length === 1 ? SIMPLEREGION : COMPLEXREGION);
 const box = (rs) => (rs.length ? [Math.min(...rs.map((r) => r[0])), Math.min(...rs.map((r) => r[1])), Math.max(...rs.map((r) => r[2])), Math.max(...rs.map((r) => r[3]))] : [0, 0, 0, 0]);
 
-/** gdi32's region calls on `st.gdi` handles of kind 'region' ({ rects }). `updateRect(hwnd)`: the part of
- *  a window waiting to be painted, [l, t, r, b] in its client area, or null when it waits for nothing. */
-export function regionApis(st, updateRect = () => null) {
+/** gdi32's region calls on `st.gdi` handles of kind 'region' ({ rects }). `updateRects(hwnd)`: the part
+ *  of a window waiting to be painted, rectangles [l, t, r, b] in its client area (none: nothing waits). */
+export function regionApis(st, updateRects = () => []) {
   const rgn = (h) => { const o = st.gdi.get(h); return o && o.kind === 'region' ? o : null; };
   const make = (rs) => st.newHandle('region', { rects: rs });
   const i32 = (v) => v | 0;
@@ -90,8 +90,8 @@ export function regionApis(st, updateRect = () => null) {
     }],
   };
   const user32 = {
-    // GetUpdateRgn(hwnd, h, erase): the window's update region into `h` (its rectangle here).
-    GetUpdateRgn: ['ppi', (x, hwnd, h) => { const o = rgn(h); if (!o) return ERROR; const u = updateRect(hwnd); o.rects = u ? rect(...u) : []; return kind(o.rects); }],
+    // GetUpdateRgn(hwnd, h, erase): the window's update region into `h`.
+    GetUpdateRgn: ['ppi', (x, hwnd, h) => { const o = rgn(h); if (!o) return ERROR; o.rects = updateRects(hwnd); return kind(o.rects); }],
   };
   return { gdi32, user32 };
 }
