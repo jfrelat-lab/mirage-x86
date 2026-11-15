@@ -5,6 +5,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-15
 
+- **Deltarune Chapter 1 (2018) starts on the Windows machine** and draws its intro (tested locally): Direct3D 11 games begin.
 - **Diablo's shareware plays** on the Windows machine: its menus, a hero made, Tristram (tested locally).
 - **Windows text in Arial, Times New Roman and Courier New** takes the room it takes on Windows.
 - **Jazz Jackrabbit 2 plays again**: it stopped at start since 2026-11-13.
