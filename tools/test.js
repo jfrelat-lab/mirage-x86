@@ -4905,6 +4905,32 @@ const runLinux = (hex, argv) => {
     got = [c.width, c.height, c.windowed, L.setSamplerState.join(','), L.setTextureStageState.join(','), L.drawIndexedPrimitive.join(','), x.r32(pp + 32 + 16), x.r32(pp + 32 + 24)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: Direct3D 8 -- its present parameters, sampler states, base vertex index, surface size', got, '320 200 true 0,5,2 0,1,4 4,7,0,4,0,2 512 16');
+  // The device's own back buffer lives as long as the device: GameMaker 8 releases the render target it got
+  // and set back, and the model's back buffer was deleted. And in a dialog application's desktop (Delphi:
+  // a main window of no size, its forms on the desktop) the picture goes in the device's window.
+  try { const { fn, x, apis, str } = await w32(), { recordD3D9 } = await import('../src/win32/d3d9.js'), rec = recordD3D9(); x.backend.d3d9 = () => rec;
+    const d = (n) => fn('d3d8.dll', n), u = (n) => fn('user32.dll', n), pp = x.win.heapAlloc(64), out = x.win.heapAlloc(8);
+    u('CreateWindowExA')(0, str('TApplication'), 0, 0x84ca0000, 0, 0, 0, 0); u('CreateWindowExA')(0, str('TRunnerForm'), 0, 0x96000000, 100, 50, 640, 480); const form = parseInt(apis.windows().find((w) => w.cls === 'trunnerform').hwnd, 16);
+    x.write(pp, new Uint8Array(64)); x.w32(pp, 640); x.w32(pp + 4, 480); x.w32(pp + 8, 22); x.w32(pp + 24, form); x.w32(pp + 28, 1);
+    const d3d = d('Direct3DCreate8')(220); d('IDirect3D8::CreateDevice')(d3d, 0, 1, form, 0x40, pp, out); const dev = x.r32(out);
+    d('IDirect3DDevice8::GetRenderTarget')(dev, out); d('IDirect3DSurface8::Release')(x.r32(out));
+    const r = apis.wm.clientRect();
+    got = [rec.calls.get('release') || 0, r && [r.x, r.y, r.w, r.h].join(',')].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Direct3D\'s back buffer outlives a Release; on a Delphi desktop the picture is in its window', got, '0 100,50,640,480');
+  // A viewport beyond the render target is refused (D3DERR_INVALIDCALL, as Wine's d3d8 and d3d9): GameMaker 8
+  // sets its 640x480 port while drawing into a 320x240 surface, and the room was drawn twice its size.
+  try { const { fn, x } = await w32(), { recordD3D9 } = await import('../src/win32/d3d9.js'), rec = recordD3D9(); x.backend.d3d9 = () => rec;
+    const d = (n) => fn('d3d8.dll', n), pp = x.win.heapAlloc(64), out = x.win.heapAlloc(8), vp = x.win.heapAlloc(24);
+    x.write(pp, new Uint8Array(64)); x.w32(pp, 640); x.w32(pp + 4, 480); x.w32(pp + 8, 22); x.w32(pp + 28, 1);
+    const d3d = d('Direct3DCreate8')(220); d('IDirect3D8::CreateDevice')(d3d, 0, 1, 0, 0x40, pp, out); const dev = x.r32(out);
+    d('IDirect3DDevice8::CreateTexture')(dev, 320, 240, 1, 1, 21, 0, out); d('IDirect3DTexture8::GetSurfaceLevel')(x.r32(out), 0, out);
+    d('IDirect3DDevice8::SetRenderTarget')(dev, x.r32(out), 0);
+    const set = (w, hh) => { x.write(vp, new Uint8Array(24)); x.w32(vp + 8, w); x.w32(vp + 12, hh); return (d('IDirect3DDevice8::SetViewport')(dev, vp) >>> 0).toString(16); };
+    const a = set(640, 480), b = set(320, 240);
+    got = [a, b, rec.device.last.setViewport[0].width].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a viewport larger than the render target is refused, a fitting one set', got, '8876086c 0 320');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');

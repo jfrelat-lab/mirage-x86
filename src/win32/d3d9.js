@@ -408,6 +408,10 @@ export function d3d9Apis(st) {
       const ob = o(self); if (!ob) return 0;
       if (--ob.ref > 0) return ob.ref;
       if (ob.tex) { ob.ref = 0; return 0; }                // a texture's level lives as long as its texture
+      // The device's own surfaces (its back buffer, its depth buffer, as GetBackBuffer, GetRenderTarget and
+      // GetDepthStencilSurface hand them out) live as long as the device: GameMaker 8 releases the render
+      // target it saved and set back, and the model's back buffer was deleted under the device.
+      if (ob.implicit) { ob.ref = 0; return 0; }
       if (ob.h && ob.dev) ob.dev.release(ob.h);
       objs.delete(self >>> 0);
       return 0;
@@ -532,6 +536,7 @@ export function d3d9Apis(st) {
       let w = r(0), hh = r(1);
       if (!w || !hh) { w = st.w || 640; hh = st.h || 480; x.w32(pp, w); x.w32(pp + 4, hh); }
       const params = { width: w, height: hh, backBufferFormat: r(2) || 22, backBufferCount: r(3) || 1, autoDepthStencilFormat: r(9) ? r(10) : 0, windowed, presentInterval: r(13) };
+      st.glWindow = r(7) || hwnd;                                      // its window (hDeviceWindow, else the focus window): where the picture goes
       if (x.backend.setVideoMode) x.backend.setVideoMode(w, hh, false);
       const dev = model(x).createDevice(params);
       const p = make(x, 'IDirect3DDevice9', { dev, d3d: self, params, created: [ad, type, hwnd, flags], v8 });
@@ -573,7 +578,7 @@ export function d3d9Apis(st) {
     // The implicit swap chain: its methods are the device's (.kkrieger asks for it to present).
     GetSwapChain: (x, self, i, pp) => { x.w32(pp, i ? 0 : (o(self).swap ??= make(x, 'IDirect3DSwapChain9', { devPtr: self }))); if (!i) o(o(self).swap).ref++; return i ? D3DERR_INVALIDCALL : S_OK; },
     GetNumberOfSwapChains: () => 1,
-    GetBackBuffer: (x, self, sw, i, type, pp) => { const q = o(self).params; x.w32(pp, byHandle(x, D(self), D(self).getBackBuffer(sw, i), 'IDirect3DSurface9', { devPtr: self, w: q.width, h2: q.height, format: q.backBufferFormat, usage: 1 })); return S_OK; },
+    GetBackBuffer: (x, self, sw, i, type, pp) => { const q = o(self).params; x.w32(pp, byHandle(x, D(self), D(self).getBackBuffer(sw, i), 'IDirect3DSurface9', { devPtr: self, implicit: true, w: q.width, h2: q.height, format: q.backBufferFormat, usage: 1 })); return S_OK; },
     CreateTexture: (x, self, w, hh, levels, usage, fmt, pool, pp) => {
       let n = levels; if (!n) { n = 1; while ((w >> n) || (hh >> n)) n++; }
       x.w32(pp, res(x, self, 'IDirect3DTexture9', D(self).createTexture(w, hh, levels, usage, fmt, pool), { w, h2: hh, levels: n, usage, format: fmt, pool })); return S_OK;
@@ -594,10 +599,10 @@ export function d3d9Apis(st) {
       const rect = (p) => (p ? [x.r32(p) | 0, x.r32(p + 4) | 0, x.r32(p + 8) | 0, x.r32(p + 12) | 0] : null);
       return D(self).stretchRect(h(src), rect(pSr), h(dst), rect(pDr), filter) || S_OK;
     },
-    SetRenderTarget: (x, self, i, s) => D(self).setRenderTarget(i, h(s)) || S_OK,
-    GetRenderTarget: (x, self, i, pp) => { const hd = D(self).getRenderTarget(i), q = o(self).params; x.w32(pp, byHandle(x, D(self), hd, 'IDirect3DSurface9', { devPtr: self, w: q.width, h2: q.height, format: q.backBufferFormat, usage: 1 })); return hd ? S_OK : 0x8876086c; },
+    SetRenderTarget: (x, self, i, s) => { if (i === 0) o(self).rt0 = s && o(s) ? { w: o(s).w, h: o(s).h2 } : null; return D(self).setRenderTarget(i, h(s)) || S_OK; },
+    GetRenderTarget: (x, self, i, pp) => { const hd = D(self).getRenderTarget(i), q = o(self).params; x.w32(pp, byHandle(x, D(self), hd, 'IDirect3DSurface9', { devPtr: self, implicit: true, w: q.width, h2: q.height, format: q.backBufferFormat, usage: 1 })); return hd ? S_OK : 0x8876086c; },
     SetDepthStencilSurface: (x, self, s) => D(self).setDepthStencilSurface(h(s)) || S_OK,
-    GetDepthStencilSurface: (x, self, pp) => { const hd = D(self).getDepthStencilSurface(), q = o(self).params; x.w32(pp, byHandle(x, D(self), hd, 'IDirect3DSurface9', { devPtr: self, w: q.width, h2: q.height, format: q.autoDepthStencilFormat, usage: 2 })); return hd ? S_OK : 0x8876086c; },
+    GetDepthStencilSurface: (x, self, pp) => { const hd = D(self).getDepthStencilSurface(), q = o(self).params; x.w32(pp, byHandle(x, D(self), hd, 'IDirect3DSurface9', { devPtr: self, implicit: true, w: q.width, h2: q.height, format: q.autoDepthStencilFormat, usage: 2 })); return hd ? S_OK : 0x8876086c; },
     BeginScene: (x, self) => D(self).beginScene() || S_OK,
     EndScene: (x, self) => D(self).endScene() || S_OK,
     Clear: (x, self, count, pRects, flags, color, z, stencil) => {
@@ -643,7 +648,15 @@ export function d3d9Apis(st) {
       return (D(self).setMaterial && D(self).setMaterial({ diffuse: f.slice(0, 4), ambient: f.slice(4, 8), specular: f.slice(8, 12), emissive: f.slice(12, 16), power: f[16] })) || S_OK;
     },
     GetMaterial: (x, self, p) => { x.write(p, o(self).material || new Uint8Array(68)); return S_OK; },
-    SetViewport: (x, self, p) => D(self).setViewport({ x: x.r32(p), y: x.r32(p + 4), width: x.r32(p + 8), height: x.r32(p + 12), minZ: x.f32(p + 16), maxZ: x.f32(p + 20) }) || S_OK,
+    // A viewport beyond the render target is refused, the one SetRenderTarget set kept (D3DERR_INVALIDCALL,
+    // as Wine's d3d8 and d3d9 answer): GameMaker 8 sets its 640x480 port while drawing into a 320x240
+    // surface, and the room was drawn twice its size, its corner in the middle.
+    SetViewport: (x, self, p) => {
+      const v = { x: x.r32(p), y: x.r32(p + 4), width: x.r32(p + 8), height: x.r32(p + 12), minZ: x.f32(p + 16), maxZ: x.f32(p + 20) };
+      const rt = o(self).rt0 || { w: o(self).params.width, h: o(self).params.height };
+      if (v.x + v.width > rt.w || v.y + v.height > rt.h) return D3DERR_INVALIDCALL;
+      return D(self).setViewport(v) || S_OK;
+    },
     GetViewport: (x, self, p) => { const v = D(self).getViewport ? D(self).getViewport() : null, q = o(self).params;
       const r = v || { x: 0, y: 0, width: q.width, height: q.height, minZ: 0, maxZ: 1 };
       [r.x, r.y, r.width, r.height].forEach((v2, i) => x.w32(p + 4 * i, v2)); const f = new DataView(new ArrayBuffer(8)); f.setFloat32(0, r.minZ, true); f.setFloat32(4, r.maxZ, true);
