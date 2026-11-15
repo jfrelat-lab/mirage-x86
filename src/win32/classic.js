@@ -530,16 +530,50 @@ export function classicApis({ st, wm }) {
   // A DLL made here has the version of XP SP3's (DirectX's 5.3.2600.5512, the others 5.1.2600.5512): a
   // VS_VERSIONINFO of its fixed part alone. The StarCraft installer reads ddraw.dll's before it installs.
   const madeVersions = new Map();
+  /*
+   * VS_VERSIONINFO, as a .rc compiles it: nodes of { wLength, wValueLength, wType (1 text), key in UTF-16,
+   * padding to 4, value, padding, children }. A DLL made here has XP's: its fixed file info, its strings
+   * in US English (StringFileInfo\040904B0) and that language in VarFileInfo\Translation -- Jazz
+   * Jackrabbit 2 reads the Translation of each DirectX DLL it loads, and does not check it got one.
+   */
+  const verNode = (key, value, children = []) => {
+    const k = [...key].flatMap((c) => [c.charCodeAt(0) & 255, c.charCodeAt(0) >> 8]).concat([0, 0]);
+    const text = typeof value === 'string', val = text ? [...value].flatMap((c) => [c.charCodeAt(0) & 255, c.charCodeAt(0) >> 8]).concat([0, 0]) : [...(value || [])];
+    const pad = (a) => { while (a.length % 4) a.push(0); return a; };
+    const body = pad([0, 0, 0, 0, 0, 0, ...k]); body.push(...val); pad(body);
+    for (const c of children) body.push(...pad([...c]));
+    const v = new DataView(Uint8Array.from(body).buffer);
+    v.setUint16(0, body.length, true); v.setUint16(2, text ? val.length / 2 : val.length, true); v.setUint16(4, text ? 1 : 0, true);
+    return new Uint8Array(v.buffer);
+  };
   const madeVersion = (x, name) => {
     if (!x.win.made || !x.win.made(name)) return null;
     if (madeVersions.has(name)) return madeVersions.get(name);
-    const at = x.win.heapAlloc(92), b = new Uint8Array(92), v = new DataView(b.buffer);
-    v.setUint16(0, 92, true); v.setUint16(2, 52, true);
-    [...'VS_VERSION_INFO'].forEach((c, i) => v.setUint16(6 + 2 * i, c.charCodeAt(0), true));
-    const ms = /^(ddraw|dsound|dinput|d3d)/.test(name) ? 0x50003 : 0x50001;
-    [0xfeef04bd, 0x10000, ms, 0x0a281588, ms, 0x0a281588, 0x3f, 0, 0x40004, 2, 0, 0, 0].forEach((w, i) => v.setUint32(40 + 4 * i, w >>> 0, true));
-    x.write(at, b);
-    const r = { at, size: 92 }; madeVersions.set(name, r); return r;
+    const ms = /^(ddraw|dsound|dinput|d3d)/.test(name) ? 0x50003 : 0x50001, ver = `${ms >>> 16}.${ms & 0xffff}.2600.5512`;
+    const fixed = new Uint8Array(52), fv = new DataView(fixed.buffer);
+    [0xfeef04bd, 0x10000, ms, 0x0a281588, ms, 0x0a281588, 0x3f, 0, 0x40004, 2, 0, 0, 0].forEach((w, i) => fv.setUint32(4 * i, w >>> 0, true));
+    const b = verNode('VS_VERSION_INFO', fixed, [
+      verNode('StringFileInfo', null, [verNode('040904B0', null, [verNode('CompanyName', 'Microsoft Corporation'), verNode('FileVersion', ver), verNode('InternalName', name), verNode('OriginalFilename', name), verNode('ProductVersion', ver)])]),
+      verNode('VarFileInfo', null, [verNode('Translation', [0x09, 0x04, 0xb0, 0x04])]),
+    ]);
+    const at = x.win.heapAlloc(b.length); x.write(at, b);
+    const r = { at, size: b.length }; madeVersions.set(name, r); return r;
+  };
+  // A node of a version block by its path ("\\", "\\VarFileInfo\\Translation", "\\StringFileInfo\\040904B0\\FileVersion").
+  const verFind = (x, block, path) => {
+    const al = (a) => block + ((a - block + 3) & ~3);
+    const node = (p) => {
+      let key = '', q = p + 6; for (let c; (c = x.r16(q)); q += 2) key += String.fromCharCode(c);
+      const len = x.r16(p), vlen = x.r16(p + 2), type = x.r16(p + 4), vo = al(q + 2), vb = type === 1 ? vlen * 2 : vlen;
+      return { p, key, len, vlen, type, vo, kids: al(vo + vb) };
+    };
+    let n = node(block);
+    for (const part of path.split('\\').filter(Boolean)) {
+      let found = null;
+      for (let c = n.kids; c < n.p + n.len;) { const k = node(c); if (!k.len) break; if (k.key.toLowerCase() === part.toLowerCase()) { found = k; break; } c = al(c + k.len); }
+      if (!found) return null; n = found;
+    }
+    return n;
   };
   const ownVersion = (x, f) => {
     const name = x.str(f, 260).split('\\').pop().toLowerCase();
@@ -549,14 +583,22 @@ export function classicApis({ st, wm }) {
   const version = {
     GetFileVersionInfoSizeA: ['pp', (x, f, h) => { if (h) x.w32(h, 0); const r = ownVersion(x, f); return r ? r.size : 0; }],
     GetFileVersionInfoA: ['puup', (x, f, h, n, buf) => { const r = ownVersion(x, f); if (!r) return 0; x.write(buf, x.bytes(r.at, Math.min(n, r.size))); return 1; }],
+    // A text value comes back in ANSI (a copy), as VerQueryValueA gives it; nothing found clears both.
     VerQueryValueA: ['pppp', (x, block, sub, pp, plen) => {
-      if (x.str(sub, 64) !== '\\' || x.r16(block + 2) < 52) return 0;
-      x.w32(pp, block + 40); x.w32(plen, 52); return 1;
+      const n = verFind(x, block, x.str(sub, 256));
+      if (!n || (!n.vlen && n.type !== 1)) { x.w32(pp, 0); if (plen) x.w32(plen, 0); return 0; }
+      if (n.type === 1) { let t = ''; for (let i = 0; i < n.vlen; i++) { const c = x.r16(n.vo + 2 * i); if (!c) break; t += String.fromCharCode(c); } const a = x.win.heapAlloc(t.length + 1); x.write(a, Uint8Array.from([...t].map((c) => c.charCodeAt(0) & 255).concat([0]))); x.w32(pp, a); if (plen) x.w32(plen, t.length + 1); return 1; }
+      x.w32(pp, n.vo); if (plen) x.w32(plen, n.vlen); return 1;
     }],
   };
   const ole32 = {
     CoInitialize: ['p', () => 0], CoInitializeEx: ['pu', () => 0], CoUninitialize: ['', () => 0],
-    CoCreateInstance: ['ppupp', (x, clsid, outer, ctx, iid, pp) => { if (pp) x.w32(pp, 0); return 0x80040154; }],
+    // Internet Explorer's WebBrowser control (an inert one, below); any other class is not registered.
+    CoCreateInstance: ['ppupp', (x, clsid, outer, ctx, iid, pp) => {
+      if (pp) x.w32(pp, 0);
+      if (guid(x, clsid) !== CLSID_WEBBROWSER) return 0x80040154;   // REGDB_E_CLASSNOTREG
+      const o = oleControl(x); return OLE_IMPL.IUnknown.QueryInterface(x, o, iid, pp);
+    }],
   };
   // ---- shlwapi.dll: the path helpers (Cave Story finds its data from its own path).
   const shlwapi = {
@@ -621,6 +663,68 @@ export function classicApis({ st, wm }) {
       const f = n === 'QueryInterface' ? (x, self, iid, pp) => { x.w32(pp, self); return 0; } : n === 'AddRef' || n === 'Release' ? () => 1
         : (SHELL_IMPL[iface][n] || ((x, self, ...a) => { const pp = { BindToObject: a[3], BindToStorage: a[3], CreateViewObject: a[2], Clone: a[0] }[n]; if (pp) x.w32(pp, 0); return E_FAIL; }));
       shell32[`${iface}::${n}`] = ['p' + 'u'.repeat(+k), f, { ordinal: ord++ }];
+    }
+  }
+  /*
+   * An inert OLE control for CLSID_WebBrowser: GameMaker 8's runner (Delphi) puts Internet Explorer's
+   * WebBrowser on its help form, and every form is made at start -- the class not registered, the runner
+   * stopped there ("OLE error 80040154"). It answers the interfaces a control's host asks for, each a
+   * pointer of its own in one block (QueryInterface hands out the one asked, E_NOINTERFACE else), draws
+   * nothing and navigates nowhere. Methods are ole32's exports named "Interface::Method", as the shell's.
+   */
+  const guid = (x, p) => { const b = x.bytes(p, 16), h = (i, n) => [...b.slice(i, i + n)].map((v) => v.toString(16).padStart(2, '0')).join(''), r = (i, n) => h(i, n).match(/../g).reverse().join('');
+    return `${r(0, 4)}-${r(4, 2)}-${r(6, 2)}-${h(8, 2)}-${h(10, 6)}`; };
+  const CLSID_WEBBROWSER = '8856f961-340a-11d0-a96b-00c04fd705a2';
+  const OLE_VT = {
+    IUnknown: ['00000000-0000-0000-c000-000000000046', ''],
+    IOleObject: ['00000112-0000-0000-c000-000000000046', 'SetClientSite:1 GetClientSite:1 SetHostNames:2 Close:1 SetMoniker:2 GetMoniker:3 InitFromData:3 GetClipboardData:2 DoVerb:6 EnumVerbs:1 Update:0 IsUpToDate:0 GetUserClassID:1 GetUserType:2 SetExtent:2 GetExtent:2 Advise:2 Unadvise:1 EnumAdvise:1 GetMiscStatus:2 SetColorScheme:1'],
+    IPersistStreamInit: ['7fd52380-4e07-101b-ae2d-08002b2ec713', 'GetClassID:1 IsDirty:0 Load:1 Save:2 GetSizeMax:1 InitNew:0'],
+    IOleControl: ['b196b288-bab4-101a-b69c-00aa00341d07', 'GetControlInfo:1 OnMnemonic:1 OnAmbientPropertyChange:1 FreezeEvents:1'],
+    IOleInPlaceObject: ['00000113-0000-0000-c000-000000000046', 'GetWindow:1 ContextSensitiveHelp:1 InPlaceDeactivate:0 UIDeactivate:0 SetObjectRects:2 ReactivateAndUndo:0'],
+    IOleInPlaceActiveObject: ['00000117-0000-0000-c000-000000000046', 'GetWindow:1 ContextSensitiveHelp:1 TranslateAccelerator:1 OnFrameWindowActivate:1 OnDocWindowActivate:1 ResizeBorder:3 EnableModeless:1'],
+    IViewObject: ['0000010d-0000-0000-c000-000000000046', 'Draw:10 GetColorSet:6 Freeze:4 Unfreeze:1 SetAdvise:3 GetAdvise:3'],
+    IDispatch: ['00020400-0000-0000-c000-000000000046', 'GetTypeInfoCount:1 GetTypeInfo:3 GetIDsOfNames:5 Invoke:8'],
+  };
+  const OLE_IFACES = Object.keys(OLE_VT), E_NOTIMPL = 0x80004001;
+  const out0 = (n) => (x, self, ...a) => { if (a[n]) x.w32(a[n], 0); return E_NOTIMPL; };   // an out pointer cleared
+  const OLE_IMPL = {
+    IUnknown: {
+      QueryInterface: (x, self, iid, pp) => {
+        const g = guid(x, iid), i = OLE_IFACES.findIndex((k) => OLE_VT[k][0] === g), blk = oleBase(x, self);
+        if (i < 0) { x.w32(pp, 0); if (!(st.saidIids ||= new Set()).has(g)) { st.saidIids.add(g); x.win.say(`WebBrowser: no interface ${g}`); } return 0x80004002; }
+        x.w32(pp, blk + 4 * i); return 0;
+      },
+      AddRef: () => 1, Release: () => 1,
+    },
+    IOleObject: { GetClientSite: out0(0), GetMoniker: out0(2), EnumVerbs: out0(0), GetUserClassID: () => E_NOTIMPL, GetUserType: out0(1), EnumAdvise: out0(0),
+      InitFromData: () => E_NOTIMPL, GetClipboardData: out0(1), Advise: (x, self, sink, pc) => { x.w32(pc, 1); return 0; },
+      GetExtent: (x, self, aspect, sz) => { x.w32(sz, 0); x.w32(sz + 4, 0); return 0; }, GetMiscStatus: (x, self, aspect, p) => { x.w32(p, 0); return 0; } },
+    IPersistStreamInit: { GetClassID: () => E_NOTIMPL, IsDirty: () => 1, GetSizeMax: (x, self, p) => { x.w32(p, 0); x.w32(p + 4, 0); return 0; } },
+    IOleControl: { GetControlInfo: (x, self, ci) => { x.w32(ci + 4, 0); x.w16(ci + 8, 0); x.w32(ci + 12, 0); return 0; } },
+    IOleInPlaceObject: { GetWindow: out0(0), ContextSensitiveHelp: () => E_NOTIMPL, ReactivateAndUndo: () => E_NOTIMPL },
+    IOleInPlaceActiveObject: { GetWindow: out0(0), ContextSensitiveHelp: () => E_NOTIMPL, TranslateAccelerator: () => 1 },
+    IViewObject: { GetColorSet: out0(5), GetAdvise: () => E_NOTIMPL },
+    IDispatch: { GetTypeInfoCount: (x, self, p) => { x.w32(p, 0); return 0; }, GetTypeInfo: out0(2), GetIDsOfNames: () => 0x80020006, Invoke: () => 0x80020003 },
+  };
+  // The block: one vtable pointer per interface, in OLE_VT's order; an interface pointer's block is
+  // found from its vtable's place in that order.
+  const oleVt = new Map();
+  const oleBase = (x, self) => { const v = x.r32(self), i = [...oleVt.values()].indexOf(v); return self - 4 * Math.max(0, i); };
+  const oleControl = (x) => {
+    const mod = x.win.load('ole32.dll');
+    for (const k of OLE_IFACES) if (!oleVt.has(k)) {
+      const ms = ['QueryInterface', 'AddRef', 'Release', ...OLE_VT[k][1].split(' ').filter(Boolean).map((t) => t.split(':')[0])];
+      const v = x.win.heapAlloc(4 * ms.length); ms.forEach((n, i) => x.w32(v + 4 * i, mod.exports.get(`${k}::${n}`))); oleVt.set(k, v);
+    }
+    const p = x.win.heapAlloc(4 * OLE_IFACES.length);
+    OLE_IFACES.forEach((k, i) => x.w32(p + 4 * i, oleVt.get(k)));
+    return p;
+  };
+  {
+    let ord = 3000;
+    for (const [k, [, list]] of Object.entries(OLE_VT)) for (const [n, c] of [['QueryInterface', 2], ['AddRef', 0], ['Release', 0], ...list.split(' ').filter(Boolean).map((t) => t.split(':'))]) {
+      const f = OLE_IMPL.IUnknown[n] || (OLE_IMPL[k] && OLE_IMPL[k][n]) || (() => 0);
+      ole32[`${k}::${n}`] = ['p' + 'u'.repeat(+c), f, { ordinal: ord++ }];
     }
   }
   // ---- imm32.dll: no input method -- a window has no input context.

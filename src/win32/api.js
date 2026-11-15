@@ -277,7 +277,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // Said once a name: SDL 2 asks for hid.dll at every frame, and a line each slowed the page to a crawl.
       if (!m && /^[\w.\\: -]{1,64}$/.test(s) && !(st.saidMissing ||= new Set()).has(s.toLowerCase())) { st.saidMissing.add(s.toLowerCase()); x.win.say(`LoadLibraryA("${s}"): not made here`); }
       if (!m) return 0;
-      const inits = [...x.win.modules.values()].filter((d) => d.file && d.init);
+      // In the loader's order, each DLL after those it imports (`loaded`), as Windows runs them: Caster.dll's
+      // DllMain, run before msvcr100.dll's, found its C runtime not started ("R6030 CRT not initialized").
+      const inits = x.win.loaded.filter((d) => d.file && d.init && x.win.modules.get(d.name) === d);
       for (const d of inits) d.init = false;
       return inits.length ? send(x, inits.map((d) => ({ fn: d.entry, args: [d.base, 1, 0] })), () => m.base, 4) : m.base;
     }],
@@ -304,6 +306,18 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       vaRegions.set(p, n); x.lx.lazy.push([p, p + n]); return p;
     }],
     // MEM_DECOMMIT (4000h): those pages' contents go; MEM_RELEASE (8000h, size 0): the whole region.
+    /*
+     * MEMORY_BASIC_INFORMATION for an address: committed and read-write; its allocation base the image
+     * that holds it (MEM_IMAGE) or VirtualAlloc's region, else its page. Delphi finds a class's module so
+     * (FindClassHInstance: the allocation base of its VMT), and that module's resources: its forms.
+     */
+    VirtualQuery: ['ppu', (x, a, mbi, n) => {
+      if (n < 28) return 0;
+      const page = (a & ~0xfff) >>> 0, m = x.win.moduleHolding(a), r = !m && [...vaRegions].find(([b, k]) => a >= b && a < b + k);
+      const alloc = m ? m.base : r ? r[0] : page, end = m ? m.base + m.size : r ? r[0] + r[1] : page + 0x1000;
+      [page, alloc, 4, end - page, 0x1000, 4, m ? 0x1000000 : 0x20000].forEach((v, i) => x.w32(mbi + 4 * i, v >>> 0));
+      return 28;
+    }],
     VirtualFree: ['puu', (x, addr, size, type) => {
       const n = vaRegions.get(addr);
       if (type & 0x8000) {
@@ -482,6 +496,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       x.w32(p + 4, 5); x.w32(p + 8, 1); x.w32(p + 12, 2600); x.w32(p + 16, 2); x.write(p + 20, new Uint8Array(128)); return 1;
     }],
     GetStartupInfoA: ['p', (x, p) => { x.write(p, new Uint8Array(68)); x.w32(p, 68); return 0; }],
+    GetStartupInfoW: ['p', (x, p) => { x.write(p, new Uint8Array(68)); x.w32(p, 68); return 0; }],
     GetModuleFileNameA: ['ppu', (x, h, buf, n) => {
       const m = h && h !== x.win.base ? x.win.moduleAt(h) : null, s = m ? (m.file ? `C:\\${m.name}` : `C:\\WINDOWS\\system32\\${m.name}`) : x.win.path;
       const k = Math.min(s.length, n - 1); if (n) x.write(buf, new TextEncoder().encode(s.slice(0, k) + '\0')); return k;
@@ -529,10 +544,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     CompareStringA: ['uupipi', (x, lcid, flags, a, na, b, nb) => compare([...(na < 0 ? new TextEncoder().encode(x.str(a)) : x.bytes(a, na))], [...(nb < 0 ? new TextEncoder().encode(x.str(b)) : x.bytes(b, nb))], flags)],
     CompareStringW: ['uupipi', (x, lcid, flags, a, na, b, nb) => compare(wideRead(x, a, na, true), wideRead(x, b, nb, true), flags)],
-    // Exceptions. RtlUnwind takes the frames off TEB's list down to the target, as ntdll's does once the
-    // handlers below it have run; the runtime calls it from its own handler.
-    RtlUnwind: ['pppu', (x, target) => { if (target) x.w32(x.win.teb, target); return 0; }],
-    RaiseException: ['uuup', (x, code) => { throw new Error(`mirage-win32: RaiseException(${code.toString(16)})`); }],
+    // Exceptions (structured exception handling): see seh below.
+    RtlUnwind: ['pppu', (x, target, ip, rec, value) => seh.unwind(x, target, rec, value)],
+    RaiseException: ['uuup', (x, code, flags, n, args) => seh.raise(x, code, flags, n, args)],
     UnhandledExceptionFilter: ['p', () => 1],                         // EXCEPTION_EXECUTE_HANDLER
     TerminateProcess: ['pu', (x, h, code) => { x.lx.exitProcess(code); return 1; }],
     // ---- what Quake II's executable and its DLLs ask beyond WinQuake --------------------------------
@@ -638,7 +652,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const win = (h) => st.wins.get(h);
   const procOf = (h) => (h === st.hwnd ? st.wndProc : win(h) ? win(h).proc : 0);
   let nextHwnd = 0x10100;
-  const createWindow = (x, cls, style, w, h, wide, X, Y, title, parent = 0, menu = 0) => {
+  const createWindow = (x, cls, style, w, h, wide, X, Y, title, parent = 0, menu = 0, ex = 0) => {
     // The main window, unless it is a child, or another class's while the main one lives (MFC's dialogs
     // beside its frame); the main class's again is the main window made anew (a game's new video mode).
     const k0 = cls < 0x10000 ? cls : (wide ? String.fromCharCode(...wideRead(x, cls, -1, true)) : x.str(cls, 256)).toLowerCase();
@@ -646,7 +660,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // the main one: it receives messages and nothing else.
     if (parent === 0xfffffffd) return createOther(x, cls, style & ~0x10000000, w, h, wide, X, Y, title, parent, menu, { messageOnly: true });
     if ((style & 0x40000000) || (st.mainMade && !st.destroyed && k0 !== st.mainClass)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
+    // An invisible tool window of no size (WS_EX_TOOLWINDOW: Delphi's AllocateHWnd, one per TTimer and per
+    // component that needs a window) is never the main one: made as such, each made the last one anew,
+    // under its handle, and the timers on them stopped one another.
+    if ((ex & 0x80) && !w && !h && !(style & 0x10000000)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu);
     st.mainMade = true; st.mainClass = k0;
+    // A main window of no size, never shown (Delphi's TApplication window): the program's windows are its
+    // forms, each a top-level window on the desktop -- a dialog application's desktop (deskMode).
+    if (!w && !h && !(style & 0x10000000)) st.mainDialog = true;
     // Where it sits on the desktop (CW_USEDEFAULT: the first cascade position) and its caption.
     st.x = X === -0x80000000 ? 22 : X; st.y = Y === -0x80000000 || X === -0x80000000 ? 22 : Y; st.placed = X !== -0x80000000;
     st.title = title ? (wide ? String.fromCharCode(...wideRead(x, title, -1, true)) : x.str(title, 256)) : '';
@@ -1281,7 +1302,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return 0;
   };
   const mirageReturn = (x) => {
-    const f = st.sends[st.sends.length - 1], c = x.cpu, eax = x.r32(c.reg[4] >>> 0);   // pushed by its stub
+    const c = x.cpu, eax = x.r32(c.reg[4] >>> 0);                      // pushed by its stub
+    // A call returns below the frame it was made from (its arguments, its return address, EAX pushed).
+    // Calls whose frame is below this one were abandoned: an exception handler jumped out of them (seh).
+    while (st.sends.length > 1 && st.sends[st.sends.length - 1].esp0 < (c.reg[4] >>> 0)) st.sends.pop();
+    const f = st.sends[st.sends.length - 1];
     if (f.msgs.length) { c.reg[4] = f.esp0; callProc(x, f.msgs.shift(), back(x)); return eax; }
     // `result` runs on the API's own frame (its return address and arguments still on the stack): one
     // that sends again (DefDlgProc's FALSE going on to DefWindowProc, which sends WM_ERASEBKGND) starts
@@ -1291,9 +1316,75 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const depth = st.sends.length, ret = x.r32(f.esp0);
     c.reg[4] = f.esp0;
     const r = f.result(eax);
+    if (st.resumed) { st.resumed = false; return r; }                // an exception's context resumed (seh)
     if (st.sends.length > depth) return r;                           // a new sequence: it returns, later
     c.reg[4] = (f.esp0 + 4 + f.pop) >>> 0; c.eip = ret;
     return r;
+  };
+  /*
+   * Structured exception handling, as ntdll dispatches it on x86. RaiseException makes an EXCEPTION_RECORD
+   * and a CONTEXT (the caller's registers, Eip its return address) and calls each handler on the thread's
+   * list (fs:[0], the TEB's first field: { next, handler } records on the stack), innermost first, with
+   * (record, its frame, context, 0): ExceptionContinueExecution (0) resumes at the context, perhaps
+   * changed; ExceptionContinueSearch (1) goes on to the next. A handler that takes the exception -- Delphi's
+   * and Visual C++'s do -- calls RtlUnwind, which calls the handlers between it and the target frame again
+   * with EXCEPTION_UNWINDING (2), takes them off the list, and returns to it; the handler then jumps into
+   * its except block and never returns to the dispatcher (mirageReturn forgets such abandoned calls) --
+   * or, as Delphi's _RaiseAgain does, returns ExceptionContinueSearch to it after all, and the search goes
+   * on outwards. With no handler left, the exception is unhandled and the program ends, as Windows ends it.
+   */
+  const seh = {
+    fs: (x) => x.cpu.base[4] >>> 0,
+    context(x, ret, esp) {
+      const c = x.cpu, ctx = x.win.heapAlloc(0x2cc); x.write(ctx, new Uint8Array(0x2cc));
+      x.w32(ctx, 0x10007);                                                // CONTROL | INTEGER | SEGMENTS
+      [[0x9c, 7], [0xa0, 6], [0xa4, 3], [0xa8, 2], [0xac, 1], [0xb0, 0], [0xb4, 5]].forEach(([o, r]) => x.w32(ctx + o, c.reg[r] >>> 0));
+      x.w32(ctx + 0xb8, ret); x.w32(ctx + 0xc4, esp); x.w32(ctx + 0xc0, (c.flags | 2) >>> 0);
+      x.w32(ctx + 0xbc, c.seg[1]); x.w32(ctx + 0xc8, c.seg[2]); x.w32(ctx + 0x98, c.seg[3]); x.w32(ctx + 0x94, c.seg[0]); x.w32(ctx + 0x90, c.seg[4]);
+      return ctx;
+    },
+    record(x, code, flags, n, args, at) {
+      const rec = x.win.heapAlloc(80); x.write(rec, new Uint8Array(80));
+      x.w32(rec, code >>> 0); x.w32(rec + 4, flags >>> 0); x.w32(rec + 12, at >>> 0);
+      n = Math.min(n >>> 0, 15); x.w32(rec + 16, n); for (let i = 0; i < n; i++) x.w32(rec + 20 + 4 * i, x.r32(args + 4 * i));
+      return rec;
+    },
+    // Back at the context: its registers, its stack and its instruction.
+    resume(x, ctx) {
+      const c = x.cpu;
+      [[0x9c, 7], [0xa0, 6], [0xa4, 3], [0xa8, 2], [0xac, 1], [0xb4, 5]].forEach(([o, r]) => { c.reg[r] = x.r32(ctx + o); });
+      c.reg[4] = x.r32(ctx + 0xc4); c.eip = x.r32(ctx + 0xb8); st.resumed = true;
+      return x.r32(ctx + 0xb0);
+    },
+    raise(x, code, flags, n, args) {
+      const esp = x.cpu.reg[4] >>> 0, ret = x.r32(esp);
+      const rec = seh.record(x, code, flags, n, args, ret), ctx = seh.context(x, ret, esp + 4 + 16);
+      const next = (frame) => {
+        if (frame === 0xffffffff || !frame) throw new Error(`mirage-win32: unhandled exception ${(code >>> 0).toString(16)} at ${ret.toString(16)}`);
+        return send(x, [{ fn: x.r32(frame + 4), args: [rec, frame, ctx, 0] }], (r) => {
+          if (r === 0 && !(flags & 1)) return seh.resume(x, ctx);       // ExceptionContinueExecution
+          return next(x.r32(frame));                                    // ExceptionContinueSearch
+        }, 16);
+      };
+      return next(x.r32(seh.fs(x)));
+    },
+    unwind(x, target, rec, value) {
+      const teb = seh.fs(x), esp = x.cpu.reg[4] >>> 0;
+      if (!rec) rec = seh.record(x, 0xc0000027, 0, 0, 0, x.r32(esp));   // STATUS_UNWIND
+      x.w32(rec + 4, x.r32(rec + 4) | (target ? 2 : 6));                // EXCEPTION_UNWINDING (| EXIT_UNWIND)
+      const ctx = seh.context(x, x.r32(esp), esp + 4 + 16);
+      const done = () => {
+        x.w32(teb, target || 0xffffffff);
+        return value;
+      };
+      const next = () => {
+        const frame = x.r32(teb);
+        if (frame === 0xffffffff || !frame || frame === target) return done();
+        x.w32(teb, x.r32(frame));
+        return send(x, [{ fn: x.r32(frame + 4), args: [rec, frame, ctx, 0] }], next, 16);
+      };
+      return next();
+    },
   };
   // The window made w x h (its frame included): the client area inside the frame its style has, as
   // AdjustWindowRectEx adds it -- what the screen shows.
@@ -1329,12 +1420,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // with its procedure, if any, in lParam; the next due again one interval later, as Windows does not
   // queue them up. `timerNext()`: when the first is due.
   st.timers = new Map();
-  const timerFor = (x, hwnd, min, max) => {
+  // `remove`: the timer is set again only when its WM_TIMER is taken -- PeekMessage(PM_NOREMOVE) looks
+  // and leaves it due (Delphi looks, then takes: the taking found nothing, and no TTimer ever fired).
+  const timerFor = (x, hwnd, min, max, remove = true) => {
     if ((min || max) && (0x113 < min || 0x113 > max)) return null;
     const now = x.lx.mono();
     for (const t of st.timers.values()) {
       if (t.next > now || (hwnd && hwnd !== 0xffffffff && t.hwnd !== hwnd && !isAncestor(hwnd, t.hwnd))) continue;
-      t.next = now + t.every;
+      if (remove) t.next = now + t.every;
       return { msg: 0x113, wp: t.id, lp: t.fn || 0, hwnd: t.hwnd || 0, time: ms(x) };
     }
     return null;
@@ -1345,8 +1438,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // The window: one, the size it was made or the display mode set; its DC and GL go to the backend.
     // The window: its client area is what a framed window keeps inside the frame AdjustWindowRectEx adds;
     // its procedure is its class's (by name or by atom), which DispatchMessageA calls.
-    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h, parent, menu) => createWindow(x, cls, style, w, h, false, X, Y, title, parent, menu)],
-    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h, parent, menu) => createWindow(x, cls, style, w, h, true, X, Y, title, parent, menu)],
+    CreateWindowExA: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h, parent, menu) => createWindow(x, cls, style, w, h, false, X, Y, title, parent, menu, ex)],
+    CreateWindowExW: ['upppiiiippp' + 'p', (x, ex, cls, title, style, X, Y, w, h, parent, menu) => createWindow(x, cls, style, w, h, true, X, Y, title, parent, menu, ex)],
     // A display mode: the screen becomes it and the program's window fills it (a full-screen program
     // draws at that size); NULL gives the desktop back, where a framed window sits.
     // CDS_TEST (2) only asks whether the mode would do: it would (DISP_CHANGE_SUCCESSFUL), nothing changes.
@@ -1439,7 +1532,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         const i = firstMsg(hwnd, min, max);
         if (i < 0) {
           const p = paintFor(hwnd, min, max); if (p) { putMsg(x, m, { msg: 0x0f, wp: 0, lp: 0, hwnd: p }); return 1; }
-          const t = timerFor(x, hwnd, min, max); if (t) { putMsg(x, m, t); return 1; }
+          const t = timerFor(x, hwnd, min, max, !!(remove & 1)); if (t) { putMsg(x, m, t); return 1; }
           return 0;
         }
         const e = st.msgs[i];
@@ -1651,7 +1744,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return stops[(i + (prev ? stops.length - 1 : 1) + (i < 0 ? stops.length : 0)) % stops.length].hwnd;
     }],
     // WaitMessage: until something is queued, as GetMessage waits.
-    WaitMessage: ['', (x) => (st.msgs.length || st.pendingMove || (st.paintDue && st.paintDue()) ? 1 : x.waitUntil(x.lx.mono() + 0.01))],
+    // A timer due is a message waiting, as for GetMessage (Delphi's TTimer: its window's WM_TIMER).
+    WaitMessage: ['', (x) => (st.msgs.length || st.pendingMove || (st.paintDue && st.paintDue()) || timerNext() <= x.lx.mono() ? 1 : x.waitUntil(Math.min(x.lx.mono() + 0.01, timerNext())))],
     // GetKeyNameTextA(lParam, buf, n): the key's name, from its scancode (bits 16-23) and extended bit (24).
     GetKeyNameTextA: ['ipi', (x, lp, buf, n) => {
       const vk = scanToVk((lp >> 16) & 0xff, !!(lp & 0x1000000));
@@ -2596,7 +2690,21 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   Object.assign(gdi32, {
     CreateSolidBrush: ['u', (x, c) => st.newHandle('brush', { color: rgb(c) })],
     CreatePen: ['iiu', (x, style, w, c) => st.newHandle('pen', { color: rgb(c), style, width: w })],
+    // A glyph's outline, a font's outline metrics: none -- GDI_ERROR, 0 (D3DX8 imports them for its text).
+    GetGlyphOutlineA: ['puupupp', () => 0xffffffff], GetOutlineTextMetricsA: ['pup', () => 0],
+    CreatePenIndirect: ['p', (x, lp) => st.newHandle('pen', { color: rgb(x.r32(lp + 12)), style: x.r32(lp), width: x.r32(lp + 4) | 0 })],
+    // Lines through points: LineTo from each to the next (a polygon closed back to its first).
+    Polyline: ['ppi', (x, hdc, pts, n) => { const d = dcState(hdc), sx = d.penX, sy = d.penY; for (let i = 0; i < n; i++) { const X = x.r32(pts + 8 * i) | 0, Y = x.r32(pts + 8 * i + 4) | 0; if (i) gdi32.LineTo[1](x, hdc, X, Y); else { d.penX = X; d.penY = Y; } } d.penX = sx; d.penY = sy; return 1; }],
+    Polygon: ['ppi', (x, hdc, pts, n) => { if (n > 1) { const q = x.win.heapAlloc(8 * (n + 1)); x.write(q, x.bytes(pts, 8 * n)); x.w32(q + 8 * n, x.r32(pts)); x.w32(q + 8 * n + 4, x.r32(pts + 4)); gdi32.Polyline[1](x, hdc, q, n + 1); x.win.heapFree(q); } return 1; }],
+    PolyPolyline: ['pppu', (x, hdc, pts, counts, n) => { let p = pts; for (let i = 0; i < n; i++) { const k = x.r32(counts + 4 * i); gdi32.Polyline[1](x, hdc, p, k); p += 8 * k; } return 1; }],
+    // GetObjectType: OBJ_PEN 1, BRUSH 2, DC 3, PAL 5, FONT 6, BITMAP 7, REGION 8.
+    GetObjectType: ['p', (x, h) => { const o = st.gdi.get(h); return o ? ({ pen: 1, brush: 2, palette: 5, font: 6, bitmap: 7, region: 8 })[o.kind] || 0 : 3; }],
+    SetWindowOrgEx: ['piip', (x, dc, X, Y, p) => { if (p) { x.w32(p, 0); x.w32(p + 4, 0); } return 1; }],
+    GetWindowOrgEx: ['pp', (x, dc, p) => { x.w32(p, 0); x.w32(p + 4, 0); return 1; }],
+    GetViewportOrgEx: ['pp', (x, dc, p) => { x.w32(p, 0); x.w32(p + 4, 0); return 1; }],
+    LPtoDP: ['ppi', () => 1], DPtoLP: ['ppi', () => 1],                // MM_TEXT, no origin: the same
     CreateBrushIndirect: ['p', (x, lb) => st.newHandle('brush', { color: rgb(x.r32(lb + 4)) })],
+    GetCurrentPositionEx: ['pp', (x, hdc, p) => { const d = dcState(hdc); x.w32(p, d.penX | 0); x.w32(p + 4, d.penY | 0); return 1; }],
     MoveToEx: ['piip', (x, hdc, X, Y, old) => { const d = dcState(hdc); if (old) { x.w32(old, d.penX | 0); x.w32(old + 4, d.penY | 0); } d.penX = X; d.penY = Y; return 1; }],
     LineTo: ['pii', (x, hdc, X, Y) => {
       const d = dcState(hdc), t = target(x, hdc), pen = st.gdi.get(d.pen);
@@ -2661,6 +2769,19 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const px = new Uint32Array(Math.max(0, w * h));
       if (bits && bpp === 1) { const stride = ((w + 15) >> 4) << 1, raw = x.bytes(bits, stride * h); for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) px[y * w + i] = (raw[y * stride + (i >> 3)] >> (7 - (i & 7))) & 1 ? 0xffffff : 0; }
       return st.newHandle('bitmap', { w, h, px, mono: bpp === 1 && planes === 1 });
+    }],
+    // A bitmap's bits in its own format: rows of words for a mask, 32-bit pixels (as GetObject says) else.
+    GetBitmapBits: ['pip', (x, h, cb, p) => {
+      const o = st.gdi.get(h); if (!o || o.kind !== 'bitmap') return 0;
+      let b;
+      if (o.mono) { const stride = ((o.w + 15) >> 4) << 1; b = new Uint8Array(stride * o.h); for (let y = 0; y < o.h; y++) for (let i = 0; i < o.w; i++) if (o.px[y * o.w + i] & 0xffffff) b[y * stride + (i >> 3)] |= 0x80 >> (i & 7); }
+      else b = new Uint8Array(o.px.buffer, o.px.byteOffset, o.w * o.h * 4);
+      const k = Math.min(cb, b.length); if (p) x.write(p, b.subarray(0, k)); return k;
+    }],
+    SetBitmapBits: ['pip', (x, h, cb, p) => {
+      const o = st.gdi.get(h); if (!o || o.kind !== 'bitmap') return 0;
+      if (o.mono) { const stride = ((o.w + 15) >> 4) << 1, raw = x.bytes(p, Math.min(cb, stride * o.h)); for (let y = 0; y < o.h; y++) for (let i = 0; i < o.w; i++) { const q = y * stride + (i >> 3); if (q < raw.length) o.px[y * o.w + i] = (raw[q] >> (7 - (i & 7))) & 1 ? 0xffffff : 0; } return raw.length; }
+      const k = Math.min(cb, o.w * o.h * 4) & ~3, raw = x.bytes(p, k); new Uint8Array(o.px.buffer, o.px.byteOffset, k).set(raw); return k;
     }],
     CreateDIBitmap: ['ppupp' + 'u', (x, hdc, bih, init, bits, bmi) => {
       const w = x.r32(bih + 4) | 0, h = Math.abs(x.r32(bih + 8) | 0);
@@ -2791,6 +2912,80 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     CreatePatternBrush: ['p', (x, hbm) => { const bm = st.gdi.get(hbm), c = bm && bm.px ? bm.px[0] : 0x808080; return gdi32.CreateSolidBrush[1](x, ((c & 255) << 16) | (c & 0xff00) | ((c >>> 16) & 255)); }],
     SetTextAlign: ['pu', () => 0], GetRegionData: ['pup', () => 0], RectInRegion: ['pp', () => 1],
   })) if (!(k in gdi32)) gdi32[k] = v;
+  /*
+   * GameMaker 8's runner (Delphi, 2009; the Undertale demo, 2013): the VCL's start-up asks the keyboard's
+   * type (an enhanced 101/102-key one), the cursor, the system menu and the keyboard layouts.
+   */
+  const copyStr = (x, a, b, n) => { if (a !== b) x.write(b, x.bytes(a, n ?? x.str(a).length + 1)); return 1; };   // one code page here
+  for (const [k, v] of Object.entries({
+    GetKeyboardType: ['i', (x, n) => [4, 0, 12][n] ?? 0],
+    OemToCharA: ['pp', (x, a, b) => copyStr(x, a, b)], CharToOemA: ['pp', (x, a, b) => copyStr(x, a, b)],
+    OemToCharBuffA: ['ppu', (x, a, b, n) => copyStr(x, a, b, n)], CharToOemBuffA: ['ppu', (x, a, b, n) => copyStr(x, a, b, n)],
+    CharUpperBuffA: ['pu', (x, p, n) => { const b = x.bytes(p, n); for (let i = 0; i < n; i++) if (b[i] >= 97 && b[i] <= 122) b[i] -= 32; x.write(p, b); return n; }],
+    IsCharAlphaA: ['i', (x, c) => +/[A-Za-z]/.test(String.fromCharCode(c & 255))],
+    IsCharAlphaNumericA: ['i', (x, c) => +/[A-Za-z0-9]/.test(String.fromCharCode(c & 255))],
+    // One keyboard layout: US English.
+    GetKeyboardLayoutList: ['ip', (x, n, p) => { if (n && p) x.w32(p, 0x04090409); return 1; }],
+    GetKeyboardLayoutNameA: ['p', (x, p) => { x.write(p, new TextEncoder().encode('00000409\0')); return 1; }],
+    LoadKeyboardLayoutA: ['pu', () => 0x04090409], ActivateKeyboardLayout: ['pu', () => 0x04090409],
+    GetCursor: ['', () => st.cursor || 0], GetSystemMenu: ['pi', () => 0], EnumThreadWindows: ['upp', () => 1], EnumChildWindows: ['ppp', () => 1],
+    // An icon made from masks (Delphi's TIcon): its size kept, drawn as nothing.
+    CreateIcon: ['piiuupp', (x, inst, w, h) => st.newHandle('icon', { w, h, px: new Uint32Array(Math.max(0, w * h)), mask: new Uint8Array(Math.max(0, w * h)).fill(1) })],
+    RegisterClipboardFormatA: ['p', () => (st.clipFormats = (st.clipFormats || 0xc000) + 1)],
+    // Scroll bars a window never shows here.
+    ShowScrollBar: ['pii', () => 1], EnableScrollBar: ['puu', () => 1], SetScrollRange: ['piiii', () => 1], SetScrollInfo: ['pipi', () => 0],
+    GetScrollInfo: ['pip', () => 0], GetScrollPos: ['pi', () => 0], GetScrollRange: ['pipp', (x, h, b, a, c) => { x.w32(a, 0); x.w32(c, 0); return 1; }],
+  })) if (!(k in user32)) user32[k] = v;
+  if (!kernel32.InterlockedCompareExchange) kernel32.InterlockedCompareExchange = ['pii', (x, p, v, cmp) => { const old = x.r32(p) | 0; if (old === (cmp | 0)) x.w32(p, v); return old; }];
+  // Visual C++ 2010's runtime (msvcr100.dll, which a program brings): pointers "encoded" as themselves,
+  // fiber-local storage as thread-local (one fiber a thread), a heap's options taken.
+  for (const [k, v] of Object.entries({
+    // A thread's or the process's times: all of it user time, since the start (FILETIMEs, 100 ns).
+    GetThreadTimes: ['ppppp', (x, h, c, e, k, u) => { const t = Math.floor(x.lx.mono() * 1e7); for (const p of [c, e, k]) { x.w32(p, 0); x.w32(p + 4, 0); } x.w32(u, t >>> 0); x.w32(u + 4, Math.floor(t / 4294967296)); return 1; }],
+    GetProcessTimes: ['ppppp', (x, h, c, e, k, u) => kernel32.GetThreadTimes[1](x, h, c, e, k, u)],
+    EncodePointer: ['p', (x, p) => p], DecodePointer: ['p', (x, p) => p], HeapSetInformation: ['pupu', () => 1],
+    FlsAlloc: ['p', (x) => kernel32.TlsAlloc[1](x)], FlsGetValue: ['u', (x, i) => kernel32.TlsGetValue[1](x, i)],
+    FlsSetValue: ['up', (x, i, v) => kernel32.TlsSetValue[1](x, i, v)], FlsFree: ['u', () => 1],
+  })) if (!(k in kernel32)) kernel32[k] = v;
+  if (!kernel32.LoadLibraryExA) kernel32.LoadLibraryExA = ['ppu', (x, name) => kernel32.LoadLibraryA[1](x, name)];
+  // BSTRs: a length in bytes before the UTF-16 text, the pointer past it, a 0 after it.
+  const bstr = (x, src, n) => { const p = x.win.heapAlloc(n * 2 + 6) + 4; x.w32(p - 4, n * 2); if (src) x.write(p, x.bytes(src, n * 2)); else x.write(p, new Uint8Array(n * 2)); x.w16(p + n * 2, 0); return p; };
+  Object.assign(modern.oleaut32, {
+    SysAllocStringLen: ['pu', (x, s, n) => bstr(x, s, n), { ordinal: 4 }],
+    SysReAllocStringLen: ['ppu', (x, pp, s, n) => { x.w32(pp, bstr(x, s, n)); return 1; }, { ordinal: 5 }],
+    SysStringLen: ['p', (x, p) => (p ? x.r32(p - 4) >>> 1 : 0), { ordinal: 7 }],
+    // VARIANTs (Delphi's Variants unit): 16 bytes, the type first; a BSTR copied as a new one.
+    VariantInit: ['p', (x, v) => { x.w16(v, 0); return 0; }, { ordinal: 8 }],
+    VariantClear: ['p', (x, v) => { x.w16(v, 0); return 0; }, { ordinal: 9 }],
+    VariantCopy: ['pp', (x, d, s) => {
+      if (d === s) return 0;
+      x.write(d, x.bytes(s, 16));
+      if ((x.r16(s) & 0xfff) === 8 && x.r32(s + 8)) { const b = x.r32(s + 8); x.w32(d + 8, bstr(x, b, x.r32(b - 4) >>> 1)); }
+      return 0;
+    }, { ordinal: 10 }],
+    VariantChangeType: ['ppuu', () => 0x80020005, { ordinal: 12 }], VariantChangeTypeEx: ['ppuuu', () => 0x80020005, { ordinal: 147 }],   // DISP_E_TYPEMISMATCH
+  });
+  /*
+   * Image lists (comctl32): their sizes and counts kept, their pictures not -- drawn as nothing. Delphi's
+   * forms read theirs from the form's resource (ImageList_Read), each from a stream of its own.
+   */
+  const ilist = (h) => st.gdi.get(h);
+  const imageLists = {
+    ImageList_Create: ['iiuii', (x, cx, cy) => st.newHandle('imagelist', { cx, cy, n: 0 })],
+    ImageList_Read: ['p', () => st.newHandle('imagelist', { cx: 16, cy: 16, n: 0 })],
+    ImageList_Write: ['pp', () => 1], ImageList_Destroy: ['p', () => 1],
+    ImageList_GetImageCount: ['p', (x, h) => (ilist(h) ? ilist(h).n : 0)],
+    ImageList_SetImageCount: ['pu', (x, h, n) => { if (ilist(h)) ilist(h).n = n; return 1; }],
+    ImageList_Add: ['ppp', (x, h) => (ilist(h) ? ilist(h).n++ : -1)], ImageList_AddMasked: ['ppu', (x, h) => (ilist(h) ? ilist(h).n++ : -1)],
+    ImageList_ReplaceIcon: ['pip', (x, h, i) => (i >= 0 ? i : ilist(h) ? ilist(h).n++ : -1)], ImageList_Replace: ['pipp', () => 1],
+    ImageList_Remove: ['pi', (x, h, i) => { const l = ilist(h); if (l) l.n = i < 0 ? 0 : Math.max(0, l.n - 1); return 1; }],
+    ImageList_GetIconSize: ['ppp', (x, h, pw, ph) => { const l = ilist(h); x.w32(pw, l ? l.cx : 16); x.w32(ph, l ? l.cy : 16); return 1; }],
+    ImageList_SetIconSize: ['pii', (x, h, cx, cy) => { const l = ilist(h); if (l) { l.cx = cx; l.cy = cy; l.n = 0; } return 1; }],
+    ImageList_SetBkColor: ['pu', () => 0xffffffff], ImageList_GetBkColor: ['p', () => 0xffffffff],
+    ImageList_Draw: ['pippiu', () => 1], ImageList_DrawEx: ['pippiiiuuu', () => 1], ImageList_GetImageInfo: ['pip', () => 0],
+    ImageList_SetOverlayImage: ['pii', () => 1], ImageList_Copy: ['pipiu', () => 1],
+    ImageList_GetIcon: ['piu', () => 0], ImageList_BeginDrag: ['piii', () => 1], ImageList_EndDrag: ['', () => 0],
+  };
   if (!winmm.waveOutGetID) winmm.waveOutGetID = ['pp', (x, h, p) => { if (p) x.w32(p, 0); return 0; }];
   kernel32.RtlZeroMemory = ['pu', (x, p, n) => { x.write(p, new Uint8Array(n)); return 0; }];   // kernel32's, forwarded to ntdll's (Spider imports it so)
   const tables = [
@@ -2823,7 +3018,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ddrawApis(st, wm, send),
     { dll: 'wsock32.dll', fns: wsock32 },
     // comctl32: the common controls are registered (InitCommonControls, ordinal 17); none is drawn here.
-    { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }], ImageList_Destroy: ['p', () => 1] } },
+    { dll: 'comctl32.dll', fns: { InitCommonControls: ['', () => 0, { ordinal: 17 }], InitCommonControlsEx: ['p', () => 1, { ordinal: 81 }], ...imageLists } },
     /*
      * The common dialogs and the printers of a machine with neither: a file dialog, a find or print dialog
      * is cancelled at once (FALSE, CommDlgExtendedError 0: the user cancelled), no printer opens, a print job

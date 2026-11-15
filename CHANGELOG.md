@@ -3,6 +3,12 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-15
+
+- **Jazz Jackrabbit 2 plays again**: it stopped at start since 2026-11-13.
+- **Programs written in Delphi start on the Windows machine**: GameMaker 8's runner loads the Undertale demo
+  up to its graphics, which need Direct3D 8 (next).
+
 ## 2026-11-14
 
 - **StarCraft's shareware demo plays its first mission to victory** (tested locally; its licence forbids

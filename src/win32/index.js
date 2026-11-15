@@ -314,10 +314,12 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   const win = {
     /** Whether a system DLL of that name is made here (ddraw.dll, dsound.dll...): it is "in" system32. */
     made: (name) => images.has(name.toLowerCase().replace(/^.*[\\/]/, '')),
-    base, path, args, modules, load, heapAlloc, heapFree, heapSize, peb: PEB, teb: TEB, createThread,
+    base, path, args, modules, loaded, load, heapAlloc, heapFree, heapSize, peb: PEB, teb: TEB, createThread,
     /** GetProcAddress: an export by name or ordinal, 0 when there is none. */
     proc: (mod, name) => (typeof name === 'number' ? mod.byOrdinal.get(name) : mod.exports.get(name)) || 0,
     moduleAt: (b) => [...modules.values(), exeMod].find((m) => m.base === b >>> 0) || null,
+    /** The module whose image holds address `a` (VirtualQuery's AllocationBase), or null. */
+    moduleHolding: (a) => [...modules.values(), exeMod].find((m) => a >>> 0 >= m.base && a >>> 0 < m.base + m.size) || null,
     /** A line for the log: what a program asked that is not here. */
     say: (t) => { if (lx.onOutput) lx.onOutput(2, enc.encode(`mirage-win32: ${t}\n`)); },
   };

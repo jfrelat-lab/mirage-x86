@@ -4850,6 +4850,39 @@ const runLinux = (hex, argv) => {
     got = before + ' ' + apis.input.captures();
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: the pointer is captured for a program that recentres the cursor, not one that only clips it', got, 'false true');
+  // Timers (Delphi's TTimer, GameMaker 8): WaitMessage returns when one is due, as for a message queued;
+  // PeekMessage(PM_NOREMOVE) leaves its WM_TIMER there, PM_REMOVE takes it and sets the timer again.
+  try { const { fn, x, mc } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28);
+    u('SetTimer')(0, 1, 50, 0); mc.cpu.cycles += 1e7;
+    const r = [u('WaitMessage')(), u('PeekMessageA')(m, 0, 0, 0, 0), u('PeekMessageA')(m, 0, 0, 0, 1), x.r32(m + 4).toString(16), u('PeekMessageA')(m, 0, 0, 0, 1)];
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a timer due wakes WaitMessage; PM_NOREMOVE leaves its WM_TIMER, PM_REMOVE takes it', got, '1 1 1 113 0');
+  // Delphi's AllocateHWnd: each an invisible tool window of no size, never the main one -- taken for it,
+  // each was the last one made anew, under one handle, and the timers on them stopped one another.
+  try { const { fn } = await w32(), u = (n) => fn('user32.dll', n);
+    const a = u('CreateWindowExA')(0x80, 0, 0, 0x80000000, 0, 0, 0, 0), b = u('CreateWindowExA')(0x80, 0, 0, 0x80000000, 0, 0, 0, 0);
+    got = String(a !== b && a !== 0 && b !== 0);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: invisible tool windows of no size are windows of their own, not the main one', got, 'true');
+  // VirtualQuery's allocation base of an address in an image is the image's: Delphi finds a class's module
+  // so, and its forms in that module's resources ("Resource TRunnerForm not found").
+  try { const { fn, x } = await w32(), mbi = x.win.heapAlloc(28);
+    fn('kernel32.dll', 'VirtualQuery')(x.win.base + 0x1010, mbi, 28);
+    got = [x.r32(mbi) === x.win.base + 0x1000, x.r32(mbi + 4) === x.win.base, x.r32(mbi + 24).toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: VirtualQuery gives an image\'s address its image as the allocation base', got, 'true true 1000000');
+  // A made DLL's version block has its language and strings: Jazz Jackrabbit 2 reads the Translation of
+  // each DirectX DLL it loads, without checking it got one, and faulted on the pointer never written.
+  try { const { fn, x, str } = await w32(), v = (n) => fn('version.dll', n), out = x.win.heapAlloc(8);
+    const n = v('GetFileVersionInfoSizeA')(str('ddraw.dll'), 0), blk = x.win.heapAlloc(n); v('GetFileVersionInfoA')(str('ddraw.dll'), 0, n, blk);
+    const r = [v('VerQueryValueA')(blk, str('\\VarFileInfo\\Translation'), out, out + 4), x.r32(x.r32(out)).toString(16)];
+    r.push(v('VerQueryValueA')(blk, str('\\StringFileInfo\\040904B0\\FileVersion'), out, out + 4), x.str(x.r32(out)));
+    r.push(v('VerQueryValueA')(blk, str('\\'), out, out + 4), x.r32(x.r32(out)).toString(16), x.r32(out + 4));
+    x.w32(out, 0x1234); r.push(v('VerQueryValueA')(blk, str('\\VarFileInfo\\Nothing'), out, out + 4), x.r32(out));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a made DLL\'s version block -- its translation, its strings, its fixed info; nothing found, NULL', got, '1 4b00409 1 5.3.2600.5512 1 feef04bd 52 0 0');
   // The command line: the program's path quoted, then its arguments (WinQuake's -dibonly).
   try { const { fn, x } = await w32('-dibonly -nosound'); got = x.str(fn('kernel32.dll', 'GetCommandLineA')(), 64); } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: GetCommandLineA gives the arguments after the quoted path', got, '"C:\\intro.exe" -dibonly -nosound');
@@ -5289,7 +5322,7 @@ const runLinux = (hex, argv) => {
     const h = k('CreateFileA')(str('f.dat'), 0x80000000, 1, 0, 3, 0x80, 0), hi = x.win.heapAlloc(4), size = k('GetFileSize')(h, hi);
     const t = x.win.heapAlloc(16); x.write(t, Uint8Array.of(0xd4, 7, 12, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0));   // 2004-12-01 00:00 (a Wednesday)
     const ft = x.win.heapAlloc(8); k('SystemTimeToFileTime')(t, ft);
-    const blk = x.win.heapAlloc(96); x.write(blk, new Uint8Array(96)); x.w16(blk, 92); x.w16(blk + 2, 52);
+    const blk = x.win.heapAlloc(96); x.write(blk, new Uint8Array(96)); x.w16(blk, 92); x.w16(blk + 2, 52); [...'VS_VERSION_INFO'].forEach((c, i) => x.w16(blk + 6 + 2 * i, c.charCodeAt(0)));
     const pv = x.win.heapAlloc(8), q = fn('version.dll', 'VerQueryValueA')(blk, str('\\'), pv, pv + 4);
     got = [x.str(p1), x.str(p2), size, x.r32(hi), (x.r32(ft + 4) * 4294967296 + x.r32(ft)).toString(16), q, x.r32(pv) - blk, x.r32(pv + 4)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
@@ -5401,6 +5434,54 @@ const runPE = async (exe, readFile) => {
     got = String(await runPE(exe, (k) => (k.toLowerCase() === 't.dll' ? lib : null)));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: an imported DLL\'s DllMain gets a non-NULL lpvReserved', got, '1'); }
+// Structured exceptions: RaiseException calls the handler on fs:[0] with the record, its frame and a
+// CONTEXT; ExceptionContinueExecution resumes at the context, here with EAX made 42 by the handler.
+{ let got;
+  try {
+    const H = 0x40, exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['RaiseException', 'ExitProcess'] }], code: (at) => { const c = new Uint8Array(0x60).fill(0x90); c.set([
+      0x68, ...le(at.d(H)), 0x64, 0xff, 0x35, 0, 0, 0, 0, 0x64, 0x89, 0x25, 0, 0, 0, 0,        // push handler; push fs:[0]; mov fs:[0], esp
+      0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, 1, 0, 0, 0xe0, 0xff, 0x15, ...le(at.iat['kernel32.dll!RaiseException']),
+      0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]);
+      c.set([0x8b, 0x44, 0x24, 0x0c, 0xc7, 0x80, 0xb0, 0, 0, 0, 42, 0, 0, 0, 0x31, 0xc0, 0xc3], H);   // context.Eax = 42; ExceptionContinueExecution
+      return c; } });
+    got = String(await runPE(exe, () => null));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: RaiseException calls the handler; ExceptionContinueExecution resumes at its context', got, '42'); }
+// The handler that takes it, as Delphi's and Visual C++'s do: an inner frame's handler searches on (1), the
+// outer one calls RtlUnwind to its own frame, which calls the inner one again with EXCEPTION_UNWINDING (it
+// marks it), and returns; the outer handler never goes back to the dispatcher. 10 * mark + 7.
+{ let got;
+  try {
+    const H1 = 0x60, H2 = 0x90, exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['RaiseException', 'RtlUnwind', 'ExitProcess'] }], code: (at) => { const c = new Uint8Array(0xb0).fill(0x90);
+      const reg = (h) => [0x68, ...le(at.d(h)), 0x64, 0xff, 0x35, 0, 0, 0, 0, 0x64, 0x89, 0x25, 0, 0, 0, 0];
+      c.set([...reg(H1), ...reg(H2), 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, 1, 0, 0, 0xe0, 0xff, 0x15, ...le(at.iat['kernel32.dll!RaiseException']),
+        0x6a, 1, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]);
+      c.set([0x6a, 0, 0xff, 0x74, 0x24, 0x08, 0x6a, 0, 0xff, 0x74, 0x24, 0x14, 0xff, 0x15, ...le(at.iat['kernel32.dll!RtlUnwind']),   // RtlUnwind(frame, 0, rec, 0)
+        0xa1, ...le(at.d(0x400)), 0x6b, 0xc0, 0x0a, 0x83, 0xc0, 0x07, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4], H1);
+      c.set([0x8b, 0x44, 0x24, 0x04, 0xf6, 0x40, 0x04, 0x02, 0x74, 0x0a, 0xc7, 0x05, ...le(at.d(0x400)), 1, 0, 0, 0, 0xb8, 1, 0, 0, 0, 0xc3], H2);
+      return c; } });
+    got = String(await runPE(exe, () => null));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: RtlUnwind calls the handlers below its target with EXCEPTION_UNWINDING, and returns', got, '17'); }
+// LoadLibrary runs DllMains in the order Windows does, each DLL after those it imports: a.dll imports
+// b.dll, and a's DllMain asks b for its flag, set in b's DllMain. Caster.dll (Undertale's demo), run before
+// msvcr100.dll, found its C runtime not started ("R6030 CRT not initialized").
+{ let got;
+  try {
+    const a = mkPE({ base: 0x50000000, dll: true, name: 'a.dll', imports: [{ dll: 'b.dll', names: ['g'] }], exports: { f: 0x20 }, code: (at) => Uint8Array.from([
+      0xff, 0x15, ...le(at.iat['b.dll!g']), 0xa3, ...le(at.d(0x400)), 0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0x00,
+      ...new Array(0x20 - 19).fill(0x90), 0xa1, ...le(at.d(0x400)), 0xc3]) });
+    const b = mkPE({ base: 0x50010000, dll: true, name: 'b.dll', exports: { g: 0x20 }, code: (at) => Uint8Array.from([
+      0xc7, 0x05, ...le(at.d(0x400)), 1, 0, 0, 0, 0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0x00,
+      ...new Array(0x20 - 18).fill(0x90), 0xa1, ...le(at.d(0x400)), 0xc3]) });
+    const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['LoadLibraryA', 'GetProcAddress', 'ExitProcess'] }], code: (at) => { const c = new Uint8Array(0x120).fill(0x90); c.set([
+      0x68, ...le(at.d(0x100)), 0xff, 0x15, ...le(at.iat['kernel32.dll!LoadLibraryA']),
+      0x68, ...le(at.d(0x110)), 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!GetProcAddress']),
+      0xff, 0xd0, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]);
+      c.set(new TextEncoder().encode('a.dll\0'), 0x100); c.set(new TextEncoder().encode('f\0'), 0x110); return c; } });
+    got = String(await runPE(exe, (k) => ({ 'a.dll': a, 'b.dll': b })[k.toLowerCase()] || null));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: LoadLibrary runs a DLL\'s DllMain after those of the DLLs it imports', got, '1'); }
 // Drawing into an 8-bit DIB section lands in its memory, as indices of its own colour table: a 4x1 section
 // (grey 80h at index 1), PatBlt with a grey brush over it; the exit code is the first pixel's index. The
 // StarCraft installer composes its menu in one, and nothing it drew there showed.
