@@ -5104,12 +5104,21 @@ const runLinux = (hex, argv) => {
       of('createVertexDeclaration')[0][1].map((e) => [e.offset, e.type, e.usage, e.usageIndex].join(':')).join(','),
       of('setVertexShaderConstantF').map((v) => v[1] + '=' + Array.from(v[2], (f) => +f.toFixed(4)).join(',')).join(' '),
       of('setSamplerState').length > 0, of('drawPrimitive')[0].slice(1).join(','), of('present').length);
+    // ResizeBuffers resets the model at the new size; 32-bit indices as IASetIndexBuffer said; an input slot above 0 its own stream.
+    g('IDXGISwapChain::ResizeBuffers')(sc, 0, 640, 480, 0, 0);
+    x.w32(bd, 12); x.w32(bd + 8, 2); x.w32(init, mem(12)); d('ID3D11Device::CreateBuffer')(dev, bd, init, out); const ib = x.r32(out);
+    c('IASetIndexBuffer')(ctx, ib, 42, 0); c('DrawIndexed')(ctx, 3, 0, 0);
+    x.w32(els + 40, 1); x.w32(els + 44, 0); d('ID3D11Device::CreateInputLayout')(dev, els, 2, put(vs), vs.length, out); c('IASetInputLayout')(ctx, x.r32(out));
+    c('IASetVertexBuffers')(ctx, 1, 1, arr(vb), arr(8), arr(0)); c('Draw')(ctx, 3, 0);
+    const of2 = (k) => calls.filter((v) => v[0] === k);
+    r.push(of2('reset').map((v) => v[1].width + 'x' + v[1].height).join(), of2('setIndices').map((v) => v[2]).join(), of2('setStreamSource').map((v) => v[1]).join(''), of2('createVertexDeclaration').at(-1)[1].map((e) => e.stream).join(''));
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: Direct3D 11 at level 9_3 -- swap chain, Aon9 shaders, input layout, constants, a draw, a present', got,
-    '0 9300 0 0 0 320x200 fffe0200,ffff 0:2:5:0,12:1:5:1 2=1,2,3,4,1,0,0,0 0=-0.0031,0.005,0,0 true 4,0,1 1');
-  // A 2D texture's level goes to the model whole, in its D3D9 format (R8G8B8A8 as A8B8G8R8): its initial data
-  // at creation, then again with a box written into it (PRISM's model writes levels, not rectangles).
+    '0 9300 0 0 0 320x200 fffe0200,ffff 0:2:5:0,12:1:5:1 2=1,2,3,4,1,0,0,0 0=-0.0031,0.005,0,0 true 4,0,1 1 640x480 102 0001 01');
+  // A 2D texture's level goes to the model whole, in its D3D9 format (R8G8B8A8 as A8B8G8R8), with its initial
+  // data at creation; a box written into it goes as that rectangle alone, its own rows (PRISM's textureWrite
+  // with a rect: GameMaker writes its 2048x2048 pages a glyph at a time).
   try { const { fn, x } = await w32(), d = (n) => fn('d3d11.dll', n), writes = [];
     const dev9 = new Proxy({}, { get: (t, k) => (...a) => { if (k === 'textureWrite') writes.push([a[2], Array.from(a[3]), a[4]]); if (k === 'createTexture') writes.push(['create', ...a]); return /^(create|get)/.test(k) ? 1 : 0; } });
     x.backend.d3d9 = () => ({ createDevice: () => dev9 });
@@ -5120,9 +5129,10 @@ const runLinux = (hex, argv) => {
     d('ID3D11Device::CreateTexture2D')(dev, td, init, out); const tex = x.r32(out);
     x.w32(px, 0xaabbccdd); [1, 1, 0, 2, 2, 1].forEach((v, i) => x.w32(box + 4 * i, v));
     d('ID3D11DeviceContext::UpdateSubresource')(ctx, tex, 0, box, px, 4, 0);
-    got = [writes[0].slice(1, 6).join(','), writes.length, writes[1][1].length, writes[1][1].slice(16, 24).join(','), writes[2][1].slice(16, 24).join(','), writes[2][2]].join(' ');
+    const rect = writes[2][0] ? [writes[2][0].left, writes[2][0].top, writes[2][0].right, writes[2][0].bottom].join(',') : 'whole';
+    got = [writes[0].slice(1, 6).join(','), writes.length, writes[1][1].length, writes[1][1].slice(16, 24).join(','), rect, writes[2][1].join(','), writes[2][2]].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a Direct3D 11 texture is written to the model a whole level at a time, a box into its bytes', got, '4,2,1,0,32 3 32 16,17,18,19,20,21,22,23 16,17,18,19,221,204,187,170 16');
+  eq('win32: a Direct3D 11 texture is written to the model whole at creation, a box as its rectangle', got, '4,2,1,0,32 3 32 16,17,18,19,20,21,22,23 1,1,2,2 221,204,187,170 4');
   // MIRAGE_W32MEM / an image's machine.mem: the RAM at least that.
   try { const { win32Memory } = await import('../src/win32/index.js'), exe = new Uint8Array(64);
     got = [win32Memory(exe) >> 20, win32Memory(exe, 300) >> 20, win32Memory(exe, 4096) >> 20].join(' ');

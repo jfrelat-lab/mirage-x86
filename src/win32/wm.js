@@ -205,7 +205,11 @@ export function windowManager(st) {
     wm.under = { at: v.fb.byteOffset, w: v.w, px };
   };
   /** The pointer moved or the program showed or hid the cursor: draw it again, now. */
-  wm.moveCursor = () => { uncover(); cover(); };
+  // wm.version: one more each time the screen's pixels change here (a present, the cursor drawn again), so
+  // that the page converts the desktop to its canvas only then -- under a window WebGL draws (Deltarune),
+  // converting 1024x768 pixels at every animation frame took a fourteenth of the time.
+  wm.version = 0;
+  wm.moveCursor = () => { uncover(); cover(); wm.version++; };
 
   /**
    * The screen, after the program drew into its window (`client`: the client area's pixels, or null
@@ -213,6 +217,7 @@ export function windowManager(st) {
    * and the frame (redrawn when they changed) and the client area at its place.
    */
   wm.present = (lx, client) => {
+    wm.version++;
     wm.lx = lx;
     if (client) wm.presented = (wm.presented | 0) + 1;              // a frame the program drew (the page's fps)
     if (!lx || !lx.fbView) return;
@@ -252,6 +257,7 @@ export function windowManager(st) {
    * deskMode), `desk` the whole of it.
    */
   wm.presentDesk = (lx, desk) => {
+    wm.version++;
     wm.lx = lx; wm.presented = (wm.presented | 0) + 1;
     if (!lx || !lx.fbView) return;
     uncover();

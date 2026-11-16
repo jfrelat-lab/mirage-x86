@@ -3342,7 +3342,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // window its device was made for (st.glWindow: GameMaker 8's runner form), at its place on the desktop --
   // it went in the hidden TApplication window's client area, of no size, and the form stayed black.
   const glRect = () => { const w = st.glWindow && win(st.glWindow); if (!w || w.dead || !deskMode()) return null; const o = screenOrigin(st.glWindow); return { x: o.x, y: o.y, w: w.w, h: w.h, screen: st.desk }; };
-  tables.wm = { clientRect: () => glRect() || (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0,
+  tables.wm = { clientRect: () => glRect() || (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0, version: () => wm.version | 0,
     // The program's icon (its first RT_GROUP_ICON's first image): { w, h, px 0x00RRGGBB, mask 1 transparent }, or null.
     icon: (x) => { try { const b = st.gdi.get(loadIcon(x, x.win.base, null)); return b && b.px ? { w: b.w, h: b.h, px: b.px, mask: b.mask } : null; } catch { return null; } } };   // GDI frames shown
   return tables;

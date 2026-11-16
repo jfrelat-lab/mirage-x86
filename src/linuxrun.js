@@ -211,13 +211,16 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     for (const fn of f.querySelectorAll('feFuncR, feFuncG, feFuncB')) fn.setAttribute('exponent', String(1 / g));
     canvas.style.filter = g === 1 ? '' : 'url(#mirage-gamma)';
   };
+  let deskVersion = -1;
   const draw = () => {
     if (stopped) return;
     const d0 = performance.now();
     const glFrame = hle && hle.frame(), cr = glFrame && w32wm && w32wm.clientRect();
     if (w32in && locked() && !w32in.captures()) document.exitPointerLock();   // the program let the mouse go
     if (cr) {                                                            // a framed Windows window: the screen, WebGL's picture in its client area
-      video.render();
+      // The desktop converted again only when the window manager changed it (or the canvas is not its size).
+      const v = w32wm.version ? w32wm.version() : -1;
+      if (v < 0 || v !== deskVersion || canvas.width !== cr.screen.w || canvas.height !== cr.screen.h) { video.render(); deskVersion = v; }
       canvas.getContext('2d').drawImage(glFrame, cr.x, cr.y, cr.w, cr.h);
     } else if (glFrame) {                                                // an SDL OpenGL window: PRISM's picture
       if (hle.gamma) showGamma(hle.gamma());

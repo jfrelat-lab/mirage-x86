@@ -417,10 +417,12 @@ export function d3d11Apis(st) {
       [sc.w, sc.h, 60, 1, sc.format, 0, 0, 1, 0, 0x20, sc.count, sc.hwnd, sc.fullscreen ? 0 : 1, sc.effect, sc.flags].forEach((v, i) => x.w32(p + 4 * i, v));
       return S_OK;
     },
-    // A new size: kept, and the window's; the model's back buffer stays the size it was made (PRISM's
-    // device has no Reset yet), the picture scaled to the canvas.
+    // A new size: the device model's back buffer and depth buffer made again at it under the same handles
+    // (PRISM's reset keeps every other resource and state, as ResizeBuffers does): Deltarune's window is
+    // sized after its swap chain is made, and its picture was drawn into the first size, too large.
     ResizeBuffers: (x, self, n, w, h, fmt) => {
       const sc = o(self);
+      if (w && h && (w !== sc.w || h !== sc.h)) { const dev = D(x, sc.dev); if (dev && dev.reset) dev.reset({ width: w, height: h }); }
       if (w && h) { sc.w = w; sc.h = h; }
       if (fmt) sc.format = fmt;
       if (sc.buffer) { const b = o(sc.buffer); b.w = sc.w; b.ht = sc.h; }
@@ -479,8 +481,14 @@ export function d3d11Apis(st) {
     const [w, h] = levelSize(t, l), row = w * t.bpp;
     const lv = t.lv[l] ||= new Uint8Array(row * h);
     const [x0, y0, x1, y1] = box || [0, 0, w, h], n = (Math.min(x1, w) - x0) * t.bpp;
-    for (let y = y0; y < Math.min(y1, h); y++) lv.set(x.bytes(src + (y - y0) * pitch, n), y * row + x0 * t.bpp);
-    if (t.h9 !== undefined && t.model) t.model.textureWrite(t.h9, l, null, lv, row);
+    const yEnd = Math.min(y1, h);
+    for (let y = y0; y < yEnd; y++) lv.set(x.bytes(src + (y - y0) * pitch, n), y * row + x0 * t.bpp);
+    // A box goes to the model as itself, its own rows n bytes apart (GameMaker's 2048x2048 pages written
+    // a glyph or a sprite at a time); the whole level otherwise.
+    if (t.h9 !== undefined && t.model) {
+      if (box && n > 0 && yEnd > y0) { const b = new Uint8Array(n * (yEnd - y0)); for (let y = y0; y < yEnd; y++) b.set(lv.subarray(y * row + x0 * t.bpp, y * row + x0 * t.bpp + n), (y - y0) * n); t.model.textureWrite(t.h9, l, { left: x0, top: y0, right: x0 + n / t.bpp, bottom: yEnd }, b, n); }
+      else t.model.textureWrite(t.h9, l, null, lv, row);
+    }
     if (x.backend.textureCapture) x.backend.textureCapture({ seq: capSeq++, texture: t.h9 ?? 0, iface: 'texture2d', face: -1, level: l, w, h, format: t.format }, Uint8Array.from(lv));
   };
   let capSeq = 0;
@@ -524,7 +532,7 @@ export function d3d11Apis(st) {
       list.push({ stream: slot, offset: off, type, method: 0, usage: 5, usageIndex: sig.register });
     }
     const dev = D(x, self), lay = { dev: self, els: list };
-    if (dev) { lay.model = dev; lay.h = dev.createVertexDeclaration(list.map((e) => ({ ...e, stream: 0 }))); }
+    if (dev) { lay.model = dev; lay.h = dev.createVertexDeclaration(list); }   // input slots as the model's streams
     if (pp) x.w32(pp, make(x, 'ID3D11InputLayout', lay));
     return S_OK;
   };
@@ -646,7 +654,24 @@ export function d3d11Apis(st) {
   };
   // A draw: the model's state made from the context's, then its draw; nothing when a shader has no
   // Direct3D 9 twin or no model draws.
-  const prepare = (x, self) => {
+  // A vertex buffer the program wrote through Map since (`dirty`): its guest memory is the truth. A draw
+  // whose vertices are known sends those alone to the model; any other use takes the whole buffer, only
+  // the bytes that changed. GameMaker Studio 2 appends a few hundred bytes at a time into a 1.7 MB buffer
+  // mapped NO_OVERWRITE some 150 times a second: copied out and compared whole at each Unmap, that was
+  // half a gigabyte a second, and Deltarune ran at 15 frames.
+  const sync = (x, r) => {
+    if (!r.dirty) return; r.dirty = false;
+    const now = x.bytes(r.maps[0], r.size), was = r.bytes;
+    let lo = 0, hi = r.size;
+    while (lo < hi && now[lo] === was[lo]) lo++;
+    while (hi > lo && now[hi - 1] === was[hi - 1]) hi--;
+    if (lo < hi) { was.set(now.subarray(lo, hi), lo); if (r.h !== undefined) r.model.bufferWrite(r.h, lo, was.subarray(lo, hi)); }
+  };
+  const sendRange = (x, r, from, len) => {
+    from = Math.max(0, from); len = Math.min(len, r.size - from); if (len <= 0) return;
+    r.bytes.set(x.bytes(r.maps[0] + from, len), from); r.model.bufferWrite(r.h, from, r.bytes.subarray(from, from + len));
+  };
+  const prepare = (x, self, range = null) => {
     const s = S(self), dev = D(x, o(self).dev), vs = o(s.vs), ps = o(s.ps), lay = o(s.layout);
     if (!dev || !vs || !ps || !vs.d9 || !ps.d9 || !lay || vs.h === undefined || ps.h === undefined) return null;
     applyTargets(dev, s); applyViewport(dev, s);
@@ -658,13 +683,21 @@ export function d3d11Apis(st) {
       applySampler(x, dev, m.target, s.samplers[m.sampler]);
     }
     applyStates(dev, s);
-    const slot = lay.els.length ? lay.els[0].stream : 0, vb = s.vb[slot], b = vb && o(vb.buf);
-    if (!b || b.h === undefined) return null;
-    dev.setStreamSource(0, b.h, vb.offset, vb.stride);
-    return { dev, s, vb, b };
+    // Each input slot the layout reads, as the model's stream of that number; the first one's buffer
+    // bounds the vertices an indexed draw may use.
+    const slots = [...new Set(lay.els.map((e) => e.stream))]; if (!slots.length) slots.push(0);
+    let first = null;
+    for (const slot of slots) {
+      const vb = s.vb[slot], b = vb && o(vb.buf);
+      if (!b || b.h === undefined) return null;
+      if (b.dirty) { if (range) sendRange(x, b, vb.offset + range.start * vb.stride, range.n * vb.stride); else sync(x, b); }
+      dev.setStreamSource(slot, b.h, vb.offset, vb.stride);
+      if (!first) first = { vb, b };
+    }
+    return { dev, s, ...first };
   };
   const draw = (x, self, n, start) => {
-    const p = prepare(x, self), prims = PRIMS[S(self).topology];
+    const p = prepare(x, self, { start, n }), prims = PRIMS[S(self).topology];
     if (!p || !prims || !prims(n)) return 0;
     p.dev.drawPrimitive(S(self).topology, start, prims(n));
     return 0;
@@ -672,10 +705,8 @@ export function d3d11Apis(st) {
   const drawIndexed = (x, self, n, startIndex, baseVertex) => {
     const p = prepare(x, self), s = S(self), prims = PRIMS[s.topology], ib = s.ib && o(s.ib.buf);
     if (!p || !prims || !prims(n) || !ib || ib.h === undefined) return 0;
-    const size = s.ib.fmt === 42 ? 4 : 2;
-    if (ib.fmtSeen !== s.ib.fmt && s.ib.fmt === 42) x.win.say('d3d11: 32-bit indices are drawn as 16-bit ones');
-    ib.fmtSeen = s.ib.fmt;
-    p.dev.setIndices(ib.h);
+    const size = s.ib.fmt === 42 ? 4 : 2;                               // DXGI_FORMAT_R32_UINT, else R16_UINT
+    p.dev.setIndices(ib.h, size === 4 ? 102 : 101);                     // D3DFMT_INDEX32 / INDEX16, as IASetIndexBuffer said
     p.dev.drawIndexedPrimitive(s.topology, baseVertex | 0, 0, Math.floor((p.b.size - p.vb.offset) / Math.max(1, p.vb.stride)), startIndex + s.ib.offset / size, prims(n));
     return 0;
   };
@@ -685,8 +716,11 @@ export function d3d11Apis(st) {
     let bytes, pitch;
     if (r.iface === 'ID3D11Buffer') { bytes = r.bytes; pitch = r.size; }
     else { const [w, h] = levelSize(r, sub); pitch = w * r.bpp; bytes = (r.lv[sub] ||= new Uint8Array(pitch * h)); }
-    const m = (r.maps ||= {}); if (!m[sub]) m[sub] = galloc(x, bytes.length);
-    if (type !== 4) x.write(m[sub], bytes);                            // D3D11_MAP_WRITE_DISCARD: nothing to read
+    const m = (r.maps ||= {}), first = !m[sub]; if (first) m[sub] = galloc(x, bytes.length);
+    // D3D11_MAP_WRITE_DISCARD (4): nothing to read. A buffer mapped before keeps its bytes in that memory,
+    // the newest there unless they were changed since by other means (UpdateSubresource, a copy).
+    if (type !== 4 && (r.iface !== 'ID3D11Buffer' || first || r.newer)) x.write(m[sub], bytes);
+    r.newer = false;
     x.w32(pm, m[sub]); x.w32(pm + 4, pitch); x.w32(pm + 8, bytes.length);
     r.mapped = { sub, type };
     return S_OK;
@@ -696,6 +730,7 @@ export function d3d11Apis(st) {
     r.mapped = null;
     // A buffer: only the bytes that changed go to the model (a dynamic vertex buffer of megabytes is mapped
     // once a batch, a few hundred bytes written each time).
+    if (r.iface === 'ID3D11Buffer' && (r.bind & 1) && r.h !== undefined) { r.dirty = true; return 0; }   // sent when drawn (sync)
     if (r.iface === 'ID3D11Buffer') {
       const now = x.bytes(r.maps[sub], r.size), was = r.bytes;
       let lo = 0, hi = r.size;
@@ -712,6 +747,7 @@ export function d3d11Apis(st) {
     const box = pBox ? [x.r32(pBox), x.r32(pBox + 4), x.r32(pBox + 12), x.r32(pBox + 16)] : null;
     if (r.iface === 'ID3D11Buffer') {
       const a = box ? box[0] : 0, n = (box ? box[2] : r.size) - a;
+      sync(x, r); r.newer = true;
       r.bytes.set(x.bytes(src, n), a);
       if (r.h !== undefined) r.model.bufferWrite(r.h, a, r.bytes.subarray(a, a + n));
     } else writeLevel(x, r, sub, box, src, pitch);
@@ -773,7 +809,7 @@ export function d3d11Apis(st) {
     // A copy between textures: their kept bytes; render targets' are not read back.
     CopyResource: (x, self, dst, src) => {
       const d = o(dst), s = o(src); if (!d || !s) return 0;
-      if (d.iface === 'ID3D11Buffer') { d.bytes.set(s.bytes.subarray(0, d.size)); if (d.h !== undefined) d.model.bufferWrite(d.h, 0, d.bytes); }
+      if (d.iface === 'ID3D11Buffer') { sync(x, s); sync(x, d); d.newer = true; d.bytes.set(s.bytes.subarray(0, d.size)); if (d.h !== undefined) d.model.bufferWrite(d.h, 0, d.bytes); }
       else if (s.surface && d.surface) D(x, o(self).dev).stretchRect(s.surface, null, d.surface, null, 0);
       else s.lv.forEach((lv, l) => { if (lv && d.h9 !== undefined) { d.lv[l] = lv.slice(); d.model.textureWrite(d.h9, l, null, d.lv[l], levelSize(d, l)[0] * d.bpp); } });
       return 0;
