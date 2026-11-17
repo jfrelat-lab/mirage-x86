@@ -238,7 +238,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    */
   const relPath = (p) => {
     const out = [];
-    for (const part of p.toLowerCase().replace(/\\/g, '/').replace(/^[a-z]:/, '').split('/')) {
+    // Win32 drops a name's trailing spaces and dots ("demo.mp3 " is demo.mp3: Winamp 2's playlist).
+    for (const raw of p.toLowerCase().replace(/\\/g, '/').replace(/^[a-z]:/, '').split('/')) {
+      const part = raw === '.' || raw === '..' ? raw : raw.replace(/[ .]+$/, '');
       if (part === '..') out.pop(); else if (part && part !== '.') out.push(part);
     }
     return out.join('/');
@@ -303,13 +305,23 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // Said once a name: SDL 2 asks for hid.dll at every frame, and a line each slowed the page to a crawl.
       if (!m && /^[\w.\\: -]{1,64}$/.test(s) && !(st.saidMissing ||= new Set()).has(s.toLowerCase())) { st.saidMissing.add(s.toLowerCase()); x.win.say(`LoadLibraryA("${s}"): not made here`); }
       if (!m) return 0;
+      { const refs = (st.libRefs ||= new Map()); refs.set(m.base, (refs.get(m.base) || 0) + 1); }   // counted (FreeLibrary)
       // In the loader's order, each DLL after those it imports (`loaded`), as Windows runs them: Caster.dll's
       // DllMain, run before msvcr100.dll's, found its C runtime not started ("R6030 CRT not initialized").
       const inits = x.win.loaded.filter((d) => d.file && d.init && x.win.modules.get(d.name) === d);
       for (const d of inits) d.init = false;
       return inits.length ? send(x, inits.map((d) => ({ fn: d.entry, args: [d.base, 1, 0] })), () => m.base, 4) : m.base;
     }],
-    FreeLibrary: ['p', () => 1],                                      // the image stays mapped: nothing calls into it again
+    // A module's loads counted: one by the loader (or its first LoadLibrary), one more each LoadLibrary;
+    // FreeLibrary takes one off, and fails (ERROR_MOD_NOT_FOUND) once none is left, as on Windows when the
+    // module is gone. The image itself stays mapped. Winamp's setup frees a DLL it registered with
+    // "while (FreeLibrary(h))", and went round for ever.
+    FreeLibrary: ['p', (x, h) => {
+      if (!x.win.moduleAt(h)) { setError(x, 126); return 0; }
+      const refs = (st.libRefs ||= new Map()), n = refs.has(h) ? refs.get(h) : 1;
+      if (n <= 0) { setError(x, 126); return 0; }
+      refs.set(h, n - 1); return 1;
+    }],
     GetProcAddress: ['pp', (x, h, name) => {
       const m = x.win.moduleAt(h), what = name < 0x10000 ? name : x.str(name), r = m ? x.win.proc(m, what) : 0;
       if (!r) x.win.say(`GetProcAddress(${m ? m.name : h.toString(16)}, ${what}): none`);
@@ -492,6 +504,20 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     FlushFileBuffers: ['p', () => 1],
     // A name on the program's disk is a file (FILE_ATTRIBUTE_ARCHIVE); the disk has no directories but
     // its root, so anything else is not there.
+    // SearchPathA(path, file, ext, n, buf, filePart): the file (with `ext` when it has none) in `path`'s
+    // directories, else the program's, the current one (C:\) and Windows' -- the first that holds it, as a
+    // full path; 0 and ERROR_FILE_NOT_FOUND otherwise. Winamp's setup looks for its components so.
+    SearchPathA: ['pppupp', (x, path, file, ext, n, buf, part) => {
+      let name = x.str(file); if (ext && !/\.[^\\/]*$/.test(name)) name += x.str(ext);
+      const dirs = /^[a-z]:|^\\/i.test(name) ? [''] : [...(path ? x.str(path).split(';') : [x.win.path.replace(/[^\\]*$/, ''), 'C:\\', 'C:\\WINDOWS\\system32', 'C:\\WINDOWS'])].filter((d) => d !== undefined);
+      for (const d of dirs) {
+        const full = d ? `${d.replace(/\\$/, '')}\\${name}` : name;
+        if (!diskFile(full) || !st.disk.has(relPath(full))) { if (!sysDll(x, full)) continue; }
+        if (n > full.length && buf) { x.write(buf, ansi(full + '\0')); if (part) x.w32(part, buf + full.lastIndexOf('\\') + 1); return full.length; }
+        return full.length + 1;
+      }
+      setError(x, 2); return 0;
+    }],
     GetFileAttributesA: ['p', (x, pName) => { const n = x.str(pName); return diskDir(n) ? 0x10 : diskFile(n) || sysDll(x, n) ? 0x20 : 0xffffffff; }],
     CreateDirectoryA: ['pp', () => 1],
     GetCurrentDirectoryA: ['up', (x, n, buf) => { if (n >= 4) x.write(buf, new TextEncoder().encode('C:\\\0')); return 3; }],
@@ -1296,6 +1322,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       else if (!(style & 1)) { d.x += o.x; d.y += o.y; }
       d.x = Math.max(0, Math.min(st.desk.w - W, d.x)); d.y = Math.max(0, Math.min(st.desk.h - H, d.y));
     }
+    // ...and on a dialog application's desktop, where a window's x and y are its client area's: centred on
+    // the desktop (DS_CENTER) or at the template's place, its frame and caption on the screen -- Winamp's
+    // and Diablo's setup dialogs stood at the corner, their captions above the screen.
+    else if (!win(dlg).main && deskMode() && !(style & 0x40000000)) {
+      const d = win(dlg), f = popFrame(d), W = d.w + 2 * f.b, H = d.h + 2 * f.b + f.cap;
+      if (style & 0x800) { d.x = ((st.desk.w - W) >> 1) + f.b; d.y = ((st.desk.h - H) >> 1) + f.b + f.cap; }
+      else { d.x += f.b; d.y += f.b + f.cap; }
+      d.x = Math.max(f.b, Math.min(st.desk.w - W + f.b, d.x)); d.y = Math.max(f.b + f.cap, Math.min(st.desk.h - H + f.b + f.cap, d.y));
+    }
     const kids = [];
     for (let i = 0; i < n; i++) {
       align();
@@ -1910,7 +1945,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ClipCursor: ['p', (x, r) => { st.clip = r ? { l: x.r32(r) | 0, t: x.r32(r + 4) | 0, r: x.r32(r + 8) | 0, b: x.r32(r + 12) | 0 } : null; return 1; }],
     // InvalidateRect: a WM_PAINT due, the main window's too (Minesweeper's new game).
     InvalidateRect: ['ppi', (x, h, r, erase) => { invalidate(h || st.hwnd, !!erase); return 1; }], PostMessageA: ['puuu', (x, hwnd, msg, wp, lp) => { st.msgs.push({ msg, wp, lp, ...(hwnd && hwnd !== st.hwnd ? { hwnd } : {}) }); return 1; }],
-    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp, pop = 16) => (procOf(hwnd) ? send(x, [[msg, wp, lp, hwnd]], (eax) => eax, pop) : 0)], KillTimer: ['pu', (x, hwnd, id) => (st.timers.delete(`${hwnd}:${id}`) ? 1 : 0)],
+    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp, pop = 16) => (procOf(hwnd) ? send(x, [[msg, wp, lp, hwnd]], (eax) => eax, pop) : 0)],
+    // SendMessageTimeoutA: sent as SendMessageA, the answer at `out`; never timed out here.
+    SendMessageTimeoutA: ['puuuuup', (x, hwnd, msg, wp, lp, flags, ms, out) => {
+      if (!procOf(hwnd)) { if (out) x.w32(out, 0); return hwnd === 0xffff ? 1 : 0; }
+      return send(x, [[msg, wp, lp, hwnd]], (eax) => { if (out) x.w32(out, eax); return 1; }, 28);
+    }], KillTimer: ['pu', (x, hwnd, id) => (st.timers.delete(`${hwnd}:${id}`) ? 1 : 0)],
     // GWL_STYLE (-16): the frame the window's size includes from now on (WinQuake's windowed and full-screen modes).
     SetWindowLongA: ['pii', (x, hwnd, i, v) => {
       if (hwnd === st.hwnd) {
@@ -2009,7 +2049,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     CallWindowProcA: ['ppuuu', (x, fn, h, msg, wp, lp) => (fn ? send(x, [{ fn, args: [h, msg, wp, lp] }], (eax) => eax, 20) : 0)],
     WindowFromPoint: ['ii', () => st.hwnd],
     WindowFromDC: ['p', (x, hdc) => hwndOfDC(hdc) || st.hwnd],
-    GetWindowDC: ['p', () => st.hdc],
+    // A window's DC with its frame: a window other than the main one with no frame (Winamp 2's skinned
+    // windows draw their own title bars so) has it the same as its client area's; the main DC otherwise.
+    GetWindowDC: ['p', (x, h) => { const w = h && h !== st.hwnd && win(h); return w && !w.main && !(w.style & 0xcc0000) ? dcFor(h) : st.hdc; }],
     BringWindowToTop: ['p', () => 1], ShowOwnedPopups: ['pi', () => 1],
     RedrawWindow: ['pppu', () => 1], ExcludeUpdateRgn: ['pp', () => 1],
     FindWindowA: ['pp', () => 0],
@@ -2781,6 +2823,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     _CIatan2: ['', CI2(Math.atan2), cd], _CIfmod: ['', CI2((a, b) => a % b), cd],
     _ftol: ['', ftol, cd], _ftol2: ['', ftol, cd], _ftol2_sse: ['', ftol, cd],
     abs: ['i', (x, v) => Math.abs(v), cd],
+    // C++'s operator new and delete (and their [] forms) by their decorated names, as malloc and free: the
+    // COM DLLs Winamp's setup registers (CDDBControlWinamp.dll) allocate with them.
+    '??2@YAPAXI@Z': ['u', (x, n) => x.win.heapAlloc(Math.max(1, n)), cd], '??_U@YAPAXI@Z': ['u', (x, n) => x.win.heapAlloc(Math.max(1, n)), cd],
+    '??3@YAXPAX@Z': ['p', () => 0, cd], '??_V@YAXPAX@Z': ['p', () => 0, cd],
+    // Functions to run at the exit (a DLL's static destructors): kept, never run -- the process's end needs
+    // none of them here. Winamp registers its own with _onexit.
+    _onexit: ['p', (x, f) => f, cd], __dllonexit: ['ppp', (x, f) => f, cd], atexit: ['p', () => 0, cd],
     malloc: ['u', (x, n) => x.win.heapAlloc(n), cd], calloc: ['uu', (x, n, k) => { const p = x.win.heapAlloc(n * k); x.write(p, new Uint8Array(n * k)); return p; }, cd], free: ['p', () => 0, cd],
     memset: ['piu', (x, p, v, n) => { x.write(p, new Uint8Array(n).fill(v)); return p; }, cd],
     memcpy: ['ppu', (x, d, s, n) => { x.write(d, x.bytes(s, n)); return d; }, cd],
@@ -2932,6 +2981,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       let e = dx - dy, X = x0, Y = y0;
       while ((X !== x1 || Y !== y1) && pts.length < 10000) { pts.push({ fn, args: [X >>> 0, Y >>> 0, data] }); const e2 = 2 * e; if (e2 > -dy) { e -= dy; X += sx; } if (e2 < dx) { e += dx; Y += sy; } }
       return send(x, pts, () => 1, 24);
+    }],
+    // A rounded rectangle as a square one (its corners' ellipses not drawn); a region filled rectangle by
+    // rectangle (src/win32/region.js) -- Winamp 2's dialogs and skins.
+    RoundRect: ['piiiiii', (x, hdc, l, tp, r, b) => gdi32.Rectangle[1](x, hdc, l, tp, r, b)],
+    FillRgn: ['ppp', (x, hdc, h, hbr) => {
+      const g = st.gdi.get(h); if (!g || g.kind !== 'region') return 0;
+      const rc = x.win.heapAlloc(16);
+      for (const q of g.rects) { q.forEach((v, i) => x.w32(rc + 4 * i, v)); user32.FillRect[1](x, hdc, rc, hbr); }
+      x.win.heapFree(rc); return 1;
     }],
     Rectangle: ['piiii', (x, hdc, l, tp, r, b) => {
       const d = dcState(hdc), t = target(x, hdc); if (!t) return 1;
@@ -3210,7 +3268,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const mpr = { WNetGetConnectionA: ['ppp', () => 2250] };
   const tables = [
     { dll: 'msimg32.dll', fns: msimg32 }, { dll: 'mpr.dll', fns: mpr },
-    { dll: 'msvcrt.dll', fns: msvcrt },
+    // msvcrt.dll: its own functions, and the Universal CRT's (src/win32/ucrt.js) for the rest, as crtdll.dll's
+    // below -- Winamp 2 and its plugins import some 150 of them (strcmp, fopen, sscanf, _beginthreadex...).
+    { dll: 'msvcrt.dll', fns: { ...Object.assign({}, ...ucrt.map((t) => t.fns)), ...msvcrt } },
     /*
      * crtdll.dll, the C runtime of Windows NT 3.x's own programs (NT 3.51's Solitaire): msvcrt's functions
      * under its names -- __GetMainArgs, and _acmdln_dll, _fmode_dll, _commode_dll as DATA exports. SEH's
@@ -3393,6 +3453,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   };
   /** A file of the program's disk, by name (the loader's DLLs of the program's own), or null. */
   tables.readFile = (name) => { const f = diskFile(name); return f && f.bytes ? f.bytes.subarray(0, f.size) : null; };
+  /** The disk's files, by their path there (lower case, '/' between the parts, C: its root): tools/win32/run.mjs's MIRAGE_W32DUMPTREE. */
+  tables.diskFiles = () => [...st.disk.keys()];
   /** Where WebGL's picture goes on the screen, for a framed window (null: it is the whole screen). */
   // The windows as they are (tools/win32/run.mjs MIRAGE_W32WINS): handle, class, parent, id, place, style, title.
   tables.windows = () => [...st.wins.values()].map((w) => ({ hwnd: w.hwnd.toString(16), cls: w.cls, parent: (w.parent || 0).toString(16), id: w.id, rect: [w.x, w.y, w.w, w.h], style: (w.style >>> 0).toString(16), visible: !!w.visible, title: w.title, image: w.image || undefined }));

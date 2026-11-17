@@ -56,18 +56,46 @@ export function loadString(x, base, id) {
 
 /**
  * A packed DIB in memory (BITMAPINFOHEADER, its colour table, its bits: a bitmap resource, a .bmp after
- * its file header) as { w, h, px }: 0x00RRGGBB, top row first. 1, 4, 8, 16, 24 and 32 bits, uncompressed.
+ * its file header) as { w, h, px }: 0x00RRGGBB, top row first. 1, 4, 8, 16, 24 and 32 bits, uncompressed; 8 and 4 bits RLE too.
  */
+/**
+ * BI_RLE8 / BI_RLE4 bits (bottom row first) unpacked into uncompressed rows of `stride` bytes. A run is a
+ * count and a value (RLE4: two nibbles alternating); 0 escapes: 0 ends a row, 1 the bitmap, 2 skips right
+ * and up by the next two bytes, 3 and up are that many literal values (padded to a 16-bit word). What is
+ * skipped stays colour 0. Winamp 2's built-in skin is kept so.
+ */
+function unRle(src, w, h, stride, bpp) {
+  const out = new Uint8Array(stride * h), put = (px, row, v) => {
+    if (px >= w || row >= h) return;
+    if (bpp === 8) out[row * stride + px] = v;
+    else { const o = row * stride + (px >> 1); out[o] = px & 1 ? (out[o] & 0xf0) | (v & 15) : (out[o] & 15) | (v << 4); }
+  };
+  let i = 0, px = 0, row = 0;
+  while (i + 1 < src.length && row < h) {
+    const n = src[i++], v = src[i++];
+    if (n) { for (let k = 0; k < n; k++, px++) put(px, row, bpp === 8 ? v : k & 1 ? v & 15 : v >> 4); continue; }
+    if (v === 0) { px = 0; row++; } else if (v === 1) break;
+    else if (v === 2) { px += src[i++] || 0; row += src[i++] || 0; } else {
+      const bytes = bpp === 8 ? v : (v + 1) >> 1;
+      for (let k = 0; k < v; k++, px++) put(px, row, bpp === 8 ? src[i + k] : k & 1 ? src[i + (k >> 1)] & 15 : src[i + (k >> 1)] >> 4);
+      i += bytes + (bytes & 1);
+    }
+  }
+  return out;
+}
+
 export function decodeDib(x, at) {
   // BITMAPCOREHEADER (12 bytes, OS/2 1.x's): 16-bit sizes, RGBTRIPLE colours -- Windows' own cards.dll keeps
   // its cards so. BITMAPINFOHEADER (40 and up) otherwise.
   const core = x.r32(at) === 12;
   const hs = x.r32(at), w = core ? x.r16(at + 4) : x.r32(at + 4) | 0, h0 = core ? x.r16(at + 6) : x.r32(at + 8) | 0;
   const bpp = core ? x.r16(at + 10) : x.r16(at + 14), comp = core ? 0 : x.r32(at + 16), cs = core ? 3 : 4;
-  if ((hs < 40 && !core) || w <= 0 || !h0 || comp !== 0 && comp !== 3) return null;
+  const rle = (comp === 1 && bpp === 8) || (comp === 2 && bpp === 4);
+  if ((hs < 40 && !core) || w <= 0 || !h0 || comp !== 0 && comp !== 3 && !rle || rle && h0 < 0) return null;
   const h = Math.abs(h0), n = bpp <= 8 ? ((core ? 0 : x.r32(at + 32)) || 1 << bpp) : 0, pal = new Uint32Array(256);
   for (let i = 0; i < n; i++) pal[i] = (x.r8(at + hs + cs * i + 2) << 16) | (x.r8(at + hs + cs * i + 1) << 8) | x.r8(at + hs + cs * i);
-  const bits = at + hs + cs * n + (comp === 3 ? 12 : 0), stride = ((w * bpp + 31) >> 5) << 2, raw = x.bytes(bits, stride * h), px = new Uint32Array(w * h);
+  const bits = at + hs + cs * n + (comp === 3 ? 12 : 0), stride = ((w * bpp + 31) >> 5) << 2, px = new Uint32Array(w * h);
+  const raw = rle ? unRle(x.bytes(bits, x.r32(at + 20)), w, h, stride, bpp) : x.bytes(bits, stride * h);
   for (let r = 0; r < h; r++) {
     const y = h0 > 0 ? h - 1 - r : r, o = r * stride;
     for (let i = 0; i < w; i++) {
@@ -199,6 +227,9 @@ export function classicApis({ st, wm }) {
   };
   st.setMenu = setMenu;
   const kernel32 = {
+    // Winamp 2's start: the drives (C:, the program's disk), a thread's priority (normal), the instruction
+    // cache (nothing to flush: the recompiler sees code written).
+    GetLogicalDrives: ['', () => 4], GetThreadPriority: ['p', () => 0], FlushInstructionCache: ['ppu', () => 1],
     GetProcessVersion: ['u', () => 0x00040000],                         // Windows 95's 4.0, for every process
     lstrlenA: ['p', (x, p) => (p ? x.str(p).length : 0)],
     lstrcpyA: ['pp', (x, d, s) => { const t = x.str(s); x.write(d, Uint8Array.from(t + '\0', (c) => c.charCodeAt(0) & 0xff)); return d; }],
@@ -235,6 +266,21 @@ export function classicApis({ st, wm }) {
     GetProfileStringA: ['ppppu', (x, sec, key, def, buf, n) => iniString(x, 0, sec, key, def, buf, n)],
     GetProfileIntA: ['ppi', (x, sec, key, def) => { const v = iniGet(x, 0, sec, key); const n = v === null ? NaN : parseInt(v, 10); return Number.isNaN(n) ? def : n; }],
     WritePrivateProfileStringA: ['pppp', (x, sec, key, val, file) => iniWrite(x, file, sec, key, val)],
+    // A structure as the profile keeps one: its bytes in hexadecimal, then a byte of their sum; read back only
+    // whole and summing right (Winamp keeps its windows' places so).
+    GetPrivateProfileStructA: ['pppup', (x, sec, key, buf, n, file) => {
+      const v = iniGet(x, file, sec, key);
+      if (v === null || v.length !== 2 * n + 2 || !/^[0-9a-f]*$/i.test(v)) return 0;
+      const b = Uint8Array.from({ length: n + 1 }, (_, i) => parseInt(v.substr(2 * i, 2), 16));
+      if ((b.subarray(0, n).reduce((a, c) => a + c, 0) & 255) !== b[n]) return 0;
+      x.write(buf, b.subarray(0, n)); return 1;
+    }],
+    WritePrivateProfileStructA: ['pppup', (x, sec, key, buf, n, file) => {
+      if (!buf) return iniWrite(x, file, sec, key, 0);
+      const b = x.bytes(buf, n), hex = [...b, b.reduce((a, c) => a + c, 0) & 255].map((c) => c.toString(16).toUpperCase().padStart(2, '0')).join('');
+      const tmp = x.win.heapAlloc(hex.length + 1); x.write(tmp, Uint8Array.from(hex + '\0', (c) => c.charCodeAt(0)));
+      const r = iniWrite(x, file, sec, key, tmp); x.win.heapFree(tmp); return r;
+    }],
     WriteProfileStringA: ['ppp', (x, sec, key, val) => iniWrite(x, 0, sec, key, val)],
     SetCurrentDirectoryA: ['p', () => 1],
     GetVolumeInformationA: ['ppupppp' + 'u', (x, root, name, nn, serial, maxlen, flags, fs, nfs) => {
@@ -284,6 +330,10 @@ export function classicApis({ st, wm }) {
   const props = new Map();                                              // hwnd + name -> value
   const propKey = (x, h, name) => h + ':' + (name < 0x10000 ? '#' + name : x.str(name).toUpperCase());
   const user32 = {
+    // No input waiting in the queue's bits (GetQueueStatus), the system font's dialog units (8x16), a window's
+    // parent changed (SetParent: the old one returned).
+    GetQueueStatus: ['u', () => 0], GetDialogBaseUnits: ['', () => (16 << 16) | 8],
+    SetParent: ['pp', (x, h, p) => { const w = st.wins.get(h); if (!w) return 0; const old = w.parent || 0; w.parent = p; return old; }],
     SetRect: ['piiii', (x, p, l, t, r, b) => setRect(x, p, l, t, r, b)],
     SetRectEmpty: ['p', (x, p) => setRect(x, p, 0, 0, 0, 0)],
     CopyRect: ['pp', (x, d, s) => setRect(x, d, ...rect(x, s))],
@@ -340,6 +390,8 @@ export function classicApis({ st, wm }) {
       return d ? st.newHandle('bitmap', d) : 0;
     }],
     GetMenuCheckMarkDimensions: ['', () => (13 << 16) | 13],
+    // A shortcut menu: none shown here -- the call returns as if it were dismissed (0, no command).
+    TrackPopupMenu: ['puiiipp', () => 0], TrackPopupMenuEx: ['puiipp', () => 0],
     // Menus (above): made, loaded from the resources, filled, changed, attached to a window. A program
     // empties a menu by deleting its first item until that fails (Jazz Jackrabbit 2).
     CreateMenu: ['', () => newMenu()], CreatePopupMenu: ['', () => newMenu()],
@@ -385,6 +437,21 @@ export function classicApis({ st, wm }) {
       mn.items.push({ id: flags & 0x10 ? 0 : id & 0xffff, sub: flags & 0x10 ? id : 0, flags: flags & 0x81b, text: flags & 0x804 || !text ? '' : x.str(text, 256) });
       return 1;
     }],
+    // GetMenuItemInfoA: InsertMenuItemA's fields read back (cch at +40 the buffer's size, then the length).
+    GetMenuItemInfoA: ['puip', (x, m, at, byPos, mii) => {
+      const r = itemOf(m, at, byPos ? 0x400 : 0); if (!r) return 0;
+      const it = r.list[r.i], mask = x.r32(mii + 4);
+      if (mask & 1) x.w32(mii + 12, it.flags & 0x0b);
+      if (mask & 2) x.w32(mii + 16, it.id);
+      if (mask & 4) x.w32(mii + 20, it.flags & 0x10 ? it.sub : 0);
+      if (mask & 0x110) x.w32(mii + 8, it.flags & 0x800);
+      if (mask & 0x50) {
+        const buf = x.r32(mii + 36), n = x.r32(mii + 40);
+        if (buf && n) putStr(x, buf, n, it.text);
+        x.w32(mii + 40, it.text.length);
+      }
+      return 1;
+    }],
     GetMenuItemCount: ['p', (x, m) => (menu(m) ? menu(m).items.length : -1)],
     // InsertMenuA (before an item, by position or command) and ModifyMenuA (an item replaced); an item's text.
     InsertMenuA: ['puupp', (x, m, at, flags, id, text) => {
@@ -425,6 +492,8 @@ export function classicApis({ st, wm }) {
     LockWindowUpdate: ['p', () => 1],
   };
   const gdi32 = {
+    // MM_TEXT, and the colour itself as the nearest (a true-colour screen).
+    GetMapMode: ['p', () => 1], GetNearestColor: ['pu', (x, hdc, c) => c],
     SaveDC: ['p', () => 1], RestoreDC: ['pi', () => 1],
     SetMapMode: ['pi', () => 1],
     SetViewportOrgEx: ['piip', (x, dc, X, Y, p) => { if (p) { x.w32(p, 0); x.w32(p + 4, 0); } return 1; }],
@@ -435,7 +504,7 @@ export function classicApis({ st, wm }) {
     PtVisible: ['pii', () => 1], RectVisible: ['pp', () => 1],
     // Clipping regions: none kept -- a DC draws over its whole surface. GetClipRgn: the DC has none (0).
     GetClipRgn: ['pp', () => 0],
-    SelectClipRgn: ['pp', () => 2], ExcludeClipRect: ['piiii', () => 2], OffsetClipRgn: ['pii', () => 2],
+    SelectClipRgn: ['pp', () => 2], ExtSelectClipRgn: ['ppi', () => 2], UpdateColors: ['p', () => 1], ExcludeClipRect: ['piiii', () => 2], OffsetClipRgn: ['pii', () => 2],
   };
   // ---- advapi32: a registry in memory, for the run -- keys made and opened, values written and read
   // back (Half-Life's launcher keeps its settings under HKEY_LOCAL_MACHINE\Software\Valve and gives up
@@ -674,7 +743,18 @@ export function classicApis({ st, wm }) {
     }],
   });
   const ole32 = {
+    // CoCreateGuid(&guid): sixteen random bytes, a version 4 GUID.
+    CoCreateGuid: ['p', (x, g) => {
+      const b = new Uint8Array(16); for (let i = 0; i < 16; i++) b[i] = (Math.random() * 256) | 0;
+      b[7] = (b[7] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80; x.write(g, b); return 0;
+    }],
+    // OLE drag and drop and class objects: registered, never called here (nothing is dropped).
+    RegisterDragDrop: ['pp', () => 0], RevokeDragDrop: ['p', () => 0], CoDisconnectObject: ['pu', () => 0],
+    CoRegisterClassObject: ['ppuup', (x, clsid, unk, ctx, flags, cookie) => { if (cookie) x.w32(cookie, 1); return 0; }],
+    CoRevokeClassObject: ['u', () => 0],
+    ProgIDFromCLSID: ['pp', () => 0x80040154],                       // REGDB_E_CLASSNOTREG
     CoInitialize: ['p', () => 0], CoInitializeEx: ['pu', () => 0], CoUninitialize: ['', () => 0],
+    OleInitialize: ['p', () => 0], OleUninitialize: ['', () => 0],    // COM and OLE ready (Winamp's NSIS setup, before it browses folders)
     // Internet Explorer's WebBrowser control (an inert one, below); any other class is not registered.
     CoCreateInstance: ['ppupp', (x, clsid, outer, ctx, iid, pp) => {
       if (pp) x.w32(pp, 0);
@@ -696,6 +776,8 @@ export function classicApis({ st, wm }) {
   // ---- shell32.dll: files dropped on the window (none ever is), and documents opened (none is: there
   // is no shell to open them with -- SE_ERR_NOASSOC, and FindExecutable finds no program for them).
   const shell32 = {
+    // The taskbar's notification area: none to put an icon in, the call answered (Winamp's tray icon).
+    Shell_NotifyIconA: ['up', () => 1], DragQueryPoint: ['pp', () => 0],
     DragAcceptFiles: ['pi', () => 0], DragFinish: ['p', () => 0],
     DragQueryFileA: ['pupu', () => 0],
     ShellExecuteA: ['ppppppi', () => 31],

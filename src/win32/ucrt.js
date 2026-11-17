@@ -142,8 +142,21 @@ export function ucrtApis({ st, send }) {
 
   // ---- files: FILE blocks over kernel32's handles --------------------------------------------------
   st.crtFiles = st.crtFiles || [];                                   // FILE index -> { h, eof, err, back, cons }
-  const fileBlock = (x, rec) => { const p = malloc(x, 32); x.write(p, new Uint8Array(32)); st.crtFiles.push(rec); x.w32(p, 0x46494c45); x.w32(p + 4, st.crtFiles.length - 1); rec.ptr = p; return p; };
-  const fileOf = (x, F) => (F && x.r32(F) === 0x46494c45 ? st.crtFiles[x.r32(F + 4)] : null);
+  // A FILE laid out as msvcrt's (_ptr, _cnt, _base, _flag, _file, _charbuf, _bufsiz, _tmpfname): Visual C++ 6
+  // inlines feof as a read of _flag's _IOEOF (10h) and getc as _cnt's countdown -- so _cnt stays 0 (each read
+  // through the runtime) and _flag follows the end of file and the errors (_IOERR 20h); the runtime's own
+  // mark and index are in _bufsiz and _tmpfname. With the index in _cnt and no _flag, Winamp read its
+  // playlist with fgets until feof, for ever.
+  const fileBlock = (x, rec) => {
+    const p = malloc(x, 32); x.write(p, new Uint8Array(32)); st.crtFiles.push(rec);
+    x.w32(p + 24, 0x46494c45); x.w32(p + 28, st.crtFiles.length - 1); x.w32(p + 16, 2 + st.crtFiles.length); rec.ptr = p;
+    let eof = !!rec.eof, err = !!rec.err;
+    const flag = () => x.w32(p + 12, (eof ? 0x10 : 0) | (err ? 0x20 : 0) | 1);
+    Object.defineProperty(rec, 'eof', { get: () => eof, set: (v) => { eof = !!v; flag(); }, configurable: true });
+    Object.defineProperty(rec, 'err', { get: () => err, set: (v) => { err = !!v; flag(); }, configurable: true });
+    flag(); return p;
+  };
+  const fileOf = (x, F) => (F && x.r32(F + 24) === 0x46494c45 ? st.crtFiles[x.r32(F + 28)] : null);
   const stdFile = (x, i) => (st.crtStd ||= [0, 1, 2].map((k) => fileBlock(x, { cons: k })))[i];
   const open = (x, name, mode) => {
     const f0 = st.diskFile(name), rel = st.relPath(name), plus = mode.includes('+');
@@ -175,7 +188,10 @@ export function ucrtApis({ st, send }) {
     const r = fileOf(x, F); if (!r || r.cons !== undefined) { if (r) r.eof = true; return -1; }
     if (r.back !== undefined) { const c = r.back; r.back = undefined; return c; }
     const o = st.files[r.h - 0x4000]; if (!o || o.pos >= o.f.size) { r.eof = true; return -1; }
-    return o.f.bytes ? o.f.bytes[o.pos++] : (o.pos++, 0);
+    const c = o.f.bytes ? o.f.bytes[o.pos++] : (o.pos++, 0);
+    // Text mode (opened without 'b'): CR LF read as LF -- Winamp 2's playlist lines, else ending "\r".
+    if (c === 13 && r.text && o.pos < o.f.size && o.f.bytes[o.pos] === 10) { o.pos++; return 10; }
+    return c;
   };
   // fds (_open, _read): the same handles, numbered from 3.
   st.crtFds = st.crtFds || [];
@@ -297,12 +313,20 @@ export function ucrtApis({ st, send }) {
     __stdio_common_vsnprintf_s: ['uupuuppp', (x, lo, hi, buf, n, max, fmt, loc, ap) => { const s = cprintf(x, x.str(fmt), ap), k = Math.min(s.length, n - 1, max >>> 0); setStr(x, buf, s.slice(0, k)); return k < s.length ? -1 : k; }, cd],
     __stdio_common_vfprintf: ['uupppp', (x, lo, hi, F, fmt, loc, ap) => { const r = fileOf(x, F), s = cprintf(x, x.str(fmt), ap); if (r) out(x, r, enc(s)); return s.length; }, cd],
     __stdio_common_vsscanf: ['uupuppp', (x, lo, hi, buf, n, fmt, loc, ap) => cscanf(x, x.str(buf, n === 0xffffffff ? 1 << 20 : n), x.str(fmt), ap), cd],
-    fopen: ['pp', (x, name, mode) => { const h = open(x, x.str(name), x.str(mode)); return h ? fileBlock(x, { h }) : 0; }, cd],
+    fopen: ['pp', (x, name, mode) => { const m = x.str(mode), h = open(x, x.str(name), m); return h ? fileBlock(x, { h, text: !m.includes('b') }) : 0; }, cd],
     fclose: ['p', (x, F) => { const r = fileOf(x, F); if (!r) return -1; if (r.cons === undefined) free(x, F); return 0; }, cd],
     fread: ['puup', (x, buf, size, n, F) => {
       const r = fileOf(x, F); if (!r || r.cons !== undefined || !size || !n) return 0;
       let at = buf, want = size * n;
       if (r.back !== undefined) { x.w8(at++, r.back); r.back = undefined; want--; }
+      const o = st.files[r.h - 0x4000];
+      if (r.text && o && o.f.bytes) {                                  // text mode: CR LF as LF
+        const b = o.f.bytes, end = o.f.size, outb = [];
+        while (outb.length < want && o.pos < end) { const c = b[o.pos++]; if (c === 13 && o.pos < end && b[o.pos] === 10) continue; outb.push(c); }
+        x.write(at, Uint8Array.from(outb)); const got = (at - buf) + outb.length;
+        if (got < size * n) r.eof = true;
+        return Math.floor(got / size);
+      }
       const k = hRead(x, r.h, at, want), got = (at - buf) + Math.max(0, k);
       if (got < size * n) r.eof = true;
       return Math.floor(got / size);
@@ -473,10 +497,82 @@ export function ucrtApis({ st, send }) {
     __telemetry_main_invoke_trigger: ['p', () => 0, cd], __telemetry_main_return_trigger: ['p', () => 0, cd],
     __vcrt_InitializeCriticalSectionEx: ['puu', () => 1, cd],
   };
+  // ---- msvcrt.dll's own names: what Visual C++ 6 programs import (Winamp 2 and its plugins), its varargs
+  // printf and scanf (the arguments on the stack after the fixed ones: esp + 4 is the first), its old wide
+  // swprintf with no count, its character-class table (_pctype, a variable), _stat's 36 bytes.
+  const W = (x, p, s) => { for (let i = 0; i < s.length; i++) x.w16(p + 2 * i, s.charCodeAt(i)); x.w16(p + 2 * s.length, 0); };
+  const va = (x, k) => (x.cpu.reg[4] >>> 0) + 4 + 4 * k;            // the k-th 4-byte argument's address
+  const ctypeTable = (x) => st.pctype ||= (() => {
+    const t = malloc(x, 2 * 257); x.w16(t, 0);
+    for (let c = 0; c < 256; c++) {
+      const ch = String.fromCharCode(c);
+      let f = (/[A-Z]/.test(ch) ? 0x101 : 0) | (/[a-z]/.test(ch) ? 0x102 : 0) | (/[0-9]/.test(ch) ? 4 : 0) | (/[ \t\n\v\f\r]/.test(ch) ? 8 : 0);
+      if (c < 32 || c === 127) f |= 0x20;                             // _CONTROL
+      if (c === 32 || c === 9) f |= 0x40;                             // _BLANK
+      if (/[0-9A-Fa-f]/.test(ch)) f |= 0x80;                          // _HEX
+      if (c > 32 && c < 127 && !/[A-Za-z0-9]/.test(ch)) f |= 0x10;   // _PUNCT
+      x.w16(t + 2 + 2 * c, f);
+    }
+    return t + 2;                                                     // _pctype[-1] is EOF's
+  })();
+  const statOf = (x, name, buf) => {
+    const f = st.diskFile(name), dir = !f && st.diskDir && st.diskDir(name);
+    if (!f && !dir) { x.w32(errnoP(x), 2); return -1; }
+    x.write(buf, new Uint8Array(36)); x.w16(buf + 6, dir ? 0x41ff : 0x81b6); x.w16(buf + 8, 1);
+    x.w32(buf + 20, dir ? 0 : f.size); for (const o of [24, 28, 32]) x.w32(buf + o, 946684800);   // 2000-01-01
+    return 0;
+  };
+  const splitPath = (p) => { const m = /^([A-Za-z]:)?((?:.*[\\/])?)([^\\/]*?)(\.[^.\\/]*)?$/.exec(p) || []; return [m[1] || '', m[2] || '', m[3] || '', m[4] || '']; };
+  const classic = {
+    printf: ['p', (x, fmt) => { const s = cprintf(x, x.str(fmt), va(x, 1)); out(x, fileOf(x, stdFile(x, 1)), enc(s)); return s.length; }, cd],
+    fprintf: ['pp', (x, F, fmt) => { const r = fileOf(x, F), s = cprintf(x, x.str(fmt), va(x, 2)); if (r) out(x, r, enc(s)); return s.length; }, cd],
+    sscanf: ['pp', (x, buf, fmt) => cscanf(x, x.str(buf), x.str(fmt), va(x, 2)), cd],
+    _snprintf: ['pup', (x, buf, n, fmt) => { const s = cprintf(x, x.str(fmt), va(x, 3)); setStr(x, buf, s.slice(0, n)); if (s.length >= n) { if (s.length > n) return -1; } return s.length; }, cd],
+    swprintf: ['pp', (x, buf, fmt) => { const s = cprintf(x, wstr(x, fmt), va(x, 2), true); W(x, buf, s); return s.length; }, cd],
+    vswprintf: ['ppp', (x, buf, fmt, ap) => { const s = cprintf(x, wstr(x, fmt), ap, true); W(x, buf, s); return s.length; }, cd],
+    _fsopen: ['ppi', (x, name, mode) => { const m = x.str(mode), h = open(x, x.str(name), m); return h ? fileBlock(x, { h, text: !m.includes('b') }) : 0; }, cd],
+    _wfsopen: ['ppi', (x, name, mode) => { const h = open(x, wstr(x, name), wstr(x, mode)); return h ? fileBlock(x, { h }) : 0; }, cd],
+    _fdopen: ['ip', (x, fd) => (fd >= 0x4000 ? fileBlock(x, { h: fd }) : 0), cd],
+    _stat: ['pp', (x, name, buf) => statOf(x, x.str(name), buf), cd],
+    _splitpath: ['ppppp', (x, path, d, dir, fname, ext) => { const parts = splitPath(x.str(path)); [d, dir, fname, ext].forEach((p, i) => { if (p) setStr(x, p, parts[i]); }); return 0; }, cd],
+    _makepath: ['ppppp', (x, buf, d, dir, fname, ext) => {
+      let dirs = dir ? x.str(dir) : ''; if (dirs && !/[\\/]$/.test(dirs)) dirs += '\\';
+      let e = ext ? x.str(ext) : ''; if (e && e[0] !== '.') e = '.' + e;
+      setStr(x, buf, (d ? x.str(d) : '') + dirs + (fname ? x.str(fname) : '') + e); return 0;
+    }, cd],
+    _strcmpi: ['pp', (x, a, b) => { const s = x.str(a).toLowerCase(), t = x.str(b).toLowerCase(); return s < t ? -1 : s > t ? 1 : 0; }, cd],
+    _mbsstr: ['pp', (x, a, b) => { const i = x.str(a).indexOf(x.str(b)); return i < 0 ? 0 : a + i; }, cd],
+    _isctype: ['ii', (x, c, mask) => (c >= -1 && c < 256 ? x.r16(ctypeTable(x) + 2 * c) & mask : 0), cd],
+    _pctype: ['', (x) => { const v = malloc(x, 4); x.w32(v, ctypeTable(x)); return x.r32(v); }, { data: true }],
+    __mb_cur_max: ['', () => 1, { data: true }],
+    _atoi64: ['p', (x, p) => { const m = /^\s*[-+]?\d+/.exec(x.str(p)); const v = BigInt.asUintN(64, BigInt(m ? m[0].trim() : 0)); return { eax: Number(v & 0xffffffffn), edx: Number(v >> 32n) }; }, cd],
+    _i64toa: ['uuip', (x, lo, hi, buf, r) => { const v = BigInt.asIntN(64, (BigInt(hi) << 32n) | BigInt(lo >>> 0)); setStr(x, buf, (r === 10 ? v : BigInt.asUintN(64, v)).toString(r)); return buf; }, cd],
+    _itow: ['ipi', (x, v, buf, r) => { W(x, buf, (r === 10 ? v | 0 : v >>> 0).toString(r)); return buf; }, cd],
+    _ltow: ['ipi', (x, v, buf, r) => { W(x, buf, (r === 10 ? v | 0 : v >>> 0).toString(r)); return buf; }, cd],
+    _wtoi: ['p', (x, p) => parseInt(wstr(x, p), 10) | 0, cd],
+    _wcsdup: ['p', (x, p) => { const s = wstr(x, p), q = malloc(x, 2 * s.length + 2); W(x, q, s); return q; }, cd],
+    wcscpy: ['pp', (x, d, s0) => { W(x, d, wstr(x, s0)); return d; }, cd],
+    wcsncpy: ['ppu', (x, d, s0, n) => { const s = wstr(x, s0).slice(0, n); for (let i = 0; i < n; i++) x.w16(d + 2 * i, i < s.length ? s.charCodeAt(i) : 0); return d; }, cd],
+    wcscat: ['pp', (x, d, s0) => { W(x, d, wstr(x, d) + wstr(x, s0)); return d; }, cd],
+    wcspbrk: ['pp', (x, p, set) => { const s = wstr(x, p), c = wstr(x, set); for (let i = 0; i < s.length; i++) if (c.includes(s[i])) return p + 2 * i; return 0; }, cd],
+    wcstol: ['ppi', (x, p, end, base) => { const s = wstr(x, p), m = /^\s*[-+]?(0x)?[0-9a-fA-F]*/.exec(s), v = parseInt(m[0], base || 10); if (end) x.w32(end, p + 2 * m[0].length); return Number.isNaN(v) ? 0 : v | 0; }, cd],
+    iswalnum: ['i', (x, c) => (/[\p{L}\p{N}]/u.test(String.fromCharCode(c & 0xffff)) ? 1 : 0), cd],
+    iswdigit: ['i', (x, c) => (c >= 48 && c <= 57 ? 1 : 0), cd],
+    iswctype: ['ii', (x, c, mask) => (c < 256 ? x.r16(ctypeTable(x) + 2 * c) & mask : (mask & 0x103) && /\p{L}/u.test(String.fromCharCode(c)) ? mask & 0x103 : 0), cd],
+    frexp: ['dp', (x, v, e) => { if (!v || !Number.isFinite(v)) { x.w32(e, 0); return { st0: v }; } let k = Math.ceil(Math.log2(Math.abs(v))); let m = v / 2 ** k; if (Math.abs(m) >= 1) { m /= 2; k++; } x.w32(e, k); return { st0: m }; }, cd],
+    ldexp: ['di', (x, v, e) => ({ st0: v * 2 ** e }), cd],
+    tanh: ['d', (x, v) => ({ st0: Math.tanh(v) }), cd],
+    // C++: a type_info's destructor (nothing to free here), terminate (the program stops), and the frames'
+    // handler of Visual C++ 6's exceptions (one thrown stops the program first: _CxxThrowException).
+    '??1type_info@@UAE@XZ': ['', () => 0],
+    '?terminate@@YAXXZ': ['', (x) => { x.win.say('terminate()'); x.lx.exitProcess(3); return 0; }, cd],
+    __CxxFrameHandler: ['pppp', () => 1, cd],
+  };
   // Every set's functions are ucrtbase's: a name any program imports from any set answers the same.
   const ucrtbase = { ...runtime, ...heapFns, ...math, ...stdio, ...str, ...convert, ...timeFns, ...utility, ...env, ...fs, ...locale, ...vc };
+  // msvcrt.dll's names beyond ucrtbase's (api.js gives msvcrt.dll and crtdll.dll every table's functions).
   const tables = UCRT_SETS.map((s) => ({ dll: `api-ms-win-crt-${s}-l1-1-0.dll`, fns: ucrtbase }));
-  return [...tables, { dll: 'ucrtbase.dll', fns: ucrtbase }, { dll: 'vcruntime140.dll', fns: vc }];
+  return [...tables, { dll: 'ucrtbase.dll', fns: ucrtbase }, { dll: 'vcruntime140.dll', fns: vc }, { dll: 'msvcrt-classic', fns: classic }];
 }
 
 const wstr = (x, p, n = -1) => { if (!p) return ''; let s = ''; for (let i = 0; n < 0 || i < n; i++) { const c = x.r16(p + 2 * i); if (n < 0 && !c) break; s += String.fromCharCode(c); } return s; };

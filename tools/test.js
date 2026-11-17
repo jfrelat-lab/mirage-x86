@@ -5429,6 +5429,35 @@ const runLinux = (hex, argv) => {
     got = [before === after, count, flags.toString(16), bits, b !== a, rect, len].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: stock objects kept, an OpenGL pixel format, a maximized window, a new main window, a long text', got, 'true 1 25 32/24/8 true -3,-3,1027,741 2000');
+  // Winamp 2: its built-in skin is RLE8 bitmaps; skins shape windows with polygons; its playlist is read in
+  // text mode (CR LF as LF) and names "demo.mp3 " (Win32 drops trailing spaces); its frameless windows
+  // draw their own title bars through GetWindowDC.
+  try { const { fn, x, str, apis } = await w32(), { decodeDib } = await import('../src/win32/classic.js'), k = (n) => fn('kernel32.dll', n), c = (n) => fn('msvcrt.dll', n);
+    const u = (n) => fn('user32.dll', n), g = (n) => fn('gdi32.dll', n), r = [];
+    const dib = Uint8Array.from([40, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 1, 0, 8, 0, 1, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0xff, 0, 0xff, 0, 0, 0, 4, 1, 0, 0, 0, 3, 0, 1, 0, 0, 0, 0, 0, 1]), at = x.win.heapAlloc(dib.length); x.write(at, dib);
+    const d = decodeDib(x, at); r.push(d ? [...d.px].map((v) => v.toString(16)).join(',') : 'none');
+    const pts = x.win.heapAlloc(64), cnt = x.win.heapAlloc(8), box = x.win.heapAlloc(16);
+    [0, 0, 10, 0, 10, 10, 0, 10, 20, 0, 30, 0, 30, 10, 20, 10].forEach((v, i) => x.w32(pts + 4 * i, v)); x.w32(cnt, 4); x.w32(cnt + 4, 4);
+    const rgn = g('CreatePolyPolygonRgn')(pts, cnt, 2, 1); r.push(g('GetRgnBox')(rgn, box), [0, 4, 8, 12].map((o) => x.r32(box + o)).join(','), (g('GetRegionData')(rgn, 0, 0) - 32) / 16);
+    const text = 'a\r\nb', b = str(text), done = x.win.heapAlloc(4), h = k('CreateFileA')(str('C:\\l.m3u'), 0x40000000, 0, 0, 2, 0, 0);
+    k('WriteFile')(h, b, text.length, done, 0); k('CloseHandle')(h);
+    const buf = x.win.heapAlloc(16), F = c('fopen')(str('C:\\l.m3u'), str('r'));
+    c('fgets')(buf, 16, F); r.push(JSON.stringify(x.str(buf))); c('fgets')(buf, 16, F); r.push(c('fgets')(buf, 16, F), x.r32(F + 12) & 0x10, c('feof')(F));
+    const FB = c('fopen')(str('C:\\l.m3u'), str('rb')); c('fgets')(buf, 16, FB); r.push(JSON.stringify(x.str(buf)));
+    const FT = c('fopen')(str('C:\\l.m3u'), str('rt')); r.push(c('fread')(buf, 1, 16, FT));
+    r.push(k('CreateFileA')(str('C:\\l.m3u '), 0x80000000, 1, 0, 3, 0, 0) !== -1);
+    const main = u('CreateWindowExA')(0, 0, 0, 0x10cf0000, 0, 0, 320, 200); u('CreateWindowExA')(0, str('static'), 0, 0x90000000, 300, 0, 50, 50, main, 0);
+    const pop = parseInt(apis.windows().at(-1).hwnd, 16);
+    r.push(u('GetWindowDC')(pop) === u('GetDC')(pop) && u('GetWindowDC')(pop) !== u('GetWindowDC')(main));
+    const m = u('CreatePopupMenu')(), mii = x.win.heapAlloc(48), tb = x.win.heapAlloc(16); u('AppendMenuA')(m, 0, 77, str('Play'));
+    x.write(mii, new Uint8Array(48)); x.w32(mii, 48); x.w32(mii + 4, 0x42); x.w32(mii + 36, tb); x.w32(mii + 40, 16);
+    r.push(u('GetMenuItemInfoA')(m, 0, 1, mii), x.r32(mii + 16), x.str(tb), x.r32(mii + 40));
+    const lib = str('user32.dll'), hl = k('LoadLibraryA')(lib); k('LoadLibraryA')(lib); r.push([1, 2, 3].map(() => k('FreeLibrary')(hl)).join(''));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: RLE8 bitmaps, polygon regions, text-mode reads, trailing spaces, frameless window DCs, menu item info, FreeLibrary\'s count', got,
+    'ff0000,ff,ff0000,ff0000,ff,ff,ff,ff 3 0,0,30,10 2 "a\\n" 0 16 1 "a\\r\\n" 3 true true 1 77 Play 4 110');
   // The stand-ins for Arial, Times New Roman and Courier New measure a line as Windows does: their win
   // metrics set to their hhea ones (Arimo's raised 2136/797 made a 17-pixel Arial line 25 pixels high).
   try { const { windowsMetrics } = await import('../src/win32/fonts.js'), b = new Uint8Array(176), dv = new DataView(b.buffer);

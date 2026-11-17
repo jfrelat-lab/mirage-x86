@@ -25,6 +25,7 @@
 //   MIRAGE_W32CODEPAGE=932          the system's code page (machine.codepage): Shift-JIS, a Japanese Windows'
 //   MIRAGE_W32DUMP=<name>,...       those files of the program's disk at the end (what it wrote)
 //   MIRAGE_W32DUMPDIR=<dir>         ... written into that directory, as bytes, instead
+//   MIRAGE_W32DUMPTREE=<folder>     every file under that folder of the disk, into MIRAGE_W32DUMPDIR by its path below it
 //   MIRAGE_W32MEMDUMP=<mod>:<rva>:<size>@<s>,<s>:<prefix>  a module's bytes at those guest seconds; <mod> "abs": an address
 //   MIRAGE_W32WINS=1                the windows at the end: handle, class, parent, id, place, style, title
 //   MIRAGE_W32TEX=<dir>             every texture level as the program unlocks it: <dir>/NNNN.bin and index.json
@@ -349,6 +350,15 @@ if (WAV) {
 }
 // MIRAGE_W32DUMP=qconsole.log: a file of the program's disk at the end (what it wrote: Half-Life's -condebug log).
 // MIRAGE_W32DUMPDIR=<dir>: those files written there instead, as bytes, by their base name (an installer's).
+// MIRAGE_W32DUMPTREE=<folder>: every file of the program's disk under that folder ("C:\\Program Files\\Winamp"),
+// written into MIRAGE_W32DUMPDIR by its path below it -- what an installer installed, its subfolders kept.
+if (process.env.MIRAGE_W32DUMPTREE && process.env.MIRAGE_W32DUMPDIR) {
+  const { writeFileSync, mkdirSync } = await import('node:fs'), { dirname } = await import('node:path');
+  const root = process.env.MIRAGE_W32DUMPTREE.toLowerCase().replace(/\\/g, '/').replace(/^[a-z]:\/?/, '').replace(/\/$/, '') + '/';
+  let k = 0;
+  for (const f of apis.diskFiles()) if (f.startsWith(root)) { const out = join(process.env.MIRAGE_W32DUMPDIR, f.slice(root.length)); mkdirSync(dirname(out), { recursive: true }); writeFileSync(out, apis.readFile(f)); k++; }
+  console.error(`w32 tree ${process.env.MIRAGE_W32DUMPTREE}: ${k} files -> ${process.env.MIRAGE_W32DUMPDIR}`);
+}
 if (process.env.MIRAGE_W32DUMP) for (const n of process.env.MIRAGE_W32DUMP.split(',')) {
   const f = apis.readFile(n), dir = process.env.MIRAGE_W32DUMPDIR;
   if (dir && f) { const { writeFileSync, mkdirSync } = await import('node:fs'); mkdirSync(dir, { recursive: true }); writeFileSync(`${dir}/${n.replace(/^.*[\\/]/, '')}`, f); console.error(`w32 file ${n}: ${f.length} bytes`); }

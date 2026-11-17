@@ -50,6 +50,23 @@ export function combine(a, b, op) {
   return normalize(cells);
 }
 
+/** Edges [top point, bottom point, direction] filled (ALTERNATE 1, WINDING 2): the region's rectangles. */
+export function polyRects(edges, mode) {
+  if (!edges.length) return [];
+  const y0 = Math.min(...edges.map((e) => e[0][1])), y1 = Math.max(...edges.map((e) => e[1][1])), cells = [];
+  for (let y = y0; y < y1; y++) {
+    const cy = y + 0.5, xs = [];
+    for (const [a, b, d] of edges) if (cy >= a[1] && cy < b[1]) xs.push([a[0] + (b[0] - a[0]) * (cy - a[1]) / (b[1] - a[1]), d]);
+    xs.sort((p, q) => p[0] - q[0]);
+    let w = 0;
+    for (let i = 0; i + 1 < xs.length; i++) {
+      w = mode === 2 ? w + xs[i][1] : w ^ 1;
+      if (w) { const l = Math.ceil(xs[i][0] - 0.5), r = Math.ceil(xs[i + 1][0] - 0.5); if (r > l) cells.push([l, y, r, y + 1]); }
+    }
+  }
+  return normalize(cells);
+}
+
 const rect = (l, t, r, b) => (r > l && b > t ? [[l, t, r, b]] : []);
 const kind = (rs) => (!rs.length ? NULLREGION : rs.length === 1 ? SIMPLEREGION : COMPLEXREGION);
 const box = (rs) => (rs.length ? [Math.min(...rs.map((r) => r[0])), Math.min(...rs.map((r) => r[1])), Math.max(...rs.map((r) => r[2])), Math.max(...rs.map((r) => r[3]))] : [0, 0, 0, 0]);
@@ -63,6 +80,24 @@ export function regionApis(st, updateRects = () => []) {
   const rd = (x, p) => [i32(x.r32(p)), i32(x.r32(p + 4)), i32(x.r32(p + 8)), i32(x.r32(p + 12))];
   const gdi32 = {
     CreateRectRgn: ['iiii', (x, l, t, r, b) => make(rect(l, t, r, b))],
+    // CreatePolyPolygonRgn(points, counts, n, mode): the polygons filled scanline by scanline, a pixel in
+    // when its centre is (ALTERNATE 1: an odd number of edges to its left; WINDING 2: a non-zero sum).
+    // Winamp 2's skins shape the main window so (region.txt).
+    CreatePolyPolygonRgn: ['ppii', (x, pts, cnts, n, mode) => {
+      const edges = [];
+      for (let k = 0, at = pts; k < n; k++) {
+        const c = x.r32(cnts + 4 * k), p = [];
+        for (let i = 0; i < c; i++, at += 8) p.push([i32(x.r32(at)), i32(x.r32(at + 4))]);
+        for (let i = 0; i < c; i++) { const a = p[i], b = p[(i + 1) % c]; if (a[1] !== b[1]) edges.push(a[1] < b[1] ? [a, b, 1] : [b, a, -1]); }
+      }
+      return make(polyRects(edges, mode));
+    }],
+    CreatePolygonRgn: ['pii', (x, pts, c, mode) => {
+      const p = []; for (let i = 0; i < c; i++) p.push([i32(x.r32(pts + 8 * i)), i32(x.r32(pts + 8 * i + 4))]);
+      const edges = [];
+      for (let i = 0; i < c; i++) { const a = p[i], b = p[(i + 1) % c]; if (a[1] !== b[1]) edges.push(a[1] < b[1] ? [a, b, 1] : [b, a, -1]); }
+      return make(polyRects(edges, mode));
+    }],
     CreateRectRgnIndirect: ['p', (x, p) => make(rect(...rd(x, p)))],
     SetRectRgn: ['piiii', (x, h, l, t, r, b) => { const o = rgn(h); if (!o) return 0; o.rects = rect(l, t, r, b); return 1; }],
     // CombineRgn(dest, a, b, op): the kind of the result, ERROR when a handle is not a region.

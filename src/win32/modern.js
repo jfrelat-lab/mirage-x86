@@ -163,7 +163,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     SystemParametersInfoW: ['uupu', (x, what, n, p) => (what === 0x30 ? A(user32, 'SystemParametersInfoA')(x, what, n, p) : 1)],
     GetWindowThreadProcessId: ['pp', (x, h, pid) => { if (pid) x.w32(pid, 0x100); return 1; }],
     AttachThreadInput: ['uui', () => 1],
-    FlashWindowEx: ['p', () => 1], SetLayeredWindowAttributes: ['puui', () => 1], SetWindowRgn: ['ppi', () => 1],
+    FlashWindowEx: ['p', () => 1], SetLayeredWindowAttributes: ['puui', () => 1], SetWindowRgn: ['ppi', () => 1], GetWindowRgn: ['pp', () => 0],                // ERROR: no window region kept
     TrackMouseEvent: ['p', () => 1], GetMessageExtraInfo: ['', () => 0], GetDoubleClickTime: ['', () => 500],
     // The region a window is due to paint: its whole client area while it is invalid (WM_PAINT pending),
     // nothing once validated -- SDL validates its window only when this says there is something.
@@ -288,6 +288,11 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   const ole32 = {
     CoTaskMemFree: ['p', (x, p) => { if (p) x.win.heapFree(p); return 0; }],
     CoTaskMemAlloc: ['u', (x, n) => x.win.heapAlloc(Math.max(1, n))],
+    CoTaskMemRealloc: ['pu', (x, p, n) => {
+      const q = x.win.heapAlloc(Math.max(1, n));
+      if (p) { const old = x.win.heapSize(p) >>> 0; x.write(q, x.bytes(p, Math.min(n, old))); x.win.heapFree(p); }
+      return q;
+    }],
     PropVariantClear: ['p', (x, p) => { x.write(p, new Uint8Array(16)); return 0; }],
     CLSIDFromString: ['pp', () => 0x800401f3],                      // CO_E_CLASSSTRING
   };
@@ -315,6 +320,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     CancelIo: ['p', () => 1], GetOverlappedResult: ['pppi', () => 0], DeviceIoControl: ['pupupupp', () => 0],
     CreateToolhelp32Snapshot: ['uu', () => -1], Process32First: ['pp', () => 0], Process32Next: ['pp', () => 0],
     // A semaphore: an event, signalled while its count is above zero (WaitForSingleObject takes one).
+    CreateSemaphoreA: ['piip', (x, sa, initial) => A(kernel32, 'CreateEventA')(x, 0, 0, initial > 0 ? 1 : 0, 0)],
     CreateSemaphoreW: ['piip', (x, sa, initial) => A(kernel32, 'CreateEventA')(x, 0, 0, initial > 0 ? 1 : 0, 0)],
     ReleaseSemaphore: ['pip', (x, h, n, prev) => { if (prev) x.w32(prev, 0); return A(kernel32, 'SetEvent')(x, h); }],
     GetCommandLineW: ['', (x) => (st.cmdW ||= (() => { const s = x.str(A(kernel32, 'GetCommandLineA')(x)), b = wbytes(s), p = x.win.heapAlloc(b.length); x.write(p, b); return p; })())],

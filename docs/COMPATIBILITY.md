@@ -225,6 +225,12 @@ MIRAGE's own test demos (`demos/`), all golden:
 | <img src="compat/win32-deltarune-intro.png" width="160" alt=""> | Deltarune Chapter 1 (Toby Fox, 2018), GameMaker Studio 2 | Direct3D 11, DXGI, VC++ 2015 runtime, SSE2 | 🟡 Renders | The runner starts on a Pentium 4 with 512 MiB, loads its game and draws its intro in its window on the desktop through Direct3D 11 at feature level 9_3 (each shader's level 9 bytecode, on PRISM's Direct3D 9 device model), some 15 frames a second in the page; no sound (XAudio2 missing). Run locally as a test | 2026-11-15 |
 | <img src="compat/win32-halflife-uplink.png" width="160" alt=""> | Half-Life: Uplink demo (Valve, 1999) | DirectDraw, its own DLLs | 🟡 Renders, not offered | `hl.exe` and its software renderer `sw.dll` (`-soft`), the game in `hl.dll`, the HUD in `client.dll`: its first level drawn and its HUD up, run headless (captured at 120 s), as under Wine. No OASIS image: the demo's licence (Sierra, 1999) allows personal use only, not redistribution | 2026-11-11 |
 
+### Applications
+
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Title | API | Status | Notes |
+|---|---|---|---|---|
+| <img src="compat/win32-winamp.png" width="160" alt=""> | Winamp 2.95 (Nullsoft, 2003) | GDI, waveOut, its plug-ins (in_mp3, out_wave) | 🟢 Plays | Installed by its own setup in MIRAGE-WIN32; its main window, equalizer and playlist drawn with its built-in skin, and its demo MP3 played to the end with its spectrum. The minibrowser's update dialog is drawn without its caption; shortcut menus are not shown yet; AVS not tried yet. Run locally as a test | 2026-11-17 |
+
 ### Intros
 
 The scene's Windows intros of 2007-2017, run with no Windows: the `.exe` mapped as Windows XP maps it,
