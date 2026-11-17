@@ -5429,6 +5429,47 @@ const runLinux = (hex, argv) => {
     got = [before === after, count, flags.toString(16), bits, b !== a, rect, len].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: stock objects kept, an OpenGL pixel format, a maximized window, a new main window, a long text', got, 'true 1 25 32/24/8 true -3,-3,1027,741 2000');
+  // A tree view (comctl32's SysTreeView32) as AVS's editor fills it: items inserted at the root, first and
+  // last, a child; walked, opened, read back, hit, selected and deleted.
+  try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), r = [];
+    const main = u('CreateWindowExA')(0, 0, 0, 0x10cf0000, 0, 0, 320, 200); u('CreateWindowExA')(0, str('SysTreeView32'), 0, 0x50000007, 0, 0, 200, 100, main, 9);
+    const tv = parseInt(apis.windows().at(-1).hwnd, 16), tvm = (m, wp, lp) => u('DefWindowProcA')(tv, m, wp, lp) >>> 0;
+    const ins = x.win.heapAlloc(48), ins1 = (parent, after, text) => { x.write(ins, new Uint8Array(48)); x.w32(ins, parent); x.w32(ins + 4, after); x.w32(ins + 8, 5); x.w32(ins + 24, str(text)); x.w32(ins + 44, 77); return tvm(0x1100, 0, ins); };
+    const a = ins1(0xffff0000, 0xffff0002, 'Alpha'), b = ins1(a, 0xffff0002, 'Beta'), c = ins1(0xffff0000, 0xffff0001, 'Gamma');
+    const next = (f, h) => tvm(0x110a, f, h);
+    r.push(tvm(0x1105, 0, 0), next(0, 0) === c, next(1, c) === a, next(4, a) === b, next(3, b) === a, next(6, a) === c ? 'shut' : next(6, a) || 'shut');
+    r.push(tvm(0x1102, 2, a), next(6, a) === b);
+    const item = x.win.heapAlloc(40), buf = x.win.heapAlloc(16); x.write(item, new Uint8Array(40)); x.w32(item, 0x0d); x.w32(item + 4, b); x.w32(item + 12, 0xff); x.w32(item + 16, buf); x.w32(item + 20, 16);
+    r.push(tvm(0x110c, 0, item), x.str(buf), x.r32(item + 36));
+    const ht = x.win.heapAlloc(16), hit = (X, Y) => { x.w32(ht, X); x.w32(ht + 4, Y); const h = tvm(0x1111, 0, ht); return `${h === a ? 'A' : h === b ? 'B' : h === c ? 'C' : h}/${x.r32(ht + 8).toString(16)}`; };
+    r.push(hit(30, 20), hit(5, 20), hit(5, 90));
+    tvm(0x110b, 9, b); r.push(next(9, 0) === b, tvm(0x1101, 0, a), tvm(0x1105, 0, 0), next(9, 0));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a tree view -- inserted first and last, walked, opened, read, hit, selected, deleted', got, '3 true true true true shut 1 true 1 Beta 77 A/4 A/10 0/1 true 1 1 0');
+  // A stroke thinner than a pixel between two rows' centres is drawn on the nearest row (dropout control):
+  // Arial's hyphen at 8 points, the "-" of AVS's editor, was not drawn.
+  try { const be16 = (...v) => v.flatMap((n) => [(n >> 8) & 255, n & 255]);
+    const head = new Array(54).fill(0); head.splice(18, 2, ...be16(1000));
+    const os2 = new Array(78).fill(0); os2.splice(74, 4, ...be16(900, 300));
+    const hhea = new Array(36).fill(0); hhea.splice(34, 2, ...be16(2));
+    // glyph 1, '-': one clockwise contour, x 100..600, y 260..340 -- 0.8 pixel high at 10 pixels an em, between rows
+    const dash = [...be16(1, 100, 260, 600, 340, 3, 0), 1, 1, 1, 1, ...be16(100, 0, 500, 0), ...be16(260, 80, 0, 0xffb0)];
+    const cmap = [...be16(0, 1, 3, 1, 0, 12), ...be16(4, 32, 0, 4, 4, 1, 0, 0x2d, 0xffff, 0, 0x2d, 0xffff, (1 - 0x2d) & 0xffff, 1, 0, 0)];
+    const tables = { head, maxp: [0, 0, 0x50, 0, ...be16(2)], hhea, 'OS/2': os2, hmtx: be16(700, 0, 700, 0), cmap, loca: be16(0, 0, dash.length / 2), glyf: dash };
+    const names = Object.keys(tables), ttf = [...be16(1, 0, names.length, 0, 0, 0)];
+    let at = 12 + 16 * names.length;
+    for (const n of names) { ttf.push(...[...n].map((c) => c.charCodeAt(0)), 0, 0, 0, 0, ...be16(at >>> 16, at & 0xffff, 0, tables[n].length)); at += tables[n].length; }
+    for (const n of names) ttf.push(...tables[n]);
+    const { fn, x, str } = await w32('', { fonts: { 'times new roman': Uint8Array.from(ttf) } }), g = (n) => fn('gdi32.dll', n);
+    const bmi = x.win.heapAlloc(40); x.write(bmi, new Uint8Array(40)); x.w32(bmi, 40); x.w32(bmi + 4, 16); x.w32(bmi + 8, -16); x.w16(bmi + 12, 1); x.w16(bmi + 14, 32);
+    const pb = x.win.heapAlloc(4), hbm = g('CreateDIBSection')(0, bmi, 0, pb, 0, 0), bits = x.r32(pb), dc = g('CreateCompatibleDC')(0); g('SelectObject')(dc, hbm);
+    const lf = x.win.heapAlloc(60); x.write(lf, new Uint8Array(60)); x.w32(lf, -10); x.write(lf + 28, new TextEncoder().encode('Times\0')); g('SelectObject')(dc, g('CreateFontIndirectA')(lf));
+    x.write(bits, new Uint8Array(16 * 16 * 4).fill(0xff)); g('SetBkMode')(dc, 1); g('TextOutA')(dc, 0, 0, str('-'), 1);
+    const rows = []; for (let Y = 0; Y < 16; Y++) { let n = 0; for (let X = 0; X < 16; X++) if (!(x.r32(bits + 4 * (Y * 16 + X)) & 0xffffff)) n++; if (n) rows.push(`${Y}:${n}`); }
+    got = rows.join(' ') || 'none';
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a hyphen thinner than a pixel, between two rows, drawn on the nearest (dropout)', got, '6:5');
   // Winamp 2: its built-in skin is RLE8 bitmaps; skins shape windows with polygons; its playlist is read in
   // text mode (CR LF as LF) and names "demo.mp3 " (Win32 drops trailing spaces); its frameless windows
   // draw their own title bars through GetWindowDC.

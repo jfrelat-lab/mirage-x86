@@ -6,6 +6,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 ## 2026-11-17
 
 - **Winamp 2.95 plays MP3s** on the Windows machine, in its built-in skin, with AVS visualisations (tested locally).
+- **Windows dialogs** have their frames and captions, overlapping windows cover one another as on Windows, and tree views are drawn and work.
 - **Quake III Arena's demo installs and plays** on the Windows machine (tested locally).
 - **Windows setup programs**: their texts, licences and destination folders work (Installer VISE's).
 

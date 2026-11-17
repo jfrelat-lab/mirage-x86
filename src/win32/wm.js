@@ -173,6 +173,24 @@ export function windowManager(st) {
       }
     }
   };
+  /**
+   * A dialog application's top-level window's frame (src/win32/api.js deskMode), into `fb` of size S with
+   * its outer corner at (0, 0): the face and its raised edge, a caption (`cap` 19) in the active or
+   * inactive gradient with the title and a close box -- what Windows paints at WM_NCPAINT. The client
+   * area (inside b and cap) is left as it was.
+   */
+  wm.paintFrame = (fb, S, font, { b, cap, title }, active = true) => {
+    fill(fb, S, 0, 0, S.w, b + cap, FACE); fill(fb, S, 0, S.h - b, S.w, b, FACE); fill(fb, S, 0, 0, b, S.h, FACE); fill(fb, S, S.w - b, 0, b, S.h, FACE);
+    if (b >= 3) raised(fb, S, 0, 0, S.w, S.h, FACE, LIGHT);
+    else if (b) { fill(fb, S, 0, 0, S.w, 1, 0); fill(fb, S, 0, S.h - 1, S.w, 1, 0); fill(fb, S, 0, 0, 1, S.h, 0); fill(fb, S, S.w - 1, 0, 1, S.h, 0); }
+    if (!cap) return;
+    const cw = S.w - 2 * b, [L, R] = active ? [CAPTION_L, CAPTION_R] : [SHADOW, 0xc0c0c0];
+    for (let i = 0; i < cw; i++) fill(fb, S, b + i, b, 1, 18, lerp(L, R, cw > 1 ? i / (cw - 1) : 0) | 0);
+    text(fb, S, font, title || '', b + 4, b + 1, cw - 26, active ? 0xffffff : FACE);
+    const k = { x: b + cw - 2 - 16, y: b + 2, w: 16, h: 14 };
+    fill(fb, S, k.x, k.y, k.w, k.h, FACE); raised(fb, S, k.x, k.y, k.w, k.h, LIGHT, FACE);
+    for (let i = 0; i < 7; i++) { fill(fb, S, k.x + 4 + i, k.y + 3 + i, 2, 1, 0); fill(fb, S, k.x + 9 - i, k.y + 3 + i, 2, 1, 0); }
+  };
   /** The open popup, over everything but the cursor. */
   const drawPopup = (fb, S, font) => {
     const g = popupRows(); if (!g) return;

@@ -185,11 +185,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     for (let y = Math.max(0, y0); y < Math.min(bm.h, y1); y++) bm.px.fill(c, y * bm.w + Math.max(0, x0), y * bm.w + Math.max(0, Math.min(bm.w, x1)));
   };
   // A glyph's outline (truetype.js: y up, origin at the pen) filled at pixel centres, nonzero winding.
+  // Dropout control, as TrueType's rasterizers do: an outer contour thinner than a pixel row and between
+  // two rows' centres (the hyphen of Arial at 8 points, AVS's "-" button) is filled on its nearest row,
+  // a span between two pixels' centres on its nearest pixel; they were left out, the hyphen not drawn.
   const fillGlyph = (bm, g, ox, oy, c) => {
-    const edges = [];
+    const edges = [], outlines = [];
     for (const ct of g.contours) {
       let p = ct.start;
-      const line = (q) => { if (p[1] !== q[1]) edges.push([ox + p[0], oy - p[1], ox + q[0], oy - q[1]]); p = q; };
+      const pts = [[ox + p[0], oy - p[1]]];
+      const line = (q) => { if (p[1] !== q[1]) edges.push([ox + p[0], oy - p[1], ox + q[0], oy - q[1]]); pts.push([ox + q[0], oy - q[1]]); p = q; };
       for (const cv of ct.curves) {
         if (!cv.spline) { for (const q of cv.pts) line(q); continue; }
         const pts = cv.pts;                                            // off-curve points, then the end on the curve
@@ -199,7 +203,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         }
       }
       line(ct.start);
+      outlines.push(pts);
     }
+    if (!edges.length) return;
     const ys = edges.flatMap((e) => [e[1], e[3]]);
     for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(bm.h - 1, Math.ceil(Math.max(...ys))); y++) {
       const yc = y + 0.5, xs = [];
@@ -211,8 +217,21 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       for (let i = 0; i < xs.length - 1; i++) {
         wind += xs[i][1];
         if (!wind) continue;
-        for (let X = Math.max(0, Math.ceil(xs[i][0] - 0.5)); X < Math.min(bm.w, Math.ceil(xs[i + 1][0] - 0.5)); X++) bm.px[y * bm.w + X] = c;
+        const a = Math.ceil(xs[i][0] - 0.5), b = Math.ceil(xs[i + 1][0] - 0.5);
+        if (a >= b) { const X = Math.floor((xs[i][0] + xs[i + 1][0]) / 2); if (X >= 0 && X < bm.w && xs[i + 1][0] > xs[i][0]) bm.px[y * bm.w + X] = c; continue; }
+        for (let X = Math.max(0, a); X < Math.min(bm.w, b); X++) bm.px[y * bm.w + X] = c;
       }
+    }
+    for (const pts of outlines) {
+      let area = 0, y0 = Infinity, y1 = -Infinity, x0 = Infinity, x1 = -Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const [px, py] = pts[i], [qx, qy] = pts[(i + 1) % pts.length]; area += px * qy - qx * py;
+        y0 = Math.min(y0, py); y1 = Math.max(y1, py); x0 = Math.min(x0, px); x1 = Math.max(x1, px);
+      }
+      // Screen y is down: an outer contour (clockwise in the font) has a positive area here.
+      if (area <= 0 || Math.ceil(y1 - 0.5) > Math.ceil(y0 - 0.5)) continue;
+      const Y = Math.floor((y0 + y1) / 2); if (Y < 0 || Y >= bm.h) continue;
+      for (let X = Math.max(0, Math.round(x0)); X < Math.min(bm.w, Math.max(Math.round(x0) + 1, Math.round(x1))); X++) bm.px[Y * bm.w + X] = c;
     }
   };
   // A DIB to or from a bitmap: BITMAPINFOHEADER's height > 0 bottom-up, < 0 top-down; 24 or 32 bits.
@@ -722,6 +741,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // its procedure, its parent and control id. The first top-level window is the one the screen shows.
   st.wins = new Map(); st.hooks = new Map();
   const win = (h) => st.wins.get(h);
+  const zNext = () => (st.zSeq = (st.zSeq | 0) + 1);                  // a window's place in the order of top-level windows (zKey)
   const procOf = (h) => (h === st.hwnd ? st.wndProc : win(h) ? win(h).proc : 0);
   let nextHwnd = 0x10100;
   const createWindow = (x, cls, style, w, h, wide, X, Y, title, parent = 0, menu = 0, ex = 0) => {
@@ -761,7 +781,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // WS_VISIBLE: shown and activated before CreateWindowEx returns, as Windows does it -- Quake II
     // creates its window visible and only takes the mouse once WM_ACTIVATE has said it is active.
     const shown = st.shown ? (st.active = true, ACTIVATE) : [];
-    st.wins.set(st.hwnd, { hwnd: st.hwnd, main: true, cls: key, parent: 0, id: 0, ex: x.r32(a), erase: true });   // its first WM_PAINT erases
+    st.wins.set(st.hwnd, { hwnd: st.hwnd, main: true, cls: key, parent: 0, id: 0, ex: x.r32(a), erase: true, z: zNext() });   // its first WM_PAINT erases
     // An overlapped window placed by Windows (CW_USEDEFAULT) gets its WM_SIZE and WM_MOVE when first shown,
     // not from CreateWindowEx (Wine's WIN_NEED_SIZE): Solitaire makes its game after CreateWindowEx returns,
     // and its WM_SIZE, sent before, read through a pointer still null.
@@ -795,7 +815,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (dflt(X)) { X = 22; Y = 22; }
     const bar = style & 0x40000000 ? 0 : menu || classMenu(x, key);  // a top-level window's menu bar, kept for when it is the screen's
     const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, bar, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
-      title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), ...extra };
+      title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), z: zNext(), ...extra };
     if (rec.ex) rec.long.set(-20, rec.ex);                            // GWL_EXSTYLE: what it was made with
     st.wins.set(hwnd, rec);
     if (!proc) return hwnd;
@@ -890,7 +910,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const activateOther = (x, h, result, pop) => {
     const w = win(h);
     if (!w || w.main || h === st.hwnd || (w.style & 0x40000000) || st.activeWin === h) { if (h === st.hwnd) st.activeWin = 0; return result(); }
-    st.activeWin = h; st.focus = h;
+    const was = st.activeWin || st.hwnd; st.activeWin = h; st.focus = h; raise(h); activeFrames(x, was, h);
     return send(x, ACTIVATE.slice(1).map((m) => [...m, h]), () => result(), pop);
   };
   // ---- painting the windows that are not the main one, and a dialog that is ---------------------------
@@ -929,6 +949,31 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    */
   const popFrame = (w) => { const s = w.style | 0; return { b: s & 0xc00000 || s & 0x80 ? 3 : s & 0x800000 ? 1 : 0, cap: (s & 0xc00000) === 0xc00000 ? 19 : 0 }; };
   const topOf = (h) => { let w = win(h); while (w && !w.main && (w.style & 0x40000000)) w = win(w.parent); return w; };
+  /*
+   * The order of the top-level windows, bottom to top: each window's z, given when it is made and again
+   * when it comes to the top (activated, clicked on a dialog application's desktop); WS_EX_TOPMOST (8)
+   * above the others. On a dialog application's desktop (deskMode) a window's drawing does not reach what
+   * the windows above it cover, and their frames are painted there too (ncPaint): the AVS editor's group
+   * box drew over Winamp's minibrowser, and dialogs had no caption.
+   */
+  const exOf = (w) => ((w.long && w.long.get(-20)) ?? w.ex) | 0;
+  const zKey = (w) => (exOf(w) & 8 ? 1e12 : 0) + (w.z | 0);
+  const raise = (h) => { const t = topOf(h); if (t) t.z = zNext(); return t; };
+  const shownTop = (w) => !w.dead && (w.main ? !!st.shown && !st.destroyed : !!w.visible && !(w.style & 0x40000000));
+  /** A top-level window's rectangle on the screen with its frame (a dialog's, which ncPaint draws): { l, t, r, b, f }. */
+  const topRect = (w) => {
+    const f = w.dialog ? popFrame({ style: w.main ? st.style : w.style }) : { b: 0, cap: 0 }, o = screenOrigin(w.main ? st.hwnd : w.hwnd), W = w.main ? st.w : w.w, H = w.main ? st.h : w.h;
+    return { l: o.x - f.b, t: o.y - f.b - f.cap, r: o.x + (W | 0) + f.b, b: o.y + (H | 0) + f.b, f };
+  };
+  /** The topmost shown top-level window (not WS_EX_TOPMOST): the one whose caption is drawn active. */
+  const topmost = () => { let t = null; for (const v of st.wins.values()) if (shownTop(v) && !(exOf(v) & 8) && (!t || zKey(v) > zKey(t))) t = v; return t; };
+  /** What the shown top-level windows above h's own cover of the screen (WS_EX_TRANSPARENT covers nothing). */
+  const coversOf = (h) => {
+    const t = topOf(h); if (!t) return [];
+    const k = zKey(t), out = [];
+    for (const v of st.wins.values()) if (v !== t && shownTop(v) && zKey(v) > k && !(exOf(v) & 0x20)) out.push(topRect(v));
+    return out;
+  };
   // Over a program that set a display mode (DirectDraw full screen), a window shows what is under it
   // where it has not drawn, as on Windows: its pixels start see-through (top byte set), and the window
   // manager copies only what was drawn. Storm's dialogs (Diablo's menus) draw their pictures into the
@@ -947,21 +992,47 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return { w: D.w, h: D.h, px: st.deskPx };
   };
   // What a hidden or moved window leaves: the desktop there, and the windows that were under it to paint.
-  const uncoverRect = (o, W, H) => {
+  const uncoverRect = (o, W, H, w = null) => {
     // A layer gone: the screen composed again, now (Pinball's splash, destroyed while the table loads for
     // 2 s); over a display mode, the windows it covered paint again what it hid (Diablo's class notice).
     if (!deskMode()) { wm.redraw(); if (st.modeSet) for (const w of st.wins.values()) if (!w.main && !w.dead && w.visible && !(w.style & 0x40000000)) invalidate(w.hwnd, true, true); return; }
     const sc = deskScreen();
+    // A dialog's frame with it (ncPaint draws one).
+    if (w && w.dialog) { const f = popFrame({ style: w.main ? st.style : w.style }); o = { x: o.x - f.b, y: o.y - f.b - f.cap }; W += 2 * f.b; H += 2 * f.b + f.cap; }
     for (let j = Math.max(0, o.y); j < Math.min(sc.h, o.y + H); j++) sc.px.fill(0x3a6ea5, j * sc.w + Math.max(0, o.x), j * sc.w + Math.max(0, Math.min(sc.w, o.x + W)));
     for (const w of st.wins.values()) if (!w.dead && (w.main ? st.shown : w.visible && !(w.style & 0x40000000))) invalidate(w.hwnd, true, true);
   };
   const dcFor = (h) => (!h || h === st.hwnd ? st.hdc : (0x02000000 | (h & 0xffffff)) >>> 0);
   const hwndOfDC = (hdc) => (hdc === st.hdc ? st.hwnd : ((hdc & 0xff000000) >>> 0) === 0x02000000 ? hdc & 0xffffff : 0);
   const shown = (h) => { for (let w = win(h); w; w = win(w.parent)) { if (w.main) return st.shown; if (!w.visible || w.dead) return false; if (!(w.style & 0x40000000)) return true; } return false; };
+  // A dialog's frame on a dialog application's desktop, when it is due one (shown, uncovered:
+  // ncDirty) and it paints -- as Windows sends WM_NCPAINT before WM_PAINT. Its caption active when it is
+  // the topmost window. What the windows above cover is left alone.
+  const ncPaint = (x, h) => {
+    const w = win(h); if (!w || !w.ncDirty || !w.dialog || !deskMode() || !shownTop(w)) return;
+    w.ncDirty = false;
+    const R = topRect(w), { b, cap } = R.f; if (!b && !cap) return;
+    const S = { w: R.r - R.l, h: R.b - R.t }; if (S.w <= 0 || S.h <= 0) return;
+    const px = new Uint32Array(S.w * S.h), active = topmost() === w;
+    wm.paintFrame(px, S, x.lx.romFont && x.lx.romFont(), { b, cap, title: w.main ? st.title : w.title }, active);
+    const sc = deskScreen(), cov = coversOf(w.main ? st.hwnd : w.hwnd);
+    for (let j = 0; j < S.h; j++) {
+      const Y = R.t + j; if (Y < 0 || Y >= sc.h) continue;
+      const inner = j >= b + cap && j < S.h - b, cs = cov.filter((r) => Y >= r.t && Y < r.b);
+      for (let i = 0; i < S.w; i++) {
+        if (inner && i >= b && i < S.w - b) continue;
+        const X = R.l + i; if (X < 0 || X >= sc.w || cs.some((r) => X >= r.l && X < r.r)) continue;
+        sc.px[Y * sc.w + X] = px[j * S.w + i];
+      }
+    }
+    wm.presentDesk(x.lx, sc);
+  };
+  // The active window changed: both frames painted again (their captions' colours).
+  const activeFrames = (x, ...hs) => { for (const h of hs) { const w = h && win(h); if (w) { w.ncDirty = true; ncPaint(x, h); } } };
   // Invalidate: to be painted (WM_PAINT when the queue is empty), erased first if asked; with its children.
   const invalidate = (h, erase, kids = false) => {
     const w = win(h); if (!w) return;
-    st.invalid.add(h); if (erase) w.erase = true;
+    st.invalid.add(h); if (erase) { w.erase = true; if (w.main || !(w.style & 0x40000000)) w.ncDirty = true; }
     if (kids) for (const c of st.wins.values()) if (c.parent === h && !c.dead && (c.style & 0x40000000)) invalidate(c.hwnd, erase, true);
   };
   st.invalidate = invalidate;
@@ -976,7 +1047,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const placeOther = (x, hwnd, X, Y, w, h, flags, pop) => {
     const o = win(hwnd); if (!o) return 0;
     const parent = o.parent && win(o.parent) ? o.parent : st.hwnd;
-    if (!(o.style & 0x40000000) && o.visible) uncoverRect(screenOrigin(hwnd), o.w, o.h); else invalidate(parent, true, true);
+    if (!(o.style & 0x40000000) && o.visible) uncoverRect(screenOrigin(hwnd), o.w, o.h, o); else invalidate(parent, true, true);
     if (!(flags & 2)) { o.x = X; o.y = Y; }
     const sized = !(flags & 1) && (o.w !== w || o.h !== h);
     if (!(flags & 1)) { o.w = w; o.h = h; }
@@ -992,14 +1063,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (w.main && !st.mainDialog && msg !== 0x14) return undefined;      // a game's or an intro's window: as it always was, but erased with its class's brush
     if ((w.cls === 'combobox' || w.cls === 'listbox') && LIST_OPS[w.cls][msg]) return listOp(x, hwnd, w, LIST_OPS[w.cls][msg], wp, lp);
     if (w.cls === 'combobox' || w.cls === 'listbox') { const r = listInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
-    // A tree view (SysTreeView32): its items kept as handles, none drawn yet. TVM_INSERTITEM gives each a
-    // handle (the StarCraft installer's folder tree stops, "exp1: Error 0", on NULL), TVM_DELETEITEM and
-    // the others answer as an empty tree does.
-    if (w.cls === 'systreeview32' && msg >= 0x1100 && msg < 0x1200) {
-      if (msg === 0x1100 || msg === 0x1132) return (w.treeNext = (w.treeNext || 0x1000) + 1);   // TVM_INSERTITEMA/W
-      if (msg === 0x1101) return 1;                                                               // TVM_DELETEITEM
-      return 0;
-    }
+    if (w.cls === 'systreeview32') { const r = msg >= 0x1100 && msg < 0x1200 ? treeOp(x, hwnd, w, msg, wp, lp) : treeInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
     switch (msg) {
       case 0x0c: w.title = lp ? x.str(lp, 0x8000) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
       case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, ansi(t + '\0')); return t.length; }   // WM_GETTEXT
@@ -1105,6 +1169,240 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     w.dropped = open;
     if (open) { st.focus = w.hwnd; st.capture = w.hwnd; } else { if (st.capture === w.hwnd) st.capture = 0; invalidate(w.parent, true, true); }
     invalidate(w.hwnd, true);
+  };
+  /*
+   * A tree view (SysTreeView32, comctl32): its items -- text, images, state, lParam -- in a tree of
+   * handles (from 1001h), drawn as Windows draws one: each shown item a row, indented by its depth, with
+   * its +/- button (TVS_HASBUTTONS 1, at the root too with TVS_LINESATROOT 4), dotted lines (TVS_HASLINES
+   * 2), the selected one highlighted (grey when the tree has not the focus, with TVS_SHOWSELALWAYS 20h).
+   * A click selects (TVN_SELCHANGING, TVN_SELCHANGED to the parent, NM_CLICK) or opens and closes an item
+   * (TVN_ITEMEXPANDING, TVN_ITEMEXPANDED); a double click opens and closes it too; the arrows move the
+   * selection, Left and Right close and open, as on Windows. AVS's editor lists its effects so; the
+   * StarCraft installer its folders. Not drawn: the images (image lists keep no pixels here), scroll bars.
+   */
+  const TVI_ROOT = 0xffff0000, TVI_FIRST = 0xffff0001, TVI_LAST = 0xffff0002, TVI_SORT = 0xffff0003;
+  const tree = (w) => (w.tree ||= { items: new Map(), roots: [], sel: 0, top: 0, indent: 19, next: 0x1000, imgl: [0, 0] });
+  const tvKids = (T, p) => (p && T.items.get(p) ? T.items.get(p).kids : T.roots);
+  const tvHasKids = (it) => it.kids.length > 0 || it.children === 1;
+  /** The rows shown, top to bottom: { it, depth }. */
+  const tvRows = (T) => { const out = []; const walk = (list, d) => { for (const h of list) { const it = T.items.get(h); out.push({ it, depth: d }); if (it.state & 0x20) walk(it.kids, d + 1); } }; walk(T.roots, 0); return out; };
+  const tvRowH = (w) => w.tvRowH || 16;
+  const tvBorder = (w) => ((w.ex | 0) & 0x200 ? 2 : w.style & 0x800000 ? 1 : 0);   // WS_EX_CLIENTEDGE, WS_BORDER
+  /** TVITEMA/W at p: what its mask (TVIF_TEXT 1, IMAGE 2, PARAM 4, STATE 8, SELECTEDIMAGE 20h, CHILDREN 40h) gives, into `it`. */
+  const tvRead = (x, p, it, wide) => {
+    const mask = x.r32(p);
+    if (mask & 1) { const t = x.r32(p + 16); it.text = t === 0xffffffff ? '' : t ? (wide ? String.fromCharCode(...wideRead(x, t, -1, true)) : x.str(t, 1024)) : ''; }
+    if (mask & 2) it.image = x.r32(p + 24) | 0;
+    if (mask & 4) it.param = x.r32(p + 36);
+    if (mask & 8) { const sm = x.r32(p + 12); it.state = (it.state & ~sm) | (x.r32(p + 8) & sm); }
+    if (mask & 0x20) it.selImage = x.r32(p + 28) | 0;
+    if (mask & 0x40) it.children = x.r32(p + 32) | 0;
+  };
+  const tvWrite = (x, p, it, wide) => {
+    const mask = x.r32(p);
+    if (mask & 1) { const buf = x.r32(p + 16), n = x.r32(p + 20) | 0; if (buf && n > 0) { const t = it.text.slice(0, n - 1); if (wide) { const b = new Uint8Array(2 * t.length + 2); for (let i = 0; i < t.length; i++) { b[2 * i] = t.charCodeAt(i) & 255; b[2 * i + 1] = t.charCodeAt(i) >> 8; } x.write(buf, b); } else x.write(buf, ansi(t + '\0')); } }
+    if (mask & 2) x.w32(p + 24, it.image | 0);
+    if (mask & 4) x.w32(p + 36, it.param >>> 0);
+    if (mask & 8) x.w32(p + 8, it.state & (x.r32(p + 12) || 0xffff));
+    if (mask & 0x20) x.w32(p + 28, it.selImage | 0);
+    if (mask & 0x40) x.w32(p + 32, tvHasKids(it) ? 1 : 0);
+  };
+  /** NMTREEVIEW (NMHDR, action, itemOld, itemNew, ptDrag: 104 bytes) for the parent, in the program's memory. */
+  const tvNotify = (x, w, code, action, oldIt, newIt) => {
+    const T = tree(w), nm = x.win.heapAlloc(104), item = (at, it) => { if (!it) return; [0x1c, it.h, it.state, 0xffff, 0, 0, it.image | 0, it.selImage | 0, tvHasKids(it) ? 1 : 0, it.param >>> 0].forEach((v, i) => x.w32(at + 4 * i, v)); };
+    x.write(nm, new Uint8Array(104)); x.w32(nm, w.hwnd); x.w32(nm + 4, w.id | 0); x.w32(nm + 8, (T.wide ? code - 49 : code) >>> 0); x.w32(nm + 12, action);
+    item(nm + 16, oldIt); item(nm + 56, newIt);
+    return [0x4e, w.id | 0, nm, w.parent];
+  };
+  const tvHdr = (x, w, code) => { const nm = x.win.heapAlloc(16); x.w32(nm, w.hwnd); x.w32(nm + 4, w.id | 0); x.w32(nm + 8, code >>> 0); return [0x4e, w.id | 0, nm, w.parent]; };
+  /** The rows the tree shows at once, and the top row kept so that the selection is among them. */
+  const tvVisible = (w) => Math.max(1, Math.floor((w.h - 2 * tvBorder(w)) / tvRowH(w)));
+  const tvScrollTo = (w, h) => {
+    const T = tree(w), rows = tvRows(T), k = rows.findIndex((r) => r.it.h === h); if (k < 0) return;
+    const vis = tvVisible(w); if (k < T.top) T.top = k; else if (k >= T.top + vis) T.top = k - vis + 1;
+  };
+  // Select item h (0: none): the parent asked first, then told -- by what means (TVC_BYMOUSE 1, BYKEYBOARD 2).
+  const tvSelect = (x, hwnd, w, h, action, extra = []) => {
+    const T = tree(w), was = T.items.get(T.sel), it = T.items.get(h);
+    if ((h || 0) === (T.sel || 0)) return extra;
+    if (was) was.state &= ~2;
+    T.sel = it ? h : 0; if (it) { it.state |= 2; for (let p = it.parent; p; p = T.items.get(p).parent) T.items.get(p).state |= 0x20; tvScrollTo(w, h); }
+    invalidate(hwnd, true);
+    return [tvNotify(x, w, -401, action, was, it), tvNotify(x, w, -402, action, was, it), ...extra];
+  };
+  // Open or close item h (TVE_COLLAPSE 1, TVE_EXPAND 2, TVE_TOGGLE 3), the parent told when asked (notify).
+  const tvExpand = (x, hwnd, w, h, how, notify) => {
+    const T = tree(w), it = T.items.get(h); if (!it) return [];
+    const open = (how & 3) === 3 ? !(it.state & 0x20) : (how & 3) === 2;
+    if (!!(it.state & 0x20) === open && !notify) return [];
+    const msgs = notify && tvHasKids(it) ? [tvNotify(x, w, -405, open ? 2 : 1, null, it)] : [];
+    it.state = open ? it.state | 0x60 : it.state & ~0x20;
+    if (!open && T.sel && T.items.get(T.sel)) { for (let p = T.items.get(T.sel).parent; p; p = T.items.get(p).parent) if (p === h) { const s0 = T.items.get(T.sel); s0.state &= ~2; T.sel = h; it.state |= 2; break; } }
+    invalidate(hwnd, true);
+    if (notify && tvHasKids(it)) msgs.push(tvNotify(x, w, -406, open ? 2 : 1, null, it));
+    return msgs;
+  };
+  const tvDrop = (T, h) => { const it = T.items.get(h); if (!it) return; for (const k of [...it.kids]) tvDrop(T, k); const list = tvKids(T, it.parent), i = list.indexOf(h); if (i >= 0) list.splice(i, 1); T.items.delete(h); if (T.sel === h) T.sel = 0; };
+  const treeOp = (x, hwnd, w, msg, wp, lp) => {
+    const T = tree(w), wide = msg === 0x1132 || msg === 0x113e || msg === 0x113f;
+    if (wide) T.wide = true;
+    switch (msg) {
+      case 0x1100: case 0x1132: {                                         // TVM_INSERTITEM: TVINSERTSTRUCT {hParent, hInsertAfter, TVITEM}
+        const par0 = x.r32(lp), after = x.r32(lp + 4), par = par0 === TVI_ROOT || !T.items.has(par0) ? 0 : par0;
+        const it = { h: (T.next = T.next + 1), parent: par, kids: [], text: '', image: 0, selImage: 0, state: 0, param: 0, children: 0 };
+        tvRead(x, lp + 8, it, wide); it.state &= ~2;
+        T.items.set(it.h, it);
+        const list = tvKids(T, par);
+        if (after === TVI_FIRST) list.unshift(it.h);
+        else if (after === TVI_SORT) { const i = list.findIndex((k) => T.items.get(k).text.localeCompare(it.text, 'en', { sensitivity: 'base' }) > 0); list.splice(i < 0 ? list.length : i, 0, it.h); }
+        else { const i = list.indexOf(after); list.splice(i < 0 || after === TVI_LAST ? list.length : i + 1, 0, it.h); }
+        invalidate(hwnd, true); return it.h;
+      }
+      case 0x1101:                                                         // TVM_DELETEITEM (TVI_ROOT, or NULL: all)
+        if (!lp || lp === TVI_ROOT) { T.items.clear(); T.roots = []; T.sel = 0; T.top = 0; } else if (T.items.has(lp)) tvDrop(T, lp); else return 0;
+        invalidate(hwnd, true); return 1;
+      case 0x1102: { const msgs = tvExpand(x, hwnd, w, lp, wp, false); return T.items.has(lp) ? (msgs.length ? send(x, msgs, () => 1, 16) : 1) : 0; }   // TVM_EXPAND
+      case 0x1104: {                                                       // TVM_GETITEMRECT: *(HTREEITEM *)rect in, its row out
+        const h = x.r32(lp), rows = tvRows(T), k = rows.findIndex((r) => r.it.h === h); if (k < T.top || k < 0) return 0;
+        const b = tvBorder(w), y = b + (k - T.top) * tvRowH(w), r = rows[k], x0 = b + (r.depth + ((w.style & 5) === 5 ? 1 : 0)) * T.indent + ((w.style & 1) ? 0 : 3);
+        [wp ? x0 : b, y, wp ? x0 + (T.measure ? T.measure(r.it.text) : 8 * r.it.text.length) + 4 : w.w - b, y + tvRowH(w)].forEach((v, i) => x.w32(lp + 4 * i, v)); return 1;
+      }
+      case 0x1105: return T.items.size;                                    // TVM_GETCOUNT
+      case 0x1106: return T.indent;                                        // TVM_GETINDENT
+      case 0x1107: T.indent = Math.max(wp, 3); invalidate(hwnd, true); return 0;   // TVM_SETINDENT
+      case 0x1108: return T.imgl[wp & 1] || 0;                             // TVM_GETIMAGELIST
+      case 0x1109: { const was = T.imgl[wp & 1] || 0; T.imgl[wp & 1] = lp; return was; }   // TVM_SETIMAGELIST
+      case 0x110a: {                                                       // TVM_GETNEXTITEM
+        const it = T.items.get(lp), sib = (d) => { if (!it) return 0; const l = tvKids(T, it.parent), i = l.indexOf(lp); return l[i + d] || 0; };
+        const rows = tvRows(T), k = rows.findIndex((r) => r.it.h === lp);
+        switch (wp & 0xf) {
+          case 0: return T.roots[0] || 0;                                  // TVGN_ROOT
+          case 1: return sib(1); case 2: return sib(-1);                   // TVGN_NEXT, TVGN_PREVIOUS
+          case 3: return it ? it.parent : 0;                               // TVGN_PARENT
+          case 4: return lp && lp !== TVI_ROOT ? (it ? it.kids[0] || 0 : 0) : T.roots[0] || 0;   // TVGN_CHILD
+          case 5: return rows[T.top] ? rows[T.top].it.h : 0;               // TVGN_FIRSTVISIBLE
+          case 6: return k >= 0 && rows[k + 1] ? rows[k + 1].it.h : 0;     // TVGN_NEXTVISIBLE
+          case 7: return k > 0 ? rows[k - 1].it.h : 0;                     // TVGN_PREVIOUSVISIBLE
+          case 8: return T.drop || 0;                                      // TVGN_DROPHILITE
+          case 9: return T.sel || 0;                                       // TVGN_CARET
+          case 10: return rows.length ? rows[rows.length - 1].it.h : 0;    // TVGN_LASTVISIBLE
+          default: return 0;
+        }
+      }
+      case 0x110b: {                                                       // TVM_SELECTITEM: TVGN_CARET 9, DROPHILITE 8, FIRSTVISIBLE 5
+        if ((wp & 0xf) === 8) { T.drop = lp; invalidate(hwnd, true); return 1; }
+        if ((wp & 0xf) === 5) { const k = tvRows(T).findIndex((r) => r.it.h === lp); if (k >= 0) T.top = k; invalidate(hwnd, true); return 1; }
+        if (lp && !T.items.has(lp)) return 0;
+        const msgs = tvSelect(x, hwnd, w, lp, 0); return msgs.length ? send(x, msgs, () => 1, 16) : 1;
+      }
+      case 0x110c: case 0x113e: { const it = T.items.get(x.r32(lp + 4)); if (!it) return 0; tvWrite(x, lp, it, wide); return 1; }   // TVM_GETITEM
+      case 0x110d: case 0x113f: {                                          // TVM_SETITEM
+        const it = T.items.get(x.r32(lp + 4)); if (!it) return 0;
+        const wasSel = it.state & 2; tvRead(x, lp, it, wide); it.state = (it.state & ~2) | wasSel; invalidate(hwnd, true); return 1;
+      }
+      case 0x1110: return tvVisible(w);                                    // TVM_GETVISIBLECOUNT
+      case 0x1111: {                                                       // TVM_HITTEST: TVHITTESTINFO {pt, flags, hItem}
+        const r = tvHit(w, x.r32(lp) | 0, x.r32(lp + 4) | 0); x.w32(lp + 8, r.flags); x.w32(lp + 12, r.h); return r.h;
+      }
+      case 0x1113: { const l = tvKids(T, lp === TVI_ROOT ? 0 : lp); l.sort((a, b) => T.items.get(a).text.localeCompare(T.items.get(b).text, 'en', { sensitivity: 'base' })); invalidate(hwnd, true); return 1; }   // TVM_SORTCHILDREN
+      case 0x1114: { const it = T.items.get(lp); if (!it) return 0; for (let p = it.parent; p; p = T.items.get(p).parent) T.items.get(p).state |= 0x60; tvScrollTo(w, lp); invalidate(hwnd, true); return 1; }   // TVM_ENSUREVISIBLE
+      case 0x111b: { const was = tvRowH(w); if (wp !== 0xffffffff) w.tvRowH = Math.max(1, wp | 0); invalidate(hwnd, true); return was; }   // TVM_SETITEMHEIGHT
+      case 0x111c: return tvRowH(w);                                       // TVM_GETITEMHEIGHT
+      case 0x111d: { const was = T.bk ?? -1; T.bk = lp === 0xffffffff ? undefined : lp; invalidate(hwnd, true); return was; }   // TVM_SETBKCOLOR
+      case 0x111e: { const was = T.fg ?? -1; T.fg = lp === 0xffffffff ? undefined : lp; invalidate(hwnd, true); return was; }   // TVM_SETTEXTCOLOR
+      case 0x111f: return T.bk ?? -1; case 0x1120: return T.fg ?? -1;       // TVM_GETBKCOLOR, TVM_GETTEXTCOLOR
+      default: return 0;                                                   // label editing, insert marks, scroll time: none
+    }
+  };
+  /** What is at (X, Y) of the tree: { h, flags } -- TVHT_NOWHERE 1, ONITEMICON 2, ONITEMLABEL 4, ONITEMINDENT 8, ONITEMBUTTON 10h, ONITEMRIGHT 20h. */
+  const tvHit = (w, X, Y) => {
+    const T = tree(w), b = tvBorder(w), k = Math.floor((Y - b) / tvRowH(w)) + T.top, rows = tvRows(T);
+    if (Y < b || k < 0 || k >= rows.length || X < 0 || X >= w.w) return { h: 0, flags: 1 };
+    const r = rows[k], root = (w.style & 5) === 5 ? 1 : 0, lv = r.depth + root, x0 = b + lv * T.indent + (w.style & 1 && !lv ? 3 : 0);
+    const btn = (w.style & 1) && tvHasKids(r.it) && lv > 0 && X >= x0 - T.indent && X < x0;
+    const tw = (T.measure ? T.measure(r.it.text) : 8 * r.it.text.length) + 4;
+    return { h: r.it.h, flags: btn ? 0x10 : X < x0 ? 8 : X < x0 + tw ? 4 : 0x20 };
+  };
+  const treeInput = (x, hwnd, w, msg, wp, lp) => {
+    const T = tree(w), X = (lp << 16) >> 16, Y = lp >> 16;
+    const go = (msgs, r = 0) => (msgs.length ? send(x, msgs, () => r, 16) : r);
+    if (msg === 0x201 || msg === 0x204) {                                 // WM_LBUTTONDOWN, WM_RBUTTONDOWN
+      st.focus = hwnd; invalidate(hwnd, true);
+      const hit = tvHit(w, X, Y), now = x.lx.mono ? x.lx.mono() : 0;
+      if (msg === 0x204) return go([...(hit.h ? tvSelect(x, hwnd, w, hit.h, 1) : []), tvHdr(x, w, -5)]);   // NM_RCLICK
+      const dbl = hit.h && T.lastClick && T.lastClick.h === hit.h && now - T.lastClick.at < 0.5;
+      T.lastClick = dbl ? null : { h: hit.h, at: now };
+      if (hit.flags & 0x10) return go(tvExpand(x, hwnd, w, hit.h, 3, true));
+      if (!hit.h) return go([tvHdr(x, w, -2)]);                            // NM_CLICK
+      return go(tvSelect(x, hwnd, w, hit.h, 1, dbl ? [...tvExpand(x, hwnd, w, hit.h, 3, true), tvHdr(x, w, -3)] : [tvHdr(x, w, -2)]));   // NM_DBLCLK
+    }
+    if (msg === 0x100) {                                                   // WM_KEYDOWN: TVN_KEYDOWN, then the move
+      const rows = tvRows(T), k = rows.findIndex((r) => r.it.h === T.sel), it = T.items.get(T.sel);
+      const kd = x.win.heapAlloc(20); x.w32(kd, hwnd); x.w32(kd + 4, w.id | 0); x.w32(kd + 8, -412 >>> 0); x.w16(kd + 12, wp); x.w32(kd + 14, 0);
+      const to = (j) => (rows[j] ? tvSelect(x, hwnd, w, rows[j].it.h, 2) : []);
+      let move = [];
+      if (wp === 0x26) move = to(Math.max(0, k - 1)); else if (wp === 0x28) move = to(k < 0 ? 0 : Math.min(rows.length - 1, k + 1));
+      else if (wp === 0x24) move = to(0); else if (wp === 0x23) move = to(rows.length - 1);
+      else if (wp === 0x21) move = to(Math.max(0, k - tvVisible(w) + 1)); else if (wp === 0x22) move = to(Math.min(rows.length - 1, k + tvVisible(w) - 1));
+      else if (it && (wp === 0x25 || wp === 0x6d)) move = it.state & 0x20 && tvHasKids(it) ? tvExpand(x, hwnd, w, it.h, 1, true) : wp === 0x25 && it.parent ? tvSelect(x, hwnd, w, it.parent, 2) : [];
+      else if (it && (wp === 0x27 || wp === 0x6b)) move = !(it.state & 0x20) && tvHasKids(it) ? tvExpand(x, hwnd, w, it.h, 2, true) : wp === 0x27 && it.kids[0] ? tvSelect(x, hwnd, w, it.kids[0], 2) : [];
+      return go([[0x4e, w.id | 0, kd, w.parent], ...move]);
+    }
+    if (msg === 0x20a) { const d = (wp >> 16) > 0 ? -3 : 3; T.top = Math.max(0, Math.min(Math.max(0, tvRows(T).length - tvVisible(w)), T.top + d)); invalidate(hwnd, true); return 0; }   // WM_MOUSEWHEEL
+    if (msg === 0x07 || msg === 0x08) { invalidate(hwnd, true); return undefined; }   // WM_SETFOCUS, WM_KILLFOCUS: the selection's colour
+    if (msg === 0x87) return 0x01 | 0x04;                                  // WM_GETDLGCODE: DLGC_WANTARROWS | DLGC_WANTCHARS
+    if (msg === 0x0f) { drawTree(x, hwnd, w); return 0; }
+    if (msg === 0x14) return 1;                                            // WM_ERASEBKGND: WM_PAINT fills it all
+    return undefined;
+  };
+  // The tree's face: white (or its TVM_SETBKCOLOR), its border, and its rows.
+  const drawTree = (x, hwnd, w) => {
+    st.invalid.delete(hwnd); w.erase = false;
+    const hdc = dcFor(hwnd), t = target(x, hdc); if (!t) return;
+    if (w.font) st.dcFonts.set(hdc, w.font);
+    const T = tree(w), m = textMetrics(hdc), d = dcState(hdc), rowH = (w.tvRowH ||= Math.max(16, m.height + 3)), b = tvBorder(w);
+    const bg = T.bk !== undefined ? rgbOf(T.bk) : 0xffffff, fg = T.fg !== undefined ? rgbOf(T.fg) : 0;
+    fillRect(t, 0, 0, t.w, t.h, bg);
+    if (b === 1) { fillRect(t, 0, 0, t.w, 1, 0); fillRect(t, 0, t.h - 1, t.w, t.h, 0); fillRect(t, 0, 0, 1, t.h, 0); fillRect(t, t.w - 1, 0, t.w, t.h, 0); }
+    if (b === 2) {
+      fillRect(t, 0, 0, t.w, 1, 0x808080); fillRect(t, 0, 0, 1, t.h, 0x808080); fillRect(t, 0, t.h - 1, t.w, t.h, 0xffffff); fillRect(t, t.w - 1, 0, t.w, t.h, 0xffffff);
+      fillRect(t, 1, 1, t.w - 1, 2, 0x404040); fillRect(t, 1, 1, 2, t.h - 1, 0x404040); fillRect(t, 1, t.h - 2, t.w - 1, t.h - 1, 0xd4d0c8); fillRect(t, t.w - 2, 1, t.w - 1, t.h - 1, 0xd4d0c8);
+    }
+    const put = (str, X, Y, ink) => {
+      if (!str) return; const buf = x.win.heapAlloc(str.length + 1); x.write(buf, Uint8Array.from(str, (c) => c.charCodeAt(0) & 255));
+      const keep = [d.bkMode, d.textColor]; d.bkMode = 1; d.textColor = ink; textOut(x, t, d, m, X, Y, 0, 0, buf, str.length); [d.bkMode, d.textColor] = keep; x.win.heapFree(buf);
+    };
+    const dot = (X, Y) => { if (X >= b && Y >= b && X < t.w - b && Y < t.h - b) t.px[Y * t.w + X] = 0x808080; };
+    const rows = tvRows(T), vis = tvVisible(w), focused = st.focus === hwnd, root = (w.style & 5) === 5 ? 1 : 0, ind = T.indent;
+    T.top = Math.max(0, Math.min(T.top, Math.max(0, rows.length - vis)));
+    const measure = (str) => { let n = 0; for (const c of str) n += m.font ? m.font.glyph(c.charCodeAt(0) & 255, m.ppem).cellIncX : m.avg; return n; };
+    T.measure = measure;                                                  // for tvHit's labels
+    for (let k = T.top, Y = b; k < rows.length && Y < t.h - b; k++, Y += rowH) {
+      const { it, depth } = rows[k], lv = depth + root, x0 = b + lv * ind + ((w.style & 1) && !lv ? 3 : 0), cy = Y + (rowH >> 1);
+      if (w.style & 2) {                                                    // TVS_HASLINES: to the parent, and on to the next sibling
+        const cx = x0 - ind + (ind >> 1);
+        if (lv > 0) {
+          for (let i = cx; i < x0 - 2; i += 2) dot(i, cy);
+          const sibs = tvKids(T, it.parent), last = sibs[sibs.length - 1] === it.h;
+          for (let j = Y; j < (last ? cy : Y + rowH); j += 2) dot(cx, j);
+          for (let p = T.items.get(it.parent), dd = lv - 1; p && dd > 0; p = T.items.get(p.parent), dd--) {
+            const ps = tvKids(T, p.parent); if (ps[ps.length - 1] === p.h) continue;
+            const px0 = b + dd * ind - ind + (ind >> 1); for (let j = Y; j < Y + rowH; j += 2) dot(px0, j);
+          }
+        }
+      }
+      if ((w.style & 1) && lv > 0 && tvHasKids(it)) {                      // the button: a 9x9 box, - or +
+        const bx = x0 - ind + (ind >> 1) - 4, by = cy - 4;
+        fillRect(t, bx, by, bx + 9, by + 9, 0xffffff);
+        fillRect(t, bx, by, bx + 9, by + 1, 0x808080); fillRect(t, bx, by + 8, bx + 9, by + 9, 0x808080); fillRect(t, bx, by, bx + 1, by + 9, 0x808080); fillRect(t, bx + 8, by, bx + 9, by + 9, 0x808080);
+        fillRect(t, bx + 2, by + 4, bx + 7, by + 5, 0);
+        if (!(it.state & 0x20)) fillRect(t, bx + 4, by + 2, bx + 5, by + 7, 0);
+      }
+      const tw = measure(it.text) + 4, sel = it.h === T.sel || it.h === T.drop, hot = sel && (focused || it.h === T.drop);
+      if (sel && (hot || (w.style & 0x20))) fillRect(t, x0, Y, Math.min(t.w - b, x0 + tw), Y + rowH, hot ? 0x0a246a : 0xd4d0c8);
+      put(it.text, x0 + 2, Y + ((rowH - m.height) >> 1), hot ? 0xffffff : fg);
+    }
+    t.done();
   };
   const listInput = (x, hwnd, w, msg, wp, lp) => {
     const X = (lp << 16) >> 16, Y = lp >> 16, items = w.items || [], rowH = w.rowH || 16;
@@ -1301,7 +1599,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const dlg = nextHwnd; nextHwnd += 4;
     const dProc = typeof cls === 'string' && cls ? st.classes.get(cls.toLowerCase()) || systemProc(x, '#32770') : systemProc(x, '#32770');
     st.wins.set(dlg, { hwnd: dlg, cls: '#32770', proc: dProc, dlgProc, style: style >>> 0, parent, id: 0, x: du(X, 0), y: du(Y, 1), w: du(cx, 0), h: du(cy, 1),
-      title: typeof title === 'string' ? title : '', visible: false, enabled: true, long: new Map(), dialog: true, menu, erase: true });
+      title: typeof title === 'string' ? title : '', visible: false, enabled: true, long: new Map(), dialog: true, menu, erase: true, z: zNext() });
     // A program whose first window is a dialog (an MFC dialog application, Half-Life's launcher): that
     // dialog is the window the screen shows, as a CreateWindowEx main window would be.
     if (!st.mainMade && !parent) {
@@ -1360,7 +1658,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const first = kids.find((h) => win(h).style & 0x10000 && win(h).visible && win(h).enabled) || kids[0] || 0;
     const msgs = [...born(dlg), [0x30, font, 0, dlg], ...kids.flatMap((h) => [...born(h), [0x30, font, 0, h]]), [0x110, first, param, dlg]];
     return send(x, msgs, (init) => {
-      if (init && first && win(first)) { st.focus = first; if (win(first).cls === 'edit') win(first).selAll = true; }
+      // ...except a DS_CONTROL dialog made hidden (a page inside another dialog), as Windows: AVS's editor
+      // made each effect's page so, and the focus left its tree for the page's first control.
+      if (init && first && win(first) && (!(style & 0x400) || (style & 0x10000000))) { st.focus = first; if (win(first).cls === 'edit') win(first).selAll = true; }
       const w = win(dlg); if (w && (style & 0x10000000)) { w.visible = true; if (w.main) { st.shown = true; wm.dirty = true; } invalidate(dlg, true, true); }
       if (w && st.dialogShown) st.dialogShown(dlg);
       return then(dlg);
@@ -1376,7 +1676,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // edit control in its WM_DESTROY, and installed everything at the disk's root.
     w.dying = true; for (const c of kids) c.dying = true;
     if (w.modal && w.modalOwner && win(w.modalOwner)) win(w.modalOwner).enabled = true;   // a modal dialog's owner again
-    if (w.visible && !(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h);
+    if (w.visible && !(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h, w);
     // The focus it held goes back to its owner, where the owner's had been (the dialog manager keeps it):
     // Diablo's class notice closed, and the keys went to the hidden main window, the class list deaf.
     if (st.focus === hwnd || kids.some((c) => c.hwnd === st.focus)) {
@@ -1410,6 +1710,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // An lParam given as a function is read when the message goes (CreateWindow's WM_SIZE: the size
     // its WM_CREATE may have changed).
     const c = x.cpu, fn = Array.isArray(m) ? procOf(h) : m.fn, args = Array.isArray(m) ? [h, m[0], m[1], typeof m[2] === 'function' ? m[2]() : m[2]] : m.args;
+    if (Array.isArray(m) && m[0] === 0x0f) ncPaint(x, h);
     let sp = c.reg[4] >>> 0;
     for (const v of [...args].reverse()) { sp -= 4; x.w32(sp, v >>> 0); }
     sp -= 4; x.w32(sp, ret); c.reg[4] = sp; c.eip = fn;
@@ -1578,7 +1879,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       wm.dirty = true; return 0;
     }],
     // A text up to an edit control's 32 KB (a licence shown in one: Quake III's setup), as WM_SETTEXT.
-    SetWindowTextA: ['pp', (x, hwnd, t) => { if (hwnd === st.hwnd) { st.title = t ? x.str(t, 0x8000) : ''; wm.redraw(); } else if (win(hwnd)) { win(hwnd).title = t ? x.str(t, 0x8000) : ''; invalidate(hwnd, true); } return 1; }],
+    SetWindowTextA: ['pp', (x, hwnd, t) => {
+      if (hwnd === st.hwnd) { st.title = t ? x.str(t, 0x8000) : ''; wm.redraw(); } else if (win(hwnd)) { win(hwnd).title = t ? x.str(t, 0x8000) : ''; invalidate(hwnd, true); }
+      if (deskMode() && win(hwnd) && (win(hwnd).main || !(win(hwnd).style & 0x40000000))) activeFrames(x, hwnd);   // a caption's title
+      return 1;
+    }],
     GetWindowTextA: ['ppi', (x, hwnd, buf, n) => { const t = hwnd === st.hwnd ? (st.title || '') : win(hwnd) ? win(hwnd).title || '' : ''; if (n > 0) x.write(buf, ansi(t.slice(0, n - 1) + '\0')); return Math.min(t.length, Math.max(0, n - 1)); }],
     // A point of the client area on the screen and back: the window's place and its frame.
     ClientToScreen: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) + c.x); x.w32(p + 4, (x.r32(p + 4) | 0) + c.y); return 1; }],
@@ -1605,10 +1910,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         const w = win(hwnd); if (!w) return 0;
         const was = w.visible ? 1 : 0; w.visible = cmd !== 0;
         if (w.visible && !was) invalidate(hwnd, true, true);
-        else if (!w.visible && was) { if (!(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h); else invalidate(w.parent || st.hwnd, true, true); }
+        else if (!w.visible && was) { if (!(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h, w); else invalidate(w.parent || st.hwnd, true, true); }
         // SW_SHOWNORMAL 1, SW_SHOWMAXIMIZED 3, SW_SHOW 5, SW_RESTORE 9 activate a top-level window, shown or not.
         if (w.visible && !(w.style & 0x40000000) && [1, 3, 5, 9].includes(cmd) && st.activeWin !== hwnd) {
-          st.activeWin = hwnd; st.focus = hwnd;
+          const prev = st.activeWin || st.hwnd; st.activeWin = hwnd; st.focus = hwnd; raise(hwnd); activeFrames(x, prev);
           return send(x, [...(was ? [] : [[0x18, 1, 0, hwnd]]), ...ACTIVATE.slice(1).map((m) => [...m, hwnd])], () => was, 8);
         }
         // WM_SHOWWINDOW only when that changes (a procedure that shows its window again on it, Half-Life's
@@ -1642,7 +1947,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     SetWindowPos: ['ppiiiiu', (x, hwnd, after, X, Y, w, h, flags) => {
       if (hwnd !== st.hwnd) return placeOther(x, hwnd, X, Y, w, h, flags, 28);
       if (deskMode()) {
-        if (st.shown) uncoverRect(mainOrigin(), st.w, st.h);
+        if (st.shown) uncoverRect(mainOrigin(), st.w, st.h, win(st.hwnd));
         if (!(flags & 2)) { st.x = X; st.y = Y; } if (!(flags & 1)) { st.w = Math.max(1, w); st.h = Math.max(1, h); }
         if (flags & 0x40) st.shown = true; if (flags & 0x80) st.shown = false;
         invalidate(hwnd, true, true); return 1;
@@ -1656,7 +1961,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     MoveWindow: ['piiiii', (x, hwnd, X, Y, w, h) => {
       if (hwnd !== st.hwnd) return placeOther(x, hwnd, X, Y, w, h, 0, 24);
-      if (deskMode()) { if (st.shown) uncoverRect(mainOrigin(), st.w, st.h); st.x = X; st.y = Y; st.w = Math.max(1, w); st.h = Math.max(1, h); invalidate(hwnd, true, true); return 1; }
+      if (deskMode()) { if (st.shown) uncoverRect(mainOrigin(), st.w, st.h, win(st.hwnd)); st.x = X; st.y = Y; st.w = Math.max(1, w); st.h = Math.max(1, h); invalidate(hwnd, true, true); return 1; }
       st.x = X; st.y = Y; st.placed = true;
       const w0 = st.w, h0 = st.h; resize(w, h);
       return st.w !== w0 || st.h !== h0 ? send(x, [[0x47, 0, windowPos(x, w, h, 0)], [0x05, 0, sizeLp()]], () => 1, 24) : 1;
@@ -1724,6 +2029,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     DispatchMessageA: ['p', (x, m) => {
       // WM_TIMER with a procedure in lParam: that procedure, with the time in its place (TIMERPROC).
       const timed = x.r32(m + 4) === 0x113 && x.r32(m + 12);
+      if (x.r32(m + 4) === 0x0f) ncPaint(x, x.r32(m) || st.hwnd);
       const proc = timed || procOf(x.r32(m)); if (!proc) { if (x.r32(m + 4) === 0x0f) st.invalid.delete(x.r32(m)); return 0; }
       const c = x.cpu, args = [x.r32(m), x.r32(m + 4), x.r32(m + 8), timed ? x.r32(m + 16) : x.r32(m + 12)];
       let sp = c.reg[4] >>> 0;
@@ -1810,7 +2116,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const w = win(dlg); if (!w) return 0;
       w.result = r; w.ended = true;
       if (w.modal) { x.w32(w.modal, 1); x.w32(w.modal + 8, r); }      // the modal loop ends (DialogBoxParam)
-      if (w.visible) { w.visible = false; if (!(w.style & 0x40000000)) uncoverRect(screenOrigin(dlg), w.w, w.h); }
+      if (w.visible) { w.visible = false; if (!(w.style & 0x40000000)) uncoverRect(screenOrigin(dlg), w.w, w.h, w); }
       return 1;
     }],
     // A dialog's keyboard: Enter is the push button with the focus (a message box's Yes), else IDOK; Escape
@@ -2110,8 +2416,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // main dialog before it is shown, which left a black rectangle under the intro.
     if (v && deskMode() && !shown(hwndOfDC(hdc))) return { w: v.w, h: v.h, px: v.px, done: () => {} };
     if (v) return { w: v.w, h: v.h, px: v.px, done: () => {
-      const { sc, o } = v;
-      for (let j = 0; j < v.h; j++) { const y = o.y + j; if (y < 0 || y >= sc.h) continue; for (let i = 0; i < v.w; i++) { const X = o.x + i; if (X >= 0 && X < sc.w) sc.px[y * sc.w + X] = v.px[j * v.w + i]; } }
+      const { sc, o } = v, cov = deskMode() ? coversOf(hwndOfDC(hdc)) : [];
+      for (let j = 0; j < v.h; j++) {
+        const y = o.y + j; if (y < 0 || y >= sc.h) continue;
+        const cs = cov.length ? cov.filter((r) => y >= r.t && y < r.b) : cov;
+        for (let i = 0; i < v.w; i++) { const X = o.x + i; if (X >= 0 && X < sc.w && !(cs.length && cs.some((r) => X >= r.l && X < r.r))) sc.px[y * sc.w + X] = v.px[j * v.w + i]; }
+      }
       if (deskMode()) wm.presentDesk(x.lx, sc); else if (sc === st.screen) wm.present(x.lx, sc); else { wm.dirty = true; wm.present(x.lx, null); }
     } };
     const bm = st.gdi.get(st.dcBitmaps.get(hdc));
@@ -3390,7 +3700,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     };
     const pops = [...st.wins.values()].filter((w) => !w.main && !w.dead && w.visible && !(w.style & 0x40000000) && inside(w.hwnd, X, Y));
     if (!pops.length && deskMode() && !(st.shown && inside(st.hwnd, X, Y))) return -1;   // the desktop
-    const h = deepest(pops.length ? pops[pops.length - 1].hwnd : st.hwnd);
+    // On a dialog application's desktop the topmost of them, the main window among them; else the popups
+    // over the main window, the last made on top.
+    if (deskMode() && st.shown && win(st.hwnd) && inside(st.hwnd, X, Y)) pops.push(win(st.hwnd));
+    if (deskMode()) pops.sort((a, b) => zKey(a) - zKey(b));
+    const h = deepest(pops.length ? (pops[pops.length - 1].main ? st.hwnd : pops[pops.length - 1].hwnd) : st.hwnd);
     for (let w = win(h); w; w = w.main || !(w.style & 0x40000000) ? null : win(w.parent)) if (w.enabled === false) return -1;   // up to its top-level window
     return h === st.hwnd ? null : h;
   };
@@ -3482,6 +3796,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         if (where !== 'client') return;
       } else if (free() && wm.hit(X, Y) !== 'client') return;
       const bit = [1, 2, 0x10][b], msg = [0x201, 0x204, 0x207][b] + (down ? 0 : 1);
+      // A press on a dialog application's window brings it to the top, painted again whole.
+      if (down && deskMode()) {
+        const at = windowAt(X, Y), t = at === -1 ? null : topOf(at || st.hwnd);
+        if (t && coversOf(t.main ? st.hwnd : t.hwnd).length) {
+          const was = topmost(); raise(t.main ? st.hwnd : t.hwnd); invalidate(t.main ? st.hwnd : t.hwnd, true, true);
+          if (was) was.ncDirty = true, invalidate(was.main ? st.hwnd : was.hwnd, false);   // its caption, inactive now
+        }
+      }
       st.buttons = down ? (st.buttons | 0) | bit : (st.buttons | 0) & ~bit;
       postMouse(msg, st.buttons);
     },
