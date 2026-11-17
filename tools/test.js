@@ -5454,10 +5454,19 @@ const runLinux = (hex, argv) => {
     x.write(mii, new Uint8Array(48)); x.w32(mii, 48); x.w32(mii + 4, 0x42); x.w32(mii + 36, tb); x.w32(mii + 40, 16);
     r.push(u('GetMenuItemInfoA')(m, 0, 1, mii), x.r32(mii + 16), x.str(tb), x.r32(mii + 40));
     const lib = str('user32.dll'), hl = k('LoadLibraryA')(lib); k('LoadLibraryA')(lib); r.push([1, 2, 3].map(() => k('FreeLibrary')(hl)).join(''));
+    // AVS: its frame window finds the plug-in's child with FindWindowExA(frame, 0, NULL, NULL); its frames
+    // go to the screen through DrawDibDraw (a size of -1: the DIB's own).
+    u('CreateWindowExA')(0, str('static'), 0, 0x50000000, 0, 0, 10, 10, pop, 0); const kid = parseInt(apis.windows().at(-1).hwnd, 16);
+    r.push(u('FindWindowExA')(pop, 0, 0, 0) === kid, u('FindWindowExA')(pop, kid, 0, 0), u('FindWindowExA')(pop, 0, str('Static'), 0) === kid);
+    const mdc = g('CreateCompatibleDC')(0); g('SelectObject')(mdc, g('CreateCompatibleBitmap')(mdc, 4, 4));
+    const bih = x.win.heapAlloc(40), px = x.win.heapAlloc(8); x.write(bih, new Uint8Array(40)); x.w32(bih, 40); x.w32(bih + 4, 2); x.w32(bih + 8, 1); x.w16(bih + 12, 1); x.w16(bih + 14, 32);
+    x.w32(px, 0x00112233); x.w32(px + 4, 0x00445566);
+    const vfw = (n) => fn('msvfw32.dll', n), hdd = vfw('DrawDibOpen')();
+    r.push(vfw('DrawDibDraw')(hdd, mdc, 1, 1, -1, -1, bih, px, 0, 0, -1, -1, 0), [g('GetPixel')(mdc, 1, 1), g('GetPixel')(mdc, 2, 1)].map((v) => v.toString(16)).join(','));
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: RLE8 bitmaps, polygon regions, text-mode reads, trailing spaces, frameless window DCs, menu item info, FreeLibrary\'s count', got,
-    'ff0000,ff,ff0000,ff0000,ff,ff,ff,ff 3 0,0,30,10 2 "a\\n" 0 16 1 "a\\r\\n" 3 true true 1 77 Play 4 110');
+  eq('win32: RLE8 bitmaps, polygon regions, text-mode reads, trailing spaces, frameless window DCs, menu item info, FreeLibrary\'s count, FindWindowExA, DrawDib', got,
+    'ff0000,ff,ff0000,ff0000,ff,ff,ff,ff 3 0,0,30,10 2 "a\\n" 0 16 1 "a\\r\\n" 3 true true 1 77 Play 4 110 true 0 true 1 332211,665544');
   // The stand-ins for Arial, Times New Roman and Courier New measure a line as Windows does: their win
   // metrics set to their hhea ones (Arimo's raised 2136/797 made a 17-pixel Arial line 25 pixels high).
   try { const { windowsMetrics } = await import('../src/win32/fonts.js'), b = new Uint8Array(176), dv = new DataView(b.buffer);

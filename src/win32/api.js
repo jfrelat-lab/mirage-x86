@@ -803,7 +803,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].forEach((k, i) => x.w32(cs + 4 * i, x.r32(a + 4 * k)));
     if (extra.params !== undefined) x.w32(cs, extra.params);
     const to = (m) => [m[0], m[1], m[2], hwnd];
-    return send(x, [...cbt(x, hwnd, cs), to([0x81, 0, cs]), to([0x01, 0, cs]), to([0x05, 0, ((rec.h & 0xffff) << 16 | (rec.w & 0xffff)) >>> 0]), to([0x03, 0, 0])],
+    return send(x, [...cbt(x, hwnd, cs), to([0x81, 0, cs]), to([0x01, 0, cs]), to([0x05, 0, () => ((rec.h & 0xffff) << 16 | (rec.w & 0xffff)) >>> 0]), to([0x03, 0, 0])],
       () => hwnd, extra.pop ?? 48);
   };
   st.createOther = createOther;
@@ -1407,7 +1407,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // (a DLL's DllMain), stdcall, returning into the stub.
   const callProc = (x, m, ret) => {
     const h = Array.isArray(m) ? (m[3] ?? st.hwnd) : 0;
-    const c = x.cpu, fn = Array.isArray(m) ? procOf(h) : m.fn, args = Array.isArray(m) ? [h, m[0], m[1], m[2]] : m.args;
+    // An lParam given as a function is read when the message goes (CreateWindow's WM_SIZE: the size
+    // its WM_CREATE may have changed).
+    const c = x.cpu, fn = Array.isArray(m) ? procOf(h) : m.fn, args = Array.isArray(m) ? [h, m[0], m[1], typeof m[2] === 'function' ? m[2]() : m[2]] : m.args;
     let sp = c.reg[4] >>> 0;
     for (const v of [...args].reverse()) { sp -= 4; x.w32(sp, v >>> 0); }
     sp -= 4; x.w32(sp, ret); c.reg[4] = sp; c.eip = fn;
@@ -3156,7 +3158,21 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   for (const [k, v] of Object.entries({
     GetDCEx: ['ppu', (x, hwnd) => user32.GetDC[1](x, hwnd)],
     CharLowerBuffA: ['pu', (x, p, n) => { const b = x.bytes(p, n); for (let i = 0; i < n; i++) if (b[i] >= 65 && b[i] <= 90) b[i] += 32; x.write(p, b); return n; }],
-    DestroyAcceleratorTable: ['p', () => 1], ExitWindowsEx: ['uu', () => 0], WaitForInputIdle: ['pu', () => 0], EnumWindows: ['pp', () => 1], FindWindowExA: ['pppp', () => 0],
+    DestroyAcceleratorTable: ['p', () => 1], ExitWindowsEx: ['uu', () => 0], WaitForInputIdle: ['pu', () => 0], EnumWindows: ['pp', () => 1],
+    // FindWindowExA(parent, after, class, title): a child of `parent` after `after`, of that class (a name
+    // or an atom) and title when given -- Winamp's frame windows find the plug-in window they hold so.
+    // Top-level windows (no parent) are not looked for: none is found, as FindWindowA's.
+    FindWindowExA: ['pppp', (x, parent, after, cls, title) => {
+      if (!parent) return 0;
+      const k = !cls ? null : cls < 0x10000 ? cls : x.str(cls, 256).toLowerCase(), t = title ? x.str(title, 256) : null;
+      let past = !after;
+      for (const w of st.wins.values()) {
+        if (w.parent !== parent || w.dead || !(w.style & 0x40000000)) continue;
+        if (!past) { past = w.hwnd === after; continue; }
+        if ((k === null || w.cls === k) && (t === null || w.title === t)) return w.hwnd;
+      }
+      return 0;
+    }],
     DrawEdge: ['ppuu', () => 1], CreateCursor: ['piiiipp', () => st.newHandle('cursor', {})], DestroyCursor: ['p', () => 1],
     GetClassLongA: ['pi', () => 0], SetClassLongA: ['pii', () => 0],
   })) if (!(k in user32)) user32[k] = v;
@@ -3307,8 +3323,27 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
      * does not start (SP_ERROR). MFC programs (Half-Life's launcher) import them all.
      */
     { dll: 'comdlg32.dll', fns: { GetOpenFileNameA: ['p', () => 0], GetSaveFileNameA: ['p', () => 0], PrintDlgA: ['p', () => 0], FindTextA: ['p', () => 0], ReplaceTextA: ['p', () => 0],
+      ChooseFontA: ['p', () => 0], ChooseColorA: ['p', () => 0],
       CommDlgExtendedError: ['', () => 0],
       GetFileTitleA: ['ppu', (x, path, buf, n) => { const t = x.str(path, 260).split(/[\\/:]/).pop(); if (!buf || n <= t.length) return t.length + 1; x.write(buf, new TextEncoder().encode(t + '\0')); return 0; }] } },
+    /*
+     * Video for Windows: DrawDib draws a DIB to a DC as StretchDIBits does (a size of -1: the DIB's own) --
+     * AVS, Winamp's visualisation, shows its frames so. AVIFile opens no file here (AVIERR_FILEOPEN): AVS's
+     * AVI player effect stays blank.
+     */
+    { dll: 'msvfw32.dll', fns: {
+      DrawDibOpen: ['', () => 0xdd01], DrawDibClose: ['p', () => 1],
+      DrawDibDraw: ['ppiiiipppiiiiu', (x, hdd, hdc, dx, dy, dw, dh, bmi, bits, sx, sy, sw, sh) => {
+        const w = x.r32(bmi + 4) | 0, h = Math.abs(x.r32(bmi + 8) | 0);
+        if (sw === -1 || sh === -1) { sw = w; sh = h; }
+        if (dw === -1 || dh === -1) { dw = sw; dh = sh; }
+        gdi32.StretchDIBits[1](x, hdc, dx, dy, dw, dh, sx, sy, sw, sh, bits, bmi, 0, 0xcc0020); return 1;
+      }] } },
+    { dll: 'avifil32.dll', fns: {
+      AVIFileInit: ['', () => 0], AVIFileExit: ['', () => 0],
+      AVIStreamOpenFromFileA: ['ppuuup', (x, out) => { if (out) x.w32(out, 0); return 0x80044067; }],   // AVIERR_FILEOPEN
+      AVIStreamRelease: ['p', () => 0], AVIStreamLength: ['p', () => -1],
+      AVIStreamGetFrameOpen: ['pp', () => 0], AVIStreamGetFrame: ['pi', () => 0], AVIStreamGetFrameClose: ['p', () => 0] } },
     { dll: 'winspool.drv', fns: { OpenPrinterA: ['ppp', (x, name, ph) => { if (ph) x.w32(ph, 0); return 0; }], ClosePrinter: ['p', () => 1], DocumentPropertiesA: ['pppppu', () => -1] } },
     // The registry: empty. A key opens as not found (ERROR_FILE_NOT_FOUND), so nothing is read from it
     // or written to it, as on a machine where the program never ran.
