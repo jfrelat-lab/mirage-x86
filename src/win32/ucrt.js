@@ -147,8 +147,8 @@ export function ucrtApis({ st, send }) {
   // through the runtime) and _flag follows the end of file and the errors (_IOERR 20h); the runtime's own
   // mark and index are in _bufsiz and _tmpfname. With the index in _cnt and no _flag, Winamp read its
   // playlist with fgets until feof, for ever.
-  const fileBlock = (x, rec) => {
-    const p = malloc(x, 32); x.write(p, new Uint8Array(32)); st.crtFiles.push(rec);
+  const fileBlock = (x, rec, at = 0) => {
+    const p = at || malloc(x, 32); x.write(p, new Uint8Array(32)); st.crtFiles.push(rec);
     x.w32(p + 24, 0x46494c45); x.w32(p + 28, st.crtFiles.length - 1); x.w32(p + 16, 2 + st.crtFiles.length); rec.ptr = p;
     let eof = !!rec.eof, err = !!rec.err;
     const flag = () => x.w32(p + 12, (eof ? 0x10 : 0) | (err ? 0x20 : 0) | 1);
@@ -157,7 +157,8 @@ export function ucrtApis({ st, send }) {
     flag(); return p;
   };
   const fileOf = (x, F) => (F && x.r32(F + 24) === 0x46494c45 ? st.crtFiles[x.r32(F + 28)] : null);
-  const stdFile = (x, i) => (st.crtStd ||= [0, 1, 2].map((k) => fileBlock(x, { cons: k })))[i];
+  // stdin, stdout, stderr: three FILEs one after the other, msvcrt's _iob (&_iob[1] is stdout).
+  const stdFile = (x, i) => (st.crtStd ||= (() => { const base = malloc(x, 96); return [0, 1, 2].map((k) => fileBlock(x, { cons: k }, base + 32 * k)); })())[i];
   const open = (x, name, mode) => {
     const f0 = st.diskFile(name), rel = st.relPath(name), plus = mode.includes('+');
     let f = f0;
@@ -525,6 +526,11 @@ export function ucrtApis({ st, send }) {
   const splitPath = (p) => { const m = /^([A-Za-z]:)?((?:.*[\\/])?)([^\\/]*?)(\.[^.\\/]*)?$/.exec(p) || []; return [m[1] || '', m[2] || '', m[3] || '', m[4] || '']; };
   const classic = {
     printf: ['p', (x, fmt) => { const s = cprintf(x, x.str(fmt), va(x, 1)); out(x, fileOf(x, stdFile(x, 1)), enc(s)); return s.length; }, cd],
+    vfprintf: ['ppp', (x, F, fmt, ap) => { const r = fileOf(x, F), s = cprintf(x, x.str(fmt), ap); if (r) out(x, r, enc(s)); return s.length; }, cd],
+    _iob: ['', (x) => stdFile(x, 0), { data: true }],                   // the three standard FILEs (MinGW-w64's stdout is &_iob[1])
+    // _ismbblead: a Shift-JIS lead byte on a code page 932 system; none on 1252's.
+    _ismbblead: ['u', (x, c) => (st.acp === 932 && ((c >= 0x81 && c <= 0x9f) || (c >= 0xe0 && c <= 0xfc)) ? 4 : 0), cd],
+    _amsg_exit: ['i', (x, n) => { x.win.say(`_amsg_exit(${n}): the C runtime's fatal error`); x.lx.exitProcess(255); return 0; }, cd],
     fprintf: ['pp', (x, F, fmt) => { const r = fileOf(x, F), s = cprintf(x, x.str(fmt), va(x, 2)); if (r) out(x, r, enc(s)); return s.length; }, cd],
     sscanf: ['pp', (x, buf, fmt) => cscanf(x, x.str(buf), x.str(fmt), va(x, 2)), cd],
     _snprintf: ['pup', (x, buf, n, fmt) => { const s = cprintf(x, x.str(fmt), va(x, 3)); setStr(x, buf, s.slice(0, n)); if (s.length >= n) { if (s.length > n) return -1; } return s.length; }, cd],

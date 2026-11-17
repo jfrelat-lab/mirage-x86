@@ -818,6 +818,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), z: zNext(), ...extra };
     if (rec.ex) rec.long.set(-20, rec.ex);                            // GWL_EXSTYLE: what it was made with
     st.wins.set(hwnd, rec);
+    // Made visible (WS_VISIBLE): due its first WM_PAINT, as Windows paints it -- two popups made so over a
+    // framed window were never drawn.
+    if (rec.visible) invalidate(hwnd, true, true);
     if (!proc) return hwnd;
     const a = (x.cpu.reg[4] >>> 0) + 4, cs = x.win.heapAlloc(48);
     [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].forEach((k, i) => x.w32(cs + 4 * i, x.r32(a + 4 * k)));
@@ -870,7 +873,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       align(); u32(0x50010000 | (i ? 0 : 1)); u32(0); u16(((cx - bw) >> 1) + 56 * i); u16(by); u16(50); u16(14); u16(id); u16(0xffff); u16(0x0080); wstrz(label); u16(0);
     });
     const tpl = x.win.heapAlloc(parts.length); x.write(tpl, Uint8Array.from(parts));
-    return createDialog(x, 0, tpl, owner || st.hwnd, 0, 0, 16, (dlg) => { const w = win(dlg); if (w) w.msgBox = buttons.map(([id]) => id); return modal(x, dlg, owner || st.hwnd, 16); });
+    // No owner and no window yet (a program that only says something): the message box is its first window.
+    return createDialog(x, 0, tpl, owner || (st.mainMade ? st.hwnd : 0), 0, 0, 16, (dlg) => { const w = win(dlg); if (w) w.msgBox = buttons.map(([id]) => id); return modal(x, dlg, owner || (w && w.main ? 0 : st.hwnd), 16); });
   };
   // The dialog made: shown, its owner disabled, and modalLoop(data) called in DialogBox's place (a send
   // on DialogBox's own frame), its result DialogBox's (`pop`: DialogBox's argument bytes, MessageBox's 16).
@@ -879,7 +883,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const data = x.win.heapAlloc(40); x.write(data, new Uint8Array(40)); x.w32(data + 4, dlg);
     w.modal = data;
     if (w.ended) { x.w32(data, 1); x.w32(data + 8, w.result); }       // EndDialog already (in WM_INITDIALOG): not shown, its result at once
-    if (!w.visible && !w.ended) { w.visible = true; invalidate(dlg, true, true); }
+    if (!w.visible && !w.ended) { w.visible = true; if (w.main) { st.shown = true; wm.dirty = true; } invalidate(dlg, true, true); }   // the main one: the screen's
     const o = owner && win(owner); if (o) o.enabled = false;
     w.modalOwner = owner;
     // Activated, it has the focus: its first control with WS_TABSTOP (a message box's default button) unless
@@ -1623,11 +1627,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // ...and on a dialog application's desktop, where a window's x and y are its client area's: centred on
     // the desktop (DS_CENTER) or at the template's place, its frame and caption on the screen -- Winamp's
     // and Diablo's setup dialogs stood at the corner, their captions above the screen.
-    else if (!win(dlg).main && deskMode() && !(style & 0x40000000)) {
+    // The main dialog too (a dialog application's first window: MinGW's DialogBox samples stood at the corner).
+    else if (deskMode() && !(style & 0x40000000)) {
       const d = win(dlg), f = popFrame(d), W = d.w + 2 * f.b, H = d.h + 2 * f.b + f.cap;
-      if (style & 0x800) { d.x = ((st.desk.w - W) >> 1) + f.b; d.y = ((st.desk.h - H) >> 1) + f.b + f.cap; }
+      // DS_CENTER: in the work area, above the taskbar (30 pixels), as Windows centres a dialog.
+      if (style & 0x800) { d.x = ((st.desk.w - W) >> 1) + f.b; d.y = ((st.desk.h - 30 - H) >> 1) + f.b + f.cap; }
       else { d.x += f.b; d.y += f.b + f.cap; }
       d.x = Math.max(f.b, Math.min(st.desk.w - W + f.b, d.x)); d.y = Math.max(f.b + f.cap, Math.min(st.desk.h - H + f.b + f.cap, d.y));
+      if (d.main) { st.x = d.x; st.y = d.y; }
     }
     const kids = [];
     for (let i = 0; i < n; i++) {
@@ -2570,14 +2577,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       for (const c of textChars(hdc, x.bytes(str, Math.max(0, n)))) w += m.font ? m.font.glyph(c, m.ppem).cellIncX : m.avg;
       x.w32(size, w); x.w32(size + 4, m.height); return 1;
     }],
+    // Into what the DC draws on (target): a bitmap, a DIB section (the program's memory), a DirectDraw
+    // surface, or a window's part of the screen -- text TextOut'd into a window's DC was dropped.
     ExtTextOutA: ['piiuppip', (x, hdc, X, Y, opts, rect, str, n) => {
-      const bm = st.gdi.get(st.dcBitmaps.get(hdc)), d = dcState(hdc), m = textMetrics(hdc);
-      if (!bm || bm.kind !== 'bitmap') return 1;
-      if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);   // a DIB section: its pixels are the program's memory
-      if (bm.load) bm.load(x);                                          // a DirectDraw surface's DC
-      const r = textOut(x, bm, d, m, X, Y, opts, rect, str, n, hdc);
-      if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, false);
-      if (bm.store) bm.store(x);
+      const t = target(x, hdc), d = dcState(hdc), m = textMetrics(hdc);
+      if (!t) return 1;
+      const r = textOut(x, t, d, m, X, Y, opts, rect, str, n, hdc);
+      t.done();
       return r;
     }],
     TextOutA: ['piipi', (x, hdc, X, Y, str, n) => gdi32.ExtTextOutA[1](x, hdc, X, Y, 0, 0, str, n)],
@@ -3165,6 +3171,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }, cd],
     _controlfp: ['uu', () => 0x0009001f, cd], _exit: ub._exit,
     _acmdln: ['', (x) => kernel32.GetCommandLineA[1](x), { data: true }],
+    __initenv: ['', (x) => ub._get_initial_narrow_environment[1](x), { data: true }],   // the environment (char **), MinGW-w64's
+    // __p__acmdln: where _acmdln is (char **) -- MinGW-w64's start-up reads the command line so.
+    __p__acmdln: ['', (x) => (st.acmdlnCell ||= (() => { const q = x.win.heapAlloc(4); x.w32(q, kernel32.GetCommandLineA[1](x)); return q; })()), cd],
     _adjust_fdiv: ['', () => 0, { data: true }],
     _except_handler3: ['pppp', () => 1, cd], _XcptFilter: ['up', () => 0, cd],
     isdigit: ub.isdigit,

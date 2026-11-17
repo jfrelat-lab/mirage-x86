@@ -5429,6 +5429,21 @@ const runLinux = (hex, argv) => {
     got = [before === after, count, flags.toString(16), bits, b !== a, rect, len].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: stock objects kept, an OpenGL pixel format, a maximized window, a new main window, a long text', got, 'true 1 25 32/24/8 true -3,-3,1027,741 2000');
+  // The Win32 samples (tools/win32/samples, MinGW-w64, against Windows 2000): MinGW's start-up asks msvcrt
+  // for __p__acmdln and _iob (three FILEs one after another); a dialog that is the first window is the
+  // screen's, centred in the work area above the taskbar; text TextOut'd into a window's DC reaches the
+  // screen; a window made with WS_VISIBLE is due its first WM_PAINT.
+  try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), g = (n) => fn('gdi32.dll', n), c = (n) => fn('msvcrt.dll', n), r = [];
+    r.push(x.r32(c('__p__acmdln')()) === fn('kernel32.dll', 'GetCommandLineA')(), c('__acrt_iob_func')(1) - c('_iob')());
+    const tpl = x.win.heapAlloc(24); x.write(tpl, new Uint8Array(24)); x.w32(tpl, 0x80c808c0); x.w16(tpl + 14, 200); x.w16(tpl + 16, 100);
+    u('CreateDialogIndirectParamA')(0, tpl, 0, 0, 0); const d = apis.windows()[0]; r.push(d.rect.slice(0, 2).join(','));
+    const main = u('CreateWindowExA')(0, str('static'), 0, 0x90000000, 10, 10, 50, 50, 0, 0), pop = parseInt(apis.windows().at(-1).hwnd, 16), ur = x.win.heapAlloc(16);
+    r.push(u('GetUpdateRect')(pop, ur, 0) ? 'due' : 'not due');
+    const dc = u('GetDC')(pop); g('SetBkMode')(dc, 2); g('SetBkColor')(dc, 0x0000ff); g('TextOutA')(dc, 0, 0, str('Hi'), 2);
+    r.push(g('GetPixel')(dc, 1, 1).toString(16)); void main;
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: MinGW\'s msvcrt (__p__acmdln, _iob), a first dialog centred in the work area, TextOut into a window, WS_VISIBLE painted', got, 'true 32 362,297 due ff');
   // A tree view (comctl32's SysTreeView32) as AVS's editor fills it: items inserted at the root, first and
   // last, a child; walked, opened, read back, hit, selected and deleted.
   try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), r = [];
