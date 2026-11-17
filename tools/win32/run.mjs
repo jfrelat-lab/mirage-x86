@@ -20,6 +20,7 @@
 //   MIRAGE_W32MEM=<MiB>             the machine's RAM at least that (default: 64 MiB and the image, a power of two)
 //   MIRAGE_W32TRACE=1|<file>        every API call as it is made (to stderr, or that file)
 //   MIRAGE_W32TRACEFROM=<seconds>   ... from that guest second on
+//   MIRAGE_W32TRACESTR=1            ... each argument that points at text with that text
 //   MIRAGE_W32FONTS=arial=<ttf>,arial:bold=<ttf>  TrueType fonts the program selects, as the page's machine.fonts
 //   MIRAGE_W32CODEPAGE=932          the system's code page (machine.codepage): Shift-JIS, a Japanese Windows'
 //   MIRAGE_W32DUMP=<name>,...       those files of the program's disk at the end (what it wrote)
@@ -67,7 +68,13 @@ const traceFd = process.env.MIRAGE_W32TRACE && process.env.MIRAGE_W32TRACE !== '
 const traceOut = (t) => { const b = Buffer.from(t); for (let o = 0; o < b.length;) { try { o += writeSync(traceFd, b, o); } catch (e) { if (e.code !== 'EAGAIN') throw e; } } };
 // MIRAGE_W32TRACEFROM=<guest seconds>: only from then on (a launcher's first minute is millions of calls).
 const traceFrom = Number(process.env.MIRAGE_W32TRACEFROM) || 0;
-if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { if (traceFrom && lx.mono() < traceFrom) { if (t0) t0(name, args); return; } traceOut('w32 ' + lx.mono().toFixed(3) + ': ' + name + ' ' + args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) : a)).join(' ') + '\n'); if (t0) t0(name, args); }; }
+// MIRAGE_W32TRACESTR=1: an argument that points at text shows it too ("0x12e918 'c:\\Q3Ademo'"): the paths
+// an installer builds in its variables, which the bare pointers do not tell.
+const traceStr = (a) => {
+  if (!process.env.MIRAGE_W32TRACESTR || a < 0x10000) return '';
+  try { const b = lx.rdBytes(a >>> 0, 96); let n = 0; while (n < b.length && b[n] >= 0x20 && b[n] < 0x7f) n++; return n >= 2 && (n === b.length || b[n] === 0) ? ` '${String.fromCharCode(...b.subarray(0, n))}'` : ''; } catch { return ''; }
+};
+if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { if (traceFrom && lx.mono() < traceFrom) { if (t0) t0(name, args); return; } traceOut('w32 ' + lx.mono().toFixed(3) + ': ' + name + ' ' + args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) + traceStr(a) : a)).join(' ') + '\n'); if (t0) t0(name, args); }; }
 const files = {};
 if (process.env.MIRAGE_W32DIR) (function walk(d, rel) { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p, rel + n + '/'); else files[rel + n] = new Uint8Array(readFileSync(p)); } })(process.env.MIRAGE_W32DIR, '');
 // MIRAGE_W32FONTS=arial=/path/Arial.ttf,arial:bold=/path/Arial Bold.ttf: TrueType fonts, as the page's machine.fonts.

@@ -541,6 +541,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GlobalLock: ['p', (x, h) => h], GlobalUnlock: ['p', () => 1],
     // Code pages: Windows-1252 for ANSI, 437 for OEM, one byte a character either way.
     GetACP: ['', () => st.acp], GetOEMCP: ['', () => (st.acp === 932 ? 932 : 437)],
+    // A lead byte of a double-byte character: Shift-JIS's (81h-9Fh, E0h-FCh) on a Japanese system, none on Windows-1252.
+    IsDBCSLeadByte: ['u', (x, b) => (st.acp === 932 && (((b & 255) >= 0x81 && (b & 255) <= 0x9f) || ((b & 255) >= 0xe0 && (b & 255) <= 0xfc)) ? 1 : 0)],
+    IsDBCSLeadByteEx: ['uu', (x, cp, b) => ((cp === 932 || (cp === 0 && st.acp === 932)) && (((b & 255) >= 0x81 && (b & 255) <= 0x9f) || ((b & 255) >= 0xe0 && (b & 255) <= 0xfc)) ? 1 : 0)],
     // CPINFO: MaxCharSize, DefaultChar, LeadByte ranges -- Shift-JIS's lead bytes 81-9F and E0-FC.
     GetCPInfo: ['up', (x, cp, p) => {
       const dbcs = (cp === 0 || cp === 1 || cp === 3 ? st.acp : cp) === 932;
@@ -602,6 +605,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     GlobalSize: ['p', (x, h) => x.win.heapSize(h)],
     GetDriveTypeA: ['p', () => 3],                                    // DRIVE_FIXED: C:, the program's disk
+    // CopyFileA(from, to, failIfExists): a copy of the bytes, the source found as CreateFileA finds it; an
+    // existing destination kept when asked (ERROR_FILE_EXISTS). Quake III's demo setup copies its files so.
+    CopyFileA: ['ppi', (x, a, b, fail) => {
+      const f = diskFile(x.str(a)); if (!f || !f.bytes) { setError(x, 2); return 0; }
+      const k = relPath(x.str(b)); if (fail && st.disk.has(k)) { setError(x, 80); return 0; }
+      st.disk.set(k, { bytes: f.bytes.slice(0, f.size), size: f.size }); return 1;
+    }],
     MoveFileA: ['pp', (x, a, b) => { const f = diskFile(x.str(a)), k = f && [...st.disk].find(([, v]) => v === f)?.[0]; if (!k) return 0; st.disk.delete(k); st.disk.set(relPath(x.str(b)), f); return 1; }],
     // A path on C:, whose root is the program's directory: "C:\\" and the name, the part after the last
     // backslash pointed at.
@@ -700,6 +710,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // component that needs a window) is never the main one: made as such, each made the last one anew,
     // under its handle, and the timers on them stopped one another.
     if ((ex & 0x80) && !w && !h && !(style & 0x10000000)) return createOther(x, cls, style, w, h, wide, X, Y, title, parent, menu, { ex: ex >>> 0 });
+    // A main window made after the last one was destroyed has a handle of its own, as on Windows, and is a
+    // dialog application's or not by itself (Quake III's setup: a "Starting..." dialog first, then its
+    // full-screen window, which took the dialog's handle, its texts and its place).
+    if (st.mainMade && st.destroyed) { st.wins.delete(st.hwnd); st.hwnd = nextHwnd; nextHwnd += 4; st.mainDialog = false; }
     st.mainMade = true; st.mainClass = k0; if (st.guiTid === undefined) st.guiTid = x.lx.pid;
     // A main window of no size, never shown (Delphi's TApplication window): the program's windows are its
     // forms, each a top-level window on the desktop -- a dialog application's desktop (deskMode).
@@ -961,7 +975,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return 0;
     }
     switch (msg) {
-      case 0x0c: w.title = lp ? x.str(lp, 1024) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
+      case 0x0c: w.title = lp ? x.str(lp, 0x8000) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
       case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, ansi(t + '\0')); return t.length; }   // WM_GETTEXT
       case 0x0e: return (w.title || '').length;                          // WM_GETTEXTLENGTH
       case 0x30: w.font = wp; if (lp & 0xffff) invalidate(hwnd, true); return 0;   // WM_SETFONT
@@ -1203,7 +1217,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const lt = w.pushed ? 0x404040 : 0xffffff, dk = w.pushed ? 0xffffff : 0x404040;
       fillRect(t, 0, 0, t.w, 1, lt); fillRect(t, 0, 0, 1, t.h, lt); fillRect(t, 0, t.h - 1, t.w, t.h, dk); fillRect(t, t.w - 1, 0, t.w, t.h, dk);
     }
-    const text = (w.title || '').replace(/&(.)/g, '$1');
+    const text = w.cls === 'edit' ? (w.title || '') : (w.title || '').replace(/&(.)/g, '$1');   // an edit's & is text, not a mnemonic
     if (text) {
       if (w.font) st.dcFonts.set(hdc, w.font);
       const m = textMetrics(hdc), buf = x.win.heapAlloc(text.length + 1);
@@ -1212,8 +1226,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // A static's text (SS_LEFT, SS_CENTER, SS_RIGHT) breaks between words to its width, as DrawText's
       // DT_WORDBREAK: Pinball's instructions, "Left Table Bump" on two lines.
       const lines = [];
-      if (w.cls === 'static' && (w.style & 15) <= 2) {
-        for (const para of text.split(/\r?\n/)) {
+      // ...and a multi-line edit control's (ES_MULTILINE, 4) to its width, from its first line shown (`top`),
+      // its tabs as spaces: Quake III's setup shows its licence so.
+      const multi = w.cls === 'edit' && (w.style & 4);
+      if ((w.cls === 'static' && (w.style & 15) <= 2) || multi) {
+        for (const para of (multi ? text.replace(/\t/g, '    ') : text).split(/\r?\n/)) {
           let line = '';
           for (const word of para.split(' ')) { const next = line ? line + ' ' + word : word; if (line && widthOf(next) > t.w) { lines.push(line); line = word; } else line = next; }
           lines.push(line);
@@ -1222,8 +1239,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const ink = d.textColor;
       lines.forEach((ln, k) => {
         const width = widthOf(ln);
+        if (multi && k < (w.top | 0)) return;
         const X = w.cls === 'edit' ? 4 : group ? 8 : w.cls === 'button' ? (type <= 1 ? (t.w - width) >> 1 : 16) : (w.style & 3) === 1 ? (t.w - width) >> 1 : (w.style & 3) === 2 ? t.w - width : 0;
-        const Y = group ? 0 : w.cls === 'button' || w.cls === 'edit' ? (t.h - m.height) >> 1 : k * m.height;
+        const Y = group ? 0 : multi ? 3 + (k - (w.top | 0)) * m.height : w.cls === 'button' || w.cls === 'edit' ? (t.h - m.height) >> 1 : k * m.height;
         if (Y >= t.h) return;
         if (group) fillRect(t, X - 2, 0, X + width + 2, m.height, face);
         // An edit control with the focus and its text all selected: white on the selection's blue.
@@ -1315,10 +1333,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   };
   // Its end, and its children's: WM_DESTROY to it then to them, WM_NCDESTROY to them then to it.
   const destroyOther = (x, hwnd, result, pop) => {
-    const w = win(hwnd); if (!w || w.dead) return result(0) && 0;
+    const w = win(hwnd); if (!w || w.dead || w.dying) return result(0) && 0;
     const all = (h) => [...st.wins.values()].filter((c) => c.parent === h && !c.dead).flatMap((c) => [c, ...all(c.hwnd)]);
     const kids = all(hwnd);
-    w.dead = true; for (const c of kids) c.dead = true;
+    // Dying, not dead, while WM_DESTROY goes round: the window and its children are still there to be asked,
+    // as on Windows until WM_NCDESTROY -- Quake III's setup reads its destination folder from the dialog's
+    // edit control in its WM_DESTROY, and installed everything at the disk's root.
+    w.dying = true; for (const c of kids) c.dying = true;
     if (w.modal && w.modalOwner && win(w.modalOwner)) win(w.modalOwner).enabled = true;   // a modal dialog's owner again
     if (w.visible && !(w.style & 0x40000000)) uncoverRect(screenOrigin(hwnd), w.w, w.h);
     // The focus it held goes back to its owner, where the owner's had been (the dialog manager keeps it):
@@ -1328,7 +1349,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       st.focus = back || (owner && !owner.main ? owner.hwnd : 0); if (owner && !owner.main) st.activeWin = owner.hwnd;
     }
     return send(x, [[0x02, 0, 0, hwnd], ...kids.map((c) => [0x02, 0, 0, c.hwnd]), ...kids.reverse().map((c) => [0x82, 0, 0, c.hwnd]), [0x82, 0, 0, hwnd]],
-      (eax) => { st.wins.delete(hwnd); for (const c of kids) st.wins.delete(c.hwnd); return result(eax); }, pop);
+      (eax) => { w.dead = true; st.wins.delete(hwnd); for (const c of kids) { c.dead = true; st.wins.delete(c.hwnd); } return result(eax); }, pop);
   };
   // Showing and activating: WM_SHOWWINDOW, WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE (WA_ACTIVE), WM_SETFOCUS.
   const ACTIVATE = [[0x18, 1, 0], [0x1c, 1, 0], [0x86, 1, 0], [0x06, 1, 0], [0x07, 0, 0]];
@@ -1519,7 +1540,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; st.modeSet = true; } else st.modeSet = false;
       wm.dirty = true; return 0;
     }],
-    SetWindowTextA: ['pp', (x, hwnd, t) => { if (hwnd === st.hwnd) { st.title = t ? x.str(t, 256) : ''; wm.redraw(); } else if (win(hwnd)) win(hwnd).title = t ? x.str(t, 256) : ''; return 1; }],
+    // A text up to an edit control's 32 KB (a licence shown in one: Quake III's setup), as WM_SETTEXT.
+    SetWindowTextA: ['pp', (x, hwnd, t) => { if (hwnd === st.hwnd) { st.title = t ? x.str(t, 0x8000) : ''; wm.redraw(); } else if (win(hwnd)) { win(hwnd).title = t ? x.str(t, 0x8000) : ''; invalidate(hwnd, true); } return 1; }],
     GetWindowTextA: ['ppi', (x, hwnd, buf, n) => { const t = hwnd === st.hwnd ? (st.title || '') : win(hwnd) ? win(hwnd).title || '' : ''; if (n > 0) x.write(buf, ansi(t.slice(0, n - 1) + '\0')); return Math.min(t.length, Math.max(0, n - 1)); }],
     // A point of the client area on the screen and back: the window's place and its frame.
     ClientToScreen: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) + c.x); x.w32(p + 4, (x.r32(p + 4) | 0) + c.y); return 1; }],
@@ -1557,11 +1579,19 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         return w.visible === !!was ? was : send(x, [[0x18, w.visible ? 1 : 0, 0, hwnd]], () => was, 8);
       }
       if (st.mainDialog && cmd !== 0 && !st.shown) invalidate(hwnd, true, true);
+      // SW_SHOWMAXIMIZED (3): the work area (above the taskbar), its frame beyond the screen's edges, as
+      // Windows maximizes; WM_SIZE says SIZE_MAXIMIZED. Quake III's setup centres its wizard on its window
+      // so maximized, and the wizard stood half off the screen.
+      if (cmd === 3 && !st.maximized) {
+        const { b } = wm.frame(); st.maximized = true; st.x = -b; st.y = -b; st.placed = true;
+        resize(st.desk.w + 2 * b, st.desk.h - 30 + 2 * b); st.needSize = true;
+        if (st.active && st.shown) { st.needSize = false; return send(x, [[0x05, 2, sizeLp()], [0x03, 0, (((st.y + b) & 0xffff) << 16 | ((st.x + b) & 0xffff)) >>> 0]], () => 1, 8); }
+      }
       if (st.active || cmd === 0) return st.shown ? 1 : 0;
       // Shown framed: the desktop and its frame drawn now, at the desktop's size -- a program that draws only
       // through Direct3D (Deltarune) never presents through GDI, and the screen kept its swap chain's size.
       const was = st.shown ? 1 : 0; st.shown = st.active = true; wm.dirty = true; if (!was && wm.framed()) wm.present(x.lx, null);
-      const sized = st.needSize ? [[0x05, 0, sizeLp()], [0x03, 0, 0]] : []; st.needSize = false;   // its first showing: WM_SIZE, WM_MOVE (above)
+      const sized = st.needSize ? [[0x05, st.maximized ? 2 : 0, sizeLp()], [0x03, 0, 0]] : []; st.needSize = false;   // its first showing: WM_SIZE, WM_MOVE (above)
       return send(x, [...ACTIVATE.slice(0, 1), ...sized, ...ACTIVATE.slice(1)], () => was, 8);
     }],
     UpdateWindow: ['p', (x, hwnd) => {
@@ -1715,7 +1745,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return id || 1;
     }], ValidateRect: ['pp', (x, h) => { st.invalid.delete(h || st.hwnd); return 1; }], // The window's end: WM_DESTROY, then WM_NCDESTROY; the program's other windows (dialogs) have no procedure here.
     DestroyWindow: ['p', (x, hwnd) => {
-      if (hwnd === st.hwnd) return !st.destroyed ? (st.destroyed = true, send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 1, 4)) : 1;
+      // The main window's end takes its children and the windows it owns with it, as any window's: Quake III's
+      // demo setup ends its "Starting..." dialog, and its texts stayed on the screen in the windows after it.
+      if (hwnd === st.hwnd) {
+        if (st.destroyed) return 1;
+        st.destroyed = true;
+        const all = (h) => [...st.wins.values()].filter((c) => c.parent === h && !c.dead && !c.main).flatMap((c) => [c, ...all(c.hwnd)]);
+        const kids = all(hwnd); for (const c of kids) c.dying = true;
+        if (kids.some((c) => c.hwnd === st.focus)) st.focus = 0;
+        return send(x, [[0x02, 0, 0], ...kids.map((c) => [0x02, 0, 0, c.hwnd]), ...[...kids].reverse().map((c) => [0x82, 0, 0, c.hwnd]), [0x82, 0, 0]],
+          () => { for (const c of kids) { c.dead = true; st.wins.delete(c.hwnd); } return 1; }, 4);
+      }
       return destroyOther(x, hwnd, () => 1, 4);
     }],
     LoadCursorA: ['pp', () => 0x10003], LoadIconA: ['pp', () => 0x10002], SetCursor: ['p', () => 0], AdjustWindowRect: ['pui', (x, r, style, menu) => user32.AdjustWindowRectEx[1](x, r, style, menu, 0)],
@@ -2101,8 +2141,21 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     t.done(); return 1;
   };
   const gdi32 = {
-    ChoosePixelFormat: ['pp', () => 1], SetPixelFormat: ['pip', () => 1],
-    DescribePixelFormat: ['piup', () => 1],
+    ChoosePixelFormat: ['pp', () => 1], SetPixelFormat: ['pip', () => 1], GetPixelFormat: ['p', () => 1],
+    // The one pixel format there is (WebGL's), as a card's driver describes it: drawn to a window, OpenGL,
+    // double buffered, not the generic (software) one; RGBA 8888, 24 bits of depth, 8 of stencil. Its
+    // number is the count of formats. Quake III counts the formats that do OpenGL: the PIXELFORMATDESCRIPTOR
+    // left empty, it found none ("0 PFDs found") and gave up OpenGL.
+    DescribePixelFormat: ['piup', (x, hdc, i, n, pfd) => {
+      if (pfd && n >= 40 && i === 1) {
+        const b = new Uint8Array(40), dv = new DataView(b.buffer);
+        dv.setUint16(0, 40, true); dv.setUint16(2, 1, true); dv.setUint32(4, 0x25, true);   // PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER
+        b.set([0, 32, 8, 16, 8, 8, 8, 0, 8, 24], 8);                    // RGBA; 32 bits: red, green, blue, alpha and their shifts
+        b[23] = 24; b[24] = 8;                                          // depth, stencil
+        x.write(pfd, b);
+      }
+      return 1;
+    }],
     // The frame: presented at most sixty times a second of the guest's clock, as a vsynced swap, and
     // not before the page has taken the last one (backend.swapReady: one frame in flight).
     SwapBuffers: ['p', (x) => {
@@ -2115,7 +2168,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // Fonts and device contexts: what a font names and the DC it is selected into, for D3DXCreateText
     // (st.dcFont) to find its outlines among the fonts the page handed over.
     // Stock objects: WHITE_BRUSH 0 to BLACK_BRUSH 4, NULL_BRUSH 5, the pens 6-8, the fonts 10-17, each its handle.
-    GetStockObject: ['i', (x, i) => 0x01900010 + (i & 31)], DeleteObject: ['p', (x, h) => { st.gdi.delete(h); return 1; }],
+    GetStockObject: ['i', (x, i) => 0x01900010 + (i & 31)], // A stock object (GetStockObject's, 1900010h up) is never deleted, as Windows ignores it: Quake III's setup
+    // deletes DEFAULT_GUI_FONT after its first page, and every dialog after it lost its text.
+    DeleteObject: ['p', (x, h) => { if (h >= 0x01900010 && h < 0x01900030) return 1; st.gdi.delete(h); return 1; }],
     SelectObject: ['pp', (x, hdc, obj) => {
       const o = st.gdi.get(obj);
       if (o && o.kind === 'bitmap') { const prev = st.dcBitmaps.get(hdc) || 0x0185000f; st.dcBitmaps.set(hdc, obj); return prev; }   // DEFAULT_BITMAP's
@@ -2299,6 +2354,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const opengl32 = { ...(gl || glTable().fns) };
   delete opengl32.glXGetProcAddress; delete opengl32.glXGetProcAddressARB;
   Object.assign(opengl32, {
+    // opengl32's own pixel-format calls, as a standalone driver's (a 3Dfx MiniGL) are: gdi32's answers.
+    wglChoosePixelFormat: gdi32.ChoosePixelFormat, wglSetPixelFormat: gdi32.SetPixelFormat, wglGetPixelFormat: gdi32.GetPixelFormat,
+    wglDescribePixelFormat: gdi32.DescribePixelFormat,
     wglCreateContext: ['p', () => st.hglrc],
     // The GL surface takes the window's size when a context is made current, and again whenever that size
     // changed: Quake II re-creates its window and context at a new video mode (800x600 from its menu).

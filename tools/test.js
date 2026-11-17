@@ -5400,6 +5400,35 @@ const runLinux = (hex, argv) => {
     got = [0, 2, 6, 8, 10, 12].map((o) => x.r16(stm + o)).join(',');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: DosDateTimeToFileTime', got, '1999,12,2,10,30,20');
+  // Quake III's demo setup (Installer VISE): its texts from an INI file of its own, its files copied, the
+  // service manager closed to it.
+  try { const { fn, x, str } = await w32(), k = (n) => fn('kernel32.dll', n), a = (n) => fn('advapi32.dll', n), buf = x.win.heapAlloc(64), done = x.win.heapAlloc(4);
+    const ini = '; a comment\r\n[Lang]\r\nWelcome="Hi there"\r\nN = 42\r\n[Other]\r\nk=v\r\n', b = str(ini), h = k('CreateFileA')(str('C:\\setup\\l.ini'), 0x40000000, 0, 0, 2, 0, 0);
+    k('WriteFile')(h, b, ini.length, done, 0); k('CloseHandle')(h); const file = str('C:\\setup\\l.ini');
+    const r = [k('GetPrivateProfileStringA')(str('lang'), str('welcome'), str('?'), buf, 64, file), x.str(buf), k('GetPrivateProfileIntA')(str('Lang'), str('N'), 7, file)];
+    k('GetPrivateProfileStringA')(str('Lang'), str('none'), str('dflt'), buf, 64, file); r.push(x.str(buf));
+    const n = k('GetPrivateProfileStringA')(0, 0, 0, buf, 64, file); r.push(new TextDecoder().decode(x.bytes(buf, n)).replace(/\0/g, '|'));
+    k('WritePrivateProfileStringA')(str('Other'), str('k'), str('w'), file); k('GetPrivateProfileStringA')(str('Other'), str('k'), 0, buf, 64, file); r.push(x.str(buf));
+    r.push(k('CopyFileA')(file, str('C:\\copy\\l.ini'), 0), k('CopyFileA')(file, str('C:\\copy\\l.ini'), 1), k('GetPrivateProfileIntA')(str('Lang'), str('N'), 7, str('C:\\copy\\l.ini')));
+    r.push(a('OpenSCManagerA')(0, 0, 0xf003f), k('GetLastError')());
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: INI profiles read, listed and written, CopyFileA, no service manager', got, '8 Hi there 42 dflt Lang|Other| w 1 0 42 0 5');
+  // A stock object outlives DeleteObject (Quake III's setup deletes DEFAULT_GUI_FONT); a pixel format that does
+  // OpenGL (Quake III counts them); a window maximized to the work area, its frame beyond the screen; a main
+  // window made after the last was destroyed has a handle of its own; a long text.
+  try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), g = (n) => fn('gdi32.dll', n), tm = x.win.heapAlloc(64), pfd = x.win.heapAlloc(40), rc = x.win.heapAlloc(16);
+    const dc = g('CreateCompatibleDC')(0), font = g('GetStockObject')(17); g('SelectObject')(dc, font);
+    g('GetTextMetricsA')(dc, tm); const before = x.r32(tm); g('DeleteObject')(font); g('GetTextMetricsA')(dc, tm); const after = x.r32(tm);
+    x.write(pfd, new Uint8Array(40)); const count = g('DescribePixelFormat')(dc, 1, 40, pfd), flags = x.r32(pfd + 4) & 0x25, bits = [x.r8(pfd + 9), x.r8(pfd + 23), x.r8(pfd + 24)].join('/');
+    const a = u('CreateWindowExA')(0, 0, 0, 0x10000000, 0, 0, 320, 200); u('CreateWindowExA')(0, str('static'), 0, 0x50000000, 0, 0, 10, 10, a, 7);
+    u('DestroyWindow')(a); const b = u('CreateWindowExA')(0, 0, 0, 0xcf0000, -0x80000000, -0x80000000, -0x80000000, -0x80000000);
+    u('ShowWindow')(b, 3); u('GetWindowRect')(b, rc); const rect = [0, 4, 8, 12].map((o) => x.r32(rc + o) | 0).join(',');
+    u('CreateWindowExA')(0, str('static'), 0, 0x50000000, 0, 0, 10, 10, b, 8); const st = parseInt(apis.windows().at(-1).hwnd, 16);
+    u('SetWindowTextA')(st, str('x'.repeat(2000))); const len = u('GetWindowTextLengthA')(st);
+    got = [before === after, count, flags.toString(16), bits, b !== a, rect, len].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: stock objects kept, an OpenGL pixel format, a maximized window, a new main window, a long text', got, 'true 1 25 32/24/8 true -3,-3,1027,741 2000');
   // The stand-ins for Arial, Times New Roman and Courier New measure a line as Windows does: their win
   // metrics set to their hhea ones (Arimo's raised 2136/797 made a 17-pixel Arial line 25 pixels high).
   try { const { windowsMetrics } = await import('../src/win32/fonts.js'), b = new Uint8Array(176), dv = new DataView(b.buffer);

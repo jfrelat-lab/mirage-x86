@@ -3,6 +3,11 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-17
+
+- **Quake III Arena's demo installs and plays** on the Windows machine (tested locally).
+- **Windows setup programs**: their texts, licences and destination folders work (Installer VISE's).
+
 ## 2026-11-15
 
 - **Deltarune Chapter 1 (2018) starts on the Windows machine** and draws its intro (tested locally): Direct3D 11 games begin.

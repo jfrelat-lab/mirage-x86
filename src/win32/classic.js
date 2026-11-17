@@ -91,6 +91,59 @@ export function classicApis({ st, wm }) {
     if (!atoms.has(k)) { const a = 0xc000 + atoms.size; atoms.set(k, a); atomNames.set(a, name); }
     return atoms.get(k);
   };
+  // INI files on the program's disk (see GetPrivateProfileStringA): sections by lower-case name, each its
+  // own name and its [key, value] lines in order.
+  const iniPath = (x, file) => { const n = file ? x.str(file, 260) : 'win.ini'; return /[\\/:]/.test(n) ? n : `C:\\WINDOWS\\${n}`; };
+  const ini = (x, file) => {
+    const secs = new Map(), f = st.diskFile && st.diskFile(iniPath(x, file));
+    if (!f || !f.bytes) return secs;
+    let cur = null;
+    for (const raw of new TextDecoder('latin1').decode(f.bytes.subarray(0, f.size)).split(/\r?\n/)) {
+      const l = raw.trim();
+      if (!l || l[0] === ';') continue;
+      const m = /^\[(.*)\]/.exec(l);
+      if (m) { const k = m[1].trim().toLowerCase(); cur = secs.get(k) || { name: m[1].trim(), entries: [] }; secs.set(k, cur); continue; }
+      const eq = l.indexOf('=');
+      if (cur && eq > 0) cur.entries.push([l.slice(0, eq).trim(), l.slice(eq + 1).trim()]);
+    }
+    return secs;
+  };
+  const iniGet = (x, file, sec, key) => {
+    const s = ini(x, file).get(x.str(sec).trim().toLowerCase()), k = x.str(key).trim().toLowerCase();
+    const e = s && s.entries.find(([n]) => n.toLowerCase() === k);
+    return e ? e[1] : null;
+  };
+  // A list (section or key names, a section's lines): each string then 0, and a last 0; cut to the room.
+  const putList = (x, buf, n, list) => {
+    if (!buf || n < 2) return 0;
+    let at = 0;
+    for (const s of list) { const t = s.slice(0, Math.max(0, n - 2 - at)); for (let i = 0; i < t.length; i++) x.w8(buf + at + i, t.charCodeAt(i) & 0xff); at += t.length; x.w8(buf + at++, 0); if (at >= n - 1) { at = n - 2; break; } }
+    x.w8(buf + at, 0); if (!list.length) x.w8(buf + 1, 0);
+    return at;
+  };
+  const iniString = (x, file, sec, key, def, buf, n) => {
+    if (!sec) return putList(x, buf, n, [...ini(x, file).values()].map((s) => s.name));
+    if (!key) { const s = ini(x, file).get(x.str(sec).trim().toLowerCase()); return putList(x, buf, n, s ? s.entries.map(([k]) => k) : []); }
+    let v = iniGet(x, file, sec, key);
+    if (v === null) v = def ? x.str(def).trim() : '';
+    if (v.length > 1 && /^(["']).*\1$/.test(v)) v = v.slice(1, -1);   // a quoted value: its quotes off
+    return putStr(x, buf, n, v);
+  };
+  const iniWrite = (x, file, sec, key, val) => {
+    if (!sec) return 0;
+    const secs = ini(x, file), k = x.str(sec).trim(), s = secs.get(k.toLowerCase()) || { name: k, entries: [] };
+    secs.set(k.toLowerCase(), s);
+    if (!key) secs.delete(k.toLowerCase());
+    else {
+      const name = x.str(key).trim(), i = s.entries.findIndex(([n]) => n.toLowerCase() === name.toLowerCase());
+      if (!val) { if (i >= 0) s.entries.splice(i, 1); }
+      else if (i >= 0) s.entries[i][1] = x.str(val); else s.entries.push([name, x.str(val)]);
+    }
+    const text = [...secs.values()].map((t) => `[${t.name}]\r\n${t.entries.map(([a, b]) => `${a}=${b}\r\n`).join('')}`).join('\r\n');
+    const bytes = Uint8Array.from(text, (c) => c.charCodeAt(0) & 0xff);
+    st.disk.set(st.relPath(iniPath(x, file)), { bytes, size: bytes.length });
+    return 1;
+  };
   const putStr = (x, buf, n, s) => { if (!buf || n <= 0) return 0; const b = Uint8Array.from(s.slice(0, n - 1), (c) => c.charCodeAt(0) & 0xff); x.write(buf, b); x.w8(buf + b.length, 0); return b.length; };
   const lower = (s) => s.toLowerCase();
   /*
@@ -170,12 +223,19 @@ export function classicApis({ st, wm }) {
     GlobalGetAtomNameA: ['upi', (x, a, buf, n) => putStr(x, buf, n, atomNames.get(a) || (a < 0xc000 ? '#' + a : ''))],
     GlobalDeleteAtom: ['u', () => 0],
     CreateMutexA: ['pup', () => 0x3800], ReleaseMutex: ['p', () => 1], OpenMutexA: ['uup', () => 0],
-    // Profiles: no WIN.INI and no program .ini but those on its disk; what is asked for is the default.
-    GetPrivateProfileIntA: ['ppip', (x, sec, key, def) => def],
-    GetPrivateProfileStringA: ['ppppup', (x, sec, key, def, buf, n) => putStr(x, buf, n, def ? x.str(def) : '')],
-    GetProfileStringA: ['ppppu', (x, sec, key, def, buf, n) => putStr(x, buf, n, def ? x.str(def) : '')],
-    GetProfileIntA: ['ppi', (x, sec, key, def) => def],
-    WritePrivateProfileStringA: ['pppp', () => 1], WriteProfileStringA: ['ppp', () => 1],
+    // Profiles: the INI files on the program's disk ([section], then key=value lines), a name with no path
+    // in Windows' directory; WIN.INI none until written. Quake III's demo installer (Installer VISE) reads
+    // its wizard's every text from its language file so: answered with the defaults, the wizard was blank.
+    GetPrivateProfileIntA: ['ppip', (x, sec, key, def, file) => { const v = iniGet(x, file, sec, key); const n = v === null ? NaN : parseInt(v, 10); return Number.isNaN(n) ? def : n; }],
+    GetPrivateProfileStringA: ['ppppup', (x, sec, key, def, buf, n, file) => iniString(x, file, sec, key, def, buf, n)],
+    GetPrivateProfileSectionA: ['ppup', (x, sec, buf, n, file) => {
+      const s = ini(x, file).get(x.str(sec).trim().toLowerCase());
+      return putList(x, buf, n, s ? s.entries.map(([k, v]) => `${k}=${v}`) : []);
+    }],
+    GetProfileStringA: ['ppppu', (x, sec, key, def, buf, n) => iniString(x, 0, sec, key, def, buf, n)],
+    GetProfileIntA: ['ppi', (x, sec, key, def) => { const v = iniGet(x, 0, sec, key); const n = v === null ? NaN : parseInt(v, 10); return Number.isNaN(n) ? def : n; }],
+    WritePrivateProfileStringA: ['pppp', (x, sec, key, val, file) => iniWrite(x, file, sec, key, val)],
+    WriteProfileStringA: ['ppp', (x, sec, key, val) => iniWrite(x, 0, sec, key, val)],
     SetCurrentDirectoryA: ['p', () => 1],
     GetVolumeInformationA: ['ppupppp' + 'u', (x, root, name, nn, serial, maxlen, flags, fs, nfs) => {
       if (name) putStr(x, name, nn, 'MIRAGE'); if (serial) x.w32(serial, 0x19990212);
@@ -422,6 +482,11 @@ export function classicApis({ st, wm }) {
     x.write(data, v.data); return 0;
   };
   const advapi32 = {
+    // The service manager: not open to this user (ERROR_ACCESS_DENIED), as on a Windows 95 or for a limited
+    // account -- Quake III's demo setup asks it before it copies its files, and goes on without.
+    OpenSCManagerA: ['ppu', (x) => { (st.lastError ||= new Map()).set(x.lx.pid, 5); return 0; }],
+    OpenServiceA: ['ppu', (x) => { (st.lastError ||= new Map()).set(x.lx.pid, 5); return 0; }],
+    CloseServiceHandle: ['p', () => 1],
     RegCreateKeyExA: ['ppupuuppp', (x, hk, sub, r, cls, opt, sam, sa, out, disp) => create(x, hk, sub, out, disp)],
     RegCreateKeyA: ['ppp', (x, hk, sub, out) => create(x, hk, sub, out, 0)],
     RegOpenKeyExA: ['ppuup', (x, hk, sub, opt, sam, out) => open(x, hk, sub, out)],
