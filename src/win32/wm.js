@@ -58,7 +58,7 @@ export function windowManager(st) {
   wm.menuLayout = () => {
     if (!wm.frame().menu) return [];
     const bar = wm.menuBar(); let X = bar.x + 1;
-    return menuItems(st.menu).map((it, i) => { const w = label(it.text.split('\t')[0]).length * 8 + 14, r = { i, it, x: X, y: bar.y + 1, w, h: MENU_H - 2 }; X += w; return r; });
+    return menuItems(st.menu).map((it, i) => { const w = textW(label(it.text.split('\t')[0])) + 14, r = { i, it, x: X, y: bar.y + 1, w, h: MENU_H - 2 }; X += w; return r; });
   };
   wm.menuItemRect = (pos) => wm.menuLayout()[pos] || null;
   /** The open popup: under item `i` of the bar, its rows (separators 8 pixels, items 18). */
@@ -67,7 +67,7 @@ export function windowManager(st) {
     const p = wm.popup; if (!p) return null;
     const items = menuItems(p.menu);
     const cols = items.map((it) => { const [a, k = ''] = label(it.text).split('\t'); return { a, k }; });
-    const w = Math.max(80, ...cols.map((c) => (c.a.length + (c.k ? c.k.length + 3 : 0)) * 8 + 40));
+    const w = Math.max(80, ...cols.map((c) => textW(c.a) + (c.k ? textW(c.k) + 24 : 0) + 40));
     let Y = p.y + 3;
     const rows = items.map((it, i) => { const h = it.flags & 0x800 ? 8 : 18, r = { i, it, ...cols[i], y: Y, h }; Y += h; return r; });
     return { x: p.x, y: p.y, w, h: Y - p.y + 3, rows };
@@ -109,7 +109,11 @@ export function windowManager(st) {
     fill(fb, S, x + 1, y + 1, w - 2, 1, innerTL); fill(fb, S, x + 1, y + 1, 1, h - 2, innerTL);
     fill(fb, S, x + 1, y + h - 2, w - 2, 1, SHADOW); fill(fb, S, x + w - 2, y + 1, 1, h - 2, SHADOW);
   };
-  const text = (fb, S, font, str, x, y, maxW, c) => {
+  // A line of the window manager's text in a 16-pixel band from y: the system's TrueType face at 8 points
+  // when the page has one (wm.uiText, from src/win32/api.js: Tahoma's stand-in, bold for captions, as
+  // Windows 2000 draws them), else the card's 8x16 font.
+  const text = (fb, S, font, str, x, y, maxW, c, bold = false) => {
+    if (wm.uiText && wm.uiText(fb, S, str, x, y, 16, maxW, c, bold)) return;
     if (!font) return;
     for (let i = 0; i < str.length && (i + 1) * 8 <= maxW; i++) {
       const g = str.charCodeAt(i) & 0xff;
@@ -120,22 +124,47 @@ export function windowManager(st) {
       }
     }
   };
+  const textW = (str, bold = false) => (wm.uiWidth && wm.uiWidth(str, bold)) ?? str.length * 8;
   const lerp = (a, b, t) => (((a >> 16 & 255) + ((b >> 16 & 255) - (a >> 16 & 255)) * t) << 16) | (((a >> 8 & 255) + ((b >> 8 & 255) - (a >> 8 & 255)) * t) << 8) | ((a & 255) + ((b & 255) - (a & 255)) * t);
+  /**
+   * A caption as Windows 2000 draws it, at (x, y), w wide and 18 high: the active gradient (or the inactive
+   * one), the window's icon (the generic application's) when it has a system menu and is not a dialog,
+   * its title in bold, and its buttons at the right -- minimize and maximize (WS_MINIMIZEBOX 20000h,
+   * WS_MAXIMIZEBOX 10000h; the one it has not, greyed), close (WS_SYSMENU 80000h).
+   */
+  const captionBar = (fb, S, font, x, y, w, title, style, active, dialog) => {
+    const [L, R] = active ? [CAPTION_L, CAPTION_R] : [SHADOW, 0xc0c0c0];
+    for (let i = 0; i < w; i++) fill(fb, S, x + i, y, 1, 18, lerp(L, R, w > 1 ? i / (w - 1) : 0) | 0);
+    const sys = style & 0x80000, icon = sys && !dialog;
+    if (icon) {                                                       // IDI_APPLICATION, small: a window
+      fill(fb, S, x + 2, y + 2, 14, 13, 0); fill(fb, S, x + 3, y + 3, 12, 11, 0xffffff); fill(fb, S, x + 3, y + 3, 12, 3, 0x0a246a);
+    }
+    const close = sys ? { x: x + w - 2 - 16, y: y + 2, w: 16, h: 14 } : null, boxes = style & 0x30000 && sys;
+    const right = close ? (boxes ? close.x - 2 - 32 : close.x) : x + w;
+    text(fb, S, font, title || '', x + (icon ? 20 : 3), y + 1, right - x - (icon ? 22 : 5), active ? 0xffffff : FACE, true);
+    const button = (bx, glyph, on) => {
+      fill(fb, S, bx, y + 2, 16, 14, FACE); raised(fb, S, bx, y + 2, 16, 14, LIGHT, FACE);
+      const ink = on ? 0 : SHADOW; glyph(bx, y + 2, ink);
+      if (!on) glyph(bx + 1, y + 3, LIGHT);
+    };
+    if (close) button(close.x, (bx, by, ink) => { for (let i = 0; i < 7; i++) { fill(fb, S, bx + 4 + i, by + 3 + i, 2, 1, ink); fill(fb, S, bx + 9 - i, by + 3 + i, 2, 1, ink); } }, true);
+    if (boxes) {
+      button(close.x - 2 - 16, (bx, by, ink) => { fill(fb, S, bx + 3, by + 2, 9, 2, ink); fill(fb, S, bx + 3, by + 2, 1, 9, ink); fill(fb, S, bx + 11, by + 2, 1, 9, ink); fill(fb, S, bx + 3, by + 10, 9, 1, ink); }, !!(style & 0x10000));
+      button(close.x - 2 - 32, (bx, by, ink) => fill(fb, S, bx + 4, by + 9, 6, 2, ink), !!(style & 0x20000));
+    }
+  };
   wm.draw = (fb, S, font) => {
     fb.fill(DESKTOP);
     const o = wm.outer(), { b } = wm.frame();
     fill(fb, S, o.x, o.y, o.w, o.h, FACE);
     if (b >= 3) raised(fb, S, o.x, o.y, o.w, o.h, FACE, LIGHT);
     if (!wm.captioned()) { fill(fb, S, wm.client().x, wm.client().y, st.w, st.h, 0); return; }   // a splash: no caption
-    const c = caption();
-    for (let i = 0; i < c.w; i++) fill(fb, S, c.x + i, c.y, 1, c.h, lerp(CAPTION_L, CAPTION_R, c.w > 1 ? i / (c.w - 1) : 0) | 0);
-    text(fb, S, font, st.title || '', c.x + 4, c.y + 1, c.w - 26, 0xffffff);
-    const k = closeBox();
-    fill(fb, S, k.x, k.y, k.w, k.h, FACE); raised(fb, S, k.x, k.y, k.w, k.h, LIGHT, FACE);
-    const d = wm.closeArmed ? 1 : 0;                         // pressed: the cross one pixel down and right
-    for (let i = 0; i < 7; i++) {                            // the cross, two pixels thick
-      fill(fb, S, k.x + 4 + i + d, k.y + 3 + i + d, 2, 1, 0);
-      fill(fb, S, k.x + 9 - i + d, k.y + 3 + i + d, 2, 1, 0);
+    const c = caption(), active = !st.activeTop || st.activeTop() === st.hwnd;
+    captionBar(fb, S, font, c.x, c.y, c.w, st.title, (st.style | 0) | 0x80000, active, !!st.mainDialog);
+    if (wm.closeArmed) {                                     // pressed: the cross one pixel down and right
+      const k = closeBox();
+      fill(fb, S, k.x, k.y, k.w, k.h, FACE); fill(fb, S, k.x, k.y, k.w, 1, DARK); fill(fb, S, k.x, k.y, 1, k.h, DARK); fill(fb, S, k.x + k.w - 1, k.y, 1, k.h, LIGHT); fill(fb, S, k.x, k.y + k.h - 1, k.w, 1, LIGHT);
+      for (let i = 0; i < 7; i++) { fill(fb, S, k.x + 5 + i, k.y + 4 + i, 2, 1, 0); fill(fb, S, k.x + 10 - i, k.y + 4 + i, 2, 1, 0); }
     }
     if (wm.frame().menu) {
       const bar = wm.menuBar(), open = wm.popup ? wm.popup.bar : -1;
@@ -158,11 +187,7 @@ export function windowManager(st) {
       if (!l.see) fill(fb, S, l.x, l.y, W, H, FACE);
       else if (l.b || l.cap) { fill(fb, S, l.x, l.y, W, l.b + l.cap, FACE); fill(fb, S, l.x, l.y + H - l.b, W, l.b, FACE); fill(fb, S, l.x, l.y, l.b, H, FACE); fill(fb, S, l.x + W - l.b, l.y, l.b, H, FACE); }
       if (l.b >= 3) raised(fb, S, l.x, l.y, W, H, FACE, LIGHT);
-      if (l.cap) {
-        const cw = W - 2 * l.b;
-        for (let i = 0; i < cw; i++) fill(fb, S, l.x + l.b + i, l.y + l.b, 1, 18, lerp(CAPTION_L, CAPTION_R, cw > 1 ? i / (cw - 1) : 0) | 0);
-        text(fb, S, font, l.title, l.x + l.b + 4, l.y + l.b + 1, cw - 8, 0xffffff);
-      }
+      if (l.cap) captionBar(fb, S, font, l.x + l.b, l.y + l.b, W - 2 * l.b, l.title, l.style | 0, l.active !== false, !!l.dialog);
       const cx = l.x + l.b, cy = l.y + l.b + l.cap;
       for (let j = 0; j < l.h; j++) {
         const Y = cy + j; if (Y < 0 || Y >= S.h) continue;
@@ -179,17 +204,12 @@ export function windowManager(st) {
    * inactive gradient with the title and a close box -- what Windows paints at WM_NCPAINT. The client
    * area (inside b and cap) is left as it was.
    */
-  wm.paintFrame = (fb, S, font, { b, cap, title }, active = true) => {
+  wm.paintFrame = (fb, S, font, { b, cap, title, style = 0x80000, dialog = true }, active = true) => {
     fill(fb, S, 0, 0, S.w, b + cap, FACE); fill(fb, S, 0, S.h - b, S.w, b, FACE); fill(fb, S, 0, 0, b, S.h, FACE); fill(fb, S, S.w - b, 0, b, S.h, FACE);
     if (b >= 3) raised(fb, S, 0, 0, S.w, S.h, FACE, LIGHT);
     else if (b) { fill(fb, S, 0, 0, S.w, 1, 0); fill(fb, S, 0, S.h - 1, S.w, 1, 0); fill(fb, S, 0, 0, 1, S.h, 0); fill(fb, S, S.w - 1, 0, 1, S.h, 0); }
     if (!cap) return;
-    const cw = S.w - 2 * b, [L, R] = active ? [CAPTION_L, CAPTION_R] : [SHADOW, 0xc0c0c0];
-    for (let i = 0; i < cw; i++) fill(fb, S, b + i, b, 1, 18, lerp(L, R, cw > 1 ? i / (cw - 1) : 0) | 0);
-    text(fb, S, font, title || '', b + 4, b + 1, cw - 26, active ? 0xffffff : FACE);
-    const k = { x: b + cw - 2 - 16, y: b + 2, w: 16, h: 14 };
-    fill(fb, S, k.x, k.y, k.w, k.h, FACE); raised(fb, S, k.x, k.y, k.w, k.h, LIGHT, FACE);
-    for (let i = 0; i < 7; i++) { fill(fb, S, k.x + 4 + i, k.y + 3 + i, 2, 1, 0); fill(fb, S, k.x + 9 - i, k.y + 3 + i, 2, 1, 0); }
+    captionBar(fb, S, font, b, b, S.w - 2 * b, title, style, active, dialog);
   };
   /** The open popup, over everything but the cursor. */
   const drawPopup = (fb, S, font) => {
@@ -201,7 +221,7 @@ export function windowManager(st) {
       if (hot) fill(fb, S, g.x + 3, r.y, g.w - 6, r.h, CAPTION_L);
       if (r.it.flags & 8) [3, 4, 5, 4, 3, 2, 1].forEach((d, k) => fill(fb, S, g.x + 6 + k, r.y + 4 + d, 1, 3, c));   // the check mark
       text(fb, S, font, r.a, g.x + 20, r.y + 1, g.w - 24, c);
-      if (r.k) text(fb, S, font, r.k, g.x + g.w - 8 - r.k.length * 8, r.y + 1, r.k.length * 8, c);
+      if (r.k) text(fb, S, font, r.k, g.x + g.w - 8 - textW(r.k), r.y + 1, textW(r.k), c);
     }
   };
 

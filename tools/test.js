@@ -5428,7 +5428,7 @@ const runLinux = (hex, argv) => {
     u('SetWindowTextA')(st, str('x'.repeat(2000))); const len = u('GetWindowTextLengthA')(st);
     got = [before === after, count, flags.toString(16), bits, b !== a, rect, len].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: stock objects kept, an OpenGL pixel format, a maximized window, a new main window, a long text', got, 'true 1 25 32/24/8 true -3,-3,1027,741 2000');
+  eq('win32: stock objects kept, an OpenGL pixel format, a maximized window, a new main window, a long text', got, 'true 1 25 32/24/8 true -3,-3,1027,743 2000');
   // The Win32 samples (tools/win32/samples, MinGW-w64, against Windows 2000): MinGW's start-up asks msvcrt
   // for __p__acmdln and _iob (three FILEs one after another); a dialog that is the first window is the
   // screen's, centred in the work area above the taskbar; text TextOut'd into a window's DC reaches the
@@ -5443,7 +5443,17 @@ const runLinux = (hex, argv) => {
     r.push(g('GetPixel')(dc, 1, 1).toString(16)); void main;
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: MinGW\'s msvcrt (__p__acmdln, _iob), a first dialog centred in the work area, TextOut into a window, WS_VISIBLE painted', got, 'true 32 362,297 due ff');
+  eq('win32: MinGW\'s msvcrt (__p__acmdln, _iob), a first dialog centred in the work area, TextOut into a window, WS_VISIBLE painted', got, 'true 32 362,298 due ff');
+  // A top-level window's size is its frame's (CreateWindowEx, SetWindowPos): the samples' popups, 260x140
+  // with a caption, were drawn 266x162; GetWindowRect has the frame, GetClientRect the inside.
+  try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), r = x.win.heapAlloc(16), q = () => [0, 4, 8, 12].map((o) => x.r32(r + o) | 0).join(',');
+    u('CreateWindowExA')(0, 0, 0, 0x10cf0000, 0, 0, 320, 200); u('CreateWindowExA')(0, str('static'), 0, 0x90c80000, 300, 200, 260, 140, 0, 0);
+    const pop = parseInt(apis.windows().at(-1).hwnd, 16), out = [];
+    u('GetClientRect')(pop, r); out.push(q()); u('GetWindowRect')(pop, r); out.push(q());
+    u('SetWindowPos')(pop, 0, 10, 20, 100, 80, 4); u('GetWindowRect')(pop, r); out.push(q()); u('GetClientRect')(pop, r); out.push(q());
+    got = out.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a popup\'s size is its frame\'s -- CreateWindowEx, GetWindowRect, SetWindowPos, GetClientRect', got, '0,0,254,115 300,200,560,340 10,20,110,100 0,0,94,55');
   // A tree view (comctl32's SysTreeView32) as AVS's editor fills it: items inserted at the root, first and
   // last, a child; walked, opened, read back, hit, selected and deleted.
   try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), r = [];

@@ -127,6 +127,13 @@ function windowState(fonts = {}) {
     if (!parsed.has(key)) parsed.set(key, parseTrueType(fonts[key]));
     return parsed.get(key);
   };
+  // The face the window manager writes captions and menus in: Tahoma's (MS Sans Serif's) stand-in, Arial's.
+  st.uiFont = (bold) => {
+    const key = [...(bold ? ['tahoma:bold', 'arial:bold'] : []), 'tahoma', 'arial'].find((k) => fonts[k]);
+    if (!key) return null;
+    if (!parsed.has(key)) parsed.set(key, parseTrueType(fonts[key]));
+    return parsed.get(key);
+  };
   return st;
 }
 
@@ -234,6 +241,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       for (let X = Math.max(0, Math.round(x0)); X < Math.min(bm.w, Math.max(Math.round(x0) + 1, Math.round(x1))); X++) bm.px[Y * bm.w + X] = c;
     }
   };
+  // The window manager's text (captions, menus): the system's face at 8 points (11 pixels), centred in a
+  // band h high from y, at most maxW wide -- false when the page has no TrueType face (the 8x16 font then).
+  const UI_PPEM = 11;
+  wm.uiText = (fb, S, str, X, y, h, maxW, c, bold) => {
+    const f = st.uiFont(bold); if (!f) return false;
+    const asc = Math.round(f.winAscent * UI_PPEM / f.em), desc = Math.round(f.winDescent * UI_PPEM / f.em), base = y + ((h - asc - desc) >> 1) + asc, bm = { w: S.w, h: S.h, px: fb };
+    let at = X;
+    for (const ch of str) { const g = f.glyph(ch.charCodeAt(0) & 255, UI_PPEM); if (at - X + g.cellIncX > maxW) break; fillGlyph(bm, g, at, base, c); at += g.cellIncX; }
+    return true;
+  };
+  wm.uiWidth = (str, bold) => { const f = st.uiFont(bold); if (!f) return null; let n = 0; for (const ch of str) n += f.glyph(ch.charCodeAt(0) & 255, UI_PPEM).cellIncX; return n; };
   // A DIB to or from a bitmap: BITMAPINFOHEADER's height > 0 bottom-up, < 0 top-down; 24 or 32 bits.
   const dibCopy = (x, bm, start, lines, bits, bmi, toBitmap) => {
     const w = x.r32(bmi + 4) | 0, h = x.r32(bmi + 8) | 0, bpp = x.r16(bmi + 14), stride = ((w * bpp + 31) >> 5) << 2;
@@ -741,6 +759,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // its procedure, its parent and control id. The first top-level window is the one the screen shows.
   st.wins = new Map(); st.hooks = new Map();
   const win = (h) => st.wins.get(h);
+  const TASKBAR = 28;                                                  // Windows 2000's taskbar, 28 pixels high: the work area above it
   const zNext = () => (st.zSeq = (st.zSeq | 0) + 1);                  // a window's place in the order of top-level windows (zKey)
   const procOf = (h) => (h === st.hwnd ? st.wndProc : win(h) ? win(h).proc : 0);
   let nextHwnd = 0x10100;
@@ -814,13 +833,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (dflt(w)) { w = 640; h = 480; }
     if (dflt(X)) { X = 22; Y = 22; }
     const bar = style & 0x40000000 ? 0 : menu || classMenu(x, key);  // a top-level window's menu bar, kept for when it is the screen's
+    // A top-level window's size is its frame's, as CreateWindowEx takes it; kept as its client area's.
+    if (top) { const f = popFrame({ style }); w = Math.max(0, (w | 0) - 2 * f.b); h = Math.max(0, (h | 0) - 2 * f.b - f.cap); }
     const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, bar, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
       title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), z: zNext(), ...extra };
     if (rec.ex) rec.long.set(-20, rec.ex);                            // GWL_EXSTYLE: what it was made with
     st.wins.set(hwnd, rec);
     // Made visible (WS_VISIBLE): due its first WM_PAINT, as Windows paints it -- two popups made so over a
     // framed window were never drawn.
-    if (rec.visible) invalidate(hwnd, true, true);
+    if (rec.visible) { invalidate(hwnd, true, true); if (top) wm.dirty = true; }
     if (!proc) return hwnd;
     const a = (x.cpu.reg[4] >>> 0) + 4, cs = x.win.heapAlloc(48);
     [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].forEach((k, i) => x.w32(cs + 4 * i, x.r32(a + 4 * k)));
@@ -854,27 +875,101 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return (st.modalLoop = code);
   };
   /*
-   * MessageBox: a modal dialog made here -- its text (one static, lines as the text breaks them), its
-   * buttons as the type's low nibble says (MB_OK, OKCANCEL, ABORTRETRYIGNORE, YESNOCANCEL, YESNO,
-   * RETRYCANCEL), the first the default; centred on its owner, its caption the given one. It returns the
+   * The system's 32x32 icons, drawn here as Windows 2000 shows them (MIRAGE ships no Windows image):
+   * 'info' (IDI_ASTERISK) and 'question' a white balloon with a blue i or ?, 'warn' (IDI_EXCLAMATION) a
+   * yellow triangle with a black !, 'error' (IDI_HAND) a red disc with a white cross. A bitmap with a mask
+   * (1: transparent), as loadIcon makes from a program's own.
+   */
+  const sysIcons = new Map();
+  const sysIcon = (kind) => {
+    if (sysIcons.has(kind)) return sysIcons.get(kind);
+    const N = 32, px = new Uint32Array(N * N), mask = new Uint8Array(N * N).fill(1);
+    const put = (X, Y, c) => { if (X >= 0 && Y >= 0 && X < N && Y < N) { px[Y * N + X] = c; mask[Y * N + X] = 0; } };
+    const rect = (x0, y0, x1, y1, c) => { for (let Y = y0; Y < y1; Y++) for (let X = x0; X < x1; X++) put(X, Y, c); };
+    const disc = (cx, cy, r, c) => { for (let Y = 0; Y < N; Y++) for (let X = 0; X < N; X++) if ((X + 0.5 - cx) ** 2 + (Y + 0.5 - cy) ** 2 <= r * r) put(X, Y, c); };
+    const tri = (pts, c) => { for (let Y = 0; Y < N; Y++) for (let X = 0; X < N; X++) { const px0 = X + 0.5, py0 = Y + 0.5; let sgn = 0, inside = true;
+      for (let i = 0; i < 3; i++) { const [ax, ay] = pts[i], [bx, by] = pts[(i + 1) % 3], d = (bx - ax) * (py0 - ay) - (by - ay) * (px0 - ax); if (d) { if (!sgn) sgn = Math.sign(d); else if (Math.sign(d) !== sgn) inside = false; } }
+      if (inside) put(X, Y, c); } };
+    if (kind === 'info' || kind === 'question') {
+      disc(17, 15, 13, 0x808080); tri([[9, 22], [9, 31], [17, 25]], 0x808080);              // its shadow
+      disc(15, 13, 13, 0); tri([[6, 20], [6, 29], [15, 23]], 0);                            // its outline
+      disc(15, 13, 12, 0xffffff); tri([[7, 20], [7, 27], [14, 22]], 0xffffff);
+      if (kind === 'info') { rect(13, 5, 17, 9, 0x0000ff); rect(12, 11, 17, 13, 0x0000ff); rect(13, 13, 17, 20, 0x0000ff); rect(12, 20, 18, 22, 0x0000ff); }
+      else { rect(11, 6, 19, 8, 0x0000ff); rect(17, 8, 20, 12, 0x0000ff); rect(10, 8, 13, 11, 0x0000ff); rect(14, 12, 18, 14, 0x0000ff); rect(13, 14, 17, 17, 0x0000ff); rect(13, 19, 17, 22, 0x0000ff); }
+    } else if (kind === 'warn') {
+      tri([[16, 1], [1, 29], [31, 29]], 0); tri([[16, 4], [4, 28], [28, 28]], 0xffff00);
+      rect(14, 10, 18, 21, 0); rect(14, 23, 18, 26, 0);
+    } else {
+      disc(17, 17, 14, 0x808080); disc(15, 15, 14, 0x800000); disc(15, 15, 13, 0xff0000);
+      for (let k = -6; k <= 6; k++) for (let t = -1; t <= 1; t++) { put(15 + k + t, 15 + k, 0xffffff); put(15 + k + t, 15 - k, 0xffffff); }
+    }
+    const h = st.newHandle('bitmap', { w: N, h: N, px, mask }); sysIcons.set(kind, h); return h;
+  };
+  /*
+   * MessageBox: a modal dialog made here as Windows 2000 lays one out (measured against it, the samples'
+   * oracle): its icon at (11, 11), its text at 61 (11 with no icon) in the system's font, centred on the
+   * icon, its buttons 75x23, 6 apart, centred, 17 below the icon or the text, 11 at the right and 12 at
+   * the bottom; centred on its owner (or the work area). Its buttons as the type's low nibble says
+   * (MB_OK, OKCANCEL, ABORTRETRYIGNORE, YESNOCANCEL, YESNO, RETRYCANCEL), the first the default; its icon
+   * as bits 4-6 do (MB_ICONHAND 10h, QUESTION 20h, EXCLAMATION 30h, ASTERISK 40h). It returns the
    * button's id, and the text goes to the log too. FreeCell's "That move is not allowed." is one.
    */
   const MB_BUTTONS = [[[1, 'OK']], [[1, 'OK'], [2, 'Cancel']], [[3, '&Abort'], [4, '&Retry'], [5, '&Ignore']], [[6, '&Yes'], [7, '&No'], [2, 'Cancel']], [[6, '&Yes'], [7, '&No']], [[4, '&Retry'], [2, 'Cancel']]];
   const messageBox = (x, owner, text, caption, type) => {
     x.win.say(`MessageBox("${caption}"): ${text}`);
-    const buttons = MB_BUTTONS[type & 15] || MB_BUTTONS[0], lines = text.split(/\r?\n/);
-    const tw = Math.min(280, Math.max(40, ...lines.map((l) => l.length * 4 + 8))), th = 8 * lines.length;
-    const bw = buttons.length * 56 - 6, cx = Math.max(tw + 20, bw + 20), by = 10 + th + 10, cy = by + 14 + 8;
+    const buttons = MB_BUTTONS[type & 15] || MB_BUTTONS[0], icon = [null, 'error', 'question', 'warn', 'info'][(type >> 4) & 7] || null;
+    const f = st.uiFont(false), lineH = f ? Math.round((f.winAscent + f.winDescent) * 11 / f.em) : 13;
+    const width = (t) => (wm.uiWidth && wm.uiWidth(t, false)) ?? t.length * 6, maxW = Math.round(st.desk.w * 5 / 8);
+    const lines = [];                                                    // the text broken between words to fit
+    for (const para of text.split(/\r?\n/)) { let line = ''; for (const word of para.split(' ')) { const next = line ? `${line} ${word}` : word; if (line && width(next) > maxW) { lines.push(line); line = word; } else line = next; } lines.push(line); }
+    const tw = Math.max(1, ...lines.map(width)), th = lines.length * lineH;
+    const tx = icon ? 61 : 11, ty = icon ? 11 + Math.max(0, (32 - th + 2) >> 1) : 11, bottom = Math.max(icon ? 43 : 0, ty + th), by = bottom + 17;
+    const all = buttons.length * 75 + (buttons.length - 1) * 6, cw = Math.max(tx + tw + 11, all + 22), ch = by + 23 + 12, bx = (cw - all) >> 1;
+    // The template (in dialog units, rounded: the places are set in pixels once it is made).
     const parts = [], u16 = (v) => parts.push(v & 255, (v >> 8) & 255), u32 = (v) => { u16(v & 0xffff); u16(v >>> 16); };
     const wstrz = (t) => { for (const c of t) u16(c.charCodeAt(0)); u16(0); }, align = () => { while (parts.length & 3) parts.push(0); };
-    u32(0x80c80880); u32(0); u16(1 + buttons.length); u16(0); u16(0); u16(cx); u16(cy); u16(0); u16(0); wstrz(caption);   // DS_CENTER | DS_MODALFRAME, a caption
-    align(); u32(0x50000000); u32(0); u16(10); u16(10); u16(tw); u16(th); u16(0xffff); u16(0xffff); u16(0x0082); wstrz(text); u16(0);   // the text
-    buttons.forEach(([id, label], i) => {
-      align(); u32(0x50010000 | (i ? 0 : 1)); u32(0); u16(((cx - bw) >> 1) + 56 * i); u16(by); u16(50); u16(14); u16(id); u16(0xffff); u16(0x0080); wstrz(label); u16(0);
-    });
+    const items = 1 + buttons.length + (icon ? 1 : 0);
+    u32(0x80c80880); u32(0); u16(items); u16(0); u16(0); u16(Math.round(cw / 1.5)); u16(Math.round(ch * 8 / 13)); u16(0); u16(0); wstrz(caption);   // DS_CENTER | DS_MODALFRAME, a caption
+    if (icon) { align(); u32(0x50000003); u32(0); u16(7); u16(7); u16(21); u16(20); u16(0xffff); u16(0xffff); u16(0x0082); wstrz(''); u16(0); }   // SS_ICON
+    align(); u32(0x50000080); u32(0); u16(40); u16(10); u16(100); u16(8); u16(0xffff); u16(0xffff); u16(0x0082); wstrz(lines.join('\n')); u16(0);   // the text, SS_NOPREFIX
+    buttons.forEach(([id, label], i) => { align(); u32(0x50010000 | (i ? 0 : 1)); u32(0); u16(10 + 54 * i); u16(30); u16(50); u16(14); u16(id); u16(0xffff); u16(0x0080); wstrz(label); u16(0); });
     const tpl = x.win.heapAlloc(parts.length); x.write(tpl, Uint8Array.from(parts));
-    // No owner and no window yet (a program that only says something): the message box is its first window.
-    return createDialog(x, 0, tpl, owner || (st.mainMade ? st.hwnd : 0), 0, 0, 16, (dlg) => { const w = win(dlg); if (w) w.msgBox = buttons.map(([id]) => id); return modal(x, dlg, owner || (w && w.main ? 0 : st.hwnd), 16); });
+    const own = owner || (st.mainMade ? st.hwnd : 0);
+    return createDialog(x, 0, tpl, own, 0, 0, 16, (dlg) => {
+      const w = win(dlg);
+      if (w) {
+        w.msgBox = buttons.map(([id]) => id);
+        const kids = [...st.wins.values()].filter((c) => c.parent === dlg), at = (c, X, Y, W, H) => { if (c) Object.assign(c, { x: X, y: Y, w: W, h: H }); };
+        let k = 0;
+        if (icon) { at(kids[k], 11, 11, 32, 32); kids[k].imageHandle = sysIcon(icon); k++; }
+        at(kids[k++], tx, ty, tw + 4, th);
+        buttons.forEach((_, i) => at(kids[k++], bx + 81 * i, by, 75, 23));
+        w.w = cw; w.h = ch; placeDialog(dlg, 0x80c80880, own);
+      }
+      return modal(x, dlg, owner || (w && w.main ? 0 : st.hwnd), 16);
+    });
+  };
+  // A dialog's place (not a child's), as Windows places one -- below, the two cases.
+  const placeDialog = (dlg, style, parent) => {
+    if (!deskMode()) {
+      const d = win(dlg), f = popFrame(d), W = d.w + 2 * f.b, H = d.h + 2 * f.b + f.cap;
+      const ow = parent && (parent === st.hwnd || win(parent)) ? parent : st.hwnd, o = screenOrigin(ow), osz = ow === st.hwnd ? { w: st.w, h: st.h } : win(ow);
+      if (style & 0x800) { d.x = o.x + ((osz.w - W) >> 1); d.y = o.y + ((osz.h - H) >> 1); }
+      else if (!(style & 1)) { d.x += o.x; d.y += o.y; }
+      d.x = Math.max(0, Math.min(st.desk.w - W, d.x)); d.y = Math.max(0, Math.min(st.desk.h - H, d.y));
+    }
+    // ...and on a dialog application's desktop, where a window's x and y are its client area's: centred on
+    // the desktop (DS_CENTER) or at the template's place, its frame and caption on the screen -- Winamp's
+    // and Diablo's setup dialogs stood at the corner, their captions above the screen.
+    // The main dialog too (a dialog application's first window: MinGW's DialogBox samples stood at the corner).
+    else {
+      const d = win(dlg), f = popFrame(d), W = d.w + 2 * f.b, H = d.h + 2 * f.b + f.cap;
+      // DS_CENTER: in the work area, above the taskbar, as Windows centres a dialog.
+      if (style & 0x800) { d.x = ((st.desk.w - W) >> 1) + f.b; d.y = ((st.desk.h - TASKBAR - H) >> 1) + f.b + f.cap; }
+      else { d.x += f.b; d.y += f.b + f.cap; }
+      d.x = Math.max(f.b, Math.min(st.desk.w - W + f.b, d.x)); d.y = Math.max(f.b + f.cap, Math.min(st.desk.h - H + f.b + f.cap, d.y));
+      if (d.main) { st.x = d.x; st.y = d.y; }
+    }
   };
   // The dialog made: shown, its owner disabled, and modalLoop(data) called in DialogBox's place (a send
   // on DialogBox's own frame), its result DialogBox's (`pop`: DialogBox's argument bytes, MessageBox's 16).
@@ -942,7 +1037,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (!h || h === st.hwnd) return mainOrigin();
     const w = win(h); if (!w) return mainOrigin();
     if (w.style & 0x40000000) { const o = screenOrigin(w.parent); return { x: o.x + w.x, y: o.y + w.y }; }
-    if (deskMode()) return { x: w.x | 0, y: w.y | 0 };
+    // On a dialog application's desktop a dialog's x and y are its client area's (createDialog); another
+    // window's, as everywhere, its frame's corner.
+    if (deskMode() && w.dialog) return { x: w.x | 0, y: w.y | 0 };
     const f = popFrame(w); return { x: (w.x | 0) + f.b, y: (w.y | 0) + f.b + f.cap };   // its client area, inside its frame
   };
   /*
@@ -962,15 +1059,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    */
   const exOf = (w) => ((w.long && w.long.get(-20)) ?? w.ex) | 0;
   const zKey = (w) => (exOf(w) & 8 ? 1e12 : 0) + (w.z | 0);
-  const raise = (h) => { const t = topOf(h); if (t) t.z = zNext(); return t; };
+  const raise = (h) => { const t = topOf(h); if (t) { t.z = zNext(); wm.dirty = true; } return t; };
   const shownTop = (w) => !w.dead && (w.main ? !!st.shown && !st.destroyed : !!w.visible && !(w.style & 0x40000000));
   /** A top-level window's rectangle on the screen with its frame (a dialog's, which ncPaint draws): { l, t, r, b, f }. */
   const topRect = (w) => {
-    const f = w.dialog ? popFrame({ style: w.main ? st.style : w.style }) : { b: 0, cap: 0 }, o = screenOrigin(w.main ? st.hwnd : w.hwnd), W = w.main ? st.w : w.w, H = w.main ? st.h : w.h;
+    const f = w.dialog || !w.main ? popFrame({ style: w.main ? st.style : w.style }) : { b: 0, cap: 0 }, o = screenOrigin(w.main ? st.hwnd : w.hwnd), W = w.main ? st.w : w.w, H = w.main ? st.h : w.h;
     return { l: o.x - f.b, t: o.y - f.b - f.cap, r: o.x + (W | 0) + f.b, b: o.y + (H | 0) + f.b, f };
   };
   /** The topmost shown top-level window (not WS_EX_TOPMOST): the one whose caption is drawn active. */
   const topmost = () => { let t = null; for (const v of st.wins.values()) if (shownTop(v) && !(exOf(v) & 8) && (!t || zKey(v) > zKey(t))) t = v; return t; };
+  st.activeTop = () => { const t = topmost(); return t ? (t.main ? st.hwnd : t.hwnd) : st.hwnd; };   // whose caption is active (src/win32/wm.js)
   /** What the shown top-level windows above h's own cover of the screen (WS_EX_TRANSPARENT covers nothing). */
   const coversOf = (h) => {
     const t = topOf(h); if (!t) return [];
@@ -986,8 +1084,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (!w.layer || w.layer.w !== w.w || w.layer.h !== w.h) { const see = !!st.modeSet; w.layer = { w: Math.max(1, w.w), h: Math.max(1, w.h), see, px: new Uint32Array(Math.max(1, w.w) * Math.max(1, w.h)).fill(see ? 0xff000000 : 0xd4d0c8) }; }
     return w.layer;
   };
-  st.popupLayers = () => (deskMode() ? [] : [...st.wins.values()].filter((w) => !w.main && !w.dead && w.visible && !(w.style & 0x40000000) && w.layer)
-    .map((w) => ({ x: w.x | 0, y: w.y | 0, ...popFrame(w), title: w.title || '', w: w.layer.w, h: w.layer.h, px: w.layer.px, see: w.layer.see })));
+  st.popupLayers = () => (deskMode() ? [] : [...st.wins.values()].filter((w) => !w.main && !w.dead && w.visible && !(w.style & 0x40000000) && w.layer).sort((a, b) => zKey(a) - zKey(b))
+    .map((w) => ({ x: w.x | 0, y: w.y | 0, ...popFrame(w), title: w.title || '', w: w.layer.w, h: w.layer.h, px: w.layer.px, see: w.layer.see, style: w.style, dialog: !!w.dialog, active: topmost() === w })));
   /** ... and in the buffer drawn on: the desktop's in deskMode, the main client area's otherwise. */
   const originOf = (h) => { const o = screenOrigin(h); if (deskMode()) return o; const m = mainOrigin(); return { x: o.x - m.x, y: o.y - m.y }; };
   const deskScreen = () => {
@@ -1002,7 +1100,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (!deskMode()) { wm.redraw(); if (st.modeSet) for (const w of st.wins.values()) if (!w.main && !w.dead && w.visible && !(w.style & 0x40000000)) invalidate(w.hwnd, true, true); return; }
     const sc = deskScreen();
     // A dialog's frame with it (ncPaint draws one).
-    if (w && w.dialog) { const f = popFrame({ style: w.main ? st.style : w.style }); o = { x: o.x - f.b, y: o.y - f.b - f.cap }; W += 2 * f.b; H += 2 * f.b + f.cap; }
+    if (w && (w.dialog || !w.main)) { const f = popFrame({ style: w.main ? st.style : w.style }); o = { x: o.x - f.b, y: o.y - f.b - f.cap }; W += 2 * f.b; H += 2 * f.b + f.cap; }
     for (let j = Math.max(0, o.y); j < Math.min(sc.h, o.y + H); j++) sc.px.fill(0x3a6ea5, j * sc.w + Math.max(0, o.x), j * sc.w + Math.max(0, Math.min(sc.w, o.x + W)));
     for (const w of st.wins.values()) if (!w.dead && (w.main ? st.shown : w.visible && !(w.style & 0x40000000))) invalidate(w.hwnd, true, true);
   };
@@ -1013,12 +1111,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // ncDirty) and it paints -- as Windows sends WM_NCPAINT before WM_PAINT. Its caption active when it is
   // the topmost window. What the windows above cover is left alone.
   const ncPaint = (x, h) => {
-    const w = win(h); if (!w || !w.ncDirty || !w.dialog || !deskMode() || !shownTop(w)) return;
+    const w = win(h); if (!w || !w.ncDirty || (w.main && !w.dialog) || !deskMode() || !shownTop(w)) return;
     w.ncDirty = false;
     const R = topRect(w), { b, cap } = R.f; if (!b && !cap) return;
     const S = { w: R.r - R.l, h: R.b - R.t }; if (S.w <= 0 || S.h <= 0) return;
     const px = new Uint32Array(S.w * S.h), active = topmost() === w;
-    wm.paintFrame(px, S, x.lx.romFont && x.lx.romFont(), { b, cap, title: w.main ? st.title : w.title }, active);
+    wm.paintFrame(px, S, x.lx.romFont && x.lx.romFont(), { b, cap, title: w.main ? st.title : w.title, style: w.main ? st.style : w.style, dialog: !!w.dialog }, active);
     const sc = deskScreen(), cov = coversOf(w.main ? st.hwnd : w.hwnd);
     for (let j = 0; j < S.h; j++) {
       const Y = R.t + j; if (Y < 0 || Y >= sc.h) continue;
@@ -1052,7 +1150,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const o = win(hwnd); if (!o) return 0;
     const parent = o.parent && win(o.parent) ? o.parent : st.hwnd;
     if (!(o.style & 0x40000000) && o.visible) uncoverRect(screenOrigin(hwnd), o.w, o.h, o); else invalidate(parent, true, true);
-    if (!(flags & 2)) { o.x = X; o.y = Y; }
+    // A top-level window's place and size are its frame's (a dialog's x and y on a dialog application's
+    // desktop its client area's, as it keeps them).
+    const f = o.style & 0x40000000 ? { b: 0, cap: 0 } : popFrame(o), inner = deskMode() && o.dialog;
+    if (!(flags & 2)) { o.x = inner ? X + f.b : X; o.y = inner ? Y + f.b + f.cap : Y; }
+    w = Math.max(0, w - 2 * f.b); h = Math.max(0, h - 2 * f.b - f.cap);
     const sized = !(flags & 1) && (o.w !== w || o.h !== h);
     if (!(flags & 1)) { o.w = w; o.h = h; }
     if (flags & 0x40) o.visible = true; if (flags & 0x80) o.visible = false;
@@ -1427,11 +1529,38 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (msg === 0x87) return 0x01 | 0x04;                                // WM_GETDLGCODE: DLGC_WANTARROWS | DLGC_WANTCHARS
     return undefined;
   };
+  /*
+   * A vertical scroll bar as Windows 2000 draws one, 16 pixels wide at x0, from y0, h high: its arrows'
+   * buttons, the track's dither and the thumb, sized by what shows of the whole (page of total) and
+   * placed by pos; with nothing to scroll (total <= page), the arrows greyed and no thumb.
+   */
+  const scrollBar = (t, x0, y0, h, pos, page, total) => {
+    const btn = (bx, by, bw, bh) => {
+      fillRect(t, bx, by, bx + bw, by + bh, 0xd4d0c8);
+      fillRect(t, bx, by, bx + bw, by + 1, 0xd4d0c8); fillRect(t, bx, by, bx + 1, by + bh, 0xd4d0c8);
+      fillRect(t, bx + 1, by + 1, bx + bw - 1, by + 2, 0xffffff); fillRect(t, bx + 1, by + 1, bx + 2, by + bh - 1, 0xffffff);
+      fillRect(t, bx, by + bh - 1, bx + bw, by + bh, 0x404040); fillRect(t, bx + bw - 1, by, bx + bw, by + bh, 0x404040);
+      fillRect(t, bx + 1, by + bh - 2, bx + bw - 1, by + bh - 1, 0x808080); fillRect(t, bx + bw - 2, by + 1, bx + bw - 1, by + bh - 1, 0x808080);
+    };
+    const on = total > page, arrow = (by, up) => {
+      for (const [ox, c] of on ? [[0, 0]] : [[1, 0xffffff], [0, 0x808080]]) for (let k = 0; k < 4; k++) fillRect(t, x0 + 4 + k + ox, (up ? by + 9 - k : by + 6 + k) + ox, x0 + 11 - k + ox, (up ? by + 7 + k : by + 10 - k) + ox, c);
+    };
+    const bh = Math.min(16, h >> 1);
+    btn(x0, y0, 16, bh); arrow(y0, true); btn(x0, y0 + h - bh, 16, bh); arrow(y0 + h - bh, false);
+    for (let Y = y0 + bh; Y < y0 + h - bh; Y++) for (let X = x0; X < x0 + 16; X++) if (X >= 0 && X < t.w && Y >= 0 && Y < t.h) t.px[Y * t.w + X] = (X + Y) & 1 ? 0xffffff : 0xd4d0c8;
+    const track = h - 2 * bh; if (!on || track < 8) return;
+    const th = Math.max(8, Math.round(track * page / total)), ty = y0 + bh + Math.round((track - th) * Math.min(1, pos / Math.max(1, total - page)));
+    btn(x0, ty, 16, th);
+  };
   // A list's or a combo box's face: a sunken white field, the drop-down's button with its arrow, the items.
+  // An item is the font's height (13 pixels for MS Sans Serif 8); a list box without LBS_NOINTEGRALHEIGHT
+  // (100h) is made as high as a whole number of them, and shows its scroll bar (WS_VSCROLL) when they do
+  // not all fit, as Windows does.
   const drawList = (x, hwnd, w, hdc) => {
-    const t = target(x, hdc); if (!t) return;
     if (w.font) st.dcFonts.set(hdc, w.font);
-    const m = textMetrics(hdc), d = dcState(hdc), rowH = (w.rowH = Math.max(12, m.height + 2)), items = w.items || [];
+    const m = textMetrics(hdc), d = dcState(hdc), rowH = (w.rowH = Math.max(8, m.height)), items = w.items || [];
+    if (!isDrop(w) && !(w.style & 0x100) && !w.integral) { w.integral = true; const n = Math.max(1, Math.floor((w.h - 4) / rowH)); if (n * rowH + 4 < w.h) w.h = n * rowH + 4; }   // its parent, painted first, filled what it gives up
+    const t = target(x, hdc); if (!t) return;
     const put = (str, X, Y, ink) => {
       if (!str) return; const buf = x.win.heapAlloc(str.length + 1); x.write(buf, Uint8Array.from(str, (c) => c.charCodeAt(0) & 255));
       const keep = [d.bkMode, d.textColor]; d.bkMode = 1; d.textColor = ink; textOut(x, t, d, m, X, Y, 0, 0, buf, str.length); [d.bkMode, d.textColor] = keep; x.win.heapFree(buf);
@@ -1448,9 +1577,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     };
     if (!isDrop(w)) {
       sunken(0, 0, t.w, t.h);
-      const vis = Math.max(1, Math.floor((t.h - 4) / rowH));
+      const vis = Math.max(1, Math.floor((t.h - 4) / rowH)), bar = (w.style & 0x200000) && (items.length > vis || (w.style & 0x1000));   // LBS_DISABLENOSCROLL
       if ((w.sel ?? -1) >= 0) w.top = Math.max(0, Math.min(w.sel, Math.max(w.top | 0, w.sel - vis + 1)));
-      for (let k = w.top | 0, Y = 2; k < items.length && Y + rowH <= t.h - 2; k++, Y += rowH) row(k, Y, 2, t.w - 2);
+      const x1 = bar ? t.w - 2 - 16 : t.w - 2;
+      for (let k = w.top | 0, Y = 2; k < items.length && Y + rowH <= t.h - 2; k++, Y += rowH) row(k, Y, 2, x1);
+      if (bar) scrollBar(t, x1, 2, t.h - 4, w.top | 0, vis, items.length);
       t.done(); return;
     }
     const fh = (w.fieldH = Math.min(t.h, m.height + 8));
@@ -1527,6 +1658,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       fillRect(t, 0, 0, t.w, 1, 0x808080); fillRect(t, 0, 0, 1, t.h, 0x808080); fillRect(t, 0, t.h - 1, t.w, t.h, 0xd4d0c8); fillRect(t, t.w - 1, 0, t.w, t.h, 0xd4d0c8);
       fillRect(t, 1, 1, t.w - 1, 2, 0x404040); fillRect(t, 1, 1, 2, t.h - 1, 0x404040);
     }
+    // A multi-line edit's WS_VSCROLL bar: there always, greyed while its lines fit.
+    const editBar = w.cls === 'edit' && (w.style & 4) && (w.style & 0x200000);
     // A check box (2, 3) or a radio button (4, 9): its box or its circle at the left, white and sunken, its
     // mark as BM_SETCHECK left it.
     const box = w.cls === 'button' && [2, 3, 4, 9, 5, 6].includes(type) && type !== 7;
@@ -1541,10 +1674,27 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         if (w.checked) [3, 4, 5, 4, 3, 2, 1].forEach((dy, k) => fillRect(t, 3 + k, by + 3 + dy, 4 + k, by + 6 + dy, 0));
       }
     }
-    if (w.cls === 'button' && (type === 0 || type === 1)) {               // a push button, raised or pressed
-      const lt = w.pushed ? 0x404040 : 0xffffff, dk = w.pushed ? 0xffffff : 0x404040;
-      fillRect(t, 0, 0, t.w, 1, lt); fillRect(t, 0, 0, 1, t.h, lt); fillRect(t, 0, t.h - 1, t.w, t.h, dk); fillRect(t, t.w - 1, 0, t.w, t.h, dk);
+    // A push button as Windows 2000 draws it: white then face on the top and left, dark grey then shadow on
+    // the bottom and right; the default one (BS_DEFPUSHBUTTON) inside a black line; pressed, a black line
+    // and a shadow one, its text a pixel down and right.
+    const push = w.cls === 'button' && (type === 0 || type === 1);
+    if (push) {
+      const frame = (x0, y0, x1, y1, c) => { fillRect(t, x0, y0, x1, y0 + 1, c); fillRect(t, x0, y0, x0 + 1, y1, c); fillRect(t, x0, y1 - 1, x1, y1, c); fillRect(t, x1 - 1, y0, x1, y1, c); };
+      const o = type === 1 || w.pushed ? 1 : 0;
+      if (o) frame(0, 0, t.w, t.h, 0);
+      if (w.pushed) frame(1, 1, t.w - 1, t.h - 1, 0x808080);
+      else {
+        fillRect(t, o, o, t.w - o, o + 1, 0xffffff); fillRect(t, o, o, o + 1, t.h - o, 0xffffff);
+        fillRect(t, o, t.h - o - 1, t.w - o, t.h - o, 0x404040); fillRect(t, t.w - o - 1, o, t.w - o, t.h - o, 0x404040);
+        fillRect(t, o + 1, t.h - o - 2, t.w - o - 1, t.h - o - 1, 0x808080); fillRect(t, t.w - o - 2, o + 1, t.w - o - 1, t.h - o - 1, 0x808080);
+      }
     }
+    const dotted = (x0, y0, x1, y1) => {                                  // the focus rectangle, every other pixel
+      for (let X = x0; X < x1; X++) { if ((X - x0) & 1) continue; if (y0 >= 0 && y0 < t.h && X >= 0 && X < t.w) t.px[y0 * t.w + X] = 0; if (y1 - 1 >= 0 && y1 - 1 < t.h && X >= 0 && X < t.w) t.px[(y1 - 1) * t.w + X] = 0; }
+      for (let Y = y0; Y < y1; Y++) { if ((Y - y0) & 1) continue; if (x0 >= 0 && x0 < t.w && Y >= 0 && Y < t.h) t.px[Y * t.w + x0] = 0; if (x1 - 1 >= 0 && x1 - 1 < t.w && Y >= 0 && Y < t.h) t.px[Y * t.w + x1 - 1] = 0; }
+    };
+    const focused = st.focus === hwnd && w.cls === 'button';
+    if (focused && push) dotted(4, 4, t.w - 4, t.h - 4);
     const text = w.cls === 'edit' ? (w.title || '') : (w.title || '').replace(/&(.)/g, '$1');   // an edit's & is text, not a mnemonic
     if (text) {
       if (w.font) st.dcFonts.set(hdc, w.font);
@@ -1560,7 +1710,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if ((w.cls === 'static' && (w.style & 15) <= 2) || multi) {
         for (const para of (multi ? text.replace(/\t/g, '    ') : text).split(/\r?\n/)) {
           let line = '';
-          for (const word of para.split(' ')) { const next = line ? line + ' ' + word : word; if (line && widthOf(next) > t.w) { lines.push(line); line = word; } else line = next; }
+          for (const word of para.split(' ')) { const next = line ? line + ' ' + word : word; if (line && widthOf(next) > t.w - (editBar ? 24 : 0)) { lines.push(line); line = word; } else line = next; }
           lines.push(line);
         }
       } else lines.push(text);
@@ -1576,10 +1726,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         const sel = w.cls === 'edit' && w.selAll && st.focus === hwnd;
         if (sel) { fillRect(t, X, Y, X + width, Y + m.height, 0x0a246a); d.textColor = 0xffffff; }
         x.write(buf, Uint8Array.from(ln, (c) => c.charCodeAt(0) & 255));
-        const keep = d.bkMode; d.bkMode = 1; textOut(x, t, d, m, X, Y, 0, 0, buf, ln.length); d.bkMode = keep; d.textColor = ink;
+        const dx = push && w.pushed ? 1 : 0, keep = d.bkMode; d.bkMode = 1;
+        // Disabled: embossed, white a pixel down and right under the shadow's grey, as Windows greys text.
+        if (w.enabled === false && w.cls !== 'edit') { d.textColor = 0xffffff; textOut(x, t, d, m, X + 1, Y + 1, 0, 0, buf, ln.length); d.textColor = 0x808080; }
+        textOut(x, t, d, m, X + dx, Y + dx, 0, 0, buf, ln.length); d.bkMode = keep; d.textColor = ink;
+        if (focused && box && k === 0) dotted(X - 2, Y - 1, X + width + 2, Y + m.height + 1);   // a check box's or radio button's: round its text
       });
       x.win.heapFree(buf);
-    }
+      if (editBar) { const page = Math.max(1, Math.floor((t.h - 6) / m.height)); scrollBar(t, t.w - 2 - 16, 2, t.h - 4, w.top | 0, page, lines.length); }
+    } else if (editBar) scrollBar(t, t.w - 2 - 16, 2, t.h - 4, 0, 1, 0);
     t.done();
   };
   /*
@@ -1617,25 +1772,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // Its place, when not the main window and not in a dialog application's desktop: the template's x and y
     // from its owner's client area (DS_ABSALIGN, 1: from the screen's corner), or centred on the owner
     // (DS_CENTER, 800h), as Windows places a dialog.
-    if (!win(dlg).main && !deskMode() && !(style & 0x40000000)) {
-      const d = win(dlg), f = popFrame(d), W = d.w + 2 * f.b, H = d.h + 2 * f.b + f.cap;
-      const ow = parent && (parent === st.hwnd || win(parent)) ? parent : st.hwnd, o = screenOrigin(ow), osz = ow === st.hwnd ? { w: st.w, h: st.h } : win(ow);
-      if (style & 0x800) { d.x = o.x + ((osz.w - W) >> 1); d.y = o.y + ((osz.h - H) >> 1); }
-      else if (!(style & 1)) { d.x += o.x; d.y += o.y; }
-      d.x = Math.max(0, Math.min(st.desk.w - W, d.x)); d.y = Math.max(0, Math.min(st.desk.h - H, d.y));
-    }
-    // ...and on a dialog application's desktop, where a window's x and y are its client area's: centred on
-    // the desktop (DS_CENTER) or at the template's place, its frame and caption on the screen -- Winamp's
-    // and Diablo's setup dialogs stood at the corner, their captions above the screen.
-    // The main dialog too (a dialog application's first window: MinGW's DialogBox samples stood at the corner).
-    else if (deskMode() && !(style & 0x40000000)) {
-      const d = win(dlg), f = popFrame(d), W = d.w + 2 * f.b, H = d.h + 2 * f.b + f.cap;
-      // DS_CENTER: in the work area, above the taskbar (30 pixels), as Windows centres a dialog.
-      if (style & 0x800) { d.x = ((st.desk.w - W) >> 1) + f.b; d.y = ((st.desk.h - 30 - H) >> 1) + f.b + f.cap; }
-      else { d.x += f.b; d.y += f.b + f.cap; }
-      d.x = Math.max(f.b, Math.min(st.desk.w - W + f.b, d.x)); d.y = Math.max(f.b + f.cap, Math.min(st.desk.h - H + f.b + f.cap, d.y));
-      if (d.main) { st.x = d.x; st.y = d.y; }
-    }
+    if (!(style & 0x40000000) && (deskMode() || !win(dlg).main)) placeDialog(dlg, style, parent);
     const kids = [];
     for (let i = 0; i < n; i++) {
       align();
@@ -1933,7 +2070,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // so maximized, and the wizard stood half off the screen.
       if (cmd === 3 && !st.maximized) {
         const { b } = wm.frame(); st.maximized = true; st.x = -b; st.y = -b; st.placed = true;
-        resize(st.desk.w + 2 * b, st.desk.h - 30 + 2 * b); st.needSize = true;
+        resize(st.desk.w + 2 * b, st.desk.h - TASKBAR + 2 * b); st.needSize = true;
         if (st.active && st.shown) { st.needSize = false; return send(x, [[0x05, 2, sizeLp()], [0x03, 0, (((st.y + b) & 0xffff) << 16 | ((st.x + b) & 0xffff)) >>> 0]], () => 1, 8); }
       }
       if (st.active || cmd === 0) return st.shown ? 1 : 0;
@@ -2067,14 +2204,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       x.write(wc, new Uint8Array(40)); x.w32(wc + 4, proc); x.w32(wc + 36, name); return 1;
     }],
     // SM_CXSCREEN, SM_CYSCREEN (the desktop, or the mode a program set), SM_CYCAPTION and the frames as
-    // XP's classic style, the work area above a 30-pixel taskbar.
+    // The classic style, the work area above the taskbar (TASKBAR).
     GetSystemMetrics: ['i', (x, n) => {
       const S = st.modeSet ? { w: st.w, h: st.h } : st.desk;
       // SM_CYMENU (15): the menu bar's height as the window manager draws it (src/win32/wm.js), which
       // Minesweeper adds to its board's to size its window. Scroll bars and their arrows 16, icons 32 (small
       // 16), the caption's buttons 18, 3D edges 2.
       return ({ 0: S.w, 1: S.h, 2: 16, 3: 16, 4: 18, 5: 1, 6: 1, 7: 3, 8: 3, 9: 16, 10: 16, 11: 32, 12: 32, 13: 32, 14: 32, 15: 19, 20: 16, 21: 16,
-        30: 18, 31: 18, 32: 4, 33: 4, 45: 2, 46: 2, 49: 16, 50: 16, 16: S.w, 17: S.h - 30 - 19 })[n] ?? 0;
+        30: 18, 31: 18, 32: 4, 33: 4, 45: 2, 46: 2, 49: 16, 50: 16, 16: S.w, 17: S.h - TASKBAR - 19 })[n] ?? 0;
     }],
     // The desktop's (GetDesktopWindow, 10004h): the screen -- Pinball centres its window by it.
     GetClientRect: ['pp', (x, hwnd, r) => { if (hwnd === 0x10004) { const D = st.modeSet ? { w: st.w, h: st.h } : st.desk; x.w32(r, 0); x.w32(r + 4, 0); x.w32(r + 8, D.w); x.w32(r + 12, D.h); return 1; }
@@ -2083,7 +2220,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetWindowRect: ['pp', (x, hwnd, r) => {
       if (hwnd === 0x10004) return user32.GetClientRect[1](x, hwnd, r);
       const w = hwnd !== st.hwnd && win(hwnd);
-      if (w) { const o = screenOrigin(hwnd); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + w.w); x.w32(r + 12, o.y + w.h); return 1; }
+      if (w) {
+        const o = screenOrigin(hwnd), f = w.style & 0x40000000 ? { b: 0, cap: 0 } : popFrame(w);   // a top-level window's frame with it
+        x.w32(r, o.x - f.b); x.w32(r + 4, o.y - f.b - f.cap); x.w32(r + 8, o.x + w.w + f.b); x.w32(r + 12, o.y + w.h + f.b); return 1;
+      }
       const o = st.mainDialog && !wm.framed() ? { x: 0, y: 0, w: st.w, h: st.h } : wm.outer(); x.w32(r, o.x); x.w32(r + 4, o.y); x.w32(r + 8, o.x + o.w); x.w32(r + 12, o.y + o.h); return 1;
     }],
     // A message box is not shown; its caption and text go to the log, where an error says what it is.
