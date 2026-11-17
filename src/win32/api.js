@@ -15,6 +15,7 @@ import { dinputApis } from './dinput.js';
 import { parseTrueType } from './truetype.js';
 import { parseSMF } from '../midi.js';
 import { windowManager } from './wm.js';
+import { commonControls, COMMON_CONTROLS } from './comctl.js';
 import { ddrawApis } from './ddraw.js';
 import { classicApis, loadString, decodeDib, findResource, resId } from './classic.js';
 import { modernApis } from './modern.js';
@@ -1164,12 +1165,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // DefWindowProc's part for the windows made here: the system controls painted and clicked, the
   // background erased with the class's brush, text set and got. undefined: the rest (below).
   const ctlBrush = 0x01a00000 + 15;                                      // COLOR_3DFACE's
+  // comctl32's other controls (src/win32/comctl.js), made when one is first used: the helpers it draws with.
+  let cc = null;
+  const comctl = () => (cc ||= commonControls({ st, target, fillRect, textMetrics, textOut, dcFor, dcState, invalidate, send, win, wideRead,
+    loadBitmap: (x, inst, id) => st.gdi.get(user32.LoadBitmapA[1](x, inst, id)) || null }));
   const defWindow = (x, hwnd, msg, wp, lp) => {
     const w = win(hwnd); if (!w) return undefined;
     if (w.main && !st.mainDialog && msg !== 0x14) return undefined;      // a game's or an intro's window: as it always was, but erased with its class's brush
     if ((w.cls === 'combobox' || w.cls === 'listbox') && LIST_OPS[w.cls][msg]) return listOp(x, hwnd, w, LIST_OPS[w.cls][msg], wp, lp);
     if (w.cls === 'combobox' || w.cls === 'listbox') { const r = listInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
     if (w.cls === 'systreeview32') { const r = msg >= 0x1100 && msg < 0x1200 ? treeOp(x, hwnd, w, msg, wp, lp) : treeInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
+    if (COMMON_CONTROLS.has(w.cls)) { const r = comctl().message(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }   // src/win32/comctl.js
     switch (msg) {
       case 0x0c: w.title = lp ? x.str(lp, 0x8000) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
       case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, ansi(t + '\0')); return t.length; }   // WM_GETTEXT
@@ -1804,7 +1810,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return send(x, msgs, (init) => {
       // ...except a DS_CONTROL dialog made hidden (a page inside another dialog), as Windows: AVS's editor
       // made each effect's page so, and the focus left its tree for the page's first control.
-      if (init && first && win(first) && (!(style & 0x400) || (style & 0x10000000))) { st.focus = first; if (win(first).cls === 'edit') win(first).selAll = true; }
+      // The first tab stop as the controls stand now, in their order (WM_INITDIALOG may have moved them: the
+      // samples' tab control sent to the bottom), as Windows' GetNextDlgTabItem picks it.
+      const now = [...st.wins.values()].find((c) => c.parent === dlg && !c.dead && (c.style & 0x10000) && c.visible && c.enabled !== false);
+      const to = now ? now.hwnd : first;
+      if (init && to && win(to) && (!(style & 0x400) || (style & 0x10000000))) { st.focus = to; if (win(to).cls === 'edit') win(to).selAll = true; }
       const w = win(dlg); if (w && (style & 0x10000000)) { w.visible = true; if (w.main) { st.shown = true; wm.dirty = true; } invalidate(dlg, true, true); }
       if (w && st.dialogShown) st.dialogShown(dlg);
       return then(dlg);
@@ -2089,6 +2099,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // A window moved or sized: its new size, unless SWP_NOSIZE (1). WinQuake's video modes resize its
     // window this way (vid_mode 2: 806x625 with its frame, an 800x600 picture).
     SetWindowPos: ['ppiiiiu', (x, hwnd, after, X, Y, w, h, flags) => {
+      // A child's place among its siblings (unless SWP_NOZORDER 4): HWND_TOP (0) first, HWND_BOTTOM (1) last,
+      // else after `after` -- the order its dialog's Tab goes in, top first, as the dialog made them.
+      const c = win(hwnd);
+      if (c && !(flags & 4) && (c.style & 0x40000000) && (after === 0 || after === 1 || (win(after) && win(after).parent === c.parent))) {
+        const all = [...st.wins.values()].filter((v) => v !== c), at = after === 0 ? all.findIndex((v) => v.parent === c.parent) : after === 1 ? -1 : all.indexOf(win(after)) + 1;
+        if (at < 0 || after === 1) all.push(c); else all.splice(at, 0, c);
+        st.wins.clear(); for (const v of all) st.wins.set(v.hwnd, v);
+      }
       if (hwnd !== st.hwnd) return placeOther(x, hwnd, X, Y, w, h, flags, 28);
       if (deskMode()) {
         if (st.shown) uncoverRect(mainOrigin(), st.w, st.h, win(st.hwnd));
@@ -2187,7 +2205,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (r !== undefined) return r;
       // WM_PAINT left to Windows validates the window, as BeginPaint and EndPaint would: Diablo's procedure
       // passes it on, and its message loop got it again for ever, never idle to run the game.
-      if (msg === 0x0f) { st.invalid.delete(hwnd); return 0; }
+      // ...erased first when it waits to be (WM_ERASEBKGND, the class's brush), as BeginPaint does -- a window
+      // that paints nothing showed black where Windows shows its background (COLOR_APPWORKSPACE). Not over a
+      // display mode of the program's (DirectDraw full screen), whose surface it would wipe.
+      if (msg === 0x0f) {
+        st.invalid.delete(hwnd); const w = win(hwnd);
+        if (w && w.erase && !st.modeSet) { w.erase = false; return send(x, [[0x14, dcFor(hwnd), 0, hwnd]], () => 0, 16); }
+        return 0;
+      }
       if (msg === 0x10 && hwnd === st.hwnd && !st.destroyed) { st.destroyed = true; return send(x, [[0x02, 0, 0], [0x82, 0, 0]], () => 0, 16); }
       if (msg === 0x10 && hwnd !== st.hwnd && win(hwnd)) return destroyOther(x, hwnd, () => 0, 16);
       if (msg === 0x112 && (wp & 0xfff0) === 0xf060) st.msgs.push({ msg: 0x10, wp: 0, lp: 0 });

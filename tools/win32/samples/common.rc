@@ -1,0 +1,18 @@
+#include <windows.h>
+#include <commctrl.h>
+1 DIALOGEX 0, 0, 230, 160
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_SETFONT
+CAPTION "Common controls"
+FONT 8, "MS Sans Serif"
+BEGIN
+    CONTROL "", 100, "SysTabControl32", WS_TABSTOP, 7, 7, 216, 70
+    LTEXT   "Progress:", 101, 14, 30, 40, 8
+    CONTROL "", 102, "msctls_progress32", WS_BORDER, 60, 28, 155, 12
+    LTEXT   "Trackbar:", 103, 14, 50, 40, 8
+    CONTROL "", 104, "msctls_trackbar32", TBS_AUTOTICKS | WS_TABSTOP, 56, 46, 163, 22
+    LTEXT   "Up-down:", 105, 7, 88, 40, 8
+    EDITTEXT 106, 50, 86, 40, 14, ES_NUMBER
+    CONTROL "", 107, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS, 90, 86, 11, 14
+    CONTROL "", 108, "msctls_progress32", PBS_SMOOTH | WS_BORDER, 7, 110, 216, 10
+    DEFPUSHBUTTON "OK", IDOK, 173, 139, 50, 14
+END

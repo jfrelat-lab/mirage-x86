@@ -9,6 +9,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 - **Windows dialogs** have their frames and captions, overlapping windows cover one another as on Windows, and tree views are drawn and work.
 - **Windows programs' text and pop-up windows** are drawn where they were missing, and a program's first dialog is centred as on Windows.
 - **Windows' look, checked against Windows 2000**: captions with their icons and buttons, menus and buttons in Windows' font, focus rectangles, scroll bars, message box icons, windows at their right size.
+- **Windows' common controls**: tabs, progress bars, sliders, spin buttons, lists with columns, toolbars and status bars are drawn and work.
 - **Quake III Arena's demo installs and plays** on the Windows machine (tested locally).
 - **Windows setup programs**: their texts, licences and destination folders work (Installer VISE's).
 

@@ -5454,6 +5454,42 @@ const runLinux = (hex, argv) => {
     got = out.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a popup\'s size is its frame\'s -- CreateWindowEx, GetWindowRect, SetWindowPos, GetClientRect', got, '0,0,254,115 300,200,560,340 10,20,110,100 0,0,94,55');
+  // comctl32's common controls (src/win32/comctl.js), as the samples (tools/win32/samples: common, listview,
+  // toolbar) use them against Windows 2000: a progress bar, a trackbar, an up-down on its buddy, tabs, a
+  // report list view, a toolbar, a status bar; a child sent to the bottom of its siblings.
+  try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), r = [];
+    const main = u('CreateWindowExA')(0, 0, 0, 0x10cf0000, 0, 0, 400, 300);
+    const make = (cls, style, X, Y, W, H, id) => { u('CreateWindowExA')(0, str(cls), 0, 0x50000000 | style, X, Y, W, H, main, id); return parseInt(apis.windows().at(-1).hwnd, 16); };
+    const msg = (h, m, wp = 0, lp = 0) => u('DefWindowProcA')(h, m, wp, lp) | 0;
+    const pb = make('msctls_progress32', 0, 0, 0, 100, 10, 1); msg(pb, 0x401, 0, 50 << 16); msg(pb, 0x402, 70); msg(pb, 0x404, 30); msg(pb, 0x405);
+    r.push(msg(pb, 0x408), msg(pb, 0x407, 0, 0));                                                     // 70 clamped to 50, a step past the end wraps: 30
+    const tbh = make('msctls_trackbar32', 1, 0, 20, 245, 36, 2); msg(tbh, 0x406, 1, 10 << 16); msg(tbh, 0x405, 1, 3); msg(tbh, 0x405, 1, 99);
+    const rc = x.win.heapAlloc(16); msg(tbh, 0x405, 1, 3); msg(tbh, 0x419, 0, rc); r.push(msg(tbh, 0x400), [0, 4, 8, 12].map((o) => x.r32(rc + o)).join(','));
+    const ed = make('edit', 0x800000, 50, 80, 60, 21, 3), udh = make('msctls_updown32', 0x16, 110, 80, 17, 21, 4);   // UDS_SETBUDDYINT | ALIGNRIGHT | AUTOBUDDY
+    msg(udh, 0x465, 0, 99); msg(udh, 0x467, 0, 42); r.push(msg(udh, 0x46a) === ed, apis.windows().find((w) => parseInt(w.hwnd, 16) === ed).title, apis.windows().find((w) => parseInt(w.hwnd, 16) === udh).rect[0]);
+    const tc = make('SysTabControl32', 0, 0, 120, 300, 100, 5), ti = x.win.heapAlloc(28);
+    ['General', 'Advanced', 'About'].forEach((t, i) => { x.write(ti, new Uint8Array(28)); x.w32(ti, 1); x.w32(ti + 12, str(t)); msg(tc, 0x1307, i, ti); });
+    msg(tc, 0x130c, 2); const tb = x.win.heapAlloc(16); x.write(ti, new Uint8Array(28)); x.w32(ti, 1); x.w32(ti + 12, tb); x.w32(ti + 16, 16); msg(tc, 0x1305, 1, ti);
+    r.push(msg(tc, 0x1304), msg(tc, 0x130b), x.str(tb));
+    const lvh = make('SysListView32', 1, 0, 0, 300, 120, 6), col = x.win.heapAlloc(24), it = x.win.heapAlloc(40), buf = x.win.heapAlloc(32);
+    ['Name', 'Size'].forEach((t, i) => { x.write(col, new Uint8Array(24)); x.w32(col, 6); x.w32(col + 8, 100); x.w32(col + 12, str(t)); msg(lvh, 0x101b, i, col); });
+    ['a.txt', 'b.exe'].forEach((t, i) => { x.write(it, new Uint8Array(40)); x.w32(it, 1); x.w32(it + 4, i); x.w32(it + 20, str(t)); msg(lvh, 0x1007, 0, it); x.w32(it + 8, 1); x.w32(it + 20, str(`${i + 1} KB`)); msg(lvh, 0x102e, i, it); });
+    x.write(it, new Uint8Array(40)); x.w32(it + 12, 2); x.w32(it + 16, 2); msg(lvh, 0x102b, 1, it);
+    x.write(it, new Uint8Array(40)); x.w32(it + 8, 1); x.w32(it + 20, buf); x.w32(it + 24, 32); msg(lvh, 0x102d, 1, it);
+    r.push(msg(lvh, 0x1004), msg(lvh, 0x100c, -1, 2), x.str(buf));
+    const tbw = make('ToolbarWindow32', 0, 0, 0, 0, 0, 7), btns = x.win.heapAlloc(60); x.write(btns, new Uint8Array(60));
+    [[6, 10, 4, 0], [0, 0, 4, 1], [7, 11, 0, 0]].forEach(([img, id, state, style], i) => { x.w32(btns + 20 * i, img); x.w32(btns + 20 * i + 4, id); x.w8(btns + 20 * i + 8, state); x.w8(btns + 20 * i + 9, style); });
+    msg(tbw, 0x414, 3, btns); msg(tbw, 0x41d, 2, rc);
+    r.push(msg(tbw, 0x418), msg(tbw, 0x419, 11), msg(tbw, 0x409, 10), msg(tbw, 0x409, 11), x.r32(rc), apis.windows().find((w) => parseInt(w.hwnd, 16) === tbw).rect[2]);
+    const sbw = make('msctls_statusbar32', 0x100, 0, 0, 0, 0, 8), parts = x.win.heapAlloc(12); [200, 320, -1].forEach((v, i) => x.w32(parts + 4 * i, v >>> 0));
+    msg(sbw, 0x404, 3, parts); msg(sbw, 0x401, 1, str('Line 1')); msg(sbw, 0x05); const sbt = x.win.heapAlloc(16); msg(sbw, 0x402, 1, sbt);
+    const sr = apis.windows().find((w) => parseInt(w.hwnd, 16) === sbw).rect;
+    r.push(msg(sbw, 0x406, 0, 0), x.str(sbt), sr[1] + sr[3]);
+    u('SetWindowPos')(tc, 1, 0, 0, 0, 0, 3); r.push(apis.windows().filter((w) => w.parent === main.toString(16)).at(-1).hwnd === tc.toString(16));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: comctl32\'s progress bar, trackbar, up-down, tabs, list view, toolbar, status bar; a child sent to the bottom', got,
+    '30 50 3 73,2,84,23 true 42 91 3 2 Advanced 2 1 2 KB 3 2 1 0 31 394 3 Line 1 275 true');
   // A tree view (comctl32's SysTreeView32) as AVS's editor fills it: items inserted at the root, first and
   // last, a child; walked, opened, read back, hit, selected and deleted.
   try { const { fn, x, str, apis } = await w32(), u = (n) => fn('user32.dll', n), r = [];
