@@ -5454,6 +5454,30 @@ const runLinux = (hex, argv) => {
     got = out.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a popup\'s size is its frame\'s -- CreateWindowEx, GetWindowRect, SetWindowPos, GetClientRect', got, '0,0,254,115 300,200,560,340 10,20,110,100 0,0,94,55');
+  // Flash Player 8 (the standalone projector): a resource in several languages taken as an English
+  // Windows takes it (its menu's first language is Chinese); GetFileAttributesExA; ExtTextOutW; the
+  // default value RegSetValueA writes; CRYPT32 there, trusting nothing.
+  try { const { fn, x, str } = await w32(), { findResource } = await import('../src/win32/classic.js'), k = (n) => fn('kernel32.dll', n), g = (n) => fn('gdi32.dll', n), a = (n) => fn('advapi32.dll', n), r = [];
+    const base = x.win.heapAlloc(0x400); x.write(base, new Uint8Array(0x400)); x.w32(base + 0x3c, 0x40); x.w32(base + 0x40 + 24 + 96 + 16, 0x100);
+    const dir = (at, entries) => { x.w16(at + 14, entries.length); entries.forEach(([id, off], i) => { x.w32(at + 16 + 8 * i, id); x.w32(at + 20 + 8 * i, off >>> 0); }); };
+    dir(base + 0x100, [[4, 0x80000020]]); dir(base + 0x120, [[1, 0x80000040]]); dir(base + 0x140, [[0x804, 0x80], [0x409, 0x90], [0x40c, 0xa0]]);   // MENU 1: Chinese, English, French
+    x.w32(base + 0x180, 0x200); x.w32(base + 0x184, 8); x.w32(base + 0x190, 0x300); x.w32(base + 0x194, 8); x.w32(base + 0x1a0, 0x340); x.w32(base + 0x1a4, 8);
+    const { resourceLang } = await import('../src/win32/classic.js'), { langIdOf } = await import('../src/win32/api.js');
+    r.push((findResource(x, base, 4, 1).at - base).toString(16), (findResource(x, base, 4, 1, 0x804).at - base).toString(16));
+    resourceLang.id = 0x80c; r.push((findResource(x, base, 4, 1).at - base).toString(16)); resourceLang.id = 0x409;   // a Belgian French browser: the French menu
+    r.push([langIdOf('fr-FR'), langIdOf('ja-JP'), langIdOf('ja-JP', 932), langIdOf('')].map((v) => v.toString(16)).join(','));
+    const h = k('CreateFileA')(str('C:\\movie.swf'), 0x40000000, 0, 0, 2, 0, 0), done = x.win.heapAlloc(4); k('WriteFile')(h, str('FWS123456'), 9, done, 0); k('CloseHandle')(h);
+    const fa = x.win.heapAlloc(36); r.push(k('GetFileAttributesExA')(str('C:\\movie.swf'), 0, fa), x.r32(fa).toString(16), x.r32(fa + 32), k('GetFileAttributesExA')(str('C:\\none.swf'), 0, fa));
+    const bmi = x.win.heapAlloc(40); x.write(bmi, new Uint8Array(40)); x.w32(bmi, 40); x.w32(bmi + 4, 16); x.w32(bmi + 8, -16); x.w16(bmi + 12, 1); x.w16(bmi + 14, 32);
+    const pb = x.win.heapAlloc(4), dc = g('CreateCompatibleDC')(0); g('SelectObject')(dc, g('CreateDIBSection')(0, bmi, 0, pb, 0, 0)); g('SetBkMode')(dc, 2); g('SetBkColor')(dc, 0x00ff00);
+    const ws = x.win.heapAlloc(8); x.w16(ws, 0x41); x.w16(ws + 2, 0x42); r.push(g('ExtTextOutW')(dc, 0, 0, 0, 0, ws, 2, 0), (x.r32(x.r32(pb) + 4) & 0xffffff).toString(16));
+    const hk = x.win.heapAlloc(4), buf = x.win.heapAlloc(32), cb = x.win.heapAlloc(4);
+    r.push(a('RegSetValueA')(0x80000001, str('Software\\Macromedia\\FlashPlayer'), 1, str('yes'), 3));
+    a('RegOpenKeyA')(0x80000001, str('Software\\Macromedia\\FlashPlayer'), hk); x.w32(cb, 32); a('RegQueryValueExA')(x.r32(hk), 0, 0, 0, buf, cb); r.push(x.str(buf));
+    r.push(fn('crypt32.dll', 'CertCreateCertificateContext')(1, 0, 0));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Flash Player 8 -- a resource\'s language, GetFileAttributesExA, ExtTextOutW, RegSetValueA, CRYPT32', got, '300 200 340 40c,409,411,409 1 20 9 0 1 ff00 0 yes 0');
   // comctl32's common controls (src/win32/comctl.js), as the samples (tools/win32/samples: common, listview,
   // toolbar) use them against Windows 2000: a progress bar, a trackbar, an up-down on its buddy, tabs, a
   // report list view, a toolbar, a status bar; a child sent to the bottom of its siblings.

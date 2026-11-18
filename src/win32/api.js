@@ -17,7 +17,7 @@ import { parseSMF } from '../midi.js';
 import { windowManager } from './wm.js';
 import { commonControls, COMMON_CONTROLS } from './comctl.js';
 import { ddrawApis } from './ddraw.js';
-import { classicApis, loadString, decodeDib, findResource, resId } from './classic.js';
+import { classicApis, loadString, decodeDib, findResource, resId, resourceLang } from './classic.js';
 import { modernApis } from './modern.js';
 import { regionApis, combine } from './region.js';
 import { parseAvi, decodeFrame } from './avi.js';
@@ -158,11 +158,29 @@ function reAlloc(x, p, n, zero) {
   x.win.heapFree(p); return q;
 }
 
-export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null } = {}) {
+/*
+ * The Windows language (LANGID) of a browser's language tag ("fr-FR" -> 40Ch), when the machine's code
+ * page can write it: a Western system (1252) takes English, French, German, Spanish...; a Japanese one
+ * (932) Japanese. Else English (United States), 409h -- a Chinese menu on a 1252 system is unreadable.
+ */
+const LANGIDS = { en: [0x409, 1252], 'en-gb': [0x809, 1252], fr: [0x40c, 1252], 'fr-ca': [0xc0c, 1252], 'fr-be': [0x80c, 1252], 'fr-ch': [0x100c, 1252],
+  de: [0x407, 1252], 'de-at': [0xc07, 1252], 'de-ch': [0x807, 1252], es: [0xc0a, 1252], 'es-mx': [0x80a, 1252], it: [0x410, 1252], pt: [0x816, 1252], 'pt-br': [0x416, 1252],
+  nl: [0x413, 1252], sv: [0x41d, 1252], da: [0x406, 1252], fi: [0x40b, 1252], nb: [0x414, 1252], no: [0x414, 1252], is: [0x40f, 1252], ca: [0x403, 1252],
+  ja: [0x411, 932], ko: [0x412, 949], 'zh-cn': [0x804, 936], 'zh-tw': [0x404, 950], zh: [0x804, 936], ru: [0x419, 1251], pl: [0x415, 1250], cs: [0x405, 1250],
+  hu: [0x40e, 1250], el: [0x408, 1253], tr: [0x41f, 1254] };
+export function langIdOf(tag, codepage = 1252) {
+  const t = String(tag || '').toLowerCase(), e = LANGIDS[t] || LANGIDS[t.split('-')[0]];
+  return e && e[1] === (codepage === 932 ? 932 : 1252) ? e[0] : 0x409;
+}
+
+export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null, lang = 0x409 } = {}) {
   const st = windowState(fonts);
   // The system's code page (GetACP): 1252, a Western Windows XP's, or 932, a Japanese one's -- what the
   // ANSI calls' bytes mean, Shift-JIS there (Cave Story's text, 2004). An image's `machine.codepage`.
   st.acp = codepage === 932 ? 932 : 1252;
+  // The user's language (LANGID): the visitor's browser's (langIdOf), the one a program's resources are
+  // taken in when it has several (findResource) and GetUserDefaultLangID's. English (United States) else.
+  st.lang = lang; resourceLang.id = lang;
   const sjis = new TextDecoder('shift_jis');
   /** Bytes of the system's code page as UTF-16 code units. */
   st.ansiDecode = (b) => (st.acp === 932 ? [...sjis.decode(b)].flatMap((c) => { const v = c.codePointAt(0); return v > 0xffff ? [0xd800 + ((v - 0x10000) >> 10), 0xdc00 + ((v - 0x10000) & 0x3ff)] : [v]; }) : [...b]);
@@ -557,6 +575,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       setError(x, 2); return 0;
     }],
     GetFileAttributesA: ['p', (x, pName) => { const n = x.str(pName); return diskDir(n) ? 0x10 : diskFile(n) || sysDll(x, n) ? 0x20 : 0xffffffff; }],
+    // GetFileAttributesExA(name, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA): attributes, three times
+    // (none kept: 0), the size's high and low words.
+    GetFileAttributesExA: ['pip', (x, pName, level, out) => {
+      const n = x.str(pName), dir = diskDir(n), f = !dir && diskFile(n);
+      if (!dir && !f) { setError(x, 2); return 0; }
+      x.write(out, new Uint8Array(36)); x.w32(out, dir ? 0x10 : 0x20); x.w32(out + 32, f ? f.size : 0); return 1;
+    }],
     CreateDirectoryA: ['pp', () => 1],
     GetCurrentDirectoryA: ['up', (x, n, buf) => { if (n >= 4) x.write(buf, new TextEncoder().encode('C:\\\0')); return 3; }],
     GetSystemDirectoryA: ['pu', (x, buf, n) => { const s = 'C:\\WINDOWS\\system32'; if (n > s.length) x.write(buf, new TextEncoder().encode(s + '\0')); return s.length; }],
@@ -3230,7 +3255,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     midiStreamOpen: ['ppuppu', () => 8], midiStreamClose: ['p', () => 5], midiStreamProperty: ['ppu', () => 5], midiStreamOut: ['ppu', () => 5],
     midiStreamPause: ['p', () => 5], midiStreamRestart: ['p', () => 5], midiStreamStop: ['p', () => 5],
     // waveIn: no recording device (MMSYSERR_BADDEVICEID, 2; an unknown handle MMSYSERR_INVALHANDLE, 5).
-    waveInGetNumDevs: ['', () => 0], waveInGetDevCapsW: ['upu', () => 2], waveInOpen: ['ppppuu', () => 2],
+    waveInGetNumDevs: ['', () => 0], waveInGetDevCapsW: ['upu', () => 2], waveInGetDevCapsA: ['upu', () => 2], waveInOpen: ['ppppuu', () => 2], waveInStop: ['p', () => 5],   // no microphone: MMSYSERR_BADDEVICEID, INVALHANDLE
     waveInClose: ['p', () => 5], waveInPrepareHeader: ['ppu', () => 5], waveInUnprepareHeader: ['ppu', () => 5], waveInAddBuffer: ['ppu', () => 5],
     waveInStart: ['p', () => 5], waveInReset: ['p', () => 5],
     // waveOutOpen(&hwo, device, WAVEFORMATEX*, callback, instance, flags): PCM 8/16 bits or float, 1-2 channels.
@@ -3629,7 +3654,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // direct-cable games fail, as with none), the machine's name, the system's locale (US English).
     SetCommState: ['pp', () => 0], GetCommState: ['pp', () => 0], SetCommTimeouts: ['pp', () => 0],
     GetComputerNameA: ['pp', (x, buf, pn) => { const n = 'MIRAGE'; if (x.r32(pn) <= n.length) { x.w32(pn, n.length + 1); return 0; } x.write(buf, new TextEncoder().encode(n + '\0')); x.w32(pn, n.length); return 1; }],
-    GetSystemDefaultLCID: ['', () => 0x409], SetFileTime: ['pppp', () => 1],
+    GetSystemDefaultLCID: ['', () => st.lang || 0x409], SetFileTime: ['pppp', () => 1],
     // Its installer's: no named event exists to open; files moved (MoveFileEx: MoveFile's, a delayed move
     // done at once); Windows' directory; a short name the long one (8.3 names are not kept here).
     OpenEventA: ['uip', () => 0],
@@ -3677,7 +3702,19 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     // A pattern brush: its bitmap's first pixel, as a solid one.
     CreatePatternBrush: ['p', (x, hbm) => { const bm = st.gdi.get(hbm), c = bm && bm.px ? bm.px[0] : 0x808080; return gdi32.CreateSolidBrush[1](x, ((c & 255) << 16) | (c & 0xff00) | ((c >>> 16) & 255)); }],
-    SetTextAlign: ['pu', () => 0],
+    SetTextAlign: ['pu', () => 0], GetTextAlign: ['p', () => 0], SetTextCharacterExtra: ['pi', () => 0],
+    // GDI paths: accepted, nothing filled or stroked (Flash Player prints with them); a fill mode kept.
+    BeginPath: ['p', () => 1], EndPath: ['p', () => 1], FillPath: ['p', () => 1], StrokePath: ['p', () => 1], SelectClipPath: ['pi', () => 1],
+    PolyBezierTo: ['ppu', () => 1], SetPolyFillMode: ['pi', () => 1],
+    // ExtCreatePen(style, width, LOGBRUSH, ...): a pen of the brush's colour, as CreatePen.
+    ExtCreatePen: ['uupup', (x, style, width, lb) => gdi32.CreatePen[1](x, style & 0xf, width, lb ? x.r32(lb + 4) : 0)],
+    // EnumFontFamiliesA: no family listed (the callback is not called); the program keeps its defaults.
+    EnumFontFamiliesA: ['pppp', () => 1],
+    // ExtTextOutW: its characters in the A one's (Latin-1; others '?').
+    ExtTextOutW: ['piiuppip', (x, hdc, X, Y, opts, rect, str, n, dx) => {
+      const p = x.win.heapAlloc(Math.max(1, n) + 1); for (let i = 0; i < n; i++) { const c = x.r16(str + 2 * i); x.w8(p + i, c < 256 ? c : 0x3f); }
+      try { return gdi32.ExtTextOutA[1](x, hdc, X, Y, opts, rect, p, n, dx); } finally { x.win.heapFree(p); }
+    }],
   })) if (!(k in gdi32)) gdi32[k] = v;
   /*
    * GameMaker 8's runner (Delphi, 2009; the Undertale demo, 2013): the VCL's start-up asks the keyboard's
@@ -3828,6 +3865,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       AVIStreamOpenFromFileA: ['ppuuup', (x, out) => { if (out) x.w32(out, 0); return 0x80044067; }],   // AVIERR_FILEOPEN
       AVIStreamRelease: ['p', () => 0], AVIStreamLength: ['p', () => -1],
       AVIStreamGetFrameOpen: ['pp', () => 0], AVIStreamGetFrame: ['pi', () => 0], AVIStreamGetFrameClose: ['p', () => 0] } },
+    // CRYPT32: certificates and signed messages, none trusted here -- Flash Player 8 checks its updates'
+    // signatures with them; a failure is an unsigned file.
+    { dll: 'crypt32.dll', fns: {
+      CertCreateCertificateContext: ['upu', () => 0], CertFreeCertificateContext: ['p', () => 1], CertCloseStore: ['pu', () => 1],
+      CertFindCertificateInStore: ['puuupp', () => 0], CertVerifySubjectCertificateContext: ['ppp', () => 0],
+      CryptGetMessageCertificates: ['uppup', () => 0], CryptVerifyMessageSignature: ['pupupppp', () => 0] } },
     { dll: 'winspool.drv', fns: { OpenPrinterA: ['ppp', (x, name, ph) => { if (ph) x.w32(ph, 0); return 0; }], ClosePrinter: ['p', () => 1], DocumentPropertiesA: ['pppppu', () => -1] } },
     // The registry: empty. A key opens as not found (ERROR_FILE_NOT_FOUND), so nothing is read from it
     // or written to it, as on a machine where the program never ran.

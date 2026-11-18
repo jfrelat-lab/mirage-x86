@@ -31,6 +31,13 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   };
   const A = (t, name) => t[name][1];
   const k32 = {
+    // Flash Player 8's file calls in Unicode, as their A twins.
+    GetTempFileNameW: ['pppu' + 'p', (x, path, prefix, unique, buf) => withA(x, path, (pa) => withA(x, prefix, (pr) => {
+      const t = x.win.heapAlloc(264); try { const r = A(kernel32, 'GetTempFileNameA')(x, pa, pr, unique, t); if (r) putW(x, buf, 260, x.str(t, 260)); return r; } finally { x.win.heapFree(t); }
+    }))],
+    CopyFileW: ['ppi', (x, a, b, fail) => withA(x, a, (pa) => withA(x, b, (pb) => A(kernel32, 'CopyFileA')(x, pa, pb, fail)))],
+    MoveFileW: ['pp', (x, a, b) => withA(x, a, (pa) => withA(x, b, (pb) => A(kernel32, 'MoveFileA')(x, pa, pb)))],
+    GetSystemDefaultLangID: ['', () => st.lang || 0x409],              // the visitor's language, as GetUserDefaultLangID
     /*
      * PF_* as the CPU's profile has them (src/cpu-profile.js): MMX (3), SSE (6), SSE2 (10), the
      * comparison and exchange instructions every P6 has (CMPXCHG8B 2? -- PF_COMPARE_EXCHANGE_DOUBLE),
@@ -131,6 +138,14 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   const desk = () => (st.modeSet ? { w: st.w, h: st.h } : st.desk || { w: 1024, h: 768 });
   const DISPLAY = String.fromCharCode(92, 92, 46, 92) + 'DISPLAY1';           // \\.\DISPLAY1
   const u32 = {
+    // Flash Player 8's menus and its text in Unicode.
+    InsertMenuW: ['puupp', (x, m, at, flags, id, text) => (flags & 0x804 || !text ? A(user32, 'InsertMenuA')(x, m, at, flags, id, text) : withA(x, text, (t) => A(user32, 'InsertMenuA')(x, m, at, flags, id, t)))],
+    GetMenuStringW: ['puupu', (x, m, at, buf, n, flags) => intoW(x, buf, n, (t, k) => A(user32, 'GetMenuStringA')(x, m, at, t, k, flags))],
+    // DDE: no server answers here (Flash Player asks the browser through it).
+    DdeInitializeA: ['ppuu', (x, pid) => { if (pid) x.w32(pid, 1); return 0; }], DdeUninitialize: ['u', () => 1],
+    DdeCreateStringHandleA: ['upi', () => 0xdde1], DdeFreeStringHandle: ['up', () => 1],
+    DdeConnect: ['uppp', () => 0], DdeDisconnect: ['p', () => 1], DdeClientTransaction: ['puppuuup', () => 0],
+    SendInput: ['upi', (x, n) => n],
     RegisterClassW: ['p', (x, wc) => classA(x, wc, 40, 32, 36, (t) => A(user32, 'RegisterClassA')(x, t))],
     RegisterClassExW: ['p', (x, wc) => classA(x, wc, 48, 36, 40, (t) => A(user32, 'RegisterClassExA')(x, t))],
     UnregisterClassW: ['pp', () => 1],
@@ -262,6 +277,12 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   // icons in its executable to extract; files dropped on the window never.
   const APPDATA = 'C:' + String.fromCharCode(92) + 'APPDATA';
   const shell32 = {
+    // SHAppBarMessage: the taskbar, at the bottom (ABM_GETTASKBARPOS 5 fills its APPBARDATA: edge 3, its
+    // rectangle); ABM_GETSTATE 4: always on top (2). Other messages: none answered.
+    SHAppBarMessage: ['up', (x, m, abd) => {
+      if (m === 5 && abd) { x.w32(abd + 16, 3); [0, st.desk.h - 28, st.desk.w, st.desk.h].forEach((v, i) => x.w32(abd + 20 + 4 * i, v)); return 1; }
+      return m === 4 ? 2 : 0;
+    }],
     SHGetFolderPathW: ['pipup', (x, hwnd, csidl, tok, flags, buf) => { putW(x, buf, 260, APPDATA); return 0; }],
     SHGetSpecialFolderPathA: ['ppii', (x, hwnd, buf, csidl) => { putA(x, buf, 260, APPDATA); return 1; }],
     SHGetFolderPathA: ['pipup', (x, hwnd, csidl, tok, flags, buf) => { putA(x, buf, 260, APPDATA); return 0; }],
@@ -331,6 +352,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     GetPrivateProfileStringW: ['ppppup', (x, sec, key, def, buf, n) => putW(x, buf, n, def ? wstr(x, def) : '')],
     WritePrivateProfileStringW: ['pppp', () => 1],
     FindResourceW: ['ppp', (x, mod, name, type) => withAR(x, name, (n) => withAR(x, type, (t) => A(kernel32, 'FindResourceA')(x, mod, n, t)))],
+    FindResourceExW: ['pppu', (x, mod, type, name, lang) => withAR(x, name, (n) => withAR(x, type, (t) => A(kernel32, 'FindResourceExA')(x, mod, t, n, lang)))],
     lstrcpyW: ['pp', (x, d, s) => { x.write(d, wbytes(wstr(x, s))); return d; }],
     lstrcpynW: ['ppi', (x, d, s, n) => { putW(x, d, n, wstr(x, s)); return d; }],
     lstrcmpW: ['pp', (x, a, b) => { const s = wstr(x, a), t = wstr(x, b); return s < t ? -1 : s > t ? 1 : 0; }],

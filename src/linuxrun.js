@@ -76,7 +76,10 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     (function walk(d, rel) { for (const n of host.list(d)) { const p = `${d === '/' ? '' : d}/${n}`, st = host.lstat(p); if (st && st.type === 'dir') walk(p, rel + n + '/'); else if (st && st.type === 'file') files[rel + n] = host.read(p); } })(dir, '');
     // entry.env: the program's environment (SDL's hints); machine.codepage: the system's code page, 932 for a
     // Japanese Windows (Cave Story's Shift-JIS text).
-    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files, env: img.entry.env || {}, codepage: m.codepage, desk: m.desktop });
+    // The visitor's language (machine.lang, else the browser's, when the code page can write it): the
+    // language a program's resources are taken in -- Flash Player 8's menus in French for a French browser.
+    const { langIdOf } = await import('./win32/api.js'), lang = m.lang ? Number(m.lang) : langIdOf(globalThis.navigator && navigator.language, m.codepage);
+    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files, env: img.entry.env || {}, codepage: m.codepage, desk: m.desktop, lang });
     w32in = apis.input; w32wm = apis.wm;
     w32loaded = win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
   } else if (m.hle) {

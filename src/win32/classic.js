@@ -12,7 +12,12 @@ const RT = { CURSOR: 1, BITMAP: 2, ICON: 3, MENU: 4, DIALOG: 5, STRING: 6, ACCEL
 export { RT };
 
 /** The resource `type`/`name` (numbers, or strings) of the module at `base`: { at, size } or null. */
-export function findResource(x, base, type, name) {
+// Of a resource's languages, as Windows' FindResource picks: the one asked (FindResourceEx), else neutral
+// (0), the user's (resourceLang: the visitor's browser's, src/win32/api.js), its primary language's, English
+// (United States), any English, the first -- Flash Player 8 keeps its menu in a dozen languages, the first
+// Chinese, and showed that.
+export const resourceLang = { id: 0x409 };
+export function findResource(x, base, type, name, lang = null) {
   const pe = base + x.r32(base + 0x3c), rva = x.r32(pe + 24 + 96 + 8 * 2);
   if (!rva) return null;
   const root = base + rva;
@@ -30,7 +35,12 @@ export function findResource(x, base, type, name) {
   if (off < 0 || !(off & 0x80000000)) return null;
   off = entry(root + (off & 0x7fffffff), name);
   if (off < 0 || !(off & 0x80000000)) return null;
-  off = entry(root + (off & 0x7fffffff), null);
+  const langs = root + (off & 0x7fffffff), ids = [];
+  for (let i = 0, n = x.r16(langs + 12) + x.r16(langs + 14); i < n; i++) ids.push(x.r32(langs + 16 + 8 * i));
+  const user = resourceLang.id, primary = ids.findIndex((v) => (v & 0x3ff) === (user & 0x3ff));
+  const pick = [lang, 0, user, 0x400, 0x800].filter((v) => v !== null && v !== undefined).map((v) => ids.indexOf(v)).find((i) => i >= 0)
+    ?? (primary >= 0 ? primary : ids.indexOf(0x409) >= 0 ? ids.indexOf(0x409) : ids.findIndex((v) => (v & 0x3ff) === 0x09) >= 0 ? ids.findIndex((v) => (v & 0x3ff) === 0x09) : 0);
+  off = ids.length ? x.r32(langs + 16 + 8 * pick + 4) : -1;
   if (off < 0 || off & 0x80000000) return null;
   const data = root + off;
   return { entry: data, at: base + x.r32(data), size: x.r32(data + 4) };
@@ -239,7 +249,7 @@ export function classicApis({ st, wm }) {
     lstrcmpiA: ['pp', (x, a, b) => { const s = lower(x.str(a)), t = lower(x.str(b)); return s < t ? -1 : s > t ? 1 : 0; }],
     MulDiv: ['iii', (x, a, b, c) => (c ? Math.round((a * b) / c) : -1)],
     IsBadReadPtr: ['pu', (x, p) => (p ? 0 : 1)], IsBadWritePtr: ['pu', (x, p) => (p ? 0 : 1)], IsBadCodePtr: ['p', (x, p) => (p ? 0 : 1)],
-    GetThreadLocale: ['', () => 0x409], GetUserDefaultLCID: ['', () => 0x409], GetUserDefaultLangID: ['', () => 0x409],
+    GetThreadLocale: ['', () => st.lang || 0x409], GetUserDefaultLCID: ['', () => st.lang || 0x409], GetUserDefaultLangID: ['', () => st.lang || 0x409],   // the visitor's language (api.js)
     IsValidLocale: ['uu', () => 1], IsValidCodePage: ['u', () => 1],
     GetStringTypeExA: ['uupip', (x, lcid, type, src, n, out) => {
       const s = n < 0 ? x.str(src) + '\0' : String.fromCharCode(...x.bytes(src, n));
@@ -317,7 +327,7 @@ export function classicApis({ st, wm }) {
     }],
     // Resources, from the image in memory.
     FindResourceA: ['ppp', (x, mod, name, type) => { const r = findResource(x, mod || x.win.base, resId(x, type), resId(x, name)); return r ? r.entry : 0; }],
-    FindResourceExA: ['pppu', (x, mod, type, name) => { const r = findResource(x, mod || x.win.base, resId(x, type), resId(x, name)); return r ? r.entry : 0; }],
+    FindResourceExA: ['pppu', (x, mod, type, name, lang) => { const r = findResource(x, mod || x.win.base, resId(x, type), resId(x, name), lang || null); return r ? r.entry : 0; }],
     LoadResource: ['pp', (x, mod, h) => (h ? (mod || x.win.base) + x.r32(h) : 0)],
     LockResource: ['p', (x, h) => h],
     SizeofResource: ['pp', (x, mod, h) => (h ? x.r32(h + 4) : 0)],
@@ -572,6 +582,11 @@ export function classicApis({ st, wm }) {
       const k = keys.get(handles.get(hk) || (ROOTS[hk >>> 0] || '').toLowerCase()); if (!k) return 6;
       k.values.set(valueName(x, name), { type, data: data ? x.bytes(data, cb) : new Uint8Array(0) }); return 0;
     }],
+    // RegSetValueA(key, subkey, REG_SZ, text, n): the subkey's default value (made if it is not there).
+    RegSetValueA: ['ppupu', (x, hk, sub, type, data) => {
+      const t = x.win.heapAlloc(4);
+      try { const r = sub && x.r8(sub) ? create(x, hk, sub, t, 0) : (x.w32(t, hk), 0); if (r) return r; return advapi32.RegSetValueExA[1](x, x.r32(t), 0, 0, 1, data, data ? x.str(data).length + 1 : 0); } finally { x.win.heapFree(t); }
+    }],
     RegDeleteValueA: ['pp', (x, hk, name) => { const k = keys.get(handles.get(hk)); return k && k.values.delete(valueName(x, name)) ? 0 : 2; }],
     RegDeleteKeyA: ['pp', (x, hk, sub) => { const p = pathOf(x, hk, sub); return p && keys.delete(p) ? 0 : 2; }],
     // The subkeys one by one: their names (ERROR_NO_MORE_ITEMS, 259, after the last).
@@ -753,6 +768,7 @@ export function classicApis({ st, wm }) {
     CoRegisterClassObject: ['ppuup', (x, clsid, unk, ctx, flags, cookie) => { if (cookie) x.w32(cookie, 1); return 0; }],
     CoRevokeClassObject: ['u', () => 0],
     ProgIDFromCLSID: ['pp', () => 0x80040154],                       // REGDB_E_CLASSNOTREG
+    CoFreeUnusedLibraries: ['', () => 0],
     CoInitialize: ['p', () => 0], CoInitializeEx: ['pu', () => 0], CoUninitialize: ['', () => 0],
     OleInitialize: ['p', () => 0], OleUninitialize: ['', () => 0],    // COM and OLE ready (Winamp's NSIS setup, before it browses folders)
     // Internet Explorer's WebBrowser control (an inert one, below); any other class is not registered.
