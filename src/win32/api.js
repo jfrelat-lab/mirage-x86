@@ -592,6 +592,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       // name anywhere, as the disk was before it had directories.
       const full = x.str(pPat), pat = baseName(full), dir = relPath(full.replace(/[^\\/]*$/, '')), re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
       const inDir = [...st.disk.keys()].filter((n) => n.replace(/\/?[^/]*$/, '') === dir);
+      // ...but a wildcard in a directory that is not there finds nothing (ERROR_PATH_NOT_FOUND): Warcraft III's
+      // installer looks in its destination with *.* first, and was told it held the whole disk.
+      if (!inDir.length && /[*?]/.test(pat) && /[\\/]/.test(full) && !diskDir(full.replace(/[^\\/]*$/, ''))) { setError(x, 3); return -1; }
       let list = (inDir.length ? inDir : [...st.disk.keys()]).filter((n) => re.test(baseName(n)));
       // A DLL made here, asked for by its name in the system directory: there. SciTech MGL (WinQuake)
       // looks for system32\ddraw.dll before it offers DirectDraw's modes.
@@ -3334,11 +3337,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // C++'s operator new and delete (and their [] forms) by their decorated names, as malloc and free: the
     // COM DLLs Winamp's setup registers (CDDBControlWinamp.dll) allocate with them.
     '??2@YAPAXI@Z': ['u', (x, n) => x.win.heapAlloc(Math.max(1, n)), cd], '??_U@YAPAXI@Z': ['u', (x, n) => x.win.heapAlloc(Math.max(1, n)), cd],
-    '??3@YAXPAX@Z': ['p', () => 0, cd], '??_V@YAXPAX@Z': ['p', () => 0, cd],
+    '??3@YAXPAX@Z': ['p', (x, p) => { if (p) x.win.heapFree(p); return 0; }, cd], '??_V@YAXPAX@Z': ['p', (x, p) => { if (p) x.win.heapFree(p); return 0; }, cd],
     // Functions to run at the exit (a DLL's static destructors): kept, never run -- the process's end needs
     // none of them here. Winamp registers its own with _onexit.
     _onexit: ['p', (x, f) => f, cd], __dllonexit: ['ppp', (x, f) => f, cd], atexit: ['p', () => 0, cd],
-    malloc: ['u', (x, n) => x.win.heapAlloc(n), cd], calloc: ['uu', (x, n, k) => { const p = x.win.heapAlloc(n * k); x.write(p, new Uint8Array(n * k)); return p; }, cd], free: ['p', () => 0, cd],
+    malloc: ['u', (x, n) => x.win.heapAlloc(n), cd], calloc: ['uu', (x, n, k) => { const p = x.win.heapAlloc(n * k); x.write(p, new Uint8Array(n * k)); return p; }, cd],
+    // free (and operator delete above) give the block back, as the UCRT's does: they kept everything, and
+    // Warcraft III's installer, 32 KiB at a time, filled the heap.
+    free: ['p', (x, p) => { if (p) x.win.heapFree(p); return 0; }, cd],
     memset: ['piu', (x, p, v, n) => { x.write(p, new Uint8Array(n).fill(v)); return p; }, cd],
     memcpy: ['ppu', (x, d, s, n) => { x.write(d, x.bytes(s, n)); return d; }, cd],
     strlen: ['p', (x, p) => x.str(p).length, cd],

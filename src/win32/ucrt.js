@@ -533,6 +533,9 @@ export function ucrtApis({ st, send }) {
     _amsg_exit: ['i', (x, n) => { x.win.say(`_amsg_exit(${n}): the C runtime's fatal error`); x.lx.exitProcess(255); return 0; }, cd],
     fprintf: ['pp', (x, F, fmt) => { const r = fileOf(x, F), s = cprintf(x, x.str(fmt), va(x, 2)); if (r) out(x, r, enc(s)); return s.length; }, cd],
     sscanf: ['pp', (x, buf, fmt) => cscanf(x, x.str(buf), x.str(fmt), va(x, 2)), cd],
+    _vsnprintf: ['pupp', (x, buf, n, fmt, ap) => { const s = cprintf(x, x.str(fmt), ap); setStr(x, buf, s.slice(0, n)); return s.length > n ? -1 : s.length; }, cd],
+    // _beginthread(start, stack, arg): a thread, its handle (-1 when none could be made).
+    _beginthread: ['pup', (x, fn, stack, arg) => 0x2000 + x.win.createThread(fn, arg), cd],
     _snprintf: ['pup', (x, buf, n, fmt) => { const s = cprintf(x, x.str(fmt), va(x, 3)); setStr(x, buf, s.slice(0, n)); if (s.length >= n) { if (s.length > n) return -1; } return s.length; }, cd],
     swprintf: ['pp', (x, buf, fmt) => { const s = cprintf(x, wstr(x, fmt), va(x, 2), true); W(x, buf, s); return s.length; }, cd],
     vswprintf: ['ppp', (x, buf, fmt, ap) => { const s = cprintf(x, wstr(x, fmt), ap, true); W(x, buf, s); return s.length; }, cd],
@@ -571,6 +574,9 @@ export function ucrtApis({ st, send }) {
     // C++: a type_info's destructor (nothing to free here), terminate (the program stops), and the frames'
     // handler of Visual C++ 6's exceptions (one thrown stops the program first: _CxxThrowException).
     '??1type_info@@UAE@XZ': ['', () => 0],
+    // type_info::raw_name (thiscall, `this` in ECX): its decorated name, kept after its vtable and its
+    // undecorated name's pointer -- Warcraft III's installer compares classes so.
+    '?raw_name@type_info@@QBEPBDXZ': ['', (x) => ((x.cpu.reg[1] >>> 0) + 8) >>> 0],
     '?terminate@@YAXXZ': ['', (x) => { x.win.say('terminate()'); x.lx.exitProcess(3); return 0; }, cd],
     __CxxFrameHandler: ['pppp', () => 1, cd],
   };

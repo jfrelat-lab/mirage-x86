@@ -5454,6 +5454,20 @@ const runLinux = (hex, argv) => {
     got = out.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a popup\'s size is its frame\'s -- CreateWindowEx, GetWindowRect, SetWindowPos, GetClientRect', got, '0,0,254,115 300,200,560,340 10,20,110,100 0,0,94,55');
+  // Warcraft III's demo installer: its destination looked into with *.* before it exists (nothing:
+  // ERROR_PATH_NOT_FOUND, not the whole disk); Program Files from the registry; msvcrt's free giving the
+  // block back (32 KiB a time filled the heap); _vsnprintf; type_info::raw_name (this in ECX).
+  try { const { fn, x, str } = await w32(), k = (n) => fn('kernel32.dll', n), a = (n) => fn('advapi32.dll', n), c = (n) => fn('msvcrt.dll', n), r = [];
+    const fd = x.win.heapAlloc(320); r.push(k('FindFirstFileA')(str('C:\\Program Files\\Warcraft III Demo\\*.*'), fd), k('GetLastError')());
+    const hk = x.win.heapAlloc(4), buf = x.win.heapAlloc(64), cb = x.win.heapAlloc(4);
+    r.push(a('RegOpenKeyExA')(0x80000002, str('SOFTWARE\\Microsoft\\Windows\\CurrentVersion'), 0, 0x20019, hk)); x.w32(cb, 64); a('RegQueryValueExA')(x.r32(hk), str('ProgramFilesDir'), 0, 0, buf, cb); r.push(x.str(buf));
+    const p1 = c('calloc')(1, 32768); c('free')(p1); const p2 = c('calloc')(1, 32768); r.push(p1 === p2);
+    const out = x.win.heapAlloc(32), ap = x.win.heapAlloc(8); x.w32(ap, 42); x.w32(ap + 4, str('ok'));
+    r.push(c('_vsnprintf')(out, 32, str('%d-%s'), ap), x.str(out));
+    const ti = x.win.heapAlloc(32); x.w32(ti + 8, 0x56413f2e); x.cpu.reg[1] = ti; r.push(c('?raw_name@type_info@@QBEPBDXZ')() - ti);
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Warcraft III\'s installer -- *.* in a missing folder, Program Files, free, _vsnprintf, raw_name', got, '-1 3 0 C:\\Program Files true 5 42-ok 8');
   // Flash Player 8 (the standalone projector): a resource in several languages taken as an English
   // Windows takes it (its menu's first language is Chinese); GetFileAttributesExA; ExtTextOutW; the
   // default value RegSetValueA writes; CRYPT32 there, trusting nothing.

@@ -539,6 +539,14 @@ export function classicApis({ st, wm }) {
     for (const k of ['hkcu\\software\\microsoft\\windows\\currentversion\\explorer\\shell folders', 'hkcu\\software\\microsoft\\windows\\currentversion\\explorer\\user shell folders']) {
       make(k); for (const [n, v] of Object.entries(SF)) keys.get(k).values.set(n, { type: 1, data: new TextEncoder().encode(v + '\0') });
     }
+    // Windows' own folders and version, as a fresh Windows XP has them: Warcraft III's demo installer
+    // reads ProgramFilesDir and proposed "Invalid\Warcraft III Demo" without it.
+    const WIN = { programfilesdir: 'C:\\Program Files', commonfilesdir: 'C:\\Program Files\\Common Files', productname: 'Microsoft Windows XP', version: 'Windows XP', versionnumber: '5.1', systemroot: 'C:\\WINDOWS' };
+    make('hklm\\software\\microsoft\\windows\\currentversion');
+    for (const [n, v] of Object.entries(WIN)) keys.get('hklm\\software\\microsoft\\windows\\currentversion').values.set(n, { type: 1, data: new TextEncoder().encode(v + '\0') });
+    make('hklm\\software\\microsoft\\windows nt\\currentversion');
+    for (const [n, v] of Object.entries({ productname: 'Microsoft Windows XP', currentversion: '5.1', currentbuildnumber: '2600', systemroot: 'C:\\WINDOWS' }))
+      keys.get('hklm\\software\\microsoft\\windows nt\\currentversion').values.set(n, { type: 1, data: new TextEncoder().encode(v + '\0') });
     // DirectX's version, as XP's DirectX 9.0c writes it: installers read it before they ask for DirectX.
     make('hklm\\software\\microsoft\\directx');
     keys.get('hklm\\software\\microsoft\\directx').values.set('version', { type: 1, data: new TextEncoder().encode('4.09.00.0904\0') });
