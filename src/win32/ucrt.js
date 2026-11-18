@@ -432,21 +432,35 @@ export function ucrtApis({ st, send }) {
     srand: ['u', (x, s) => { st.crtSeed = s >>> 0; return 0; }, cd],
     /*
      * qsort and bsearch with the program's comparison function: each comparison a call into the program
-     * (a send), the next step taken from its result -- an insertion sort, element by element, and a
-     * binary search. SDL 2 imports them.
+     * (a send), the next step taken from its result -- a merge sort and a binary search. SDL 2 imports
+     * them. The sort orders indices while the elements stay where they are (what the comparisons read),
+     * then writes the array once: n log n calls, where an insertion sort made up to n*n/2 and copied
+     * each swap -- Warcraft III sorts some 430 lists a second.
      */
     qsort: ['puup', (x, base, n, w, cmp) => {
-      const at = (k) => base + k * w, tmp = x.win.heapAlloc(Math.max(1, w));
-      const insert = (i, j) => {                                       // a[i] goes down past a[j] while it compares less
-        if (i >= n) { x.win.heapFree(tmp); return 0; }
-        if (j < 0) return insert(i + 1, i);
-        return send(x, [{ fn: cmp, args: [at(j), at(j + 1)] }], (r) => {
-          if ((r | 0) <= 0) return insert(i + 1, i);
-          x.write(tmp, x.bytes(at(j), w)); x.write(at(j), x.bytes(at(j + 1), w)); x.write(at(j + 1), x.bytes(tmp, w));
-          return insert(i, j - 1);
-        }, null);
+      if (n < 2) return 0;
+      let src = Array.from({ length: n }, (_, k) => k), dst = new Array(n), width = 1, lo = 0, i = 0, j = 0, k = 0;
+      const at = (k) => (base + k * w) >>> 0;
+      const step = () => {
+        for (;;) {
+          if (width >= n) {                                              // sorted: the elements in src's order
+            const all = x.bytes(base, n * w), out = new Uint8Array(n * w);
+            for (let q = 0; q < n; q++) out.set(all.subarray(src[q] * w, src[q] * w + w), q * w);
+            x.write(base, out); return 0;
+          }
+          const mid = Math.min(lo + width, n), hi = Math.min(lo + 2 * width, n);
+          if (i < mid && j < hi) return send(x, [{ fn: cmp, args: [at(src[i]), at(src[j])] }], (r) => {
+            dst[k++] = (r | 0) <= 0 ? src[i++] : src[j++]; return step();
+          }, null);
+          while (i < mid) dst[k++] = src[i++];
+          while (j < hi) dst[k++] = src[j++];
+          lo = hi;
+          if (lo >= n) { [src, dst] = [dst, src]; width *= 2; lo = 0; }
+          i = lo; j = Math.min(lo + width, n); k = lo;
+        }
       };
-      return n > 1 ? insert(1, 0) : 0;
+      i = 0; j = Math.min(width, n); k = 0;
+      return step();
     }, cd],
     bsearch: ['ppuup', (x, key, base, n, w, cmp) => {
       const look = (lo, hi) => {

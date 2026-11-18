@@ -64,7 +64,10 @@ export function installFPU(cpu) {
   /** [view, offset] holding `len` bytes at linear `a`, read through paging. */
   const prd = (a, len) => {
     const mem = cpu.mem; a >>>= 0;
-    if ((a & 0xfff) + len <= 0x1000) return [dv, mem.xlat(a, false)];
+    // A page an access has reached is filled in the recompiler's fast table (memory.js _afterAccess),
+    // as an integer access does: a page only floats are read from -- Warcraft III's vertices -- stayed
+    // on this path after every CR3 load otherwise, a translation and an array per load.
+    if ((a & 0xfff) + len <= 0x1000) { const t = mem.xlat(a, false); if (t >= 0) mem._afterAccess(a >>> 12); return [dv, t]; }
     for (let i = 0; i < len; i++) pscratch.setUint8(i, mem.r8((a + i) >>> 0));
     return [pscratch, 0];
   };
@@ -72,7 +75,9 @@ export function installFPU(cpu) {
   const pwr = (a, len, fill) => {
     const mem = cpu.mem; a >>>= 0;
     if ((a & 0xfff) + len <= 0x1000) {
-      fill(dv, mem.xlat(a, true));
+      const t = mem.xlat(a, true);
+      fill(dv, t);
+      if (t >= 0) mem._afterAccess(a >>> 12);
       if (mem.codePage[a >>> 12]) mem._dirty(a, len);
       return;
     }

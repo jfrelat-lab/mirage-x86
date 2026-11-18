@@ -6,6 +6,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 ## 2026-11-18
 
 - **Warcraft III's demo installs and starts** on the Windows machine, its 3D main menu with its buttons' text (tested locally).
+- **Windows games run faster**: floating-point work and the C library's sorting no longer take the slow road (Warcraft III's menu from 24 to some 36 frames a second).
 
 ## 2026-11-17
 

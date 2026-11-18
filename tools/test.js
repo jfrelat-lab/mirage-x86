@@ -945,6 +945,20 @@ function eq(name, got, want) {
     eq('...and code rewritten while paging was off runs as rewritten', go(), 3);
   } catch (e) { eq('paging-toggle test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
 
+// ---- an x87 load or store under paging fills its page's fast entry, as an integer access does -------------
+// After a CR3 load every entry is stale; the helpers' first access to a page fills it (memory.js
+// _afterAccess). fpu.js's did not: a page only floats were read from or written to -- Warcraft III's
+// vertices -- stayed on the slow path, a translation and an array per load, a fifth of its speed.
+{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+  const DIR = 0x10000, PT0 = 0x11000;
+  m.setA20(true); mc.rec.setMask(m.mask);
+  for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 7);   // user pages, as a program's
+  m.w32(DIR, PT0 | 7); m.dv.setFloat32(0x200000, 1.5, true);
+  cpu.setCR3(DIR); cpu.setCR0(0x80000001);
+  const before = [m.rdOfs[0x200], m.rdOfs[0x201]].join();
+  const v = cpu.fRd32(0x200000); cpu.fWr64(0x201000, 2.5);
+  eq('an x87 load and store under paging fill their pages\' fast entries', [before, v, m.rdOfs[0x200], m.rdOfs[0x201], m.dv.getFloat64(0x201000, true)].join(' '), '-1,-1 1.5 0 0 2.5'); }
+
 // ---- leaving paging copies the identity tables back instead of refilling every page --------------------
 // CWSDPMI leaves paging 2000 times a second for Liquid War; each time the tables were refilled page by
 // page, 16384 entries for 64 MiB, and loading the game ran at 1 M instructions a second in Chrome. The
@@ -6366,6 +6380,27 @@ const runPE = async (exe, readFile) => {
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: SetTimer -- WM_TIMER when due, its TIMERPROC called by DispatchMessage', got, '3'); }
+// msvcrt's qsort with the program's comparison function (src/win32/ucrt.js): twelve dwords in reverse
+// order, sorted -- a merge sort of indices, written back once: n log n comparisons where the insertion
+// sort it replaced made n*n/2 (66 here; Warcraft III sorts some 430 lists a second). The exit code:
+// the number of comparisons when the program finds its array in order, 255 when not.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'msvcrt.dll', names: ['qsort'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const arr = at.d(0x300), cnt = at.d(0x340), cmp = at.d(0x100);
+      const main = [0x68, ...le(cmp), 0x6a, 4, 0x6a, 12, 0x68, ...le(arr), 0xff, 0x15, ...le(at.iat['msvcrt.dll!qsort']), 0x83, 0xc4, 0x10,
+        0x31, 0xc9, 0x39, 0x0c, 0x8d, ...le(arr), 0x75, 0x0d, 0x41, 0x83, 0xf9, 12, 0x72, 0xf1,      // a[k] == k for each k
+        0xa1, ...le(cnt), 0xeb, 0x05, 0xb8, 0xff, 0, 0, 0,                                         // the count, else 255
+        0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const fn = [0xff, 0x05, ...le(cnt), 0x8b, 0x44, 0x24, 4, 0x8b, 0, 0x8b, 0x4c, 0x24, 8, 0x2b, 1, 0xc3];   // ++cnt; return *a - *b
+      const img = new Uint8Array(0x500); img.set(main); img.set(fn, 0x100);
+      for (let k = 0; k < 12; k++) img.set(le(11 - k), 0x300 + 4 * k);
+      return img;
+    } });
+    const r = await runPE(exe);
+    got = r === 255 ? 'not sorted' : typeof r === 'number' && r > 0 && r < 66 ? 'sorted, fewer' : String(r);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: msvcrt qsort sorts with the program\'s comparisons, n log n of them', got, 'sorted, fewer'); }
 // msvcrt's DATA exports: _acmdln, the command line, a variable the program reads where its import points
 // (a Visual C++ 6 program's start-up) -- the exit code its first character, the quote round its path.
 { let got;
