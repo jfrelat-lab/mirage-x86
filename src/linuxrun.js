@@ -64,7 +64,8 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   let hle = null, w32in = null, w32wm = null, w32loaded = null;
   if (win32) {
     const [{ prismLibraries }, { win32Apis }] = await Promise.all([import('./hle/prism-gl.js'), import('./win32/api.js')]);
-    hle = await prismLibraries(lx, mc.mem, ['gl', 'glu']);
+    const { WIN32_GL_EXTENSIONS } = await import('./win32/api.js');
+    hle = await prismLibraries(lx, mc.mem, ['gl', 'glu'], { extensions: WIN32_GL_EXTENSIONS });
     const [glLib, gluLib] = hle.libs;
     // machine.fonts: the TrueType fonts it selects (D3DXCreateText), the visitor's or free ones (src/win32/fonts.js)
     // Without any, DejaVu Sans as Arial, where the font mapper ends: a dialog's text, a button's, a message box's.

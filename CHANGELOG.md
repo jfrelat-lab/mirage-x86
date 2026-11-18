@@ -3,6 +3,10 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-18
+
+- **Warcraft III's demo installs and starts** on the Windows machine, its 3D main menu with its buttons' text (tested locally).
+
 ## 2026-11-17
 
 - **Winamp 2.95 plays MP3s** on the Windows machine, in its built-in skin, with AVS visualisations (tested locally).

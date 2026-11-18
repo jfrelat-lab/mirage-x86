@@ -6774,6 +6774,20 @@ const runPE = async (exe, readFile) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects, every immediate-mode spelling, the uniform vectors; nothing missing', got, 'all | none'); }
 
+// opengl32.dll names GL_ARB_multitexture (src/win32/api.js WIN32_GL_EXTENSIONS, src/linuxrun.js): Warcraft
+// III's demo enables its texture coordinates for unit 0, then selects unit 1 and disables them there
+// when the extension is named -- without it, on unit 0, and its menu's text lost its glyphs. What
+// glGetString(GL_EXTENSIONS) answers with the list linuxrun.js gives PRISM's gl.js.
+{ let got;
+  try { const { prismM } = await import('../src/hle/prism-gl.js'), { WIN32_GL_EXTENSIONS } = await import('../src/win32/api.js');
+    const { installGL } = await import('../vendor/prism/src/env/gl.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
+    const M = prismM(lx, mc.mem); installGL(M, { extensions: WIN32_GL_EXTENSIONS });
+    got = M.cstr(M.rt.glGetString(0x1f03)).split(' ').sort().join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: opengl32 names GL_ARB_multitexture -- Warcraft III\'s menu text keeps its texture coordinates', got, 'GL_ARB_multitexture GL_EXT_compiled_vertex_array'); }
+
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's
 // .oasis-gone lists /x, so /x and /x/y are gone, /k stays, and the bookkeeping files are not listed.

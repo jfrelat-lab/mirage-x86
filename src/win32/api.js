@@ -173,6 +173,12 @@ export function langIdOf(tag, codepage = 1252) {
   return e && e[1] === (codepage === 932 ? 932 : 1252) ? e[0] : 0x409;
 }
 
+// The OpenGL extensions opengl32.dll names besides PRISM's own: GL_ARB_multitexture, as every Windows
+// driver had by 1999. Warcraft III (2002) enables its texture coordinates for unit 0, then disables
+// them for unit 1 -- without the extension, on unit 0, and its menu's text was drawn without them
+// (only the text's black shadow showed).
+export const WIN32_GL_EXTENSIONS = ['GL_ARB_multitexture'];
+
 export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null, lang = 0x409 } = {}) {
   const st = windowState(fonts);
   // The system's code page (GetACP): 1252, a Western Windows XP's, or 932, a Japanese one's -- what the

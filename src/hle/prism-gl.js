@@ -45,13 +45,14 @@ export function prismM(lx, mem) {
  * libGLU.so.1 whose entry points hand their raw arguments (pointers as guest addresses) to PRISM's
  * gl.js and glu.js, libSDL-1.2.so.0 whose OpenGL window is gl.js's framebuffer, libasound.so.2.
  * `frame()` gives the last picture SDL_GL_SwapBuffers presented (an ImageBitmap), or null, and lets the next swap go.
+ * `extensions`: those of PRISM's optional ones glGetString(GL_EXTENSIONS) names besides its own.
  */
-export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'asound']) {
+export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'asound'], { extensions = [] } = {}) {
   const { installGL } = await import('../../vendor/prism/src/env/gl.js');
   const { installGlu } = await import('../../vendor/prism/src/env/glu.js');
   const { createD3D9 } = await import('../../vendor/prism/src/env/d3d9.js');
   const M = prismM(lx, mem);
-  const gl = installGL(M, { backend: 'webgl' });
+  const gl = installGL(M, { backend: 'webgl', extensions });
   installGlu(M);
   // `shown`: the page has taken the last frame. A swap chain with one frame in flight: the program's
   // next swap waits for it, so a frame the GPU takes longer to draw than the guest to issue (Absolute
