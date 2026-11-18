@@ -4239,6 +4239,35 @@ const runLinux = (hex, argv) => {
     got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex'), bit('pentiummmx'), bit('686'), bit('586')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('MMX: every instruction as Docker i386 computes it; CPUID says MMX on pentiummmx alone', got, '103 36e93d3e88184161fd64b5679a9fb01f 1 0 0'); }
+// PSLLQ and PSRLQ on the quadword's two halves (src/mmx.js; BigInt arithmetic before, a few hundred
+// nanoseconds a shift, and AVS shifts half a million quadwords a second): every count from 0 to 64,
+// by an immediate, against BigInt's shifts -- through cpu.mmx and through the code the recompiler
+// emits (mmxInline).
+{ let bad = 0;
+  const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiummmx' }), c = mc.cpu, { MMX, mmxInline } = await import('../src/mmx.js');
+  const v = 0x89abcdef01234567n;
+  for (const [op, f] of [[MMX.PSLLQ, (n) => (v << BigInt(n)) & 0xffffffffffffffffn], [MMX.PSRLQ, (n) => v >> BigInt(n)]])
+    for (let n = 0; n <= 64; n++) {
+      const want = n > 63 ? 0n : f(n);
+      for (const run of [() => c.mmx(op, 1, 0, n), new Function('cpu', mmxInline(op, 1, 0, n))]) {   // called, and as compiled
+        c.mm.u32[2] = 0x01234567; c.mm.u32[3] = 0x89abcdef;
+        run(c);
+        if (((BigInt(c.mm.u32[3]) << 32n) | BigInt(c.mm.u32[2])) !== want) bad++;
+      }
+    }
+  eq('MMX: PSLLQ and PSRLQ by every count from 0 to 64, called and compiled', bad, 0); }
+// An MMX instruction leaves the x87 stack's top 0 and its eight tags valid; one that finds them so
+// writes nothing (src/mmx.js enter: rewriting them took a fifth of AVS's time). An x87 instruction
+// between two runs of MMX code changes them, and the next MMX instruction sets them again.
+{ const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiummmx' }), c = mc.cpu, { MMX, MM_ENTER } = await import('../src/mmx.js');
+  c.ftop = 3; c.focc.fill(0); c.focc[3] = 1;
+  c.mmx(MMX.PADDW, 1, 2, -1); const a = [c.ftop, ...c.focc].join('');
+  c.focc[5] = 0; c.mmx(MMX.PADDW, 1, 2, -1); const b = [c.ftop, ...c.focc].join('');
+  c.ftop = 7; c.mmx(MMX.PADDW, 1, 2, -1); const d = [c.ftop, ...c.focc].join('');
+  // The test the recompiler emits before one (MM_ENTER): after FLD and FSTP the top is 0 again, a tag empty.
+  const enter = new Function('cpu', MM_ENTER); c.focc[0] = 0; enter(c); const e = [c.ftop, ...c.focc].join('');
+  c.ftop = 2; enter(c); const g = [c.ftop, ...c.focc].join('');
+  eq('MMX: the x87 top 0 and every tag valid, set again after an x87 instruction changed them', [a, b, d, e, g].join(' '), '011111111 011111111 011111111 011111111 011111111'); }
 // tools/linux/mmxsse.asm: the integer instructions SSE added to the MMX registers -- PMINUB, PMAXUB,
 // PAVGB, PAVGW, PMULHUW, PMINSW, PMAXSW, PSADBW from a register and from memory, PSHUFW in four orders,
 // PINSRW, PEXTRW, PMOVMSKB, MOVNTQ: 39 lines, as Docker i386 prints them (their MD5). .kkrieger
@@ -6401,6 +6430,39 @@ const runPE = async (exe, readFile) => {
     got = r === 255 ? 'not sorted' : typeof r === 'number' && r > 0 && r < 66 ? 'sorted, fewer' : String(r);
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: msvcrt qsort sorts with the program\'s comparisons, n log n of them', got, 'sorted, fewer'); }
+// A critical section in kernel32's x86 code (src/win32/api.js EnterCriticalSection's x86, made a function
+// of the DLL by src/win32/dll.js): entered twice by its thread, owned by GetCurrentThreadId's id (the TEB's,
+// fs:[24h]) with a count of 2, left twice, free. The exit code: 1, or the step that went wrong (2-4).
+// And one another thread holds: EnterCriticalSection goes to the JavaScript, which waits.
+{ let got;
+  try {
+    const prog = (held) => mkPE({ imports: [{ dll: 'kernel32.dll', names: ['InitializeCriticalSection', 'EnterCriticalSection', 'LeaveCriticalSection', 'GetCurrentThreadId', 'ExitProcess'] }], code: (at) => {
+      const cs = at.d(0x300), I = (n) => [0xff, 0x15, ...le(at.iat['kernel32.dll!' + n])], push = [0x68, ...le(cs)];
+      const fail = [], code = [];
+      const jne = () => { code.push(0x0f, 0x85, 0, 0, 0, 0); fail.push(code.length); };
+      code.push(...push, ...I('InitializeCriticalSection'));
+      if (held) code.push(0xc7, 0x05, ...le(cs + 12), ...le(0x777), 0xc7, 0x05, ...le(cs + 8), 1, 0, 0, 0);   // another thread's
+      code.push(...push, ...I('EnterCriticalSection'), ...push, ...I('EnterCriticalSection'), ...I('GetCurrentThreadId'));
+      code.push(0xb3, 2, 0x39, 0x05, ...le(cs + 12)); jne(); code.push(0x83, 0x3d, ...le(cs + 8), 2); jne();
+      code.push(...push, ...I('LeaveCriticalSection'), 0xb3, 3, 0x83, 0x3d, ...le(cs + 8), 1); jne();
+      code.push(...push, ...I('LeaveCriticalSection'), 0xb3, 4, 0x83, 0x3d, ...le(cs + 8), 0); jne(); code.push(0x83, 0x3d, ...le(cs + 12), 0); jne();
+      code.push(0xb3, 1);
+      const end = code.length;
+      for (const f of fail) { const r = end - f; code.splice(f - 4, 4, ...le(r)); }
+      code.push(0x0f, 0xb6, 0xc3, 0x50, ...I('ExitProcess'), 0xf4);                                  // movzx eax, bl
+      const img = new Uint8Array(0x500); img.set(code); return img;
+    } });
+    got = [await runPE(prog(false)), await runPE(prog(true))].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a critical section entered and left in kernel32\'s x86 code; one held elsewhere waits', got, '1 running'); }
+// msvcrt's _ftol: ST(0) truncated to EDX:EAX, without BigInt -- a fraction each way, a value past 32
+// bits, and a NaN as FISTP gives it (8000000000000000h).
+{ let got;
+  try { const { win32Apis } = await import('../src/win32/api.js');
+    const f = win32Apis().find((d) => d.dll === 'msvcrt.dll').fns._ftol[1];
+    got = [3.7, -3.7, 2 ** 40 + 5.5, -(2 ** 40) - 5.5, NaN].map((v) => { const r = f({ fpop: () => v }); return `${r.edx.toString(16)}:${r.eax.toString(16)}`; }).join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: msvcrt _ftol truncates to EDX:EAX', got, '0:3 ffffffff:fffffffd 100:5 fffffeff:fffffffb 80000000:0'); }
 // msvcrt's DATA exports: _acmdln, the command line, a variable the program reads where its import points
 // (a Visual C++ 6 program's start-up) -- the exit code its first character, the quote round its path.
 { let got;

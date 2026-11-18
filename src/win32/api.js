@@ -515,12 +515,34 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ResetEvent: ['p', (x, h) => { const ev = st.events.get(h); if (ev) ev.set = false; return ev ? 1 : 0; }],
     InitializeCriticalSection: ['p', (x, cs) => { x.write(cs, new Uint8Array(24)); x.w32(cs + 4, 0xffffffff); return 0; }],
     DeleteCriticalSection: ['p', () => 0],
+    /*
+     * A critical section: its owner's thread id at +12 (fs:[24h], lx.pid), its recursion count at +8.
+     * Free or the caller's own, taken in x86 code with LOCK CMPXCHG -- no trap: AVS (Winamp's visualizer)
+     * enters and leaves some 65,000 a second; held by another thread, the JavaScript waits for it.
+     */
     EnterCriticalSection: ['p', (x, cs) => {
       const me = x.lx.pid, owner = x.r32(cs + 12);
       if (owner && owner !== me) return x.waitUntil(x.lx.mono() + 0.001);
       x.w32(cs + 12, me); x.w32(cs + 8, x.r32(cs + 8) + 1); return 0;
-    }],
-    LeaveCriticalSection: ['p', (x, cs) => { const n = Math.max(0, (x.r32(cs + 8) | 0) - 1); x.w32(cs + 8, n); if (!n) x.w32(cs + 12, 0); return 0; }],
+    }, { x86: (at, stub) => { const rel = stub - (at + 37); return Uint8Array.of(
+      0x8b, 0x4c, 0x24, 0x04,                         // mov ecx, [esp+4]
+      0x64, 0x8b, 0x15, 0x24, 0, 0, 0,                // mov edx, fs:[24h]       the thread's id
+      0x31, 0xc0,                                     // xor eax, eax
+      0xf0, 0x0f, 0xb1, 0x51, 0x0c,                   // lock cmpxchg [ecx+12], edx    free: now ours
+      0x74, 0x04,                                     // je took
+      0x39, 0xd0,                                     // cmp eax, edx           ours already
+      0x75, 0x08,                                     // jne slow
+      0xff, 0x41, 0x08,                               // took: inc dword [ecx+8]
+      0x31, 0xc0, 0xc2, 0x04, 0x00,                   // xor eax, eax ; ret 4
+      0xe9, rel & 255, (rel >>> 8) & 255, (rel >>> 16) & 255, (rel >>> 24) & 255); } }],   // slow: the trap
+    LeaveCriticalSection: ['p', (x, cs) => { const n = Math.max(0, (x.r32(cs + 8) | 0) - 1); x.w32(cs + 8, n); if (!n) x.w32(cs + 12, 0); return 0; },
+      { x86: () => Uint8Array.of(
+        0x8b, 0x4c, 0x24, 0x04,                       // mov ecx, [esp+4]
+        0xff, 0x49, 0x08,                             // dec dword [ecx+8]
+        0x7f, 0x0e,                                   // jg done                still held
+        0xc7, 0x41, 0x08, 0, 0, 0, 0,                 // mov dword [ecx+8], 0
+        0xc7, 0x41, 0x0c, 0, 0, 0, 0,                 // mov dword [ecx+12], 0  free
+        0x31, 0xc0, 0xc2, 0x04, 0x00) }],             // done: xor eax, eax ; ret 4
     GetExitCodeThread: ['pp', (x, h, p) => { const c = x.lx.threadExits.get(h - 0x2000); x.w32(p, c === undefined ? 259 : c); return 1; }],   // STILL_ACTIVE
     TerminateThread: ['pu', () => 1], ResumeThread: ['p', () => 1], SuspendThread: ['p', () => 0],
     GetCurrentThreadId: ['', (x) => x.lx.pid], GetCurrentProcessId: ['', () => 0x100],
@@ -3398,7 +3420,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const D = (f) => (x, ...a) => ({ st0: f(...a) });                   // a double on the x87 stack
   const CI = (f) => (x) => ({ st0: f(x.fpop()) });                    // _CIxxx: the argument on it too
   const CI2 = (f) => (x) => { const b = x.fpop(), a = x.fpop(); return { st0: f(a, b) }; };   // _CIpow: ST1 ^ ST0
-  const ftol = (x) => { const v = Math.trunc(x.fpop()); const lo = Number(BigInt.asIntN(64, BigInt(Number.isFinite(v) ? v : 0)) & 0xffffffffn), hi = Math.floor(v / 4294967296); return { eax: lo, edx: hi }; };
+  // _ftol: ST(0) popped, truncated, as a 64-bit integer in EDX:EAX -- the halves by arithmetic, not
+  // BigInt (AVS converts 200,000 a second). Out of range or not a number: 8000000000000000h, as FISTP.
+  const ftol = (x) => {
+    const v = Math.trunc(x.fpop());
+    if (!(v >= -9223372036854775808 && v < 9223372036854775808)) return { eax: 0, edx: 0x80000000 };
+    const hi = Math.floor(v / 4294967296); return { eax: (v - hi * 4294967296) >>> 0, edx: hi >>> 0 };
+  };
   const cd = { cdecl: true };
   const msvcrt = {
     rand: ['', () => { seed = (Math.imul(seed, 214013) + 2531011) >>> 0; return (seed >>> 16) & 0x7fff; }, cd],

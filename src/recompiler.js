@@ -13,7 +13,7 @@
 
 import { CF, PF, AF, ZF, SF, DF, OF, IF, TF, CS, SS, DS, ES, FS, GS } from './cpu.js';
 import { SSE, SSE_TABLE, VEX, XMM_SCRATCH } from './sse.js';
-import { MMX, MMX_OPS, MM_SCRATCH } from './mmx.js';
+import { MMX, MMX_OPS, MM_SCRATCH, MM_ENTER, mmxInline, mmLoadPaged, mmStorePaged } from './mmx.js';
 
 // Cap on basic-block length. Overridable because block boundaries are where IRQs are sampled, so
 // moving them is how you measure what depends on that — see docs/notes/timing.md §3, where it showed only
@@ -2583,10 +2583,10 @@ export class Recompiler {
         }
         if (op2 === 0x7f || op2 === 0xe7) {                                                          // MOVQ mm/m64, mm; MOVNTQ m64, mm
           if (op2 === 0xe7 && o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
-          if (o.isReg) P(`cpu.mmx(${MMX.MOVQ},${o.rm},${o.reg},-1);`);
+          if (o.isReg) P(`${MM_ENTER}${mmxInline(MMX.MOVQ, o.rm, o.reg, -1)}`);
           else {
             canFault = true; const a = memAddr(o), t = NT();
-            P(`var ${t}=${a};cpu.mmStore(${t},${o.reg});`);
+            P(pfRestart ? `var ${t}=${a};${mmStorePaged(t, o.reg)}` : `var ${t}=${a};cpu.mmStore(${t},${o.reg});`);
             P(`if(cp[${t}>>>12]|cp[(${AM(`${t}+7`)})>>>12])m._dirty(${t},8);`);
           }
           fsync(); return;
@@ -2596,12 +2596,18 @@ export class Recompiler {
           const code = { 0x71: { 2: MMX.PSRLW, 4: MMX.PSRAW, 6: MMX.PSLLW }, 0x72: { 2: MMX.PSRLD, 4: MMX.PSRAD, 6: MMX.PSLLD },
             0x73: { 2: MMX.PSRLQ, 6: MMX.PSLLQ } }[op2][o.reg];
           if (code === undefined || !o.isReg) { P(`cpu.eip=${curIpStart};cpu.raise(6);`); P('return;'); ended = true; return; }
-          P(`cpu.mmx(${code},${o.rm},0,${imm});`); fsync(); return;
+          const js = mmxInline(code, o.rm, 0, imm);
+          P(js !== null ? `${MM_ENTER}{${js}}` : `cpu.mmx(${code},${o.rm},0,${imm});`); fsync(); return;
         }
         // mm, mm/m64 -- the low unpacks read only 32 bits of memory
         let s = o.rm;
-        if (!o.isReg) { canFault = true; P(`cpu.mmLoad(${memAddr(o)},${op2 >= 0x60 && op2 <= 0x62 ? 4 : 8});`); s = MM_SCRATCH; }
-        P(`cpu.mmx(${op2},${o.reg},${s},-1);`); fsync(); return;
+        if (!o.isReg) {
+          canFault = true; const len = op2 >= 0x60 && op2 <= 0x62 ? 4 : 8;
+          if (pfRestart) { const t = NT(); P(`var ${t}=${memAddr(o)};${mmLoadPaged(t, len)}`); } else P(`cpu.mmLoad(${memAddr(o)},${len});`);
+          s = MM_SCRATCH;
+        }
+        const js = mmxInline(op2, o.reg, s, -1);
+        P(js !== null ? `${MM_ENTER}{${js}}` : `cpu.mmx(${op2},${o.reg},${s},-1);`); fsync(); return;
       }
       // ---- SSE / SSE2 / SSE4.1 on XMM ----------------------------------------------------------
       // The set real DOS software reaches for, not the whole ISA — see src/sse.js. The mandatory

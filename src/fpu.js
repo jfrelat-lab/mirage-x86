@@ -38,6 +38,7 @@ export function installFPU(cpu) {
   // a bitmask on `cpu`: the emitted blocks alias it as a local, and a read-modify-write of a property
   // on the CPU object cost 4% of `tube` where an indexed store costs nothing measurable.
   cpu.focc = new Uint8Array(8);   // 1 = this physical register holds a value
+  cpu.focc32 = new Uint32Array(cpu.focc.buffer);   // the eight tags as two words: MMX's test that all are 1 (src/mmx.js)
   const dv = cpu.mem.dv;
   // The address mask is read PER ACCESS, not captured once. It changes when A20 opens, and this
   // module is installed while A20 is still closed — so a captured copy pinned every x87 memory

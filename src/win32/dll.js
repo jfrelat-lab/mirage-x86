@@ -8,6 +8,8 @@
 // hashing the names there. Names are sorted, as GetProcAddress's binary search wants them.
 // A DATA export (msvcrt's _acmdln, a pointer a program reads where its import points) is a variable of
 // 4 bytes in its stub's place, its value set by the loader (index.js); the section is writable for them.
+// A function given as x86 code (EnterCriticalSection's uncontended case) runs as the program's own does,
+// with no trap; its stub stays, for the cases it hands to JavaScript.
 import { HLE_BASE } from '../hle/elfso.js';
 
 const STUB = 10;                                          // B8 imm32, CD 80, C2 imm16 (or C3, padded)
@@ -33,6 +35,10 @@ export function makeDll(name, fns, base) {
   const strAt = new Map();
   const nameRva = strs; strs += name.length + 1;
   for (const f of named) { strAt.set(f.name, strs); strs += f.name.length + 1; }
+  // A function made in x86 code (`x86(at, stub)`: its bytes at `at`, `stub` its trap for what it leaves
+  // to JavaScript) is laid out after the names, and exported there.
+  const bodies = new Map();
+  for (const [i, f] of withOrd.entries()) if (f.x86) { strs = (strs + 15) & ~15; const at = strs, code = f.x86((base + at) >>> 0, (base + stubs + i * STUB) >>> 0); bodies.set(i, { at, code }); strs += code.length; }
   const size = Math.ceil(strs / 0x1000) * 0x1000;
   const b = new Uint8Array(size), dv = new DataView(b.buffer);
   const put = (at, s) => b.set(enc.encode(s + '\0'), at);
@@ -59,10 +65,12 @@ export function makeDll(name, fns, base) {
   dv.setUint32(sec + 36, 0xe0000020, true);                // code, execute, read, write (data exports)
   // The stubs.
   const exports = new Map();
+  const entryOf = (i) => (bodies.has(i) ? bodies.get(i).at : stubs + i * STUB);
   withOrd.forEach((f, i) => {
     const o = stubs + i * STUB;
-    dv.setUint32(funcs + (f.ordinal - ordBase) * 4, o, true);
-    if (f.name) exports.set(f.name, (base + o) >>> 0);
+    dv.setUint32(funcs + (f.ordinal - ordBase) * 4, entryOf(i), true);
+    if (f.name) exports.set(f.name, (base + entryOf(i)) >>> 0);
+    if (bodies.has(i)) b.set(bodies.get(i).code, bodies.get(i).at);
     if (f.data) return;                                    // a variable: 0 until the loader sets it
     if (f.keepEax) {                                       // push eax first: what the caller had in EAX, for the function to read at [esp]
       b[o] = 0x50; b[o + 1] = 0xb8; dv.setUint32(o + 2, HLE_BASE + f.id, true); b[o + 6] = 0xcd; b[o + 7] = 0x80; b[o + 8] = 0xc3; b[o + 9] = 0x90;
@@ -82,6 +90,6 @@ export function makeDll(name, fns, base) {
     dv.setUint16(ords + i * 2, f.ordinal - ordBase, true);
     put(strAt.get(f.name), f.name);
   });
-  const byOrdinal = new Map(withOrd.map((f, i) => [f.ordinal, (base + stubs + i * STUB) >>> 0]));
+  const byOrdinal = new Map(withOrd.map((f, i) => [f.ordinal, (base + entryOf(i)) >>> 0]));
   return { bytes: b, exports, byOrdinal };
 }

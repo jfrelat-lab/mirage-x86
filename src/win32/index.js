@@ -173,7 +173,9 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   const w16 = (va, v) => lx.wrBytes(va, Uint8Array.of(v & 255, (v >>> 8) & 255));
   w32(TEB + 0x00, 0xffffffff);                                        // ExceptionList: none
   w32(TEB + 0x04, STACK_TOP); w32(TEB + 0x08, STACK_TOP - 0x3000);    // StackBase, StackLimit
-  w32(TEB + 0x18, TEB); w32(TEB + 0x20, 0x100); w32(TEB + 0x24, 0x104);   // Self, process and thread ids
+  // Self, process and thread ids: the thread's GetCurrentThreadId's (lx.pid), which the critical
+  // sections' x86 code reads here and their JavaScript there.
+  w32(TEB + 0x18, TEB); w32(TEB + 0x20, 0x100); w32(TEB + 0x24, lx.pid);
   w32(TEB + 0x30, PEB);
   w32(PEB + 0x08, base);                                              // ImageBaseAddress
   w32(PEB + 0x18, HEAP);                                              // ProcessHeap
@@ -215,7 +217,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     const key = api.dll.toLowerCase();
     const fns = Object.entries(api.fns).map(([name, [sig, fn, opt = {}]]) => {
       table.push({ name: `${api.dll}!${name}`, sig, fn });
-      return { name: opt.noName ? null : name, ordinal: opt.ordinal, id: table.length - 1, pop: opt.cdecl ? null : argBytes(sig), data: !!opt.data, keepEax: !!opt.keepEax };
+      return { name: opt.noName ? null : name, ordinal: opt.ordinal, id: table.length - 1, pop: opt.cdecl ? null : argBytes(sig), data: !!opt.data, keepEax: !!opt.keepEax, x86: opt.x86 || null };
     });
     images.set(key, { name: api.dll, fns });
   }
