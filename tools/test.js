@@ -6,6 +6,11 @@
 //
 // This is the proof the dynamic recompiler is correct without a browser, and it
 // doubles as a deterministic regression net for the engine.
+//
+// Each case runs inside its own function -- `await (async () => { ... })();` -- not a bare `{ }`
+// block: the module's top level is one function to V8, and a block's variables keep their
+// registers after it ends, so every machine a case made stayed alive to the end (9.7 GB resident,
+// past Node's heap). In a function of its own, a case's machine is freed when it returns (2.9 GB).
 
 import { Machine } from '../src/machine.js';
 import { installMouse } from '../src/mouse.js';
@@ -51,56 +56,56 @@ function eq(name, got, want) {
 
 // ----------------------------------------------------------------------------
 // 1. immediate load + add
-{ const { cpu } = run([0xb8, 0x34, 0x12, 0x05, 0x11, 0x11, 0xf4]); eq('mov+add AX', cpu.ax, 0x2345); }
+await (async () => { const { cpu } = run([0xb8, 0x34, 0x12, 0x05, 0x11, 0x11, 0xf4]); eq('mov+add AX', cpu.ax, 0x2345); })();
 
 // 2. CMP sets ZF, JZ taken skips a MOV
-{ const { cpu } = run([0xb0, 0x05, 0x3c, 0x05, 0x74, 0x02, 0xb0, 0xff, 0xf4]); eq('cmp/jz AL', cpu.al, 0x05); }
+await (async () => { const { cpu } = run([0xb0, 0x05, 0x3c, 0x05, 0x74, 0x02, 0xb0, 0xff, 0xf4]); eq('cmp/jz AL', cpu.al, 0x05); })();
 
 // 3. summation loop 1..10 via LOOP  (expect 55)
-{ const { cpu } = run([0x31, 0xc0, 0xb9, 0x0a, 0x00, 0x01, 0xc8, 0xe2, 0xfc, 0xf4]); eq('loop sum', cpu.ax, 55); }
+await (async () => { const { cpu } = run([0x31, 0xc0, 0xb9, 0x0a, 0x00, 0x01, 0xc8, 0xe2, 0xfc, 0xf4]); eq('loop sum', cpu.ax, 55); })();
 
 // 4. REP MOVSB copies 4 bytes
-{ const { mc, cpu } = run(
+await (async () => { const { mc, cpu } = run(
     [0xfc, 0xbe, 0x00, 0x00, 0xbf, 0x10, 0x00, 0xb9, 0x04, 0x00, 0xf3, 0xa4, 0xf4],
     ({ mc }) => mc.mem.blit(0x2000, Uint8Array.from([0xde, 0xad, 0xbe, 0xef])));
   const dst = [mc.mem.r8(0x2010), mc.mem.r8(0x2011), mc.mem.r8(0x2012), mc.mem.r8(0x2013)];
   eq('rep movsb', dst.join(','), '222,173,190,239');
   eq('rep movsb CX drained', cpu.cx, 0);
-}
+})();
 
 // 5. PUSH/POP round-trips a value through the stack
-{ const { cpu } = run([0xb8, 0x78, 0x56, 0x50, 0x5b, 0xf4]); eq('push/pop BX', cpu.bx, 0x5678); }
+await (async () => { const { cpu } = run([0xb8, 0x78, 0x56, 0x50, 0x5b, 0xf4]); eq('push/pop BX', cpu.bx, 0x5678); })();
 
 // 6. MUL BX  (10*3=30 in DX:AX)
-{ const { cpu } = run([0xb8, 0x0a, 0x00, 0xbb, 0x03, 0x00, 0xf7, 0xe3, 0xf4]); eq('mul AX', cpu.ax, 30); eq('mul DX', cpu.dx, 0); }
+await (async () => { const { cpu } = run([0xb8, 0x0a, 0x00, 0xbb, 0x03, 0x00, 0xf7, 0xe3, 0xf4]); eq('mul AX', cpu.ax, 30); eq('mul DX', cpu.dx, 0); })();
 
 // 7. DIV BL  (100/7 = 14 r2)
-{ const { cpu } = run([0xb8, 0x64, 0x00, 0xb3, 0x07, 0xf6, 0xf3, 0xf4]); eq('div AL', cpu.al, 14); eq('div AH', cpu.ah, 2); }
+await (async () => { const { cpu } = run([0xb8, 0x64, 0x00, 0xb3, 0x07, 0xf6, 0xf3, 0xf4]); eq('div AL', cpu.al, 14); eq('div AH', cpu.ah, 2); })();
 
 // 8. software INT routed to a JS handler that reads AL
-{ const out = [];
+await (async () => { const out = [];
   run([0xb0, 0x41, 0xcd, 0x21, 0xf4], ({ mc }) => mc.hookInterrupt(0x21, (cpu) => out.push(cpu.al)));
   eq('int 21h AL seen', out[0], 0x41);
-}
+})();
 
 // 9. carry flag: 0xFFFF + 1 wraps and sets CF/ZF
-{ const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0xf4]); eq('add wrap AX', cpu.ax, 0); eq('add wrap CF', !!(cpu.flags & CF), true); eq('add wrap ZF', !!(cpu.flags & ZF), true); }
+await (async () => { const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0xf4]); eq('add wrap AX', cpu.ax, 0); eq('add wrap CF', !!(cpu.flags & CF), true); eq('add wrap ZF', !!(cpu.flags & ZF), true); })();
 
 // 10. SHL/SHR
-{ const { cpu } = run([0xb0, 0x01, 0xc0, 0xe0, 0x04, 0xf4]); eq('shl AL', cpu.al, 0x10); }       // 1<<4
-{ const { cpu } = run([0xb0, 0x80, 0xc0, 0xe8, 0x03, 0xf4]); eq('shr AL', cpu.al, 0x10); }       // 0x80>>3
+await (async () => { const { cpu } = run([0xb0, 0x01, 0xc0, 0xe0, 0x04, 0xf4]); eq('shl AL', cpu.al, 0x10); })();       // 1<<4
+await (async () => { const { cpu } = run([0xb0, 0x80, 0xc0, 0xe8, 0x03, 0xf4]); eq('shr AL', cpu.al, 0x10); })();       // 0x80>>3
 
 // 11. signed compare: -1 vs 1 → SF!=OF so JL taken
-{ const { cpu } = run([0xb8, 0xff, 0xff, 0x3d, 0x01, 0x00, 0x7c, 0x03, 0xb8, 0x00, 0x00, 0xf4]);
-  eq('jl signed keeps AX', cpu.ax, 0xffff); }   // JL taken → skip MOV AX,0
+await (async () => { const { cpu } = run([0xb8, 0xff, 0xff, 0x3d, 0x01, 0x00, 0x7c, 0x03, 0xb8, 0x00, 0x00, 0xf4]);
+  eq('jl signed keeps AX', cpu.ax, 0xffff); })();   // JL taken → skip MOV AX,0
 
 // 12. memory store then load through DS
-{ const { cpu, mc } = run([0xb8, 0xbe, 0xba, 0xa3, 0x20, 0x00, 0xa1, 0x20, 0x00, 0xf4]);
+await (async () => { const { cpu, mc } = run([0xb8, 0xbe, 0xba, 0xa3, 0x20, 0x00, 0xa1, 0x20, 0x00, 0xf4]);
   eq('store word', mc.mem.r16(0x2000 + 0x20), 0xbabe);
-  eq('reload word', cpu.ax, 0xbabe); }
+  eq('reload word', cpu.ax, 0xbabe); })();
 
 // 13. near CALL/RET
-{ const { cpu } = run([
+await (async () => { const { cpu } = run([
     0xe8, 0x02, 0x00,   // CALL +2 (to the MOV at offset 5)
     0xeb, 0x04,         // JMP +4 (to HLT at offset 9) — RET returns here
     0xb8, 0x99, 0x00,   // sub: MOV AX,0x99
@@ -108,33 +113,33 @@ function eq(name, got, want) {
     0xf4                // HLT
   ]);
   // CALL → sub sets AX=0x99, RET → JMP → HLT
-  eq('call/ret AX', cpu.ax, 0x99); }
+  eq('call/ret AX', cpu.ax, 0x99); })();
 
 // ---- 386/486 opcodes the 8088 conformance set can't cover -----------------
 // BTS imm: set bit 2 of AX(0) → 4
-{ const { cpu } = run([0xb8, 0x00, 0x00, 0x0f, 0xba, 0xe8, 0x02, 0xf4]); eq('bts imm', cpu.ax, 4); }
+await (async () => { const { cpu } = run([0xb8, 0x00, 0x00, 0x0f, 0xba, 0xe8, 0x02, 0xf4]); eq('bts imm', cpu.ax, 4); })();
 // BTR imm: clear bit 0 of AX(0xff) → 0xfe
-{ const { cpu } = run([0xb8, 0xff, 0x00, 0x0f, 0xba, 0xf0, 0x00, 0xf4]); eq('btr imm', cpu.ax, 0xfe); }
+await (async () => { const { cpu } = run([0xb8, 0xff, 0x00, 0x0f, 0xba, 0xf0, 0x00, 0xf4]); eq('btr imm', cpu.ax, 0xfe); })();
 // BT reg: bit 3 of 8 is set → CF=1 → SBB DX,DX = 0xffff
-{ const { cpu } = run([0xb8, 0x08, 0x00, 0xb9, 0x03, 0x00, 0x0f, 0xa3, 0xc8, 0x1b, 0xd2, 0xf4]); eq('bt reg CF', cpu.dx, 0xffff); }
+await (async () => { const { cpu } = run([0xb8, 0x08, 0x00, 0xb9, 0x03, 0x00, 0x0f, 0xa3, 0xc8, 0x1b, 0xd2, 0xf4]); eq('bt reg CF', cpu.dx, 0xffff); })();
 // BSF: lowest set bit of 0x0140 is 6
-{ const { cpu } = run([0xb8, 0x40, 0x01, 0x0f, 0xbc, 0xd8, 0xf4]); eq('bsf', cpu.bx, 6); }
+await (async () => { const { cpu } = run([0xb8, 0x40, 0x01, 0x0f, 0xbc, 0xd8, 0xf4]); eq('bsf', cpu.bx, 6); })();
 // BSR: highest set bit of 0x0140 is 8
-{ const { cpu } = run([0xb8, 0x40, 0x01, 0x0f, 0xbd, 0xd8, 0xf4]); eq('bsr', cpu.bx, 8); }
+await (async () => { const { cpu } = run([0xb8, 0x40, 0x01, 0x0f, 0xbd, 0xd8, 0xf4]); eq('bsr', cpu.bx, 8); })();
 // SHLD AX,BX,4: (0x1234<<4)|(0x5678>>12) = 0x2345
-{ const { cpu } = run([0xb8, 0x34, 0x12, 0xbb, 0x78, 0x56, 0x0f, 0xa4, 0xd8, 0x04, 0xf4]); eq('shld', cpu.ax, 0x2345); }
+await (async () => { const { cpu } = run([0xb8, 0x34, 0x12, 0xbb, 0x78, 0x56, 0x0f, 0xa4, 0xd8, 0x04, 0xf4]); eq('shld', cpu.ax, 0x2345); })();
 // SHRD AX,BX,4: (0x1234>>4)|(0x5678<<12) = 0x8123
-{ const { cpu } = run([0xb8, 0x34, 0x12, 0xbb, 0x78, 0x56, 0x0f, 0xac, 0xd8, 0x04, 0xf4]); eq('shrd', cpu.ax, 0x8123); }
+await (async () => { const { cpu } = run([0xb8, 0x34, 0x12, 0xbb, 0x78, 0x56, 0x0f, 0xac, 0xd8, 0x04, 0xf4]); eq('shrd', cpu.ax, 0x8123); })();
 // XADD AX,BX: AX=5,BX=3 → AX=8, BX=5
-{ const { cpu } = run([0xb8, 0x05, 0x00, 0xbb, 0x03, 0x00, 0x0f, 0xc1, 0xd8, 0xf4]); eq('xadd sum', cpu.ax, 8); eq('xadd swap', cpu.bx, 5); }
+await (async () => { const { cpu } = run([0xb8, 0x05, 0x00, 0xbb, 0x03, 0x00, 0x0f, 0xc1, 0xd8, 0xf4]); eq('xadd sum', cpu.ax, 8); eq('xadd swap', cpu.bx, 5); })();
 // CMPXCHG CL,DL equal: AL=CL=5 → CL=DL=0x42, ZF=1
-{ const { cpu } = run([0xb0, 0x05, 0xb1, 0x05, 0xb2, 0x42, 0x0f, 0xb0, 0xd1, 0xf4]); eq('cmpxchg eq', cpu.cx & 0xff, 0x42); }
+await (async () => { const { cpu } = run([0xb0, 0x05, 0xb1, 0x05, 0xb2, 0x42, 0x0f, 0xb0, 0xd1, 0xf4]); eq('cmpxchg eq', cpu.cx & 0xff, 0x42); })();
 // CMPXCHG CL,DL not equal: AL=5,CL=9 → AL=CL=9
-{ const { cpu } = run([0xb0, 0x05, 0xb1, 0x09, 0xb2, 0x42, 0x0f, 0xb0, 0xd1, 0xf4]); eq('cmpxchg ne', cpu.al, 9); }
+await (async () => { const { cpu } = run([0xb0, 0x05, 0xb1, 0x09, 0xb2, 0x42, 0x0f, 0xb0, 0xd1, 0xf4]); eq('cmpxchg ne', cpu.al, 9); })();
 
 // self-modifying code: run a subroutine (caches it), patch its MOV BL,0x11 immediate
 // to 0x42, run again — fine-grained SMC must invalidate the block so we see 0x42.
-{ const { cpu } = run(
+await (async () => { const { cpu } = run(
     [0xe8, 0x09, 0x00,                // CALL patch (->0x0C)
      0xc6, 0x06, 0x0d, 0x00, 0x42,    // MOV byte [0x0D], 0x42   (patch the imm)
      0xe8, 0x01, 0x00,                // CALL patch again
@@ -142,51 +147,51 @@ function eq(name, got, want) {
      0xb3, 0x11,                      // patch: MOV BL, 0x11  (imm at 0x0D)
      0xc3],                           // RET
     ({ cpu }) => cpu.setSeg(DS, 0x100));  // DS=CS so the write lands on the code
-  eq('SMC re-patch', cpu.bx & 0xff, 0x42); }
+  eq('SMC re-patch', cpu.bx & 0xff, 0x42); })();
 
 // ---- dead-flag elimination (Phase 1.A2) — flags a producer sets must survive to a
 // later reader even across intervening ops; these catch a wrong def/use annotation that
 // the single-instruction conformance harness is structurally blind to. -----------------
 // ADC reads a prior ADD's CF across a transparent MOV (tests adc use=CF keeps the ADD).
-{ const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0xbb, 0x10, 0x00, 0x83, 0xd3, 0x00, 0xf4]);
-  eq('strip: adc reads prior CF', cpu.bx, 0x11); }
+await (async () => { const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0xbb, 0x10, 0x00, 0x83, 0xd3, 0x00, 0xf4]);
+  eq('strip: adc reads prior CF', cpu.bx, 0x11); })();
 // INC preserves CF (def is all-but-carry); a later ADC must still see the ADD's CF.
-{ const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0x43, 0x83, 0xd1, 0x00, 0xf4]);
-  eq('strip: inc preserves CF', cpu.cx, 1); eq('strip: inc result', cpu.bx, 1); }
+await (async () => { const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0x43, 0x83, 0xd1, 0x00, 0xf4]);
+  eq('strip: inc preserves CF', cpu.cx, 1); eq('strip: inc result', cpu.bx, 1); })();
 // DAA reads the prior ADD's AF, with a trailing CMP that would let the ADD strip if AF
 // weren't marked used (0x08+0x08=0x10 AF=1 → DAA yields 0x16, not 0x10).
-{ const { cpu } = run([0xb0, 0x08, 0x04, 0x08, 0x27, 0x3c, 0x99, 0xf4]);
-  eq('strip: daa reads prior AF', cpu.al, 0x16); }
+await (async () => { const { cpu } = run([0xb0, 0x08, 0x04, 0x08, 0x27, 0x3c, 0x99, 0xf4]);
+  eq('strip: daa reads prior AF', cpu.al, 0x16); })();
 // PUSHF reads the live flags; a trailing CMP would strip the ADD if PUSHF weren't a reader.
-{ const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0x9c, 0x5b, 0x3d, 0x00, 0x00, 0xf4]);
-  eq('strip: pushf sees CF', !!(cpu.bx & CF), true); eq('strip: pushf sees ZF', !!(cpu.bx & ZF), true); }
+await (async () => { const { cpu } = run([0xb8, 0xff, 0xff, 0x05, 0x01, 0x00, 0x9c, 0x5b, 0x3d, 0x00, 0x00, 0xf4]);
+  eq('strip: pushf sees CF', !!(cpu.bx & CF), true); eq('strip: pushf sees ZF', !!(cpu.bx & ZF), true); })();
 
 // ---- 32-bit MUL/DIV/IMUL/IDIV (66h operand-size) — these ran as 16-bit before, which
 // silently truncated the operands (the Mars-demo sky was a 32-bit `div ecx` computed as a
 // 16-bit `div cx`). The single-instruction conformance set is 8088-only and never sees them.
 // MUL ECX: EAX=0x10000 * ECX=0x10000 = 0x1_0000_0000 → EAX=0, EDX=1.
-{ const { cpu } = run([0x66, 0xb8, 0x00, 0x00, 0x01, 0x00, 0x66, 0xb9, 0x00, 0x00, 0x01, 0x00, 0x66, 0xf7, 0xe1, 0xf4]);
-  eq('mul32 EAX', cpu.reg[0] >>> 0, 0); eq('mul32 EDX', cpu.reg[2] >>> 0, 1); }
+await (async () => { const { cpu } = run([0x66, 0xb8, 0x00, 0x00, 0x01, 0x00, 0x66, 0xb9, 0x00, 0x00, 0x01, 0x00, 0x66, 0xf7, 0xe1, 0xf4]);
+  eq('mul32 EAX', cpu.reg[0] >>> 0, 0); eq('mul32 EDX', cpu.reg[2] >>> 0, 1); })();
 // DIV ECX (the Mars pattern): EAX=1000000, xor edx,edx, div ECX=7 → 142857 r1.
-{ const { cpu } = run([0x66, 0xb8, 0x40, 0x42, 0x0f, 0x00, 0x66, 0x31, 0xd2, 0x66, 0xb9, 0x07, 0x00, 0x00, 0x00, 0x66, 0xf7, 0xf1, 0xf4]);
-  eq('div32 quotient', cpu.reg[0] >>> 0, 142857); eq('div32 remainder', cpu.reg[2] >>> 0, 1); }
+await (async () => { const { cpu } = run([0x66, 0xb8, 0x40, 0x42, 0x0f, 0x00, 0x66, 0x31, 0xd2, 0x66, 0xb9, 0x07, 0x00, 0x00, 0x00, 0x66, 0xf7, 0xf1, 0xf4]);
+  eq('div32 quotient', cpu.reg[0] >>> 0, 142857); eq('div32 remainder', cpu.reg[2] >>> 0, 1); })();
 // IMUL ECX signed: EAX=-2 * ECX=3 = -6 → EAX=0xFFFFFFFA, EDX=0xFFFFFFFF (sign-extended).
-{ const { cpu } = run([0x66, 0xb8, 0xfe, 0xff, 0xff, 0xff, 0x66, 0xb9, 0x03, 0x00, 0x00, 0x00, 0x66, 0xf7, 0xe9, 0xf4]);
-  eq('imul32 EAX', cpu.reg[0] >>> 0, 0xfffffffa >>> 0); eq('imul32 EDX', cpu.reg[2] >>> 0, 0xffffffff >>> 0); }
+await (async () => { const { cpu } = run([0x66, 0xb8, 0xfe, 0xff, 0xff, 0xff, 0x66, 0xb9, 0x03, 0x00, 0x00, 0x00, 0x66, 0xf7, 0xe9, 0xf4]);
+  eq('imul32 EAX', cpu.reg[0] >>> 0, 0xfffffffa >>> 0); eq('imul32 EDX', cpu.reg[2] >>> 0, 0xffffffff >>> 0); })();
 // IDIV ECX signed: EDX:EAX = -6, div ECX=3 → -2 r0.
-{ const { cpu } = run([0x66, 0xb8, 0xfa, 0xff, 0xff, 0xff, 0x66, 0xba, 0xff, 0xff, 0xff, 0xff, 0x66, 0xb9, 0x03, 0x00, 0x00, 0x00, 0x66, 0xf7, 0xf9, 0xf4]);
-  eq('idiv32 quotient', cpu.reg[0] | 0, -2); eq('idiv32 remainder', cpu.reg[2] | 0, 0); }
+await (async () => { const { cpu } = run([0x66, 0xb8, 0xfa, 0xff, 0xff, 0xff, 0x66, 0xba, 0xff, 0xff, 0xff, 0xff, 0x66, 0xb9, 0x03, 0x00, 0x00, 0x00, 0x66, 0xf7, 0xf9, 0xf4]);
+  eq('idiv32 quotient', cpu.reg[0] | 0, -2); eq('idiv32 remainder', cpu.reg[2] | 0, 0); })();
 
 // ---- CMPXCHG8B m64 (0F C7 /1): tools/cx8probe.asm, the same four lines as QEMU -cpu pentium ------
 // 66 B8/BA/B9/BB imm32 load EAX/EDX/ECX/EBX; the quadword is at DS:0010h = 22222222:11111111.
-{ const prog = (eax, flags) => [0x66, 0xb8, ...[0, 8, 16, 24].map((k) => (eax >>> k) & 0xff), 0x66, 0xba, 0x22, 0x22, 0x22, 0x22,
+await (async () => { const prog = (eax, flags) => [0x66, 0xb8, ...[0, 8, 16, 24].map((k) => (eax >>> k) & 0xff), 0x66, 0xba, 0x22, 0x22, 0x22, 0x22,
     0x66, 0xb9, 0xaa, 0xaa, 0xaa, 0xaa, 0x66, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0x68, flags & 0xff, flags >> 8, 0x9d, 0x0f, 0xc7, 0x0e, 0x10, 0x00, 0xf4];
   const go = (eax, flags) => { try { const { mc, cpu } = run(prog(eax, flags), ({ mc }) => { mc.mem.w32(0x2010, 0x11111111); mc.mem.w32(0x2014, 0x22222222); });
     const h = (v) => (v >>> 0).toString(16); return [h(cpu.reg[2]), h(cpu.reg[0]), h(mc.mem.r32(0x2014)), h(mc.mem.r32(0x2010)), h(cpu.flags & 0x8d5)].join(' '); } catch (e) { return String(e.message).slice(0, 50); } };
   eq('CMPXCHG8B equal: ECX:EBX stored, ZF set and nothing else', go(0x11111111, 0), '22222222 11111111 aaaaaaaa bbbbbbbb 40');
-  eq('CMPXCHG8B different: the quadword into EDX:EAX, ZF cleared, SF AF PF CF OF kept', go(0x11111112, 0x8d5), '22222222 11111111 22222222 11111111 895'); }
+  eq('CMPXCHG8B different: the quadword into EDX:EAX, ZF cleared, SF AF PF CF OF kept', go(0x11111112, 0x8d5), '22222222 11111111 22222222 11111111 895'); })();
 // The P6 profiles: family 6, CMOV and MSR advertised, leaf 2, and RDMSR itself.
-{ const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiumpro' }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiumpro' }); const cpu = mc.cpu;
   cpu.reg[0] = 0; cpu.cpuid(); const max = cpu.reg[0];
   cpu.reg[0] = 1; cpu.cpuid();
   eq("the 'pentiumpro' profile: leaves 0-2, family 6 model 1, FPU PSE TSC MSR CX8 CMOV", [max, (cpu.reg[0] >>> 0).toString(16), (cpu.reg[2] >>> 0).toString(16)].join(), '2,619,8139');
@@ -199,58 +204,58 @@ function eq(name, got, want) {
   // was KMODE_EXCEPTION_NOT_HANDLED. The write is taken, nothing is applied: 8Bh still reads zero.
   gp = 0; cpu.reg[1] = 0x79; cpu.reg[0] = 0x81234000; cpu.reg[2] = 0; const upd = cpu.wrmsr();
   cpu.reg[1] = 0x8b; cpu.reg[0] = 5; cpu.reg[2] = 5; cpu.rdmsr();
-  eq('...WRMSR 79h (BIOS update trigger) is taken, and the microcode revision (8Bh) stays zero', [upd, gp, cpu.reg[0], cpu.reg[2]].join(), 'true,0,0,0'); }
+  eq('...WRMSR 79h (BIOS update trigger) is taken, and the microcode revision (8Bh) stays zero', [upd, gp, cpu.reg[0], cpu.reg[2]].join(), 'true,0,0,0'); })();
 
 // ---- CMOVcc (0F 40-4F): MOV Gv,Ev only if the condition holds; flags untouched. -------
 // AX=5; CMP AX,5 (ZF=1); CMOVZ CX,BX copies (taken); CMOVNZ DX,BX does not (not taken).
-{ const { cpu } = run([0xb8, 0x05, 0x00, 0x3d, 0x05, 0x00, 0xbb, 0x34, 0x12, 0xb9, 0x00, 0x00, 0xba, 0x00, 0x00, 0x0f, 0x44, 0xcb, 0x0f, 0x45, 0xd3, 0xf4]);
-  eq('cmovz taken', cpu.cx, 0x1234); eq('cmovnz not taken', cpu.dx, 0); }
+await (async () => { const { cpu } = run([0xb8, 0x05, 0x00, 0x3d, 0x05, 0x00, 0xbb, 0x34, 0x12, 0xb9, 0x00, 0x00, 0xba, 0x00, 0x00, 0x0f, 0x44, 0xcb, 0x0f, 0x45, 0xd3, 0xf4]);
+  eq('cmovz taken', cpu.cx, 0x1234); eq('cmovnz not taken', cpu.dx, 0); })();
 
 // ---- BOUND (0x62): #BR (INT 5) when the signed index is outside [lower,upper] in memory.
 // bounds [10,100] at DS:0x40. In-range (AX=50) falls through to the trailing MOV; the hook
 // must NOT fire. Out-of-range (AX=200) diverts to INT 5 before the trailing MOV runs.
-{ const out = [];
+await (async () => { const out = [];
   const { cpu } = run([0xbb, 0x11, 0x00, 0xb8, 0x32, 0x00, 0x62, 0x06, 0x40, 0x00, 0xbb, 0x77, 0x00, 0xf4],
     ({ mc }) => { mc.mem.w16(0x2040, 10); mc.mem.w16(0x2042, 100); mc.hookInterrupt(5, (c) => { out.push(1); c.halted = true; }); });
-  eq('bound in-range falls through', cpu.bx, 0x77); eq('bound in-range no #BR', out.length, 0); }
-{ const out = [];
+  eq('bound in-range falls through', cpu.bx, 0x77); eq('bound in-range no #BR', out.length, 0); })();
+await (async () => { const out = [];
   const { cpu } = run([0xbb, 0x11, 0x00, 0xb8, 0xc8, 0x00, 0x62, 0x06, 0x40, 0x00, 0xbb, 0x77, 0x00, 0xf4],
     ({ mc }) => { mc.mem.w16(0x2040, 10); mc.mem.w16(0x2042, 100); mc.hookInterrupt(5, (c) => { out.push(1); c.halted = true; }); });
-  eq('bound out-of-range #BR fired', out.length, 1); eq('bound out-of-range skips trailing MOV', cpu.bx, 0x11); }
+  eq('bound out-of-range #BR fired', out.length, 1); eq('bound out-of-range skips trailing MOV', cpu.bx, 0x11); })();
 
 // ---- INT 33h mouse driver — the functions Mars polls to steer the camera. ------------
 // AX=0000 reset/detect → AX=FFFF (present), BX=2 (buttons).
-{ const { cpu } = run([0xb8, 0x00, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => installMouse(mc));
-  eq('mouse detect present', cpu.ax, 0xffff); eq('mouse detect buttons', cpu.bx, 2); }
+await (async () => { const { cpu } = run([0xb8, 0x00, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => installMouse(mc));
+  eq('mouse detect present', cpu.ax, 0xffff); eq('mouse detect buttons', cpu.bx, 2); })();
 // AX=000B read motion counters: returns accumulated mickeys (signed) and clears them.
-{ const { cpu } = run([0xb8, 0x0b, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseMoveRel(7, -3); });
-  eq('mouse mickeys dx', cpu.cx, 7); eq('mouse mickeys dy (signed)', cpu.dx, 0xfffd); }
+await (async () => { const { cpu } = run([0xb8, 0x0b, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseMoveRel(7, -3); });
+  eq('mouse mickeys dx', cpu.cx, 7); eq('mouse mickeys dy (signed)', cpu.dx, 0xfffd); })();
 // AX=0003 get position + buttons: two buttons held → BX bit0|bit1.
-{ const { cpu } = run([0xb8, 0x03, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseButton(0, true); mc.mouseButton(1, true); });
-  eq('mouse buttons L+R', cpu.bx, 3); }
+await (async () => { const { cpu } = run([0xb8, 0x03, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseButton(0, true); mc.mouseButton(1, true); });
+  eq('mouse buttons L+R', cpu.bx, 3); })();
 // AX=0005 button press data: two left presses since reset → BX=2.
-{ const { cpu } = run([0xbb, 0x00, 0x00, 0xb8, 0x05, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseButton(0, true); mc.mouseButton(0, false); mc.mouseButton(0, true); });
-  eq('mouse press count', cpu.bx, 2); }
+await (async () => { const { cpu } = run([0xbb, 0x00, 0x00, 0xb8, 0x05, 0x00, 0xcd, 0x33, 0xf4], ({ mc }) => { installMouse(mc); mc.mouseButton(0, true); mc.mouseButton(0, false); mc.mouseButton(0, true); });
+  eq('mouse press count', cpu.bx, 2); })();
 
 // ---- BSWAP r32 (0F C8+r): reverse a 32-bit register's byte order (486+). --------------
-{ const { cpu } = run([0x66, 0xb8, 0x44, 0x33, 0x22, 0x11, 0x0f, 0xc8, 0xf4]);   // MOV EAX,0x11223344; BSWAP EAX
-  eq('bswap eax', cpu.reg[0] >>> 0, 0x44332211); }
-{ const { cpu } = run([0x66, 0xbb, 0x01, 0x00, 0x00, 0x00, 0x0f, 0xcb, 0xf4]);   // MOV EBX,1; BSWAP EBX (reg-index math)
-  eq('bswap ebx', cpu.reg[3] >>> 0, 0x01000000); }
+await (async () => { const { cpu } = run([0x66, 0xb8, 0x44, 0x33, 0x22, 0x11, 0x0f, 0xc8, 0xf4]);   // MOV EAX,0x11223344; BSWAP EAX
+  eq('bswap eax', cpu.reg[0] >>> 0, 0x44332211); })();
+await (async () => { const { cpu } = run([0x66, 0xbb, 0x01, 0x00, 0x00, 0x00, 0x0f, 0xcb, 0xf4]);   // MOV EBX,1; BSWAP EBX (reg-index math)
+  eq('bswap ebx', cpu.reg[3] >>> 0, 0x01000000); })();
 
 // ---- INVD / WBINVD (0F 08 / 0F 09, 486+): no cache to flush, execution just goes on. ----------
 // KolibriOS's kernel (v86 kolibri.img) stopped on WBINVD as an unimplemented opcode.
 // ENDBR32 (F3 0F 1E FB) and the other reserved-NOP hints (0F 19-1E, 0F 18 prefetch) run as NOPs, as
 // in QEMU: FreeNOS, built with -fcf-protection, stopped on "unimplemented opcode 0x0f 0x1e".
-{ let got; try { const { cpu } = run([0xf3, 0x0f, 0x1e, 0xfb, 0x0f, 0x18, 0x0e, 0x00, 0x00, 0x0f, 0x19, 0xc0, 0xbb, 0x34, 0x12, 0xf4]); got = cpu.bx.toString(16); }
+await (async () => { let got; try { const { cpu } = run([0xf3, 0x0f, 0x1e, 0xfb, 0x0f, 0x18, 0x0e, 0x00, 0x00, 0x0f, 0x19, 0xc0, 0xbb, 0x34, 0x12, 0xf4]); got = cpu.bx.toString(16); }
   catch (e) { got = e.message.slice(0, 60); }
-  eq('ENDBR32, PREFETCH and the 0F 19-1E hints are NOPs', got, '1234'); }
-{ let got; try { const { cpu } = run([0x0f, 0x09, 0x0f, 0x08, 0xbb, 0x78, 0x56, 0xf4]); got = cpu.bx.toString(16); }
+  eq('ENDBR32, PREFETCH and the 0F 19-1E hints are NOPs', got, '1234'); })();
+await (async () => { let got; try { const { cpu } = run([0x0f, 0x09, 0x0f, 0x08, 0xbb, 0x78, 0x56, 0xf4]); got = cpu.bx.toString(16); }
   catch (e) { got = String(e.message).slice(0, 60); }
-  eq('WBINVD and INVD run through to the next instruction', got, '5678'); }
+  eq('WBINVD and INVD run through to the next instruction', got, '5678'); })();
 
 // ---- Sound-hardware detection: the DSP reset handshake, and the OPL timers a detection waits on. ---
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   mc.ioWrite(0x226, 1, 1); mc.ioWrite(0x226, 1, 0);                 // SB DSP reset: 1 then 0
   eq('sb dsp data-ready', mc.ioRead(0x22e, 1) & 0x80, 0x80);       // status bit7 set
   eq('sb dsp reset ack', mc.ioRead(0x22a, 1), 0xaa);               // read-data = 0xAA
@@ -265,16 +270,16 @@ function eq(name, got, want) {
   mc.ioWrite(0x388, 1, 0x04); mc.ioWrite(0x389, 1, 0x80);          // OPL: reset
   eq('opl reset clears', mc.ioRead(0x388, 1), 0x00);
   us(80);
-  eq('...and the flag comes back at the next overflow, the timer still running', mc.ioRead(0x388, 1), 0xc0); }
+  eq('...and the flag comes back at the next overflow, the timer still running', mc.ioRead(0x388, 1), 0xc0); })();
 
 // ---- EGA/VGA detection: INT 10h AH=12h BL=10h returns EGA info so games find a card. --
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   mc.cpu.ax = 0x1200; mc.cpu.bx = 0x0010;                          // AH=12h, BL=10h "return EGA info"
   mc.intHandlers[0x10](mc.cpu, mc);
-  eq('ega detect present', mc.cpu.bx, 0x0003); }                   // BH=0 colour, BL=3 (256K) → EGA/VGA present
+  eq('ega detect present', mc.cpu.bx, 0x0003); })();                   // BH=0 colour, BL=3 (256K) → EGA/VGA present
 
 // ---- EGA planar write pipeline: map-mask selects planes; read-map selects read-back. --
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const vga = mc.vga, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const vga = mc.vga, mem = mc.mem;
   mem.planar = true; vga.setMode(0x0d, true);                      // enter planar mode 0Dh
   mc.ioWrite(0x3c4, 1, 0x02); mc.ioWrite(0x3c5, 1, 0x05);          // Sequencer map-mask = planes 0 and 2
   mc.ioWrite(0x3ce, 1, 0x05); mc.ioWrite(0x3cf, 1, 0x00);          // Graphics Ctrl write mode 0
@@ -285,19 +290,19 @@ function eq(name, got, want) {
   mc.ioWrite(0x3ce, 1, 0x04); mc.ioWrite(0x3cf, 1, 0x02);          // read-map select = plane 2
   eq('planar read-back plane2', mem.r8(0xa0000), 0xff);
   mc.ioWrite(0x3cf, 1, 0x01);                                      // read-map select = plane 1
-  eq('planar read-back plane1', mem.r8(0xa0000), 0x00); }
+  eq('planar read-back plane1', mem.r8(0xa0000), 0x00); })();
 
 // ---- Interrupt chaining: a guest that far-jumps to a saved BIOS vector (f000:n) — the
 // ubiquitous TSR/game pattern — must hit a real IRET stub and return, not run off into
 // uninitialised BIOS memory (this was Commander Keen's INT 8 derail). Simulate an interrupt
 // frame (PUSHF; PUSH CS; PUSH ret) then JMP FAR f000:0008; the IRET must resume at `cont`.
-{ const { cpu } = run([0x9c, 0x0e, 0xb8, 0x0b, 0x00, 0x50, 0xea, 0x08, 0x00, 0x00, 0xf0, 0xbb, 0x78, 0x56, 0xf4]);
-  eq('chain to f000 stub returns via IRET', cpu.bx, 0x5678); }
+await (async () => { const { cpu } = run([0x9c, 0x0e, 0xb8, 0x0b, 0x00, 0x50, 0xea, 0x08, 0x00, 0x00, 0xf0, 0xbb, 0x78, 0x56, 0xf4]);
+  eq('chain to f000 stub returns via IRET', cpu.bx, 0x5678); })();
 
 // ---- 8042 keyboard controller: a queued scancode is delivered to a guest INT 9h handler via
 // port 0x60 + IRQ1, once interrupts are unmasked (the run-loop polls the pending IRQ). This is
 // the path QBasic's IDE and most games use for input, distinct from the BIOS INT 16h buffer.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, mem = mc.mem;
   mem.blit(0x100 * 16 + 0x50, Uint8Array.from([0xe4, 0x60, 0xa2, 0x80, 0x00, 0xcf])); // INT9: in al,0x60; mov [0x80],al; iret
   mc.setVector(9, 0x100, 0x50);
   mem.blit(0x100 * 16, Uint8Array.from([0xfb, 0xeb, 0xfe]));   // sti; jmp $   (spin with IF set)
@@ -305,65 +310,65 @@ function eq(name, got, want) {
   cpu.flags &= ~0x200;                                          // start with IF clear — the STI must unmask
   mc.pushScancodes([0x1e]);                                     // scancode for 'a'
   for (let i = 0; i < 4; i++) { mc.pumpKeyboard(); mc.runSlice(2000); }
-  eq('8042 IRQ1 delivers scancode to guest INT 9', mem.u8[0x100 * 16 + 0x80], 0x1e); }
+  eq('8042 IRQ1 delivers scancode to guest INT 9', mem.u8[0x100 * 16 + 0x80], 0x1e); })();
 
 // The browser's arrow keys reach port 60h as an AT keyboard sends them, E0 48 / E0 C8, not as the
 // keypad's 8: C-Dogs tells the two apart, and its menus ignored the arrows.
-{ const sent = [], kb = new Keyboard({ keyQueue: [], pushScancodes: (a) => sent.push(...a) });
+await (async () => { const sent = [], kb = new Keyboard({ keyQueue: [], pushScancodes: (a) => sent.push(...a) });
   kb._onDown({ code: 'ArrowUp', key: 'ArrowUp', preventDefault() {} }); kb._onUp({ code: 'ArrowUp' });
   kb._onDown({ code: 'Numpad8', key: '8', preventDefault() {} }); kb._onUp({ code: 'Numpad8' });
-  eq('keyboard: an arrow is E0-prefixed, the keypad is not', sent.map((x) => x.toString(16)).join(' '), 'e0 48 e0 c8 48 c8'); }
+  eq('keyboard: an arrow is E0-prefixed, the keypad is not', sent.map((x) => x.toString(16)).join(' '), 'e0 48 e0 c8 48 c8'); })();
 
 // ---- 0x67 address-size prefix: 32-bit effective addresses (ModRM + SIB + disp32) ------------
 // The 8088 conformance vectors cannot reach this (386-only), and a mis-decode is silent: a 0x67
 // instruction is 1-5 bytes longer than its 16-bit lookalike, so getting the LENGTH wrong
 // desynchronises the whole instruction stream. Test both the value AND the resulting stream sync
 // (each case ends with `mov bx,0x1234; hlt` — BX only lands if the earlier lengths were right).
-{ // MOV AX,[EDI+0x10] — mod=01 disp8, 32-bit base
+await (async () => { // MOV AX,[EDI+0x10] — mod=01 disp8, 32-bit base
   const { cpu } = run([0x67, 0x8b, 0x47, 0x10, 0xbb, 0x34, 0x12, 0xf4],
     ({ cpu, mc }) => { cpu.reg[7] = 0x2000; mc.mem.w16(0x200 * 16 + 0x2010, 0xbeef); });
   eq('addr32 [EDI+disp8] value', cpu.reg[0] & 0xffff, 0xbeef);
-  eq('addr32 [EDI+disp8] stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
-{ // LEA AX,[EAX+EAX*4] — SIB scale=2 (x4), index=base=EAX; EAX=3 -> 15
+  eq('addr32 [EDI+disp8] stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); })();
+await (async () => { // LEA AX,[EAX+EAX*4] — SIB scale=2 (x4), index=base=EAX; EAX=3 -> 15
   const { cpu } = run([0x67, 0x8d, 0x04, 0x80, 0xbb, 0x34, 0x12, 0xf4], ({ cpu }) => { cpu.reg[0] = 3; });
   eq('addr32 SIB LEA [EAX+EAX*4]', cpu.reg[0] & 0xffff, 15);
-  eq('addr32 SIB LEA stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
-{ // MOV AX,[ECX*4+disp32] — SIB with base=101 & mod=0 => no base, disp32 follows the SIB
+  eq('addr32 SIB LEA stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); })();
+await (async () => { // MOV AX,[ECX*4+disp32] — SIB with base=101 & mod=0 => no base, disp32 follows the SIB
   const { cpu } = run([0x67, 0x8b, 0x04, 0x8d, 0x00, 0x20, 0x00, 0x00, 0xbb, 0x34, 0x12, 0xf4],
     ({ cpu, mc }) => { cpu.reg[1] = 4; mc.mem.w16(0x200 * 16 + 0x2010, 0x5678); });
   eq('addr32 SIB [ECX*4+disp32]', cpu.reg[0] & 0xffff, 0x5678);
-  eq('addr32 SIB disp32 stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
-{ // MOV AX,[EBX+ESI*2+4] — SIB with a real base, mod=01 disp8
+  eq('addr32 SIB disp32 stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); })();
+await (async () => { // MOV AX,[EBX+ESI*2+4] — SIB with a real base, mod=01 disp8
   const { cpu } = run([0x67, 0x8b, 0x44, 0x73, 0x04, 0xbb, 0x34, 0x12, 0xf4],
     ({ cpu, mc }) => { cpu.reg[3] = 0x2000; cpu.reg[6] = 8; mc.mem.w16(0x200 * 16 + 0x2014, 0x9abc); });
   eq('addr32 SIB [EBX+ESI*2+disp8]', cpu.reg[0] & 0xffff, 0x9abc);
-  eq('addr32 SIB base+index stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
-{ // MOV AX,[moffs32] — A1 takes a 4-byte displacement under 0x67, not 2
+  eq('addr32 SIB base+index stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); })();
+await (async () => { // MOV AX,[moffs32] — A1 takes a 4-byte displacement under 0x67, not 2
   const { cpu } = run([0x67, 0xa1, 0x10, 0x20, 0x00, 0x00, 0xbb, 0x34, 0x12, 0xf4],
     ({ mc }) => { mc.mem.w16(0x200 * 16 + 0x2010, 0xcafe); });
   eq('addr32 moffs32 value', cpu.reg[0] & 0xffff, 0xcafe);
-  eq('addr32 moffs32 stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); }
-{ // [EBP] defaults to SS (like 16-bit [BP]) — SS=0x300 here, DS=0x200
+  eq('addr32 moffs32 stream stayed in sync', cpu.reg[3] & 0xffff, 0x1234); })();
+await (async () => { // [EBP] defaults to SS (like 16-bit [BP]) — SS=0x300 here, DS=0x200
   const { cpu } = run([0x67, 0x8b, 0x45, 0x00, 0xbb, 0x34, 0x12, 0xf4],
     ({ cpu, mc }) => { cpu.reg[5] = 0x40; mc.mem.w16(0x300 * 16 + 0x40, 0x0ff0); mc.mem.w16(0x200 * 16 + 0x40, 0xdead); });
-  eq('addr32 [EBP] defaults to SS', cpu.reg[0] & 0xffff, 0x0ff0); }
+  eq('addr32 [EBP] defaults to SS', cpu.reg[0] & 0xffff, 0x0ff0); })();
 
 // ---- 0x66 operand-size on the sign-extend and stack-frame opcodes ---------------------------
-{ // 66 98 = CWDE (AX->EAX), not CBW. AX=0x8001 -> EAX=0xFFFF8001
+await (async () => { // 66 98 = CWDE (AX->EAX), not CBW. AX=0x8001 -> EAX=0xFFFF8001
   const { cpu } = run([0x66, 0x98, 0xf4], ({ cpu }) => { cpu.reg[0] = 0x00008001; });
-  eq('66 98 = CWDE (not CBW)', cpu.reg[0] >>> 0, 0xffff8001); }
-{ // 66 99 = CDQ (EAX->EDX:EAX), not CWD. EAX negative -> EDX = 0xFFFFFFFF
+  eq('66 98 = CWDE (not CBW)', cpu.reg[0] >>> 0, 0xffff8001); })();
+await (async () => { // 66 99 = CDQ (EAX->EDX:EAX), not CWD. EAX negative -> EDX = 0xFFFFFFFF
   const { cpu } = run([0x66, 0x99, 0xf4], ({ cpu }) => { cpu.reg[0] = 0x80000000; cpu.reg[2] = 0x1234; });
-  eq('66 99 = CDQ (not CWD)', cpu.reg[2] >>> 0, 0xffffffff); }
-{ // plain 98/99 must still be CBW/CWD
+  eq('66 99 = CDQ (not CWD)', cpu.reg[2] >>> 0, 0xffffffff); })();
+await (async () => { // plain 98/99 must still be CBW/CWD
   const { cpu } = run([0x98, 0x99, 0xf4], ({ cpu }) => { cpu.reg[0] = 0x000000ff; });
   eq('98 still CBW', cpu.reg[0] & 0xffff, 0xffff);
-  eq('99 still CWD', cpu.reg[2] & 0xffff, 0xffff); }
+  eq('99 still CWD', cpu.reg[2] & 0xffff, 0xffff); })();
 
 // ---- a #DE must abort the block ------------------------------------------------------------
 // DIV by zero vectors INT 0. If the block kept running, its terminator would overwrite cpu.eip and
 // silently discard the interrupt — on a stack that already holds the IRET frame.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x200); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
   mc.setVector(0, 0x400, 0x10);                                  // guest #DE handler at 0400:0010
   //  xor ah,ah ; div bl  (BL=0 -> #DE) ; mov bx,0x1234 ; hlt
@@ -372,10 +377,10 @@ function eq(name, got, want) {
   mc.rec.step();
   eq('#DE vectors to the guest handler', (cpu.seg[CS] << 16) | (cpu.eip & 0xffff), (0x400 << 16) | 0x10);
   eq('#DE aborted the block (BX untouched)', cpu.reg[3] & 0xffff, 0x0000);
-  eq('#DE pushed the faulting IP, not the block start', mc.mem.r16(0x300 * 16 + ((cpu.sp) & 0xffff)), 0x0002); }
+  eq('#DE pushed the faulting IP, not the block start', mc.mem.r16(0x300 * 16 + ((cpu.sp) & 0xffff)), 0x0002); })();
 
 // ---- 0x67 on the implicit-address instructions (strings, XLAT, LOOP, JCXZ) -------------------
-{ // 67 F3 A4 = REP MOVSB over ESI/EDI/ECX. Put the pointers above 0xFFFF so 16-bit regs can't work.
+await (async () => { // 67 F3 A4 = REP MOVSB over ESI/EDI/ECX. Put the pointers above 0xFFFF so 16-bit regs can't work.
   const { cpu, mc } = run([0x67, 0xf3, 0xa4, 0xf4], ({ cpu, mc }) => {
     cpu.setSeg(DS, 0); cpu.setSeg(ES, 0);
     cpu.reg[6] = 0x12000; cpu.reg[7] = 0x13000; cpu.reg[1] = 4;      // ESI, EDI, ECX
@@ -383,38 +388,38 @@ function eq(name, got, want) {
   });
   eq('67 REP MOVSB copies via ESI/EDI', mc.mem.r32(0x13000) >>> 0, 0x04030201);
   eq('67 REP MOVSB drains ECX', cpu.reg[1] >>> 0, 0);
-  eq('67 REP MOVSB advances ESI past 16 bits', cpu.reg[6] >>> 0, 0x12004); }
-{ // 67 D7 = XLAT using EBX
+  eq('67 REP MOVSB advances ESI past 16 bits', cpu.reg[6] >>> 0, 0x12004); })();
+await (async () => { // 67 D7 = XLAT using EBX
   const { cpu } = run([0x67, 0xd7, 0xf4], ({ cpu, mc }) => {
     cpu.setSeg(DS, 0); cpu.reg[3] = 0x12000; cpu.reg[0] = 0x0003; mc.mem.w8(0x12003, 0x7e);
   });
-  eq('67 XLAT uses EBX', cpu.reg[0] & 0xff, 0x7e); }
-{ // 67 E2 00 = LOOP to the next instruction: exercises the decrement alone. A 16-bit decrement of
+  eq('67 XLAT uses EBX', cpu.reg[0] & 0xff, 0x7e); })();
+await (async () => { // 67 E2 00 = LOOP to the next instruction: exercises the decrement alone. A 16-bit decrement of
   // ECX=0x00010000 would borrow only within CX (→0x0001FFFF); the 32-bit one gives 0x0000FFFF.
   const { cpu } = run([0x67, 0xe2, 0x00, 0xf4], ({ cpu }) => { cpu.reg[1] = 0x00010000; });
-  eq('67 LOOP decrements ECX (not CX)', cpu.reg[1] >>> 0, 0x0000ffff); }
-{ // 67 E3 = JECXZ: ECX=0x10000 is non-zero, but CX==0 — a 16-bit test would wrongly jump
+  eq('67 LOOP decrements ECX (not CX)', cpu.reg[1] >>> 0, 0x0000ffff); })();
+await (async () => { // 67 E3 = JECXZ: ECX=0x10000 is non-zero, but CX==0 — a 16-bit test would wrongly jump
   const { cpu } = run([0x67, 0xe3, 0x02, 0xbb, 0x34, 0x12, 0xf4], ({ cpu }) => { cpu.reg[1] = 0x00010000; });
-  eq('67 JECXZ tests ECX, not CX', cpu.reg[3] & 0xffff, 0x1234); }
+  eq('67 JECXZ tests ECX, not CX', cpu.reg[3] & 0xffff, 0x1234); })();
 
 // ---- 0x66 on the stack-frame opcodes (PUSHAD/POPAD/PUSHFD/POPFD) ----------------------------
-{ // 66 60 / 66 61 must move 32 bytes, and round-trip EAX's full width
+await (async () => { // 66 60 / 66 61 must move 32 bytes, and round-trip EAX's full width
   const { cpu } = run([0x66, 0x60, 0x66, 0x61, 0xf4], ({ cpu }) => { cpu.reg[0] = 0xdeadbeef; });
-  eq('66 PUSHAD/POPAD round-trips EAX', cpu.reg[0] >>> 0, 0xdeadbeef); }
-{ // PUSHAD pushes 32 bytes: SP must drop by exactly that
+  eq('66 PUSHAD/POPAD round-trips EAX', cpu.reg[0] >>> 0, 0xdeadbeef); })();
+await (async () => { // PUSHAD pushes 32 bytes: SP must drop by exactly that
   const { cpu } = run([0x66, 0x60, 0xf4], ({ cpu }) => { cpu.sp = 0x1000; });
-  eq('66 PUSHAD moves SP by 32', (0x1000 - cpu.sp) & 0xffff, 32); }
-{ // 66 9C PUSHFD pushes 4 bytes, not 2
+  eq('66 PUSHAD moves SP by 32', (0x1000 - cpu.sp) & 0xffff, 32); })();
+await (async () => { // 66 9C PUSHFD pushes 4 bytes, not 2
   const { cpu } = run([0x66, 0x9c, 0xf4], ({ cpu }) => { cpu.sp = 0x1000; });
-  eq('66 PUSHFD moves SP by 4', (0x1000 - cpu.sp) & 0xffff, 4); }
+  eq('66 PUSHFD moves SP by 4', (0x1000 - cpu.sp) & 0xffff, 4); })();
 
 // ---- unhandled INTs are reported, not silently "successful" --------------------------------
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
   mc.mem.blit(0x100 * 16, Uint8Array.from([0xf8, 0xcd, 0x13, 0xf4]));   // clc ; int 13h ; hlt
   let steps = 0; while (!cpu.halted && steps++ < 50) mc.rec.step();
   eq('unhandled INT 13h sets CF (not a silent success)', cpu.flags & 1, 1);
-  eq('unhandled INT 13h is counted', mc.unhandledInts[0x13], 1); }
+  eq('unhandled INT 13h is counted', mc.unhandledInts[0x13], 1); })();
 
 // ---- INT 13h AH=08h: ES:DI belongs to the CALLER on a fixed disk ------------------------------
 // MS-DOS 4's IO.SYS holds its drive-table pointer in DI across this call and stores the geometry
@@ -422,7 +427,7 @@ function eq(name, got, want) {
 // those stores into the IVT and left the BPB at IO.SYS's template, so the divide at 0070:3aeb
 // divided by heads * sectorsPerTrack = 0. SeaBIOS under QEMU and under v86 both hand ES:DI back
 // untouched; only floppies get the diskette parameter table.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   installBIOS(mc); installDisk(mc);
   mc.disk.attach(0x80, new Uint8Array(1024 * 1024), { cyl: 32, heads: 4, spt: 16, type: 3 });
   mc.disk.attach(0x00, new Uint8Array(737280));
@@ -434,14 +439,14 @@ function eq(name, got, want) {
   cpu.setSeg(ES, 0xbeef); cpu.di = 0x1234; cpu.ax = 0x0800; cpu.dx = 0x0000;
   mc.intHandlers[0x13](cpu, mc);
   eq('AH=08h on a floppy still returns the diskette parameter table', cpu.seg[ES], 0xf000);
-  eq('...at the offset INT 1Eh points to', cpu.di & 0xffff, 0xefc7); }
+  eq('...at the offset INT 1Eh points to', cpu.di & 0xffff, 0xefc7); })();
 
 // ---- INT 13h AH=15h: the sector count is a FIXED-DISK answer -----------------------------------
 // On a floppy a real BIOS reports the type in AH and leaves everything else to the caller. MS-DOS 4
 // keeps its drive-table loop variable in DL across the call, so returning the count there (0x0b40
 // for a 1.44M disk) made it build both floppy entries for drive 0x40. SeaBIOS answers
 // AX=0100 CX=5555 DX=0001 to a probe that arrives with CX=5555 and DL=1.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   installBIOS(mc); installDisk(mc);
   mc.disk.attach(0x00, new Uint8Array(1474560));
   mc.disk.attach(0x80, new Uint8Array(1024 * 1024), { cyl: 32, heads: 4, spt: 16, type: 3 });
@@ -458,14 +463,14 @@ function eq(name, got, want) {
   cpu.ax = 0x0800; cpu.dx = 0x0000; cpu.bx = 0xff00;
   mc.intHandlers[0x13](cpu, mc);
   eq('AH=08h reports a 1.44M floppy as drive type 04', cpu.bx & 0xff, 0x04);
-  eq('...with the geometry SeaBIOS gives for it', cpu.cx & 0xffff, 0x4f12); }
+  eq('...with the geometry SeaBIOS gives for it', cpu.cx & 0xffff, 0x4f12); })();
 
 // ---- INT 13h: drive A is fitted even with no diskette in it -------------------------------------
 // Windows 98's HSFLOP.PDR sized its DMA buffer from the drive it was told about; with no drive A it
 // took an error path that overwrote IVT[1Ah] ("Windows protection error"). QEMU with its drive A
 // removed stops on the logo too. The BIOS describes an empty drive like SeaBIOS: the drive answers,
 // the missing medium times out.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   installBIOS(mc); installDisk(mc);
   mc.disk.attach(0x80, new Uint8Array(1024 * 1024), { cyl: 32, heads: 4, spt: 16, type: 3 });
   cpu.ax = 0x0800; cpu.dx = 0x0000; cpu.bx = 0; mc.intHandlers[0x13](cpu, mc);
@@ -476,14 +481,14 @@ function eq(name, got, want) {
   cpu.ax = 0x0201; cpu.cx = 0x0001; cpu.dx = 0x0000; cpu.bx = 0; mc.intHandlers[0x13](cpu, mc);
   eq('...and a read times out, for want of a diskette', [cpu.flags & 1, (cpu.ax >> 8) & 0xff].join(), '1,128');
   cpu.ax = 0x0800; cpu.dx = 0x0001; mc.intHandlers[0x13](cpu, mc);
-  eq('...while drive B stays absent', [cpu.flags & 1, (cpu.ax >> 8) & 0xff].join(), '1,128'); }
+  eq('...while drive B stays absent', [cpu.flags & 1, (cpu.ax >> 8) & 0xff].join(), '1,128'); })();
 
 // ---- a 286 TSS lays its inner-ring stacks out differently from a 386 one ----------------------
 // Windows 3.1 in standard mode enters its ring-0 kernel through a 286 call gate, and the inward
 // stack switch reads SS0/SP0 out of a 286 TSS: SP0 at +2, SS0 at +4, four bytes per level. Read as
 // a 386 TSS (ESP0 at +4, SS0 at +8) the selector comes from past the end of a 2Ch-byte TSS, i.e.
 // zero, and the switch raises #GP(0).
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   const GDT = 0x8000, TSS286 = 0x9000, TSS386 = 0x9100;
   cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
   const desc = (i, base, limit, access) => {
@@ -503,13 +508,13 @@ function eq(name, got, want) {
   cpu.loadTR(0x10);
   eq('a 386 TSS is recognised as one', cpu.tr.is386, true);
   eq('...and SS0 comes from +8', cpu.tssStack(0).ss, 0x0010);
-  eq('...and ESP0 from +4, 32 bits wide', cpu.tssStack(0).esp >>> 0, 0x00012340); }
+  eq('...and ESP0 from +4, 32 bits wide', cpu.tssStack(0).esp >>> 0, 0x00012340); })();
 
 // ---- hardware task switch: JMP / CALL to a 32-bit TSS, IRET with NT back -----------------------
 // 386BSD 1.0 switches processes with `ljmp *0xc0(%ecx)` onto a TSS selector; MIRAGE raised #GP(48h)
 // there ("trap 9 code 48, panic: trap"). Intel SDM vol. 3 "Task Switching": the outgoing registers
 // go into the current TSS, busy bits move, a CALL links back and sets NT, and IRET follows the link.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000, TA = 0x9000, TB = 0x9100;
   cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
   const desc = (i, base, limit, access, gran = 0) => {
@@ -538,12 +543,12 @@ function eq(name, got, want) {
   cpu.iret(1, 0x1008);
   eq('IRET with NT: back in the caller at its return address, callee freed', [cpu.tr.sel.toString(16), cpu.eip.toString(16), busy(0x18)].join(), '20,4010,0');
   eq('...and the image it left has NT clear', (m.r32(TA + 0x24) >> 14) & 1, 0);
-  } catch (e) { eq('a far JMP to a TSS switches tasks instead of faulting', String(e.message || e).slice(0, 60), 'no exception'); } }
+  } catch (e) { eq('a far JMP to a TSS switches tasks instead of faulting', String(e.message || e).slice(0, 60), 'no exception'); } })();
 
 // ---- an interrupt gate clears NT for the handler (and the pushed EFLAGS keeps it) ---------------
 // Once IRET honoured NT, Windows 98 died: its ring-3 code POPFs NT on, the gate left it set, and the
 // VMM's IRET at c00015e1 followed the NULL back link. The SDM clears TF, VM, RF and NT on delivery.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000, IDT = 0x8800;
   cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff; cpu.idtr.base = IDT; cpu.idtr.limit = 0x7ff;
   const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
@@ -553,14 +558,14 @@ function eq(name, got, want) {
   cpu.flags = 0x4202;                                                         // NT | IF
   try { mc.protInt(0x40, undefined, undefined, true); } catch (e) { /* reported below */ }
   eq('interrupt gate: the handler runs with NT clear, the pushed EFLAGS has it',
-    [cpu.eip.toString(16), (cpu.flags >> 14) & 1, (m.r32(0x7000 - 4) >> 14) & 1].join(), '5000,0,1'); }
+    [cpu.eip.toString(16), (cpu.flags >> 14) & 1, (m.r32(0x7000 - 4) >> 14) & 1].join(), '5000,0,1'); })();
 
 // ---- CS takes any code segment, readable or not, and nothing else ---------------------------------------
 // HelenOS's kernel far-jumps to its execute-only code segment (access 98h): the data registers' rule
 // "a code segment must be readable" was applied to CS, and the #GP(8) came before any IDT — a triple
 // fault. The SDM: far JMP/CALL raise #GP(selector) when the target "is not code"; readability is a
 // data-register rule. And a writable data segment loaded into CS is that #GP.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000, IDT = 0x8800;
   cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff; cpu.idtr.base = IDT; cpu.idtr.limit = 0x7ff;
   const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
@@ -571,12 +576,12 @@ function eq(name, got, want) {
   try { cpu.farJmp(0x18, 0x2000, 0x1000, 0x1007); const a = [cpu.seg[CS].toString(16), cpu.eip.toString(16)];
     cpu.farJmp(0x10, 0x3000, 0x2000, 0x2007); got = [...a, cpu.eip.toString(16), (m.r32(cpu.reg[4]) >>> 0).toString(16)].join();
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('CS: an execute-only code segment loads, a data segment is #GP', got, '18,2000,6000,10'); }
+  eq('CS: an execute-only code segment loads, a data segment is #GP', got, '18,2000,6000,10'); })();
 
 // ---- a far CALL/JMP to a code segment keeps CPL: CS's RPL becomes the CPL -----------------------
 // QNX 4 calls a CONFORMING DPL-0 segment (00E0h) from ring 1; we loaded CS=00E0h as given and ran it
 // in ring 0, so its RETF was taken for an outward return and popped an SS:ESP that was never pushed.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000; cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
   const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
   desc(1, 0xba);                                   // 08h: ring-1 code
@@ -588,12 +593,12 @@ function eq(name, got, want) {
     [cpu.seg[CS].toString(16), cpu.cpl, cpu.eip.toString(16)].join(), '19,1,2000');
   cpu.eip = 0x2010;
   try { cpu.farJmp(0x08, 0x3000, 0x2010, 0x2017); } catch (e) { /* reported below */ }
-  eq('...and a far JMP back to ring-1 code by an RPL-0 selector loads 0009h', [cpu.seg[CS].toString(16), cpu.cpl].join(), '9,1'); }
+  eq('...and a far JMP back to ring-1 code by an RPL-0 selector loads 0009h', [cpu.seg[CS].toString(16), cpu.cpl].join(), '9,1'); })();
 
 // ---- the PCI bus (src/pci.js), read through mechanism #1 as tools/pcidump.asm reads QEMU -M pc ---
 // Off by default — QEMU's -M isapc — and identical to QEMU's i440FX/PIIX3 when asked for: Windows
 // NT 3.51 and 9legacy only boot under -M pc.
-{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
   const out = (p, sz, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, sz, v); }, inp = (p, sz) => (mc.portRead[p] ? mc.portRead[p](p, sz) >>> 0 : 0xffffffff);
   const cfg = (dev, fn, reg) => { out(0xcf8, 4, (0x80000000 | (dev << 11) | (fn << 8) | reg) >>> 0); return inp(0xcfc, 4); };
   eq('PCI 00.0 / 01.0 / 01.1 / 02.0: i440FX, PIIX3, PIIX3 IDE, display — as QEMU -M pc', [cfg(0, 0, 0), cfg(1, 0, 0), cfg(1, 1, 0), cfg(2, 0, 0)].map((v) => v.toString(16)).join(), '12378086,70008086,70108086,11111234');
@@ -616,20 +621,20 @@ function eq(name, got, want) {
   // IDE driver waits on that bit after IDENTIFY and panicked "boot device not found" without it.
   out(0xcf8, 4, 0x80000920); out(0xcfc, 4, 0xc001);                          // BAR4 back at C000h after the sizing above
   out(0xc002, 1, 0x04); mc.raiseIRQ(14);
-  eq('...an IDE interrupt sets the bus-master INTERRUPT bit, which writing 1 clears', [inp(0xc002, 1) & 4, (out(0xc002, 1, 0x04), inp(0xc002, 1) & 4)].join(), '4,0'); }
+  eq('...an IDE interrupt sets the bus-master INTERRUPT bit, which writing 1 clears', [inp(0xc002, 1) & 4, (out(0xc002, 1, 0x04), inp(0xc002, 1) & 4)].join(), '4,0'); })();
 
 // ---- VBE 4F02h with a standard VGA mode number --------------------------------------------------
 // VBE 2.0 §4.5 lets 4F02h set modes below 100h, and SeaVGABIOS does; Windows NT 3.51's video
 // miniport resets the screen with 4F02h BX=0003h and got 014Fh here.
-{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
   cpu.ax = 0x4f02; cpu.bx = 0x0003; mc.intHandlers[0x10](cpu, mc);
-  eq('4F02h BX=0003h: succeeds (004Fh) and the BIOS is in mode 3', [(cpu.ax & 0xffff).toString(16), mc.mem.u8[0x449]].join(), '4f,3'); }
+  eq('4F02h BX=0003h: succeeds (004Fh) and the BIOS is in mode 3', [(cpu.ax & 0xffff).toString(16), mc.mem.u8[0x449]].join(), '4f,3'); })();
 
 // ---- PIT counter 0 read back: 1.193 MHz ticks from the reload write, as an 8254 -----------------
 // BeOS 5 calibrates its TSC by loading FFFFh and reading the count: the old count ran in cycles with
 // a phase that ignored the write, and BeOS spent two minutes in a one-second delay.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   const read = () => { mc.ioWrite(0x43, 1, 0x00); const lo = mc.ioRead(0x40, 1); return lo | (mc.ioRead(0x40, 1) << 8); };
   cpu.cycles = 1234567;
   mc.ioWrite(0x43, 1, 0x34); mc.ioWrite(0x40, 1, 0xff); mc.ioWrite(0x40, 1, 0xff);
@@ -648,30 +653,30 @@ function eq(name, got, want) {
   const sq = read();
   cpu.cycles += Math.ceil(mc.pitBase * 32768 / 65536);
   eq('PIT mode 3: a frame after FFFFh reads FFFEh - 2 x 17045, and half a period later the same again',
-    [(0xfffe - sq) / 2, read() === sq].join(), '17045,true'); }
+    [(0xfffe - sq) / 2, read() === sq].join(), '17045,true'); })();
 
 // The BIOS leaves counter 0 in mode 3, so a program that never programs the timer reads it counting by
 // two: tools/pit40.asm's run A, 256 even counts of 256 on DOSBox-X (256bytef and kaneda seed from it).
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   const read = () => { mc.ioWrite(0x43, 1, 0x00); const lo = mc.ioRead(0x40, 1); return lo | (mc.ioRead(0x40, 1) << 8); };
   let even = 0;
   for (let i = 0; i < 256; i++) { cpu.cycles += 977 + i; if (!(read() & 1)) even++; }
-  eq('PIT at power-on: mode 3 as the BIOS leaves it, 256 of 256 latched counts even', even, 256); }
+  eq('PIT at power-on: mode 3 as the BIOS leaves it, 256 of 256 latched counts even', even, 256); })();
 
 // 16-bit SHLD/SHRD past 16 (tools/shd16.asm): a P6 shifts dst:src:dst, as QEMU answers; a Pentium,
 // and here a 386 or 486, rotates the source, as DOSBox-X answers. kaneda's palette, qblove, crevenge.
-{ const shd = (cpu) => { const c = new Machine({ memSize: 1 << 20, cpu }).cpu;
+await (async () => { const shd = (cpu) => { const c = new Machine({ memSize: 1 << 20, cpu }).cpu;
     return [17, 18, 24, 31].map((n) => c.shld(0x1234, 0xabcd, n, 16).toString(16) + '/' + c.shrd(0x1234, 0xabcd, n, 16).toString(16)).join(); };
   eq('SHLD/SHRD 16-bit, counts 17, 18, 24, 31 (1234h, ABCDh): a 686 as QEMU', shd('686'), '579a/55e6,af34/2af3,cd12/34ab,891a/2469');
-  eq('...and a 386 or 586 as DOSBox-X', [shd('386'), shd('586')].join(' '), '579b/d5e6,af36/6af3,cdab/cdab,d5e6/579b '.repeat(2).trim()); }
+  eq('...and a 386 or 586 as DOSBox-X', [shd('386'), shd('586')].join(' '), '579b/d5e6,af36/6af3,cdab/cdab,d5e6/579b '.repeat(2).trim()); })();
 
 // The 8x8 font's first half at F000:FA6E, as every PC BIOS keeps it: 256bytef reads its digits there.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const f = new Uint8Array(256 * 8); for (let i = 0; i < f.length; i++) f[i] = (i * 7) & 0xff; mc.font8x8 = f;
-  eq("ROM font: '2' at F000:FBFE is the 8x8 font's", [...mc.mem.u8.slice(0xffbfe, 0xffc06)].join(), [...f.slice(0x32 * 8, 0x33 * 8)].join()); }
+  eq("ROM font: '2' at F000:FBFE is the 8x8 font's", [...mc.mem.u8.slice(0xffbfe, 0xffc06)].join(), [...f.slice(0x32 * 8, 0x33 * 8)].join()); })();
 
 // ---- the ATAPI CD-ROM, secondary master (src/ide.js): what tools/atapiprobe.asm reads on QEMU -cdrom ----
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   eq('ATAPI: no drive fitted, the secondary channel floats', mc.ioRead(0x177, 1), 0xff);
   const iso = new Uint8Array(20 * 2048); iso.set([1, 0x43, 0x44, 0x30, 0x30, 0x31, 1], 16 * 2048);
   mc.disk.attachCD(iso);
@@ -704,11 +709,11 @@ function eq(name, got, want) {
   mc.disk.attachCD(null);
   eq('...with the drive empty, TEST UNIT READY is NOT READY', packet([0]).s, '1  41 20 3');
   mc.disk.attachCD(iso, { changed: true });
-  eq('...and a disc put in is UNIT ATTENTION once, then ready', [packet([0]).s, packet([0]).s].join(), '1  41 60 3,1  50 0 3'); }
+  eq('...and a disc put in is UNIT ATTENTION once, then ready', [packet([0]).s, packet([0]).s].join(), '1  41 60 3,1  50 0 3'); })();
 
 // ---- El Torito: booting a CD (src/boot.js bootCD) and INT 13h on drive E0h, as tools/cdboot.asm
 // reads SeaBIOS under QEMU -cdrom -boot d.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, mem = mc.mem;
   const iso = new Uint8Array(30 * 2048), dv = new DataView(iso.buffer);
   iso.set([1, 0x43, 0x44, 0x30, 0x30, 0x31, 1], 16 * 2048);                       // primary volume descriptor
   iso.set([0, 0x43, 0x44, 0x30, 0x30, 0x31, 1, ...[...'EL TORITO SPECIFICATION'].map((ch) => ch.charCodeAt(0))], 17 * 2048);
@@ -731,10 +736,10 @@ function eq(name, got, want) {
   cpu.ax = 0x4b01; cpu.si = 0x700; int13();
   eq('...4B01h: the specification packet (13h bytes, no emulation, E0h, controller 1, sector 25, 07C0h, 4)', [...mem.u8.subarray(0x700, 0x710)].map((b) => b.toString(16)).join(' '), '13 0 e0 1 19 0 0 0 0 0 0 0 c0 7 4 0');
   cpu.ax = 0x4300; cpu.si = 0x600; int13();
-  eq('...43h: write protected', [cpu.flags & 1, cpu.ax >> 8].join(), '1,3'); }
+  eq('...43h: write protected', [cpu.flags & 1, cpu.ax >> 8].join(), '1,3'); })();
 
 // ---- ZIP archives (src/zip.js): a stored entry, a deflated one, a directory entry ----------------
-{ const enc = (str) => Uint8Array.from(str, (c) => c.charCodeAt(0));
+await (async () => { const enc = (str) => Uint8Array.from(str, (c) => c.charCodeAt(0));
   const entries = [['GAME/', new Uint8Array(0), 0], ['GAME/README.TXT', enc('freeware'), 0], ['GAME/GAME.EXE', enc('MZ'.padEnd(3000, 'x')), 8]];
   const parts = [], cen = []; let off = 0;
   for (const [name, data, method] of entries) {
@@ -758,12 +763,12 @@ function eq(name, got, want) {
     { path: 'GAME_1.DAT', bytes: enc('PATH=\\GAME') }, { path: 'GAME_1.2', bytes: zip.slice(cut) }, { path: 'GAME_1.1', bytes: zip.slice(0, cut) }];
   eq('DEICE: the pieces NAME.1, NAME.2 are joined and the ZIP inside is what comes back',
     (await deice(outer)).map((f) => `${f.path}:${f.bytes.length}`).join(), 'GAME/README.TXT:8,GAME/GAME.EXE:3000');
-  eq('...and an archive without DEICE.EXE is left as it is', (await deice(files)) === files, true); }
+  eq('...and an archive without DEICE.EXE is left as it is', (await deice(files)) === files, true); })();
 
 // ---- Apogee's shareware archives: INSTALL.EXE and a .SHR of PKWARE DCL-compressed files (src/zip.js) --
 // examples/games/1keen.zip as 3D Realms served it. Its VENDOR.DOC lists the files that make a legal
 // copy, with their sizes; KEEN1.EXE is the one a Keen 1 shareware install has (sha256 8b3f829f…).
-{ const { readFileSync, existsSync } = await import('fs');
+await (async () => { const { readFileSync, existsSync } = await import('fs');
   const zp = new URL('../examples/games/1keen.zip', import.meta.url);
   if (existsSync(zp)) {
     const files = await deice(await unzip(new Uint8Array(readFileSync(zp))));
@@ -771,23 +776,23 @@ function eq(name, got, want) {
     eq('SHR: Keen 1\'s archive unpacks to its 33 files beside the installer', files.length, 3 + 33);
     eq('...at the sizes its VENDOR.DOC lists', ['KEEN1.EXE', 'EGALATCH.CK1', 'LEVEL13.CK1', 'SOUNDS.CK1'].map((n) => get(n) && get(n).bytes.length).join(), '51190,57065,9908,8898');
     eq('...and KEEN1.EXE is the shareware 1.31 executable', get('KEEN1.EXE') ? createHash('sha256').update(get('KEEN1.EXE').bytes).digest('hex').slice(0, 16) : 'missing', '8b3f829f7eeab18a');
-  } }
+  } })();
 
 // ---- a Cirrus machine has the PCI bus, and the GD5446 on it with its 32 MiB aperture -----------------
 // XFree86 3.3.2's cirrus driver reads the PCI device list for 1013h before anything else (a null one
 // without a bus: it stopped there), and takes the linear framebuffer 16 MiB-aligned from BAR0: at 60
 // MiB, the framebuffer was drawn at 48 MiB, into the RAM. As QEMU's -vga cirrus: 1013:00B8, BAR0 a
 // prefetchable 32 MiB, size-aligned — above 60 MiB of RAM, at 64 MiB.
-{ const mc = new Machine({ memSize: 128 << 20, ramSize: 60 << 20 }); installBIOS(mc, { vga: 'cirrus' });
+await (async () => { const mc = new Machine({ memSize: 128 << 20, ramSize: 60 << 20 }); installBIOS(mc, { vga: 'cirrus' });
   const out = (p, sz, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, sz, v); }, inp = (p, sz) => (mc.portRead[p] ? mc.portRead[p](p, sz) >>> 0 : 0xffffffff);
   const cfg = (dev, fn, reg) => { out(0xcf8, 4, (0x80000000 | (dev << 11) | (fn << 8) | reg) >>> 0); return inp(0xcfc, 4); };
   const id = cfg(2, 0, 0), bar = cfg(2, 0, 0x10);
   out(0xcf8, 4, 0x80001010); out(0xcfc, 4, 0xffffffff);
-  eq('a Cirrus machine: PCI 02.0 is a GD5446 (1013:00B8), BAR0 at 64 MiB, sized 32 MiB', [id, bar, cfg(2, 0, 0x10)].map((v) => v.toString(16)).join(), 'b81013,4000008,fe000008'); }
+  eq('a Cirrus machine: PCI 02.0 is a GD5446 (1013:00B8), BAR0 at 64 MiB, sized 32 MiB', [id, bar, cfg(2, 0, 0x10)].map((v) => v.toString(16)).join(), 'b81013,4000008,fe000008'); })();
 
 // ---- the Bochs DISPI registers (src/dispi.js): tools/dispiprobe.asm on QEMU -vga std, vgamem_mb=4 ----
 // Windows NT 3.51 sets its mode through these ports, not the VBE BIOS. They come with the PCI bus.
-{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { pci: true }); const cpu = mc.cpu;
   const wr = (i, v) => { mc.ioWrite(0x1ce, 2, i); mc.ioWrite(0x1cf, 2, v); };
   const dump = () => Array.from({ length: 11 }, (_, i) => (mc.ioWrite(0x1ce, 2, i), mc.ioRead(0x1cf, 2).toString(16))).join(' ');
   eq('DISPI at power-on: ID B0C5h, everything else 0, 4 MiB of video memory', dump(), 'b0c5 0 0 0 0 0 0 0 0 0 40');
@@ -802,11 +807,11 @@ function eq(name, got, want) {
   wr(4, 0);
   eq('...and disabling leaves the mode, keeping the registers', [dump(), mc.vbe].join(), 'b0c5 400 300 8 0 0 500 ccc 8 4 40,');
   const isa = new Machine({ memSize: 16 << 20 }); installBIOS(isa);
-  eq('without PCI the ports are not decoded', isa.ioRead(0x1cf, 2), 0xffff); }
+  eq('without PCI the ports are not decoded', isa.ioRead(0x1cf, 2), 0xffff); })();
 
 // ---- the 16550A on COM1 (src/uart.js): what tools/uartprobe.asm reads on QEMU ---------------------
 // QEMU's 16550A answers 60 01 C1 5A F0 F0 61 A5 C2 C1 B0 B0 to the probe's twelve reads.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc, { serial: true });
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc, { serial: true });
   const inb = (p) => (mc.portRead[p] ? mc.portRead[p](p, 1) & 0xff : 0xff), outb = (p, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, 1, v); };
   const r = [];
   r.push(inb(0x3fd), inb(0x3fa)); outb(0x3fa, 0x07); r.push(inb(0x3fa));
@@ -819,12 +824,12 @@ function eq(name, got, want) {
   outb(0x3fc, 0x08); outb(0x3f9, 0x01); mc.irqPendingMask = 0;
   if (mc.serial) mc.serial.receive('A');
   eq('...a received byte with IER bit 0 and OUT2 raises IRQ 4', [(mc.irqPendingMask >> 4) & 1, inb(0x3f8)].join(), '1,65');
-  eq('...and the BDA names COM1 at 3F8h, one port in the equipment word', [mc.mem.r16(0x400).toString(16), (mc.mem.r16(0x410) >> 9) & 7].join(), '3f8,1'); }
+  eq('...and the BDA names COM1 at 3F8h, one port in the equipment word', [mc.mem.r16(0x400).toString(16), (mc.mem.r16(0x410) >> 9) & 7].join(), '3f8,1'); })();
 
 // ---- the RTC's periodic interrupt: register A's rate, register B's PIE, IRQ 8 ----------------------
 // Windows NT 3.51's HAL calibrates its stall loop on it (A = 2Dh: 8 Hz, B = 42h: PIE) with every
 // other IRQ masked; without it the HAL counted for ever at hal.dll+8390.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   const w = (r, v) => { mc.portWrite[0x70](0x70, 1, r); mc.portWrite[0x71](0x71, 1, v); };
   const r = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
   w(0x0a, 0x2d); w(0x0b, 0x42);
@@ -834,13 +839,13 @@ function eq(name, got, want) {
   const early = (mc.irqPendingMask >> 8) & 1;
   cpu.cycles += period * 0.6; mc.rtcPoll && mc.rtcPoll();
   eq('8 Hz with PIE: no IRQ 8 before an eighth of a second, one after', [early, (mc.irqPendingMask >> 8) & 1].join(), '0,1');
-  eq('...register C says PF and IRQF, and reading it clears them', [r(0x0c).toString(16), r(0x0c)].join(), 'c0,0'); }
+  eq('...register C says PF and IRQF, and reading it clears them', [r(0x0c).toString(16), r(0x0c)].join(), 'c0,0'); })();
 
 // ---- D8: a CR3 load keeps the translated blocks, and a remapped page is still caught -----------
 // Windows 9x reloads CR3 with the same value thousands of times a minute; dropping every block each
 // time cost Windows ME 35% of its host time in translate(). Blocks now survive the load and are
 // revalidated against the frames they were translated from.
-{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000, DIR = 0x10000, PT0 = 0x11000, PT1 = 0x12000, A = 0x200000, B = 0x201000;
   m.setA20(true); mc.rec.setMask(m.mask);                                    // the frames are above 1 MiB
   cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
@@ -859,7 +864,7 @@ function eq(name, got, want) {
   eq('D8: a CR3 reload with the mapping unchanged recompiles nothing', [first, again, c2 - c1].join(), '1,1,0');
   m.w32(PT1, B | 3); cpu.setCR3(DIR);                                         // remap the code page
   eq('...and a remapped code page runs the new bytes', go(), 2);
-  } catch (e) { eq('D8 test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
+  } catch (e) { eq('D8 test machine runs', String(e.message).slice(0, 60), 'no exception'); } })();
 
 // ---- flat segments: no limit check, until a segment is no longer flat --------------------------------
 // A block whose segments are flat (limit 4 GiB, expand-up: Linux's, Win32's) is translated without
@@ -868,7 +873,7 @@ function eq(name, got, want) {
 // second time, the translated block notwithstanding. And under paging an instruction that only moves
 // registers stores no EIP: the #GP's EIP must still be the faulting `mov eax,[3000h]`, not the
 // `mov ebx,eax` before it.
-{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000, IDT = 0x8800, DIR = 0x10000, PT0 = 0x11000, PT1 = 0x12000, A = 0x200000;
   m.setA20(true); mc.rec.setMask(m.mask);
   cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff; cpu.idtr.base = IDT; cpu.idtr.limit = 0x7ff;
@@ -894,14 +899,14 @@ function eq(name, got, want) {
   m.blit(0x6100, Uint8Array.from('8b44240436a304710000f4'.match(/../g).map((x) => parseInt(x, 16))));
   try { cpu.setSeg(DS, 0x10); cpu.reg[4] = 0x9000; cpu.eip = 0x400200; cpu.halted = false;
     for (let i = 0; i < 50 && !cpu.halted; i++) mc.runSlice(100); got = (m.r32(0x7104) >>> 0).toString(16); } catch (e) { got = e.message.slice(0, 60); }
-  eq('...and a page fault after instructions that store no EIP reports the faulting instruction', got, '400205'); }
+  eq('...and a page fault after instructions that store no EIP reports the faulting instruction', got, '400205'); })();
 
 // ---- 32-bit shifts by an immediate count, translated inline: the helper's result and flags ----------
 // `shl eax,3` in a flat 32-bit program called cpu.shl and computed every flag for the next `add` to
 // overwrite; it is now a JavaScript shift, its flags in the strippable setShiftResult. Here each of
 // SHL/SHR/SAR by 1, 3, 31 on values with the top and low bits in every state: EAX, and CF PF ZF SF OF
 // read live by PUSHFD, must be what the helpers give.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000; cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
   const desc = (i, access) => { const a = GDT + i * 8; m.w16(a, 0xffff); m.w16(a + 2, 0); m.w8(a + 4, 0); m.w8(a + 5, access); m.w8(a + 6, 0xcf); m.w8(a + 7, 0); };
   desc(1, 0x9a); desc(2, 0x92);
@@ -918,13 +923,13 @@ function eq(name, got, want) {
     if ((cpu.reg[0] >>> 0) !== want || gf !== wf) bad.push(`${name} ${v.toString(16)},${c}: ${(cpu.reg[0] >>> 0).toString(16)}/${gf.toString(16)} want ${want.toString(16)}/${wf.toString(16)}`);
     at += 16;
   }
-  eq('32-bit SHL/SHR/SAR by an immediate count: the helpers\' result and flags', bad.slice(0, 3).join(' | ') || 'same', 'same'); }
+  eq('32-bit SHL/SHR/SAR by an immediate count: the helpers\' result and flags', bad.slice(0, 3).join(' | ') || 'same', 'same'); })();
 
 // ---- paging off and on again keeps the blocks; code changed meanwhile is still caught -------------------
 // CWSDPMI returns to real mode for every interrupt: under FreeDOS, Kraptor toggled paging 2600 times a
 // second, each toggle dropped the whole cache, and the browser translated 128 000 blocks a second. Each
 // paging state now keeps its own cache; the one put away is checked against its bytes when it returns.
-{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const GDT = 0x8000, DIR = 0x10000, PT0 = 0x11000, PT1 = 0x12000, A = 0x200000;
   m.setA20(true); mc.rec.setMask(m.mask);
   cpu.gdtr.base = GDT; cpu.gdtr.limit = 0xff;
@@ -943,13 +948,13 @@ function eq(name, got, want) {
     eq('paging off and on (CR3 loaded between) keeps the translated blocks', [first, again, c2 - c1].join(), '1,1,0');
     cpu.setCR0(0x00000001); m.blit(A, Uint8Array.from([0xb8, 3, 0, 0, 0])); cpu.setCR0(0x80000001);
     eq('...and code rewritten while paging was off runs as rewritten', go(), 3);
-  } catch (e) { eq('paging-toggle test machine runs', String(e.message).slice(0, 60), 'no exception'); } }
+  } catch (e) { eq('paging-toggle test machine runs', String(e.message).slice(0, 60), 'no exception'); } })();
 
 // ---- an x87 load or store under paging fills its page's fast entry, as an integer access does -------------
 // After a CR3 load every entry is stale; the helpers' first access to a page fills it (memory.js
 // _afterAccess). fpu.js's did not: a page only floats were read from or written to -- Warcraft III's
 // vertices -- stayed on the slow path, a translation and an array per load, a fifth of its speed.
-{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const DIR = 0x10000, PT0 = 0x11000;
   m.setA20(true); mc.rec.setMask(m.mask);
   for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 7);   // user pages, as a program's
@@ -957,13 +962,13 @@ function eq(name, got, want) {
   cpu.setCR3(DIR); cpu.setCR0(0x80000001);
   const before = [m.rdOfs[0x200], m.rdOfs[0x201]].join();
   const v = cpu.fRd32(0x200000); cpu.fWr64(0x201000, 2.5);
-  eq('an x87 load and store under paging fill their pages\' fast entries', [before, v, m.rdOfs[0x200], m.rdOfs[0x201], m.dv.getFloat64(0x201000, true)].join(' '), '-1,-1 1.5 0 0 2.5'); }
+  eq('an x87 load and store under paging fill their pages\' fast entries', [before, v, m.rdOfs[0x200], m.rdOfs[0x201], m.dv.getFloat64(0x201000, true)].join(' '), '-1,-1 1.5 0 0 2.5'); })();
 
 // ---- leaving paging copies the identity tables back instead of refilling every page --------------------
 // CWSDPMI leaves paging 2000 times a second for Liquid War; each time the tables were refilled page by
 // page, 16384 entries for 64 MiB, and loading the game ran at 1 M instructions a second in Chrome. The
 // identity tables are kept and copied back, and must still follow a page that gains code and the A20.
-{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
   const DIR = 0x10000, PT0 = 0x11000;
   m.setA20(true); mc.rec.setMask(m.mask);
   for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 3);
@@ -976,12 +981,12 @@ function eq(name, got, want) {
   m.markCodePage(0x150); round();
   eq('...a page that gained code while paged still traps writes', [m.wrOfs[0x150], m.rdOfs[0x150], m.wrOfs[0x151]].join(), '-1,0,0');
   m.setA20(false); round();
-  eq('...and closing the A20 sends the pages above 1 MiB to the helper again', [m.rdOfs[0x100], m.rdOfs[0x50]].join(), '-1,0'); }
+  eq('...and closing the A20 sends the pages above 1 MiB to the helper again', [m.rdOfs[0x100], m.rdOfs[0x50]].join(), '-1,0'); })();
 
 // ---- D8 step 3: the xlat TLB keeps protection, dirty bits and INVLPG exact -------------------------
 // The NT/9x kernels live above the installed RAM, where every byte used to take a full page walk;
 // a small TLB now sits in front of the walk. It must not widen any right the walk would refuse.
-{ const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 8 << 20 }); const cpu = mc.cpu, m = mc.mem;
   m.setA20(true); mc.rec.setMask(m.mask);
   const DIR = 0x10000, PT0 = 0x11000, PTH = 0x12000, F1 = 0x300000, F2 = 0x301000;
   for (let i = 0; i < 1024; i++) m.w32(PT0 + i * 4, (i << 12) | 3);
@@ -998,14 +1003,14 @@ function eq(name, got, want) {
   const pte0 = m.r32phys(PTH); m.xlat(0x80000020, true);
   eq('...the first write after a cached read sets D in the PTE', [(pte0 >> 6) & 1, (m.r32phys(PTH) >> 6) & 1].join(), '0,1');
   m.w32(PTH, F2 | 3); cpu.invlpg(0x80000000);
-  eq('...and INVLPG on a page above RAM drops the entry: the remap is seen', m.r8(0x80000010), 0xa5); }
+  eq('...and INVLPG on a page above RAM drops the entry: the remap is seen', m.r8(0x80000010), 0xa5); })();
 
 // ---- CPUID, and the generation it belongs to ---------------------------------------------------
 // CPUID is 486-and-later, so it is a PROFILE feature: on the default 386 the opcode is not there and
 // EFLAGS.ID must not stick, which is how software detects it. kvm-unit-tests' realmode suite runs
 // CPUID unconditionally and was stopped dead by it (105 of 127 cases reached); with the '586'
 // profile it now matches QEMU and v86 at 127/127.
-{ const mc = new Machine({ memSize: 1 << 20, cpu: '586' }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20, cpu: '586' }); const cpu = mc.cpu;
   cpu.reg[0] = 0; cpu.cpuid();
   eq('CPUID leaf 0 reports one further leaf', cpu.reg[0] >>> 0, 1);
   // The vendor is ours, not a copy of anyone's: EBX:EDX:ECX spell it in that order.
@@ -1021,19 +1026,19 @@ function eq(name, got, want) {
   eq('CPUID claims CMPXCHG8B, which cpu.cmpxchg8b implements', (cpu.reg[2] >> 8) & 1, 1);
   eq('...and on a 586 neither CMOV nor MSR: those are the P6 profiles', ((cpu.reg[2] >> 15) & 1) | ((cpu.reg[2] >> 5) & 1), 0);
   cpu.reg[0] = 7; cpu.cpuid();
-  eq('an unknown leaf answers zeros', (cpu.reg[0] | cpu.reg[1] | cpu.reg[2] | cpu.reg[3]) >>> 0, 0); }
-{ // The ID flag and CPUID are one feature: a CPU that accepts the bit but has no CPUID cannot exist.
+  eq('an unknown leaf answers zeros', (cpu.reg[0] | cpu.reg[1] | cpu.reg[2] | cpu.reg[3]) >>> 0, 0); })();
+await (async () => { // The ID flag and CPUID are one feature: a CPU that accepts the bit but has no CPUID cannot exist.
   eq('the 586 profile lets EFLAGS.ID be written', new Machine({ memSize: 1 << 20, cpu: '586' }).cpu.idFlagMask, 0x200000);
-  eq('the 386 profile does not', new Machine({ memSize: 1 << 20, cpu: '386' }).cpu.idFlagMask, 0); }
-{ // SMSW to a 32-bit REGISTER stores the whole of CR0; to memory it is 16 bits, always.
+  eq('the 386 profile does not', new Machine({ memSize: 1 << 20, cpu: '386' }).cpu.idFlagMask, 0); })();
+await (async () => { // SMSW to a 32-bit REGISTER stores the whole of CR0; to memory it is 16 bits, always.
   const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
   cpu.cr0 = 0x40000011;
   // 66 0f 01 e0 = smswl %eax ; f4 = hlt
   mc.mem.blit(0x100 * 16, Uint8Array.from([0x66, 0x0f, 0x01, 0xe0, 0xf4]));
   let steps = 0; while (!cpu.halted && steps++ < 20) mc.rec.step();
-  eq('SMSW to a 32-bit register gives the whole of CR0', cpu.reg[0] >>> 0, 0x40000011); }
-{ // MOV to and from a debug register IGNORES the mod field, and the value must read back.
+  eq('SMSW to a 32-bit register gives the whole of CR0', cpu.reg[0] >>> 0, 0x40000011); })();
+await (async () => { // MOV to and from a debug register IGNORES the mod field, and the value must read back.
   const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
   cpu.reg[3] = 0xaced;
@@ -1041,7 +1046,7 @@ function eq(name, got, want) {
   mc.mem.blit(0x100 * 16, Uint8Array.from([0x0f, 0x23, 0xc3, 0x0f, 0x21, 0x00, 0xf4]));
   let steps = 0; while (!cpu.halted && steps++ < 20) mc.rec.step();
   eq('a debug register reads back what was written', cpu.reg[0] >>> 0, 0xaced);
-  eq('...and the mod bits consumed no displacement', cpu.eip >>> 0, 7); }
+  eq('...and the mod bits consumed no displacement', cpu.eip >>> 0, 7); })();
 
 // ---- LAR and LSL answer for a NOT-PRESENT descriptor -------------------------------------------
 // Presence is not one of LAR's conditions, and that is the point of the instruction: it is how
@@ -1050,7 +1055,7 @@ function eq(name, got, want) {
 // fail` / `test ah,0x80` at 037f:0ede — so refusing P=0 turned "discarded, go and load it" into
 // "not a valid selector", the segment was never loaded, and the far call into it ran through empty
 // memory. The six expected answers below are the ones QEMU and v86 both give to tools/larprobe.asm.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   const GDT = 0x8000;
   cpu.gdtr = { base: GDT, limit: 0x27 };              // four descriptors: 0x28 is past the end
   const desc = (i, base, limit, access) => {
@@ -1068,7 +1073,7 @@ function eq(name, got, want) {
   eq('LAR refuses the null selector', cpu.larRights(0x00, 0), -1);
   eq('LAR refuses a selector past the table', cpu.larRights(0x38, 0), -1);
   eq('LSL accepts a not-present descriptor too', cpu.lslLimit(0x20), 0x1234);
-  eq('LSL refuses a selector past the table', cpu.lslLimit(0x38), -1); }
+  eq('LSL refuses a selector past the table', cpu.lslLimit(0x38), -1); })();
 
 // ---- a CALL GATE is honoured by the INDIRECT far forms too ------------------------------------
 // FF /3 and FF /5 loaded CS themselves instead of going through cpu.farCall/farJmp, so a call gate
@@ -1103,7 +1108,7 @@ const gateRun = (op) => {                             // op: 3 = CALLF Ev, 5 = J
   let steps = 0; while (!cpu.halted && steps++ < 40) mc.rec.step();
   return { cs: cpu.seg[CS], eip: cpu.eip >>> 0, ax: cpu.reg[0] & 0xffff, raised, sp: cpu.reg[4] & 0xffff, mem };
 };
-{ const call = gateRun(3);
+await (async () => { const call = gateRun(3);
   eq('FF /3 through a call gate raises nothing', call.raised, null);
   eq('...and lands in the gate\'s code segment', call.cs, 0x08);
   eq('...at the gate\'s own offset, not the one in memory', call.ax, 0x1234);
@@ -1113,7 +1118,7 @@ const gateRun = (op) => {                             // op: 3 = CALLF Ev, 5 = J
   eq('FF /5 through a call gate raises nothing', jmp.raised, null);
   eq('...and lands in the gate\'s code segment', jmp.cs, 0x08);
   eq('...at the gate\'s own offset', jmp.ax, 0x1234);
-  eq('...pushing nothing', jmp.sp, 0x1000); }
+  eq('...pushing nothing', jmp.sp, 0x1000); })();
 
 // ---- a FAULTING far transfer is delivered as if the instruction never ran ----------------------
 // The fault is delivered INSIDE setSeg, synchronously, so by the time the load reports a refusal
@@ -1173,7 +1178,7 @@ const v86 = (iopl) => {
   mc.protInt = (n, err, f, soft) => { calls.push([n, err === undefined ? -1 : err]); if (calls.length === 1) return orig(n, err, f, soft); };
   return { mc, cpu, calls };
 };
-{ // (1) A far RET, CALL or JMP in V86 is an 8086 one: the selector is a paragraph. Judged by the
+await (async () => { // (1) A far RET, CALL or JMP in V86 is an 8086 one: the selector is a paragraph. Judged by the
   // protected-mode rules, CS 0F40 has RPL 0 below CPL 3 — "a return inward" — and raised #GP(0F40):
   // EMM386 took that at a plain `retf` 155 000 times a second.
   const { mc, cpu, calls } = v86(3);
@@ -1187,8 +1192,8 @@ const v86 = (iopl) => {
   eq('V86: far JMP to a paragraph with RPL 3 is plain too', (cpu.base[CS] >>> 0) + cpu.eip, 0x40);
   cpu.farCall(0x0070, 0x0774, false, 0);
   eq('V86: far CALL pushes 8086-style and raises nothing', calls.length, 0);
-  eq('...and lands in 0070', cpu.base[CS] >>> 0, 0x700); }
-{ // (2) The BIOS stub's IRET, reached from V86. At IOPL 3 it must keep VM; below IOPL 3 it must
+  eq('...and lands in 0070', cpu.base[CS] >>> 0, 0x700); })();
+await (async () => { // (2) The BIOS stub's IRET, reached from V86. At IOPL 3 it must keep VM; below IOPL 3 it must
   // TRAP (IRET is IOPL-sensitive) with the service's answer already in the flags IMAGE.
   const a = v86(3);
   a.mc.intHandlers[0x61] = (c) => { c.flags |= 1; };             // a service that reports CF
@@ -1206,8 +1211,8 @@ const v86 = (iopl) => {
   b.cpu.setSeg(CS, 0xf000); b.cpu.eip = 0x61;
   b.mc.biosCallback(0x61);
   eq('V86, IOPL 0: the stub IRET traps to the monitor as #GP(0)', b.calls[0] && b.calls[0].join(','), '13,0');
-  eq('...with the service\'s CF written into the flags IMAGE', b.mc.mem.r16(0x3000 + sp + 4) & 1, 1); }
-{ // (3) The IDT gate is validated before it is used. EMM386 leaves IDT entries EMPTY on purpose:
+  eq('...with the service\'s CF written into the flags IMAGE', b.mc.mem.r16(0x3000 + sp + 4) & 1, 1); })();
+await (async () => { // (3) The IDT gate is validated before it is used. EMM386 leaves IDT entries EMPTY on purpose:
   // an INT n from V86 must reach its #GP handler with error code n*8+2 and be reflected. Read as a
   // gate to selector 0, the empty IDT[12h] sent MIRAGE to 0003:0000 at CPL 3 with VM clear.
   const { mc, cpu, calls } = v86(3);
@@ -1230,7 +1235,7 @@ const v86 = (iopl) => {
   // An EXCEPTION through an empty gate sets EXT: error code n*8+2+1.
   calls.length = 0; cpu.idtr = { base: IDT, limit: 0x1ff };
   mc.protInt(0x0b, 0);
-  eq('an exception through an empty gate sets EXT', calls[1] && calls[1].join(','), '13,91'); }
+  eq('an exception through an empty gate sets EXT', calls[1] && calls[1].join(','), '13,91'); })();
 
 // ---- segment WRITE PROTECTION and segment LIMITS are enforced by default ------------------------
 // Both checks existed behind MIRAGE_SEGWP / MIRAGE_SEGLIM, "off until the bench says what it costs".
@@ -1270,7 +1275,7 @@ eq('...while one that ends ON the limit is fine',
 // there and marks it `real`. Two ways that block could then run with PE set: reached again after the
 // switch (the dispatch loop must retranslate it), or switching itself part-way through with LMSW (the
 // block must have been translated checked). Each case faults only if its safeguard is in place.
-{ const realThenPM = (code, between) => {
+await (async () => { const realThenPM = (code, between) => {
     const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
     const GDT = 0x8000, a = GDT + 3 * 8;                // 18: data, writable, base 5000h, limit FFh
     mem.w16(a, 0x00ff); mem.w16(a + 2, 0x5000); mem.w8(a + 4, 0); mem.w8(a + 5, 0x92);
@@ -1292,7 +1297,7 @@ eq('...while one that ends ON the limit is fine',
     realThenPM([0xb8, 0x01, 0x00, 0x0f, 0x01, 0xf0, 0xa1, 0xff, 0x00, 0xf4], (cpu, go) => { // mov ax,1 / lmsw ax / mov ax,[00FF]
       cpu.cr0 |= 1; cpu.setSeg(DS, 0x18); cpu.cr0 &= ~1;          // DS keeps its FFh limit in real mode
       go();
-    }), '13,0'); }
+    }), '13,0'); })();
 
 // ---- VERR / VERW answer a question, they do not always say yes -------------------------------
 // This was `cpu.flags |= ZF`: a stub that cannot fail, and therefore cannot be told apart from a
@@ -1302,7 +1307,7 @@ eq('...while one that ends ON the limit is fine',
 // The one that is not guessable: presence is NOT required. "May I read it" sounds as though the
 // segment would have to be in memory; both references say ZF=1 for a not-present data segment, and
 // the manual's pseudocode checks only the limit, the type and the privilege.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   const GDT = 0x8000;
   cpu.gdtr = { base: GDT, limit: 0x37 };              // seven descriptors: 0x40 is past the end
   const desc = (i, access, limit = 0xffff) => {
@@ -1335,7 +1340,7 @@ eq('...while one that ends ON the limit is fine',
   cpu.reg[3] = 0x18;                                  // BX = the execute-only selector
   mc.mem.blit(0x100 * 16, Uint8Array.from([0x0f, 0x00, 0xe3, 0xf4]));
   let steps = 0; while (!cpu.halted && steps++ < 20) mc.rec.step();
-  eq('VERR through the recompiler CLEARS ZF when the answer is no', (cpu.flags >> 6) & 1, 0); }
+  eq('VERR through the recompiler CLEARS ZF when the answer is no', (cpu.flags >> 6) & 1, 0); })();
 
 // ---- #UD belongs to whoever holds the vector, in EITHER mode ------------------------------------
 // An invalid opcode is a service, and guests use it: Windows 3.1's DOS extender installs a handler
@@ -1358,12 +1363,12 @@ const udRun = (gated) => {
   catch (e) { caught = String(e.message || e); }
   return { raised, caught };
 };
-{ eq('an invalid opcode in protected mode reaches the guest gate', udRun(true).raised, 6);
+await (async () => { eq('an invalid opcode in protected mode reaches the guest gate', udRun(true).raised, 6);
   // ...and with NO gate the diagnostic must survive: an unhandled #UD would re-raise for ever.
   const bare = udRun(false);
   eq('with no gate for vector 6 nothing is delivered', bare.raised, null);
   eq('...and it still says what it could not do',
-    !!(bare.caught && bare.caught.includes('0x0f 0xff')), true); }
+    !!(bare.caught && bare.caught.includes('0x0f 0xff')), true); })();
 
 
 // ---- INT 15h AH=87h: copy extended memory ------------------------------------------------------
@@ -1371,7 +1376,7 @@ const udRun = (gated) => {
 // both call it while installing (v86's msdos622.img): EMM386 copies its protected-mode tables up to
 // 1.2 MB with it. ES:SI -> a six-descriptor GDT, source at +10h, destination at +18h, CX in WORDS,
 // base = the 24-bit field plus byte 7 on a 386.
-{ const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem;
   installBIOS(mc);
   const GDT = 0x3000, desc = (off, base) => {
     mem.w16(GDT + off, 0xffff); mem.w16(GDT + off + 2, base & 0xffff);
@@ -1401,13 +1406,13 @@ const udRun = (gated) => {
   bc.setSeg(ES, 0x300); bc.si = 0; bc.cx = 1; bc.ax = 0x8700;
   big.intHandlers[0x15](bc, big);
   eq('AH=87h honours byte 7 of the base (past 16 MiB)', bm.u8[0x01180000] | (bm.u8[0x01180001] << 8), 0x8877);
-  eq('...rather than landing 16 MiB lower', bm.u8[0x00180000], 0); }
+  eq('...rather than landing 16 MiB lower', bm.u8[0x00180000], 0); })();
 
 // ---- a PS/2 mouse: INT 15h C2xx, the 8042 aux channel, IRQ12 and the INT 74h routine -----------
 // CuteMouse on v86's msdos622.img asked C205 and got "function not supported": "Error: device not
 // found" where QEMU installs it "at PS/2 port". Here: the BIOS interface, then a packet all the way
 // into a GUEST handler registered with C207, which records the four words the BIOS pushes.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
   installBIOS(mc);
   const call = (ax, bx, es) => { cpu.ax = ax; cpu.bx = bx; if (es !== undefined) cpu.setSeg(ES, es); cpu.flags &= ~1; mc.intHandlers[0x15](cpu, mc); return { ah: (cpu.ax >> 8) & 0xff, cf: cpu.flags & 1 }; };
   eq('C200 enable with no handler installed: AH=05', call(0xc200, 0x0100).ah, 0x05);
@@ -1441,14 +1446,14 @@ const udRun = (gated) => {
   mc.ioWrite(0x64, 1, 0xd4); mc.ioWrite(0x60, 1, 0xff);
   eq('aux reset: status says OBF and AUX', mc.ioRead(0x64, 1) & 0x21, 0x21);
   eq('...and the mouse answers FA AA 00', [mc.ioRead(0x60, 1), mc.ioRead(0x60, 1), mc.ioRead(0x60, 1)].join(','), '250,170,0');
-  eq('...after which the aux channel is empty', mc.ioRead(0x64, 1) & 0x20, 0); }
+  eq('...after which the aux channel is empty', mc.ioRead(0x64, 1) & 0x20, 0); })();
 
 // ---- INT 16h / INT 1Ah open an INTERRUPT WINDOW, as SeaBIOS's do -----------------------------
 // tools/ifprobe.asm under QEMU: with CLI before every call, 65 536 calls to INT 16h AH=01 let 2Ah
 // ticks through, and INT 1Ah AH=00 29h — while every call returns IF=0. SvarDOS's EDR-DOS kernel
 // (doof-1440.img) waits for "a key or N ticks" that way; here the clock never moved and it waited
 // for ever, where Doom now runs. Both timer regimes: cycle-driven (headless) and latched (browser).
-{ const run = (latched) => {
+await (async () => { const run = (latched) => {
     const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
     installBIOS(mc);
     cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
@@ -1465,13 +1470,13 @@ const udRun = (gated) => {
   eq('...and the caller still gets IF=0 back', a.ifBack, 0);
   const b = run(true);
   eq('a tick that arrived while IF=0 is kept, not dropped, and gets in through INT 16h', b.ticks, 1);
-  eq('...still handing IF=0 back', b.ifBack, 0); }
+  eq('...still handing IF=0 back', b.ifBack, 0); })();
 
 // ---- the BIOS timer protects the interrupted program from its INT 1Ch hook --------------------
 // tools/i1cprobe.asm: under QEMU a 1Ch hook that zeroes AX..BP and ES without saving them leaves the
 // interrupted loop's registers intact; here all eight were lost. "Exploring the IBM PC" stalled on
 // it: its hook starts with `xor dx,dx`, and a BLOAD loop kept its destination segment in DX.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
   installBIOS(mc);
   mem.blit(0x600, Uint8Array.from([0x31, 0xc0, 0x31, 0xd2, 0x31, 0xdb, 0x8e, 0xc0,     // xor ax,ax/dx,dx/bx,bx ; mov es,ax
     0x2e, 0xff, 0x06, 0x00, 0x07, 0xcf]));                                          // inc word cs:[0700] ; iret
@@ -1485,12 +1490,12 @@ const udRun = (gated) => {
   eq('...its DX', cpu.reg[2] & 0xffff, 0x4444);
   eq('...its BX', cpu.reg[3] & 0xffff, 0x2222);
   eq('...and its ES', cpu.seg[ES], 0x0880);
-  eq('...running where it was', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x01000001); }
+  eq('...running where it was', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x01000001); })();
 
 // ---- a guest INT 8 that CHAINS to the BIOS still gets INT 1Ch called -------------------------
 // The TSR idiom: hook INT 8, count, `jmp far [old8]`. tools/i8chain.asm under QEMU: 20 INT 8, 20
 // INT 1Ch, 20 ticks. MIRAGE's F000:0008, reached that way, advanced the tick and never called 1Ch.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
   installBIOS(mc);
   const old8 = mc.getVector(8);
   mem.w16(0x710, old8.off); mem.w16(0x712, old8.seg);
@@ -1506,7 +1511,7 @@ const udRun = (gated) => {
   eq('...which chains to the BIOS, and the BIOS calls INT 1Ch each time', mem.r16(0x702), 3);
   eq('...and advances the BIOS tick each time', (mem.r32(0x46c) - t0) >>> 0, 3);
   eq('...and the program is back where it was', (cpu.seg[CS] << 16 | cpu.eip) >>> 0, 0x01000001);
-  eq('...with its stack balanced', cpu.sp, 0x1000); }
+  eq('...with its stack balanced', cpu.sp, 0x1000); })();
 
 // ---- hardware IRQs in protected and V86 mode go through the IDT; the BIOS INT 9 reads port 60h ---
 // MS-DOS 6.22 under EMM386 (V86): typing VER got one key in, then nothing. Two defects. IRQ1 had no
@@ -1514,11 +1519,11 @@ const udRun = (gated) => {
 // kept out of the IDT in V86. And our BIOS INT 9, reached at the end of DOS's chain, sent the EOI
 // but never READ port 0x60 — so the 8042's output buffer stayed full and no second scancode could
 // be staged. With both fixed, `ver` answers "MS-DOS Version 6.22".
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   mc.kb.obf = true; mc.kb.data = 0x2f;
   mc.intHandlers[9](mc.cpu, mc);
-  eq('the BIOS INT 9 empties the 8042 output buffer', mc.kb.obf, false); }
-{ const irq = (vm, n) => {
+  eq('the BIOS INT 9 empties the 8042 output buffer', mc.kb.obf, false); })();
+await (async () => { const irq = (vm, n) => {
     const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
     cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
     cpu.cr0 |= 1; if (vm) cpu.flags |= 0x20000; cpu.flags |= 0x200;
@@ -1531,12 +1536,12 @@ const udRun = (gated) => {
   };
   eq('IRQ1 in protected mode goes through the IDT', irq(false, 9), 9);
   eq('IRQ1 in V86 goes through the IDT (to the monitor)', irq(true, 9), 9);
-  eq('IRQ0 in V86 goes through the IDT (to the monitor)', irq(true, 8), 8); }
+  eq('IRQ0 in V86 goes through the IDT (to the monitor)', irq(true, 8), 8); })();
 
 // ---- INT 10h in graphics modes: AH=00h clears CGA pixels, AH=06h fills mode 13h, AH=13h uses BL ----
 // Three defects found by pixel-comparing v86's boot-sector demos against QEMU: hello-v86.img went
 // from 63 115 differing pixels to 0, bootlogo.img from 6 000 to 3 (its blinking cursor).
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
   for (let i = 0; i < 0x4000; i++) mem.u8[0xb8000 + i] = 0x77;
   int10(0x0004);
@@ -1557,14 +1562,14 @@ const udRun = (gated) => {
   int10(0x1300, 0x000f, 1, 0x0000);                          // one 'A' at 0,0 in colour 0Fh
   let fg = 0; for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (mem.u8[0xa0000 + y * 320 + x] === 0x0f) fg++;
   eq('AH=13h draws in the colour BL gives', fg > 0, true);
-  eq('...and with AL bit 0 clear the cursor stays where it was', mem.r16(0x450), 0x0203); }
+  eq('...and with AL bit 0 clear the cursor stays where it was', mem.r16(0x450), 0x0203); })();
 
 // ---- 320x200x4 coloured through the attribute registers and the DAC, as on a VGA ----------------
 // The renderer took the colours from the 3D9h value and DAC 8-15 — which the 'cga' DAC fills with the
 // DARK hues, so the BIOS's default palette (bright cyan/magenta/white) came out dark, and a program
 // that reprograms the registers or the DAC was not seen at all. GentleOS reads registers 0 and 3
 // with AX=1007h (unimplemented: BH stayed 0) and sets the two DAC entries behind them.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
   const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
   const video = new Video(mc, canvas);
@@ -1582,14 +1587,14 @@ const udRun = (gated) => {
   int10(0x1010, 0x0017, 0x2814, 0x1900);                 // DAC 17h := 19h,28h,14h
   eq('...and the DAC entry behind it is what pixel 3 shows', px(3), dacRGB(0x17));
   int10(0x1015, 0x0017);
-  eq('AX=1015h reads a DAC register back into DH CH CL', [(cpu.dx >> 8) & 0xff, cpu.cx].map((v) => v.toString(16)).join(), '19,2814'); }
+  eq('AX=1015h reads a DAC register back into DH CH CL', [(cpu.dx >> 8) & 0xff, cpu.cx].map((v) => v.toString(16)).join(), '19,2814'); })();
 
 // ---- A real VGA BIOS ROM as INT 10h (src/vgarom.js), and register-derived window routing -------
 // A ROM only writes registers, so the A000 routing has to follow them as on the card: planar when
 // the GC is in graphics mode (GC6 bit 0) and the Sequencer does not chain (SEQ4 bit 3). With the
 // Cirrus CL-GD5446 ROM, tools/int10gfx.asm then prints the same lines as QEMU with that ROM, but for
 // the two Cirrus extensions (8-bit GR index, 800x600 clock).
-{ const { installVgaRom } = await import('../src/vgarom.js');
+await (async () => { const { installVgaRom } = await import('../src/vgarom.js');
   const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   // A 512-byte option ROM whose init points INT 10h at C000:0020 and returns: `xor ax,ax; mov ds,ax;
   // mov word [40h],20h; mov word [42h],0C000h; retf`, and an IRET at 0020h.
@@ -1605,13 +1610,13 @@ const udRun = (gated) => {
   mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, 0x0e);                 // chain-4 on: mode 13h's
   eq('...chain-4 makes it plain RAM again', mc.mem.planar, false);
   mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, 0x06); mc.ioWrite(0x3ce, 1, 6); mc.ioWrite(0x3cf, 1, 0x0e);
-  eq('...and so does text mode (GC6 bit 0 clear, B800)', mc.mem.planar, false); }
+  eq('...and so does text mode (GC6 bit 0 clear, B800)', mc.mem.planar, false); })();
 
 // ---- src/ must load in a browser: every process.env read is guarded -----------------------------
 // There is no `process` in a browser. rtc.js and dos.js read process.env bare, the page stopped on
 // "Loading…" for two weeks, and every other gate runs under Node, where it exists. A read counts as
 // guarded when `typeof process` is on its line or the line before (the statement's start).
-{ const { readdirSync, readFileSync } = await import('fs');
+await (async () => { const { readdirSync, readFileSync } = await import('fs');
   const dir = new URL('../src/', import.meta.url), bare = [];
   for (const f of readdirSync(dir).filter((n) => n.endsWith('.js'))) {
     const lines = readFileSync(new URL(f, dir), 'utf8').split('\n');
@@ -1620,14 +1625,14 @@ const udRun = (gated) => {
       if (!l.includes('typeof process') && !(i > 0 && lines[i - 1].includes('typeof process'))) bare.push(`${f}:${i + 1}`);
     });
   }
-  eq('every process.env read in src/ is guarded by typeof process', bare.join(' '), ''); }
+  eq('every process.env read in src/ is guarded by typeof process', bare.join(' '), ''); })();
 
 // ---- The renderer follows the card (H7) ---------------------------------------------------------
 // Text colours go attribute nibble -> AC palette -> DAC. They indexed the DAC directly: after
 // AX=0003h (DAC = the 64-colour EGA table) colour 6 was dark yellow, not brown, and 8-15 wrong.
 // With a real VGA ROM as INT 10h (vga.hw), rows/columns, blink, cursor and the planar size come from
 // the BDA and the registers, since no setMode or bios.cursor is maintained by it.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
   const video = new Video(mc, canvas); video.font = new Uint8Array(4096); mc.font = video.font;
   for (let i = 0; i < 16; i++) video.font[0xdb * 16 + i] = 0xff;           // a full block, to see the ink
@@ -1649,14 +1654,14 @@ const udRun = (gated) => {
   const c = mc.vga.crtc; c[0x01] = 0x4f; c[0x12] = 0xdf; c[0x07] = 0x3e; c[0x09] = 0x40;
   eq('hw planar: size from the CRTC', JSON.stringify(mc.vga.crtcDims?.()), '{"w":640,"h":480}');
   c[0x01] = 0x27; c[0x12] = 0x8f; c[0x07] = 0x1f; c[0x09] = 0xc0;          // mode 0Dh: 40 clocks, doubled 400 lines
-  eq('...320x200 when the CRTC doubles every line', JSON.stringify(mc.vga.crtcDims?.()), '{"w":320,"h":200}'); }
+  eq('...320x200 when the CRTC doubles every line', JSON.stringify(mc.vga.crtcDims?.()), '{"w":320,"h":200}'); })();
 
 // ---- Text geometry is the card's, not the BDA's (386BSD) -------------------------------------------
 // 386BSD's kernel zeroes physical page 0 and its pccons writes only the cursor registers: the
 // renderer took rows from 0040:0084 (now 0) and drew ONE row of the console, while QEMU (whose BDA
 // reads mode 0 too) draws the CRTC's 80x25. Our POST loads no CRTC, so a zeroed BDA under an
 // unloaded CRTC is 80x25 too; once the CRTC is loaded, its geometry wins over the BDA.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
   const video = new Video(mc, canvas); video.font = new Uint8Array(4096);
   for (let a = 0x400; a < 0x500; a++) mem.w8(a, 0);                        // the kernel's page 0
@@ -1668,17 +1673,17 @@ const udRun = (gated) => {
   eq('...with the mode-3 CRTC loaded: 80x25 from it', `${video.imgW}x${video.imgH}`, '640x400');
   mc.vga.crtc[0x09] = 0x47;                                                // 8-line cells: 50 rows
   video.render();
-  eq('...and rows follow CRTC 09h, not the BDA', video.imgH / 16, 50); }
+  eq('...and rows follow CRTC 09h, not the BDA', video.imgH / 16, 50); })();
 // A VGA BIOS's POST leaves the card in mode 3: the CRTC holds that geometry at power-on, before any
 // INT 10h mode set (src/vga.js installVGA). 386BSD takes the console from that state.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const c = mc.vga.crtc;
-  eq('power-on CRTC: mode 3 (01h=4Fh, 09h=4Fh, 12h=8Fh, 13h=28h)', [c[0x01], c[0x09], c[0x12], c[0x13]].map((v) => v.toString(16)).join(','), '4f,4f,8f,28'); }
+  eq('power-on CRTC: mode 3 (01h=4Fh, 09h=4Fh, 12h=8Fh, 13h=28h)', [c[0x01], c[0x09], c[0x12], c[0x13]].map((v) => v.toString(16)).join(','), '4f,4f,8f,28'); })();
 
 // ---- INT 10h AX=1121h-1124h: graphics fonts set the BDA rows and height; AX=1130h reports them ---
 // They were no-ops, and AX=1130h answered the REQUESTED font's height. QEMU/SeaBIOS, DOSBox-X and
 // the vendor Cirrus ROM agree on every value below (tools/int10gfx.asm T11).
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   mc.font = new Uint8Array(256 * 16).fill(0xff); mc.font8x8 = new Uint8Array(256 * 8).fill(0xff); mc.font8x14 = new Uint8Array(256 * 14).fill(0xff);
   const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
   const row = (mode, ax, bx, dx) => { int10(mode); int10(ax, bx, 0, dx);
@@ -1695,13 +1700,13 @@ const udRun = (gated) => {
   mem.w8(0x450, 0); mem.w8(0x451, 0);
   int10(0x0e41, 0x000f);
   const P = 0x10000, pl = mc.vga.planes;
-  eq('...and teletype draws from it: scanline 3 of cell 0 is 81h, the rest empty', [pl[3 * 80], pl[2 * 80], pl[4 * 80]].join(), '129,0,0'); }
+  eq('...and teletype draws from it: scanline 3 of cell 0 is 81h, the rest empty', [pl[3 * 80], pl[2 * 80], pl[4 * 80]].join(), '129,0,0'); })();
 
 // ---- INT 10h in planar modes: mode 6Ah, glyphs into the planes, SeaBIOS's register side effect ----
 // v86's stillalive-os.img sets mode 6Ah (800x600x16) and prints with AH=0Eh; QEMU shows the lyrics,
 // we stayed in text mode. It then clears its lyrics panel with bare stores through A000, relying on
 // the teletype in between to have left the map mask at 0Fh (SeaBIOS's stdvga_planar4_plane(-1)).
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   const int10 = (ax, bx = 0, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc); };
   mc.font = new Uint8Array(256 * 16).fill(0xff); mc.font8x8 = new Uint8Array(256 * 8).fill(0xff);
   int10(0x006a);
@@ -1731,12 +1736,12 @@ const udRun = (gated) => {
   mc.vga.mapMask = 0x01; mc.vga.gc[4] = 2;
   int10(0x0600, 0x0000, 0x0000, 0x2463);
   eq('AH=06h in a planar mode clears the pixels', pl[P + off] | pl[2 * P + off], 0);
-  eq('...leaving map mask 0Fh and the read map it found (int10gfx T8)', [mc.vga.mapMask, mc.vga.gc[4]].join(), '15,2'); }
+  eq('...leaving map mask 0Fh and the read map it found (int10gfx T8)', [mc.vga.mapMask, mc.vga.gc[4]].join(), '15,2'); })();
 
 // ---- INT 15h AX=E820h: the system address map --------------------------------------------------
 // KolibriOS reads it and, finding nothing, probed memory itself and never finished. Walk it the way
 // a loader does: EBX=0, then whatever EBX comes back, until it is 0 again.
-{ const mc = new Machine({ memSize: 16 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 16 << 20 }); const cpu = mc.cpu, mem = mc.mem;
   installBIOS(mc);
   cpu.setSeg(ES, 0x0100); const ranges = []; let ebx = 0, n = 0;
   do {
@@ -1751,14 +1756,14 @@ const udRun = (gated) => {
     `0+a0000:1 f0000+10000:2 100000+${(mc.vbeFbBase - 0x100000).toString(16)}:1 ${mc.vbeFbBase.toString(16)}+400000:2`);
   // 4 MiB-aligned like a real aperture: KolibriOS maps it with a 4 MiB page once CPUID says PSE, and
   // at 14 MiB (unaligned) it drew 2 MiB below the screen.
-  eq('...and the framebuffer starts on a 4 MiB boundary', (mc.vbeFbBase & 0x3fffff).toString(16), '0'); }
+  eq('...and the framebuffer starts on a 4 MiB boundary', (mc.vbeFbBase & 0x3fffff).toString(16), '0'); })();
 
 // ---- INT 15h AH=C0h: the system configuration table ---------------------------------------------
 // Windows 1.01 and 2.03 ask for this before deciding what machine they are on. With no table they
 // fall through to the Microsoft serial-mouse probe, find nothing, and never draw a cursor — which is
 // how a missing BIOS table read as a missing mouse. Both reference BIOSes answer the same shape:
 // length 8, model FCh (AT), submodel 0, revision 1.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   installBIOS(mc);
   cpu.ax = 0xc000; cpu.flags |= 1;
   mc.intHandlers[0x15](cpu, mc);
@@ -1771,14 +1776,14 @@ const udRun = (gated) => {
   // Each feature bit is only set if it is true HERE: a cascaded PIC and an RTC, nothing else. Both
   // references also set bit 6 of feature byte 2 (INT 16h AH=09h), which our INT 16h does not have.
   eq('feature byte 1 claims the second PIC and the RTC, and nothing else', mc.mem.r8(t + 5), 0x60);
-  eq('feature byte 2 claims nothing', mc.mem.r8(t + 6), 0x00); }
+  eq('feature byte 2 claims nothing', mc.mem.r8(t + 6), 0x00); })();
 
 // ---- CMOS configuration bytes ------------------------------------------------------------------
 // PC-MOS/386 reads 10h (diskette types) before it has a boot sector; with the zeros we held it
 // assumed no drive and addressed every sector with a default geometry. tools/cmosdump.asm on QEMU
 // and DOSBox-X: 10h types, 14h equipment (drives, x87, bit 2), 15h/16h 640 KB, 17h/18h = 30h/31h
 // extended KB.
-{ const mc = new Machine({ memSize: 16 << 20 });
+await (async () => { const mc = new Machine({ memSize: 16 << 20 });
   installBIOS(mc);
   const cmos = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
   // Drive A is fitted with no diskette in it (QEMU's default, DOSBox-X, our equipment word): with
@@ -1793,10 +1798,10 @@ const udRun = (gated) => {
   mc.disk.attach(0x80, new Uint8Array(512 * 63 * 16), { cyl: 1, heads: 16, spt: 63 });
   eq('...and with one, type 15 in 12h pointing at user type 47 in 19h', [cmos(0x12), cmos(0x19)].join(), '240,47');
   mc.portWrite[0x70](0x70, 1, 0x10); mc.portWrite[0x71](0x71, 1, 0x24);
-  eq('a guest\'s own write to a configuration byte reads back', cmos(0x10), 0x24); }
+  eq('a guest\'s own write to a configuration byte reads back', cmos(0x10), 0x24); })();
 
 // ---- The primary IDE channel (src/ide.js): what Linux 2.2 needs to mount /dev/hda1 ---------------
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const inb = (p) => (mc.portRead[p] ? mc.portRead[p](p, 1) & 0xff : 0xff), inw = (p) => (mc.portRead[p] ? mc.portRead[p](p, 2) & 0xffff : 0xffff), outb = (p, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, 1, v); };
   eq('no hard disk: the IDE registers float at FFh, as before the device existed', [inb(0x1f7), inb(0x1f1), inb(0x3f6)].join(), '255,255,255');
   const img = new Uint8Array(4 * 16 * 63 * 512); for (let i = 0; i < img.length; i++) img[i] = (i * 7 + (i >> 9)) & 0xff;
@@ -1818,12 +1823,12 @@ const udRun = (gated) => {
   outb(0x1f6, 0xb0); outb(0x1f7, 0xec);                                        // IDENTIFY to the absent slave
   eq('the absent slave reads status 00h', inb(0x1f7), 0);
   outb(0x1f6, 0xa0);
-  eq('...and the master keeps its own status (a slave probe cleared it: "drive not ready")', inb(0x1f7) & 0x40, 0x40); }
+  eq('...and the master keeps its own status (a slave probe cleared it: "drive not ready")', inb(0x1f7) & 0x40, 0x40); })();
 // A BIOS geometry ATA cannot express (Windows 2000's v86 image is partitioned with 128 heads): the
 // drive reports and translates 16 heads, 63 sectors, as QEMU's and a real drive do. atapi.sys
 // addresses by CHS with the heads IDENTIFY gives; with 128 it wrote head 72 as A0h|48h (the LBA bit),
 // head 80 as F0h (the slave), and the read never completed: the boot screen for ever.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const inb = (p) => mc.portRead[p](p, 1) & 0xff, inw = (p) => mc.portRead[p](p, 2) & 0xffff, outb = (p, v) => mc.portWrite[p](p, 1, v);
   const img = new Uint8Array(2 * 128 * 63 * 512); for (let i = 0; i < img.length; i++) img[i] = (i >> 9) & 0xff ^ (i & 0x1ff);
   mc.disk.attach(0x80, img, { cyl: 2, heads: 128, spt: 63, type: 3 });
@@ -1833,13 +1838,13 @@ const udRun = (gated) => {
     [id[1], id[3], id[6], id[54], id[55], id[56]].join(), '16,16,63,16,16,63');
   outb(0x1f2, 1); outb(0x1f3, 7); outb(0x1f4, 3); outb(0x1f5, 0); outb(0x1f6, 0xa5); outb(0x1f7, 0x20);   // CHS 3/5/7
   const lba = (3 * 16 + 5) * 63 + 6, rd = []; for (let k = 0; k < 256; k++) { const w = inw(0x1f0); rd.push(w & 0xff, w >> 8); }
-  eq('...and READ SECTORS by CHS translates with those 16 heads', rd.every((b, i) => b === img[lba * 512 + i]), true); }
+  eq('...and READ SECTORS by CHS translates with those 16 heads', rd.every((b, i) => b === img[lba * 512 + i]), true); })();
 
 // ---- INT 13h extensions (EDD), BDA 0475h, CMOS type-47 parameters ------------------------------
 // Windows 95/98 (FAT32 boot sector) and NetBSD's bootstrap read by LBA through AH=42h: "Disk I/O error",
 // "/boot load failed". NetBSD took drive 80h for a CD because BDA 0475h said 0 hard disks; 386BSD reads
 // the user-type geometry QEMU keeps in CMOS 1Bh-23h.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   const img = new Uint8Array(20 * 16 * 63 * 512); for (let i = 0; i < img.length; i++) img[i] = (i >> 9) & 0xff;
   mc.disk.attach(0x80, img, { cyl: 20, heads: 16, spt: 63, type: 3 });
   const i13 = (ax, extra) => { cpu.ax = ax; cpu.dx = 0x0080; extra(); mc.intHandlers[0x13](cpu, mc); };
@@ -1854,12 +1859,12 @@ const udRun = (gated) => {
   eq('AH=48h: CHS 20/16/63, total sectors, 512-byte sectors', [mem.r32(0x704), mem.r32(0x708), mem.r32(0x70c), mem.r32(0x710), mem.r16(0x718)].join(), `20,16,63,${20 * 16 * 63},512`);
   eq('BDA 0475h counts the attached hard disks', mem.r8(0x475), 1);
   const cmos = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
-  eq('CMOS 1Bh-23h: the type-47 parameters (cyl 20, heads 16, sectors 63)', [cmos(0x1b) | (cmos(0x1c) << 8), cmos(0x1d), cmos(0x23)].join(), '20,16,63'); }
+  eq('CMOS 1Bh-23h: the type-47 parameters (cyl 20, heads 16, sectors 63)', [cmos(0x1b) | (cmos(0x1c) << 8), cmos(0x1d), cmos(0x23)].join(), '20,16,63'); })();
 
 // ---- The CPU profile: MIRAGE_CPU, EFLAGS.AC on a 486+, the Intel-identity 'pentium' -------------
 // MIRAGE_CPU was documented and read nowhere; and AC (bit 18) could not be toggled, so NetBSD and Linux
 // classed our 586 as a 386 (NetBSD then panicked, "no appropriate CPU class available").
-{ const was = process.env.MIRAGE_CPU; process.env.MIRAGE_CPU = '586';
+await (async () => { const was = process.env.MIRAGE_CPU; process.env.MIRAGE_CPU = '586';
   const viaEnv = new Machine({ memSize: 1 << 20 }).cpu.profile.name;
   if (was === undefined) delete process.env.MIRAGE_CPU; else process.env.MIRAGE_CPU = was;
   eq('MIRAGE_CPU selects the profile when none is passed', viaEnv, '586');
@@ -1878,34 +1883,34 @@ const udRun = (gated) => {
     const vend = String.fromCharCode(...[p.reg[3], p.reg[2], p.reg[1]].flatMap((w) => [w & 0xff, (w >>> 8) & 0xff, (w >>> 16) & 0xff, w >>> 24]));
     p.reg[0] = 1; p.cpuid(); pent = [vend, (p.reg[0] >>> 0).toString(16), p.reg[2]].join();
   } catch (e) { pent = String(e.message).slice(0, 40); }
-  eq("the 'pentium' profile says GenuineIntel, family 5 model 2, features FPU+PSE+TSC+CX8 only", pent, 'GenuineIntel,520,281'); }
+  eq("the 'pentium' profile says GenuineIntel, family 5 model 2, features FPU+PSE+TSC+CX8 only", pent, 'GenuineIntel,520,281'); })();
 
 // ---- CR4.PSE: a page-directory entry with PS set maps 4 MiB ---------------------------------------
 // 9legacy's loader maps its kernel with 4 MiB pages when CPUID says PSE, and panics at "vmap:
 // va=0x81000000" without them — QEMU `-cpu pentium,-pse` panics the same way. Before CR4 existed
 // here, MOV CR4 was ignored and every PDE was read as a page-table pointer.
-{ const mc = new Machine({ memSize: 32 << 20, cpu: '586' }); const cpu = mc.cpu, m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 32 << 20, cpu: '586' }); const cpu = mc.cpu, m = mc.mem;
   const DIR = 0x10000;
   m.w32(DIR + (0x81000000 >>> 22) * 4, 0x01000000 | 0x83);                   // 4 MiB page at 16 MiB: P, R/W, PS
   cpu.setCR3(DIR); cpu.setCR4(0x10); cpu.setCR0(0x80000001);
   eq('PSE: linear 81234567h -> physical 01234567h through one PDE', (m.walk(0x81234567) >>> 0).toString(16), '1234000');
   eq('...the PDE takes the accessed bit', (m.r32phys(DIR + 0x204 * 4) >> 5) & 1, 1);
-  eq('...and MOV from CR4 would read PSE back', cpu.cr4, 0x10); }
+  eq('...and MOV from CR4 would read PSE back', cpu.cr4, 0x10); })();
 
 // ---- A HLT is woken by what the 8259 holds, for a protected-mode OS of its own ------------------
 // A device IRQ raised while IRQ0 was in service was left in the IRR and never delivered; a HLT then
 // waited for ever (386BSD after its disk probe).
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
   cpu.cr0 |= 1; cpu.flags |= 0x200; cpu.halted = true;
   const got = []; mc.idtGatePresent = () => true; mc.protInt = (v) => { got.push(v); };
   mc.pic.raise(1);                                                          // a keyboard request nobody took
   mc.runSlice(1);
-  eq('a halted PM guest with IF set gets the IRQ its PIC holds, at the PIC vector', got.join(), String(mc.pic.vector(1))); }
+  eq('a halted PM guest with IF set gets the IRQ its PIC holds, at the PIC vector', got.join(), String(mc.pic.vector(1))); })();
 
 // ---- The 8042 answers an OS's keyboard initialisation -------------------------------------------
 // Linux 2.2 self-tests the controller, resets the keyboard and waits for the ACK in its IRQ1 handler:
 // "keyboard: Timeout - AT keyboard not present?" when any of it was missing.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const inb = (p) => (mc.portRead[p] ? mc.portRead[p](p, 1) & 0xff : 0xff), outb = (p, v) => { if (mc.portWrite[p]) mc.portWrite[p](p, 1, v); };
   outb(0x64, 0xaa); const st = inb(0x60); outb(0x64, 0xab); const it = inb(0x60); outb(0x64, 0x20); const cb = inb(0x60);
   eq('8042: self-test 55h, interface test 00h, command byte 45h', [st, it, cb].map((v) => v.toString(16)).join(), '55,0,45');
@@ -1915,25 +1920,25 @@ const udRun = (gated) => {
   outb(0x64, 0x60); outb(0x60, 0x44); outb(0x64, 0x20);
   eq('...the command byte is writable (60h) and reads back', inb(0x60), 0x44);
   mc.kbIrqPending = false; outb(0x60, 0xf4); inb(0x60);
-  eq('...and with its bit 0 clear a keyboard ACK raises nothing', mc.kbIrqPending, false); }
+  eq('...and with its bit 0 clear a keyboard ACK raises nothing', mc.kbIrqPending, false); })();
 
 // ---- The RTC is a chip: it reads the BDA tick physically, never through the guest's paging --------
 // Linux 2.2 (v86's bl3-5.img) reads the CMOS clock while low memory is unmapped; our chip read
 // 0040:006C with mem.r32, took a #PF at 0000046Ch inside `in al,71h`, and the kernel panicked.
-{ const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   mem.setA20(true);
   mem.w32(0x10000, 0x11007);
   for (let p = 1; p < 16; p++) mem.w32(0x11000 + p * 4, ((p << 12) | 0x07) >>> 0);   // page 0 NOT mapped
   cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
   let v, err = null;
   try { mc.portWrite[0x70](0x70, 1, 0x04); v = mc.portRead[0x71](0x71, 1) & 0xff; } catch (e) { err = e.constructor.name; }
-  eq('reading the RTC with page 0 unmapped does not fault, and gives the hour (08 BCD)', [err, v].join(), ',8'); }
+  eq('reading the RTC with page 0 unmapped does not fault, and gives the hour (08 BCD)', [err, v].join(), ',8'); })();
 
 // ---- MC146818 clock + CMOS ---------------------------------------------------------------------
 // The chip is the reference, not any one BIOS: four implementations (SeaBIOS under QEMU and under
 // v86, the Bochs BIOS, DOSBox-X) answer INT 1Ah by copying these registers out verbatim, and every
 // difference between them was a difference in what their CMOS held.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   installBIOS(mc);
   const cmos = (reg) => { mc.portWrite[0x70](0x70, 1, reg); return mc.portRead[0x71](0x71, 1) & 0xff; };
   eq('CMOS register B is 24-hour BCD with no daylight saving', cmos(0x0b), 0x02);
@@ -1975,13 +1980,13 @@ const udRun = (gated) => {
   mc.intHandlers[0x1a](cpu, mc);
   cpu.ax = 0x0400; mc.intHandlers[0x1a](cpu, mc);
   eq('AH=05h then AH=04h round-trips the year', cpu.cx & 0xffff, 0x2013);
-  eq('...and the month and day', cpu.dx & 0xffff, 0x0725); }
+  eq('...and the month and day', cpu.dx & 0xffff, 0x0725); })();
 
 // ---- CPU profiles: the generation differences a DOS program uses to DETECT the chip -----------
 // Until src/cpu-profile.js existed, MIRAGE was a hybrid nobody shipped — 8088 on some corners, 286
 // on others, 386 decoding throughout — so a detection routine could conclude something impossible.
 // Each of these is a DEFINED difference, not an undefined-flag corner.
-{
+await (async () => {
   /** Run `code` at 0100:0000 under `cpu` profile until HLT, return the machine. */
   const run = (cpuProfile, code) => {
     const mc = new Machine({ memSize: 1 << 20, cpu: cpuProfile });
@@ -2011,10 +2016,10 @@ const udRun = (gated) => {
   let threw = false;
   try { new Machine({ memSize: 1 << 20, cpu: 'z80' }); } catch { threw = true; }
   eq('an unknown profile is refused rather than silently ignored', threw, true);
-}
+})();
 
 // ---- #PF, CPL, and the descriptor-table limit ------------------------------------------------
-{
+await (async () => {
   // CPL is STORED. Between `mov cr0` (PE on) and the far jump that reloads CS, the selector register
   // still holds the REAL-MODE value, whose low two bits mean nothing. Windows 3.0 sits there with
   // CS = 0x13b, and a CPL derived from `seg[CS] & 3` read 3 — so the far jump to its DPL-0 code
@@ -2025,8 +2030,8 @@ const udRun = (gated) => {
   eq('CPL is 0 in real mode whatever CS looks like', cpu.cpl, 0);
   cpu.setCR0(cpu.cr0 | 1);                            // PE on, CS not yet reloaded
   eq('...and stays 0 across the PE transition, before CS is reloaded', cpu.cpl, 0);
-}
-{
+})();
+await (async () => {
   // A selector past the table limit is #GP(selector), not a read past the table.
   const mc = new Machine({ memSize: 1 << 20 });
   const cpu = mc.cpu;
@@ -2038,8 +2043,8 @@ const udRun = (gated) => {
   eq('a selector past the GDT limit raises #GP', raised && raised.n, 13);
   eq('...with that selector as the error code', raised && raised.err, 0x40);
   eq('readDesc reports no descriptor there rather than reading past', cpu.readDesc(0x40), null);
-}
-{
+})();
+await (async () => {
   // Descriptor-table and TSS reads are IMPLICIT SUPERVISOR accesses: the processor makes them on its
   // own behalf, so the page-level U/S check does not apply whatever the CPL. They were judged at the
   // current CPL, so a ring-3 interrupt could not read ESP0 out of a TSS in a supervisor page — and
@@ -2070,8 +2075,8 @@ const udRun = (gated) => {
     cpu.tr.base = 0x3ff000;                           // unmapped: the TSS read itself must #PF
     const f = faults(() => cpu.tssStack(0)); cpu.tr.base = 0x5000;
     return f && mem.sup === 0; })(), true);
-}
-{
+})();
+await (async () => {
   // ENTER probes the FINAL stack pointer before anything else: the 386 faults "whenever a write
   // using the final value of the stack pointer would", even though that byte is never written.
   // Here the push of BP lands at 4000h (user page) and the final SP is 3FFFh (supervisor page): at
@@ -2094,8 +2099,8 @@ const udRun = (gated) => {
   eq('...and nothing moved: SP', cpu.sp, 0x4002);
   eq('...BP', cpu.reg[5] & 0xffff, 0x1234);
   eq('...and the frame slot below the old SP is untouched', mem.r16(0x4000), 0);
-}
-{
+})();
+await (async () => {
   // REP MOVS that #PFs part-way restarts WHERE IT STOPPED. The count lived in a local and was
   // written back only after the loop, while ESI/EDI advanced in the registers: the restart ran the
   // full count again from the advanced position and overran the destination. KolibriOS's kernel
@@ -2119,8 +2124,8 @@ const udRun = (gated) => {
   eq('REP MOVSB across a #PF: one fault, then the copy resumes', pfs, 1);
   eq('...copying exactly CX bytes and nothing past them', dst.join(','), '1,2,3,4,5,6,7,8,ee,ee,ee,ee');
   eq('...leaving CX 0 and DI one past the end', [cpu.cx & 0xffff, (cpu.reg[7] & 0xffff).toString(16)].join(), '0,7004');
-}
-{
+})();
+await (async () => {
   // PUSH and POP m that #PF commit ESP only once the store succeeded. Both moved ESP first, so the
   // restart moved it again: KolibriOS's libini ran `pop [ebx]` into a fresh heap page and returned
   // with EBX/ESI/EDI restored one slot off, and @ICON gave up reading icon.ini.
@@ -2144,8 +2149,8 @@ const udRun = (gated) => {
     eq('PUSH onto an absent stack page: one #PF, then one slot pushed', [n, (cpu.sp & 0xffff).toString(16), mem.u8[0x7ffe] | (mem.u8[0x7fff] << 8)].join(), '1,7ffe,4660'); }
   { const { cpu, mem, n } = pf([0x8f, 0x07, 0xf4], (cpu, mem) => { cpu.sp = 0x3000; cpu.reg[3] = 0x7000; mem.u8[0x3000] = 0x78; mem.u8[0x3001] = 0x56; mem.u8[0x3002] = 0x34; mem.u8[0x3003] = 0x12; });   // pop [bx] ; hlt
     eq('POP [mem] into an absent page: one #PF, then ESP up by one slot only', [n, (cpu.sp & 0xffff).toString(16), (mem.u8[0x7000] | (mem.u8[0x7001] << 8)).toString(16)].join(), '1,3002,5678'); }
-}
-{
+})();
+await (async () => {
   // INVLPG after a PTE rewrite: the next access sees the NEW frame. The software TLB was refreshed
   // only on a CR3 load and INVLPG was a no-op, so a kernel that remaps one page and invalidates it
   // (KolibriOS, freeing and reallocating heap pages) kept running on the frame it had given away.
@@ -2165,8 +2170,8 @@ const udRun = (gated) => {
   cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
   for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
   eq('INVLPG after remapping a page: the read before sees the old frame, the read after the new', (cpu.ax & 0xffff).toString(16), 'bbaa');
-}
-{
+})();
+await (async () => {
   // x87 memory operands go through the page tables. They indexed physical memory with the LINEAR
   // address: under HDPMI32, xcom144's `fistp qword` (a loop bound) landed elsewhere and the program
   // read back two stale stack addresses as a bound of ~2^54 iterations.
@@ -2185,8 +2190,8 @@ const udRun = (gated) => {
   for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
   eq('x87 under paging: FLD m32 / FISTP m64 use the mapped frame', [Number(mem.dv.getBigInt64(0x9000, true)), Number(mem.dv.getBigInt64(0x5000, true))].join(), '1234,0');
   eq('...and FLD / FSTP m64 too', [mem.dv.getFloat64(0x9028, true), mem.dv.getFloat64(0x5028, true)].join(), '2.5,0');
-}
-{
+})();
+await (async () => {
   // PUSH and POP inline under paging take SS's base: "flat" is a 4 GiB expand-up limit, not a zero
   // base. HDPMI32's stack (xcom144) has a base, and its pushes landed at ESP itself: the host halted.
   const mc = new Machine({ memSize: 4 << 20 }), cpu = mc.cpu, mem = mc.mem;
@@ -2199,8 +2204,8 @@ const udRun = (gated) => {
   cpu.csD = 1; cpu.base[SS] = 0x4000; cpu.limit[SS] = 0xffffffff; cpu.limLo[SS] = 0; cpu.ssB = 1; cpu.reg[4] = 0x100;
   for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
   eq('push/pop inline under paging go to SS\'s base plus ESP', [(cpu.reg[0] >>> 0).toString(16), (cpu.reg[4] >>> 0).toString(16), mem.r32(0x40fc).toString(16)].join(), '11223344,fc,55667788');
-}
-{
+})();
+await (async () => {
   // An undefined 0F opcode decoded past a side exit, at ring 3: the translator asks whether the guest
   // handles #UD by reading the IDT, which the processor reads as a supervisor. Read as a user access,
   // FreeNOS's IDT page faulted at translate time -- a #PF for code that never runs -- and the kernel
@@ -2219,8 +2224,8 @@ const udRun = (gated) => {
   try { for (let i = 0; i < 10; i++) mc.runSlice(4); got = [(cpu.eip >>> 0).toString(16), (cpu.cr2 >>> 0).toString(16)].join(); }
   catch (e) { got = e.message.slice(0, 60); }
   eq('ring 3: the IDT read for an opcode past a side exit is a supervisor access, and faults nobody', got, '6,0');
-}
-{
+})();
+await (async () => {
   // The VGA / VBE window is PHYSICAL A0000h, reached through whatever linear page maps it. Under paging
   // the device routing was skipped and the TLB marked device pages by LINEAR number, so xcom144 under
   // HDPMI32 (VBE 111h, banked) drew into the RAM behind A000 and its framebuffer stayed black.
@@ -2237,8 +2242,8 @@ const udRun = (gated) => {
   for (let i = 0; i < 20 && !cpu.halted; i++) mc.runSlice(4);
   eq('paged write through a page mapped on A000: it reaches the VBE framebuffer, not the RAM behind', [mem.u8[mc.vbeFbBase], mem.u8[0xa0000]].join(), '90,0');
   eq('...and reads back through the window', (cpu.ax >> 8) & 0xff, 0x5a);
-}
-{
+})();
+await (async () => {
   // #PF: a not-present page raises INT 14 with CR2 and the error code, instead of reading zero.
   const mc = new Machine({ memSize: 4 << 20 });
   const cpu = mc.cpu, mem = mc.mem;
@@ -2259,13 +2264,13 @@ const udRun = (gated) => {
   const bare = new Machine({ memSize: 1 << 20 }).mem;
   bare.pfRaise = false;
   eq('with pfRaise off it still reads zero, for inspectors', bare.r8(0x1234) >= 0, true);
-}
+})();
 
 // ---- multi-byte memory access is translated under paging -------------------------------------
 // Only r8/w8 translated; r16/r32/w16/w32 did `a &= this.mask`, which treats a LINEAR address as
 // physical. loadDescriptor mixes r16 and r8, so every descriptor load was HALF translated. Windows
 // 3.0's WIN386 puts its GDT at linear 0x8010011c and we read the descriptor from 0x0010011c.
-{
+await (async () => {
   const mc = new Machine({ memSize: 4 << 20 });
   const cpu = mc.cpu, mem = mc.mem;
   mem.setA20(true); mc.rec.MM = mem.mask;   // without A20 the mask is 20 bits and every
@@ -2291,7 +2296,7 @@ const udRun = (gated) => {
   cpu.setCR0(0x00000001);
   eq('paging: clearing PG stops translation, even with PE still set',
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
-}
+})();
 
 // ---- Mode X (unchained 256-colour) ----------------------------------------------------------
 // Implemented since the planar work and exercised in anger by Wolf3D (88411 non-zero plane bytes),
@@ -2299,7 +2304,7 @@ const udRun = (gated) => {
 // rather than as a failing test. The layout: clearing bit 3 of Sequencer index 4 (memory mode) while
 // in mode 13h unchains the framebuffer, and pixel (x,y) then lives in plane (x&3) at plane offset
 // start + y*stride + (x>>2) — four bytes of VRAM per four horizontal pixels, one per plane.
-{
+await (async () => {
   const mc = new Machine({ memSize: 1 << 20 });
   installBIOS(mc);
   const cpu = mc.cpu, vga = mc.vga, mem = mc.mem;
@@ -2348,11 +2353,11 @@ const udRun = (gated) => {
   mc.ioWrite(0x3c4, 1, 4); mc.ioWrite(0x3c5, 1, vga.memMode | 0x08);
   eq('restoring chain-4 leaves Mode X', vga.modeX, false);
   eq('...and stops routing A000 through the planes', mem.planar, false);
-}
+})();
 // ...and Mode X set by the registers alone, no INT 10h: SVGAlib (Linux Quake II's 320x240) leaves the BIOS
 // mode at 3 and programs the Sequencer, then the Graphics Controller's 256-colour bits. Seen as text
 // mode, the window stayed plain RAM and the screen black.
-{
+await (async () => {
   const mc = new Machine({ memSize: 1 << 20 });
   installBIOS(mc);
   const vga = mc.vga, mem = mc.mem;
@@ -2361,7 +2366,7 @@ const udRun = (gated) => {
   mc.ioWrite(0x3ce, 1, 5); mc.ioWrite(0x3cf, 1, 0x40);            // 256 colours
   mc.ioWrite(0x3ce, 1, 6); mc.ioWrite(0x3cf, 1, 0x05);            // graphics, A000 64K
   eq('Mode X from the registers alone: not before 256 colours, then planes', [before, vga.modeX, mem.planar].join(), 'false,true,true');
-}
+})();
 
 // ---- a self-modifying instruction still commits its FLAGS before the block stops ------------
 // The guard used to `return` from inside the write emitter — the middle of an instruction — so
@@ -2370,7 +2375,7 @@ const udRun = (gated) => {
 // between the store and `cpu.setSub`, the following `jnc` read a stale carry, and the loop that
 // should have fallen through ran a second pass whose segment arithmetic wrapped past 1 MiB over the
 // kernel itself. The check belongs at the instruction boundary.
-{
+await (async () => {
   const mc = new Machine({ memSize: 1 << 20 });
   const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.setSeg(DS, 0x100); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
@@ -2383,14 +2388,14 @@ const udRun = (gated) => {
   eq('a self-modifying SUB still writes its result', mc.mem.u8[0x1003], 0xf0);
   eq('...and still commits its flags: 0x00 - 0x10 borrows', (cpu.flags & CF) !== 0, true);
   eq('...and the block stops AFTER it, not inside it', cpu.eip >>> 0, 5);
-}
+})();
 
 // ---- self-modification invalidation works above 2 GiB ----------------------------------------
 // `invalidate` computed its page index with a SIGNED shift, so a linear address at or above 2 GiB
 // came out negative and the lookup missed every time. Windows 3.0 pages its kernel in at linear
 // 0x80006000 AFTER blocks there are translated, and we kept running the stale ones — a block decoded
 // as `CD 20` (INT 20h) where the memory had since been rewritten to `FF 15 …` (an indirect call).
-{
+await (async () => {
   const mc = new Machine({ memSize: 16 << 20 });
   const cpu = mc.cpu, mem = mc.mem;
   mem.setA20(true); mc.rec.MM = mem.mask;
@@ -2411,14 +2416,14 @@ const udRun = (gated) => {
   let ok2 = true;
   try { mc.rec.invalidate(0x80006366, 1); } catch { ok2 = false; }
   eq('invalidate() survives an address above 2 GiB', ok2, true);
-}
+})();
 
 // ---- the STACK is a linear address too -------------------------------------------------------
 // push/pop masked with mem.mask, which is the PHYSICAL wrap. Windows 3.0's kernel stack lives at
 // linear 0x800131e8; with A20 closed that became 0x131e8, so every push landed in low memory and
 // every pop read zeros — its exception dispatcher read a return address of 0 and called through a
 // wild pointer, which is where 495 page faults on seven phantom pages came from.
-{
+await (async () => {
   const mc = new Machine({ memSize: 16 << 20 });
   const cpu = mc.cpu, mem = mc.mem;
   mem.setA20(false); mc.rec.MM = mem.mask;               // A20 CLOSED, as Windows leaves it
@@ -2439,13 +2444,13 @@ const udRun = (gated) => {
   cpu.reg[4] = 0x800131e8;
   cpu.push16(0x1234);
   eq('with paging off the stack masks again', mem.r16(0x131e6), 0x1234);
-}
+})();
 
 // ---- a linear address is not masked under paging ---------------------------------------------
 // A20 gates a PHYSICAL address line and the RAM-size wrap is physical too, so applying either
 // BEFORE the page walk truncates the guest's address space. Windows 3.0 runs its kernel at linear
 // 0x80201b5e; with A20 closed that was masked to 0x1b5e and we decoded whatever sat in low memory.
-{
+await (async () => {
   const mc = new Machine({ memSize: 16 << 20 });
   const cpu = mc.cpu, mem = mc.mem;
   mem.setA20(false); mc.rec.MM = mem.mask;              // A20 CLOSED: the 1 MiB wrap, as Windows leaves it
@@ -2463,21 +2468,21 @@ const udRun = (gated) => {
   // Turning paging off restores the wrap, so real mode still gets it.
   cpu.setCR0(0x00000001);
   eq('clearing PG restores masking', mc.rec.pagedMode, false);
-}
-{
+})();
+await (async () => {
   // A paging change must END the slice: run() hoists pagedMode into a local at entry, so the rest of
   // a slice that turned paging on would keep masking — and cache those blocks under the masked key.
   const mc = new Machine({ memSize: 1 << 20 });
   mc.cpu.tbudget = 500;
   mc.cpu.setCR0(mc.cpu.cr0 | 0x80000001);
   eq('turning paging on ends the current slice', mc.cpu.tbudget, 0);
-}
+})();
 
 // ---- self-modification bookkeeping is LINEAR, including under paging -------------------------
 // codePage is filled from blk.linStart and the block cache is keyed by linear address, but the paged
 // write path tested and reported the TRANSLATED address. Every self-modifying write under paging
 // missed its invalidation — which is exactly what an OS relocating code does.
-{
+await (async () => {
   // 16 MiB, because rdOfs/wrOfs/codePage are indexed by LINEAR page and sized from installed RAM:
   // linear page 0x400 needs at least 0x401 entries to exist. (That sizing is itself a limit — a
   // guest mapping code above installed RAM, as Windows does at 0x80000000, has no entry at all.)
@@ -2499,13 +2504,13 @@ const udRun = (gated) => {
   hits.length = 0;
   mem.w8(0x401010, 0x90);                                      // a different linear page: no report
   eq('a write to a non-code page is not reported', hits.length, 0);
-}
+})();
 
 // ---- #UD is a service the guest can ask for -------------------------------------------------
 // The Windows 3.0 loader hooks INT 6 through DOS (`mov ax,2506h / int 21h`) and then executes
 // `0f a6` on purpose to identify the processor. Reporting "unimplemented opcode 0x0f 0xa6" for an
 // opcode that is invalid on every CPU and is MEANT to fault was the wrong answer.
-{
+await (async () => {
   const mc = new Machine({ memSize: 1 << 20 });
   installBIOS(mc);
   const cpu = mc.cpu;
@@ -2529,12 +2534,12 @@ const udRun = (gated) => {
   try { mc2.rec.step(); } catch (e) { msg = e.message; }
   eq('...but with no guest handler it is still reported as an unimplemented opcode',
      msg.includes('unimplemented opcode 0x0f 0xa6'), true);
-}
+})();
 
 // ---- virtual-8086 mode: EFLAGS.VM, its segment semantics, and the IOPL-sensitive set ---------
 // test386's POST 0x21 is the gate for this; these pin the pieces individually so a regression says
 // WHICH one, rather than "POST 21" again.
-{
+await (async () => {
   const mc = new Machine({ memSize: 1 << 20 });
   const cpu = mc.cpu;
   cpu.cr0 |= 1;                                                 // protected mode, no descriptors yet
@@ -2546,8 +2551,8 @@ const udRun = (gated) => {
   eq('V86: the limit is 64K', cpu.limit[CS], 0xffff);
   eq('V86: CPL is 3 even though CS & 3 is 0', cpu.cpl, 3);
   eq('V86: CS.D is 16-bit', cpu.csD, 0);
-}
-{
+})();
+await (async () => {
   // IRETD from ring 0 with VM set in the popped EFLAGS is the only way in, and its frame is NINE
   // dwords: the four data segments ride along because no descriptor can describe an 8086 value.
   const mc = new Machine({ memSize: 1 << 20 });
@@ -2575,8 +2580,8 @@ const udRun = (gated) => {
   cpu.eip = 0x1234;
   rec.step();
   eq('POPF cannot leave virtual-8086 mode', (cpu.flags & 0x20000) !== 0, true);
-}
-{
+})();
+await (async () => {
   // The TSS I/O permission bitmap. Before this, IN/OUT raised #GP for every CPL > IOPL, so a port
   // the bitmap PERMITS was refused too.
   const mc = new Machine({ memSize: 1 << 20 });
@@ -2596,12 +2601,12 @@ const udRun = (gated) => {
   // the null selector into CS is #GP(0) on a 386, and once the CPU enforced that, the shortcut faulted.
   cpu._cpl = 0;
   eq('at CPL <= IOPL the bitmap is not consulted at all', cpu.ioDenied(0x60, 1), false);
-}
+})();
 
 // ---- derail classification: what the guest is executing when it is not executing code -------
 // Four investigations began from a message naming an opcode that turned out to be innocent, so the
 // address gets classified. These assert the SHAPE of the four regions we actually walked into.
-{
+await (async () => {
   const mc = new Machine({ memSize: 1 << 20 });
   const say = (lin) => describeRegion(mc.mem, lin, mc.cpu);
 
@@ -2636,7 +2641,7 @@ const udRun = (gated) => {
   // A descriptor table: test386 decoded gate access bytes as an instruction.
   mc.cpu.idtr = { base: 0x80000, limit: 0x7ff };
   eq('derail: the IDT is named, with the entry number', say(0x80048).includes('IDT (entry 9)'), true);
-}
+})();
 
 // ----------------------------------------------------------------------------
 
@@ -2645,7 +2650,7 @@ const udRun = (gated) => {
 // flags back for both, which rewrote a carry the guest was mid-way through consuming: Dune's
 // decompressor runs `shr bp,1` / `jnz` / `rcl cx,1`, so a timer tick on that boundary shifted a 0
 // into a match length of 3, and the resource it was unpacking came out corrupt from that byte on.
-{
+await (async () => {
   const mkFrame = (n, callerFlags, handlerFlags) => {
     const mc = new Machine({ memSize: 1 << 20 });
     const cpu = mc.cpu;
@@ -2662,13 +2667,13 @@ const udRun = (gated) => {
   // a service must still report its own carry back to a chained caller
   eq('INT 21h reports the service CF', mkFrame(0x21, 0x0202, 0x0203), CF);
   eq('INT 21h clears CF when the service did', mkFrame(0x21, 0x0203, 0x0202), 0);
-}
+})();
 
 // A null selector is legal to LOAD into a data segment and faults later, on use; into CS or SS it is
 // #GP(0) at once. MIRAGE accepted it everywhere, which is why Heretic's DOS4GW — leaving through an
 // IRET whose saved CS:IP reads back 0:0 — got CS base 0 and ran from linear 0 for 20000 blocks
 // instead of stopping at the instruction that broke.
-{
+await (async () => {
   const mc = new Machine({ memSize: 1 << 20 });
   const cpu = mc.cpu;
   cpu.cr0 |= 1;                                        // protected mode, not V86
@@ -2689,25 +2694,25 @@ const udRun = (gated) => {
   // uninitialised, and raising would recurse instead of letting the depth guard report.
   raised.length = 0; cpu._delivering = true; cpu.setSeg(CS, 0); cpu._delivering = false;
   eq('while delivering, a null CS is accepted so the depth guard can report', raised.length, 0);
-}
+})();
 
 // ---- Windows 95 under a V86 monitor: five defects between VMM's first breakpoint and the desktop ----
 // v86's windows95-v3.img, safe mode, each checked against the BOOTLOG.TXT QEMU writes for the same
 // image (as an ISA PC). In the order they were hit.
-{ // (1) ARPL does not exist in virtual-8086 mode: #UD. VMM plants `63 xx` as its V86 breakpoints.
+await (async () => { // (1) ARPL does not exist in virtual-8086 mode: #UD. VMM plants `63 xx` as its V86 breakpoints.
   const { mc, cpu, calls } = v86(3);
   mc.mem.blit(0xf500, Uint8Array.from([0x63, 0xc8, 0xf4]));          // arpl ax,cx ; hlt
   cpu.reg[0] = 0x10; cpu.reg[1] = 0x13;
   mc.rec.step();
   eq('ARPL in V86 is #UD', calls[0] && calls[0][0], 6);
-  eq('...and did not adjust the RPL', cpu.reg[0] & 0xffff, 0x10); }
-{ // (1b) LES/LDS with a REGISTER operand is #UD — Windows NT's "BOP" (C4 C4 FE) ends every BIOS
+  eq('...and did not adjust the RPL', cpu.reg[0] & 0xffff, 0x10); })();
+await (async () => { // (1b) LES/LDS with a REGISTER operand is #UD — Windows NT's "BOP" (C4 C4 FE) ends every BIOS
   // call it makes in V86 and is recognised in its #UD handler; we loaded ES and ran on into the page.
   const { mc, cpu, calls } = v86(3);
   mc.mem.blit(0xf500, Uint8Array.from([0xc4, 0xc4, 0xfe, 0xf4]));    // BOP FE ; hlt
   mc.rec.step();
-  eq('C4 C4 (LES, register form) in V86 is #UD', calls[0] && calls[0][0], 6); }
-{ // (2) STI's interrupt window: the block ends after the instruction that follows STI, so an IRQ
+  eq('C4 C4 (LES, register form) in V86 is #UD', calls[0] && calls[0][0], 6); })();
+await (async () => { // (2) STI's interrupt window: the block ends after the instruction that follows STI, so an IRQ
   // waiting for it lands there. VMM idles in `sti; nop; nop; cli; jmp` — one block, IF never set
   // at a boundary, and the timer the scheduler waited for never came.
   const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
@@ -2717,8 +2722,8 @@ const udRun = (gated) => {
   mem.blit(0x1000, Uint8Array.from([0xfb, 0x90, 0x90, 0xfa, 0xeb, 0xfa]));    // sti ; nop ; nop ; cli ; jmp $-4
   mc.timerAuto = true;
   for (let k = 0; k < 40; k++) mc.runSlice(2000);
-  eq('an IRQ is taken in the window STI opens, even when CLI closes it two instructions later', mem.r16(0x700) > 0, true); }
-{ // (3) The BIOS INT 8 / INT 9 under a monitor that traps the PIC: the EOI must be an OUT the
+  eq('an IRQ is taken in the window STI opens, even when CLI closes it two instructions later', mem.r16(0x700) > 0, true); })();
+await (async () => { // (3) The BIOS INT 8 / INT 9 under a monitor that traps the PIC: the EOI must be an OUT the
   // monitor sees. Windows 95's VPICD ends the VM's virtual IRQ0 only on a trapped EOI.
   const trapRun = (n, deny) => {
     const { mc, cpu } = v86(3); installBIOS(mc);
@@ -2740,8 +2745,8 @@ const udRun = (gated) => {
     (a.mc.eoi8Then1cRom + 9 + a.mc.mem.r16(e1c + 7)) & 0xffff, a.mc.int1cViaRom);
   eq('INT 8 with the port allowed returns straight to the caller', trapRun(8, false).at, 0x0f400200);
   const k = trapRun(9, true);
-  eq('INT 9 with ports 60h/20h trapped: hands over to ROM code', k.at, (0xf000 << 16 | k.mc.eoi9Rom) >>> 0); }
-{ // (4) mem.blit writes where the GUEST named, through its page tables. The real-mode mapper's
+  eq('INT 9 with ports 60h/20h trapped: hands over to ROM code', k.at, (0xf000 << 16 | k.mc.eoi9Rom) >>> 0); })();
+await (async () => { // (4) mem.blit writes where the GUEST named, through its page tables. The real-mode mapper's
   // INT 13h buffer at V86 081b:xxxx was mapped elsewhere; the sector went to physical 81bxx.
   const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem;
   mem.setA20(true);
@@ -2751,8 +2756,8 @@ const udRun = (gated) => {
   cpu.setCR3(0x10000); cpu.setCR0(0x80000001);
   mem.blit(0x5010, Uint8Array.from([0xaa, 0xbb]));
   eq('blit under paging lands in the mapped frame', mem.u8[0x9010] << 8 | mem.u8[0x9011], 0xaabb);
-  eq('...and not at the linear address taken as physical', mem.u8[0x5010], 0); }
-{ // (5) An EXPAND-DOWN data segment is valid above its limit. KRNL386 reads KERNEL32 at BFF71000h
+  eq('...and not at the linear address taken as physical', mem.u8[0x5010], 0); })();
+await (async () => { // (5) An EXPAND-DOWN data segment is valid above its limit. KRNL386 reads KERNEL32 at BFF71000h
   // through a selector with limit FFFFh, B=1, type 6; checked as expand-up it was #GP(0).
   const run16 = (access, flags, off) => {
     const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
@@ -2769,12 +2774,12 @@ const udRun = (gated) => {
   eq('expand-down, B=1: an offset above the limit is valid', run16(0x96, 0x40, 0x00050000), null);
   eq('expand-down: an offset AT the limit is #GP(0)', run16(0x96, 0x40, 0x0000fff0), '13,0');
   eq('expand-down, B=0: the top is FFFFh', run16(0x96, 0x00, 0x00050000), '13,0');
-  eq('expand-up with the same limit: above it is #GP(0)', run16(0x92, 0x40, 0x00050000), '13,0'); }
+  eq('expand-up with the same limit: above it is #GP(0)', run16(0x92, 0x40, 0x00050000), '13,0'); })();
 
 // ---- the renderer is the card: it reads the BDA and text memory physically ------------------------
 // Linux unmaps linear page 0; video.js read 0040:0049 through the guest's paging, and every frame of
 // the browser's bare-PC page (boot.html) threw a #PF out of render().
-{ const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 4 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   mc.font = new Uint8Array(256 * 16).fill(0xff);
   mem.u8[0xb8000] = 0x41; mem.u8[0xb8001] = 0x1f;
   mem.setA20(true);
@@ -2785,39 +2790,39 @@ const udRun = (gated) => {
   const v = new Video(mc, canvas); v.font = mc.font;
   let err = null; try { v.render(); } catch (e) { err = e.constructor.name; }
   eq('render() with linear page 0 unmapped does not fault', err, null);
-  eq('...and draws the text cell (blue background behind a white glyph)', !!v.u32 && v.u32[0] !== v.u32[v.imgW * 20], true); }
+  eq('...and draws the text cell (blue background behind a white glyph)', !!v.u32 && v.u32[0] !== v.u32[v.imgW * 20], true); })();
 
 // ---- the translation memo is bounded by the source it holds -------------------------------------------
 // Each memo entry keeps its compiled function (V8 charges about eight times the source). Bounded by a
 // count of 200 000 blocks, it reached 1.3 GB once paged blocks followed jumps and calls: Linux 3.x,
 // TinyCore and Windows ME spent 99 % of their time in the garbage collector, guest time standing still.
-{ const mc = new Machine({ memSize: 1 << 20 }), rec = mc.rec;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }), rec = mc.rec;
   rec.memoCap = 10000;
   for (let i = 0; i < 100; i++) rec._memoPut('k' + i, { linStart: 0x1000 + i * 16, linEnd: 0x1010 + i * 16, bodyLen: 1000 });
-  eq('the memo keeps no more source than its bound, the newest entries', [rec.memoBytes <= 10000, rec.memo.size, rec.memo.has('k99'), rec.memo.has('k0')].join(), 'true,10,true,false'); }
+  eq('the memo keeps no more source than its bound, the newest entries', [rec.memoBytes <= 10000, rec.memo.size, rec.memo.has('k99'), rec.memo.has('k0')].join(), 'true,10,true,false'); })();
 
 // ---- a 16-colour mode's height is the CRTC's, double scan included ------------------------------------
 // Pinball Fantasies sets mode 12h and then doubles every line (CRTC 09h bit 7) for a 640x240 menu. The
 // planar renderer took the mode's 480 lines and drew the memory below the menu as its lower half.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
   cpu.ax = 0x0012; mc.intHandlers[0x10](cpu, mc);
   const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
   const v = new Video(mc, canvas); v.font = mc.font;
   v.render(); const h12 = v.imgH;
   mc.ioWrite(0x3d4, 1, 0x09); mc.ioWrite(0x3d5, 1, mc.vga.crtc[0x09] | 0x80);
   v.render();
-  eq('mode 12h renders 480 lines, and 240 once the CRTC doubles each one', [h12, v.imgH].join(), '480,240'); }
+  eq('mode 12h renders 480 lines, and 240 once the CRTC doubles each one', [h12, v.imgH].join(), '480,240'); })();
 
 // ---- cursor shape and the PS/2 aux channel, from testing boot.html ---------------------------------
-{ // The mode set programs the CRTC cursor as SeaVGABIOS does (0607h scaled to the 16-line cell), and
+await (async () => { // The mode set programs the CRTC cursor as SeaVGABIOS does (0607h scaled to the 16-line cell), and
   // AH=01h scales a CGA-style shape. Nothing set 0Ah/0Bh: under MS-DOS the cursor sat on the TOP line.
   const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
   cpu.ax = 0x0003; mc.intHandlers[0x10](cpu, mc);
   eq('mode 3 leaves the cursor an underline (CRTC 0Ah/0Bh = 0Eh/0Fh)', (mc.vga.crtc[0x0a] << 8) | mc.vga.crtc[0x0b], 0x0e0f);
   cpu.ax = 0x0100; cpu.cx = 0x0007; mc.intHandlers[0x10](cpu, mc);
   eq('AH=01h 0007h (a block) scales as SeaVGABIOS does, to 1..0Fh', (mc.vga.crtc[0x0a] << 8) | mc.vga.crtc[0x0b], 0x010f);
-  eq('...and the BDA keeps the value asked for', mc.mem.r16(0x460), 0x0007); }
-{ // One IRQ12 per aux BYTE while bytes remain, withdrawn once drained; button changes one per packet.
+  eq('...and the BDA keeps the value asked for', mc.mem.r16(0x460), 0x0007); })();
+await (async () => { // One IRQ12 per aux BYTE while bytes remain, withdrawn once drained; button changes one per packet.
   const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); installMouse(mc);
   const p = mc.ps2; p.enabled = true; p.handler = { seg: 0, off: 0 };
   mc.mouseMoveRel(3, 0);
@@ -2831,12 +2836,12 @@ const udRun = (gated) => {
   const st1 = p.queue[0]; p.read(); p.read(); p.read();
   const st2 = p.queue[0];
   eq('a quick click: the press goes out', st1 & 1, 1);
-  eq('...and the release in the next packet', st2 !== undefined && (st2 & 1) === 0, true); }
+  eq('...and the release in the next packet', st2 !== undefined && (st2 & 1) === 0, true); })();
 
 // ---- LMSW can set PE, never clear it --------------------------------------------------------------
 // DOOM's DOS/4GW under EMM386 does `smsw cx / ... / and ax,cx / lmsw ax` with PE clear in AX. Applied,
 // it left "real mode with paging on" and the next blocks derailed; QEMU stays in protected mode.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
   mc.mem.blit(0x1000, Uint8Array.from([0x31, 0xc0, 0x0f, 0x01, 0xf0, 0xf4]));      // xor ax,ax / lmsw ax / hlt
   cpu.setCR0(cpu.cr0 | 1);                                                       // PE on, CS not reloaded
@@ -2846,40 +2851,40 @@ const udRun = (gated) => {
   c2.setSeg(CS, 0x100); c2.eip = 0; c2.setSeg(SS, 0x300); c2.sp = 0x1000;
   mc2.mem.blit(0x1000, Uint8Array.from([0xb8, 0x01, 0x00, 0x0f, 0x01, 0xf0, 0xf4]));   // mov ax,1 / lmsw ax / hlt
   s = 0; while (!c2.halted && s++ < 20) mc2.rec.step();
-  eq('...while LMSW can still set it', c2.cr0 & 1, 1); }
+  eq('...while LMSW can still set it', c2.cr0 & 1, 1); })();
 
 // ---- FLDCW changing the precision recompiles the FPU blocks, not the whole cache ------------------------
 // Kraptor (Allegro, DJGPP) sets the precision control thousands of times a second; each change dropped
 // every translated block. A loop alternates single and double precision for 1/3: both results must be
 // exact for their precision, and the loop must not be translated again on every FLDCW.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
   // nasm: mov cx,50 / L: fldcw [cw24] / fld1 / fidiv word [three] / fstp qword [r1] / fldcw [cw53] / ... / loop L / hlt
   mc.mem.blit(0x1000, Uint8Array.from('b93200d92e2200d9e8de362600dd1e2800d92e2400d9e8de362600dd1e3000e2e2f47f007f0203000000000000000000000000000000000000'.match(/../g).map((x) => parseInt(x, 16))));
   let n = 0; while (!cpu.halted && n++ < 400) mc.runSlice(1000);
   const r1 = mc.mem.dv.getFloat64(0x1028, true), r2 = mc.mem.dv.getFloat64(0x1030, true);
   eq('FLDCW: single precision gives 1/3 rounded to 24 bits, double to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true');
-  eq('...and the loop is not retranslated on each change of precision', mc.rec.stats.compiles < 30, true); }
+  eq('...and the loop is not retranslated on each change of precision', mc.rec.stats.compiles < 30, true); })();
 
 // ---- FPTAN, FSIN, FCOS, FSINCOS clear C2 for an operand in range ------------------------------------------
 // C2 left as FXAM had set it (a normal number) after FPTAN: Microsoft's C runtime tests C2 right after FPTAN
 // (out of range: reduce the argument), and Half-Life's R_ViewChanged, under Quake's single precision, got NaN
 // for its projection -- an engine running, its world never drawn. Each: fld1 / fxam / op / fnstsw ax / store.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
   mc.mem.blit(0x1000, Uint8Array.from('d9e8d9e5d9f2dfe0a34000dbe3d9e8d9e5d9fedfe0a34200dbe3d9e8d9e5d9ffdfe0a34400dbe3d9e8d9e5d9fbdfe0a34600dbe3f4'.match(/../g).map((x) => parseInt(x, 16))));
   let n = 0; while (!cpu.halted && n++ < 100) mc.runSlice(1000);
-  eq('x87: FPTAN, FSIN, FCOS, FSINCOS clear C2 for an operand in range', [0x40, 0x42, 0x44, 0x46].map((a) => (mc.mem.dv.getUint16(0x1000 + a, true) & 0x400).toString(16)).join(), '0,0,0,0'); }
+  eq('x87: FPTAN, FSIN, FCOS, FSINCOS clear C2 for an operand in range', [0x40, 0x42, 0x44, 0x46].map((a) => (mc.mem.dv.getUint16(0x1000 + a, true) & 0x400).toString(16)).join(), '0,0,0,0'); })();
 // ---- FILD m64 / FISTP m64 copy 8 bytes exactly, through an FXCH ---------------------------------------------
 // The x87 holds a 64-bit integer whole; a float64 register rounds it past 2^53. Jazz Jackrabbit 2 copies its
 // video frames so (fild, fild, fxch, fistp, fistp), and the lowest byte of every eight came back wrong. Two
 // integers that round to the same double, exchanged, in a loop run 40 times (interpreted, then compiled).
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
   mc.mem.blit(0x1000, Uint8Array.from('b92800dbe3df2e0001df2e0801d9c9df3e1001df3e1801e2eaf4'.match(/../g).map((x) => parseInt(x, 16))));
   mc.mem.dv.setBigUint64(0x1100, 0x0123456789abcdefn, true); mc.mem.dv.setBigUint64(0x1108, 0x0123456789abcde1n, true);
   let n = 0; while (!cpu.halted && n++ < 100) mc.runSlice(1000);
-  eq('x87: FILD m64 / FISTP m64 copy 8 bytes exactly, through an FXCH', [0x1110, 0x1118].map((a) => mc.mem.dv.getBigUint64(a, true).toString(16)).join(), '123456789abcdef,123456789abcde1'); }
+  eq('x87: FILD m64 / FISTP m64 copy 8 bytes exactly, through an FXCH', [0x1110, 0x1118].map((a) => mc.mem.dv.getBigUint64(a, true).toString(16)).join(), '123456789abcdef,123456789abcde1'); })();
 
 // ---- one block under both precisions: checked when it is dispatched -----------------------------------
 // gcc 2.x converts a float to an int between two FLDCW: XFree86 3.3.2 and Mesa change the precision
@@ -2887,14 +2892,14 @@ const udRun = (gated) => {
 // whether its arithmetic depends on the precision (fprec), and only such blocks are checked against the
 // control word when they are dispatched: here one subroutine `fld1 / fidiv [three] / ret`, called
 // under single then double precision, must give 1/3 rounded to 24 bits, then to 53.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
   // nasm: mov cx,20 / L: fldcw [cw24] / call third / fstp qword [r1] / fldcw [cw53] / call third / fstp qword [r2] / loop L / hlt
   //       third: fld1 / fidiv word [three] / ret
   mc.mem.blit(0x1000, Uint8Array.from('b91400d92e2300e81200dd1e3000d92e2500e80700dd1e3800e2e8f4d9e8de362700c37f007f0203009090909090909000000000000000000000000000000000'.match(/../g).map((x) => parseInt(x, 16))));
   let n = 0; while (!cpu.halted && n++ < 400) mc.runSlice(1000);
   const r1 = mc.mem.dv.getFloat64(0x1030, true), r2 = mc.mem.dv.getFloat64(0x1038, true);
-  eq('one block under both precisions: 1/3 to 24 bits, then to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true'); }
+  eq('one block under both precisions: 1/3 to 24 bits, then to 53', [r1 === Math.fround(1 / 3), r2 === 1 / 3].join(), 'true,true'); })();
 
 // A real-mode program at 1000h (DS = CS = 100h), the control word at 40h and 42h, doubles from 48h on;
 // run until HLT. For the precision-control checks below.
@@ -2913,9 +2918,9 @@ const x87Prog = (code, cw, doubles) => {
 // an FADD after an FLDCW in the same block ran at the precision the block began with. kkrieger's sFPow
 // (fldcw 103Fh, then the call, then the arithmetic, all one block under paging) came out at 53 bits.
 // nasm: fldcw [40h] / fld qword [48h] / fadd qword [50h] / fstp qword [58h] / fldcw [42h] / hlt
-{ const r = x87Prog([0xd9, 0x2e, 0x40, 0x00, 0xdd, 0x06, 0x48, 0x00, 0xdc, 0x06, 0x50, 0x00, 0xdd, 0x1e, 0x58, 0x00, 0xd9, 0x2e, 0x42, 0x00, 0xf4],
+await (async () => { const r = x87Prog([0xd9, 0x2e, 0x40, 0x00, 0xdd, 0x06, 0x48, 0x00, 0xdc, 0x06, 0x50, 0x00, 0xdd, 0x1e, 0x58, 0x00, 0xd9, 0x2e, 0x42, 0x00, 0xf4],
     [0x007f, 0x027f], [1 / 3, 0, 0]);
-  eq('FLDCW to single in the middle of a block: the FADD after it is rounded to 24 bits', r(2) === Math.fround(1 / 3), true); }
+  eq('FLDCW to single in the middle of a block: the FADD after it is rounded to 24 bits', r(2) === Math.fround(1 / 3), true); })();
 
 // ---- single precision rounds the significand, not the exponent -----------------------------------------
 // At PC = single the x87 rounds a result's significand to 24 bits and keeps its own 15-bit exponent:
@@ -2924,40 +2929,40 @@ const x87Prog = (code, cw, doubles) => {
 // nasm: fldcw [40h] / fld qword [48h] / fmul qword [50h] / fstp qword [68h] / fld qword [48h] /
 //       fdiv qword [58h] / fstp qword [70h] / fld qword [60h] / fmul qword [60h] / fstp qword [78h] /
 //       fldcw [42h] / hlt
-{ const r = x87Prog([0xd9, 0x2e, 0x40, 0x00, 0xdd, 0x06, 0x48, 0x00, 0xdc, 0x0e, 0x50, 0x00, 0xdd, 0x1e, 0x68, 0x00,
+await (async () => { const r = x87Prog([0xd9, 0x2e, 0x40, 0x00, 0xdd, 0x06, 0x48, 0x00, 0xdc, 0x0e, 0x50, 0x00, 0xdd, 0x1e, 0x68, 0x00,
     0xdd, 0x06, 0x48, 0x00, 0xdc, 0x36, 0x58, 0x00, 0xdd, 0x1e, 0x70, 0x00, 0xdd, 0x06, 0x60, 0x00, 0xdc, 0x0e, 0x60, 0x00,
     0xdd, 0x1e, 0x78, 0x00, 0xd9, 0x2e, 0x42, 0x00, 0xf4], [0x007f, 0x027f], [1e-40, 1e-33, 1e33, 1e30, 0, 0, 0]);
   // The 24-bit rounding of each, by a scale that keeps it inside float's range (exact both ways).
   const at24 = (v, s) => Math.fround(v * 2 ** s) * 2 ** -s;
   const got = [r(4), r(5), r(6)], want = [at24(1e-40 * 1e-33, 250), at24(1e-40 / 1e33, 250), at24(1e30 * 1e30, -200)];
   eq('single precision: 1e-40*1e-33, 1e-40/1e33 and 1e30*1e30 keep their exponent, 24-bit significands', got.map((v, i) => v === want[i] && v !== 0 && Number.isFinite(v)).join(), 'true,true,true');
-  eq('...and those really are rounded (not left at 53 bits)', got.map((v, i) => v !== [1e-40 * 1e-33, 1e-40 / 1e33, 1e30 * 1e30][i]).join(), 'true,true,true'); }
+  eq('...and those really are rounded (not left at 53 bits)', got.map((v, i) => v !== [1e-40 * 1e-33, 1e-40 / 1e33, 1e30 * 1e30][i]).join(), 'true,true,true'); })();
 
 // ---- sig24 at the edges: a power of two, a value that rounds up to one, float's range limits ------------
-{ const at24 = (v, s) => Math.fround(v * 2 ** s) * 2 ** -s;
+await (async () => { const at24 = (v, s) => Math.fround(v * 2 ** s) * 2 ** -s;
   const cases = [[2 ** -200, 200], [2 ** -200 * (1 - 2 ** -30), 200], [2 ** -200 * (1 + 2 ** -24), 200], [2 ** -200 * (1 + 3 * 2 ** -25), 200],
     [-(2 ** 300) * (1 + 2 ** -23 + 2 ** -40), -300], [2 ** -126 * (1 - 2 ** -30), 126], [2 ** 128 * (1 + 2 ** -20), -128], [2 ** -1000 * 1.1, 1000], [2 ** 1000 * 1.7, -1000]];
   eq('sig24: 24-bit significands at any double exponent, powers of two and carries included', cases.filter(([v, s]) => sig24(v) !== at24(v, s)).length, 0);
-  eq('...and float\'s normal range is Math.fround', [1, 1 / 3, -1e-20, 3e38, 2 ** -126].every((v) => sig24(v) === Math.fround(v)) && Object.is(sig24(-0), -0) && Number.isNaN(sig24(NaN)) && sig24(-Infinity) === -Infinity, true); }
+  eq('...and float\'s normal range is Math.fround', [1, 1 / 3, -1e-20, 3e38, 2 ** -126].every((v) => sig24(v) === Math.fround(v)) && Object.is(sig24(-0), -0) && Number.isNaN(sig24(NaN)) && sig24(-Infinity) === -Infinity, true); })();
 
 // ---- an immediate the code keeps rewriting is read at run time, not retranslated ----------------------
 // DOOM's R_DrawColumn writes each column's texture step into `add ebp,imm32`: every write evicted the
 // block and the next column translated it again — 14 000 translations in 8 s of its demo, four frames
 // a second in Chrome. Here a loop rewrites the immediate of its own `add bx,imm16` with CX each time
 // round: the sum must stay exact, and after the first rewrites the block must stop being translated.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0x100);
   // mov cx,100 / xor bx,bx / L: mov [cs:0x0c],cx / add bx,0x1234 (its immediate at 0x0c) / loop L / hlt
   mc.mem.blit(0x1000, Uint8Array.from([0xb9, 0x64, 0x00, 0x31, 0xdb, 0x2e, 0x89, 0x0e, 0x0c, 0x00, 0x81, 0xc3, 0x34, 0x12, 0xe2, 0xf5, 0xf4]));
   let n = 0; while (!cpu.halted && n++ < 5000) mc.rec.step();
   eq('SMC immediate: the sum uses every rewritten value', cpu.bx & 0xffff, 5050);
-  eq('...and the loop is not retranslated once per rewrite', mc.rec.stats.compiles < 20, true); }
+  eq('...and the loop is not retranslated once per rewrite', mc.rec.stats.compiles < 20, true); })();
 
 // ---- VBE 4F06h / 4F07h: the logical scan line and the display start ---------------------------------
 // tools/vbescan.asm in mode 101h, QEMU (SeaVGABIOS) and DOSBox-X alike: set 1024 pixels → BX 400h
 // bytes, CX 400h pixels, DX the lines video memory holds; set in bytes; display start set and read.
 // Allegro (Kraptor) sets the 1024-pixel line; MIRAGE failed it and showed 640-byte rows.
-{ const mc = new Machine({ memSize: 32 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 32 << 20 }); const cpu = mc.cpu; installBIOS(mc);
   const call = (ax, bx, cx = 0, dx = 0) => { cpu.ax = ax; cpu.bx = bx; cpu.cx = cx; cpu.dx = dx; mc.intHandlers[0x10](cpu, mc);
     return [cpu.ax, cpu.bx, cpu.cx, cpu.dx].map((x) => (x & 0xffff).toString(16)).join(' '); };
   call(0x4f02, 0x101);
@@ -2966,14 +2971,14 @@ const x87Prog = (code, cw, doubles) => {
   eq('...and the renderer\'s pitch follows', mc.vbe.pitch, 1024);
   eq('...BL=2 sets it in bytes', call(0x4f06, 2, 2048), `4f 800 800 ${((mc.vbeFbBytes / 2048) & 0xffff).toString(16)}`);
   eq('VBE 4F07h: the display start, set then read (BX keeps the 1 asked with, as on both)', (call(0x4f07, 0, 8, 16), call(0x4f07, 1)), '4f 1 8 10');
-  eq('...and the picture starts there', mc.vbe.base - mc.vbe.fbBase, 16 * 2048 + 8); }
+  eq('...and the picture starts there', mc.vbe.base - mc.vbe.fbBase, 16 * 2048 + 8); })();
 
 // ---- a tweaked chained 256-colour mode: the size the CRTC gives, blanking included -----------------
 // Helium (examples/intros) sets mode 13h, then CRTC 01h = 47h (display to 72 characters), 02h = 3Fh
 // (blanking from 63), 13h = 20h (256-byte rows), 12h = FFh with 07h = 3Eh (512 lines), 09h = 41h
 // (two lines a row). DOSBox-X's DX-CAPTURE of it is 504x512, every pixel doubled: 252x256 (QEMU shows
 // 288, ignoring the blanking). MIRAGE drew the standard 320x200.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
   const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
   const vid = new Video(mc, canvas); vid.font = new Uint8Array(4096);
@@ -2984,13 +2989,13 @@ const x87Prog = (code, cw, doubles) => {
   mem.u8[0xa0000 + 256 * 255 + 251] = 7;                                   // last row, last visible pixel
   vid.render();
   eq('Helium\'s tweaked 13h is 252x256, the size DOSBox-X shows', `${vid.imgW}x${vid.imgH}`, '252x256');
-  eq('...rows 256 bytes apart', vid.u32 && vid.u32[255 * 252 + 251] === vid.pal[7], true); }
+  eq('...rows 256 bytes apart', vid.u32 && vid.u32[255 * 252 + 251] === vid.pal[7], true); })();
 
 // ---- the Windows 9x logo: 320x400 unchained, with 03h in the BDA ------------------------------------
 // IO.SYS sets mode 13h, turns chain-4 and double scan off (Sequencer 04h = 02h, CRTC 09h = 40h), and
 // writes 03h to 0040:0049. The renderer dispatched on that byte, and INT 10h kept drawing DOS's output
 // as mode 13h glyphs over the logo.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; installBIOS(mc);
   cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
   const v = mc.vga;
   v.memMode = 0x06; v.modeX = true; v.crtc[0x09] = 0x40;                   // unchained, no double scan
@@ -3005,13 +3010,13 @@ const x87Prog = (code, cw, doubles) => {
   const a0 = mem.u8.slice(0xa0000, 0xa0000 + 320 * 16).reduce((s, x) => s + x, 0);
   cpu.ax = 0x0e41; cpu.bx = 0x000f; mc.intHandlers[0x10](cpu, mc);
   eq('INT 10h follows the BDA mode: teletype goes to the text buffer', mem.u8[0xb8000], 0x41);
-  eq('...and draws nothing in A000', mem.u8.slice(0xa0000, 0xa0000 + 320 * 16).reduce((s, x) => s + x, 0), a0); }
+  eq('...and draws nothing in A000', mem.u8.slice(0xa0000, 0xa0000 + 320 * 16).reduce((s, x) => s + x, 0), a0); })();
 
 // ---- a RETF that faults on CS: the stack as before, and nothing after the exception ---------------
 // Win16 loads a discarded code segment when a RETF to it raises #NP. MIRAGE delivered the #NP with the
 // return address already popped, then assigned EIP anyway — Windows 95's VMM handler ran from
 // 0028:<return offset>, took a #GP, and the Win16 kernel never came back: an empty desktop.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
   const GDT = 0x8000;
   const desc = (i, base, limit, access, flags) => { const a = GDT + i * 8;
     mem.w16(a, limit & 0xffff); mem.w16(a + 2, base & 0xffff); mem.w8(a + 4, (base >> 16) & 0xff);
@@ -3030,14 +3035,14 @@ const x87Prog = (code, cw, doubles) => {
   eq('RETF to a not-present code segment is #NP(selector)', got && `${got.n},${got.err}`, '11,24');
   eq('...delivered with the stack as it was before the RETF', got && got.sp, 0x0ffc);
   eq('...and at the RETF itself', got && got.eip, 0);
-  eq('...and nothing overwrites EIP after the exception', cpu.eip, 0); }
+  eq('...and nothing overwrites EIP after the exception', cpu.eip, 0); })();
 
 // ---- an IRET to a code segment whose DPL is not its RPL: #GP(selector), as a far RET -------------
 // Windows NT 3.51 ends every V86 BIOS call (VideoPortInt10) with an IRETD whose CS is its ring-0 code
 // selector with RPL 3 (000Bh), and resumes the caller from the #GP(0008) that follows (QEMU takes it).
 // MIRAGE accepted the frame and ran ring 3 at a kernel address: VBEMP's first INT 10h never came
 // back, and NT stayed in text mode where it should have switched to 1024x768.
-{ const iretTo = (cs) => {
+await (async () => { const iretTo = (cs) => {
     const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem;
     const GDT = 0x8000;
     const desc = (i, base, limit, access, flags) => { const a = GDT + i * 8;
@@ -3062,10 +3067,10 @@ const x87Prog = (code, cw, doubles) => {
   eq('...delivered with the frame still on the stack', bad.got && bad.got.sp, 0x1000 - 20);
   eq('...at the IRET itself, still in ring 0', bad.got && `${bad.got.eip},${bad.cpu.cpl}`, '0,0');
   const good = iretTo(0x1b);
-  eq('...while IRETD to a DPL-3 code segment at RPL 3 goes to ring 3', good.got === null && `${good.cpu.cpl},${good.cpu.seg[CS]},${good.cpu.eip}`, `3,${0x1b},${0x100}`); }
+  eq('...while IRETD to a DPL-3 code segment at RPL 3 goes to ring 3', good.got === null && `${good.cpu.cpl},${good.cpu.seg[CS]},${good.cpu.eip}`, `3,${0x1b},${0x100}`); })();
 
 // ---- VBE 4F09h and the Attribute Controller's read-back: what tools/vbeprobe.asm saw under QEMU ------
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; const bios = installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu, mem = mc.mem; const bios = installBIOS(mc);
   cpu.setSeg(ES, 0x0800); cpu.di = 0;
   mem.w8(0x8000, 0x21); mem.w8(0x8001, 0x22); mem.w8(0x8002, 0x23);          // entry: blue, green, red
   cpu.ax = 0x4f09; cpu.bx = 0x0000; cpu.cx = 1; cpu.dx = 5; mc.intHandlers[0x10](cpu, mc);
@@ -3078,12 +3083,12 @@ const x87Prog = (code, cw, doubles) => {
   eq('3C0h reads back the Attribute Controller address register, PAS included', rd(0x3c0), 0x32);
   mc.portWrite[0x3c0](0x3c0, 1, 0x0f);                                           // data: plane enable
   mc.portRead[0x3da](0x3da, 1); mc.portWrite[0x3c0](0x3c0, 1, 0x32);
-  eq('...and 3C1h the register it selects', rd(0x3c1), 0x0f); }
+  eq('...and 3C1h the register it selects', rd(0x3c1), 0x0f); })();
 
 // ---- a mode set under a monitor that traps the VGA ports is replayed as OUTs it can see -------------
 // Windows 95's VDD builds its copy of the card from trapped writes; ours came from JS, its copy kept
 // CRTC 09h = 0 after mode 3, and it trapped the DAC for ever (the default palette on the desktop).
-{ const trapped = (deny) => {
+await (async () => { const trapped = (deny) => {
     const { mc, cpu } = v86(3); installBIOS(mc);
     const TSS = 0x9000;
     cpu.tr = { sel: 0x28, base: TSS, limit: 0x67 + 0x2000 / 8, is386: true };
@@ -3097,16 +3102,16 @@ const x87Prog = (code, cw, doubles) => {
   const a = trapped(true), t = 0xf0000 + (a.mc.modeOutTable || 0);
   eq('INT 10h mode 3 with 3D4h trapped hands over to the ROM register load', a.at, (0xf000 << 16 | (a.mc.modeOutRom || 0)) >>> 0);
   eq('...whose table carries the mode\'s CRTC 09h (16-line characters)', a.mc.mem.u8[t + 1 + 5 + 9], 0x4f);
-  eq('...and without a trap the mode set returns straight to the caller', trapped(false).at, 0x0f400200); }
+  eq('...and without a trap the mode set returns straight to the caller', trapped(false).at, 0x0f400200); })();
 
 // ---- the host clock, switched on after the chip is installed, re-seeds the century ----------------
 // boot.html in real time: switching rtc.host alone left 19h at CMOS 32h (the 1990 epoch's century),
 // INT 1Ah AH=04h answered 1926 and MS-DOS 6.22 fell back to 01-04-1980.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
   if (mc.rtc.useHostClock) mc.rtc.useHostClock(); else mc.rtc.host = true;
   cpu.ax = 0x0400; mc.intHandlers[0x1a](cpu, mc);
   const y = new Date().getUTCFullYear(), bcd = (n) => ((n / 10 | 0) << 4) | (n % 10);
-  eq('on the host clock, INT 1Ah AH=04h gives the host\'s century and year', cpu.cx & 0xffff, (bcd(y / 100 | 0) << 8) | bcd(y % 100)); }
+  eq('on the host clock, INT 1Ah AH=04h gives the host\'s century and year', cpu.cx & 0xffff, (bcd(y / 100 | 0) << 8) | bcd(y % 100)); })();
 
 // ---- DPMI: returning from INT 31h reloads the client's segment registers ----------------------
 // tools/dpmireload.asm loads a selector into ES, FS, GS, DS and SS in turn, moves its base with
@@ -3114,7 +3119,7 @@ const x87Prog = (code, cw, doubles) => {
 // it kept the cached descriptor. CWSDPMI answers B five times under DOSBox-X and under QEMU (MS-DOS
 // 6.22). DJGPP's crt0 counts on it: it widens DS and SS to 4 GiB with 0008h and goes on using both —
 // Jump 'n Bump stopped on a #GP through DS, Quake on a #SS through SS, with the old limit cached.
-{ const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc);
   const vfs = new VFS(), dos = installDOS(mc, vfs);
   const hex = (                                         // nasm -f bin tools/dpmireload.asm, 484 bytes
     'b44abb0010cd218c0ea402b43c31c9ba6002cd210f822801a3a602b88716cd2f85c00f851a01893ea8028c06aa0289f3' +
@@ -3131,31 +3136,31 @@ const x87Prog = (code, cw, doubles) => {
   let guard = 0; while (!dos.programDone && guard++ < 2000) mc.runSlice(20000);
   const out = vfs.readFile('\\DPMIRL.TXT');
   eq('INT 31h returns with ES, FS, GS, DS and SS reloaded from the descriptor it changed',
-    out && new TextDecoder().decode(out).trim(), 'ES=B FS=B GS=B DS=B SS=B'); }
+    out && new TextDecoder().decode(out).trim(), 'ES=B FS=B GS=B DS=B SS=B'); })();
 
 // ---- the DOS player's memory: 16 MiB of RAM, and the VBE aperture above it, not inside it --------
 // DOSBox-X's default 16 MiB machine offers 15,360 KB of XMS (its MEM command). With the linear
 // framebuffer carved out of the top of 16 MiB of RAM, MIRAGE offered 11,200: Stash asks for one
 // 12 MiB block, ignores the refusal, and cleared 10 MiB of memory at an address made of the error.
-{ const mc = new Machine(DOS_PLAYER_MEM); installBIOS(mc); const cpu = mc.cpu;
+await (async () => { const mc = new Machine(DOS_PLAYER_MEM); installBIOS(mc); const cpu = mc.cpu;
   cpu.ax = 0x0800; cpu.xmsCall();
   eq('the DOS player has at least the 14,912 KB of free XMS DOSBox-X\'s 16 MiB machine has', (cpu.ax & 0xffff) >= 14912, true);
   eq('...because the VBE framebuffer is above the 16 MiB of RAM', mc.vbeFbBase >>> 0, 16 << 20);
-  eq('...and INT 15h E801 reports the 16 MiB of RAM, not the 32 MiB address space', (() => { cpu.reg[0] = 0xe801; mc.intHandlers[0x15](cpu, mc); return [cpu.ax & 0xffff, cpu.bx & 0xffff].join(); })(), '15360,0'); }
+  eq('...and INT 15h E801 reports the 16 MiB of RAM, not the 32 MiB address space', (() => { cpu.reg[0] = 0xe801; mc.intHandlers[0x15](cpu, mc); return [cpu.ax & 0xffff, cpu.bx & 0xffff].join(); })(), '15360,0'); })();
 // ?mem=64 (src/dos.js playerMem): 64 MiB of RAM, the aperture above it in a 128 MiB space.
-{ const mc = new Machine(playerMem(64)); installBIOS(mc); const cpu = mc.cpu;
+await (async () => { const mc = new Machine(playerMem(64)); installBIOS(mc); const cpu = mc.cpu;
   eq('?mem=64: INT 15h E801 reports 64 MiB of RAM', (() => { cpu.reg[0] = 0xe801; mc.intHandlers[0x15](cpu, mc); return [cpu.ax & 0xffff, cpu.bx & 0xffff].join(); })(), '15360,768');
   eq('...the VBE framebuffer sits above it', mc.vbeFbBase >>> 0, 64 << 20);
   cpu.ax = 0x0800; cpu.xmsCall();
   eq('...and XMS offers more than 60 MiB of it', (cpu.ax & 0xffff) > 60 * 1024, true);
-  eq('playerMem(16) is the default player machine', JSON.stringify(playerMem(16)), JSON.stringify(DOS_PLAYER_MEM)); }
+  eq('playerMem(16) is the default player machine', JSON.stringify(playerMem(16)), JSON.stringify(DOS_PLAYER_MEM)); })();
 
 // ---- POPF that sets TF: the trap comes after the next instruction, not at the end of the block ----
 // tools/reptrap.asm sets TF with POPF, runs `rep stosb` (CX=5) and four more instructions, clears TF
 // with POPF and counts INT 1. DOSBox-X: TRAPS=06, every one with CX=0 (the REP is one step); QEMU
 // traps per iteration and prints 0B. Both trap; MIRAGE ran the traced code inside the POPF's block
 // and printed TRAPS=00.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const vfs = new VFS(), dos = installDOS(mc, vfs);
   const hex = (                                         // nasm -f bin tools/reptrap.asm, 193 bytes
     'b80125ba6801cd210e07bfaa01b9050030c0fc9c580d00015030c09df3aa9c5825fffe509da09901bab201b409cd21a0' +
@@ -3167,7 +3172,7 @@ const x87Prog = (code, cw, doubles) => {
   dos.load(img, '', 'C:\\REPTRAP.COM');
   let guard = 0; while (!dos.programDone && guard++ < 2000) mc.runSlice(2000);
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('TRAPS=')) line = t.trim(); }
-  eq('POPF setting TF traps the instructions after it, as DOSBox-X does', line, 'TRAPS=06 CX=0 0 0 0 0 0'); }
+  eq('POPF setting TF traps the instructions after it, as DOSBox-X does', line, 'TRAPS=06 CX=0 0 0 0 0 0'); })();
 
 // ---- INT n under TF: no trap after it, none in its handler -------------------------------------------
 // tools/inttrap.asm traces nop / int 60h / nop / mov ah,30h / int 21h / nop and prints the low byte of
@@ -3175,7 +3180,7 @@ const x87Prog = (code, cw, doubles) => {
 // right after INT 21h (1F). MIRAGE trapped after every traced instruction, INT n included, so INT 1 was
 // entered at the handler's first instruction with TF clear in its frame: Second Reality's INT 1 thread
 // scheduler lost a thread's TF that way and ran into its anti-debug wipe of the IVT.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const dos = installDOS(mc, new VFS());
   const hex = (                                         // nasm -f bin tools/inttrap.asm, 206 bytes
     'b80125ba7301cd21b86025ba6d01cd219c580d0001509d90cd6090b430cd21909c5825fffe509da0ad01babf01b409cd21' +
@@ -3187,7 +3192,7 @@ const x87Prog = (code, cw, doubles) => {
   dos.load(img, '', 'C:\\INTTRAP.COM');
   let guard = 0; while (!dos.programDone && guard++ < 2000) mc.runSlice(2000);
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('TRAPS=')) line = t.trim(); }
-  eq('INT n under TF: no trap after it nor in its handler, as DOSBox-X', line, 'TRAPS=09 IP=18 1B 1D 20 21 22 25 26 27'); }
+  eq('INT n under TF: no trap after it nor in its handler, as DOSBox-X', line, 'TRAPS=09 IP=18 1B 1D 20 21 22 25 26 27'); })();
 
 // ---- chained blocks without paging (recompiler.js translate, `exact`) -------------------------------
 // tools/realchain.asm, chained and not, slice by slice under the timer: a chained block checks, wherever
@@ -3195,7 +3200,7 @@ const x87Prog = (code, cw, doubles) => {
 // so the instructions run, the slices and the cycle every timer interrupt lands at are the same -- the
 // DOS golden runs are timed to the block. And it takes fewer dispatches. BYTE's Sieve: 3.0 instructions
 // a dispatch before, 8.5 after (docs/notes/2026-11-03-sieve-profile.md).
-{ let got;
+await (async () => { let got;
   try {
     const img = Uint8Array.from('fa31c08ec026c70620005e01268c0e2200b036e64330c0e640b004e640fbb9004031f631ff31db4683fe07720331f64701f3031e6a014975eeb9003031d281faf02f7715428816530101d03d0080720231c0bd000001efebe5b8004ccd212eff066a0150b020e62058cf0000'.match(/../g), (x) => parseInt(x, 16));
     const run = (chain) => {
@@ -3213,37 +3218,37 @@ const x87Prog = (code, cw, doubles) => {
     const firstDiff = a.states.findIndex((v, i) => v !== b.states[i]);
     got = [a.done && b.done, a.states.length === b.states.length, firstDiff, b.dispatches < a.dispatches].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('realmode chaining: the same instructions, slices and timer interrupts as unchained, in fewer dispatches', got, 'true true -1 true'); }
+  eq('realmode chaining: the same instructions, slices and timer interrupts as unchained, in fewer dispatches', got, 'true true -1 true'); })();
 
 // A chained block decodes on past a side exit, into bytes that may never run: gcc puts a UD2 after a
 // call that does not return, and CoreMark's DJGPP build stopped translating there ("unimplemented
 // opcode 0f 0b") though the branch before it is always taken. Past a side exit the block now ends
 // before what it cannot decode. `xor ax,ax; inc ax; jnz +2; ud2; mov ax,4c00h; int 21h`.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
     const dos = installDOS(mc, new VFS());
     dos.load(Uint8Array.of(0x31, 0xc0, 0x40, 0x75, 0x02, 0x0f, 0x0b, 0xb8, 0x00, 0x4c, 0xcd, 0x21), '', 'C:\\UD2.COM');
     for (let k = 0; k < 20 && !dos.programDone; k++) mc.runSlice(100);
     got = dos.programDone;
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('a chained block ends before code it cannot decode past a side exit (a UD2 after a taken JNZ)', got, true); }
+  eq('a chained block ends before code it cannot decode past a side exit (a UD2 after a taken JNZ)', got, true); })();
 // The same for an instruction the CPU profile does not have: DOOM's DOS/4GW tests EFLAGS.ID and
 // jumps over its CPUID on a 386, and on the 386 profile the chained block stopped translating there.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20, cpu: '386' }); installBIOS(mc);
     const dos = installDOS(mc, new VFS());
     dos.load(Uint8Array.of(0x31, 0xc0, 0x40, 0x75, 0x02, 0x0f, 0xa2, 0xb8, 0x00, 0x4c, 0xcd, 0x21), '', 'C:\\NOCPUID.COM');
     for (let k = 0; k < 20 && !dos.programDone; k++) mc.runSlice(100);
     got = dos.programDone;
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('...and before a CPUID the 386 profile does not have, jumped over', got, true); }
+  eq('...and before a CPUID the 386 profile does not have, jumped over', got, true); })();
 
 // ---- x87: FSQRT under precision control, FPREM's condition codes and partial reduction, F2XM1 near 0 ----
 // Against Docker's i386 QEMU (its 80-bit floatx80 x87), as PRISM probed them for .kkrieger, whose
 // generator runs at 24 bits (cw 0x103F) and whose sFExp does fprem; f2xm1: fsqrt(2) at 24 bits is
 // 3ff6a09e60000000; 7 fprem 2 leaves 1 with Q=3 (C3=Q1, C1=Q0); 1e30 fprem 1 reduces only partly and
 // sets C2; f2xm1(-1e-6) is bea742163dc65d92, which 2^x-1 misses by some 1e5 ulp.
-{ const bits = (dv, o) => dv.getBigUint64(o, true).toString(16).padStart(16, '0');
+await (async () => { const bits = (dv, o) => dv.getBigUint64(o, true).toString(16).padStart(16, '0');
   const want = '3ff6a09e60000000 4200 400 bea742163dc65d92';
   let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);           // the recompiled path: nasm of the program in the comment
@@ -3259,20 +3264,20 @@ const x87Prog = (code, cw, doubles) => {
   const c = new Machine({ memSize: 1 << 20 }).cpu, f = new Float64Array(1), dv = new DataView(f.buffer);
   const run = (cw, a, b, op) => { c.fcw = cw; c.fsw = 0; c.ftop = 6; c.fst[6] = a; c.fst[7] = b; c.focc.fill(0); c.focc[6] = c.focc[7] = 1; c.fpuReg(0xd9, op[0], op[1]); f[0] = c.fst[c.ftop]; return bits(dv, 0); };
   const sq = run(0x7f, 2, 0, [7, 2]), sw1 = (run(0x37f, 7, 2, [7, 0]), c.fsw & 0x4700), sw2 = (run(0x37f, 1e30, 1, [7, 0]), c.fsw & 0x4700);
-  eq('x87, interpreted (src/fpu.js): the same', [sq, sw1.toString(16), sw2.toString(16), run(0x37f, -1e-6, 0, [6, 0])].join(' '), want); }
+  eq('x87, interpreted (src/fpu.js): the same', [sq, sw1.toString(16), sw2.toString(16), run(0x37f, -1e-6, 0, [6, 0])].join(' '), want); })();
 
 // ---- the 8237 DMA controllers read back what was programmed (src/dma.js) ----------------------
 // tools/dmaprobe.asm under QEMU and DOSBox-X: A1=1234 C1=0FFF P1=05 A3=4321 C3=07FF P3=0A. Every one
 // of those read FFh here, and Void 3, which fills its sound buffer up to `0FFFh - count`, spun in its
 // timer handler on a target it could not reach.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   const o = (p, v) => mc.ioWrite(p, 1, v), i = (p) => mc.ioRead(p, 1);
   o(0x0b, 0x59); o(0x0c, 0); o(0x02, 0x34); o(0x02, 0x12); o(0x03, 0xff); o(0x03, 0x0f); o(0x83, 0x05);
   o(0x0c, 0); o(0xc4, 0x78); o(0xc4, 0x56); o(0x8b, 0x07);                  // and channel 6, on the second controller
   const w = (p) => { o(0x0c, 0); o(0xd8, 0); const lo = i(p); return (i(p) << 8) | lo; };
   eq('8237: channel 1 address, count and page read back as written',
     [w(0x02), w(0x03), i(0x83)].map((v) => v.toString(16)).join(), '1234,fff,5');
-  eq('...and channel 6 on the second controller', [(() => { o(0xd8, 0); const lo = i(0xc4); return (i(0xc4) << 8) | lo; })(), i(0x8b)].map((v) => v.toString(16)).join(), '5678,7'); }
+  eq('...and channel 6 on the second controller', [(() => { o(0xd8, 0); const lo = i(0xc4); return (i(0xc4) << 8) | lo; })(), i(0x8b)].map((v) => v.toString(16)).join(), '5678,7'); })();
 
 // ---- running a .COM probe and reading what it wrote ---------------------------------------------
 const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
@@ -3288,7 +3293,7 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
 // tools/dpmiphys.asm: DPMI AX=0800h maps a physical address -- 64 KiB at 8 MiB, written and read back
 // through a selector on the linear address it gives -- and A0000h too. CWSDPMI under DOSBox-X:
 // HI=0 RW=1 LO=0. MIRAGE's host answered 8001h, and Heaven Seven's DOS version said "VESA error".
-{ const hex = (                                         // nasm -f bin tools/dpmiphys.asm, 391 bytes
+await (async () => { const hex = (                                         // nasm -f bin tools/dpmiphys.asm, 391 bytes
     'b44abb0010cd218c0e4b02b43c31c9ba2602cd210f82ee00a34d02b88716cd2f85c00f85e000893e51028c06530289f3' +
     'b448cd210f82ce008ec0b80100ff1e51020f82c100b80008bb800031c9be010031ffcd31c6063602307307c606360231' +
     'eb49535131c0b90100cd31723ea34f0289c35a59b80700cd31b808008b1e4f0231c9baffffcd318e064f022666c70600' +
@@ -3300,12 +3305,12 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
     '00000000000000');
   const { vfs } = runProbe(hex, 391, 'DPMIPHYS.COM');
   const out = vfs.readFile('\\DPMIPHYS.TXT');
-  eq('DPMI: 0800h maps a physical address, as CWSDPMI does', out && new TextDecoder().decode(out).trim(), 'HI=0 RW=1 LO=0 AX=????'); }
+  eq('DPMI: 0800h maps a physical address, as CWSDPMI does', out && new TextDecoder().decode(out).trim(), 'HI=0 RW=1 LO=0 AX=????'); })();
 
 // tools/dpmistack.asm: CWSDPMI under DOSBox-X and QEMU runs its IRQ 0 handler on another SS, and 64
 // bytes below the client's ESP survive five ticks. Void 3 keeps its scratch there (`lea esi,[esp-7Eh]`);
 // with the frame on the client's stack its blitter read a width of millions and drew nothing.
-{ const hex = (                                         // nasm -f bin tools/dpmistack.asm, 462 bytes
+await (async () => { const hex = (                                         // nasm -f bin tools/dpmistack.asm, 462 bytes
     'b44abb0010cd218c0e8802b43c31c9ba5d02cd210f82fd00a38a02b88716cd2f85c00f85ef00893e8c028c068e0289f3' +
     'b448cd210f82dd008ec0b80100ff1e8c020f82d0008c0e90028c1692028c1e9402b80402b308cd316689169602890e9a' +
     '02b80502b3088cc966ba1a020000cd316689e76683ef40160766b91000000066b8a55aa55a26676689076683c704e2f5' +
@@ -3318,13 +3323,13 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   const { vfs } = runProbe(hex, 462, 'DPMISTK.COM');
   const out = vfs.readFile('\\DPMISTK.TXT');
   eq('DPMI: the IRQ 0 handler runs on another stack, and below the client\'s ESP is left alone',
-    out && new TextDecoder().decode(out).trim(), 'TICKS=05 SAMESS=0 INTACT=1'); }
+    out && new TextDecoder().decode(out).trim(), 'TICKS=05 SAMESS=0 INTACT=1'); })();
 
 // tools/dpminest.asm: an IRQ 0 handler leaves the host's locked stack for its own, and the next tick
 // nests in it (DOOM's DMX does this, its Sound Blaster IRQ arriving inside its timer handler). CWSDPMI
 // under DOSBox-X: the outer handler returns, and a marker it left on the host's stack survives. MIRAGE
 // started every switch at the top of the locked stack, over the outer frame: #GP at the outer return.
-{ const hex = (                                         // nasm -f bin tools/dpminest.asm, 464 bytes
+await (async () => { const hex = (                                         // nasm -f bin tools/dpminest.asm, 464 bytes
     'b44abb0010cd218c0e8802b43c31c9ba5c02cd210f82b200a38a02b88716cd2f85c00f85a400893e8c028c068e0289f3' +
     'b448cd210f8292008ec0b80100ff1e8c020f8285008c1e9002b80402b308cd316689169802890e9c02b80502b3088cc9' +
     '66bacf010000cd31fb803e84020272f9fab80502b3088b0e9c02668b169802cd31fba08402e8b900a36f02a08502e8b0' +
@@ -3339,13 +3344,13 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   try { const out = runProbe(hex, 464, 'DPMINEST.COM').vfs.readFile('\\DPMINEST.TXT'); got = out && new TextDecoder().decode(out).trim(); }
   catch (e) { got = e.message; }
   eq('DPMI: an IRQ nested in a handler that left the locked stack does not overwrite its frame',
-    got, 'OUTER=02 NESTED=02 MARK=1'); }
+    got, 'OUTER=02 NESTED=02 MARK=1'); })();
 
 // ---- DPMI: selector 0040h is the BIOS data area -------------------------------------------------
 // tools/sel40.asm: CWSDPMI under DOSBox-X gives a client 0040h in its GDT, base 400h, limit FFFFh,
 // a ring-3 data segment (LAR F200). DOS/4GW 1.97 (C-Dogs) loads it as it stands; with no GDT of
 // ours that was #GP(40h).
-{ const hex = (                                         // nasm -f bin tools/sel40.asm, 367 bytes
+await (async () => { const hex = (                                         // nasm -f bin tools/sel40.asm, 367 bytes
     'b44abb0010cd218c0e3502a12c000631c08ec026a1100407a33302b43c31c9bafa01cd210f82b500a33702b88716cd2f' +
     '85c00f85a700893e39028c063b0289f3b448cd210f8295008ec0b80100ff1e39020f828800c7063102addeb840000f02' +
     'c8c6062c0230751bc6062c0231890e2d020f03c8890e2f02068ec026a11000a3310207bf0802a12d02e85600bf1102a1' +
@@ -3358,12 +3363,12 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   const got = out ? new TextDecoder().decode(out).trim() : '';
   const m = /EQ=(\w+) RM=(\w+)/.exec(got);
   eq('DPMI: selector 0040h is a data segment on the BIOS data area',
-    got.replace(/EQ=\w+ RM=\w+/, m && m[1] === m[2] ? 'EQ=RM' : 'EQ!=RM'), 'LAR=F200 LSL=FFFF EQ=RM ZF=1'); }
+    got.replace(/EQ=\w+ RM=\w+/, m && m[1] === m[2] ? 'EQ=RM' : 'EQ!=RM'), 'LAR=F200 LSL=FFFF EQ=RM ZF=1'); })();
 
 // tools/pmkey.asm: INT 16h AH=00 from a 32-bit client before any key is typed, called through the
 // vector 0204h reports, as DOS/4GW chains to it. A waiting service is retried at its stub; reloading CS=F000 for that is #GP(F000) in protected mode, and DSETUP32 (C-Dogs'
 // sound setup) never saw a key.
-{ const hex = (                                         // nasm -f bin tools/pmkey.asm, 253 bytes
+await (async () => { const hex = (                                         // nasm -f bin tools/pmkey.asm, 253 bytes
     'b44abb0010cd218c0ebd01b43c31c9baa901cd217276a3bf01b88716cd2f85c0756a893ec1018c06c30189f3b448cd21' +
     '725a8ec0b80100ff1ec101724fb80402b316cd31668916c501890ec90130e4669c66ff1ec501bfb701e835001e07c706' +
     'e7010040a1bf01a3db01c706e3010a00c706df01b301a1bd01a3ef01b80003bb210031c966bfcb010000cd31b8004ccd' +
@@ -3381,7 +3386,7 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
     for (let i = 0; i < 2000 && !dos.programDone; i++) mc.runSlice(20000);
     const out = vfs.readFile('\\PMKEY.TXT'); got = out && new TextDecoder().decode(out).trim();
   } catch (e) { got = e.message; }
-  eq('DPMI: INT 16h waiting for a key from protected mode gets it', got, 'KEY=1C0D'); }
+  eq('DPMI: INT 16h waiting for a key from protected mode gets it', got, 'KEY=1C0D'); })();
 
 // ---- DPMI: what Borland's RTM needs from the host (Jazz Jackrabbit) -----------------------------
 // tools/rtmhost.asm, one letter per check, '1' when it holds: V 0400h Get Version (CL = 3, our 386);
@@ -3391,7 +3396,7 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
 // restarted by a #NP handler that writes below the client's SP (the frame is on the locked stack);
 // R a 0306h raw switch to real mode and back, landing at ring 3 with IOPL 3. Each of these stopped
 // Jazz Jackrabbit in turn. Not oracle-checked against another host: CWSDPMI has no "MS-DOS" API.
-{ const hex = (                                         // nasm -f bin tools/rtmhost.asm, 799 bytes
+await (async () => { const hex = (                                         // nasm -f bin tools/rtmhost.asm, 799 bytes
     'b44abb0010cd218c0ec303b43c31c9baa203cd210f823302a3c503b88716cd2f85c00f852502893ec7038c06c90389f3' +
     'b448cd210f8213028ec031c0ff1ec7030f8207028c0edd038c1edf038c16e103b8000431c9cd3183f85a750a80f90375' +
     '05c606b50331b88a16beae03cd2f84c07524893ecb038c06cd03b80001ff1ecb0372138ee08ccb83e3f864807f05fa75' +
@@ -3412,7 +3417,7 @@ const runProbe = (hex, size, name, mem = 16 << 20, budget = 4000) => {
   let got;
   try { const out = runProbe(hex, 799, 'RTMHOST.COM').vfs.readFile('\\RTMHOST.TXT'); got = out && new TextDecoder().decode(out).trim(); }
   catch (e) { got = e.message; }
-  eq('DPMI: RTM\'s host services (V M I G P F D N R)', got, '111111111'); }
+  eq('DPMI: RTM\'s host services (V M I G P F D N R)', got, '111111111'); })();
 
 // ---- MIRAGE-LINUX (src/linux.js): static i386 ELF programs, system calls answered in JS ---------
 // The oracle is a real kernel: `docker run --platform linux/386 i386/debian` on the same binaries.
@@ -3423,55 +3428,55 @@ const runLinux = (hex, argv) => {
   return { out: new TextDecoder().decode(Uint8Array.from(lx.stdout)), status: lx.done ? lx.status : -1 };
 };
 // tools/linux/hello.asm: the initial stack (argc, argv) and write/exit. Docker: "argc=3\n/w/HELLO\na\nbc\n", 42.
-{ const hex = (                                         // nasm -f bin tools/linux/hello.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/hello.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408b7000000b7000000070000000010000089e6ad89c50430a2b4800408' +
     'b9af800408ba07000000e8330000004d7824ad89c131d2803c1100740342ebf7e81d000000b9b6800408ba01000000e8' +
     '0e000000ebd9b801000000bb2a000000cd80b804000000bb01000000cd80c3617267633d3f0a0a');
   const r = runLinux(hex, ['/w/HELLO', 'a', 'bc']);
-  eq('linux: argv on the initial stack, write and exit', JSON.stringify(r), JSON.stringify({ out: 'argc=3\n/w/HELLO\na\nbc\n', status: 42 })); }
+  eq('linux: argv on the initial stack, write and exit', JSON.stringify(r), JSON.stringify({ out: 'argc=3\n/w/HELLO\na\nbc\n', status: 42 })); })();
 // tools/linux/fpu80.asm: an 80-bit store to the stack at BFFFxxxxh, far above physical memory, under
 // paging. Docker: 3. MIRAGE masked the linear address to the size of RAM: SIGSEGV, 139.
-{ const hex = (                                         // nasm -f bin tools/linux/fpu80.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/fpu80.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '000000000100000000000000008004080080040873000000730000000500000000100000d9e8d9e8dcc0dec1db7c24e0' +
     'db6c24e0db5c24f88b5c24f8b801000000cd80');
-  eq('linux: FSTP TBYTE under paging stores at the linear address', runLinux(hex, ['/w/FPU80']).status, 3); }
+  eq('linux: FSTP TBYTE under paging stores at the linear address', runLinux(hex, ['/w/FPU80']).status, 3); })();
 // tools/linux/fileio.asm: open(O_CREAT), write, lseek, read, fstat64 on the in-memory file system.
 // Docker: "cde6", status 3 (the descriptor).
-{ const hex = (                                         // nasm -f bin tools/linux/fileio.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/fileio.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408f0000000001100000700000000100000b805000000bbdb800408b942' +
     '000000baa4010000cd8089c7b80400000089fbb9e6800408ba06000000cd80b81300000089fbb90200000031d2cd80b8' +
     '0300000089fbb9ec800408ba03000000cd80b8c500000089fbb900900408cd80a02c9004080430a2ef800408b8040000' +
     '00bb01000000b9ec800408ba04000000cd80b80100000089fbcd8066696c65696f2e746d70006162636465663f3f3f3f');
-  eq('linux: a file is created, written, sought, read back and stat-ed', JSON.stringify(runLinux(hex, ['/w/FILEIO'])), JSON.stringify({ out: 'cde6', status: 3 })); }
+  eq('linux: a file is created, written, sought, read back and stat-ed', JSON.stringify(runLinux(hex, ['/w/FILEIO'])), JSON.stringify({ out: 'cde6', status: 3 })); })();
 // tools/linux/sigabrt.asm: a write 2 MiB below ESP (the stack grows on demand), then tkill(SIGABRT).
 // Docker: 134. MIRAGE had 256 KiB of stack (139) and no tkill.
-{ const hex = (                                         // nasm -f bin tools/linux/sigabrt.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/sigabrt.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004087a0000007a0000000500000000100000c684240000e0ff01b8140000' +
     '00cd8089c3b8ee000000b906000000cd80b80100000031dbcd80');
-  eq('linux: the stack grows on demand, and SIGABRT to oneself ends with 134', runLinux(hex, ['/w/SIGABRT']).status, 134); }
+  eq('linux: the stack grows on demand, and SIGABRT to oneself ends with 134', runLinux(hex, ['/w/SIGABRT']).status, 134); })();
 // tools/linux/ud2.asm: Docker 132 (SIGILL). MIRAGE threw "unimplemented opcode 0x0f 0x0b".
-{ const hex = (                                         // nasm -f bin tools/linux/ud2.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/ud2.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408560000005600000005000000001000000f0b');
   let got; try { got = runLinux(hex, ['/w/UD2']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: an invalid opcode is SIGILL', got, 132); }
+  eq('linux: an invalid opcode is SIGILL', got, 132); })();
 // tools/linux/pipewait.asm: two processes at once — the child reads a pipe before its parent writes
 // it and waits for the byte. Docker: 88. One process at a time, the child read EOF and exited 0.
-{ const hex = (                                         // nasm -f bin tools/linux/pipewait.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/pipewait.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408cb000000db0000000700000000100000b82a000000bbcb800408cd80' +
     'b802000000cd8085c07525b8030000008b1dcb800408b9d3800408ba01000000cd800fb61dd3800408b801000000cd80' +
     'b8040000008b1dcf800408b9ca800408ba01000000cd80b872000000bbffffffffb9d780040831d231f6cd800fb61dd8' +
     '800408b801000000cd805800000000000000000000000000000000');
   let got; try { got = runLinux(hex, ['/w/PIPEWAIT']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: a child waits on a pipe its parent writes later (two processes at once)', got, 88); }
+  eq('linux: a child waits on a pipe its parent writes later (two processes at once)', got, 88); })();
 // tools/linux/dsp.asm: /dev/dsp set up as OSS programs do — rate, format, stereo, GETOSPACE's geometry,
 // a write. 31 when all hold; with no /dev/dsp the open failed and it was 0.
-{ const hex = (                                         // nasm -f bin tools/linux/dsp.asm (its file part)
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/dsp.asm (its file part)
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004083301000047110000070000000010000031ffb805000000bb1e810408' +
     'b901000000cd8085c00f8898000000a333810408b9025004c0ba27810408e88d000000813d27810408112b0000750383' +
@@ -3480,28 +3485,28 @@ const runLinux = (hex, argv) => {
     '08b947810408ba00100000cd803d00100000750383cf1089fbb801000000cd80b8360000008b1d33810408cd80c32f64' +
     '65762f64737000112b00001000000001000000');
   let got; try { got = runLinux(hex, ['/w/DSP']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: /dev/dsp takes OSS rate, format, stereo, answers GETOSPACE, plays a write', got, 31); }
+  eq('linux: /dev/dsp takes OSS rate, format, stereo, answers GETOSPACE, plays a write', got, 31); })();
 // The page's mouse on /dev/mouse, as a Microsoft serial mouse: 01LRYYXX, X's low six bits, Y's — decoded
 // the way SVGAlib's ms handler does (dx = (b0 & 3) << 6 | b1, dy = (b0 & 0Ch) << 4 | b2, signed bytes).
 // Nothing fed it: SVGAlib programs (Quake's aim) had no mouse in the page.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.mouseInput(5, -3, 1); lx.mouseInput(200, 0, 2);
     const p = lx.mouseIn, dec = (i) => [((p[i] & 3) << 6 | p[i + 1]) << 24 >> 24, ((p[i] & 0x0c) << 4 | p[i + 2]) << 24 >> 24, (p[i] >> 5) & 1, (p[i] >> 4) & 1, (p[i] >> 6) & 1];
     got = [dec(0), dec(3), dec(6)].map((x) => x.join(',')).join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: the mouse as Microsoft serial packets, a large move split', got, '5,-3,1,0,1 127,0,0,1,1 73,0,0,1,1'); }
+  eq('linux: the mouse as Microsoft serial packets, a large move split', got, '5,-3,1,0,1 127,0,0,1,1 73,0,0,1,1'); })();
 // ...and on /dev/input/mice as Linux's mousedev gives it to gpm and X: PS/2 packets — 08h set, buttons in
 // bits 0-1, the signs in bits 4-5, then dX and dY with Y UP.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.mouseInput(5, -3, 1); lx.mouseInput(-2, 4, 2);
     got = lx.miceIn.map((b) => b.toString(16)).join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: /dev/input/mice as PS/2 packets, Y up', got, '9 5 3 3a fe fc'); }
+  eq('linux: /dev/input/mice as PS/2 packets, Y up', got, '9 5 3 3a fe fc'); })();
 // tools/linux/fb.asm: /dev/fb0 as fbset, fbsplash and Xfbdev use it — its two screen infos, an mmap of the
 // card's framebuffer, a pixel written there and read back. 63 when all hold; with no /dev/fb0, 0.
-{ const hex = (                                         // nasm -f bin tools/linux/fb.asm (its file part)
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/fb.asm (its file part)
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004085f0100004b020000070000000010000031ffb805000000bb56810408' +
     'b902000000cd8085c00f88de000000a35f810408b8360000008b1d5f810408b900460000ba67810408cd80813d678104' +
@@ -3516,11 +3521,11 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
     got = lx.done ? lx.status : -1;
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: /dev/fb0 — screen infos, mmap onto the card, a pixel read back', got, 63); }
+  eq('linux: /dev/fb0 — screen infos, mmap onto the card, a pixel read back', got, 63); })();
 // src/hle/fxmesa.js: libMesaGL.so.2 for the 3dfx games (GLQuake 0.97, Quake II's ref_gl.so) -- fxMesa's
 // full screen at a Glide resolution (7: 640x480, 15: 400x300), Glide's SST_GAMMA, the swap paced at sixty a second, and the
 // names they find it by (libGL.so for ref_gl's dlopen) with OpenGL's entry points beside fxMesa's.
-{ let got;
+await (async () => { let got;
   try { const { fxmesa } = await import('../src/hle/fxmesa.js'), { gl } = await import('../src/hle/gl.js'), { traceBackend } = await import('../src/hle/trace.js');
     const lib = fxmesa(gl()), be = traceBackend(); let t = 1;
     const x = { backend: be, alloc: () => 0x1000, w32: () => {}, lx: { mono: () => t, getenv: (n) => (n === 'SST_GAMMA' ? '1.6' : null) }, waitUntil: () => 'wait' };
@@ -3530,12 +3535,12 @@ const runLinux = (hex, argv) => {
     const s1 = call('fxMesaSwapBuffers'); t += 0.001; const s2 = call('fxMesaSwapBuffers'); t += 0.02; const s3 = call('fxMesaSwapBuffers');
     got = [...modes, be.gamma, s1, s2, s3, be.frames, lib.soname, lib.links.includes('libGL.so'), !!lib.fns.glVertex3f, !!lib.fns.fxMesaMakeCurrent].join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('hle: fxMesa -- Glide resolutions, a paced swap, libMesaGL.so.2 as libGL.so', got, '640x480gl 400x300 1.6 0 wait 0 2 libMesaGL.so.2 true true true'); }
+  eq('hle: fxMesa -- Glide resolutions, a paced swap, libMesaGL.so.2 as libGL.so', got, '640x480gl 400x300 1.6 0 wait 0 2 libMesaGL.so.2 true true true'); })();
 // lx.getenv for the libraries made in JavaScript: the environment as the process changed it, through the
 // __environ its ELF defines (.dynsym) -- Quake II's ref_gl putenvs SST_GAMMA and Glide read it there.
 // An ELF of three sections (null, .dynsym, .dynstr) whose __environ is at 0x9000; the array it points
 // to holds "A=1" and "SST_GAMMA=1.6".
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.prepareSpace(); lx.mapRange(0x9000, 0xa000, true);
     const elf = new Uint8Array(0x200), v = new DataView(elf.buffer);
@@ -3552,12 +3557,12 @@ const runLinux = (hex, argv) => {
     put(0x9100, Uint8Array.from(Buffer.from('A=1\0'))); put(0x9110, Uint8Array.from(Buffer.from('SST_GAMMA=1.6\0')));
     got = [lx.symbol('__environ').toString(16), lx.getenv('SST_GAMMA'), lx.getenv('B')].join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: lx.getenv -- the environment through the ELF\'s __environ', got, '9000 1.6 '); }
+  eq('linux: lx.getenv -- the environment through the ELF\'s __environ', got, '9000 1.6 '); })();
 // src/wise.js: a Wise installer read without running it (Half-Life's Uplink demo, hluplink.exe) -- after
 // the stub's last section, raw deflate streams each followed by a CRC: the script, then the files, whose
 // offsets the script gives from where the first file's stream begins. A synthetic one: a PE header of one
 // section, a script naming two files (and a stray "%" that is no entry), the files.
-{ let got;
+await (async () => { let got;
   try { const { unwise, wiseLayer } = await import('../src/wise.js'), z = await import('zlib');
     const crc = new Uint8Array(4), d1 = z.deflateRawSync(Buffer.from('hello')), d2 = z.deflateRawSync(Buffer.from('world!!'));
     const entry = (name, start, end, size) => { const e = new Uint8Array(43 + name.length + 1), v = new DataView(e.buffer);
@@ -3570,13 +3575,13 @@ const runLinux = (hex, argv) => {
     const files = await unwise(exe), layer = await wiseLayer(exe, { wise: 'x', into: '/hl' });
     got = [files.map((f) => `${f.path}=${new TextDecoder().decode(f.bytes)}`).join(','), layer.map((f) => f.to).join(',')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('wise: an installer\'s files from its script, without running it', got, '%MAINDIR%\\a.txt=hello,%MAINDIR%\\sub\\b.txt=world!! /hl/a.txt,/hl/sub/b.txt'); }
+  eq('wise: an installer\'s files from its script, without running it', got, '%MAINDIR%\\a.txt=hello,%MAINDIR%\\sub\\b.txt=world!! /hl/a.txt,/hl/sub/b.txt'); })();
 // src/didi.js: Epic MegaGames' installer (Jazz Jackrabbit 2's shareware, JAZZ2SWF.EXE) -- after the stub,
 // "DiDi", then a record per file whose blocks (a table of their sizes, each a CRC and deflate bytes) are
 // pieces of ONE zlib stream running across files, a new stream at a group's first file. A synthetic one:
 // a.txt (20000 bytes, two blocks) and HTML\\b.txt in one stream -- b's bytes backreferencing a's -- and
 // c.txt in a second.
-{ let got;
+await (async () => { let got;
   try { const { undidi, didiLayer } = await import('../src/didi.js'), z = await import('zlib');
     const A = Buffer.from('0123456789abcdef'.repeat(1250)), B = Buffer.from('0123456789abcdef'.repeat(3) + '!'), C = Buffer.from('second stream');
     const s1 = z.deflateSync(Buffer.concat([A, B])), s2 = z.deflateSync(C), cut = s1.length >> 1, cut2 = s1.length - 3;
@@ -3595,12 +3600,12 @@ const runLinux = (hex, argv) => {
     const files = undidi(exe), layer = didiLayer(exe, { didi: 'x', into: '/jj2' });
     got = [files.map((f) => `${f.path}=${f.bytes.length}`).join(','), new TextDecoder().decode(files[1].bytes.slice(-1)), new TextDecoder().decode(files[2].bytes), layer.map((f) => f.to).join(',')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('didi: an Epic installer\'s files, one zlib stream across them', got, 'a.txt=20000,HTML\\b.txt=49,c.txt=13 ! second stream /jj2/a.txt,/jj2/HTML/b.txt,/jj2/c.txt'); }
+  eq('didi: an Epic installer\'s files, one zlib stream across them', got, 'a.txt=20000,HTML\\b.txt=49,c.txt=13 ! second stream /jj2/a.txt,/jj2/HTML/b.txt,/jj2/c.txt'); })();
 // src/win32/avi.js: an AVI as MCI's video plays it -- RIFF AVI, its 8-bit stream's palette, its RLE8 frames
 // drawn over the one before (a run, literal bytes padded to a word, a jump, a line's end), a palette change,
 // its PCM sound put end to end. Half-Life's intro is one. A synthetic 6 x 2 one: frame 1 a run of 3 and 3
 // literal bytes, then a jump to the second line; frame 2 changes one pixel of the first line only.
-{ let got;
+await (async () => { let got;
   try { const { parseAvi, decodeFrame } = await import('../src/win32/avi.js');
     const ck = (id, body) => { const b = new Uint8Array(8 + body.length + (body.length & 1)); b.set(new TextEncoder().encode(id)); new DataView(b.buffer).setUint32(4, body.length, true); b.set(body, 8); return b; };
     const list = (t, ...parts) => ck('LIST', Uint8Array.from([...new TextEncoder().encode(t), ...parts.flatMap((p) => [...p])]));
@@ -3620,11 +3625,11 @@ const runLinux = (hex, argv) => {
     for (const f of a.frames) decodeFrame(f, idx, a.w, a.h, pal);
     got = [a.w, a.h, a.codec, a.frames.map((f) => f.kind).join(''), [...idx].join(''), pal[0].toString(16), pal[1].toString(16), [...a.audio.data].join('.')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('avi: RIFF AVI, RLE8 over the frame before, a palette change, its PCM', got, '6 2 rle8 dcpcdc 110111111010 ff0000 112233 10.20.30'); }
+  eq('avi: RIFF AVI, RLE8 over the frame before, a palette change, its PCM', got, '6 2 rle8 dcpcdc 110111111010 ff0000 112233 10.20.30'); })();
 // tools/linux/lazymap.asm: anonymous memory larger than the machine (Quake II's hunks) -- 32 MiB mmapped on
 // a 16 MiB machine, its ends written and read back, mprotect and write() on pages never touched, munmap.
 // 31 when all hold; committed whole at mmap, it ran out of physical memory.
-{ const hex = (
+await (async () => { const hex = (
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004080b0100000b010000070000000010000031ff57b8c000000031dbb900' +
     '000002ba03000000be22000000bfffffffff31edcd805f3d00f0ffff0f878000000083cf0189c5c7450078563412c785' +
@@ -3637,10 +3642,10 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
     got = lx.done ? lx.status : -1;
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: anonymous mmap larger than memory, committed page by page', got, 31); }
+  eq('linux: anonymous mmap larger than memory, committed page by page', got, 31); })();
 // tools/linux/oldcalls.asm: libc5's calls — creat with a mode kept (0755: ld's output runs), fcntl 55 with
 // FD_CLOEXEC, getdents 141 and readdir 89. 15; Docker (qemu-user on this host) 7, lacking readdir.
-{ const hex = (                                         // nasm -f bin tools/linux/oldcalls.asm (its file part)
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/oldcalls.asm (its file part)
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004085f010000c7110000070000000010000031ffb83c000000bb12000000' +
     'cd80b808000000bb59810408b9ed010000cd80a35f810408b86a000000bb59810408b967810408cd800fb7056f810408' +
@@ -3650,11 +3655,11 @@ const runLinux = (hex, argv) => {
     '01c6ebe8b805000000bb5d810408b900000100cd8089c3b859000000b9c7810408ba01000000cd8083f801750383cf08' +
     '89fbb801000000cd80542e58002e00');
   let got; try { got = runLinux(hex, ['/w/OLDCALLS']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: creat keeps its mode, fcntl 55, getdents 141, readdir 89 (libc5)', got, 15); }
+  eq('linux: creat keeps its mode, fcntl 55, getdents 141, readdir 89 (libc5)', got, 15); })();
 // tools/linux/unixsock.asm: a Unix stream socket between two processes, as X uses one — bind to an
 // abstract name, listen, fork; the child connects and writes "hi" before the parent accepts; the parent
 // reads it, then the end. Docker: 3. MIRAGE had no sockets.
-{ const hex = (                                         // nasm -f bin tools/linux/unixsock.asm (its file part)
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/unixsock.asm (its file part)
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408f001000014020000070000000010000031ffc705f881040801000000' +
     'c705fc81040801000000c7050082040800000000b866000000bb01000000b9f8810408cd80a3f0810408a3f8810408c7' +
@@ -3667,10 +3672,10 @@ const runLinux = (hex, argv) => {
     '1df4810408b910820408ba02000000cd8085c0750383cf02b872000000bbffffffff31c931d231f6cd8089fbb8010000' +
     '00cd800100006d69726167652d786869');
   let got; try { got = runLinux(hex, ['/w/UNIXSOCK']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: a Unix socket between two processes (bind, listen, connect, accept, the end)', got, 3); }
+  eq('linux: a Unix socket between two processes (bind, listen, connect, accept, the end)', got, 3); })();
 // tools/linux/xcalls.asm: what XFree86 3.3 and Xlib asked beyond sockets — link (X's lock file), and on a
 // socket ioctl FIONBIO and FIONREAD. Docker: 7. MIRAGE had no link and answered ENOTTY ("Not a typewriter").
-{ const hex = (                                         // nasm -f bin tools/linux/xcalls.asm (its file part)
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/xcalls.asm (its file part)
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004085a010000e6010000070000000010000031ffb808000000bb52810408' +
     'b9a4010000cd80b809000000bb52810408b956810408cd80b86a000000bb56810408b95a810408cd8066833d64810408' +
@@ -3680,10 +3685,10 @@ const runLinux = (hex, argv) => {
     '01000000cd80b8360000008b1dd2810408b91b540000bade810408cd80833dde81040801750383cf0489fbb801000000' +
     'cd804c2e41004c2e4200');
   let got; try { got = runLinux(hex, ['/w/XCALLS']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: link, and FIONBIO/FIONREAD on a socket (X11)', got, 7); }
+  eq('linux: link, and FIONBIO/FIONREAD on a socket (X11)', got, 7); })();
 // tools/linux/shm.asm: System V shared memory between two processes (MIT-SHM's X picture): a child
 // attaches and writes, the parent attaches and reads it back, IPC_STAT gives the size. 3; MIRAGE had no ipc.
-{ const hex = (                                         // nasm -f bin tools/linux/shm.asm (its file part)
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/shm.asm (its file part)
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004080f01000057010000070000000010000031ffb875000000bb17000000' +
     '31c9ba00100000be80030000cd80a30f810408b802000000cd8085c07514e869000000c7005a5a5a5ab80100000031db' +
@@ -3691,12 +3696,12 @@ const runLinux = (hex, argv) => {
     '0f810408ba0200000031f657bf17810408cd805f813d2781040800100000750383cf0289fbb801000000cd80b8750000' +
     '00bb150000008b0d0f81040831d2be138104085731ffcd805fa113810408c3');
   let got; try { got = runLinux(hex, ['/w/SHM']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: System V shared memory between two processes (ipc SHMGET/SHMAT/SHMCTL)', got, 3); }
+  eq('linux: System V shared memory between two processes (ipc SHMGET/SHMAT/SHMCTL)', got, 3); })();
 // The translation memo (src/recompiler.js _memoGet): blocks kept across reset() under paging, reused only
 // where memory holds exactly their bytes. Two programs loaded in turn at the same address (rmw.asm, 84;
 // mprotect.asm, 42), then the first again: it reuses its blocks (memoHits), and neither gets the other's.
 // make ran cc1 once per DOOM file, retranslating it each time: building DOOM went 45% faster.
-{ let got;
+await (async () => { let got;
   try { const memo = new Map();
     const A = (                                         // nasm -f bin tools/linux/rmw.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
@@ -3711,24 +3716,24 @@ const runLinux = (hex, argv) => {
     const [s1] = runOne(A, '/w/RMW'), [s2] = runOne(B, '/w/MPROTECT'), [s3, hits] = runOne(A, '/w/RMW');
     got = [s1, s2, s3, hits > 0].join();
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('recompiler: the memo reuses a program\'s blocks after reset, never another program\'s', got, '84,42,84,true'); }
+  eq('recompiler: the memo reuses a program\'s blocks after reset, never another program\'s', got, '84,42,84,true'); })();
 // tools/linux/mprotect.asm: mprotect makes the text writable and the program patches it, as Quake's
 // Sys_MakeCodeWriteable does. Docker: 42. MIRAGE answered 0, left the page read-only: SIGSEGV, 139.
-{ const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/mprotect.asm
     '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000' +
     '000000010000000000000000800408008004088a0000008a0000000500000000100000b87d000000bb00800408b9001000' +
     '00ba07000000cd8085c07510c605768004082ab300b801000000cd80bb01000000b801000000cd80');
   let got; try { got = runLinux(hex, ['/w/MPROTECT']).status; } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: mprotect makes the code writable, and the program patches itself', got, 42); }
+  eq('linux: mprotect makes the code writable, and the program patches itself', got, 42); })();
 // tools/linux/rmw.asm: read-modify-write on the stack through the paged fast path. Docker: 84.
-{ const hex = (                                         // nasm -f bin tools/linux/rmw.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/rmw.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004087b0000007b0000000500000000100000b9e8030000c74424f8150000' +
     '00d16424f88b4424f8014424f84975e98b5c24f8b801000000cd80');
-  eq('linux: read-modify-write through the paged fast path', runLinux(hex, ['/w/RMW']).status, 84); }
+  eq('linux: read-modify-write through the paged fast path', runLinux(hex, ['/w/RMW']).status, 84); })();
 // tools/linux/symlink.asm: a PIE (ET_DYN) loaded at a base of the kernel's choosing, a symbolic link
 // made, opened through and read with readlink. Docker: "ok t.b\n", 7.
-{ const hex = (                                         // nasm -f bin tools/linux/symlink.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/symlink.asm
     '7f454c460101010000000000000000000300030001000000540000003400000000000000000000003400200001000000' +
     '00000000010000000000000000000000000000002b0100002b0100000700000000100000e8000000005d81ed59000000' +
     'b8050000008d9d09010000b941000000baa4010000cd8089c3b8040000008d8d11010000ba02000000cd80b806000000' +
@@ -3737,11 +3742,11 @@ const runLinux = (hex, argv) => {
     'bb010000008d8d13010000cd80b801000000bb07000000cd80742e6200742e6c006f6b3f3f2000000000000000000000' +
     '0000000000000000000000');
   let got; try { got = JSON.stringify(runLinux(hex, ['/w/SYMLINK'])); } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: a PIE runs, and a symbolic link is followed and read', got, JSON.stringify({ out: 'ok t.b\n', status: 7 })); }
+  eq('linux: a PIE runs, and a symbolic link is followed and read', got, JSON.stringify({ out: 'ok t.b\n', status: 7 })); })();
 // tools/linux/aout.asm: an a.out ZMAGIC program (text at address 0, argv and envp passed as pointers),
 // the format of id's Linux DOOM. No current kernel or qemu-user loads a.out: binfmt_aout.c is the
 // reference. "abc", 2.
-{ const hex = (                                         // nasm -f bin tools/linux/aout.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/aout.asm
     '0b0164002a04000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
     '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
     '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
@@ -3766,28 +3771,28 @@ const runLinux = (hex, argv) => {
     '000000000000000000000000000000008b2c248b7424048b4e0431d2803c1100740342ebf7b804000000bb01000000cd' +
     '80b80100000089ebcd80');
   let got; try { got = JSON.stringify(runLinux(hex, ['/w/AOUT', 'abc'])); } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: an a.out ZMAGIC program runs at address 0 with its argv pointer', got, JSON.stringify({ out: 'abc', status: 2 })); }
+  eq('linux: an a.out ZMAGIC program runs at address 0 with its argv pointer', got, JSON.stringify({ out: 'abc', status: 2 })); })();
 // tools/linux/ioperm.asm: ioperm opens a port in the TSS's I/O bitmap, which IN/OUT at CPL 3 consult
 // whatever IOPL is (then iopl(0), then OUT). Linux: status 5; without a TSS, #GP and 139.
-{ const hex = (                                         // nasm -f bin tools/linux/ioperm.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/ioperm.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '000000000100000000000000008004080080040883000000830000000500000000100000b865000000bb81000000b901' +
     '000000ba01000000cd80b86e00000031dbcd80b05ae681b801000000bb05000000cd80');
-  eq('linux: a port opened by ioperm stays open under IOPL 0', runLinux(hex, ['/w/IOPERM']).status, 5); }
+  eq('linux: a port opened by ioperm stays open under IOPL 0', runLinux(hex, ['/w/IOPERM']).status, 5); })();
 // tools/linux/fork.asm: fork, a child that writes and exits 3, a parent that waits for it with wait4.
 // Docker: "child\nparent\n", status 13. MIRAGE-LINUX had no fork.
-{ const hex = (                                         // nasm -f bin tools/linux/fork.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/fork.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408d6000000d60000000700000000100000b802000000cd8085c07522b8' +
     '04000000bb01000000b9c5800408ba06000000cd80b801000000bb03000000cd80b872000000bbffffffffb9d2800408' +
     '31d231f6cd80b804000000bb01000000b9cb800408ba07000000cd808b1dd2800408c1eb0881e3ff00000083c30ab801' +
     '000000cd806368696c640a706172656e740a00000000');
-  eq('linux: fork, the child runs and exits, the parent waits and reads its status', JSON.stringify(runLinux(hex, ['/w/FORK'])), JSON.stringify({ out: 'child\nparent\n', status: 13 })); }
+  eq('linux: fork, the child runs and exits, the parent waits and reads its status', JSON.stringify(runLinux(hex, ['/w/FORK'])), JSON.stringify({ out: 'child\nparent\n', status: 13 })); })();
 // tools/linux/signals.asm: signals reach a program's handlers, as i386 Linux delivers them — the frame
 // and sigreturn (registers kept), alarm + pause (EINTR), SIGCHLD in wait4 with SA_RESTART (run again),
 // a blocked signal pending until unblocked. Docker i386/debian: "sig: YYYY". MIRAGE kept handlers
 // without ever calling them, and SIGUSR1 ended the program (signal 10).
-{ const hex = (                                         // nasm -f bin tools/linux/signals.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/signals.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408c9030000c90300000700000000100000c705898304083f830408c705' +
     '8d83040800000004c705918304086f830408c7059583040800000000c7059983040800000000b8ae000000bb0a000000' +
@@ -3809,11 +3814,11 @@ const runLinux = (hex, argv) => {
     'c1830408c38b442404a3c5830408c358b877000000cd800000000080f0fa027369673a203f3f3f3f0a00000000000000' +
     '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
     '000000000000000000');
-  eq('linux: signals to handlers — sigreturn, EINTR, SA_RESTART, a blocked signal', JSON.stringify(runLinux(hex, ['/w/SIGNALS'])), JSON.stringify({ out: 'sig: YYYY\n', status: 0 })); }
+  eq('linux: signals to handlers — sigreturn, EINTR, SA_RESTART, a blocked signal', JSON.stringify(runLinux(hex, ['/w/SIGNALS'])), JSON.stringify({ out: 'sig: YYYY\n', status: 0 })); })();
 // tools/linux/sleeps.asm: nanosleep, select and poll wait for their timeout (by gettimeofday), and a
 // zero timeout does not wait. Docker i386/debian: "sleeps: YYYY". MIRAGE answered at once: NNNY —
 // XFree86's main loop, selecting with a timeout, spun some 90 000 times a second.
-{ const hex = (                                         // nasm -f bin tools/linux/sleeps.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/sleeps.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408c6020000c60200000700000000100000b84e000000bb9682040831c9' +
     'cd80b8a2000000bb8182040831c9cd80a3ae820408b84e000000bb9e82040831c9cd80a19e8204082b059682040869c0' +
@@ -3836,14 +3841,14 @@ const runLinux = (hex, argv) => {
   const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
   lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/SLEEPS']);
   mc.runSlice(200000);
-  eq('linux: a wait that moves the clock ends the slice', Math.round(lx.mono() * 10) / 10, 0.3); }
+  eq('linux: a wait that moves the clock ends the slice', Math.round(lx.mono() * 10) / 10, 0.3); })();
 // tools/linux/procs.asm: one process ends another, as busybox `timeout` does — a sleeping child killed,
 // the killer's memory still its own; a child that never makes a system call preempted and killed after
 // 50 ms; a child's exit ending its parent's wait at once, another child waiting 100 s in a select.
 // Docker i386/debian: "procs: YYY". MIRAGE cleared the killed one's addresses in the running process's
 // page table, switched processes only in system calls, and counted an exit as one more wait (the
 // select's turn then took the clock to its timeout: X's screen saver, 600 s, in a shell starting twm).
-{ const hex = (                                         // nasm -f bin tools/linux/procs.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/procs.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '000000000100000000000000008004080080040841020000410200000700000000100000b802000000cd8085c07517b8' +
     'a2000000bb0682040831c9cd80b80100000031dbcd80a32e820408b8250000008b1d2e820408b90f000000cd80c70532' +
@@ -3861,12 +3866,12 @@ const runLinux = (hex, argv) => {
   lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/PROCS']);
   for (let i = 0; i < 4000 && !lx.done; i++) mc.runSlice(20000);
   const out = new TextDecoder().decode(Uint8Array.from(lx.stdout)) || (lx.done ? `signal ${lx.signal}` : 'still running');
-  eq('linux: a process kills another, a sleeper or one that never makes a system call; an exit ends a wait', out, 'procs: YYY\n'); }
+  eq('linux: a process kills another, a sleeper or one that never makes a system call; an exit ends a wait', out, 'procs: YYY\n'); })();
 // tools/linux/pty.asm: pseudo-terminals as xterm uses them — Unix98's /dev/ptmx and /dev/pts/N (Docker
 // i386/debian answers the same five), echo and ONLCR through the line discipline, the window size, EIO
 // on the master once the slave is closed; and the BSD pairs /dev/ptyp0 /dev/ttyp0 of libc5 (a real
 // kernel has none any more: "-"; MIRAGE has them, xterm 3.3 opens them).
-{ const hex = (                                         // nasm -f bin tools/linux/pty.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/pty.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408f1030000f10300000700000000100000fcb805000000bb49830408b9' +
     '02010000cd80a39c830408c605aa8304082d85c00f88f6010000b8360000008b1d9c830408b930540480ba98830408cd' +
@@ -3889,22 +3894,22 @@ const runLinux = (hex, argv) => {
     '0000000000000000000000000000000000000000007074793a203f3f3f3f3f3f0a000000000000000000000000000000' +
     '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
     '00');
-  eq('linux: pseudo-terminals, Unix98 and BSD', JSON.stringify(runLinux(hex, ['/w/PTY'])), JSON.stringify({ out: 'pty: YYYYYY\n', status: 0 })); }
+  eq('linux: pseudo-terminals, Unix98 and BSD', JSON.stringify(runLinux(hex, ['/w/PTY'])), JSON.stringify({ out: 'pty: YYYYYY\n', status: 0 })); })();
 // The user's name inside a Linux image (lx.setUser): a page's visitor's choice, `oasis run`'s host login.
 // Cleaned to a login name, first in /etc/passwd on uid 0 (getpwuid(0) answers it: XBoing greeted
 // "Anonymous?" with no passwd at all), the image's own entries kept after it.
-{ let got;
+await (async () => { let got;
   try { const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' }));
     lx.addFile('/etc/passwd', new TextEncoder().encode('root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1::/:\n'));
     const n = lx.setUser('Max Power!');
     got = n + ' | ' + new TextDecoder().decode(lx.readFile('/etc/passwd')).trim().split('\n').join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: the user\'s name, first in /etc/passwd on uid 0', got, 'maxpower | maxpower:x:0:0:maxpower:/root:/bin/sh | root:x:0:0:root:/root:/bin/sh | daemon:x:1:1::/:'); }
+  eq('linux: the user\'s name, first in /etc/passwd on uid 0', got, 'maxpower | maxpower:x:0:0:maxpower:/root:/bin/sh | root:x:0:0:root:/root:/bin/sh | daemon:x:1:1::/:'); })();
 // tools/linux/tick.asm: a select of 35 us sleeps as the kernel's clock allows — some 35 us on a
 // modern one (Docker i386/debian: "tick: 00", MIRAGE's default), 10 to 20 ms on Linux 2.0's ticks
 // (HZ 100, fs/select.c), which an image of 1997 asks for with machine.hz: XBoing paced its frames on
 // it and ran several times too fast without.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/tick.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004080d0100000d0100000700000000100000b84e000000bbf480040831c9' +
@@ -3918,12 +3923,12 @@ const runLinux = (hex, argv) => {
     const a = run(0), b = run(100), ms = +b.slice(6);
     got = `${a} | ${ms >= 10 && ms <= 20 ? 'tick: 10-20' : b}`;
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('linux: timeouts to the microsecond, or in 1997\'s clock ticks (machine.hz 100)', got, 'tick: 00 | tick: 10-20'); }
+  eq('linux: timeouts to the microsecond, or in 1997\'s clock ticks (machine.hz 100)', got, 'tick: 00 | tick: 10-20'); })();
 // tools/linux/fbgrad.asm: /dev/fb0 at the size a program needs (lx.setFb, an image's machine.fb, the
 // Linux page's choice for a dropped program) — the 256-byte intros of the 2020s draw for one size,
 // 1024x768 for Outline 2021's xorchitecture. The program reads the size, maps the framebuffer and
 // paints a gradient: its corners on the card, and a size the card has no mode for refused.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/fbgrad.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408be010000620200000700000000100000b805000000bba7810408b902' +
@@ -3946,11 +3951,11 @@ const runLinux = (hex, argv) => {
     refused += ' / ' + new TextDecoder().decode(Uint8Array.from(lx2.stdout)).trim();
     got = [new TextDecoder().decode(Uint8Array.from(lx.stdout)).trim(), px(512, 1), px(1022, 766), px(0, 0), refused].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: /dev/fb0 at 1024x768 for a program that draws for it, 1920x1080 on a card of 8 MiB', got, 'fb: 1024x0768 | 7f0000 | fefe00 | ff | refused / fb: 1920x1080'); }
+  eq('linux: /dev/fb0 at 1024x768 for a program that draws for it, 1920x1080 on a card of 8 MiB', got, 'fb: 1024x0768 | 7f0000 | fefe00 | ff | refused / fb: 1920x1080'); })();
 // tools/linux/timerfd.asm: a timer read as a descriptor (timerfd_create/settime/gettime, a read that
 // waits for the expiry) and pwrite64 — what Outline 2021's xorchitecture paces and draws its frames
 // with. Docker i386/debian: "tfd: YYY"; MIRAGE had neither (ENOSYS).
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/timerfd.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '000000000100000000000000008004080080040862020000620200000700000000100000b84e000000bb2d82040831c9' +
@@ -3970,11 +3975,11 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = new TextDecoder().decode(Uint8Array.from(lx.stdout)) || (lx.done ? `status ${lx.status}` : 'still running');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: timerfd and pwrite64', got, 'tfd: YYY\n'); }
+  eq('linux: timerfd and pwrite64', got, 'tfd: YYY\n'); })();
 // An ELF header with EI_CLASS and EI_DATA left 0, as sizecoded intros lay their header over them
 // (xorchitecture): the kernel checks the magic, e_type, EM_386 and the program header's size, not those
 // (fs/binfmt_elf.c) — hello.asm with bytes 4 and 5 cleared runs. MIRAGE refused it: "not ELF32".
-{ const hex = (                                         // nasm -f bin tools/linux/hello.asm, e_ident[4..5] = 0
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/hello.asm, e_ident[4..5] = 0
     '7f454c460000010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408b7000000b7000000070000000010000089e6ad89c50430a2b4800408' +
     'b9af800408ba07000000e8330000004d7824ad89c131d2803c1100740342ebf7e81d000000b9b6800408ba01000000e8' +
@@ -3985,11 +3990,11 @@ const runLinux = (hex, argv) => {
   // of Holes lays its header over it): MIRAGE answered "not an i386 program".
   const h486 = hex.slice(0, 36) + '06' + hex.slice(38);
   try { r = runLinux(h486, ['/w/HELLO']).status; } catch (e) { r = e.message.slice(0, 60); }
-  eq('linux: an ELF of e_machine EM_486 runs, as the kernel runs it', r, 42); }
+  eq('linux: an ELF of e_machine EM_486 runs, as the kernel runs it', r, 42); })();
 // tools/linux/avx.asm: the VEX-encoded instructions (AVX, AVX2, BMI2) the Linux 256-byte intros of
 // Outline 2021-2023 are made of — VMOVDQU on YMM, VPADDUSB, VPSHUFD, VMOVD, VPMOVZXBD, VPSRAVD, VPBROADCASTB, VBROADCASTSS, SARX —
 // and SSE2's MOVD, on known values; the expected lines are Docker i386/debian's, byte for byte.
-{ const hex = (                                         // nasm -f bin tools/linux/avx.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/avx.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '000000000100000000000000008004080080040868020000180300000700000000100000c5fe6f0500820408c5fe6f0d' +
     '20820408c5fddcd1c5fe7f1588820408b920000000e82d010000c5f9dcd9c5fe7f1d88820408b920000000e817010000' +
@@ -4005,11 +4010,11 @@ const runLinux = (hex, argv) => {
     '00011f2004c803109cffffff9cffffff9cffffff9cffffffffffff7fffffffff4000000000000080');
   let got; try { got = runLinux(hex, ['/w/AVX']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: AVX/AVX2/BMI2 under VEX, as Docker i386 computes them', got,
-    '808182838485868788898a8b8c8d8e8f303132333435363738393a3b3c3d3eff\n808182838485868788898a8b8c8d8e8f00000000000000000000000000000000\n0c0d0e0f08090a0b0405060700010203\nefcdab8900000000000000000000000000000000000000000000000000000000\n00010203\n09000000000000000000000000000000101112131415161718191a1b1c1d1ef0\n00010203\n00000000010000001f0000002000000004000000c80000000300000010000000\n9cffffffceffffffffffffffffffffffffffff07ffffffff080000000080ffff\n2020202020202020202020202020202020202020202020202020202020202020\n4000000040000000400000004000000040000000400000004000000040000000\n230100f8\n'); }
+    '808182838485868788898a8b8c8d8e8f303132333435363738393a3b3c3d3eff\n808182838485868788898a8b8c8d8e8f00000000000000000000000000000000\n0c0d0e0f08090a0b0405060700010203\nefcdab8900000000000000000000000000000000000000000000000000000000\n00010203\n09000000000000000000000000000000101112131415161718191a1b1c1d1ef0\n00010203\n00000000010000001f0000002000000004000000c80000000300000010000000\n9cffffffceffffffffffffffffffffffffffff07ffffffff080000000080ffff\n2020202020202020202020202020202020202020202020202020202020202020\n4000000040000000400000004000000040000000400000004000000040000000\n230100f8\n'); })();
 // tools/linux/cvt.asm: SSE's CVTTSS2SI (truncated), CVTSS2SI (to nearest even) and CVTSI2SS, the
 // integer indefinite for 1e10 and a NaN — Retrospection's Linux port (2010) converts its samples so; the
 // expected lines are Docker i386/debian's.
-{ const hex = (                                         // nasm -f bin tools/linux/cvt.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/cvt.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408f2000000020100000700000000100000beca800408bf06000000f30f' +
     '2c06e82a000000f30f2d06e82100000083c6044f75e8b8f9fffffff30f2ac0660f7ec0e809000000b80100000031dbcd' +
@@ -4018,13 +4023,13 @@ const runLinux = (hex, argv) => {
     '6566');
   let got; try { got = runLinux(hex, ['/w/CVT']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: CVTTSS2SI, CVTSS2SI and CVTSI2SS, as Docker i386 computes them', got,
-    '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); }
+    '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); })();
 // tools/linux/fistind.asm: FIST and FISTP of a value their integer cannot hold store the integer
 // indefinite and raise IE; they wrapped (Docker i386 printed 0x80000000 where MIRAGE stored 1.5e11's low
 // 32 bits). The limits that fit first, IE clear; a quadword overflow and IE set; then, IE cleared by FNCLEX
 // (a no-op until then), the word and doubleword overflows, a NaN, and IE set again. Under paging, the
 // recompiler's inline stores.
-{ const hex = (                                         // nasm -f bin tools/linux/fistind.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/fistind.asm
     '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
     '000000000080040800800408130200002b02000007000000001000009bdbe3dd05b3810408db1d13820408a113820408e80d010000dd05bb' +
     '810408db1d13820408a113820408e8f7000000dd05c3810408df1d138204080fbf0513820408e8df000000dd05cb810408df1513820408dd' +
@@ -4037,7 +4042,7 @@ const runLinux = (hex, argv) => {
     '00f87f003d9160e458e14330313233343536373839616263646566');
   let got; try { got = runLinux(hex, ['/w/FISTIND']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: FIST/FISTP out of range store the integer indefinite and raise IE, as Docker i386', got,
-    '80000000\n7fffffff\nffff8000\n00007fff\n80000000\n00000000\n00000000\n80000000\n00000000\n00000001\n80000000\n80000000\nffff8000\n80000000\n00000001\n'); }
+    '80000000\n7fffffff\nffff8000\n00007fff\n80000000\n00000000\n00000000\n80000000\n00000000\n00000001\n80000000\n80000000\nffff8000\n80000000\n00000001\n'); })();
 // tools/linux/x87mem.asm: what a 4K intro's synthesizer does, under paging (every Linux and Win32
 // program is paged) -- x87 on memory operands, push and pop, lodsb, a call through a pointer, a push from
 // memory, pushad and popad, then a block that branches back to itself a thousand times: 55, Docker i386's exit status --
@@ -4047,7 +4052,7 @@ const runLinux = (hex, argv) => {
 // the loop that branches to itself dispatched a few times rather than a thousand (now an inner loop of
 // the block before it, not dispatched at all), and the block directory dense
 // (grown on demand it fell into V8's dictionary elements: a hash lookup per dispatch).
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/x87mem.asm
     '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
     '000000000080040800800408ca000000081000000700000000100000b9e803000051beba800408acff15b28004086061ff35c280040858d9' +
@@ -4066,14 +4071,14 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = [lx.done && lx.status, fpuMem, walks < 50, stack, reads < 50, (mc.rec.heat.get(0x080480a1) || 0) < 10, mc.rec.blockPages.length === 1 << 20].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: a synthesizer\'s loops under paging with no slow path (55, as Docker i386)', got, '55 0 true 0 true true true'); }
+  eq('linux: a synthesizer\'s loops under paging with no slow path (55, as Docker i386)', got, '55 0 true 0 true true true'); })();
 // tools/linux/sideexit.asm: three loops in one block, the first starting past the block's head, the
 // next closed by LOOP, the last branching forward past one instruction. Under paging each turns
 // inside the block, opened at its target, and a taken forward branch leaves by a side exit, which
 // gives back the instructions it skipped: 218 as Docker i386 exits, after 2 + 3 * 1000 + 1 + 50 * 2
 // + 1 + 750 * 5 + 250 * 6 + 3 = 8357 instructions, the block dispatched once and neither the first
 // two loops nor the fall-through a block.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/sideexit.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004088500000085000000050000000010000031d2b9e803000083c2034975' +
@@ -4085,13 +4090,13 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.get(0x08048054), mc.rec.heat.has(0x0804805b), mc.rec.heat.has(0x08048066), mc.rec.heat.has(0x08048075)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: loops inside a block, one closed by LOOP, a forward branch leaving it by a side exit (218, as Docker i386)', got, '218 8357 1 false false false'); }
+  eq('linux: loops inside a block, one closed by LOOP, a forward branch leaving it by a side exit (218, as Docker i386)', got, '218 8357 1 false false false'); })();
 // tools/linux/skip.asm: Elevated's synthesizer (RGBA & TBC, 2009), an operator's x87 operation and an
 // oscillator's waveform picked by `dec eax; jnz next` chains whose skipped instructions pop the stack, two
 // of them to one target. Under paging each skipped run stays inside the block, `if(taken){..}else{..}`,
 // the x87 top read again where the paths meet, and the loop around them too: 41 as Docker i386 exits,
 // 762 instructions (taken, a skip gives back those it jumped over), the whole program one dispatch.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/skip.asm
     '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
     '000000000080040800800408ad000000ad0000000500000000100000d9e8b92000000089c883e00340d905a9800408487502ddd8487502de' +
@@ -4104,33 +4109,33 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.size].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: x87 operations picked by forward branches, skipped inside the block (41, as Docker i386)', got, '41 762 1'); }
+  eq('linux: x87 operations picked by forward branches, skipped inside the block (41, as Docker i386)', got, '41 762 1'); })();
 // tools/linux/skipud.asm: XSAVE (0F AE /4, not translated) inside a run a short forward branch always
 // skips. Kept inside the block as a skip, it made the recompiler refuse the whole block: KolibriOS's
 // kernel stopped there ("unimplemented opcode 0x0f ae /4"). The block now ends before it.
-{ let got;
+await (async () => { let got;
   try { const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004086900000069000000050000000010000031c085c074030fae20bb07000000b801000000cd80';
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/SKIPUD']);
     for (let i = 0; i < 50 && !lx.done; i++) mc.runSlice(20000);
     got = [lx.done, lx.status].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: an instruction not translated, inside a run a forward branch skips, ends the block before it', got, 'true 7'); }
+  eq('linux: an instruction not translated, inside a run a forward branch skips, ends the block before it', got, 'true 7'); })();
 // The derail detector reads code through the page tables. A 4 MiB page (PDE.PS with CR4.PSE) has no
 // page table: read as one, KolibriOS's kernel looked like "a run of zero bytes" and was reported derailed.
-{ const mc = new Machine({ memSize: 16 << 20, cpu: '586' }), m = mc.mem;
+await (async () => { const mc = new Machine({ memSize: 16 << 20, cpu: '586' }), m = mc.mem;
   m.w32(0x1000 + (0x80000000 >>> 22) * 4, 0x00400083);                // 80000000h -> 400000h, one 4 MiB page
   m.u8.set([0x55, 0x89, 0xe5], 0x400000 + 0x21688);                   // push ebp; mov ebp, esp
   new DataView(m.u8.buffer).setUint32(0x400000 + 0x21 * 4, 0x00900001, true);                             // the page's own bytes, read as a page table, say: present, at an empty frame
   mc.cpu.cr3 = 0x1000; mc.cpu.cr4 = 0x10; mc.cpu.cr0 |= 0x80000001; m.paged = true;
-  eq('the derail detector reads a 4 MiB page as the code it holds', allZero(m, 0x80021688), false); }
+  eq('the derail detector reads a 4 MiB page as the code it holds', allZero(m, 0x80021688), false); })();
 // tools/linux/follow.asm: a loop that calls a subroutine and jumps over an instruction. Under paging
 // a direct CALL or JMP to the head's page goes on in the same block, so neither the subroutine nor
 // the jump's target begins one, nor the return address its RET goes back to (unless the subroutine
 // moved it); the subroutine rewritten, the blocks that followed into it go (16, as Docker i386 exits),
 // and a block that rewrote itself gives back what it did not run: 18016 instructions, as many as
 // without following.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/follow.asm
     '7f454c4601010100000000000000000002000300010000005d8004083400000000000000000000003400200001000000' +
     '00000000010000000000000000800408008004089f0000009f000000070000000010000083c203c383042406c331d231' +
@@ -4143,11 +4148,11 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = [lx.done && lx.status, mc.cpu.cycles - c0, mc.rec.heat.has(0x08048073), mc.rec.heat.has(0x08048054), mc.rec.heat.has(0x0804806b)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: a direct CALL and JMP followed in their block, RET back into it, rewritten code evicted (16, as Docker i386)', got, '16 18016 false false false'); }
+  eq('linux: a direct CALL and JMP followed in their block, RET back into it, rewritten code evicted (16, as Docker i386)', got, '16 18016 false false false'); })();
 // tools/linux/faulteip.asm: the EIP a page fault reports from the middle of a block whose other
 // accesses took the paged fast path (where the store of EIP moved to the helpers' slow path): the
 // SIGSEGV handler exits with the faulting instruction's distance from _start, 37, as Docker i386.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/faulteip.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408ab000000002000000700000000100000b8ae000000bb0b000000b997' +
@@ -4158,12 +4163,12 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = lx.done && lx.status;
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: a page fault in a block reports its own instruction (37, as Docker i386)', got, 37); }
+  eq('linux: a page fault in a block reports its own instruction (37, as Docker i386)', got, 37); })();
 // tools/linux/fxcache.asm: the x87 stack as a block keeps it, its top and the values it holds -- a
 // loop one push deeper each turn that reads what was there before it, one that reads nothing from
 // before it, FXCH, FINCSTP/FDECSTP, and an FCMOV through src/fpu.js between held values: 253, as
 // Docker i386 exits.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/fxcache.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408cd0000000810000007000000001000009bdbe3d9e8d9eeb904000000' +
@@ -4175,12 +4180,12 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = lx.done && lx.status;
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: the x87 stack kept in the block, its loops and helpers (253, as Docker i386)', got, 253); }
+  eq('linux: the x87 stack kept in the block, its loops and helpers (253, as Docker i386)', got, 253); })();
 // tools/linux/mmx.asm: every MMX instruction on fixed operands (saturations, signs, PMADDWD's
 // wrap, counts past the element and a 2^32 quadword count), MOVD/MOVQ in and out of memory and
 // registers, EMMS: 103 lines of 64-bit results, which Docker i386 prints identically (their MD5).
 // The CPUID MMX bit (EDX 23) is the 'pentiummmx' profile's alone. Heaven Seven (Exceed, 2000) wants it.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/mmx.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408f0080000004000000700000000100000bf00a004080f6f05d0880408' +
@@ -4238,12 +4243,12 @@ const runLinux = (hex, argv) => {
     const bit = (cpu) => { const c = new Machine({ memSize: 1 << 20, cpu }).cpu; c.reg[0] = 1; c.cpuid(); return (c.reg[2] >>> 23) & 1; };
     got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex'), bit('pentiummmx'), bit('686'), bit('586')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('MMX: every instruction as Docker i386 computes it; CPUID says MMX on pentiummmx alone', got, '103 36e93d3e88184161fd64b5679a9fb01f 1 0 0'); }
+  eq('MMX: every instruction as Docker i386 computes it; CPUID says MMX on pentiummmx alone', got, '103 36e93d3e88184161fd64b5679a9fb01f 1 0 0'); })();
 // PSLLQ and PSRLQ on the quadword's two halves (src/mmx.js; BigInt arithmetic before, a few hundred
 // nanoseconds a shift, and AVS shifts half a million quadwords a second): every count from 0 to 64,
 // by an immediate, against BigInt's shifts -- through cpu.mmx and through the code the recompiler
 // emits (mmxInline).
-{ let bad = 0;
+await (async () => { let bad = 0;
   const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiummmx' }), c = mc.cpu, { MMX, mmxInline } = await import('../src/mmx.js');
   const v = 0x89abcdef01234567n;
   for (const [op, f] of [[MMX.PSLLQ, (n) => (v << BigInt(n)) & 0xffffffffffffffffn], [MMX.PSRLQ, (n) => v >> BigInt(n)]])
@@ -4255,11 +4260,11 @@ const runLinux = (hex, argv) => {
         if (((BigInt(c.mm.u32[3]) << 32n) | BigInt(c.mm.u32[2])) !== want) bad++;
       }
     }
-  eq('MMX: PSLLQ and PSRLQ by every count from 0 to 64, called and compiled', bad, 0); }
+  eq('MMX: PSLLQ and PSRLQ by every count from 0 to 64, called and compiled', bad, 0); })();
 // An MMX instruction leaves the x87 stack's top 0 and its eight tags valid; one that finds them so
 // writes nothing (src/mmx.js enter: rewriting them took a fifth of AVS's time). An x87 instruction
 // between two runs of MMX code changes them, and the next MMX instruction sets them again.
-{ const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiummmx' }), c = mc.cpu, { MMX, MM_ENTER } = await import('../src/mmx.js');
+await (async () => { const mc = new Machine({ memSize: 1 << 20, cpu: 'pentiummmx' }), c = mc.cpu, { MMX, MM_ENTER } = await import('../src/mmx.js');
   c.ftop = 3; c.focc.fill(0); c.focc[3] = 1;
   c.mmx(MMX.PADDW, 1, 2, -1); const a = [c.ftop, ...c.focc].join('');
   c.focc[5] = 0; c.mmx(MMX.PADDW, 1, 2, -1); const b = [c.ftop, ...c.focc].join('');
@@ -4267,12 +4272,12 @@ const runLinux = (hex, argv) => {
   // The test the recompiler emits before one (MM_ENTER): after FLD and FSTP the top is 0 again, a tag empty.
   const enter = new Function('cpu', MM_ENTER); c.focc[0] = 0; enter(c); const e = [c.ftop, ...c.focc].join('');
   c.ftop = 2; enter(c); const g = [c.ftop, ...c.focc].join('');
-  eq('MMX: the x87 top 0 and every tag valid, set again after an x87 instruction changed them', [a, b, d, e, g].join(' '), '011111111 011111111 011111111 011111111 011111111'); }
+  eq('MMX: the x87 top 0 and every tag valid, set again after an x87 instruction changed them', [a, b, d, e, g].join(' '), '011111111 011111111 011111111 011111111 011111111'); })();
 // tools/linux/mmxsse.asm: the integer instructions SSE added to the MMX registers -- PMINUB, PMAXUB,
 // PAVGB, PAVGW, PMULHUW, PMINSW, PMAXSW, PSADBW from a register and from memory, PSHUFW in four orders,
 // PINSRW, PEXTRW, PMOVMSKB, MOVNTQ: 39 lines, as Docker i386 prints them (their MD5). .kkrieger
 // (farbrausch, 2004) builds its textures with PMAXSW and stopped on it (#UD).
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/mmxsse.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408c0030000004000000700000000100000bf00a004080f6f05a0830408' +
@@ -4301,14 +4306,14 @@ const runLinux = (hex, argv) => {
     const { createHash } = await import('crypto');
     got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('MMX with SSE: PMAXSW and the other integer additions as Docker i386 computes them', got, '39 b9e5b8c27f62c01835f6db8c0636cf15'); }
+  eq('MMX with SSE: PMAXSW and the other integer additions as Docker i386 computes them', got, '39 b9e5b8c27f62c01835f6db8c0636cf15'); })();
 // tools/linux/sse.asm: SSE and SSE2 on fixed operands -- arithmetic, logic, compares, conversions,
 // shuffles, unpacks, shifts and moves in single and double precision and on integers, with NaNs
 // (propagated quiet, the default one negative), signed zeros, ties to even and the integer
 // indefinite, infinity times zero -- then COMISS and its kin's flags and MXCSR: 327 lines, which Docker i386 prints
 // identically (their MD5). CPUID says SSE on 'pentium3' and 'pentium4', SSE2 on 'pentium4' alone.
 // yes we can (Still, 2009) is compiled for SSE: MULSS was the first it reached.
-{ let got;
+await (async () => { let got;
   try { const b64 = (                                  // nasm -f bin tools/linux/sse.asm, deflated
     'ddkNcFRXFQfwu7tvyTbZsJuwm/BNpmNtacs3iJWpZCqIDFW6EGA3JJuQ4tphoKSUwU7VZhFHiAyWVkdLm0gyjtZxKgZlImgd9oRKKbZOyketIh' +
     'OgIz3aaQlZsHxYVu49d/PO7r3uDNn3/u93zn3v7nsvj2zbwoe/6PF4RP7lFT4h1+rSTmC2cF+zRY3Iq2GddgLyX88EqiyRb2EhDouMEwjd4093' +
@@ -4348,11 +4353,11 @@ const runLinux = (hex, argv) => {
     const bits = (cpu) => { const c = new Machine({ memSize: 1 << 20, cpu }).cpu; c.reg[0] = 1; c.cpuid(); return ((c.reg[2] >>> 25) & 3).toString(2).padStart(2, '0'); };
     got = [out.split('\n').length - 1, createHash('md5').update(out).digest('hex'), bits('pentium4'), bits('pentium3'), bits('686')].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('SSE: every instruction as Docker i386 computes it; CPUID says SSE on pentium3 and 4, SSE2 on pentium4', got, '327 1b56ec01dd414cd0ebc0eb572a890e1b 11 01 00'); }
+  eq('SSE: every instruction as Docker i386 computes it; CPUID says SSE on pentium3 and 4, SSE2 on pentium4', got, '327 1b56ec01dd414cd0ebc0eb572a890e1b 11 01 00'); })();
 // The SSE2 that MSVC 2015+'s runtime uses where SSE2 is (GameMaker Studio 2's runner, Deltarune): MOVMSKPD
 // and MOVMSKPS (pow's and exp's argument checks), PEXTRW, PSHUFLW, PCMPEQB and PMOVMSKB (strchr, strlen).
 // The values by hand from Intel's definitions; real-mode code on a 'pentium4'.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20, cpu: 'pentium4' }), cpu = mc.cpu;
     cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(DS, 0x200); cpu.setSeg(ES, 0x200); cpu.setSeg(SS, 0x300); cpu.sp = 0x1000;
     mc.mem.blit(0x100 * 16, Uint8Array.from([
@@ -4374,12 +4379,12 @@ const runLinux = (hex, argv) => {
     const r32 = (a) => mc.mem.r32(a) >>> 0;
     got = [cpu.reg[0], cpu.reg[3], cpu.reg[1], cpu.reg[2].toString(16), r32(0x2020).toString(16), r32(0x2024).toString(16)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('SSE2: MOVMSKPD, MOVMSKPS, PEXTRW, PSHUFLW, PCMPEQB and PMOVMSKB', got, '1 5 4 2027 10000 8000'); }
+  eq('SSE2: MOVMSKPD, MOVMSKPS, PEXTRW, PSHUFLW, PCMPEQB and PMOVMSKB', got, '1 5 4 2027 10000 8000'); })();
 // tools/linux/repstr.asm: REP STOS and REP MOVS under paging -- bytes, words, dwords, across page
 // boundaries, at an odd address, backwards, copies overlapping either way -- give Docker i386's
 // checksum, and the forward ones run a page at a time, not through a memory helper an element
 // (Valleyball's synthesizer clears its buffers with `rep stosw`: a sixth of its time went there).
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/repstr.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '000000000100000000000000008004080080040848010000004000000700000000100000fcbff19f0408b834120000b9' +
@@ -4396,10 +4401,10 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
     got = [out.trim(), lx.done && lx.status, helper < 200].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: REP STOS and REP MOVS under paging, a page at a time (Docker i386\'s checksum)', got, 'c294c573 0 true'); }
+  eq('linux: REP STOS and REP MOVS under paging, a page at a time (Docker i386\'s checksum)', got, 'c294c573 0 true'); })();
 // The branch-free 32-bit flag setters (cpu.setAdd32, setSub32, setLogic32, setInc32, setDec32) against
 // the generic ones at 32 bits, on edge values and random ones, the flags they start from random too.
-{ const { CPU } = await import('../src/cpu.js');
+await (async () => { const { CPU } = await import('../src/cpu.js');
   const c = new CPU({ u8: new Uint8Array(16) }), g = new CPU({ u8: new Uint8Array(16) });
   const edge = [0, 1, 2, 0x0f, 0x10, 0x7f, 0x80, 0xff, 0x7fffffff, 0x80000000, 0x80000001, 0xfffffffe, 0xffffffff];
   let seed = 12345; const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed % 3 === 0 ? edge[seed % edge.length] : (Math.imul(seed, 2654435761) >>> 0); };
@@ -4412,12 +4417,12 @@ const runLinux = (hex, argv) => {
     c.flags = g.flags = f0; g.setAdd(a, 1, (a + 1) >>> 0, 32, false); c.setInc32(a, (a + 1) >>> 0); same('inc', a, 1);
     c.flags = g.flags = f0; g.setSub(a, 1, (a - 1) >>> 0, 32, false); c.setDec32(a, (a - 1) >>> 0); same('dec', a, 1);
   }
-  eq('cpu: the 32-bit flag setters give the generic ones\' flags', bad, 0); }
+  eq('cpu: the 32-bit flag setters give the generic ones\' flags', bad, 0); })();
 // tools/linux/fbwrite.asm: writes to /dev/fb0 as fb_write takes them, on a 1280x720 framebuffer (any
 // 32-bit size the card holds: Outline 2026's Sea of Holes asks for it) — a count of BE570E00h answered
 // with the frame's size (attraction & decay's pwrite64), a buffer running into an unmapped page written
 // up to it, nothing left at the end ENOSPC. The kernel is the oracle; MIRAGE answered EFAULT, EFAULT, 0.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/fbwrite.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408b7010000630200000700000000100000b805000000bba5810408b902' +
@@ -4434,24 +4439,24 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 400 && !lx.done; i++) mc.runSlice(20000);
     got = new TextDecoder().decode(Uint8Array.from(lx.stdout)) || (lx.done ? `signal ${lx.signal}` : 'still running');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: writes to /dev/fb0 as fb_write takes them, at 1280x720', got, 'fbw: YYY\n'); }
+  eq('linux: writes to /dev/fb0 as fb_write takes them, at 1280x720', got, 'fbw: YYY\n'); })();
 // The ELF loader maps the FILE by pages, as elf_map does: from p_offset - pageoff(p_vaddr), at
 // p_vaddr's page. hello.asm with p_offset D44h and p_vaddr 08048D44h (Sea of Holes' header gives an
 // offset past its own 64 bytes): the page at 08048000h holds the file all the same, and it runs.
-{ const hex = (                                         // nasm -f bin tools/linux/hello.asm; its PT_LOAD at D44h / 08048D44h
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/hello.asm; its PT_LOAD at D44h / 08048D44h
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408b7000000b7000000070000000010000089e6ad89c50430a2b4800408' +
     'b9af800408ba07000000e8330000004d7824ad89c131d2803c1100740342ebf7e81d000000b9b6800408ba01000000e8' +
     '0e000000ebd9b801000000bb2a000000cd80b804000000bb01000000cd80c3617267633d3f0a0a').replace(
     '01000000000000000080040800800408b7000000', '01000000440d0000448d0408448d0408b7000000');
   let r; try { r = runLinux(hex, ['/w/HELLO']).status; } catch (e) { r = e.message.slice(0, 60); }
-  eq('linux: a PT_LOAD whose p_offset lies past the file maps the file by pages, as the kernel does', r, 42); }
+  eq('linux: a PT_LOAD whose p_offset lies past the file maps the file by pages, as the kernel does', r, 42); })();
 // src/bunzip2.js: bzip2 as the bzip2 command writes it (YOLP's Linux intros are .tar.bz2 on their
 // authors' site, and a browser has no bzip2). Two streams in a row, made by `bzip2 -9` and `bzip2`:
 // "MIRAGE bzip2 " 300 times, 300 a's (the first run-length coding), every byte value three times over
 // (a full byte map), then "second stream". Held against the command's input, byte for byte; a block's
 // CRC is checked by the decoder itself.
-{ let got;
+await (async () => { let got;
   try { const { bunzip2 } = await import('../src/bunzip2.js');
     const bz = Uint8Array.from((
     '425a6839314159265359dc84ed8900048e7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' +
@@ -4476,13 +4481,13 @@ const runLinux = (hex, argv) => {
     got = out.length === want.length && out.every((b, i) => b === want[i]) ? 'same' : `${out.length} bytes, want ${want.length}`;
     bz[60] ^= 1; try { bunzip2(bz); got += ', a changed byte unnoticed'; } catch (e) { got += ', ' + (/CRC|Huffman|bad|ends|overflow|selector|pointer/.test(e.message) ? 'a changed byte refused' : e.message); }
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('bunzip2: two streams as the bzip2 command made them; a changed byte refused', got, 'same, a changed byte refused'); }
+  eq('bunzip2: two streams as the bzip2 command made them; a changed byte refused', got, 'same, a changed byte refused'); })();
 // src/hle: libraries made in JavaScript (ROADMAP O9). makeSharedObject's library, read back as an ELF:
 // each function found by DT_HASH as ld.so finds it, and by walking DT_SYMTAB with the 1K intros' own
 // hash (h * 33 ^ c, Metatunnel 2009), at a stub that traps with its id. And tools/linux/hlecall.asm
 // calls two stubs with an int and a float, an int and a double: the JavaScript gets them, and its
 // answers come back in EAX (the exit status, 133).
-{ let got;
+await (async () => { let got;
   try { const { makeSharedObject, HLE_BASE } = await import('../src/hle/elfso.js');
     const names = ['SDL_Init', 'glCreateShader', 'glColor4ubv', 'glRecti', 'SDL_GL_SwapBuffers'];
     const so = makeSharedObject('libT.so.1', names, 10), dv = new DataView(so.buffer);
@@ -4508,22 +4513,22 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 50 && !lx.done; i++) mc.runSlice(20000);
     got = [ok, lx.status, seen.map((v) => +v.toFixed(5)).join(',')].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: a library made in JavaScript, found as ld.so and the 1K intros find it, called with ints, floats and doubles', got, 'true | 133 | 7,3.14159,-2,3.14159'); }
+  eq('hle: a library made in JavaScript, found as ld.so and the 1K intros find it, called with ints, floats and doubles', got, 'true | 133 | 7,3.14159,-2,3.14159'); })();
 // A void function returns what the stub left in EAX, nonzero, as lenny's libgl1-mesa-glx 7.0.3 leaves a
 // context pointer there after glColor4ubv: Metatunnel draws glRecti(-eax, -eax, eax, eax) with it, and
 // with 0 (libgl1-mesa-swx11's) draws nothing. A function that returns a value returns it.
-{ let got;
+await (async () => { let got;
   try { const { installHLE } = await import('../src/hle/index.js'), { HLE_BASE } = await import('../src/hle/elfso.js');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     installHLE(lx, mc.mem, mc.cpu, [{ soname: 'libT.so.1', fns: { n: ['', () => 5], v: ['', () => {}] } }], {});
     got = [lx.hle(0), lx.hle(1) === HLE_BASE + 1].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: a void function leaves EAX nonzero, a function with a value returns it', got, '5 true'); }
+  eq('hle: a void function leaves EAX nonzero, a function with a value returns it', got, '5 true'); })();
 // src/hle/asound.js: libasound's simple PCM playback onto the /dev/dsp card (Retrospection 2009 plays
 // through it): snd_pcm_open hands a handle, snd_pcm_set_params sets the card's rate, format and channels,
 // snd_pcm_writei plays frames -- 16-bit as they are, floats as 16 bits. And SDL_GetError is a pointer to
 // "", not a string (it returned the JavaScript string itself).
-{ let got;
+await (async () => { let got;
   try { const { asound } = await import('../src/hle/asound.js'), { sdl12 } = await import('../src/hle/sdl12.js'), { guestMemory } = await import('../src/hle/memory.js');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
@@ -4538,13 +4543,13 @@ const runLinux = (hex, argv) => {
     const e = sdl12().fns.SDL_GetError[1](x);
     got = [open, h !== 0, set, card, n16, s16, nf, sf, typeof e, x.r8(e)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: libasound plays S16 and float frames on the /dev/dsp card; SDL_GetError is a pointer to ""', got, '0 true 0 22050/16/2 2 1000,-1000,32767,-32768 2 16384,16384,-32767,-32767 number 0'); }
+  eq('hle: libasound plays S16 and float frames on the /dev/dsp card; SDL_GetError is a pointer to ""', got, '0 true 0 22050/16/2 2 1000,-1000,32767,-32768 2 16384,16384,-32767,-32767 number 0'); })();
 // MIRAGE-WIN32 (src/win32): tools/win32/pebwalk.asm finds ExitProcess as Crinkler's header finds what it
 // imports -- fs:[30h] to the PEB, its loader data, the load-order list (exe, ntdll, kernel32), kernel32's
 // export directory -- and calls it with 42; the loader has bound its import of lz32.dll's ordinal 4.
 // opengl32.dll's ordinals are XP's (Crinkler's /RANGE imports by them: Stripped, 2009); msvcrt's cos
 // returns its double on the x87 stack, as cdecl does.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const hex = (
     '4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
@@ -4570,12 +4575,12 @@ const runLinux = (hex, argv) => {
     const cos = apis.find((d) => d.dll === 'msvcrt.dll').fns.cos[1](x, Math.PI), top = mc.cpu.fst[mc.cpu.ftop];
     got = [lx.done && lx.status, ord('GlmfBeginGlsBlock'), ord('glAccum'), ord('glViewport'), ord('wglCreateContext'), ord('wglUseFontOutlinesW'), cos.st0].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a PE walks the PEB to kernel32\'s exports as Crinkler does; opengl32\'s ordinals as XP\'s; a double returned in ST0', got, '42 1 7 343 346 368 -1'); }
+  eq('win32: a PE walks the PEB to kernel32\'s exports as Crinkler does; opengl32\'s ordinals as XP\'s; a double returned in ST0', got, '42 1 7 343 346 368 -1'); })();
 // tools/win32/tinyhdr.asm: a PE as Crinkler's /TINYHEADER lays one out -- no section, alignment 4, the
 // code in the headers, SizeOfImage past the file -- is mapped flat, as Windows maps an image whose
 // section alignment is below the page's: it reads a byte past SizeOfHeaders (42) and one past the
 // file (0) and exits with their sum. Absolute Territory (Prismbeings, 2017) is such an image.
-{ let got, fcw;
+await (async () => { let got, fcw;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const exe = Uint8Array.from((                       // nasm -f bin tools/win32/tinyhdr.asm
     '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
@@ -4590,12 +4595,12 @@ const runLinux = (hex, argv) => {
     got = [lx.done, lx.signal ? 'fault' : lx.status].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a /TINYHEADER image is mapped flat, the whole file at its base', got, 'true 42');
-  eq('win32: a process starts with the x87 at 53 bits (control word 027Fh, which MSVC\'s CRT keeps)', fcw, 0x27f); }
+  eq('win32: a process starts with the x87 at 53 bits (control word 027Fh, which MSVC\'s CRT keeps)', fcw, 0x27f); })();
 // tools/linux/thread.asm: two threads of one address space (lx.spawnThread: SDL_CreateThread's, Win32's
 // CreateThread's). The main thread spins on a flag with no system call -- the clock's preemption gives
 // the thread its turn --, the thread sets it to 42 and exit(0)s alone (freeing the shared pages would
 // fault the spin), the main thread exits with the flag.
-{ let got;
+await (async () => { let got;
   try { const hex = (                                   // nasm -f bin tools/linux/thread.asm
     '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000' +
     '000000000080040800800408790000007d1000000700000000100000a17980040885c074f789c3b801000000cd80c705798004082a000000' +
@@ -4606,7 +4611,7 @@ const runLinux = (hex, argv) => {
     for (let i = 0; i < 400 && !lx.done; i++) mc.runSlice(20000);
     got = [lx.done && lx.status, lx.signal, lx.threadExits.get(tid)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('linux: a thread shares its process\'s memory, is preempted to, and exits alone', got, '42 0 0'); }
+  eq('linux: a thread shares its process\'s memory, is preempted to, and exits alone', got, '42 0 0'); })();
 // Direct3D 9 (src/win32/d3d9.js): Direct3DCreate9's object is a vtable of d3d9.dll's stubs in IDirect3D9's
 // order (CreateDevice the 17th); a windowed device of size 0 takes its window's and says so in the
 // parameters; D3DXCompileShader's bytecode is PRISM's blob (ps_2_0's version token, a comment holding
@@ -4614,7 +4619,7 @@ const runLinux = (hex, argv) => {
 // model at the unlock; a texture is its handle to the model, not its height (cdak, 2010: a 1280x720
 // render target handed on as handle 720), and its locked level reaches the model whole at the unlock;
 // D3DXMatrixPerspectiveFovLH is d3dx9math.h's.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -4649,14 +4654,14 @@ const runLinux = (hex, argv) => {
     const m = x.win.heapAlloc(64); fn('d3dx9_37.dll', 'D3DXMatrixPerspectiveFovLH')(x, m, Math.PI / 2, 2, 1, 3);
     got = [wired, size, blob, off, bytes.join(''), tex, [0, 5, 10, 11, 14].map((i) => +x.f32(m + 4 * i).toFixed(3)).join(' ')].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: Direct3D 9 objects, D3DXCompileShader\'s blob, a vertex buffer\'s lock, D3DX\'s perspective', got, 'true | 640x480 | ffff0200,4d535250,true,ffff | 16 | 12345678 | 3 3 256 8192 256 | 0.5 1 1.5 1 -1.5'); }
+  eq('win32: Direct3D 9 objects, D3DXCompileShader\'s blob, a vertex buffer\'s lock, D3DX\'s perspective', got, 'true | 640x480 | ffff0200,4d535250,true,ffff | 16 | 12345678 | 3 3 256 8192 256 | 0.5 1 1.5 1 -1.5'); })();
 // D3DX's meshes (src/win32/d3d9.js; Wine's d3dx9_36 as the oracle), as Elevated (2009) makes its terrain:
 // D3DXCreatePolygon's square (side 2: corners at sqrt 2 from the centre, the first at +y; faces fanned from
 // the centre; adjacency across the spokes), cloned to 32-bit indices, cut by D3DXTessellateNPatches into
 // 2 segments an edge (16 faces of 6 points each, flat, the normal kept), drawn by DrawSubset as one
 // indexed triangle list; D3DXFillTexture calling a function of the program for each texel's centre — here
 // one that returns its x, so a 2x2 R16F texture holds 0.25 and 0.75 as float16.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -4692,13 +4697,13 @@ const runLinux = (hex, argv) => {
     got = [poly, idx, adjs, wide, tess, draw, texels].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: D3DX meshes — a polygon, a 32-bit clone, N-patches, DrawSubset; D3DXFillTexture calling the program', got,
-    '0 1.414 -1.414 0 1 | 012023034041 | 3 -1 1 0 -1 2 | 1 | 16 24 -0.707 0 1 | 4 0 0 24 0 16 | 0 0 34 0 3a 0 34 0 3a 4'); }
+    '0 1.414 -1.414 0 1 | 012023034041 | 3 -1 1 0 -1 2 | 1 | 16 24 -0.707 0 1 | 4 0 0 24 0 16 | 0 0 34 0 3a 0 34 0 3a 4'); })();
 // d3dx9_NN.dll numbers its exports as Microsoft's does, its version's names in ASCII order from 1 (Wine's
 // .spec lists): Crinkler's /RANGE imports by ordinal, and Stiletto (2009) called D3DXAssembleShader where it
 // meant D3DXCreateSkinInfoFVF. And D3DX's mesh tools as Wine's: GenerateAdjacency finds D3DXCreatePolygon's
 // own adjacency, D3DXComputeNormals the square's +z, UpdateSkinnedMesh moves a vertex by its bone's matrix
 // (weight 1, translated by (1, 2, 3)) and leaves one no bone holds at zero.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -4727,7 +4732,7 @@ const runLinux = (hex, argv) => {
     got = [ords, same, nz, sv(1), sv(0), d9('ID3DXSkinInfo::GetNumBones')(x, sk)].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: d3dx9 exports numbered as Microsoft\'s; GenerateAdjacency, D3DXComputeNormals, a skin\'s UpdateSkinnedMesh as Wine\'s', got,
-    '84 87 86 1 26 | true | 0,0,1 | 1,3.414,3,0,0,1 | 0,0,0,0,0,0 | 1'); }
+    '84 87 86 1 26 | true | 0,0,1 | 1,3.414,3,0,0,1 | 0,0,0,0,0,0 | 1'); })();
 // D3DXCreateText (src/win32/textmesh.js, Wine's algorithm) from a font gdi32 selects, read by truetype.js:
 // a TrueType font made here, an em of 1000 and a cell of 1000 (so a pixel an em unit). 'A' a 600-unit
 // square with a 200-unit square hole: two outlines of four corners, eight triangles between them, each
@@ -4736,7 +4741,7 @@ const runLinux = (hex, argv) => {
 // to a deviation of 0.05 em, each is two halves whose control points Wine keeps, the points between on
 // straight runs merged away: an octagon of 0.36 - 4 x 0.01125 em². The glyph metrics in ems; Direct3D's
 // default light (white, +z), enabled (128, as Wine's wined3d).
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const { parseTrueType } = await import('../src/win32/truetype.js');
     const glyf = (contours) => {                                     // a simple glyph: flags and coordinates as words
@@ -4794,7 +4799,7 @@ const runLinux = (hex, argv) => {
     got = [native, nv, nf, +aA.toFixed(4) / 2, +aB.toFixed(3) / 2, metrics, def].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: D3DXCreateText from a TrueType font gdi32 selects: GGO_NATIVE\'s contours, Wine\'s outlines, triangles and sides', got,
-    '300,0 q2q2q2q2 | 82 | 60 | 0.32 | 0.315 | 0.6,0.6,0,0.6,0.7,0.6,0.65 | 3,1,1,128'); }
+    '300,0 q2q2q2q2 | 82 | 60 | 0.32 | 0.315 | 0.6,0.6,0,0.6,0.7,0.6,0.65 | 3,1,1,128'); })();
 // What the 4K intros of 2005-2008 met (2026-11-06). dx8vb.dll's exports numbered as Microsoft's (Wine's
 // .spec order): Polystreptikum finds VB_D3DXVec3Add by hash and takes the 104 functions after it by ordinal,
 // the last VB_D3DXVec3CatmullRom; its CatmullRom as D3DX's, a length on the x87 stack. ID3DXMatrixStack as
@@ -4804,7 +4809,7 @@ const runLinux = (hex, argv) => {
 // section's pixels are the program's memory: TextOutA's opaque background lands there, the pixel the
 // program wrote outside it stays. DrawPrimitiveUP of XYZ vertices 16 bytes apart (luxo4k) reaches the model
 // packed at 12. "Times" is Times New Roman (FontSubstitutes): its metrics, not the no-font guess.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -4858,11 +4863,11 @@ const runLinux = (hex, argv) => {
     got = [ords, rf(out, 3).join(','), +len.toFixed(3), t1, t2, t3, boxN, corner, face1, world, dib, up, x.r32(size), x.r32(size + 4)].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: dx8vb.dll\'s ordinals and math, ID3DXMatrixStack, D3DXCreateBox, MultiplyTransform, a DIB section\'s text, "Times"', got,
-    '19 122 137 | 1.5,3,0 | 5 | 2,1,2,3,1 | 11,2,3 | 1,2,3 | 24 12 | 1,2,3,0,1,0 | 2,3,0 | 2,1 | ff0000,0,123456 | 36/12 1 | 14 | 12'); }
+    '19 122 137 | 1.5,3,0 | 5 | 2,1,2,3,1 | 11,2,3 | 1,2,3 | 24 12 | 1,2,3,0,1,0 | 2,3,0 | 2,1 | ff0000,0,123456 | 36/12 1 | 14 | 12'); })();
 // SwapBuffers with one frame in flight: while the page has not taken the last frame (backend.swapReady),
 // the swap waits and presents nothing; once taken, it presents. Without it Absolute Territory (2017),
 // one rectangle of 38 ms of GPU a frame, swapped sixty times a guest second and starved the page.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -4876,11 +4881,11 @@ const runLinux = (hex, argv) => {
     ready = true; const r = swap(x, 0);
     got = [held, n0, r, swaps].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: SwapBuffers waits while the page has not taken the last frame, then presents', got, 'true 0 1 1'); }
+  eq('win32: SwapBuffers waits while the page has not taken the last frame, then presents', got, 'true 0 1 1'); })();
 // WinQuake (id Software, 1997) on MIRAGE-WIN32: what it needed, each answered as Windows answers it.
 // The context comes from tools/win32/tinyhdr.asm's image (the test above); the functions are called
 // as the program's stubs call them.
-{ const w32 = async (args = '', opts = {}) => {
+await (async () => { const w32 = async (args = '', opts = {}) => {
     const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const exe = Uint8Array.from((
     '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
@@ -5971,10 +5976,10 @@ const runLinux = (hex, argv) => {
     fn('gdi32.dll', 'SelectObject')(dc, f); const sz = x.win.heapAlloc(8); fn('gdi32.dll', 'GetTextExtentPoint32A')(dc, s, 4, sz);
     got = [k('GetACP')(), x.r32(cp), [...x.bytes(cp + 6, 4)].map((b) => b.toString(16)).join('-'), n, x.r16(w).toString(16), x.r16(w + 2).toString(16), x.r32(sz)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: code page 932: GetACP, Shift-JIS lead bytes, MultiByteToWideChar, text by characters', got, '932 2 81-9f-e0-fc 2 3042 3044 20'); }
+  eq('win32: code page 932: GetACP, Shift-JIS lead bytes, MultiByteToWideChar, text by characters', got, '932 2 81-9f-e0-fc 2 3042 3044 20'); })();
 // A sleep is its thread's: two threads asleep at once each wake at their own time (src/hle/index.js) --
 // Cave Story's main loop and its multimedia timer, which shared one deadline and spun.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024), v = new DataView(exe.buffer); exe.set([0x4d, 0x5a]); v.setUint32(0x3c, 0x40, true);
@@ -5986,7 +5991,7 @@ const runLinux = (hex, argv) => {
     at(1.5); lx.wake = null; const a3 = x.sleep(0.5);
     got = [a1, b1, b2, a2, a3].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: x.sleep keeps each thread\'s deadline', got, 'true true 0 true 0'); }
+  eq('hle: x.sleep keeps each thread\'s deadline', got, 'true true 0 true 0'); })();
 
 // A PE made here, for the tests below: one section at RVA 1000h (code at 0, data from 400h, the import
 // tables from 600h, the exports from A00h), its imports [{ dll, names }], its exports { name: offset },
@@ -6043,7 +6048,7 @@ const runPE = async (exe, readFile) => {
 // one of its own functions, SDL2's C runtime set a new stack cookie under frames that had saved the old
 // one (__report_gsfailure, 0xC0000409). And static TLS: the program reads its __declspec(thread) value
 // through fs:[2Ch] and its index, as Visual C++'s thread-safe statics do. 100 * flag + the TLS value.
-{ let got;
+await (async () => { let got;
   try {
     const lib = mkPE({ base: 0x50000000, dll: true, exports: { f: 0x20 }, code: (at) => Uint8Array.from([
       0xc7, 0x05, ...le(at.d(0x400)), 1, 0, 0, 0, 0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0x00,          // DllMain: flag = 1; return TRUE
@@ -6054,12 +6059,12 @@ const runPE = async (exe, readFile) => {
       0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]) });
     got = String(await runPE(exe, (k) => (k.toLowerCase() === 't.dll' ? lib : null)));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: an imported DLL\'s DllMain runs before the entry point; static TLS through fs:[2Ch]', got, '142'); }
+  eq('win32: an imported DLL\'s DllMain runs before the entry point; static TLS through fs:[2Ch]', got, '142'); })();
 // A DLL loaded with the program has a DllMain's lpvReserved that is not NULL (Windows passes its start-up
 // CONTEXT); NULL is LoadLibrary's. StarCraft's Storm.dll recomputes its MPQ crypt table with another seed
 // when it believes itself loaded dynamically, and then finds no file in its archives. The DllMain keeps
 // lpvReserved != 0; the export returns it; the exit code is that.
-{ let got;
+await (async () => { let got;
   try {
     const lib = mkPE({ base: 0x50000000, dll: true, exports: { f: 0x20 }, code: (at) => Uint8Array.from([
       0x8b, 0x44, 0x24, 0x0c, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0, 0xa3, ...le(at.d(0x400)),   // flag = lpvReserved != 0
@@ -6068,10 +6073,10 @@ const runPE = async (exe, readFile) => {
       0xff, 0x15, ...le(at.iat['t.dll!f']), 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]) });
     got = String(await runPE(exe, (k) => (k.toLowerCase() === 't.dll' ? lib : null)));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: an imported DLL\'s DllMain gets a non-NULL lpvReserved', got, '1'); }
+  eq('win32: an imported DLL\'s DllMain gets a non-NULL lpvReserved', got, '1'); })();
 // Structured exceptions: RaiseException calls the handler on fs:[0] with the record, its frame and a
 // CONTEXT; ExceptionContinueExecution resumes at the context, here with EAX made 42 by the handler.
-{ let got;
+await (async () => { let got;
   try {
     const H = 0x40, exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['RaiseException', 'ExitProcess'] }], code: (at) => { const c = new Uint8Array(0x60).fill(0x90); c.set([
       0x68, ...le(at.d(H)), 0x64, 0xff, 0x35, 0, 0, 0, 0, 0x64, 0x89, 0x25, 0, 0, 0, 0,        // push handler; push fs:[0]; mov fs:[0], esp
@@ -6081,11 +6086,11 @@ const runPE = async (exe, readFile) => {
       return c; } });
     got = String(await runPE(exe, () => null));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: RaiseException calls the handler; ExceptionContinueExecution resumes at its context', got, '42'); }
+  eq('win32: RaiseException calls the handler; ExceptionContinueExecution resumes at its context', got, '42'); })();
 // The handler that takes it, as Delphi's and Visual C++'s do: an inner frame's handler searches on (1), the
 // outer one calls RtlUnwind to its own frame, which calls the inner one again with EXCEPTION_UNWINDING (it
 // marks it), and returns; the outer handler never goes back to the dispatcher. 10 * mark + 7.
-{ let got;
+await (async () => { let got;
   try {
     const H1 = 0x60, H2 = 0x90, exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['RaiseException', 'RtlUnwind', 'ExitProcess'] }], code: (at) => { const c = new Uint8Array(0xb0).fill(0x90);
       const reg = (h) => [0x68, ...le(at.d(h)), 0x64, 0xff, 0x35, 0, 0, 0, 0, 0x64, 0x89, 0x25, 0, 0, 0, 0];
@@ -6097,11 +6102,11 @@ const runPE = async (exe, readFile) => {
       return c; } });
     got = String(await runPE(exe, () => null));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: RtlUnwind calls the handlers below its target with EXCEPTION_UNWINDING, and returns', got, '17'); }
+  eq('win32: RtlUnwind calls the handlers below its target with EXCEPTION_UNWINDING, and returns', got, '17'); })();
 // LoadLibrary runs DllMains in the order Windows does, each DLL after those it imports: a.dll imports
 // b.dll, and a's DllMain asks b for its flag, set in b's DllMain. Caster.dll (Undertale's demo), run before
 // msvcr100.dll, found its C runtime not started ("R6030 CRT not initialized").
-{ let got;
+await (async () => { let got;
   try {
     const a = mkPE({ base: 0x50000000, dll: true, name: 'a.dll', imports: [{ dll: 'b.dll', names: ['g'] }], exports: { f: 0x20 }, code: (at) => Uint8Array.from([
       0xff, 0x15, ...le(at.iat['b.dll!g']), 0xa3, ...le(at.d(0x400)), 0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0x00,
@@ -6116,19 +6121,19 @@ const runPE = async (exe, readFile) => {
       c.set(new TextEncoder().encode('a.dll\0'), 0x100); c.set(new TextEncoder().encode('f\0'), 0x110); return c; } });
     got = String(await runPE(exe, (k) => ({ 'a.dll': a, 'b.dll': b })[k.toLowerCase()] || null));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: LoadLibrary runs a DLL\'s DllMain after those of the DLLs it imports', got, '1'); }
+  eq('win32: LoadLibrary runs a DLL\'s DllMain after those of the DLLs it imports', got, '1'); })();
 // A function a program imports from a DLL made here that the tables do not make: the program loads, and
 // stops only if it calls it (a Delphi program imports two hundred of the VCL's it never calls).
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['NoSuchFunctionHere', 'ExitProcess'] }], code: (at) => Uint8Array.from([
       0x6a, 5, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4]) });
     got = String(await runPE(exe, () => null));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: an import a made DLL does not make yet loads, and only its call stops the program', got, '5'); }
+  eq('win32: an import a made DLL does not make yet loads, and only its call stops the program', got, '5'); })();
 // waveOut tells the program a buffer is done as its callback asks -- here an event (CALLBACK_EVENT), which
 // winmm's thread sets: the program writes 3 ms, waits on the event, and finds its header WHDR_DONE (7).
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['CreateEventA', 'WaitForSingleObject', 'ExitProcess'] }, { dll: 'winmm.dll', names: ['waveOutOpen', 'waveOutPrepareHeader', 'waveOutWrite'] }], code: (at) => {
       const c = new Uint8Array(0x580), k = (n) => le(at.iat[`kernel32.dll!${n}`]), w = (n) => le(at.iat[`winmm.dll!${n}`]), WFX = at.d(0x400), HWO = at.d(0x420), HDR = at.d(0x440);
@@ -6143,11 +6148,11 @@ const runPE = async (exe, readFile) => {
       return c; } });
     got = String(await runPE(exe, () => null));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: waveOut sets the program\'s event when its buffer is done (CALLBACK_EVENT)', got, '7'); }
+  eq('win32: waveOut sets the program\'s event when its buffer is done (CALLBACK_EVENT)', got, '7'); })();
 // Drawing into an 8-bit DIB section lands in its memory, as indices of its own colour table: a 4x1 section
 // (grey 80h at index 1), PatBlt with a grey brush over it; the exit code is the first pixel's index. The
 // StarCraft installer composes its menu in one, and nothing it drew there showed.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'gdi32.dll', names: ['CreateCompatibleDC', 'CreateDIBSection', 'SelectObject', 'CreateSolidBrush', 'PatBlt'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const bmi = at.d(0x400), pbits = at.d(0x3f0);  // the image is 500h bytes: the section's header at 400h
@@ -6164,12 +6169,12 @@ const runPE = async (exe, readFile) => {
     } });
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: drawing into an 8-bit DIB section writes its colour indices', got, '1'); }
+  eq('win32: drawing into an 8-bit DIB section writes its colour indices', got, '1'); })();
 // SetWindowPos that sizes the main window sends WM_WINDOWPOSCHANGED, then WM_SIZE, as Windows does: SDL 2
 // takes a new size from the first (its fullscreen-desktop window kept a 640x480 framebuffer otherwise).
 // The window procedure logs the messages; the exit code (a byte) is the first after SetWindowPos plus
 // twice the second: 47h + 2 * 5.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'SetWindowPos'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const wc = at.d(0x440), cls = at.d(0x470), hwnd = at.d(0x478), log = at.d(0x410), cnt = at.d(0x430), proc = at.d(0x200);
@@ -6185,11 +6190,11 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: SetWindowPos sends WM_WINDOWPOSCHANGED, then WM_SIZE', got, '51'); }
+  eq('win32: SetWindowPos sends WM_WINDOWPOSCHANGED, then WM_SIZE', got, '51'); })();
 // WH_KEYBOARD: a key message GetMessage takes from the queue goes to the program's hook first, with its key
 // (Jazz Jackrabbit 2 reads its keyboard so; installed and never called, its menus took no key). The hook
 // keeps its wParam; the exit code is it: 41h, the A key.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['SetWindowsHookExA', 'PostMessageA', 'GetMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const msg = at.d(0x440), log = at.d(0x410), proc = at.d(0x200);
@@ -6203,12 +6208,12 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: WH_KEYBOARD -- GetMessage hands a key message to the hook first', got, '41'); }
+  eq('win32: WH_KEYBOARD -- GetMessage hands a key message to the hook first', got, '41'); })();
 // SendMessage gives the caller what the window procedure returned: the return stub (mirageReturn) set EAX
 // to its own number before it trapped, so every sent message's result was that number (a dialog's
 // procedure "handled" everything, and DefWindowProc never ran for it). The procedure returns 42h for
 // WM_USER; the exit code is SendMessage's result.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'SendMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const wc = at.d(0x440), cls = at.d(0x470), proc = at.d(0x200);
@@ -6224,12 +6229,12 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: SendMessage gives back what the window procedure returned', got, '42'); }
+  eq('win32: SendMessage gives back what the window procedure returned', got, '42'); })();
 // An overlapped window placed by Windows (CW_USEDEFAULT) gets WM_SIZE when first shown, not from
 // CreateWindowEx: Solitaire makes its game after CreateWindowEx returns, and a WM_SIZE sent before read
 // through a null pointer. The procedure counts WM_SIZE; the exit code is 16 x the count after
 // CreateWindowEx, plus the count after ShowWindow: 01h.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'ShowWindow'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const wc = at.d(0x440), cls = at.d(0x470), hwnd = at.d(0x478), cnt = at.d(0x430), res = at.d(0x434), proc = at.d(0x200);
@@ -6246,13 +6251,13 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a CW_USEDEFAULT window gets WM_SIZE when first shown, not from CreateWindowEx', got, '1'); }
+  eq('win32: a CW_USEDEFAULT window gets WM_SIZE when first shown, not from CreateWindowEx', got, '1'); })();
 // A modal dialog box: DialogBoxIndirectParamA on a template in memory, its procedure ending it with 2Ah
 // on WM_INITDIALOG; DialogBox returns that once its loop has run -- modalLoop, called on DialogBox's own
 // frame from the result of the sequence that made the dialog: a send within a send's result, which
 // found no return address on the stack while mirageReturn took the frame off first. The exit code is
 // DialogBox's result.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['DialogBoxIndirectParamA', 'EndDialog'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const tpl = at.d(0x440), proc = at.d(0x200);
@@ -6268,12 +6273,12 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: DialogBoxIndirectParamA runs its modal loop and returns EndDialog\'s result', got, '2a'); }
+  eq('win32: DialogBoxIndirectParamA runs its modal loop and returns EndDialog\'s result', got, '2a'); })();
 // MessageBox is a modal dialog: its loop runs until a button ends it, its result that button's id (it
 // returned IDOK at once, unseen -- FreeCell's "That move is not allowed."), and its default button has the
 // focus, so Enter is that button. MB_YESNO; a 50 ms timer's procedure posts Enter to the focused window;
 // the exit code is MessageBox's result, IDYES.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['SetTimer', 'MessageBoxA', 'GetFocus', 'PostMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const proc = at.d(0x200), text = at.d(0x440);
@@ -6287,11 +6292,11 @@ const runPE = async (exe, readFile) => {
     } });
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: MessageBox is modal; Enter is its focused default button (IDYES)', got, '6'); }
+  eq('win32: MessageBox is modal; Enter is its focused default button (IDYES)', got, '6'); })();
 // A hidden window's DC draws nothing on the desktop: Half-Life's launcher blackens its main dialog (PatBlt
 // BLACKNESS) before showing it, and a black rectangle stayed under its intro. A dialog application's
 // main dialog, made hidden; the exit code is the red of the pixel read back, the desktop's (3Ah).
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['CreateDialogIndirectParamA', 'GetDC'] }, { dll: 'gdi32.dll', names: ['PatBlt', 'GetPixel'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const tpl = at.d(0x440), proc = at.d(0x200);
@@ -6307,11 +6312,11 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a hidden window\'s DC draws nothing on the desktop', got, '3a'); }
+  eq('win32: a hidden window\'s DC draws nothing on the desktop', got, '3a'); })();
 // WS_CLIPCHILDREN: the main window's drawing does not reach its children (Solitaire's card dragged over its
 // status bar left green there). A 200x100 popup with a 50x20 static child at (10, 10); PatBlt WHITENESS over
 // the whole main window; the exit code is the low byte of the child's pixel, still black (0).
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'GetDC'] }, { dll: 'gdi32.dll', names: ['PatBlt', 'GetPixel'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const wc = at.d(0x440), cls = at.d(0x470), stc = at.d(0x480), proc = at.d(0x200), cw = at.iat['user32.dll!CreateWindowExA'];
@@ -6331,13 +6336,13 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: WS_CLIPCHILDREN -- the main window\'s drawing leaves its children as they were', got, '0'); }
+  eq('win32: WS_CLIPCHILDREN -- the main window\'s drawing leaves its children as they were', got, '0'); })();
 // BitBlt's raster operation, and a monochrome bitmap in the destination's colours (cards.dll draws an empty
 // place as a 1-bit bitmap under SRCAND over the felt; it came out white -- copied, its bits white). A
 // white 8x8 1-bit bitmap, SRCAND onto an 8x8 colour bitmap whose left half is white and right half black,
 // the destination's background colour 80h (red): left (1, 1) is 80h (the bit's colour AND white), right
 // (5, 1) is 0 (AND black). The exit code is their sum.
-{ let got;
+await (async () => { let got;
   try {
     const g = (n) => `gdi32.dll!${n}`;
     const exe = mkPE({ imports: [{ dll: 'gdi32.dll', names: ['CreateBitmap', 'CreateCompatibleDC', 'CreateCompatibleBitmap', 'SelectObject', 'PatBlt', 'SetBkColor', 'BitBlt', 'GetPixel'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
@@ -6358,12 +6363,12 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: BitBlt SRCAND, a 1-bit bitmap in the destination DC\'s colours', got, '80'); }
+  eq('win32: BitBlt SRCAND, a 1-bit bitmap in the destination DC\'s colours', got, '80'); })();
 // SendDlgItemMessageA takes its own five arguments off the stack (20 bytes) when the control's procedure is
 // the program's: it went through SendMessageA's 16, and 3D Pinball's Player Controls, filling six combo
 // boxes, lost four bytes a call until its stack ran out. A dialog with one control of the program's class;
 // the exit code is how far ESP moved over the call (0).
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateDialogIndirectParamA', 'SendDlgItemMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const wc = at.d(0x300), cls = at.d(0x380), tpl = at.d(0x400), proc = at.d(0x200), dproc = at.d(0x210);
@@ -6382,11 +6387,11 @@ const runPE = async (exe, readFile) => {
     } });
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: SendDlgItemMessageA to a program\'s control leaves the stack as it found it', got, '0'); }
+  eq('win32: SendDlgItemMessageA to a program\'s control leaves the stack as it found it', got, '0'); })();
 // A combo box keeps its items and its selection (CB_ADDSTRING, CB_SETCURSEL, CB_GETCOUNT, CB_GETCURSEL): they
 // went to DefWindowProc, which answered 0 to all. Two items, the second chosen; the exit code is
 // 16 * count + selection, 21h.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'SendMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const wc = at.d(0x440), cls = at.d(0x470), cb = at.d(0x480), a = at.d(0x490), b = at.d(0x494), proc = at.d(0x200);
@@ -6407,11 +6412,11 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a combo box keeps its items and its selection', got, '21'); }
+  eq('win32: a combo box keeps its items and its selection', got, '21'); })();
 // SetTimer: WM_TIMER when it is due and nothing else is queued, its TIMERPROC called by DispatchMessage
 // (Minesweeper's clock never ran). A thread's timer of 50 ms; the loop takes and dispatches until the
 // procedure has counted three; the exit code is the count.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['SetTimer', 'GetMessageA', 'DispatchMessageA'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const msg = at.d(0x440), cnt = at.d(0x410), proc = at.d(0x200);
@@ -6427,12 +6432,12 @@ const runPE = async (exe, readFile) => {
     } });
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: SetTimer -- WM_TIMER when due, its TIMERPROC called by DispatchMessage', got, '3'); }
+  eq('win32: SetTimer -- WM_TIMER when due, its TIMERPROC called by DispatchMessage', got, '3'); })();
 // msvcrt's qsort with the program's comparison function (src/win32/ucrt.js): twelve dwords in reverse
 // order, sorted -- a merge sort of indices, written back once: n log n comparisons where the insertion
 // sort it replaced made n*n/2 (66 here; Warcraft III sorts some 430 lists a second). The exit code:
 // the number of comparisons when the program finds its array in order, 255 when not.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'msvcrt.dll', names: ['qsort'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const arr = at.d(0x300), cnt = at.d(0x340), cmp = at.d(0x100);
@@ -6448,12 +6453,12 @@ const runPE = async (exe, readFile) => {
     const r = await runPE(exe);
     got = r === 255 ? 'not sorted' : typeof r === 'number' && r > 0 && r < 66 ? 'sorted, fewer' : String(r);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: msvcrt qsort sorts with the program\'s comparisons, n log n of them', got, 'sorted, fewer'); }
+  eq('win32: msvcrt qsort sorts with the program\'s comparisons, n log n of them', got, 'sorted, fewer'); })();
 // A critical section in kernel32's x86 code (src/win32/api.js EnterCriticalSection's x86, made a function
 // of the DLL by src/win32/dll.js): entered twice by its thread, owned by GetCurrentThreadId's id (the TEB's,
 // fs:[24h]) with a count of 2, left twice, free. The exit code: 1, or the step that went wrong (2-4).
 // And one another thread holds: EnterCriticalSection goes to the JavaScript, which waits.
-{ let got;
+await (async () => { let got;
   try {
     const prog = (held) => mkPE({ imports: [{ dll: 'kernel32.dll', names: ['InitializeCriticalSection', 'EnterCriticalSection', 'LeaveCriticalSection', 'GetCurrentThreadId', 'ExitProcess'] }], code: (at) => {
       const cs = at.d(0x300), I = (n) => [0xff, 0x15, ...le(at.iat['kernel32.dll!' + n])], push = [0x68, ...le(cs)];
@@ -6473,20 +6478,20 @@ const runPE = async (exe, readFile) => {
     } });
     got = [await runPE(prog(false)), await runPE(prog(true))].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a critical section entered and left in kernel32\'s x86 code; one held elsewhere waits', got, '1 running'); }
+  eq('win32: a critical section entered and left in kernel32\'s x86 code; one held elsewhere waits', got, '1 running'); })();
 // msvcrt's _ftol: ST(0) truncated to EDX:EAX, without BigInt -- a fraction each way, a value past 32
 // bits, and a NaN as FISTP gives it (8000000000000000h).
-{ let got;
+await (async () => { let got;
   try { const { win32Apis } = await import('../src/win32/api.js');
     const f = win32Apis().find((d) => d.dll === 'msvcrt.dll').fns._ftol[1];
     got = [3.7, -3.7, 2 ** 40 + 5.5, -(2 ** 40) - 5.5, NaN].map((v) => { const r = f({ fpop: () => v }); return `${r.edx.toString(16)}:${r.eax.toString(16)}`; }).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: msvcrt _ftol truncates to EDX:EAX', got, '0:3 ffffffff:fffffffd 100:5 fffffeff:fffffffb 80000000:0'); }
+  eq('win32: msvcrt _ftol truncates to EDX:EAX', got, '0:3 ffffffff:fffffffd 100:5 fffffeff:fffffffb 80000000:0'); })();
 // VirtualQuery on the stack (src/win32/api.js): the region from that page up to the stack's top, its
 // reservation the AllocationBase -- Flash Player 8's garbage collector scans BaseAddress + RegionSize
 // down to ESP for pointers; told one page, it freed what the frames above held (Zoo Keeper, Fly Guy).
 // The exit code: 1 when the top is 130000h and the base 30000h, 2 when not.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['VirtualQuery', 'ExitProcess'] }], code: (at) => {
       const mbi = at.d(0x300);
@@ -6498,10 +6503,10 @@ const runPE = async (exe, readFile) => {
     } });
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: VirtualQuery on the stack -- up to its top, its reservation the allocation', got, '1'); }
+  eq('win32: VirtualQuery on the stack -- up to its top, its reservation the allocation', got, '1'); })();
 // msvcrt's DATA exports: _acmdln, the command line, a variable the program reads where its import points
 // (a Visual C++ 6 program's start-up) -- the exit code its first character, the quote round its path.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'msvcrt.dll', names: ['_acmdln'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const main = [0xa1, ...le(at.iat['msvcrt.dll!_acmdln']), 0x8b, 0x00, 0x0f, 0xb6, 0x00, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
@@ -6509,11 +6514,11 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: msvcrt.dll\'s _acmdln, a DATA export, the command line', got, '22'); }
+  eq('win32: msvcrt.dll\'s _acmdln, a DATA export, the command line', got, '22'); })();
 // A DLL made here is in the system directory: SciTech MGL (WinQuake) looks for system32\ddraw.dll with
 // FindFirstFileA before it offers DirectDraw's modes, and found nothing there. The exit code is the
 // handle's high bits (a search handle, 5000h up) -- FFFFFFFFh, INVALID_HANDLE_VALUE, when it is not found.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['FindFirstFileA', 'ExitProcess'] }], code: (at) => {
       const name = at.d(0x400), fd = at.d(0x300);
@@ -6524,10 +6529,10 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: FindFirstFileA finds a DLL made here in the system directory', got, '5'); }
+  eq('win32: FindFirstFileA finds a DLL made here in the system directory', got, '5'); })();
 // crtdll.dll, the C runtime of Windows NT 3.x's programs (NT 3.51's Solitaire): msvcrt's under its own names,
 // _acmdln_dll a DATA export as msvcrt's _acmdln -- its first character the quote round the program's path.
-{ let got;
+await (async () => { let got;
   try {
     const exe = mkPE({ imports: [{ dll: 'crtdll.dll', names: ['_acmdln_dll'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
       const main = [0xa1, ...le(at.iat['crtdll.dll!_acmdln_dll']), 0x8b, 0x00, 0x0f, 0xb6, 0x00, 0x50, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
@@ -6535,11 +6540,11 @@ const runPE = async (exe, readFile) => {
     } });
     got = (await runPE(exe)).toString(16);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: crtdll.dll\'s _acmdln_dll, NT 3.x\'s C runtime', got, '22'); }
+  eq('win32: crtdll.dll\'s _acmdln_dll, NT 3.x\'s C runtime', got, '22'); })();
 // A wait that is asked again with a new deadline once the old one has passed (GetMessage, 10 ms at a time
 // while nothing comes) takes the new one: the old, kept, gave the clock nowhere to go, and an idle window
 // waited two cycles at a time -- Minesweeper's 5 s, 500 million calls.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024), v = new DataView(exe.buffer); exe.set([0x4d, 0x5a]); v.setUint32(0x3c, 0x40, true);
@@ -6549,13 +6554,13 @@ const runPE = async (exe, readFile) => {
     at(1); lx.wake = null; x.waitUntil(1.01); at(1.02); x.waitUntil(1.03);
     got = String(lx.wake);
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: a wait asked again after its deadline takes the new one', got, '1.03'); }
+  eq('hle: a wait asked again after its deadline takes the new one', got, '1.03'); })();
 // Sound from a thread. waveOut (src/win32): a buffer written, THEN filled -- a 4K intro's synthesizer
 // fills it while it plays -- is heard with what it holds when played; the position is the guest's clock
 // at the format's rate. SDL's audio (src/hle/sdl12.js): the audio loop calls the program's callback, a
 // few instructions that fill the buffer with 1234h, and its samples reach the card. A header still
 // playing is not unprepared: Retrospection's thread waits on that, and wrote four times too fast.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -6588,12 +6593,12 @@ const runPE = async (exe, readFile) => {
     const s = mc2.dsp.drain();
     got = [wave, s.rate, s.samples.length > 0 && s.samples.slice(512).every((v) => v === 0x1234)].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('sound from a thread: waveOut plays a buffer filled after its write; SDL\'s audio loop calls the callback', got, '88200 44100 true 33 0 | 22050 | true'); }
+  eq('sound from a thread: waveOut plays a buffer filled after its write; SDL\'s audio loop calls the callback', got, '88200 44100 true 33 0 | 22050 | true'); })();
 // A looped waveOut header (WHDR_BEGINLOOP | WHDR_ENDLOOP, dwLoops): its bytes play again and again and
 // the position goes on through the loops, as Wine's winmm. cdak (2010) streams its music through a
 // 32 KiB ring looped 0xFFFFFFFF times and times its pictures by the position: capped at the ring's
 // end, its clock stopped a fifth of a second in.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -6610,12 +6615,12 @@ const runPE = async (exe, readFile) => {
     const w = mc.dsp.drain();
     got = [x.r32(mmt + 4), w.samples.length, w.samples.every((v, i) => v === ((i >> 1) & 1 ? 200 : 100)), x.r32(hdr + 16) & 1].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: a looped waveOut header plays its bytes over and the position counts through the loops', got, '88200 44100 true 0'); }
+  eq('win32: a looped waveOut header plays its bytes over and the position counts through the loops', got, '88200 44100 true 0'); })();
 // Stiletto (RGBA, 2010) reads its instruments from XP's drivers/gm.dls (OpenFile, SetFilePointer,
 // ReadFile) and plays its song with sndPlaySoundA(SND_MEMORY | SND_ASYNC). Without OpenFile its
 // import walk landed on CloseHandle, the "open" returned 1 and its camera never moved; when no name
 // opens, it runs off the end of its list. gm.dls opens as XP's size in zeros; the WAV plays from memory.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js');
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
     const exe = new Uint8Array(1024); exe.set([0x4d, 0x5a]); new DataView(exe.buffer).setUint32(0x3c, 0x40, true);
@@ -6640,13 +6645,13 @@ const runPE = async (exe, readFile) => {
     const w = mc.dsp.drain();
     got = [h > 0, at, ok, x.r32(nr), x.r32(buf + 4).toString(16), miss, err, played, w.samples.length, w.samples.every((v, i) => v === ((i >> 1) & 1 ? 400 : 300))].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: OpenFile reads XP\'s gm.dls as zeros; sndPlaySoundA plays a WAV from memory', got, 'true 3440656 1 4 aaaaaaaa -1 2 1 44100 true'); }
+  eq('win32: OpenFile reads XP\'s gm.dls as zeros; sndPlaySoundA plays a WAV from memory', got, 'true 3440656 1 4 aaaaaaaa -1 2 1 44100 true'); })();
 // General MIDI (src/midi.js). DOS: the MPU-401 at 330h acknowledges UART mode (3Fh) with FEh, then a
 // program change and a note on written to 330h sound in the synthesizer, at the machine's clock --
 // Difúze (2010) plays its music so. Win32: Photon Race 2 (2008) writes a .mid (CreateFileA, WriteFile),
 // opens it with MCI as a "sequencer" and plays it; a Standard MIDI File's tempo change moves the
 // times of what follows. Before, the MPU-401 did not answer and mciSendCommandA did not exist.
-{ let got;
+await (async () => { let got;
   try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { parseSMF } = await import('../src/midi.js');
     const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc);
     const io = (port, v) => mc.ioWrite(port, 1, v);
@@ -6680,11 +6685,11 @@ const runPE = async (exe, readFile) => {
     const playing = lx.midi().playing();
     got = [ack.toString(16), st.toString(16), dos, times, open, dev, play, playing].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('midi: the MPU-401 answers UART mode and sounds; an SMF\'s tempo is followed; MCI plays a written .mid', got, 'fe 0 true 0.00,0.50,0.75 0 1 0 true'); }
+  eq('midi: the MPU-401 answers UART mode and sounds; an SMF\'s tempo is followed; MCI plays a written .mid', got, 'fe 0 true 0.00,0.50,0.75 0 1 0 true'); })();
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
 // makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).
-{ const hex = (                                         // nasm -f bin tools/linux/lsroot.asm
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/lsroot.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '0000000001000000000000000080040800800408a3000000002000000700000000100000b805000000bba1800408b900' +
     '000100cd8089c731edb8dc00000089fbb900900408ba00100000cd8085c07e18be009004088d9000900408450fb74e10' +
@@ -6694,11 +6699,11 @@ const runPE = async (exe, readFile) => {
   lx.host = { lstat: (q) => (dirs[q] ? { type: 'dir' } : null), list: (q) => dirs[q] || [], read: () => null };
   lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/LSROOT']);
   for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
-  eq('linux: / lists the host root merged with its own directories', lx.status, 6); }
+  eq('linux: / lists the host root merged with its own directories', lx.status, 6); })();
 // lx.changes: what an OASIS `run` layer keeps of a run (tools/oasis.mjs) — tools/linux/commit.asm over a
 // host tree of /keep, /mod, /old. A file only read is the host's still; one appended to, one made, a
 // link, a directory and a removal are the run's. (/tmp is MIRAGE-LINUX's own, absent from this host.)
-{ let got; try { const hex = (                          // nasm -f bin tools/linux/commit.asm
+await (async () => { let got; try { const hex = (                          // nasm -f bin tools/linux/commit.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
     '000000000100000000000000008004080080040830010000400100000700000000100000b805000000bb0e81040831c9' +
     'cd8089c3b803000000b930810408ba01000000cd80b806000000cd80b805000000bb14810408b901040000cd8089c3b8' +
@@ -6716,37 +6721,37 @@ const runPE = async (exe, readFile) => {
   got = [lx.status, c.files.map((f) => `${f.path}=${dec(f.bytes)}:${(f.mode ?? 0).toString(8)}`).join(','), c.links.map((l) => `${l.path}->${l.target}`).join(','),
     c.dirs.map((x) => `${x.path}:${(x.mode ?? 0).toString(8)}`).join(','), c.removed.join(',')].join(' ');
   } catch (e) { got = e.message; }
-  eq('linux: a run\'s changes over the host tree, as an OASIS run layer keeps them', got, '0 /mod=mm!:644,/new=hi:640 /lnk->/new /tmp:0,/dir:700 /old'); }
+  eq('linux: a run\'s changes over the host tree, as an OASIS run layer keeps them', got, '0 /mod=mm!:644,/new=hi:640 /lnk->/new /tmp:0,/dir:700 /old'); })();
 // The console's line discipline (n_tty with the default termios: ICANON ECHO ICRNL, OPOST ONLCR): a
 // line is edited — Backspace erases — and handed over at Enter, its echo on the screen.
-{ const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), echoed = [];
+await (async () => { const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), echoed = [];
   lx.onOutput = (fd, b) => echoed.push(...b);
   lx.tty.kbMode = 1;
   let got; try { lx.keyScancodes([0x1e, 0x9e, 0x30, 0xb0, 0x0e, 0x8e, 0x2e, 0xae]); const before = lx.ttyIn.length;   // a b BS c
     lx.keyScancodes([0x1c, 0x9c]);                                       // Enter
     got = `${before} ${String.fromCharCode(...lx.ttyIn).replace('\n', '|')} ${String.fromCharCode(...echoed).replace(/\x08/g, '<').replace('\r\n', '|')}`;
   } catch (e) { got = e.message; }
-  eq('linux: a console line is edited and handed over at Enter, with its echo', got, '0 ac| ab< <c|'); }
+  eq('linux: a console line is edited and handed over at Enter, with its echo', got, '0 ac| ab< <c|'); })();
 // src/vtconsole.js: the tty's text on the VGA text screen — CR LF, a CSI cursor position, SGR colour.
-{ const { VtConsole } = await import('../src/vtconsole.js');
+await (async () => { const { VtConsole } = await import('../src/vtconsole.js');
   const u8 = new Uint8Array(0xc0000), vga = { crtc: new Uint8Array(32), startAddr: () => 0 }, vt = new VtConsole(u8, vga);
   vt.write([...'ab\r\ncd\x1b[3;5H\x1b[31mX\x1b[0m'].map((c) => c.charCodeAt(0)));
   const at = (r, c) => String.fromCharCode(u8[0xb8000 + (r * 80 + c) * 2]) + u8[0xb8000 + (r * 80 + c) * 2 + 1].toString(16);
   // The cursor is where the VGA draws it from, CRTC 0Eh/0Fh: row 2, column 5 is location 165.
-  eq('linux: the VGA text console places text, moves the cursor, colours', [at(0, 0), at(1, 1), at(2, 4), u8[0x450], u8[0x451], (vga.crtc[0x0e] << 8) | vga.crtc[0x0f]].join(' '), 'a7 d7 X4 5 2 165'); }
+  eq('linux: the VGA text console places text, moves the cursor, colours', [at(0, 0), at(1, 1), at(2, 4), u8[0x450], u8[0x451], (vga.crtc[0x0e] << 8) | vga.crtc[0x0f]].join(' '), 'a7 d7 X4 5 2 165'); })();
 // The console's keyboard modes, as the kernel delivers keys (drivers/tty/vt/keyboard.c): K_MEDIUMRAW gives
 // keycodes — an ordinary key's scancode, the kernel's number for an E0 key (Up 103), bit 7 on release —
 // which is what SVGAlib reads for id's Linux DOOM; K_XLATE gives characters; K_RAW the scancodes.
-{ const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), keys = [0xe0, 0x48, 0xe0, 0xc8, 0x1e, 0x9e];
+await (async () => { const lx = installLinux(new Machine({ memSize: 16 << 20, cpu: '686' })), keys = [0xe0, 0x48, 0xe0, 0xc8, 0x1e, 0x9e];
   lx.tty.termios = new Uint8Array(36);                                  // raw: no ICANON, no ECHO, no ICRNL
   let got; try { got = [2, 1, 0].map((mode) => { lx.tty.kbMode = mode; lx.ttyIn.length = 0; lx.keyScancodes(keys); return lx.ttyIn.join(','); }).join(' / '); } catch (e) { got = e.message; }
-  eq('linux: keys reach the console as keycodes, characters or scancodes by its mode', got, '103,231,30,158 / 27,91,65,97 / 224,72,224,200,30,158'); }
+  eq('linux: keys reach the console as keycodes, characters or scancodes by its mode', got, '103,231,30,158 / 27,91,65,97 / 224,72,224,200,30,158'); })();
 
 // ---- OASIS: tools/oasis.mjs's own tar reader ---------------------------------------------------------
 // Images are unpacked from Debian packages, idgames tarballs and `docker export` without the host's tar,
 // which on macOS dropped Debian's empty directories (/etc/apt/keyrings): an empty directory, a file, a
 // symbolic link and a GNU long name must all come through as the archive has them.
-{ const { untar } = await import('./oasis.mjs');
+await (async () => { const { untar } = await import('./oasis.mjs');
   const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
   const hdr = (name, type, size = 0, link = '') => { const h = Buffer.alloc(512);
     h.write(name.slice(0, 99), 0, 'latin1'); h.write('0000644\0', 100); h.write('0000000\0', 108); h.write('0000000\0', 116);
@@ -6764,13 +6769,13 @@ const runPE = async (exe, readFile) => {
       fsm.readlinkSync(pm.join(dir, 'bin')), fsm.readFileSync(pm.join(dir, long), 'utf8')];
   } catch (e) { got = e.message.slice(0, 60); }
   fsm.rmSync(dir, { recursive: true, force: true });
-  eq('oasis: tar keeps an empty directory, a file, a symbolic link and a long name', JSON.stringify(got), JSON.stringify([true, 'hi\n', 'usr/bin', 'ok'])); }
+  eq('oasis: tar keeps an empty directory, a file, a symbolic link and a long name', JSON.stringify(got), JSON.stringify([true, 'hi\n', 'usr/bin', 'ok'])); })();
 
 // ---- LHA (src/lha.js): id's quake106.zip keeps its game in an LHA self-extractor -----------------------
 // Built here bit by bit, with no third-party data: a -lh5- stream of two blocks, each with one-symbol
 // tables (n = 0) — 'M', then a match of length 4 at distance 1 — and a -lh0- (stored) file, behind a
 // few bytes of "self-extractor" the reader must skip. Checked against bsdtar on resource.1 (16 files).
-{ let got;
+await (async () => { let got;
   try { const { unlha } = await import('../src/lha.js');
     const bits = []; const put = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >> i) & 1); };
     for (const c of [77, 256 + 1]) { put(1, 16); put(0, 5); put(0, 5); put(0, 9); put(c, 9); put(0, 4); put(0, 4); }
@@ -6782,13 +6787,13 @@ const runPE = async (exe, readFile) => {
     const arc = Uint8Array.from([0x4d, 0x5a, 1, 2, 3, ...entry('-lh5-', 'ID1\\M.TXT', lh5, 5), ...entry('-lh0-', 'HI.TXT', [104, 105], 2), 0]);
     got = unlha(arc).map((f) => f.path + '=' + new TextDecoder().decode(f.bytes)).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('LHA: -lh5- blocks with a literal and a match, a stored file, after a self-extractor', got, 'ID1/M.TXT=MMMMM HI.TXT=hi'); }
+  eq('LHA: -lh5- blocks with a literal and a match, a stored file, after a self-extractor', got, 'ID1/M.TXT=MMMMM HI.TXT=hi'); })();
 
 // ---- OASIS: the busybox layer links every applet the binary lists (tools/oasis.mjs) ------------------
 // A Linux with no distribution (linux/doom-mini): one static busybox, linked as `busybox --install -s`
 // would, its applet list taken from the binary itself run on MIRAGE-LINUX. tools/linux/applets.asm
 // stands in for busybox: it lists ls, busybox and cat.
-{ let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
+await (async () => { let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
   const tmp = fsm.mkdtempSync(pm.join(osm.tmpdir(), 'oasis-bb-')); let layerDir = null;
   try { const { linuxRoot } = await import('./oasis.mjs');
     const hex = '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040882000000820000000500000000100000b804000000bb01000000b973800408ba0f000000cd80b80100000031dbcd806c730a62757379626f780a6361740a';
@@ -6798,14 +6803,14 @@ const runPE = async (exe, readFile) => {
     got = fsm.readdirSync(bin).sort().map((n) => n + (fsm.lstatSync(pm.join(bin, n)).isSymbolicLink() ? '->' + fsm.readlinkSync(pm.join(bin, n)) : '')).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   fsm.rmSync(tmp, { recursive: true, force: true }); if (layerDir) fsm.rmSync(layerDir, { recursive: true, force: true });
-  eq('oasis: a busybox layer links each applet the binary lists', got, 'busybox cat->busybox ls->busybox'); }
+  eq('oasis: a busybox layer links each applet the binary lists', got, 'busybox cat->busybox ls->busybox'); })();
 
 // ---- OASIS in a page: the tree built from the layers with no server (src/oasis-layers.js) ------------
 // A tar (gzipped) and a .deb made here, a file, links and a directory, as buildTree reads them; then a
 // run layer's cached result that removes a file. Paths differing only in case stay apart, as on Linux:
 // unpacked on macOS's disk, xbase's /etc/X11/Xserver (a file) and /etc/X11/xserver/ (a directory)
 // overwrote each other, and XFree86 lost its SecurityPolicy.
-{ let got;
+await (async () => { let got;
   try { const { buildTree, tarWrite, sha256 } = await import('../src/oasis-layers.js');
     const enc = new TextEncoder(), gz = async (u8) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
     const tar = await gz(tarWrite([{ path: 'etc/X11/Xserver', type: 'file', mode: 0o644, data: enc.encode('XF86_NONE') },
@@ -6824,10 +6829,10 @@ const runPE = async (exe, readFile) => {
     got = [dec('/etc/X11/Xserver'), dec('/etc/X11/xserver/SecurityPolicy'), (h.lstat('/bin/tool').mode & 0o777).toString(8), dec('/usr/lib/libz.so.1'), dec('/etc/f.conf'),
       h.lstat('/usr/lib/libz.so').target, h.lstat('/tmp').type, dec('/built'), h.lstat('/bin/old'), h.list('/bin').join()].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis in a page: tar, deb, file, links, mkdir, a run layer, case kept apart', got, 'XF86_NONE policy 755 elf conf libz.so.1 dir made  tool'); }
+  eq('oasis in a page: tar, deb, file, links, mkdir, a run layer, case kept apart', got, 'XF86_NONE policy 755 elf conf libz.so.1 dir made  tool'); })();
 // The relay a page reads Debian's and idgames' archives through: only the hosts the images use, so it
 // is no open proxy — and those hosts are every one oasis/images/ names.
-{ let got;
+await (async () => { let got;
   try { const { relayTarget, OASIS_HOSTS } = await import('../src/oasis-hosts.js'); const fsm = await import('fs'), pm = await import('path');
     const used = new Set(); const walk = (dir) => { for (const f of fsm.readdirSync(dir)) { const q = pm.join(dir, f); if (fsm.statSync(q).isDirectory()) walk(q); else if (f.endsWith('.json')) for (const m of fsm.readFileSync(q, 'utf8').matchAll(/"(https?:\/\/[^"]+)"/g)) used.add(m[1]); } };
     walk(new URL('../oasis/images', import.meta.url).pathname);
@@ -6846,10 +6851,10 @@ const runPE = async (exe, readFile) => {
       'https://ia600805.us.archive.org/view_archive.php?archive=/7/items/official-jj-2/OfficialJJ2.zip&file=a', 'https://dn710401.ca.archive.org/0/items/someone-else/x.zip',
       'https://evil.example/0/items/official-jj-2/x.zip'].map((u) => relayTarget(u) !== null).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis-fetch: an archive.org item\'s storage servers, either datacentre', got, 'true true true false false'); }
+  eq('oasis-fetch: an archive.org item\'s storage servers, either datacentre', got, 'true true true false false'); })();
 // A `zip` layer with `files`: the members it names, each put where it says (an intro's dropper out of
 // its party archive, oasis/images/linux/ribbon-2009.json); a member that is not there is said so.
-{ let got;
+await (async () => { let got;
   try { const { buildTree } = await import('../src/oasis-layers.js'), enc = new TextEncoder();
     const zipOf = (entries) => {                                    // stored entries, a central directory, its end
       const loc = [], cen = []; let off = 0;
@@ -6870,10 +6875,10 @@ const runPE = async (exe, readFile) => {
     let missing = 'none'; try { await buildTree({ layers: [{ zip: 'https://ftp.scene.org/pub/x.zip', files: { 'party/nope': '/x' } }] }, io); } catch (e) { missing = e.message; }
     got = [new TextDecoder().decode(h.read('/intro/intro.i386')), h.list('/').join(), missing].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis in a page: a zip layer with files takes the members it names, to where it says', got, 'a=/tmp/I | intro | oasis: party/nope is not in https://ftp.scene.org/pub/x.zip'); }
+  eq('oasis in a page: a zip layer with files takes the members it names, to where it says', got, 'a=/tmp/I | intro | oasis: party/nope is not in https://ftp.scene.org/pub/x.zip'); })();
 // src/hle/prism-gl.js: the M PRISM's gl.js reads guest memory through -- u8 by index across a page
 // boundary, slice and set, the DataView-like dv in every width (glCallLists reads GL_BYTE names with getInt8), cstr and intern.
-{ let got;
+await (async () => { let got;
   try { const { prismM } = await import('../src/hle/prism-gl.js');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
@@ -6884,13 +6889,13 @@ const runPE = async (exe, readFile) => {
     const s = M.mod.intern([...new TextEncoder().encode('gl'), 0]);
     got = [Array.from(M.u8.slice(edge + 8, edge + 9)), f64, M.mod.dv.getInt16(p, true), M.mod.dv.getUint16(p, true), M.mod.dv.getFloat32(p + 4, true), M.cstr(s), M.rt.malloc(8) > 0, (M.mod.dv.setInt8(p + 8, -3), M.mod.dv.getInt8(p + 8))].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true -3'); }
+  eq('hle: PRISM\'s M over a Linux guest: u8 across a page, dv, cstr, intern, malloc', got, '5 1.5 -2 65534 0.25 gl true -3'); })();
 // MIRAGE's GL table to PRISM's gl.js: the framebuffer objects (Hartverdrahtet renders to a texture) and
 // every immediate-mode spelling (Paradistance's glTexCoord3iv), the uniform vectors and matrices
 // (kindernoiser's glUniform4fv), Waillee's glCreateShaderProgramv and D-Four's raster position, display
 // lists, glGetFloatv and vertex arrays have their signatures here and their implementations there, and
 // nothing here is missing there.
-{ let got;
+await (async () => { let got;
   try { const { prismM } = await import('../src/hle/prism-gl.js'), { gl } = await import('../src/hle/gl.js');
     const { installGL } = await import('../vendor/prism/src/env/gl.js');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
@@ -6905,13 +6910,13 @@ const runPE = async (exe, readFile) => {
     got = [names.filter((n) => !fns[n] || !M.rt[n]).join(' ') || 'all',
       Object.keys(fns).filter((n) => !M.rt[n] && !n.startsWith('glX')).join(' ') || 'none'].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects, every immediate-mode spelling, the uniform vectors; nothing missing', got, 'all | none'); }
+  eq('hle: MIRAGE\'s GL table to PRISM\'s: framebuffer objects, every immediate-mode spelling, the uniform vectors; nothing missing', got, 'all | none'); })();
 
 // opengl32.dll names GL_ARB_multitexture (src/win32/api.js WIN32_GL_EXTENSIONS, src/linuxrun.js): Warcraft
 // III's demo enables its texture coordinates for unit 0, then selects unit 1 and disables them there
 // when the extension is named -- without it, on unit 0, and its menu's text lost its glyphs. What
 // glGetString(GL_EXTENSIONS) answers with the list linuxrun.js gives PRISM's gl.js.
-{ let got;
+await (async () => { let got;
   try { const { prismM } = await import('../src/hle/prism-gl.js'), { WIN32_GL_EXTENSIONS } = await import('../src/win32/api.js');
     const { installGL } = await import('../vendor/prism/src/env/gl.js');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
@@ -6919,12 +6924,12 @@ const runPE = async (exe, readFile) => {
     const M = prismM(lx, mc.mem); installGL(M, { extensions: WIN32_GL_EXTENSIONS });
     got = M.cstr(M.rt.glGetString(0x1f03)).split(' ').sort().join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('win32: opengl32 names GL_ARB_multitexture -- Warcraft III\'s menu text keeps its texture coordinates', got, 'GL_ARB_multitexture GL_EXT_compiled_vertex_array'); }
+  eq('win32: opengl32 names GL_ARB_multitexture -- Warcraft III\'s menu text keeps its texture coordinates', got, 'GL_ARB_multitexture GL_EXT_compiled_vertex_array'); })();
 
 // ---- OASIS: a `run` layer's removals hide the layers below (tools/oasis.mjs hostOver) ----------------
 // A build that deletes a file must not see it come back from the layer under it: the run layer's
 // .oasis-gone lists /x, so /x and /x/y are gone, /k stays, and the bookkeeping files are not listed.
-{ let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
+await (async () => { let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
   const tmp = fsm.mkdtempSync(pm.join(osm.tmpdir(), 'oasis-gone-'));
   try { const { hostOver } = await import('./oasis.mjs');
     const lo = pm.join(tmp, 'lo'), hi = pm.join(tmp, 'hi');
@@ -6934,13 +6939,13 @@ const runPE = async (exe, readFile) => {
     got = [h.list('/').sort().join(','), h.lstat('/x'), h.lstat('/x/y'), h.lstat('/k').type].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   fsm.rmSync(tmp, { recursive: true, force: true });
-  eq('oasis: a run layer\'s removals hide what the layers below have there', got, 'k   file'); }
+  eq('oasis: a run layer\'s removals hide what the layers below have there', got, 'k   file'); })();
 
 // ---- OASIS: a DOS image's zip layer as the C: directory (tools/oasis.mjs dosDir) -----------------------
 // `oasis run dos/<image> --terminal` threw "unzip is not a function or its return value is not
 // iterable": dosDir iterated src/zip.js's unzip as if it were synchronous and read f.name / f.data,
 // where it is async and gives { path, bytes }. A stored ZIP built here: GAME/RUN.BAT holds "hi".
-{ let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
+await (async () => { let got; const fsm = await import('fs'), osm = await import('os'), pm = await import('path');
   const tmp = fsm.mkdtempSync(pm.join(osm.tmpdir(), 'oasis-dos-'));
   try { const { dosDir } = await import('./oasis.mjs');
     const name = [...'game/run.bat'].map((c) => c.charCodeAt(0)), data = [104, 105];
@@ -6954,19 +6959,19 @@ const runPE = async (exe, readFile) => {
     got = fsm.readFileSync(pm.join(dir, 'GAME', 'RUN.BAT'), 'utf8'); fsm.rmSync(dir, { recursive: true, force: true });
   } catch (e) { got = e.message.slice(0, 80); }
   fsm.rmSync(tmp, { recursive: true, force: true });
-  eq('oasis: a DOS image\'s zip layer becomes the C: directory, names upper-cased', got, 'hi'); }
+  eq('oasis: a DOS image\'s zip layer becomes the C: directory, names upper-cased', got, 'hi'); })();
 
 // oasis.html and the machines page read the images from oasis/index.json, which a static host can serve:
 // it must say what oasis/images/ holds. `node tools/oasis.mjs index` writes it again.
-{ const { indexText } = await import('./oasis.mjs'); const fsm = await import('fs');
+await (async () => { const { indexText } = await import('./oasis.mjs'); const fsm = await import('fs');
   let got; try { got = fsm.readFileSync(new URL('../oasis/index.json', import.meta.url), 'utf8') === indexText(); } catch (e) { got = e.message.slice(0, 60); }
-  eq('oasis: oasis/index.json lists oasis/images/ (node tools/oasis.mjs index)', got, true); }
+  eq('oasis: oasis/index.json lists oasis/images/ (node tools/oasis.mjs index)', got, true); })();
 
 // ---- in the browser a tick that comes while IF is clear is taken at the next STI -------------------------
 // The browser delivers ticks off the wall clock (timerAuto off). One that came with IF clear was kept
 // only until the next tick, and lost unless IF happened to be set just then: CWSDPMI runs with IF clear
 // most of the time, and Liquid War's Allegro timer got none of its ticks. A PIC keeps the request.
-{ const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); const cpu = mc.cpu; installBIOS(mc);
   mc.timerAuto = false;
   mc.mem.blit(0x2000, Uint8Array.from([0xfe, 0x06, 0x00, 0x30, 0xb0, 0x20, 0xe6, 0x20, 0xcf]));   // inc byte [3000h] / EOI / iret
   mc.setVector(8, 0x0200, 0);
@@ -6974,13 +6979,13 @@ const runPE = async (exe, readFile) => {
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.setSeg(DS, 0); cpu.flags &= ~0x200;
   mc.tickTimer();                                                          // IF clear: latched
   mc.runSlice(20);
-  eq('a tick that came with IF clear runs its handler once IF is set', mc.mem.r8(0x3000), 1); }
+  eq('a tick that came with IF clear runs its handler once IF is set', mc.mem.r8(0x3000), 1); })();
 
 // ---- the PIT: a reprogrammed counter 0 raises IRQ 0 at the rate it was given ------------------------
 // tools/pitrate.asm -dDIVIDER=11932 (100 Hz) counts INT 8 over 70 vertical retraces. DOSBox-X: 100
 // (and 291 for 4096, 37 for 32768). MIRAGE took the reload for a number of cycles, right while pitBase
 // was 65536 and 2.79x too fast since it is 182584: 278 here, DOOM's 104.6 Hz timer at 291.
-{ const hex = (                                         // nasm -f bin -dDIVIDER=11932 tools/pitrate.asm, 195 bytes
+await (async () => { const hex = (                                         // nasm -f bin -dDIVIDER=11932 tools/pitrate.asm, 195 bytes
     'b80835cd21891ead018c06af01b80825ba9601cd21fab034e643b89c2ee64088e0e640fbb94600bada03eca80875fbec' +
     'a80874fbe2f4fab034e64330c0e640e6401eb80825c516ad01cd211ffbb43c31c9bab101cd21721f89c3beb901a1ab01' +
     'e81900a1a901e81300b440b90a00bab901cd21b43ecd21b8004ccd2151b90400c1c00450240f04303c39760204078804' +
@@ -6988,11 +6993,11 @@ const runPE = async (exe, readFile) => {
     '300d0a');
   const out = runProbe(hex, 195, 'PITRATE.COM').vfs.readFile('\\OUT.TXT');
   const n = out ? parseInt(new TextDecoder().decode(out).trim(), 16) : -1;
-  eq('PIT: counter 0 programmed for 100 Hz raises IRQ 0 about 100 times a second (DOSBox-X: 100)', n >= 97 && n <= 103 ? 'ok' : n, 'ok'); }
+  eq('PIT: counter 0 programmed for 100 Hz raises IRQ 0 about 100 times a second (DOSBox-X: 100)', n >= 97 && n <= 103 ? 'ok' : n, 'ok'); })();
 
 // Divisor 2128, 561 Hz: Keen 4's rate. DOSBox-X counts 560; MIRAGE's floor of pitBase>>4 gave 290, and
 // Keen 4 ran at half speed (Wolf3D, ~700 Hz, at 0.4). The floor is pitBase>>6 now, about 1165 Hz.
-{ const hex = (                                         // nasm -f bin -dDIVIDER=2128 tools/pitrate.asm, 195 bytes
+await (async () => { const hex = (                                         // nasm -f bin -dDIVIDER=2128 tools/pitrate.asm, 195 bytes
     'b80835cd21891ead018c06af01b80825ba9601cd21fab034e643b85008e64088e0e640fbb94600bada03eca80875fbec' +
     'a80874fbe2f4fab034e64330c0e640e6401eb80825c516ad01cd211ffbb43c31c9bab101cd21721f89c3beb901a1ab01' +
     'e81900a1a901e81300b440b90a00bab901cd21b43ecd21b8004ccd2151b90400c1c00450240f04303c39760204078804' +
@@ -7000,13 +7005,13 @@ const runPE = async (exe, readFile) => {
     '300d0a');
   const out = runProbe(hex, 195, 'PITRATE.COM').vfs.readFile('\\OUT.TXT');
   const n = out ? parseInt(new TextDecoder().decode(out).trim(), 16) : -1;
-  eq('PIT: 561 Hz asked, about 561 delivered (DOSBox-X: 560), not capped at 291', n >= 550 && n <= 570 ? 'ok' : n, 'ok'); }
+  eq('PIT: 561 Hz asked, about 561 delivered (DOSBox-X: 560), not capped at 291', n >= 550 && n <= 570 ? 'ok' : n, 'ok'); })();
 
 // ---- the Sound Blaster plays its DMA at the rate it was set, then raises IRQ 7 (src/sb.js) ------
 // tools/sbprobe.asm: 11111 bytes at 11111 Hz, single cycle. DOSBox-X: DSP 4.05, the IRQ after 12h
 // ticks (one second), and at tick 9 the count reads 1737h, about half. MIRAGE plays from the first
 // cycle and reads 15F3h — what 9 ticks of 11111 Hz leave of 11111 bytes; DOSBox-X starts ~30 ms late.
-{ const hex = (                                         // nasm -f bin tools/sbprobe.asm, 395 bytes
+await (async () => { const hex = (                                         // nasm -f bin tools/sbprobe.asm, 395 bytes
     'b80f35cd21891e63028c066502b80f25ba1302cd21e421247fe621ba2602b001eeb96400ece2fd30c0eee80b01b0e1e8' +
     'fa00e80301a26702e8fd00a26802b0d1e8e900b040e8e400b0a6e8df00fab005e60ae60cb049e60b30c0e602e602b001' +
     'e683b8662be60388e0e603b001e60afbb014e8b700b066e8b200b02be8ad0031c08ec0268b1e6c0426a16c0429d8803e' +
@@ -7018,22 +7023,22 @@ const runPE = async (exe, readFile) => {
     '3d242041434b3d240d0a24');
   const { mc } = runProbe(hex, 395, 'SBPROBE.COM', 16 << 20, 40000);
   let line = ''; for (let r = 0; r < 25; r++) { let t = ''; for (let i = 0; i < 80; i++) { const ch = mc.mem.u8[0xb8000 + (r * 80 + i) * 2]; t += ch >= 32 ? String.fromCharCode(ch) : ' '; } if (t.includes('DSP=')) line = t.trim(); }
-  eq('Sound Blaster: version 4.05, DMA consumed at the set rate, IRQ 7 after a second', line, 'DSP=0405 TICKS=12 HALF=15F3 ACK=1'); }
+  eq('Sound Blaster: version 4.05, DMA consumed at the set rate, IRQ 7 after a second', line, 'DSP=0405 TICKS=12 HALF=15F3 ACK=1'); })();
 
 // ---- MIRAGE_RTC=hostdate: a headless machine starts on the host's date (src/rtc.js) -------------------
 // The default is 1990-01-01 08:00, reproducible; Damn Small Linux's tar then called every file of its
 // CD "in the future". With hostdate the clock starts at the host's instant and runs on guest time.
-{ let got; const was = process.env.MIRAGE_RTC;
+await (async () => { let got; const was = process.env.MIRAGE_RTC;
   try { process.env.MIRAGE_RTC = 'hostdate'; const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
     got = Math.abs(mc.rtc.now().getTime() - Date.now()) < 60000;
   } catch (e) { got = e.message; } finally { if (was === undefined) delete process.env.MIRAGE_RTC; else process.env.MIRAGE_RTC = was; }
-  eq('RTC: MIRAGE_RTC=hostdate starts the clock at the host\'s date and time', got, true); }
+  eq('RTC: MIRAGE_RTC=hostdate starts the clock at the host\'s date and time', got, true); })();
 
 // ---- the SB16's ASP/CSP commands take their arguments, and 0Fh answers (src/sb.js) --------------
 // Windows 95's SB16 driver sends 04 FC, 04 FA, 0F 83 and waits for 0F's answer at its logo. Measured
 // with tools/cspprobe.asm: QEMU -device sb16 and DOSBox-X both answer 00 to 0F 83 and nothing to 04;
 // QEMU reads back what 0E wrote. Before: 04's argument FC ran as a command, 0F never answered.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
     const o = (p, v) => mc.ioWrite(p, 1, v), i = (p) => mc.ioRead(p, 1), dsp = (...b) => b.forEach((v) => o(0x22c, v));
     const rd = () => (i(0x22e) & 0x80 ? i(0x22a) : -1);
@@ -7042,39 +7047,39 @@ const runPE = async (exe, readFile) => {
     dsp(0x0e, 0x34, 0x56); dsp(0x0f, 0x34); const r34 = rd();
     dsp(0x05, 0x12, 0x34); dsp(0xe1); got = [r83, r34, rd(), rd(), rd()];
   } catch (e) { got = e.message; }
-  eq('Sound Blaster ASP: 0F 83 answers 00, 0E/0F keep a register, 04/05 take their arguments', JSON.stringify(got), JSON.stringify([0, 0x56, 4, 5, -1])); }
+  eq('Sound Blaster ASP: 0F 83 answers 00, 0E/0F keep a register, 04/05 take their arguments', JSON.stringify(got), JSON.stringify([0, 0x56, 4, 5, -1])); })();
 
 // ---- the SB16 raises the IRQ its mixer register 80h selects (src/sb.js) ---------------------------
 // Windows 95's driver writes 80h = 02h (IRQ 5); the card kept raising IRQ 7 and the startup sound
 // waited for ever. DOSBox-X, QEMU and ALSA agree: 80h selects the IRQ, 81h the DMA channels.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
     const o = (p, v) => mc.ioWrite(p, 1, v), irq = () => { const m = mc.irqPendingMask & 0xa0; mc.irqPendingMask = 0; return m; };
     o(0x226, 1); o(0x226, 0); irq();
     o(0x22c, 0xf2); const before = irq();                                  // after a reset: IRQ 7
     o(0x224, 0x80); o(0x225, 0x02); o(0x22c, 0xf2); got = [before, irq()];
   } catch (e) { got = e.message; }
-  eq('Sound Blaster: IRQ 7 after reset, IRQ 5 once mixer 80h selects it', JSON.stringify(got), JSON.stringify([0x80, 0x20])); }
+  eq('Sound Blaster: IRQ 7 after reset, IRQ 5 once mixer 80h selects it', JSON.stringify(got), JSON.stringify([0x80, 0x20])); })();
 
 // ---- VBE 4F03h in text mode answers the standard mode (tools/vbecur.asm) -----------------------------
 // QEMU's SeaVGABIOS and DOSBox-X both give BX=0003h; MIRAGE gave 0, and GRUB 2 then asked 4F01h for
 // mode 0 and stopped with "can't get mode info" (HelenOS).
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
     cpu.ax = 0x0003; mc.intHandlers[0x10](cpu, mc); cpu.ax = 0x4f03; cpu.bx = 0x1234; mc.intHandlers[0x10](cpu, mc);
     got = [cpu.ax & 0xffff, cpu.bx & 0xffff].map((x) => x.toString(16)).join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('VBE 4F03h in text mode: the standard mode 03h', got, '4f 3'); }
+  eq('VBE 4F03h in text mode: the standard mode 03h', got, '4f 3'); })();
 
 // ---- VBE 4F08h and an undefined VBE function (tools/vbefull.asm) --------------------------------------
 // The real Cirrus GD5446 BIOS, DOSBox-X and SeaVGABIOS all answer 4F08h get with BH=6, and 4FFFh with
 // AL != 4Fh (not supported). MIRAGE answered 014Fh to both.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu, i10 = () => mc.intHandlers[0x10](cpu, mc);
     cpu.ax = 0x4f08; cpu.bx = 0x0001; i10(); const dac = [cpu.ax & 0xffff, (cpu.bx >> 8) & 0xff];
     cpu.ax = 0x4fff; i10(); got = [...dac, cpu.ax & 0xff].map((x) => x.toString(16)).join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('VBE: 4F08h get answers a 6-bit DAC, 4FFFh is not a supported function', got, '4f 6 ff'); }
+  eq('VBE: 4F08h get answers a 6-bit DAC, 4FFFh is not a supported function', got, '4f 6 ff'); })();
 
 // ---- the Cirrus Logic CL-GD5446 (src/cirrus.js) as tools/cirprobe.asm sees it --------------------------
 // The real CL-GD5436/46 BIOS 1.25 under QEMU -device cirrus-vga answers U 12 12 0F 12 1E 31 27,
@@ -7082,7 +7087,7 @@ const runPE = async (exe, readFile) => {
 // the 5446's part ID, the hidden DAC behind four reads of 3C6h, the cursor's colours apart from the
 // palette, the A000 window banked in 4 KiB and 16 KiB units and in two halves. Then an 800x600x8
 // mode as XFree86 3.3's clgd5446 driver programs it, which the renderer must draw at that size.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { vga: 'cirrus' }); const cpu = mc.cpu;
     const o = (p, v) => mc.ioWrite(p, 1, v), i = (p) => mc.ioRead(p, 1), hx = (a) => a.map((x) => x.toString(16).padStart(2, '0')).join(' ');
     const sr = (n, v) => { o(0x3c4, n); if (v !== undefined) o(0x3c5, v); return i(0x3c5); }, grw = (n, v) => { o(0x3ce, n); o(0x3cf, v); };
@@ -7103,33 +7108,33 @@ const runPE = async (exe, readFile) => {
     got = [hx(U), hx(I), hx(D), hx(C), hx(B), v ? `${v.width}x${v.height}x${v.bpp}/${v.pitch}` : 'no mode'].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('Cirrus GD5446: unlock, ID, hidden DAC, cursor colours, banking, an 800x600 mode (the real BIOS\'s answers)', got,
-    '12 12 0f 12 1e 31 27 | b8 98 04 21 2d | 00 a1 ff | 2a 2a 3f 11 22 33 | 5a 5a 5a | 800x600x8/800'); }
+    '12 12 0f 12 1e 31 27 | b8 98 04 21 2d | 00 a1 ff | 2a 2a 3f 11 22 33 | 5a 5a 5a | 800x600x8/800'); })();
 
 // The Cirrus's 16 KiB banks reach the whole 4 MB: XFree86 3.3 writes its hardware cursor's pattern to
 // the last 16 KiB (bank FFh at 16 KiB, GRB bit 5). A bank number masked to 7 bits (as MIRAGE had it,
 // QEMU has no mask) put it at 2 MB - 16 KiB, and the X pointer never showed.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 16 << 20 }); installBIOS(mc, { vga: 'cirrus' }); const cpu = mc.cpu, o = (p, v) => mc.ioWrite(p, 1, v);
     cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
     o(0x3c4, 7); o(0x3c5, mc.ioRead(0x3c5, 1) | 1); o(0x3ce, 0x0b); o(0x3cf, 0x20); o(0x3ce, 0x09); o(0x3cf, 0xff);
     mc.mem.w8(0xa0000 + 0x3f00, 0xa5);
     got = mc.mem.u8[(mc.vbeFbBase + mc.vbeFbBytes - 0x4000 + 0x3f00) >>> 0].toString(16);
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('Cirrus GD5446: a 16 KiB bank reaches the last 16 KiB of 4 MB (the hardware cursor)', got, 'a5'); }
+  eq('Cirrus GD5446: a 16 KiB bank reaches the last 16 KiB of 4 MB (the hardware cursor)', got, 'a5'); })();
 
 // ---- 3DAh bit 0 is each line's horizontal blank too, not the vertical blank alone ---------------------
 // VGA's documentation (display disabled: horizontal OR vertical blank), DOSBox (it models the line) and
 // QEMU (it toggles the bit at every read) agree. SVGAlib waits for bit 0 before each DAC write: with the
 // vertical blank alone a palette took a third of a second, DOOM's pickup flashes several seconds.
 // Over one mode-13h frame, bit 0 rises once per line shown (400 of 449: in the vertical blank it stays up).
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
     cpu.ax = 0x0013; mc.intHandlers[0x10](cpu, mc);
     let rises = 0, prev = mc.ioRead(0x3da, 1) & 1; const start = cpu.cycles, period = Math.round((mc.pitBase || mc.pitReload) / 3.845);
     for (let k = 1; k <= 449 * 16; k++) { cpu.cycles = start + Math.floor(k * period / (449 * 16)); const b = mc.ioRead(0x3da, 1) & 1; if (b && !prev) rises++; prev = b; }
     got = rises >= 398 && rises <= 402 ? 'per line' : `${rises} rises`;
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('VGA 3DAh bit 0: the horizontal blank of every line', got, 'per line'); }
+  eq('VGA 3DAh bit 0: the horizontal blank of every line', got, 'per line'); })();
 
 // ---- PIT channel 2 in mode 0: OUT (port 61h bit 5) low until the count runs out with GATE high ----------
 // GRUB 2 calibrates its TSC this way. The free-running square wave answered high at once: GRUB
@@ -7137,7 +7142,7 @@ const runPE = async (exe, readFile) => {
 // QEMU's i8254.c: mode 0's OUT goes low with the control word and high at terminal count; a low GATE
 // pauses the count. The count runs at counter 0's clock, pitBase cycles to 65536 ticks: 100 ticks are
 // some 279 cycles (at one tick a cycle Linux 2.2 measured a 1193 kHz processor; see counter 0 below).
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const o = (p, v) => mc.ioWrite(p, 1, v), b5 = () => (mc.ioRead(0x61, 1) >> 5) & 1;
     const tick = mc.pitBase / 65536;
     mc.cpu.cycles = 1000;
@@ -7147,7 +7152,7 @@ const runPE = async (exe, readFile) => {
     mc.cpu.cycles += Math.round(60 * tick); const mid = b5();   // 60 ticks: not yet
     mc.cpu.cycles += Math.round(60 * tick); got = [paused, atStart, mid, b5()];
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('PIT channel 2, mode 0: OUT low, held by GATE, high at terminal count', JSON.stringify(got), '[0,0,0,1]'); }
+  eq('PIT channel 2, mode 0: OUT low, held by GATE, high at terminal count', JSON.stringify(got), '[0,0,0,1]'); })();
 
 // ---- PIT counter 0 read back in phase with the INT 8 it drives -----------------------------------------
 // Linux 2.2's timer interrupt latches counter 0 at once and takes a count of LATCH or more for a lost
@@ -7156,7 +7161,7 @@ const runPE = async (exe, readFile) => {
 // after 2000 periods of LATCH = 11932 (100 Hz) it read some 40 ticks off, at LATCH or not yet reloaded,
 // and BasicLinux's console filled with the message. Headless the count follows the schedule: just
 // after a tick it is a little under LATCH, just before the next a little over 0.
-{ let got;
+await (async () => { let got;
   try { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const o = (p, v) => mc.ioWrite(p, 1, v);
     const rd = () => { o(0x43, 0x00); const lo = mc.ioRead(0x40, 1); return lo | (mc.ioRead(0x40, 1) << 8); };
     o(0x43, 0x34); o(0x40, 11932 & 0xff); o(0x40, 11932 >> 8);
@@ -7166,18 +7171,18 @@ const runPE = async (exe, readFile) => {
     mc.cpu.cycles = mc.nextTimerCycle - 1; const before = rd();
     got = [after >= 11932 - 12 && after <= 11931, before >= 1 && before <= 3].join(' ');
   } catch (e) { got = e.message.slice(0, 60); }
-  eq('PIT counter 0: read back in phase with its INT 8 schedule (Linux 2.2\'s timer check)', got, 'true true'); }
+  eq('PIT counter 0: read back in phase with its INT 8 schedule (Linux 2.2\'s timer check)', got, 'true true'); })();
 
 // ---- an IRQ nobody claimed is acknowledged by the BIOS, as SeaBIOS's default handler does --------
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const cpu = mc.cpu;
   cpu.setSeg(CS, 0x100); cpu.eip = 0; cpu.setSeg(SS, 0x300); cpu.sp = 0x1000; cpu.flags |= 0x200;
   mc.mem.blit(0x1000, Uint8Array.from([0x90, 0x90, 0x90, 0xf4]));
   mc.raiseIRQ(3);
   let steps = 0; while (!cpu.halted && steps++ < 20) mc.runSlice(1);
-  eq('an unclaimed IRQ 3 is not left in service at the PIC', mc.pic.master.isr & 0x08, 0); }
+  eq('an unclaimed IRQ 3 is not left in service at the PIC', mc.pic.master.isr & 0x08, 0); })();
 
 // ---- sound: the mixer turns the speaker and the Sound Blaster into samples (src/audio.js) ---------
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const audio = installAudio(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const audio = installAudio(mc);
   const sec = 18.2065 * mc.pitBase, o = (p, v) => mc.ioWrite(p, 1, v);
   const hz = (buf, rate) => { let zc = 0; for (let i = 2; i < buf.length; i += 2) if ((buf[i - 2] < 0) !== (buf[i] < 0)) zc++; return zc / 2 / (buf.length / 2 / rate); };
   audio.pull(44100);
@@ -7210,27 +7215,27 @@ const runPE = async (exe, readFile) => {
   o(0x224, 0x0e); o(0x225, 0); o(0x226, 1); o(0x226, 0); dsp(0xd3); dsp(0x40); dsp(256 - 125); dsp(0x48); dsp(0xff); dsp(0x07); dsp(0x1c);
   const off = [];
   for (let i = 0; i < 60; i++) { mc.cpu.cycles += Math.round(sec / 100); mc.sbPoll(); const p = audio.pull(44100); if (i >= 20) off.push(...p); }
-  eq('...and plays with the speaker off, as an SB16 does', Math.abs(hz(Float32Array.from(off), 44100) - 500) < 10, true); }
+  eq('...and plays with the speaker off, as an SB16 does', Math.abs(hz(Float32Array.from(off), 44100) - 500) < 10, true); })();
 
 // ---- in the browser the card keeps up with a guest that runs ahead of the wall clock -----------------
 // Unreal waits for the IRQ of a short test transfer in a counted loop. In the browser the card ran on
 // the wall clock alone, the guest ran its loop faster than that, and Unreal answered "Selected sound
 // card not found". The card's time is now the wall clock or the instructions run, whichever is
 // further (as the OPL's timers): here the wall clock stands still while the CPU runs.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
   let wall = 1000; mc.wallClockMs = () => wall; mc.cyclesPerSecond = 50e6;
   const o = (p, v) => mc.ioWrite(p, 1, v), dsp = (v) => o(0x22c, v);
   o(0x0a, 5); o(0x0c, 0); o(0x0b, 0x49); o(0x02, 0); o(0x02, 0); o(0x83, 2); o(0x03, 15); o(0x03, 0); o(0x0a, 1);
   o(0x226, 1); o(0x226, 0); dsp(0x40); dsp(256 - 125); dsp(0x14); dsp(15); dsp(0);   // 16 bytes at 8000 Hz: 2 ms
   mc.cpu.cycles += 0.01 * 50e6;                                            // 10 ms of instructions, no wall time
   mc.sbPoll();
-  eq('SB: the end-of-block IRQ comes when the guest has run long enough, wall clock or not', (mc.irqPendingMask >> 7) & 1, 1); }
+  eq('SB: the end-of-block IRQ comes when the guest has run long enough, wall clock or not', (mc.irqPendingMask >> 7) & 1, 1); })();
 
 // ---- the OPL3 plays FM (src/opl.js) ---------------------------------------------------------------
 // tools/oplnotes.asm recorded here and on DOSBox-X's Nuked-OPL3 (tools/audio-compare.mjs): 16 sections
 // each, same durations, pitch within the FFT's 3 Hz; Dune's AdLib music: loudness envelopes
 // correlated 0.96 over 40 s. Here: one carrier, F-number 144h, block 4 = 245.8 Hz, at full level.
-{ const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const audio = installAudio(mc);
+await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc); const audio = installAudio(mc);
   const sec = 18.2065 * mc.pitBase, w = (r, v) => { mc.ioWrite(0x388, 1, r); mc.ioWrite(0x389, 1, v); };
   const hz = (buf, rate) => { let zc = 0; for (let i = 2; i < buf.length; i += 2) if ((buf[i - 2] < 0) !== (buf[i] < 0)) zc++; return zc / 2 / (buf.length / 2 / rate); };
   audio.pull(44100);
@@ -7243,14 +7248,14 @@ const runPE = async (exe, readFile) => {
   w(0xb0, 0x11);                                                   // key off: RR 15 releases at once
   for (let i = 0; i < 5; i++) { mc.cpu.cycles += Math.round(sec / 50); audio.pull(44100); }
   mc.cpu.cycles += Math.round(sec / 50);
-  eq('...and falls silent after key-off', Math.max(...audio.pull(44100).map(Math.abs)) < 0.01, true); }
+  eq('...and falls silent after key-off', Math.max(...audio.pull(44100).map(Math.abs)) < 0.01, true); })();
 
 // ---- the OPL3, sample for sample: Nuked-OPL3's output for the same register writes ---------------
 // tools/oplnotes.asm's 988509 samples (20 s: sine, FM, envelopes, feedback, all eight waveforms,
 // vibrato and tremolo, the five drums, OPL3 stereo, four operators), its register writes logged at
 // their sample positions by tools/opl-compare.mjs, rendered by Nuked-OPL3 outside the repository:
 // SHA-256 of the int16 stereo stream below. Ours must be the same stream, to the bit.
-{ const log = (
+await (async () => { const log = (
     '1,1,32;4,4,96;7,189,0;10924,32,33;10927,35,33;10929,96,240;10932,99,240;10935,128,15;10938,131,1' +
     '5;10941,64,63;10944,67,0;10946,192,1;10949,160,68;10952,176,49;60076,176,17;84652,64,20;84655,19' +
     '2,0;84658,176,49;133804,176,17;158380,64,63;158383,192,1;158386,35,1;158389,99,101;158391,131,5;' +
@@ -7277,7 +7282,7 @@ const runPE = async (exe, readFile) => {
   for (const w of log.split(';')) { const [t, r, v] = w.split(',').map(Number); gen(t); chip.write(r >> 8, r & 0xff, v); }
   gen(988509);
   const sha = createHash('sha256').update(Buffer.from(buf.buffer)).digest('hex').slice(0, 16);
-  eq('OPL3: tools/oplnotes.asm renders bit for bit as Nuked-OPL3 does', sha, '02264c24e625b726'); }
+  eq('OPL3: tools/oplnotes.asm renders bit for bit as Nuked-OPL3 does', sha, '02264c24e625b726'); })();
 
 // The browser's clock (machine.wallClockMs): performance.now() moves in 100 µs steps there, and the
 // machine runs part of each animation frame only. Unreal (Future Crew, 1992) times a frame with PIT
@@ -7286,7 +7291,7 @@ const runPE = async (exe, readFile) => {
 // of 100 µs steps, 2 µs a port read (100 cycles at 50 M a second), and the machine idle 4 ms of each
 // 16: the count a frame takes (17045 clocks, 1193182 / 70) twice alike within Unreal's 32 tries, and the
 // 70 retraces of a second.
-{ let got;
+await (async () => { let got;
   const pn = performance.now;
   try {
     const mc = new Machine({ memSize: 1 << 20 }); installBIOS(mc);
@@ -7306,7 +7311,7 @@ const runPE = async (exe, readFile) => {
     while (us < end) { const v = rd(0x3da) & 8; if (v && !last) edges++; last = v; }
     got = [tries < 32, Math.abs(a - 17045) < 40 ? 'ok' : a, edges >= 70 && edges <= 71].join(' ');
   } catch (e) { got = e.message.slice(0, 80); } finally { performance.now = pn; }
-  eq('browser clock: a frame timed by PIT counter 0 between retraces, and every retrace seen (Unreal)', got, 'true ok true'); }
+  eq('browser clock: a frame timed by PIT counter 0 between retraces, and every retrace seen (Unreal)', got, 'true ok true'); })();
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
