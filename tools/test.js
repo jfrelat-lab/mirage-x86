@@ -5468,6 +5468,40 @@ const runLinux = (hex, argv) => {
     got = r.join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: Warcraft III\'s installer -- *.* in a missing folder, Program Files, free, _vsnprintf, raw_name', got, '-1 3 0 C:\\Program Files true 5 42-ok 8');
+  // Kernel objects as Warcraft III uses them: a named event made twice is one (ERROR_ALREADY_EXISTS), opened
+  // by name; a mutex owned again by its owner and freed when released as often; three thousand events
+  // and a mutex, every handle its own (the mutex had a constant one, an event's from the 2048th on).
+  try { const { fn, x, str } = await w32(), k = (n) => fn('kernel32.dll', n), r = [];
+    const e1 = k('CreateEventA')(0, 1, 0, str('Blizzard_Loader')); r.push(k('GetLastError')());
+    const e2 = k('CreateEventA')(0, 1, 0, str('Blizzard_Loader')); r.push(e1 === e2, k('GetLastError')(), k('OpenEventA')(2, 0, str('Blizzard_Loader')) === e1, k('OpenEventA')(2, 0, str('none')));
+    const fh = k('CreateFileA')(str('C:\\w3.tmp'), 0x40000000, 0, 0, 2, 0, 0);
+    const hs = new Set(); for (let i = 0; i < 4200; i++) hs.add(k('CreateEventA')(0, 0, 0, 0));
+    const m = k('CreateMutexA')(0, 0, 0); r.push(hs.size, hs.has(m), hs.has(fh));
+    r.push(k('WaitForSingleObject')(m, 0), k('WaitForSingleObject')(m, 0), k('ReleaseMutex')(m), k('ReleaseMutex')(m), k('ReleaseMutex')(m));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: named events, mutexes, four thousand handles of their own', got, '0 true 183 true 0 4200 false false 0 0 1 1 0');
+  // Warcraft III: game.dll imports from War3Demo.exe (covered by the loader); its thread table read
+  // with TlsGetValue, which clears the last error; a shortcut made through CLSID_ShellLink (IShellLinkA,
+  // IPersistFile::Save writing the .lnk); the Programs folder's ID list read back as a path; CreateIoCompletionPort.
+  try { const { fn, x, str } = await w32(), k = (n) => fn('kernel32.dll', n), o = (n) => fn('ole32.dll', n), sh = (n) => fn('shell32.dll', n), r = [];
+    const ti = k('TlsAlloc')(); k('TlsSetValue')(ti, 0); k('SetLastError')(0x57); r.push(k('TlsGetValue')(ti), k('GetLastError')());
+    const g = (t) => { const p = x.win.heapAlloc(16), h = t.replace(/-/g, ''), b = (i) => parseInt(h.slice(2 * i, 2 * i + 2), 16);
+      x.write(p, Uint8Array.of(b(3), b(2), b(1), b(0), b(5), b(4), b(7), b(6), ...[8, 9, 10, 11, 12, 13, 14, 15].map(b))); return p; };
+    const pp = x.win.heapAlloc(4); r.push(o('CoCreateInstance')(g('00021401-0000-0000-c000-000000000046'), 0, 1, g('000214ee-0000-0000-c000-000000000046'), pp));
+    const link = x.r32(pp);
+    const shl = (n) => fn('shell32.dll', n);
+    shl('IShellLinkA::SetPath')(link, str('C:\\Program Files\\Warcraft III Demo\\war3demo.exe'));
+    const pf = x.win.heapAlloc(4); r.push(shl('IShellLinkA::QueryInterface')(link, g('0000010b-0000-0000-c000-000000000046'), pf), x.r32(pf) - link);
+    const wname = x.win.heapAlloc(64); const nm = 'C:\\WINDOWS\\Start Menu\\Programs\\W3.lnk'; for (let i = 0; i <= nm.length; i++) x.w16(wname + 2 * i, i < nm.length ? nm.charCodeAt(i) : 0);
+    r.push(shl('IPersistFile::Save')(x.r32(pf), wname, 1), k('GetFileAttributesA')(str(nm)) !== -1 >>> 0);
+    const lp = x.win.heapAlloc(4), path = x.win.heapAlloc(260); r.push(sh('SHGetSpecialFolderLocation')(0, 2, lp), sh('SHGetPathFromIDListA')(x.r32(lp), path), x.str(path));
+    const port = k('CreateIoCompletionPort')(-1, 0, 0, 0), q = [x.win.heapAlloc(4), x.win.heapAlloc(4), x.win.heapAlloc(4)];
+    k('PostQueuedCompletionStatus')(port, 7, 9, 0x1234); r.push(k('GetQueuedCompletionStatus')(port, q[0], q[1], q[2], 0), x.r32(q[0]), x.r32(q[1]), x.r32(q[2]).toString(16));
+    got = r.join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Warcraft III -- TlsGetValue clears the error, a ShellLink saved, the Programs folder, a completion port', got,
+    '0 0 0 0 4 0 true 0 1 C:\\WINDOWS\\Start Menu\\Programs 1 7 9 1234');
   // Flash Player 8 (the standalone projector): a resource in several languages taken as an English
   // Windows takes it (its menu's first language is Chinese); GetFileAttributesExA; ExtTextOutW; the
   // default value RegSetValueA writes; CRYPT32 there, trusting nothing.

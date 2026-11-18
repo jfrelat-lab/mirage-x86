@@ -190,6 +190,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   st.files = [];                                                      // handle - 4000h -> { f, pos }
   st.env = new Map(Object.entries(env).map(([k, v]) => [k.toUpperCase(), String(v)]));   // the environment beyond PATH (GetEnvironmentVariable)
   st.events = new Map(); st.dcBitmaps = new Map(); st.dcStates = new Map();
+  // Kernel objects -- events, mutexes, waitable timers -- by handle, numbered from 200000h in fours as
+  // Windows' handles are (they took 3000h + n, and a game's two thousandth event met a mutex's constant
+  // handle, then the files' at 4000h); a name table, shared, so that a second CreateEvent of a name opens
+  // the first.
+  st.kNames = new Map();
+  st.newEvent = (rec) => { const h = 0x200000 + 4 * (st.eventNext = (st.eventNext | 0) + 1); st.events.set(h, rec); return h; };
   const dcState = (hdc) => { let d = st.dcStates.get(hdc); if (!d) st.dcStates.set(hdc, d = { bkMode: 2, bkColor: 0xffffff, textColor: 0 }); return d; };
   // A DC's font in pixels: its em (lfHeight < 0 is the character height, > 0 the cell's), its ascent
   // and descent as the font's win metrics give them.
@@ -444,8 +450,30 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (pid) x.w32(pid, tid);
       return 0x2000 + tid;
     }],
+    /*
+     * I/O completion ports (Storm's network threads, Warcraft III's): a port is a queue of packets;
+     * PostQueuedCompletionStatus puts one, GetQueuedCompletionStatus takes one or waits for it (the others
+     * running), WAIT_TIMEOUT (258) and no OVERLAPPED when none came. No I/O completes on its own here.
+     */
+    CreateIoCompletionPort: ['ppuu', (x, file, existing, key) => {
+      st.iocp ||= new Map(); if (existing && st.iocp.has(existing)) return existing;
+      const h = 0x300000 + 4 * st.iocp.size; st.iocp.set(h, { packets: [] }); return h;
+    }],
+    PostQueuedCompletionStatus: ['puup', (x, port, n, key, ov) => { const q = st.iocp && st.iocp.get(port); if (!q) return 0; q.packets.push({ n, key, ov }); return 1; }],
+    GetQueuedCompletionStatus: ['ppppu', (x, port, pN, pKey, pOv, ms) => {
+      const q = st.iocp && st.iocp.get(port); if (!q) { setError(x, 6); return 0; }
+      if (q.packets.length) { done(x); const p = q.packets.shift(); if (pN) x.w32(pN, p.n); if (pKey) x.w32(pKey, p.key); if (pOv) x.w32(pOv, p.ov); return 1; }
+      const r = timedWait(x, ms); if (r === 0x102) { if (pOv) x.w32(pOv, 0); setError(x, 258); return 0; } return r;
+    }],
+    GetProcessHeaps: ['up', (x, n, out) => { if (n && out) x.w32(out, x.r32(x.win.peb + 0x18)); return 1; }],
+    HeapLock: ['p', () => 1], HeapUnlock: ['p', () => 1],
     WaitForSingleObject: ['pu', (x, h, ms) => {
       const ev = st.events.get(h);
+      if (ev && ev.mutex) {                                           // a mutex: its owner's again, or free and taken
+        if (ev.owner === x.lx.pid) { done(x); ev.count++; return 0; }
+        if (ev.set) { done(x); ev.set = false; ev.owner = x.lx.pid; ev.count = 1; return 0; }
+        return timedWait(x, ms);
+      }
       if (ev) {                                                       // an event: signalled, or wait for SetEvent
         if (ev.set) { done(x); if (!ev.manual) ev.set = false; return 0; }
         return timedWait(x, ms);
@@ -457,7 +485,26 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // Events (handle 3000h up) and critical sections, for programs whose threads hand work over (.kkrieger
     // generates its textures on one). A critical section is owned by a thread: CRITICAL_SECTION's
     // RecursionCount at +8 and OwningThread at +12, as Windows keeps them; a thread finding it owned waits.
-    CreateEventA: ['puup', (x, sa, manual, initial) => { const h = 0x3000 + st.events.size; st.events.set(h, { manual: !!manual, set: !!initial }); return h; }],
+    // A named event made a second time is the first, ERROR_ALREADY_EXISTS (183) set: Warcraft III makes its
+    // loader's event twice by name, set the one and waited on the other.
+    CreateEventA: ['puup', (x, sa, manual, initial, name) => {
+      const n = name ? x.str(name, 260) : '';
+      if (n && st.kNames.has(n)) { setError(x, 183); return st.kNames.get(n); }
+      const h = st.newEvent({ manual: !!manual, set: !!initial }); if (n) st.kNames.set(n, h); setError(x, 0); return h;
+    }],
+    OpenEventA: ['uip', (x, access, inherit, name) => { const h = name && st.kNames.get(x.str(name, 260)); if (!h) { setError(x, 2); return 0; } return h; }],
+    // A mutex: an object owned by one thread at a time, again and again by its owner (a count); free when its
+    // owner releases it as often as it took it. Named as events are.
+    CreateMutexA: ['pup', (x, sa, owned, name) => {
+      const n = name ? x.str(name, 260) : '';
+      if (n && st.kNames.has(n)) { setError(x, 183); return st.kNames.get(n); }
+      const h = st.newEvent({ mutex: true, set: !owned, owner: owned ? x.lx.pid : null, count: owned ? 1 : 0 }); if (n) st.kNames.set(n, h); setError(x, 0); return h;
+    }],
+    OpenMutexA: ['uup', (x, access, inherit, name) => { const h = name && st.kNames.get(x.str(name, 260)); if (!h) { setError(x, 2); return 0; } return h; }],
+    ReleaseMutex: ['p', (x, h) => {
+      const m = st.events.get(h); if (!m || !m.mutex || m.owner !== x.lx.pid) { setError(x, 288); return 0; }   // ERROR_NOT_OWNER
+      if (--m.count <= 0) { m.count = 0; m.owner = null; m.set = true; } return 1;
+    }],
     SetEvent: ['p', (x, h) => { const ev = st.events.get(h); if (ev) ev.set = true; return ev ? 1 : 0; }],
     ResetEvent: ['p', (x, h) => { const ev = st.events.get(h); if (ev) ev.set = false; return ev ? 1 : 0; }],
     InitializeCriticalSection: ['p', (x, cs) => { x.write(cs, new Uint8Array(24)); x.w32(cs + 4, 0xffffffff); return 0; }],
@@ -678,7 +725,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     TlsAlloc: ['', () => (st.tlsNext = (st.tlsNext | 0) + 1) - 1],
     TlsFree: ['u', () => 1],
     TlsSetValue: ['up', (x, i, v) => { st.tls ||= new Map(); const id = x.lx.pid; if (!st.tls.has(id)) st.tls.set(id, new Map()); st.tls.get(id).set(i, v >>> 0); return 1; }],
-    TlsGetValue: ['u', (x, i) => (st.tls && st.tls.get(x.lx.pid) && st.tls.get(x.lx.pid).get(i)) || 0],
+    // TlsGetValue clears the last error when it succeeds, as Windows does, so that a value of 0 tells from a
+    // failure: Warcraft III reads its thread's table so, and took the 57h (ERROR_INVALID_PARAMETER) left there for one.
+    TlsGetValue: ['u', (x, i) => { setError(x, 0); return (st.tls && st.tls.get(x.lx.pid) && st.tls.get(x.lx.pid).get(i)) || 0; }],
     // Interlocked: one CPU at a time runs here, so a read and a write are atomic; the new value returned.
     InterlockedIncrement: ['p', (x, p) => { const v = (x.r32(p) + 1) | 0; x.w32(p, v); return v; }],
     InterlockedDecrement: ['p', (x, p) => { const v = (x.r32(p) - 1) | 0; x.w32(p, v); return v; }],
@@ -728,8 +777,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // its loads, and went on with the first one done, drawing a sprite not read yet.
     WaitForMultipleObjects: ['upiu', (x, n, hs, all, ms) => {
       const hs_ = Array.from({ length: n }, (_, i) => x.r32(hs + 4 * i));
-      const ready = (h) => { const ev = st.events.get(h); return ev ? ev.set : h >= 0x2000 && h < 0x3000 && x.lx.threadExits.has(h - 0x2000); };
-      const take = (h) => { const ev = st.events.get(h); if (ev && !ev.manual) ev.set = false; };
+      const ready = (h) => { const ev = st.events.get(h); return ev ? ev.set || (ev.mutex && ev.owner === x.lx.pid) : h >= 0x2000 && h < 0x3000 && x.lx.threadExits.has(h - 0x2000); };
+      const take = (h) => { const ev = st.events.get(h); if (ev && ev.mutex) { ev.set = false; ev.owner = x.lx.pid; ev.count++; } else if (ev && !ev.manual) ev.set = false; };
       if (all) { if (hs_.every(ready)) { done(x); hs_.forEach(take); return 0; } }
       else for (let i = 0; i < n; i++) if (ready(hs_[i])) { done(x); take(hs_[i]); return i; }
       return timedWait(x, ms);
@@ -2055,6 +2104,25 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // A display mode: the screen becomes it and the program's window fills it (a full-screen program
     // draws at that size); NULL gives the desktop back, where a framed window sits.
     // CDS_TEST (2) only asks whether the mode would do: it would (DISP_CHANGE_SUCCESSFUL), nothing changes.
+    ChangeDisplaySettingsExA: ['ppppp', (x, name, dm, hwnd, flags) => user32.ChangeDisplaySettingsA[1](x, dm, flags)],
+    // EnumDisplayDevicesA: one adapter, the primary, attached to the desktop (DISPLAY_DEVICEA: its name at 4,
+    // its string at 36, StateFlags at 164).
+    EnumDisplayDevicesA: ['pupu', (x, dev, i, dd) => {
+      if (i !== 0 || !dd) return 0;
+      x.write(dd + 4, new Uint8Array(420)); x.write(dd + 4, Uint8Array.from('\\\\.\\DISPLAY1\0', (c) => c.charCodeAt(0)));
+      x.write(dd + 36, Uint8Array.from('MIRAGE Display Adapter\0', (c) => c.charCodeAt(0))); x.w32(dd + 164, 0x5); return 1;   // ATTACHED_TO_DESKTOP | PRIMARY_DEVICE
+    }],
+    // GetWindowInfo: WINDOWINFO -- the window's and its client area's rectangles on the screen, its styles,
+    // whether it is active, its borders.
+    GetWindowInfo: ['pp', (x, hwnd, wi) => {
+      const r = x.win.heapAlloc(16); user32.GetWindowRect[1](x, hwnd, r); const outer = [0, 4, 8, 12].map((o) => x.r32(r + o) | 0); x.win.heapFree(r);
+      const o = screenOrigin(hwnd), w = hwnd === st.hwnd ? { w: st.w, h: st.h, style: st.style, ex: 0 } : win(hwnd) || { w: 0, h: 0, style: 0, ex: 0 };
+      outer.forEach((v, i) => x.w32(wi + 4 + 4 * i, v)); [o.x, o.y, o.x + w.w, o.y + w.h].forEach((v, i) => x.w32(wi + 20 + 4 * i, v));
+      x.w32(wi + 36, w.style >>> 0); x.w32(wi + 40, (w.ex | 0) >>> 0); x.w32(wi + 44, (st.activeWin || st.hwnd) === hwnd ? 1 : 0);
+      x.w32(wi + 48, Math.max(0, o.x - outer[0])); x.w32(wi + 52, Math.max(0, outer[3] - o.y - w.h)); x.w16(wi + 56, 0); x.w16(wi + 58, 0x0400); return 1;
+    }],
+    // CreateAcceleratorTableA(ACCEL[n]: fVirt, key, cmd -- 6 bytes each): a table as LoadAccelerators makes.
+    CreateAcceleratorTableA: ['pi', (x, p, n) => { const keys = []; for (let i = 0; i < n; i++) keys.push({ f: x.r8(p + 6 * i), key: x.r16(p + 6 * i + 2), id: x.r16(p + 6 * i + 4) }); return st.newHandle('accel', { keys }); }],
     ChangeDisplaySettingsA: ['pu', (x, dm, flags) => {
       if (flags & 2) return 0;
       if (dm) { st.w = x.r32(dm + 108) || st.w; st.h = x.r32(dm + 112) || st.h; st.modeSet = true; } else st.modeSet = false;
@@ -3236,6 +3304,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     sndPlaySoundA: ['pu', (x, p, flags) => playMemory(x, p, flags)],
     PlaySoundA: ['ppu', (x, p, mod, flags) => playMemory(x, p, flags), { ordinal: 2 }],   // winmm's ordinal 2 (Spider imports it so)
     waveOutGetNumDevs: ['', () => 1],
+    // The mixer and the auxiliary devices (CD audio's volume): none here, MMSYSERR_BADDEVICEID / NODRIVER.
+    mixerGetNumDevs: ['', () => 0], mixerOpen: ['ppuuu', (x, ph) => { if (ph) x.w32(ph, 0); return 6; }], mixerClose: ['p', () => 0],
+    mixerGetLineInfoA: ['ppu', () => 5], mixerGetLineControlsA: ['ppu', () => 5], mixerGetControlDetailsA: ['ppu', () => 5], mixerSetControlDetails: ['ppu', () => 5],
+    auxGetNumDevs: ['', () => 0], auxGetDevCapsA: ['upu', () => 2], auxGetVolume: ['up', () => 2], auxSetVolume: ['uu', () => 2],
     // WAVEOUTCAPSA: every PCM format of 8 and 16 bits at 11, 22 and 44 kHz (0xfff), stereo, volume control.
     waveOutGetDevCapsA: ['upu', (x, dev, caps, size) => {
       if (!caps || size < 52) return 11;
@@ -3329,7 +3401,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     atan: ['d', D(Math.atan), cd], exp: ['d', D(Math.exp), cd], log: ['d', D(Math.log), cd], fabs: ['d', D(Math.abs), cd],
     floor: ['d', D(Math.floor), cd], ceil: ['d', D(Math.ceil), cd], pow: ['dd', D(Math.pow), cd], atan2: ['dd', D(Math.atan2), cd],
     fmod: ['dd', D((a, b) => a % b), cd],
-    _CIsin: ['', CI(Math.sin), cd], _CIcos: ['', CI(Math.cos), cd], _CItan: ['', CI(Math.tan), cd], _CIsqrt: ['', CI(Math.sqrt), cd],
+    _CIsin: ['', CI(Math.sin), cd], _CIcos: ['', CI(Math.cos), cd], _CItan: ['', CI(Math.tan), cd], _CIsqrt: ['', CI(Math.sqrt), cd], _CIacos: ['', CI(Math.acos), cd], _CIasin: ['', CI(Math.asin), cd],
     _CIexp: ['', CI(Math.exp), cd], _CIlog: ['', CI(Math.log), cd], _CIatan: ['', CI(Math.atan), cd], _CIpow: ['', CI2(Math.pow), cd],
     _CIatan2: ['', CI2(Math.atan2), cd], _CIfmod: ['', CI2((a, b) => a % b), cd],
     _ftol: ['', ftol, cd], _ftol2: ['', ftol, cd], _ftol2_sse: ['', ftol, cd],
@@ -3366,6 +3438,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return 0;
     }, cd],
     _controlfp: ['uu', () => 0x0009001f, cd], _exit: ub._exit,
+    // _control87: the x87's control word as _controlfp keeps it; _clearfp: its status word cleared (none raised).
+    _control87: ['uu', () => 0x0009001f, cd], _clearfp: ['', () => 0, cd],
+    _HUGE: ['', () => ({ f64: Infinity }), { data: true }],             // HUGE_VAL, a double
+    _ismbcspace: ['u', (x, c) => (c === 0x20 || (c >= 9 && c <= 13) ? 8 : 0), cd], iswspace: ['u', (x, c) => (/\s/.test(String.fromCharCode(c & 0xffff)) ? 8 : 0), cd],
+    putc: ['ip', (x, c, F) => ucrt.find((t) => t.fns.fputc).fns.fputc[1](x, c, F), cd],
+    // ctime(&t): "Wed Jan 02 02:03:55 1980\n", local time (the machine's: UTC), in a buffer kept for it.
+    ctime: ['p', (x, p) => {
+      const d = new Date((p ? x.r32(p) : 0) * 1000), D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], two = (v) => String(v).padStart(2, '0');
+      const s = `${D[d.getUTCDay()]} ${M[d.getUTCMonth()]} ${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())}:${two(d.getUTCSeconds())} ${d.getUTCFullYear()}\n`;
+      const b = (st.ctimeBuf ||= x.win.heapAlloc(32)); x.write(b, Uint8Array.from(s + '\0', (c) => c.charCodeAt(0))); return b;
+    }, cd],
     _acmdln: ['', (x) => kernel32.GetCommandLineA[1](x), { data: true }],
     __initenv: ['', (x) => ub._get_initial_narrow_environment[1](x), { data: true }],   // the environment (char **), MinGW-w64's
     // __p__acmdln: where _acmdln is (char **) -- MinGW-w64's start-up reads the command line so.
@@ -3663,7 +3746,6 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetSystemDefaultLCID: ['', () => st.lang || 0x409], SetFileTime: ['pppp', () => 1],
     // Its installer's: no named event exists to open; files moved (MoveFileEx: MoveFile's, a delayed move
     // done at once); Windows' directory; a short name the long one (8.3 names are not kept here).
-    OpenEventA: ['uip', () => 0],
     MoveFileExA: ['ppu', (x, a, b) => (b ? kernel32.MoveFileA[1](x, a, b) : kernel32.DeleteFileA[1](x, a))],
     GetWindowsDirectoryA: ['pu', (x, buf, n) => { const w = 'C:\\WINDOWS'; if (n > w.length) x.write(buf, new TextEncoder().encode(w + '\0')); return w.length; }],
     SetVolumeLabelA: ['pp', () => 1], RemoveDirectoryA: ['p', () => 1],
@@ -3785,6 +3867,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ImageList_Create: ['iiuii', (x, cx, cy) => st.newHandle('imagelist', { cx, cy, n: 0 })],
     ImageList_Read: ['p', () => st.newHandle('imagelist', { cx: 16, cy: 16, n: 0 })],
     ImageList_Write: ['pp', () => 1], ImageList_Destroy: ['p', () => 1],
+    // Dragging an image list's image: nothing drawn here. _TrackMouseEvent: accepted (no WM_MOUSELEAVE yet).
+    ImageList_DragEnter: ['pii', () => 1], ImageList_DragLeave: ['p', () => 1], ImageList_DragMove: ['ii', () => 1], ImageList_DragShowNolock: ['i', () => 1], _TrackMouseEvent: ['p', () => 1],
     ImageList_GetImageCount: ['p', (x, h) => (ilist(h) ? ilist(h).n : 0)],
     ImageList_SetImageCount: ['pu', (x, h, n) => { if (ilist(h)) ilist(h).n = n; return 1; }],
     ImageList_Add: ['ppp', (x, h) => (ilist(h) ? ilist(h).n++ : -1)], ImageList_AddMasked: ['ppu', (x, h) => (ilist(h) ? ilist(h).n++ : -1)],

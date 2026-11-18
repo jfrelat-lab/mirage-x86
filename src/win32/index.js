@@ -209,7 +209,8 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   const table = [];                                                   // id -> { name, sig, fn }
   const images = new Map();                                           // lower-case name -> { name, fns }
   const dataInits = []; let x = null;
-  const runDataInits = () => { for (const d of dataInits.splice(0)) w32(d.at, d.fn(x) >>> 0); };
+  // A data export's value: a dword, or a double ({ f64 }: msvcrt's _HUGE) in its 10-byte slot.
+  const runDataInits = () => { for (const d of dataInits.splice(0)) { const v = d.fn(x); if (v && typeof v === 'object') wr(d.at, new Uint8Array(new Float64Array([v.f64]).buffer)); else w32(d.at, v >>> 0); } };
   for (const api of apis) {
     const key = api.dll.toLowerCase();
     const fns = Object.entries(api.fns).map(([name, [sig, fn, opt = {}]]) => {
@@ -285,6 +286,20 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
    * applied (IMAGE_REL_BASED_HIGHLOW) when that is not the base it was linked for, its imports bound,
    * its exports read. Its DllMain is LoadLibraryA's to call (src/win32/api.js): `init` is pending.
    */
+  /** An image's export directory: its functions by name and by ordinal, at their addresses. */
+  const readExports = (at, ih) => {
+    const exports = new Map(), byOrdinal = new Map(), ex = ih.dirs[0];
+    if (ex && ex.rva) {
+      const d = at + ex.rva, ordBase = rd32(d + 16), nFuncs = rd32(d + 20), nNames = rd32(d + 24);
+      const funcs = at + rd32(d + 28), names = at + rd32(d + 32), ords = at + rd32(d + 36);
+      for (let i = 0; i < nFuncs; i++) { const r = rd32(funcs + 4 * i); if (r) byOrdinal.set(ordBase + i, at + r); }
+      for (let i = 0; i < nNames; i++) {
+        const b = lx.rdBytes(ords + 2 * i, 2), o = b[0] | b[1] << 8, r = rd32(funcs + 4 * o);
+        if (r) exports.set(lx.rdStr(at + rd32(names + 4 * i)), at + r);
+      }
+    }
+    return { exports, byOrdinal };
+  };
   let dllNext = 0x50000000;
   const loaded = [];
   /*
@@ -330,16 +345,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
         blk += bsize;
       }
     }
-    const name = img.name || key, exports = new Map(), byOrdinal = new Map(), ex = ih.dirs[0];
-    if (ex && ex.rva) {
-      const d = at + ex.rva, ordBase = rd32(d + 16), nFuncs = rd32(d + 20), nNames = rd32(d + 24);
-      const funcs = at + rd32(d + 28), names = at + rd32(d + 32), ords = at + rd32(d + 36);
-      for (let i = 0; i < nFuncs; i++) { const r = rd32(funcs + 4 * i); if (r) byOrdinal.set(ordBase + i, at + r); }
-      for (let i = 0; i < nNames; i++) {
-        const b = lx.rdBytes(ords + 2 * i, 2), o = b[0] | b[1] << 8, r = rd32(funcs + 4 * o);
-        if (r) exports.set(lx.rdStr(at + rd32(names + 4 * i)), at + r);
-      }
-    }
+    const name = img.name || key, { exports, byOrdinal } = readExports(at, ih);
     const mod = { name: key, base: at, size, entry: ih.entry ? at + ih.entry : 0, exports, byOrdinal, file: true, init: !!ih.entry };
     modules.set(key, mod);
     addEntry(mod, `C:\\${key}`, key);
@@ -354,6 +360,12 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     loaded.push(mod);                                                 // its own imports first: the order DllMains run in
     return mod;
   };
+  // The program's own exports, and the program as a module others import from: Warcraft III's game.dll
+  // imports two hundred functions of War3Demo.exe by ordinal.
+  // (Read only when the directory lies in the image, and given up on a fault: Crinkler's packed intros
+  // keep other bytes where the directory's entry would be.)
+  if (h.dirs[0] && h.dirs[0].rva && h.dirs[0].rva + 40 <= h.sizeImage) { try { Object.assign(exeMod, readExports(base, h)); } catch { /* no exports */ } }
+  modules.set(exeMod.name.toLowerCase(), exeMod);
   bindImports(base, h, exeMod.name);
   addTls(base, h);
   tlsBlocks(TEB);

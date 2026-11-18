@@ -263,7 +263,7 @@ export function classicApis({ st, wm }) {
     GlobalFindAtomA: ['p', (x, p) => (p < 0x10000 ? p : atoms.get(x.str(p).toUpperCase()) || 0)],
     GlobalGetAtomNameA: ['upi', (x, a, buf, n) => putStr(x, buf, n, atomNames.get(a) || (a < 0xc000 ? '#' + a : ''))],
     GlobalDeleteAtom: ['u', () => 0],
-    CreateMutexA: ['pup', () => 0x3800], ReleaseMutex: ['p', () => 1], OpenMutexA: ['uup', () => 0],
+
     // Profiles: the INI files on the program's disk ([section], then key=value lines), a name with no path
     // in Windows' directory; WIN.INI none until written. Quake III's demo installer (Installer VISE) reads
     // its wizard's every text from its language file so: answered with the defaults, the wizard was blank.
@@ -433,6 +433,17 @@ export function classicApis({ st, wm }) {
     DeleteMenu: ['puu', (x, m, at, flags) => dropItem(m, at, flags)], RemoveMenu: ['puu', (x, m, at, flags) => dropItem(m, at, flags)],
     // MENUITEMINFOA: fMask's MIIM_STATE (1) fState at +12, MIIM_ID (2) wID at +16, MIIM_SUBMENU (4)
     // hSubMenu at +20, MIIM_TYPE (10h) fType at +8 and its text at +36; fByPosition: `at` a position.
+    // SetMenuItemInfoA: InsertMenuItemA's fields set on an item there.
+    SetMenuItemInfoA: ['puip', (x, m, at, byPos, mii) => {
+      const r = itemOf(m, at, byPos ? 0x400 : 0); if (!r) return 0;
+      const it = r.list[r.i], mask = x.r32(mii + 4), type = mask & 0x110 ? x.r32(mii + 8) : it.flags & 0x800, data = x.r32(mii + 36);
+      if (mask & 1) it.flags = (it.flags & ~0x0b) | (x.r32(mii + 12) & 0x0b);
+      if (mask & 2) it.id = x.r32(mii + 16) & 0xffff;
+      if (mask & 4) { it.sub = x.r32(mii + 20); it.flags = it.sub ? it.flags | 0x10 : it.flags & ~0x10; }
+      if (mask & 0x110) it.flags = (it.flags & ~0x800) | (type & 0x800);
+      if (mask & 0x50 && !(type & 0x804)) it.text = data ? x.str(data, 256) : '';
+      if (m === st.menu) wm.dirty = true; return 1;
+    }],
     InsertMenuItemA: ['puip', (x, m, at, byPos, mii) => {
       const mn = menu(m); if (!mn) return 0;
       const mask = x.r32(mii + 4), type = mask & 0x110 ? x.r32(mii + 8) : 0, data = x.r32(mii + 36);
@@ -784,6 +795,7 @@ export function classicApis({ st, wm }) {
       if (pp) x.w32(pp, 0);
       const made = st.coClasses && st.coClasses.get(guid(x, clsid));   // DirectMusic's (src/win32/dmusic.js)
       if (made) return made(x, iid, pp);
+      if (guid(x, clsid) === '00021401-0000-0000-c000-000000000046') return linkQI(x, newLink(x), iid, pp);   // CLSID_ShellLink
       if (guid(x, clsid) !== CLSID_WEBBROWSER) return 0x80040154;   // REGDB_E_CLASSNOTREG
       const o = oleControl(x); return OLE_IMPL.IUnknown.QueryInterface(x, o, iid, pp);
     }],
@@ -799,6 +811,11 @@ export function classicApis({ st, wm }) {
   };
   // ---- shell32.dll: files dropped on the window (none ever is), and documents opened (none is: there
   // is no shell to open them with -- SE_ERR_NOASSOC, and FindExecutable finds no program for them).
+  // The special folders by CSIDL, as the registry's shell folders name them (a Windows 98 layout).
+  const CSIDL = { 0x00: 'C:\\WINDOWS\\Desktop', 0x02: 'C:\\WINDOWS\\Start Menu\\Programs', 0x05: 'C:\\My Documents', 0x07: 'C:\\WINDOWS\\Start Menu\\Programs\\StartUp',
+    0x0b: 'C:\\WINDOWS\\Start Menu', 0x10: 'C:\\WINDOWS\\Desktop', 0x14: 'C:\\WINDOWS\\Fonts', 0x16: 'C:\\WINDOWS\\Start Menu', 0x17: 'C:\\WINDOWS\\Start Menu\\Programs',
+    0x18: 'C:\\WINDOWS\\Start Menu\\Programs\\StartUp', 0x19: 'C:\\WINDOWS\\Desktop', 0x1a: 'C:\\WINDOWS\\Application Data', 0x23: 'C:\\WINDOWS\\Application Data',
+    0x24: 'C:\\WINDOWS', 0x25: 'C:\\WINDOWS\\SYSTEM', 0x26: 'C:\\Program Files', 0x2b: 'C:\\Program Files\\Common Files' };
   const shell32 = {
     // The taskbar's notification area: none to put an icon in, the call answered (Winamp's tray icon).
     Shell_NotifyIconA: ['up', () => 1], DragQueryPoint: ['pp', () => 0],
@@ -813,9 +830,20 @@ export function classicApis({ st, wm }) {
     SHGetFileInfoA: ['pupuu', () => 0],
     SHChangeNotify: ['uupp', () => 0],                                 // no shell to tell (an installer's new shortcuts)
     FindExecutableA: ['ppp', (x, f, d, out) => { if (out) x.w8(out, 0); return 31; }],
-    // The special folders (CSIDL): none to give -- E_FAIL, and no path from a list there is not.
-    SHGetSpecialFolderLocation: ['pip', (x, h, csidl, pp) => { if (pp) x.w32(pp, 0); return 0x80004005; }],
-    SHGetPathFromIDListA: ['pp', (x, l, out) => { if (out) x.w8(out, 0); return 0; }],
+    /*
+     * The special folders (CSIDL), as a fresh Windows 98 has them (the shell folders the registry names):
+     * an item ID list of one item that carries the path ('MRGP' then the path), which SHGetPathFromIDListA
+     * reads back -- Warcraft III's installer puts its shortcuts in Programs. One not known: E_FAIL.
+     */
+    SHGetSpecialFolderLocation: ['pip', (x, h, csidl, pp) => {
+      const path = CSIDL[csidl & 0xff]; if (pp) x.w32(pp, 0); if (!path) return 0x80004005;
+      const n = 2 + 4 + path.length + 1, l = x.win.heapAlloc(n + 2); x.w16(l, n); x.write(l + 2, Uint8Array.from('MRGP' + path + '\0', (c) => c.charCodeAt(0))); x.w16(l + n, 0);
+      if (pp) x.w32(pp, l); return 0;
+    }],
+    SHGetPathFromIDListA: ['pp', (x, l, out) => {
+      const ok = l && x.r16(l) > 6 && x.str(l + 2, 4) === 'MRGP'; if (!out) return ok ? 1 : 0;
+      if (!ok) { x.w8(out, 0); return 0; } x.write(out, Uint8Array.from(x.str(l + 6, 260) + '\0', (c) => c.charCodeAt(0))); return 1;
+    }],
   };
   /*
    * The shell's COM objects, made as ddraw.js makes DirectDraw's: a pointer to a vtable of shell32's
@@ -823,20 +851,51 @@ export function classicApis({ st, wm }) {
    * item (its IEnumIDList ends at once, S_FALSE), is named "Desktop", and binds to nothing (E_FAIL).
    */
   const E_FAIL = 0x80004005, SHELL_VT = {
+    IShellLinkA: 'GetPath:4 GetIDList:1 SetIDList:1 GetDescription:2 SetDescription:1 GetWorkingDirectory:2 SetWorkingDirectory:1 GetArguments:2 SetArguments:1 GetHotkey:1 SetHotkey:1 GetShowCmd:1 SetShowCmd:1 GetIconLocation:3 SetIconLocation:2 SetRelativePath:2 Resolve:2 SetPath:1',
+    IPersistFile: 'GetClassID:1 IsDirty:0 Load:2 Save:2 SaveCompleted:1 GetCurFile:1',
     IMalloc: 'Alloc:1 Realloc:2 Free:1 GetSize:1 DidAlloc:1 HeapMinimize:0',
     IShellFolder: 'ParseDisplayName:6 EnumObjects:3 BindToObject:4 BindToStorage:4 CompareIDs:3 CreateViewObject:3 GetAttributesOf:3 GetUIObjectOf:6 GetDisplayNameOf:3 SetNameOf:5',
     IEnumIDList: 'Next:3 Skip:1 Reset:0 Clone:1',
   };
   const shellVt = new Map();
-  const shellObj = (x, iface) => {
+  const vtOf = (x, iface) => {
     if (!shellVt.has(iface)) {
       const mod = x.win.load('shell32.dll'), ms = ['QueryInterface', 'AddRef', 'Release', ...SHELL_VT[iface].split(' ').map((t) => t.split(':')[0])];
       const v = x.win.heapAlloc(4 * ms.length); ms.forEach((n, i) => x.w32(v + 4 * i, mod.exports.get(`${iface}::${n}`)));
       shellVt.set(iface, v);
     }
-    const p = x.win.heapAlloc(8); x.w32(p, shellVt.get(iface)); return p;
+    return shellVt.get(iface);
   };
+  const shellObj = (x, iface) => { const p = x.win.heapAlloc(8); x.w32(p, vtOf(x, iface)); return p; };
+  /*
+   * CLSID_ShellLink: a shortcut, IShellLinkA and IPersistFile (two pointers of one block, QueryInterface
+   * giving the one asked): its target, arguments, folder, description and icon kept, Save writing the
+   * .lnk file on the disk (a line naming its target: no shell reads it here).
+   */
+  const IID_UNKNOWN = '00000000-0000-0000-c000-000000000046', IID_SHELLLINKA = '000214ee-0000-0000-c000-000000000046', IID_PERSISTFILE = '0000010b-0000-0000-c000-000000000046';
+  const links = new Map();                                              // the IShellLinkA pointer -> its fields
+  const linkOf = (self) => links.get(self) || links.get(self - 4);
+  const newLink = (x) => { const p = x.win.heapAlloc(8); x.w32(p, vtOf(x, 'IShellLinkA')); x.w32(p + 4, vtOf(x, 'IPersistFile')); links.set(p, { path: '', args: '', dir: '', desc: '', icon: '' }); return p; };
+  const linkQI = (x, self, iid, pp) => {
+    const base = links.has(self) ? self : self - 4, id = guid(x, iid);
+    const to = id === IID_UNKNOWN || id === IID_SHELLLINKA ? base : id === IID_PERSISTFILE ? base + 4 : 0;
+    x.w32(pp, to); return to ? 0 : 0x80004002;                          // E_NOINTERFACE
+  };
+  const linkSet = (key) => (x, self, p) => { linkOf(self)[key] = p ? x.str(p, 1024) : ''; return 0; };
+  const linkGet = (key) => (x, self, buf, n) => { const s = linkOf(self)[key]; if (buf && n > 0) x.write(buf, Uint8Array.from(s.slice(0, n - 1) + '\0', (c) => c.charCodeAt(0) & 255)); return 0; };
   const SHELL_IMPL = {
+    IShellLinkA: { QueryInterface: linkQI, SetPath: linkSet('path'), GetPath: linkGet('path'), SetArguments: linkSet('args'), GetArguments: linkGet('args'),
+      SetWorkingDirectory: linkSet('dir'), GetWorkingDirectory: linkGet('dir'), SetDescription: linkSet('desc'), GetDescription: linkGet('desc'),
+      SetIconLocation: (x, self, p, i) => { linkOf(self).icon = p ? x.str(p, 260) : ''; return 0; }, GetIconLocation: (x, self, buf, n, pi) => { linkGet('icon')(x, self, buf, n); if (pi) x.w32(pi, 0); return 0; },
+      SetShowCmd: () => 0, GetShowCmd: (x, self, p) => { if (p) x.w32(p, 1); return 0; }, SetHotkey: () => 0, GetHotkey: (x, self, p) => { if (p) x.w16(p, 0); return 0; },
+      SetIDList: () => 0, GetIDList: (x, self, pp) => { if (pp) x.w32(pp, 0); return E_FAIL; }, SetRelativePath: () => 0, Resolve: () => 0 },
+    IPersistFile: { QueryInterface: linkQI, IsDirty: () => 0, SaveCompleted: () => 0, Load: () => E_FAIL, GetCurFile: (x, self, pp) => { if (pp) x.w32(pp, 0); return E_FAIL; },
+      GetClassID: (x, self, p) => { x.write(p, Uint8Array.of(0x01, 0x14, 0x02, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46)); return 0; },
+      Save: (x, self, name) => {                                         // its name in UTF-16
+        let f = ''; for (let i = 0; ; i++) { const c = x.r16(name + 2 * i); if (!c) break; f += String.fromCharCode(c); }
+        const L = linkOf(self), b = new TextEncoder().encode(`[MIRAGE shortcut]\r\nTarget=${L.path}\r\nArguments=${L.args}\r\nDirectory=${L.dir}\r\n`);
+        st.disk.set(st.relPath(f), { bytes: b, size: b.length }); return 0;
+      } },
     IMalloc: { Alloc: (x, self, n) => x.win.heapAlloc(n), Realloc: (x, self, p, n) => { const q = x.win.heapAlloc(n); if (p) x.write(q, x.bytes(p, n)); return q; },
       Free: () => 0, GetSize: () => -1, DidAlloc: () => -1, HeapMinimize: () => 0 },
     IShellFolder: {
@@ -851,7 +910,7 @@ export function classicApis({ st, wm }) {
     let ord = 2000 + Object.keys(shell32).length;
     const all = [['QueryInterface', 2], ['AddRef', 0], ['Release', 0], ...list.split(' ').map((t) => t.split(':'))];
     for (const [n, k] of all) {
-      const f = n === 'QueryInterface' ? (x, self, iid, pp) => { x.w32(pp, self); return 0; } : n === 'AddRef' || n === 'Release' ? () => 1
+      const f = n === 'QueryInterface' ? (SHELL_IMPL[iface].QueryInterface || ((x, self, iid, pp) => { x.w32(pp, self); return 0; })) : n === 'AddRef' || n === 'Release' ? () => 1
         : (SHELL_IMPL[iface][n] || ((x, self, ...a) => { const pp = { BindToObject: a[3], BindToStorage: a[3], CreateViewObject: a[2], Clone: a[0] }[n]; if (pp) x.w32(pp, 0); return E_FAIL; }));
       shell32[`${iface}::${n}`] = ['p' + 'u'.repeat(+k), f, { ordinal: ord++ }];
     }

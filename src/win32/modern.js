@@ -78,7 +78,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     LoadLibraryExW: ['ppu', (x, w) => withA(x, w, (a) => A(kernel32, 'LoadLibraryA')(x, a))],
     DisableThreadLibraryCalls: ['p', () => 1],
     OutputDebugStringW: ['p', () => 0],
-    CreateEventW: ['puup', (x, sa, manual, initial, name) => A(kernel32, 'CreateEventA')(x, sa, manual, initial, 0)],
+    CreateEventW: ['puup', (x, sa, manual, initial, name) => withA(x, name, (n) => A(kernel32, 'CreateEventA')(x, sa, manual, initial, n))],
     WaitForSingleObjectEx: ['puu', (x, h, ms) => A(kernel32, 'WaitForSingleObject')(x, h, ms)],
     SetThreadExecutionState: ['u', () => 0x80000000],              // ES_CONTINUOUS: what it was
     // MEMORYSTATUSEX: 64 MiB of RAM, half of it free, a 2 GiB address space -- GlobalMemoryStatus's machine.
@@ -294,6 +294,9 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   };
   // imm32: no input method; a key types its character directly.
   const imm32 = {
+    // No input method composes here (Warcraft III's chat asks): nothing open, nothing composed.
+    ImmGetCandidateListA: ['pupu', () => 0], ImmGetCompositionStringA: ['pupu', () => 0], ImmGetOpenStatus: ['p', () => 0],
+    ImmGetConversionStatus: ['ppp', (x, h, c, s) => { if (c) x.w32(c, 0); if (s) x.w32(s, 0); return 1; }], ImmSetConversionStatus: ['puu', () => 1], ImmSetOpenStatus: ['pi', () => 1],
     ImmGetContext: ['p', () => 0], ImmReleaseContext: ['pp', () => 1], ImmAssociateContext: ['pp', () => 0],
     ImmGetCompositionStringW: ['pupu', () => 0], ImmSetCompositionStringW: ['pupupu', () => 0], ImmGetCandidateListW: ['pupu', () => 0],
     ImmNotifyIME: ['puuu', () => 0], ImmSetCompositionWindow: ['pp', () => 0], ImmSetCandidateWindow: ['pp', () => 0], ImmGetIMEFileNameA: ['ppu', () => 0],
@@ -418,7 +421,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
       get: () => t.fired || x.lx.mono() >= t.due,
       set: (v) => { if (v) { t.fired = true; return; } t.fired = false; if (x.lx.mono() >= t.due) t.due = t.period ? Math.max(t.due + t.period, x.lx.mono()) : Infinity; },
     });
-    const h = 0x3000 + st.events.size; st.events.set(h, t); return h;
+    return st.newEvent(t);
   };
   Object.assign(k32, {
     FindFirstFileW: ['pp', (x, pat, fd) => findW(x, fd, (t) => withA(x, pat, (a) => A(kernel32, 'FindFirstFileA')(x, a, t)))],
