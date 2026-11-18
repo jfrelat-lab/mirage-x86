@@ -417,9 +417,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
      * that holds it (MEM_IMAGE) or VirtualAlloc's region, else its page. Delphi finds a class's module so
      * (FindClassHInstance: the allocation base of its VMT), and that module's resources: its forms.
      */
+    /*
+     * A stack's page answers for the stack: its reservation the AllocationBase, the region committed
+     * from that page up to its top -- what a conservative garbage collector reads to know how far up to
+     * scan for pointers (Flash Player 8: BaseAddress + RegionSize). Told one page, it scanned that page,
+     * freed what the frames above still held, and later read a freed page's header (Zoo Keeper, 2002).
+     */
     VirtualQuery: ['ppu', (x, a, mbi, n) => {
       if (n < 28) return 0;
-      const page = (a & ~0xfff) >>> 0, m = x.win.moduleHolding(a), r = !m && [...vaRegions].find(([b, k]) => a >= b && a < b + k);
+      const page = (a & ~0xfff) >>> 0, stack = x.win.stackHolding && x.win.stackHolding(a);
+      if (stack) { [page, stack.base, 4, stack.top - page, 0x1000, 4, 0x20000].forEach((v, i) => x.w32(mbi + 4 * i, v >>> 0)); return 28; }
+      const m = x.win.moduleHolding(a), r = !m && [...vaRegions].find(([b, k]) => a >= b && a < b + k);
       const alloc = m ? m.base : r ? r[0] : page, end = m ? m.base + m.size : r ? r[0] + r[1] : page + 0x1000;
       [page, alloc, 4, end - page, 0x1000, 4, m ? 0x1000000 : 0x20000].forEach((v, i) => x.w32(mbi + 4 * i, v >>> 0));
       return 28;

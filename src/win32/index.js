@@ -399,6 +399,13 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     moduleAt: (b) => [...modules.values(), exeMod].find((m) => m.base === b >>> 0) || null,
     /** The module whose image holds address `a` (VirtualQuery's AllocationBase), or null. */
     moduleHolding: (a) => [...modules.values(), exeMod].find((m) => a >>> 0 >= m.base && a >>> 0 < m.base + m.size) || null,
+    /** The stack holding `a`, the main thread's or another's: { base (its reservation), top }, or null. */
+    stackHolding: (a) => {
+      a >>>= 0;
+      if (a >= STACK_TOP - STACK_RESERVE && a < STACK_TOP) return { base: STACK_TOP - STACK_RESERVE, top: STACK_TOP };
+      const n = Math.ceil((a + 1 - THREAD_STACKS) / STACK_RESERVE);
+      return a >= THREAD_STACKS && n >= 1 && n <= threads ? { base: THREAD_STACKS + (n - 1) * STACK_RESERVE, top: THREAD_STACKS + n * STACK_RESERVE } : null;
+    },
     /** A line for the log: what a program asked that is not here. */
     say: (t) => { if (lx.onOutput) lx.onOutput(2, enc.encode(`mirage-win32: ${t}\n`)); },
   };

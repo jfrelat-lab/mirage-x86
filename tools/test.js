@@ -6463,6 +6463,23 @@ const runPE = async (exe, readFile) => {
     got = [3.7, -3.7, 2 ** 40 + 5.5, -(2 ** 40) - 5.5, NaN].map((v) => { const r = f({ fpop: () => v }); return `${r.edx.toString(16)}:${r.eax.toString(16)}`; }).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: msvcrt _ftol truncates to EDX:EAX', got, '0:3 ffffffff:fffffffd 100:5 fffffeff:fffffffb 80000000:0'); }
+// VirtualQuery on the stack (src/win32/api.js): the region from that page up to the stack's top, its
+// reservation the AllocationBase -- Flash Player 8's garbage collector scans BaseAddress + RegionSize
+// down to ESP for pointers; told one page, it freed what the frames above held (Zoo Keeper, Fly Guy).
+// The exit code: 1 when the top is 130000h and the base 30000h, 2 when not.
+{ let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['VirtualQuery', 'ExitProcess'] }], code: (at) => {
+      const mbi = at.d(0x300);
+      const main = [0x6a, 28, 0x68, ...le(mbi), 0x54, 0xff, 0x15, ...le(at.iat['kernel32.dll!VirtualQuery']),
+        0xa1, ...le(mbi), 0x03, 0x05, ...le(mbi + 12), 0x3d, ...le(0x130000), 0x75, 0x10,       // BaseAddress + RegionSize
+        0x81, 0x3d, ...le(mbi + 4), ...le(0x30000), 0x75, 0x04,                                  // AllocationBase
+        0x6a, 1, 0xeb, 0x02, 0x6a, 2, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: VirtualQuery on the stack -- up to its top, its reservation the allocation', got, '1'); }
 // msvcrt's DATA exports: _acmdln, the command line, a variable the program reads where its import points
 // (a Visual C++ 6 program's start-up) -- the exit code its first character, the quote round its path.
 { let got;
