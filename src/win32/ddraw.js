@@ -26,7 +26,21 @@ const VTABLES = {
   IDirectDrawPalette: `${UNK} GetCaps:1 GetEntries:4 Initialize:3 SetEntries:4`,
   IDirectDrawClipper: `${UNK} GetClipList:3 GetHWnd:1 Initialize:2 IsClipListChanged:1 SetClipList:2 SetHWnd:2`,
 };
+// DirectX 3's: IDirectDraw2 is IDirectDraw with SetDisplayMode's refresh rate and flags, and
+// GetAvailableVidMem; the surfaces 2 and 3 add the DirectDraw they came from, page locking and
+// SetSurfaceDesc. NESticle for Windows 95 (1997) asks for IDirectDraw2.
+VTABLES.IDirectDraw2 = VTABLES.IDirectDraw.replace('SetDisplayMode:3', 'SetDisplayMode:5') + ' GetAvailableVidMem:3';
+VTABLES.IDirectDrawSurface2 = VTABLES.IDirectDrawSurface + ' GetDDInterface:1 PageLock:1 PageUnlock:1';
+VTABLES.IDirectDrawSurface3 = VTABLES.IDirectDrawSurface2 + ' SetSurfaceDesc:2';
 const METHODS = Object.fromEntries(Object.entries(VTABLES).map(([i, s]) => [i, s.trim().split(/\s+/).map((t) => t.split(':'))]));
+// The interfaces by IID (its first dword, then the rest as GUID text), and the family each belongs to:
+// QueryInterface answers within the family, a pointer of its own onto the same object.
+const IIDS = {
+  '6c14db80-a733-11ce-a521-0020af0be560': 'IDirectDraw', 'b3a6f3e0-2b43-11cf-a2de-00aa00b93356': 'IDirectDraw2',
+  '6c14db81-a733-11ce-a521-0020af0be560': 'IDirectDrawSurface', '57805885-6eef-11cf-9441-a82303c10e27': 'IDirectDrawSurface2',
+  'da044e00-69b2-11d0-a1d5-00aa00b8dfbb': 'IDirectDrawSurface3', '00000000-0000-0000-c000-000000000046': 'IUnknown',
+};
+const FAMILY = (iface) => iface.replace(/\d$/, '');
 
 const DDSD_CAPS = 1, DDSD_HEIGHT = 2, DDSD_WIDTH = 4, DDSD_PITCH = 8, DDSD_BACKBUFFERCOUNT = 0x20, DDSD_LPSURFACE = 0x800, DDSD_PIXELFORMAT = 0x1000;
 const DDSCAPS_BACKBUFFER = 4, DDSCAPS_FLIP = 0x10, DDSCAPS_FRONTBUFFER = 0x20, DDSCAPS_OFFSCREENPLAIN = 0x40, DDSCAPS_PRIMARYSURFACE = 0x200, DDSCAPS_SYSTEMMEMORY = 0x800;
@@ -36,19 +50,31 @@ const DDBLT_COLORFILL = 0x400, DDBLT_KEYSRC = 0x8000, DDBLTFAST_SRCCOLORKEY = 1;
  *  `send`: calls into the program (EnumDisplayModes' callback), as user32's sent messages do. */
 export function ddrawApis(st, wm, send) {
   const objs = new Map(), vtables = new Map();
-  const make = (x, iface, props) => {
+  const vtable = (x, iface) => {
     if (!vtables.has(iface)) {
       const mod = x.win.load('ddraw.dll'), ms = METHODS[iface], v = x.win.heapAlloc(ms.length * 4);
       ms.forEach(([n], i) => x.w32(v + 4 * i, mod.exports.get(`${iface}::${n}`)));
       vtables.set(iface, v);
     }
+    return vtables.get(iface);
+  };
+  const make = (x, iface, props) => {
     const p = x.win.heapAlloc(16);
-    x.w32(p, vtables.get(iface));
+    x.w32(p, vtable(x, iface));
     objs.set(p, { iface, ref: 1, ...props });
     return p;
   };
+  // The object behind `p` as another interface of its family: one pointer per interface, kept with it.
+  const as = (x, p, iface) => {
+    const ob = objs.get(p >>> 0); ob.views ||= { [ob.iface]: p >>> 0 };
+    if (!ob.views[iface]) { const q = x.win.heapAlloc(16); x.w32(q, vtable(x, iface)); objs.set(q, ob); ob.views[iface] = q; }
+    ob.ref++; return ob.views[iface];
+  };
+  const guid = (x, p) => { const b = x.bytes(p, 16), h = (i, n) => [...b.slice(i, i + n)].map((v) => v.toString(16).padStart(2, '0')).join('');
+    return `${h(0, 4).match(/../g).reverse().join('')}-${h(4, 2).match(/../g).reverse().join('')}-${h(6, 2).match(/../g).reverse().join('')}-${h(8, 2)}-${h(10, 6)}`; };
   const o = (p) => objs.get(p >>> 0);
   const mode = { w: 640, h: 480, bpp: 8 };
+  const vbl = { due: 0 };                                              // the vertical blank the last flip waits for
   // The display: the program's mode once it set one (full screen), else the desktop, 32 bits as GDI
   // reports it -- a windowed program's primary surface is the whole screen, its window somewhere on it.
   const display = () => (st.modeSet ? mode : { w: st.desk.w, h: st.desk.h, bpp: 32 });
@@ -164,14 +190,27 @@ export function ddrawApis(st, wm, send) {
   };
 
   const unknown = {
-    QueryInterface: (x, self, riid, pp) => { if (pp) x.w32(pp, 0); return E_NOINTERFACE; },   // DirectDraw 1 only, so far
+    QueryInterface: (x, self, riid, pp) => {
+      const ob = o(self), want = riid && IIDS[guid(x, riid)];
+      const iface = want === 'IUnknown' ? ob.iface : want;
+      if (!ob || !iface || FAMILY(iface) !== FAMILY(ob.iface)) { if (pp) x.w32(pp, 0); return E_NOINTERFACE; }
+      x.w32(pp, as(x, self, iface)); return DD_OK;
+    },
     AddRef: (x, self) => ++o(self).ref,
     Release: (x, self) => { const ob = o(self); if (!ob) return 0; if (--ob.ref > 0) return ob.ref; objs.delete(self >>> 0); return 0; },
   };
   const IMPL = {
     IDirectDraw: {
       Compact: () => DD_OK, Initialize: () => DD_OK, FlipToGDISurface: () => DD_OK,
-      SetCooperativeLevel: (x, self, hwnd, flags) => { o(self).exclusive = !!(flags & 0x10); return DD_OK; },   // DDSCL_EXCLUSIVE
+      // DDSCL_EXCLUSIVE with DDSCL_FULLSCREEN: the window takes the screen and becomes the active one --
+      // shown, WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE, WM_SETFOCUS, as Windows sends them then.
+      // NESticle for Windows 95 never shows its window itself, and runs only once it has been activated.
+      SetCooperativeLevel: (x, self, hwnd, flags) => {
+        o(self).exclusive = !!(flags & 0x10);
+        if ((flags & 0x11) !== 0x11 || st.active || (hwnd >>> 0) !== (st.hwnd >>> 0)) return DD_OK;
+        st.shown = st.active = true; wm.dirty = true;
+        return send(x, [[0x1c, 1, 0, hwnd], [0x86, 1, 0, hwnd], [0x06, 1, 0, hwnd], [0x07, 0, 0, hwnd]], () => DD_OK, 12);
+      },
       // A display mode: the screen becomes it, full screen, as ChangeDisplaySettings makes it.
       SetDisplayMode: (x, self, w, h, bpp) => {
         Object.assign(mode, { w, h, bpp }); st.w = w; st.h = h; st.modeSet = true; wm.dirty = true; return DD_OK;
@@ -232,8 +271,13 @@ export function ddrawApis(st, wm, send) {
       // Lock hands out the surface's memory (at the rectangle's corner); Unlock of the primary shows it.
       Lock: (x, self, r, d) => { const s = o(self), rc = rect(x, r, s); putDesc(x, d, s, s.mem + rc.t * s.pitch + rc.l * (s.bpp >> 3)); return DD_OK; },
       Unlock: (x, self) => { if (o(self).primary) show(x); return DD_OK; },
-      // Flip: the back buffer's memory becomes the front's, and is shown.
+      // Flip: the back buffer's memory becomes the front's, and is shown -- at the screen's next
+      // vertical blank, 60 times a second, as a card flips: the call waits for it. Returning at once,
+      // NESticle (1997) flipped 700 frames a second and its emulation got a twentieth of the machine.
       Flip: (x, self) => {
+        const now = x.lx.mono();
+        if (vbl.due && now < vbl.due) return x.waitUntil(vbl.due);
+        vbl.due = (Math.floor(now * 60) + 1) / 60;
         const f = o(self), b = f.backBuffer && o(f.backBuffer);
         if (b) [f.mem, b.mem] = [b.mem, f.mem];
         show(x); return DD_OK;
@@ -289,6 +333,12 @@ export function ddrawApis(st, wm, send) {
       IsClipListChanged: (x, self, p) => { if (p) x.w32(p, 0); return DD_OK; }, Initialize: () => DD_OK,
     },
   };
+  IMPL.IDirectDraw2 = { ...IMPL.IDirectDraw,
+    // DDSCAPS, then the total and free video memory: 8 MB, all free (nothing is in video memory here).
+    GetAvailableVidMem: (x, self, caps, total, free) => { if (total) x.w32(total, 8 << 20); if (free) x.w32(free, 8 << 20); return DD_OK; } };
+  IMPL.IDirectDrawSurface2 = { ...IMPL.IDirectDrawSurface,
+    GetDDInterface: (x, self, pp) => { x.w32(pp, 0); return DDERR_INVALIDPARAMS; }, PageLock: () => DD_OK, PageUnlock: () => DD_OK };
+  IMPL.IDirectDrawSurface3 = { ...IMPL.IDirectDrawSurface2, SetSurfaceDesc: () => DDERR_INVALIDPARAMS };
   const sigOf = (s) => 'p' + 'u'.repeat(+s);
   const fns = {
     // DirectDrawCreate(guid, lplpDD, outer): the one display.

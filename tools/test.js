@@ -5897,6 +5897,7 @@ const runLinux = (hex, argv) => {
     got = [...a, fb(19, 11), fb(20, 11), fb(0, 0)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: DirectDraw 8-bit: Flip shows the back buffer in the palette\'s colours, a colour key, SetEntries at once', got, '320x200 320 123456 ffffff 123456 ffffff');
+  let got2;
   // A surface's DC (Cave Story, 2004, draws its pictures and its text on its surfaces so): in a 16-bit
   // mode, SetPixel through GetDC writes the surface's 5:6:5 and GetPixel reads it back as a COLORREF;
   // a second GetDC before ReleaseDC is refused. With no mode set, the display is the desktop's.
@@ -5913,8 +5914,26 @@ const runLinux = (hex, argv) => {
     call('IDirectDrawSurface::ReleaseDC', sf, dc);
     call('IDirectDrawSurface::Lock', sf, 0, d, 1, 0); const bits = x.r32(d + 36), pitch = x.r32(d + 16);
     got = [desk, again.toString(16), back, x.r16(bits + 2).toString(16), x.r16(bits + pitch + 4).toString(16)].join(' ');
-  } catch (e) { got = e.message.slice(0, 80); }
+    // DirectX 3's interfaces (NESticle for Windows 95 asks for IDirectDraw2): QueryInterface hands
+    // IDirectDraw2 for IDirectDraw's IID, its SetDisplayMode takes five arguments, a surface asked as
+    // IDirectDrawSurface3 is the same surface (its pixels), and a palette is not a DirectDraw. And Flip
+    // waits for the screen's vertical blank: a second flip at once waits (BLOCK), not 700 a second.
+    call('DirectDrawCreate', 0, pp, 0); const dd1 = x.r32(pp);
+    const iid = (g) => { const p = x.win.heapAlloc(16), h = g.replace(/-/g, ''), b = h.match(/../g).map((v) => parseInt(v, 16));
+      x.write(p, Uint8Array.from([...b.slice(0, 4).reverse(), ...b.slice(4, 6).reverse(), ...b.slice(6, 8).reverse(), ...b.slice(8)])); return p; };
+    const hr = call('IDirectDraw::QueryInterface', dd1, iid('b3a6f3e0-2b43-11cf-a2de-00aa00b93356'), pp) >>> 0, dd2 = x.r32(pp);
+    const vt = x.r32(dd2) !== x.r32(dd1);
+    const mode = call('IDirectDraw2::SetDisplayMode', dd2, 320, 240, 8, 0, 0), vm = x.win.heapAlloc(8); call('IDirectDraw2::GetAvailableVidMem', dd2, 0, vm, vm + 4);
+    const d2 = x.win.heapAlloc(108); x.write(d2, new Uint8Array(108)); x.w32(d2, 108); x.w32(d2 + 4, 0x21); x.w32(d2 + 20, 1); x.w32(d2 + 104, 0x218);
+    call('IDirectDraw2::CreateSurface', dd2, d2, pp, 0); const prim = x.r32(pp);
+    call('IDirectDrawSurface::QueryInterface', prim, iid('da044e00-69b2-11d0-a1d5-00aa00b8dfbb'), pp); const s3 = x.r32(pp);
+    call('IDirectDrawSurface::Lock', prim, 0, d2, 1, 0); const b1 = x.r32(d2 + 36); call('IDirectDrawSurface3::Lock', s3, 0, d2, 1, 0); const b3 = x.r32(d2 + 36);
+    const no = call('IDirectDrawSurface::QueryInterface', prim, iid('b3a6f3e0-2b43-11cf-a2de-00aa00b93356'), pp) >>> 0;
+    const f1 = call('IDirectDrawSurface::Flip', prim, 0, 1), f2 = call('IDirectDrawSurface::Flip', prim, 0, 1);
+    got2 = [hr, vt, mode, x.r32(vm) >> 20, b1 === b3, no.toString(16), f1, f2 === x.lx.BLOCK].join(' ');
+  } catch (e) { got = got2 = e.message.slice(0, 80); }
   eq('win32: DirectDraw surface GetDC: GDI pixels in 5:6:5 and back; the desktop\'s mode before any is set', got, '1024x768x32 8876021c ff f800 1f');
+  eq('win32: DirectDraw 2 and surface 3 by QueryInterface; Flip waits for the vertical blank', got2, '0 true 0 8 true 80004002 0 true');
   // LoadImageA(LR_LOADFROMFILE): a .bmp of the program's disk (Cave Story's .pbm pictures) as a bitmap.
   try { const bmp = new Uint8Array(54 + 8), v = new DataView(bmp.buffer);
     bmp.set([0x42, 0x4d]); v.setUint32(2, bmp.length, true); v.setUint32(10, 54, true); v.setUint32(14, 40, true); v.setInt32(18, 2, true); v.setInt32(22, 1, true);
