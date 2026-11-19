@@ -31,6 +31,12 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   };
   const A = (t, name) => t[name][1];
   const k32 = {
+    // ExpandEnvironmentStringsA: %NAME% as the environment has it (GetEnvironmentVariableA), kept when it has not.
+    ExpandEnvironmentStringsA: ['ppu', (x, src, dst, n) => {
+      const out = x.str(src).replace(/%([^%]+)%/g, (m, k) => { const t = x.win.heapAlloc(1024); try { const r = A(kernel32, 'GetEnvironmentVariableA')(x, (() => { const q = x.win.heapAlloc(k.length + 1); x.write(q, Uint8Array.from(k + '\0', (c) => c.charCodeAt(0))); return q; })(), t, 1024); return r ? x.str(t) : m; } finally { x.win.heapFree(t); } });
+      if (dst && n > out.length) x.write(dst, Uint8Array.from(out + '\0', (c) => c.charCodeAt(0) & 0xff));
+      return out.length + 1;
+    }],
     // Flash Player 8's file calls in Unicode, as their A twins.
     GetTempFileNameW: ['pppu' + 'p', (x, path, prefix, unique, buf) => withA(x, path, (pa) => withA(x, prefix, (pr) => {
       const t = x.win.heapAlloc(264); try { const r = A(kernel32, 'GetTempFileNameA')(x, pa, pr, unique, t); if (r) putW(x, buf, 260, x.str(t, 260)); return r; } finally { x.win.heapFree(t); }
@@ -176,7 +182,9 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     }],
     // SPI_GETWORKAREA is the A function's; the rest (the mouse's settings, the screen reader) unchanged.
     SystemParametersInfoW: ['uupu', (x, what, n, p) => (what === 0x30 ? A(user32, 'SystemParametersInfoA')(x, what, n, p) : 1)],
-    GetWindowThreadProcessId: ['pp', (x, h, pid) => { if (pid) x.w32(pid, 0x100); return 1; }],
+    // The thread that made the window (its record's), not the first: the Java 2 Runtime's AWT makes its windows on
+    // its own toolkit thread and asks so whether a window is one of its own.
+    GetWindowThreadProcessId: ['pp', (x, h, pid) => { if (pid) x.w32(pid, 0x100); const w = st.wins && st.wins.get(h >>> 0); return (w && w.tid) || 1; }],
     AttachThreadInput: ['uui', () => 1],
     FlashWindowEx: ['p', () => 1], SetLayeredWindowAttributes: ['puui', () => 1], SetWindowRgn: ['ppi', () => 1], GetWindowRgn: ['pp', () => 0],                // ERROR: no window region kept
     TrackMouseEvent: ['p', () => 1], GetMessageExtraInfo: ['', () => 0], GetDoubleClickTime: ['', () => 500],
@@ -245,8 +253,34 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     DialogBoxIndirectParamW: ['ppppp', (x) => { x.win.say('DialogBoxIndirectParamW: a message box, not shown'); return 2; }],
     // The clipboard: empty, and kept from (OpenClipboard fails here).
     GetClipboardSequenceNumber: ['', () => 1], IsClipboardFormatAvailable: ['u', () => 0], EmptyClipboard: ['', () => 0], SetClipboardData: ['up', () => 0],
+    CountClipboardFormats: ['', () => 0], EnumClipboardFormats: ['u', () => 0], GetClipboardFormatNameA: ['upi', () => 0],
+    // The rest of what the Java 2 Runtime's AWT (awt.dll, 1.4) imports from user32: the keyboard as US English
+    // (VkKeyScan, ToAscii), a window class asked in its Ex or wide form, regions invalidated whole.
+    MapVirtualKeyExA: ['uup', (x, code, type) => mapVk(code, type)], MapVirtualKeyExW: ['uup', (x, code, type) => mapVk(code, type)],
+    VkKeyScanA: ['u', (x, c) => {
+      const ch = String.fromCharCode(c & 0xff);
+      for (const shift of [0, 1]) for (let vk = 8; vk < 0xe0; vk++) if (vkChar(vk, shift) === ch) return vk | (shift << 8);
+      return 0xffff;
+    }],
+    ToAscii: ['uuppu', (x, vk, scan, state, buf) => { const shift = state && (x.r8(state + 0x10) & 0x80), c = vkChar(vk, shift); if (!c) return 0; x.w16(buf, c.charCodeAt(0) & 0xff); return 1; }],
+    ToAsciiEx: ['uuppup', (x, vk, scan, state, buf) => { const shift = state && (x.r8(state + 0x10) & 0x80), c = vkChar(vk, shift); if (!c) return 0; x.w16(buf, c.charCodeAt(0) & 0xff); return 1; }],
+    // WNDCLASSEXA: its size, then a WNDCLASSA's fields, then the small icon.
+    GetClassInfoExA: ['ppp', (x, inst, name, wcx) => { const t = x.win.heapAlloc(40); try { if (!A(user32, 'GetClassInfoA')(x, inst, name, t)) return 0; x.write(wcx + 4, x.bytes(t, 40)); x.w32(wcx + 44, 0); return 1; } finally { x.win.heapFree(t); } }],
+    GetClassInfoW: ['ppp', (x, inst, name, wc) => (name < 0x10000 ? A(user32, 'GetClassInfoA')(x, inst, name, wc) : withA(x, name, (a) => A(user32, 'GetClassInfoA')(x, inst, a, wc)))],
+    InvalidateRgn: ['ppi', (x, h, rgn, erase) => A(user32, 'InvalidateRect')(x, h, 0, erase)], ValidateRgn: ['pp', () => 1],
+    ScrollDC: ['piipppp', (x, hdc, dx, dy, scroll, clip, rgn, upd) => { if (upd) x.write(upd, new Uint8Array(16)); return 1; }],
+    GetCaretPos: ['p', (x, p) => { x.w32(p, 0); x.w32(p + 4, 0); return 1; }], mouse_event: ['uiiuu', () => 0],
+    LoadCursorFromFileA: ['p', () => 0],
   };
   const g32 = {
+    // AWT's other GDI imports: fonts enumerated as none (AWT falls back on its own list), a region from RGNDATA as
+    // its bounding rectangle, arcs and pies not drawn yet, paths left as they are.
+    EnumFontFamiliesExA: ['pppui', () => 1], EnumFontFamiliesExW: ['pppui', () => 1],
+    ExtCreateRegion: ['pup', (x, xf, n, d) => A(gdi32, 'CreateRectRgn')(x, x.r32(d + 16) | 0, x.r32(d + 20) | 0, x.r32(d + 24) | 0, x.r32(d + 28) | 0)],
+    // A font file added for the process or removed: one font said added (the Java 2 Runtime's font manager calls
+    // them through GetProcAddress, unchecked).
+    AddFontResourceExA: ['puu', () => 1], RemoveFontResourceExA: ['puu', () => 1], AddFontResourceExW: ['puu', () => 1], RemoveFontResourceExW: ['puu', () => 1],
+    Arc: ['piiiiiiii', () => 1], Pie: ['piiiiiiii', () => 1], AbortPath: ['p', () => 1], CloseFigure: ['p', () => 1], ResetDCA: ['pp', (x, hdc) => hdc],
     CreateDCW: ['pppp', (x, drv, dev, out, dm) => withA(x, drv, (a) => A(gdi32, 'CreateDCA')(x, a, 0, 0, 0))],
     // LOGFONTW: LOGFONTA's fields, its face name 32 WCHARs.
     CreateFontIndirectW: ['p', (x, lf) => {
@@ -298,6 +332,9 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     ImmGetCandidateListA: ['pupu', () => 0], ImmGetCompositionStringA: ['pupu', () => 0], ImmGetOpenStatus: ['p', () => 0],
     ImmGetConversionStatus: ['ppp', (x, h, c, s) => { if (c) x.w32(c, 0); if (s) x.w32(s, 0); return 1; }], ImmSetConversionStatus: ['puu', () => 1], ImmSetOpenStatus: ['pi', () => 1],
     ImmGetContext: ['p', () => 0], ImmReleaseContext: ['pp', () => 1], ImmAssociateContext: ['pp', () => 0],
+    // An input context of the program's own (the Java 2 Runtime's AWT makes one per text component): a handle, kept by nothing.
+    ImmCreateContext: ['', () => 0x4c00], ImmDestroyContext: ['p', () => 1], ImmAssociateContextEx: ['ppu', () => 1], ImmIsIME: ['p', () => 0],
+    ImmGetCompositionWindow: ['pp', () => 0], ImmGetCompositionFontA: ['pp', () => 0], ImmSetCompositionFontA: ['pp', () => 0], ImmGetVirtualKey: ['p', () => 0], ImmGetProperty: ['pu', () => 0],
     ImmGetCompositionStringW: ['pupu', () => 0], ImmSetCompositionStringW: ['pupupu', () => 0], ImmGetCandidateListW: ['pupu', () => 0],
     ImmNotifyIME: ['puuu', () => 0], ImmSetCompositionWindow: ['pp', () => 0], ImmSetCandidateWindow: ['pp', () => 0], ImmGetIMEFileNameA: ['ppu', () => 0],
   };

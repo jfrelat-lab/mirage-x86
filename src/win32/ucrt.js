@@ -363,7 +363,17 @@ export function ucrtApis({ st, send }) {
     }, cd],
     _read: ['ipu', (x, fd, buf, n) => (fdH(fd) ? hRead(x, fdH(fd), buf, n) : -1), cd],
     _write: ['ipu', (x, fd, buf, n) => (fd === 1 || fd === 2 ? (x.lx.onOutput && x.lx.onOutput(fd, x.bytes(buf, n)), n) : fdH(fd) ? hWrite(x, fdH(fd), x.bytes(buf, n)) : -1), cd],
+    // _setmode(fd, mode): text or binary; the previous mode back (text). The Java VM sets its standard streams binary.
+    _setmode: ['ii', () => 0x4000, cd],
+    _getpid: ['', () => 0x100, cd],
+    // _open_osfhandle(handle, flags): a descriptor for a handle (the Java VM wraps its files' handles so), in _fileno's table.
+    _open_osfhandle: ['pi', (x, h) => { st.crtFds.push(h >>> 0); return st.crtFds.length + 2; }, cd],
+    towupper: ['u', (x, c) => String.fromCharCode(c & 0xffff).toUpperCase().charCodeAt(0), cd], towlower: ['u', (x, c) => String.fromCharCode(c & 0xffff).toLowerCase().charCodeAt(0), cd],
+    _isnan: ['d', (x, v) => (Number.isNaN(v) ? 1 : 0), cd], _finite: ['d', (x, v) => (Number.isFinite(v) ? 1 : 0), cd],                                   // GetCurrentProcessId's
     _lseek: ['iii', (x, fd, off, how) => { const o = fdH(fd) && st.files[fdH(fd) - 0x4000]; if (!o) return -1; o.pos = Math.max(0, (how === 1 ? o.pos : how === 2 ? o.f.size : 0) + off); return o.pos; }, cd],
+    // _lseeki64(fd, offset as two dwords, origin): the new position in EDX:EAX (files here stay below 4 GB).
+    _lseeki64: ['iuii', (x, fd, lo, hi, how) => { const o = fdH(fd) && st.files[fdH(fd) - 0x4000]; if (!o) return { eax: 0xffffffff, edx: 0xffffffff };
+      o.pos = Math.max(0, (how === 1 ? o.pos : how === 2 ? o.f.size : 0) + (hi | 0) * 4294967296 + (lo >>> 0)); return { eax: o.pos >>> 0, edx: Math.floor(o.pos / 4294967296) }; }, cd],
     _close: ['i', (x, fd) => (fdH(fd) ? 0 : -1), cd],
     _getcwd: ['pi', (x, buf, n) => { const s = 'C:\\'; if (!buf) return putStr(x, s); if (n <= s.length) return 0; setStr(x, buf, s); return buf; }, cd],
     remove: ['p', (x, p) => { const f = st.diskFile(x.str(p)), k = f && [...st.disk].find(([, v]) => v === f)?.[0]; return k ? (st.disk.delete(k), 0) : -1; }, cd],
@@ -479,6 +489,7 @@ export function ucrtApis({ st, send }) {
     _mkdir: ['p', () => 0, cd], _chdir: ['p', (x, p) => (st.diskDir(x.str(p)) ? 0 : -1), cd],
     _unlink: ['p', (x, p) => stdio.remove[1](x, p), cd],
     _access: ['pi', (x, p) => (st.diskFile(x.str(p)) || st.diskDir(x.str(p)) ? 0 : -1), cd],
+    _waccess: ['pi', (x, p) => (st.diskFile(wstr(x, p)) || st.diskDir(wstr(x, p)) ? 0 : -1), cd],
   };
   const locale = {
     setlocale: ['ip', (x) => (st.cLocale ||= putStr(x, 'C')), cd],
@@ -537,6 +548,13 @@ export function ucrtApis({ st, send }) {
     x.w32(buf + 20, dir ? 0 : f.size); for (const o of [24, 28, 32]) x.w32(buf + o, 946684800);   // 2000-01-01
     return 0;
   };
+  // struct _stati64 (48 bytes): _stat's fields with the size a 64-bit integer at 24 and the times after it.
+  const stat64 = (x, f, dir, buf) => {
+    x.write(buf, new Uint8Array(48)); x.w16(buf + 6, dir ? 0x41ff : 0x81b6); x.w16(buf + 8, 1);
+    x.w32(buf + 24, dir ? 0 : f.size); for (const o of [32, 36, 40]) x.w32(buf + o, 946684800);
+    return 0;
+  };
+  const stat64Of = (x, name, buf) => { const f = st.diskFile(name), dir = !f && st.diskDir && st.diskDir(name); if (!f && !dir) { x.w32(errnoP(x), 2); return -1; } return stat64(x, f, dir, buf); };
   const splitPath = (p) => { const m = /^([A-Za-z]:)?((?:.*[\\/])?)([^\\/]*?)(\.[^.\\/]*)?$/.exec(p) || []; return [m[1] || '', m[2] || '', m[3] || '', m[4] || '']; };
   const classic = {
     printf: ['p', (x, fmt) => { const s = cprintf(x, x.str(fmt), va(x, 1)); out(x, fileOf(x, stdFile(x, 1)), enc(s)); return s.length; }, cd],
@@ -557,6 +575,9 @@ export function ucrtApis({ st, send }) {
     _wfsopen: ['ppi', (x, name, mode) => { const h = open(x, wstr(x, name), wstr(x, mode)); return h ? fileBlock(x, { h }) : 0; }, cd],
     _fdopen: ['ip', (x, fd) => (fd >= 0x4000 ? fileBlock(x, { h: fd }) : 0), cd],
     _stat: ['pp', (x, name, buf) => statOf(x, x.str(name), buf), cd],
+    // The 64-bit forms (the Java VM's): by name, by wide name, by descriptor (an open file of the disk's).
+    _stati64: ['pp', (x, name, buf) => stat64Of(x, x.str(name), buf), cd], _wstati64: ['pp', (x, name, buf) => stat64Of(x, wstr(x, name), buf), cd],
+    _fstati64: ['ip', (x, fd, buf) => { const o = fdH(fd) && st.files[fdH(fd) - 0x4000]; if (!o) { x.w32(errnoP(x), 9); return -1; } return stat64(x, o.f, false, buf); }, cd],
     _splitpath: ['ppppp', (x, path, d, dir, fname, ext) => { const parts = splitPath(x.str(path)); [d, dir, fname, ext].forEach((p, i) => { if (p) setStr(x, p, parts[i]); }); return 0; }, cd],
     _makepath: ['ppppp', (x, buf, d, dir, fname, ext) => {
       let dirs = dir ? x.str(dir) : ''; if (dirs && !/[\\/]$/.test(dirs)) dirs += '\\';

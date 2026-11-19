@@ -14,7 +14,8 @@
 //                                   a point (mouseAt), the left button down or up there
 //                                   (rdown, rup: the right button)
 //   MIRAGE_W32ENV=NAME=value,...    the program's environment (GetEnvironmentVariable)
-//   MIRAGE_W32DIR=<dir>             the files beside it and below, by their path there, on the program's own disk (src/win32/api.js)
+//   MIRAGE_W32DIR=<dir>             the files beside it and below, by their path there, on the program's own disk (src/win32/api.js);
+//                                   a program in a folder of it has its path there (C:\jre\bin\java.exe)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
 //   MIRAGE_W32IPS=<n>               instructions per guest second (default 1e8)
 //   MIRAGE_W32MEM=<MiB>             the machine's RAM at least that (default: 64 MiB and the image, a power of two)
@@ -31,7 +32,7 @@
 //   MIRAGE_W32TEX=<dir>             every texture level as the program unlocks it: <dir>/NNNN.bin and index.json
 //   MIRAGE_W32WAV=<file.wav>        what waveOut played (and <file>.midi.wav what MIDI played: midiOut, MCI)
 import { readFileSync, readdirSync, statSync, writeSync, openSync, writeFileSync } from 'fs';
-import { basename, join } from 'path';
+import { basename, join, relative } from 'path';
 import { Machine } from '../../src/machine.js';
 import { installLinux } from '../../src/linux.js';
 import { installBIOS } from '../../src/bios.js';
@@ -284,7 +285,11 @@ if (process.env.MIRAGE_W32STUBS) {
     }
   }
 }
-const loaded = loadPE(lx, mc.mem, mc.cpu, exe, { path: `C:\\${basename(prog)}`, args: args.join(' '), apis, backend });
+// The program's path: C:\ and its name -- or, when MIRAGE_W32DIR holds it in a folder below, its path
+// there (the Java 2 Runtime's java.exe finds its lib\ from bin\java.exe, C:\jre\bin\java.exe).
+const inDir = process.env.MIRAGE_W32DIR && relative(process.env.MIRAGE_W32DIR, prog);
+const winPath = inDir && !inDir.startsWith('..') ? `C:\\${inDir.replace(/\//g, '\\')}` : `C:\\${basename(prog)}`;
+const loaded = loadPE(lx, mc.mem, mc.cpu, exe, { path: winPath, args: args.join(' '), apis, backend });
 const SEC = mc.cyclesPerSecond || 1e8, SECS = Number(process.env.MIRAGE_W32SECS) || 0;
 const LIMIT = SECS ? SECS * SEC : 2e10;
 // MIRAGE_W32WAV=<file.wav>: what waveOut played, recorded.
@@ -381,10 +386,14 @@ console.error('w32:', JSON.stringify({ mode: t.mode, frames: t.frames, calls: t.
 for (const s of t.shaders) console.error('w32 shader:\n' + s);
 // What Direct3D 9, 8 or 11 asked of the device model (src/win32/d3d9.js's recorder), call by call.
 if (t.d3d) console.error('w32 d3d:', JSON.stringify(t.d3d));
+// MIRAGE_W32THREADS=1: where each thread is when the run stops (its id, EIP, ESP, the wait it is in) -- which one
+// hangs, and where, when a program stops making calls.
+if (!lx.done && process.env.MIRAGE_W32THREADS) for (const t of [{ pid: lx.pid, eip: mc.cpu.eip, reg: mc.cpu.reg, wake: lx.wake, running: true }, ...lx.procs])
+  console.error(`mirage-win32: thread ${t.pid}${t.running ? ' (running)' : ''} eip ${(t.eip >>> 0).toString(16)} esp ${(t.reg[4] >>> 0).toString(16)} eax ${(t.reg[0] >>> 0).toString(16)} wake ${t.wake}`);
 if (!lx.done) { console.error(SECS ? `mirage-win32: stopped after ${SECS} guest seconds` : `mirage-win32: still running after ${LIMIT} cycles`); process.exit(SECS ? 0 : 124); }
 if (lx.signal) {
   const f = lx.faultInfo;
-  console.error(`mirage-win32: fault` + (f ? ` (exception ${f.n} err ${f.err} at eip ${f.eip.toString(16)}, cr2 ${f.cr2.toString(16)})` : ''));
+  console.error(`mirage-win32: fault` + (f ? ` (exception ${f.n} err ${f.err} at eip ${f.eip.toString(16)}, cr2 ${f.cr2.toString(16)}, esp ${(f.esp ?? 0).toString(16)}, [esp] ${(f.top ?? 0).toString(16)})` : ''));
   process.exit(1);
 }
 console.error(`mirage-win32: exited with ${lx.status}`);

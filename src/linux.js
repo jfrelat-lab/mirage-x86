@@ -433,7 +433,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // Memory reserved and committed on first touch (src/win32: an image's SizeOfImage, a stack).
     if (n === 14 && !(err & 1) && lx.lazy && lx.lazy.some(([a, b]) => cr2 >= a && cr2 < b)) { mapPage(cr2 >>> 12, true); return; }
     const sig = n === 0 ? SIG.SIGFPE : n === 6 ? SIG.SIGILL : n === 16 || n === 19 ? SIG.SIGFPE : SIG.SIGSEGV;
-    lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0 };
+    lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0, esp: cpu.reg[4] >>> 0, top: (() => { try { return lx.rdBytes(cpu.reg[4] >>> 0, 4).reduce((v, b, i) => v | (b << (8 * i)), 0) >>> 0; } catch { return 0; } })() };
     const h = lx.sigHandlers[sig] || 0;
     if (h > 1 && !blockedSig(lx.sigBlocked, sig)) { setupFrame(sig, h, r0Now()); return; }   // the program's handler (it may longjmp)
     exit(0, sig);

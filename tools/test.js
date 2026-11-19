@@ -5939,6 +5939,29 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
   } catch (e) { got = got2 = e.message.slice(0, 80); }
   eq('win32: DirectDraw surface GetDC: GDI pixels in 5:6:5 and back; the desktop\'s mode before any is set', got, '1024x768x32 8876021c ff f800 1f');
   eq('win32: DirectDraw 2 and surface 3 by QueryInterface; Flip waits for the vertical blank', got2, '0 true 0 8 true 80004002 0 true');
+  // What the Java 2 Runtime 1.4 (HotSpot, AWT) needs of Windows, one machine for all: a TLS slot in the TEB
+  // at E10h (HotSpot reads it there); setjmp and longjmp; EnumDisplayDevicesA within the structure's cb (AWT's
+  // is 168 bytes, on its stack); MapWindowPoints' four arguments; GetDIBits' BI_BITFIELDS masks.
+  try { const { x, apis, fn } = await w32();
+    const k = (n) => fn('kernel32.dll', n), m = (n) => fn('msvcrt.dll', n), c = x.cpu;
+    const i = k('TlsAlloc')(); k('TlsSetValue')(i, 0x1234);
+    const tls = [x.r32((c.base[4] + 0xe10 + 4 * i) >>> 0).toString(16), k('TlsGetValue')(i).toString(16)].join(',');
+    // setjmp: [ESP] the return address; the registers it saves; longjmp back with 5 and the registers as they were.
+    const sp = x.win.heapAlloc(64) + 32, buf = x.win.heapAlloc(64); x.w32(sp, 0x401234); c.reg[4] = sp; c.reg[3] = 0x33; c.reg[5] = 0x55;
+    const s0 = m('_setjmp3')(buf, 0); c.reg[3] = 0; c.reg[5] = 0; c.reg[4] = sp - 40;
+    const s1 = m('longjmp')(buf, 5), jmp = [s0, s1, c.reg[3].toString(16), c.reg[5].toString(16), c.reg[4] === sp, x.r32(c.reg[4]).toString(16)].join(',');
+    const dd = x.win.heapAlloc(424); x.write(dd, new Uint8Array(424).fill(0xee)); x.w32(dd, 168);
+    const ed = [fn('user32.dll', 'EnumDisplayDevicesA')(0, 0, dd, 0), x.str(dd + 36), x.r32(dd + 168).toString(16)].join(',');
+    const mwp = apis.find((d) => d.dll === 'user32.dll').fns.MapWindowPoints[0].length;
+    const bmi = x.win.heapAlloc(60); x.write(bmi, new Uint8Array(60)); x.w32(bmi, 40);
+    const hdc = fn('gdi32.dll', 'CreateCompatibleDC')(0), hbm = fn('gdi32.dll', 'CreateCompatibleBitmap')(hdc, 1, 1);
+    fn('gdi32.dll', 'GetDIBits')(hdc, hbm, 0, 1, 0, bmi, 0); x.w32(bmi + 16, 3);
+    const px = x.win.heapAlloc(4); fn('gdi32.dll', 'GetDIBits')(hdc, hbm, 0, 1, px, bmi, 0);
+    const masks = [0, 1, 2].map((j) => x.r32(bmi + 40 + 4 * j).toString(16)).join(',');
+    got = [tls, jmp, ed, mwp, masks].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: TLS in the TEB, setjmp/longjmp, EnumDisplayDevicesA within cb, MapWindowPoints, BI_BITFIELDS masks', got,
+    '1234,1234 0,5,33,55,true,401234 1,MIRAGE Display Adapter,eeeeeeee 4 ff0000,ff00,ff');
   // LoadImageA(LR_LOADFROMFILE): a .bmp of the program's disk (Cave Story's .pbm pictures) as a bitmap.
   try { const bmp = new Uint8Array(54 + 8), v = new DataView(bmp.buffer);
     bmp.set([0x42, 0x4d]); v.setUint32(2, bmp.length, true); v.setUint32(10, 54, true); v.setUint32(14, 40, true); v.setInt32(18, 2, true); v.setInt32(22, 1, true);
@@ -6433,6 +6456,28 @@ await (async () => { let got;
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: SetTimer -- WM_TIMER when due, its TIMERPROC called by DispatchMessage', got, '3'); })();
+// A DLL loaded by its full path is named so by GetModuleFileNameA (the Java 2 Runtime's jvm.dll finds its JRE
+// from C:\\jre\\bin\\client\\jvm.dll), and _EH_prolog (msvcrt, x86 code) links a C++ frame at fs:[0]: { next,
+// handler, -1 }, EBP 0Ch above it. The exit code: 1 when the frame is so, 2 when not.
+{ let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const dll = mkPE({ base: 0x50000000, dll: true, exports: { f: 0 }, code: () => Uint8Array.of(0xc3) });
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
+    const apis = win32Apis({ files: { 'jre/bin/t.dll': dll } }), exe = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['ExitProcess'] }], code: () => Uint8Array.of(0xf4) });
+    const { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: traceBackend() }), k = (n) => apis.find((d) => d.dll === 'kernel32.dll').fns[n][1];
+    const name = x.win.heapAlloc(32); x.write(name, new TextEncoder().encode('C:\\jre\\bin\\t.dll\0'));
+    k('LoadLibraryA')(x, name);                                             // its DllMain left to run: the module, loaded
+    const h = x.win.modules.get('t.dll').base, nb = x.win.heapAlloc(260), nl = k('GetModuleFileNameA')(x, h, nb, 260);
+    const eh = mkPE({ imports: [{ dll: 'msvcrt.dll', names: ['_EH_prolog'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const main = [0xb8, ...le(0x11223344), 0xff, 0x15, ...le(at.iat['msvcrt.dll!_EH_prolog']),
+        0x64, 0x8b, 0x0d, 0, 0, 0, 0, 0x8d, 0x51, 0x0c, 0x39, 0xea, 0x75, 0x13,                    // ecx = fs:[0]; ebp == ecx + 0Ch
+        0x81, 0x79, 0x04, ...le(0x11223344), 0x75, 0x0a, 0x83, 0x79, 0x08, 0xff, 0x75, 0x04,      // its handler, its -1
+        0x6a, 1, 0xeb, 0x02, 0x6a, 2, 0xff, 0x15, ...le(at.iat['kernel32.dll!ExitProcess']), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); return img;
+    } });
+    got = [nl && x.str(nb), await runPE(eh)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a DLL\'s full path from GetModuleFileNameA; _EH_prolog\'s frame at fs:[0]', got, 'C:\\jre\\bin\\t.dll 1'); }
 // msvcrt's qsort with the program's comparison function (src/win32/ucrt.js): twelve dwords in reverse
 // order, sorted -- a merge sort of indices, written back once: n log n comparisons where the insertion
 // sort it replaced made n*n/2 (66 here; Warcraft III sorts some 430 lists a second). The exit code:

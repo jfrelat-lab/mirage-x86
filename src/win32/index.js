@@ -226,7 +226,7 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     if (!/\.[a-z0-9]+$/.test(key)) key += '.dll';
     if (modules.has(key)) return modules.get(key);
     const img = images.get(key);
-    if (!img) return loadFile(key);
+    if (!img) return loadFile(key, /^[a-z]:\\/i.test(name) ? name : null);
     const mb = BASES[key] || (0x60000000 + modules.size * 0x100000);
     const d = makeDll(img.name, img.fns, mb);
     mapBytes(mb, d.bytes);
@@ -329,7 +329,9 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
     });
     w32(teb + 0x2c, arr);
   };
-  const loadFile = (key) => {
+  // `full`: the path LoadLibrary named it by, when it gave one -- what GetModuleFileName answers for it (the Java
+  // VM finds its JRE from C:\jre\bin\client\jvm.dll); C:\ and its name else.
+  const loadFile = (key, full = null) => {
     const img = readFile && readFile(key), ih = img && peHeader(img);
     if (!ih) return null;
     const size = (ih.sizeImage + 0xffff) & ~0xffff, at = dllNext >>> 0; dllNext += size;
@@ -348,9 +350,9 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
       }
     }
     const name = img.name || key, { exports, byOrdinal } = readExports(at, ih);
-    const mod = { name: key, base: at, size, entry: ih.entry ? at + ih.entry : 0, exports, byOrdinal, file: true, init: !!ih.entry };
+    const mod = { name: key, path: full || `C:\\${key}`, base: at, size, entry: ih.entry ? at + ih.entry : 0, exports, byOrdinal, file: true, init: !!ih.entry };
     modules.set(key, mod);
-    addEntry(mod, `C:\\${key}`, key);
+    addEntry(mod, mod.path, key);
     // A DLL whose imports are not all here does not load, as on Windows (ERROR_MOD_NOT_FOUND): Half-Life's
     // launcher tries its 3dfx OpenGL driver, which needs glide2x.dll, and goes on without it.
     try { bindImports(at, ih, key); } catch (e) {

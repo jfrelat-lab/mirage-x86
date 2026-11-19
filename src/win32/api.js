@@ -702,7 +702,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetStartupInfoA: ['p', (x, p) => { x.write(p, new Uint8Array(68)); x.w32(p, 68); return 0; }],
     GetStartupInfoW: ['p', (x, p) => { x.write(p, new Uint8Array(68)); x.w32(p, 68); return 0; }],
     GetModuleFileNameA: ['ppu', (x, h, buf, n) => {
-      const m = h && h !== x.win.base ? x.win.moduleAt(h) : null, s = m ? (m.file ? `C:\\${m.name}` : `C:\\WINDOWS\\system32\\${m.name}`) : x.win.path;
+      const m = h && h !== x.win.base ? x.win.moduleAt(h) : null, s = m ? (m.file ? m.path || `C:\\${m.name}` : `C:\\WINDOWS\\system32\\${m.name}`) : x.win.path;
       const k = Math.min(s.length, n - 1); if (n) x.write(buf, new TextEncoder().encode(s.slice(0, k) + '\0')); return k;
     }],
     // The environment: one variable, as a block of NUL-terminated strings ending in an empty one.
@@ -760,10 +760,16 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // Thread-local slots, one table per thread; TlsAlloc hands out indices from 0, as XP's first free.
     TlsAlloc: ['', () => (st.tlsNext = (st.tlsNext | 0) + 1) - 1],
     TlsFree: ['u', () => 1],
-    TlsSetValue: ['up', (x, i, v) => { st.tls ||= new Map(); const id = x.lx.pid; if (!st.tls.has(id)) st.tls.set(id, new Map()); st.tls.get(id).set(i, v >>> 0); return 1; }],
+    // The first 64 slots are the thread's TEB's (TlsSlots at E10h, the TEB at FS's base), as Windows keeps
+    // them: HotSpot (the Java 2 Runtime's VM) reads its thread there with fs:[E10h + 4 * index] and stops
+    // at start-up ("threadLocalStorage.cpp") when that is not what TlsGetValue answers.
+    TlsSetValue: ['up', (x, i, v) => {
+      if (i < 64) { x.w32((x.cpu.base[4] + 0xe10 + 4 * i) >>> 0, v >>> 0); return 1; }
+      st.tls ||= new Map(); const id = x.lx.pid; if (!st.tls.has(id)) st.tls.set(id, new Map()); st.tls.get(id).set(i, v >>> 0); return 1;
+    }],
     // TlsGetValue clears the last error when it succeeds, as Windows does, so that a value of 0 tells from a
     // failure: Warcraft III reads its thread's table so, and took the 57h (ERROR_INVALID_PARAMETER) left there for one.
-    TlsGetValue: ['u', (x, i) => { setError(x, 0); return (st.tls && st.tls.get(x.lx.pid) && st.tls.get(x.lx.pid).get(i)) || 0; }],
+    TlsGetValue: ['u', (x, i) => { setError(x, 0); if (i < 64) return x.r32((x.cpu.base[4] + 0xe10 + 4 * i) >>> 0); return (st.tls && st.tls.get(x.lx.pid) && st.tls.get(x.lx.pid).get(i)) || 0; }],
     // Interlocked: one CPU at a time runs here, so a read and a write are atomic; the new value returned.
     InterlockedIncrement: ['p', (x, p) => { const v = (x.r32(p) + 1) | 0; x.w32(p, v); return v; }],
     InterlockedDecrement: ['p', (x, p) => { const v = (x.r32(p) - 1) | 0; x.w32(p, v); return v; }],
@@ -914,7 +920,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // WS_VISIBLE: shown and activated before CreateWindowEx returns, as Windows does it -- Quake II
     // creates its window visible and only takes the mouse once WM_ACTIVATE has said it is active.
     const shown = st.shown ? (st.active = true, ACTIVATE) : [];
-    st.wins.set(st.hwnd, { hwnd: st.hwnd, main: true, cls: key, parent: 0, id: 0, ex: x.r32(a), erase: true, z: zNext() });   // its first WM_PAINT erases
+    st.wins.set(st.hwnd, { hwnd: st.hwnd, main: true, tid: x.lx.pid, cls: key, parent: 0, id: 0, ex: x.r32(a), erase: true, z: zNext() });   // its first WM_PAINT erases
     // An overlapped window placed by Windows (CW_USEDEFAULT) gets its WM_SIZE and WM_MOVE when first shown,
     // not from CreateWindowEx (Wine's WIN_NEED_SIZE): Solitaire makes its game after CreateWindowEx returns,
     // and its WM_SIZE, sent before, read through a pointer still null.
@@ -952,6 +958,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, bar, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
       title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), z: zNext(), ...extra };
     if (rec.ex) rec.long.set(-20, rec.ex);                            // GWL_EXSTYLE: what it was made with
+    rec.tid = x.lx.pid;                                             // the thread that made it (GetWindowThreadProcessId)
     st.wins.set(hwnd, rec);
     // Made visible (WS_VISIBLE): due its first WM_PAINT, as Windows paints it -- two popups made so over a
     // framed window were never drawn.
@@ -1876,7 +1883,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const du = (v, axis) => Math.round(v * (axis ? 13 : 6) / (axis ? 8 : 4));
     const dlg = nextHwnd; nextHwnd += 4;
     const dProc = typeof cls === 'string' && cls ? st.classes.get(cls.toLowerCase()) || systemProc(x, '#32770') : systemProc(x, '#32770');
-    st.wins.set(dlg, { hwnd: dlg, cls: '#32770', proc: dProc, dlgProc, style: style >>> 0, parent, id: 0, x: du(X, 0), y: du(Y, 1), w: du(cx, 0), h: du(cy, 1),
+    st.wins.set(dlg, { hwnd: dlg, tid: x.lx.pid, cls: '#32770', proc: dProc, dlgProc, style: style >>> 0, parent, id: 0, x: du(X, 0), y: du(Y, 1), w: du(cx, 0), h: du(cy, 1),
       title: typeof title === 'string' ? title : '', visible: false, enabled: true, long: new Map(), dialog: true, menu, erase: true, z: zNext() });
     // A program whose first window is a dialog (an MFC dialog application, Half-Life's launcher): that
     // dialog is the window the screen shows, as a CreateWindowEx main window would be.
@@ -1902,7 +1909,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const kc = sz(), kt = sz(), extra = u16(); p += extra;
       const key = typeof kc === 'number' ? ({ 0x80: 'button', 0x81: 'edit', 0x82: 'static', 0x83: 'listbox', 0x84: 'scrollbar', 0x85: 'combobox' })[kc] || kc : kc.toLowerCase();
       const h = nextHwnd; nextHwnd += 4;
-      st.wins.set(h, { hwnd: h, cls: key, proc: st.classes.get(key) || systemProc(x, key), style: (cs | 0x40000000) >>> 0, ex: cex, parent: dlg, id: id & 0xffff,
+      st.wins.set(h, { hwnd: h, tid: x.lx.pid, cls: key, proc: st.classes.get(key) || systemProc(x, key), style: (cs | 0x40000000) >>> 0, ex: cex, parent: dlg, id: id & 0xffff,
         x: du(kx, 0), y: du(ky, 1), w: du(kw, 0), h: du(kh, 1), title: typeof kt === 'string' ? kt : '', image: typeof kt === 'number' ? kt : 0,
         visible: !!(cs & 0x10000000), enabled: !(cs & 0x08000000), long: new Map() });
       kids.push(h);
@@ -2143,9 +2150,12 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ChangeDisplaySettingsExA: ['ppppp', (x, name, dm, hwnd, flags) => user32.ChangeDisplaySettingsA[1](x, dm, flags)],
     // EnumDisplayDevicesA: one adapter, the primary, attached to the desktop (DISPLAY_DEVICEA: its name at 4,
     // its string at 36, StateFlags at 164).
+    // Only as much as the structure's cb says: the Java 2 Runtime's AWT passes an older one (no DeviceID, no
+    // DeviceKey, 168 bytes on its stack), and the 424 bytes written over it took its return address.
     EnumDisplayDevicesA: ['pupu', (x, dev, i, dd) => {
       if (i !== 0 || !dd) return 0;
-      x.write(dd + 4, new Uint8Array(420)); x.write(dd + 4, Uint8Array.from('\\\\.\\DISPLAY1\0', (c) => c.charCodeAt(0)));
+      const cb = Math.min(424, x.r32(dd) || 424); if (cb < 168) return 0;
+      x.write(dd + 4, new Uint8Array(cb - 4)); x.write(dd + 4, Uint8Array.from('\\\\.\\DISPLAY1\0', (c) => c.charCodeAt(0)));
       x.write(dd + 36, Uint8Array.from('MIRAGE Display Adapter\0', (c) => c.charCodeAt(0))); x.w32(dd + 164, 0x5); return 1;   // ATTACHED_TO_DESKTOP | PRIMARY_DEVICE
     }],
     // GetWindowInfo: WINDOWINFO -- the window's and its client area's rectangles on the screen, its styles,
@@ -2174,8 +2184,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // A point of the client area on the screen and back: the window's place and its frame.
     ClientToScreen: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) + c.x); x.w32(p + 4, (x.r32(p + 4) | 0) + c.y); return 1; }],
     ScreenToClient: ['pp', (x, hwnd, p) => { const c = screenOrigin(hwnd); x.w32(p, (x.r32(p) | 0) - c.x); x.w32(p + 4, (x.r32(p + 4) | 0) - c.y); return 1; }],
-    // MapWindowPoints: from one window's client coordinates to another's (0: the screen).
-    MapWindowPoints: ['ppppu', (x, from, to, pts, n) => {
+    // MapWindowPoints: from one window's client coordinates to another's (0: the screen). Four arguments: its
+    // stdcall return took five (20 bytes), and the Java 2 Runtime's AWT found its stack a dword off.
+    MapWindowPoints: ['pppu', (x, from, to, pts, n) => {
       const a = from ? screenOrigin(from) : { x: 0, y: 0 }, b = to ? screenOrigin(to) : { x: 0, y: 0 }, dx = a.x - b.x, dy = a.y - b.y;
       for (let i = 0; i < n; i++) { x.w32(pts + 8 * i, (x.r32(pts + 8 * i) | 0) + dx); x.w32(pts + 8 * i + 4, (x.r32(pts + 8 * i + 4) | 0) + dy); }
       return ((dy & 0xffff) << 16 | (dx & 0xffff)) >>> 0;
@@ -2917,6 +2928,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       if (!bm || bm.kind !== 'bitmap') return 0;
       if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
       if (!bits) { x.w32(bmi + 4, bm.w); x.w32(bmi + 8, bm.h); x.w16(bmi + 12, 1); x.w16(bmi + 14, 32); x.w32(bmi + 16, 0); x.w32(bmi + 20, bm.w * bm.h * 4); return bm.h; }
+      // Asked in BI_BITFIELDS, the three colour masks follow the header, as Windows writes them: the Java 2
+      // Runtime's AWT reads the screen's format so, and shifted a zero mask for ever.
+      if (x.r32(bmi + 16) === 3) { const b16 = x.r16(bmi + 14) === 16; [b16 ? 0xf800 : 0xff0000, b16 ? 0x7e0 : 0xff00, b16 ? 0x1f : 0xff].forEach((m, i) => x.w32(bmi + 40 + 4 * i, m)); }
       return dibCopy(x, bm, start, lines, bits, bmi, false);
     }],
     SetDIBits: ['ppuuppu', (x, hdc, hbm, start, lines, bits, bmi) => {
@@ -3485,6 +3499,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     _HUGE: ['', () => ({ f64: Infinity }), { data: true }],             // HUGE_VAL, a double
     _ismbcspace: ['u', (x, c) => (c === 0x20 || (c >= 9 && c <= 13) ? 8 : 0), cd], iswspace: ['u', (x, c) => (/\s/.test(String.fromCharCode(c & 0xffff)) ? 8 : 0), cd],
     putc: ['ip', (x, c, F) => ucrt.find((t) => t.fns.fputc).fns.fputc[1](x, c, F), cd],
+    // localtime(&t), gmtime(&t): the struct tm of a 32-bit time_t (the machine's time zone is UTC), ucrt's.
+    // The Java 2 Runtime's unpacker (1.4.2's installer) dates its log with them.
+    localtime: ['p', (x, p) => ucrt.find((t) => t.fns._localtime32).fns._localtime32[1](x, p), cd],
+    gmtime: ['p', (x, p) => ucrt.find((t) => t.fns._gmtime64).fns._gmtime64[1](x, p), cd],
     // ctime(&t): "Wed Jan 02 02:03:55 1980\n", local time (the machine's: UTC), in a buffer kept for it.
     ctime: ['p', (x, p) => {
       const d = new Date((p ? x.r32(p) : 0) * 1000), D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], two = (v) => String(v).padStart(2, '0');
@@ -3495,6 +3513,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     __initenv: ['', (x) => ub._get_initial_narrow_environment[1](x), { data: true }],   // the environment (char **), MinGW-w64's
     // __p__acmdln: where _acmdln is (char **) -- MinGW-w64's start-up reads the command line so.
     __p__acmdln: ['', (x) => (st.acmdlnCell ||= (() => { const q = x.win.heapAlloc(4); x.w32(q, kernel32.GetCommandLineA[1](x)); return q; })()), cd],
+    // __p___initenv: where __initenv is (char ***) -- the Java 2 Runtime's java.exe (1.4) reads its environment so.
+    __p___initenv: ['', (x) => (st.initenvCell ||= (() => { const q = x.win.heapAlloc(4); x.w32(q, ub._get_initial_narrow_environment[1](x)); return q; })()), cd],
     _adjust_fdiv: ['', () => 0, { data: true }],
     _except_handler3: ['pppp', () => 1, cd], _XcptFilter: ['up', () => 0, cd],
     isdigit: ub.isdigit,
@@ -3506,6 +3526,47 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const r = x.str(rel), full = /^[a-z]:/i.test(r) ? r : 'C:\\' + r.replace(/^[\\/]+/, '').replace(/\//g, '\\');
       if (buf && full.length >= n) return 0;
       const p = buf || x.win.heapAlloc(full.length + 1); x.write(p, new TextEncoder().encode(full + '\0')); return p;
+    }, cd],
+    /*
+     * setjmp and longjmp, Visual C++'s jmp_buf: EBP, EBX, EDI, ESI, ESP and EIP as the caller has them after the
+     * call, then the thread's exception registration (fs:[0]). longjmp puts them back and returns `val` (1 for
+     * 0) from the setjmp: the saved EIP set where the stub's RET takes it. The Java 2 Runtime's JPEG decoder
+     * (libjpeg's error exit) leaves through it.
+     */
+    // What operator new does when memory runs out: the previous setting back (none), the C and C++ spellings.
+    '?_set_new_mode@@YAHH@Z': ['i', () => 0, cd], _set_new_mode: ['i', () => 0, cd], '?_set_new_handler@@YAP6AHI@ZP6AHI@Z@Z': ['p', () => 0, cd],
+    // _EH_prolog: a C++ function's exception frame (EAX its handler), built on the caller's stack -- x86 code,
+    // msvcrt's own sequence: { next, handler, -1 } linked at fs:[0], EBP the frame's, then back to the caller.
+    _EH_prolog: ['', () => 0, { cdecl: true, x86: () => Uint8Array.of(
+      0x6a, 0xff,                                     // push -1
+      0x50,                                           // push eax                  the handler
+      0x64, 0xa1, 0, 0, 0, 0,                         // mov eax, fs:[0]
+      0x50,                                           // push eax                  the previous registration
+      0x8b, 0x44, 0x24, 0x0c,                         // mov eax, [esp+0Ch]        the return address
+      0x64, 0x89, 0x25, 0, 0, 0, 0,                   // mov fs:[0], esp
+      0x89, 0x6c, 0x24, 0x0c,                         // mov [esp+0Ch], ebp
+      0x8d, 0x6c, 0x24, 0x0c,                         // lea ebp, [esp+0Ch]
+      0x50, 0xc3) }],                                 // push eax ; ret
+    _setjmp3: ['p', (x, buf) => {
+      const c = x.cpu, sp = c.reg[4] >>> 0;
+      [c.reg[5], c.reg[3], c.reg[7], c.reg[6], sp + 4, x.r32(sp), x.r32(c.base[4] >>> 0)].forEach((v, i) => x.w32(buf + 4 * i, v >>> 0));
+      return 0;
+    }, cd],
+    longjmp: ['pi', (x, buf, val) => {
+      const c = x.cpu, r = (i) => x.r32(buf + 4 * i);
+      c.reg[5] = r(0); c.reg[3] = r(1); c.reg[7] = r(2); c.reg[6] = r(3);
+      x.w32(c.base[4] >>> 0, r(6));
+      const sp = (r(4) - 4) >>> 0; x.w32(sp, r(5)); c.reg[4] = sp;
+      return val || 1;
+    }, cd],
+    // _wfullpath: _fullpath in UTF-16 (the Java VM makes its class path's entries absolute so); n in characters.
+    _wfullpath: ['ppu', (x, buf, rel, n) => {
+      let r = ''; for (let i = 0; ; i++) { const c = x.r16(rel + 2 * i); if (!c) break; r += String.fromCharCode(c); }
+      const full = /^[a-z]:/i.test(r) ? r : 'C:\\' + r.replace(/^[\\/]+/, '').replace(/\//g, '\\');
+      if (buf && full.length >= n) return 0;
+      const p = buf || x.win.heapAlloc(2 * full.length + 2), b = new Uint8Array(2 * full.length + 2);
+      for (let i = 0; i < full.length; i++) { b[2 * i] = full.charCodeAt(i) & 255; b[2 * i + 1] = full.charCodeAt(i) >> 8; }
+      x.write(p, b); return p;
     }, cd],
     sprintf: ['pp', (x, buf, fmt) => {
       const out = formatC(x, x.str(fmt), (x.cpu.reg[4] >>> 0) + 12);
