@@ -5998,6 +5998,17 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
     got = [own, s, held, g, same, q.eip.toString(16), r, lx.held.has(tid)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a thread\'s own handle; SuspendThread holds it, its context read and set, ResumeThread', got, 'true 0 true 1 true 401234 1 false');
+  // On a dialog application's desktop a window's close box closes it: pressed and let go on the box, WM_CLOSE to
+  // that window; let go elsewhere, nothing. Java2Demo's frame (AWT's) could not be closed.
+  try { const { fn, x, apis, str } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28);
+    u('CreateWindowExA')(0, str('TApplication'), 0, 0x84ca0000, 0, 0, 0, 0); u('CreateWindowExA')(0, str('TFrame'), 0, 0x10cf0000, 100, 50, 200, 100);
+    const form = parseInt(apis.windows().find((w) => w.cls === 'tframe').hwnd, 16), click = (X, Y, X2 = X, Y2 = Y) => {
+      apis.input.mouseAt(X, Y); apis.input.mouseButton(0, true); apis.input.mouseAt(X2, Y2); apis.input.mouseButton(0, false); };
+    click(285, 60, 150, 100); const away = u('PeekMessageA')(m, 0, 0x10, 0x10, 1);
+    click(285, 60); const on = u('PeekMessageA')(m, 0, 0x10, 0x10, 1);
+    got = [away, on, x.r32(m) === form].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a desktop window\'s close box sends it WM_CLOSE', got, '0 1 true');
   // LoadImageA(LR_LOADFROMFILE): a .bmp of the program's disk (Cave Story's .pbm pictures) as a bitmap.
   try { const bmp = new Uint8Array(54 + 8), v = new DataView(bmp.buffer);
     bmp.set([0x42, 0x4d]); v.setUint32(2, bmp.length, true); v.setUint32(10, 54, true); v.setUint32(14, 40, true); v.setInt32(18, 2, true); v.setInt32(22, 1, true);
@@ -6591,6 +6602,82 @@ await (async () => { let got;
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: SendMessage to another thread\'s window runs on that thread, the sender waiting for its answer', got, '115'); })();
+// ...and once answered the sender runs next, as Windows wakes it: the main thread takes the message in a
+// PeekMessageA loop that counts its turns; the sender notes the count before it sends and after its answer.
+// Exit code 1 when the main thread went round fewer than 16 more times, 2 when it went on (a whole slice:
+// AWT's shutdown hook, its answer read only once the toolkit's thread had ended, waited for ever).
+await (async () => { let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'PeekMessageA', 'SendMessageA', 'DefWindowProcA'] },
+      { dll: 'kernel32.dll', names: ['CreateThread', 'ExitThread', 'ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])], D = (o) => le(at.d(o));
+      const HWND = 0x400, SPIN = 0x404, S0 = 0x408, DONE = 0x40c, LATE = 0x410, MSG = 0x420, THR = 0x100, PROC = 0x180, CLS = 0x300, NAME = 0x380;
+      const main = [0x68, ...D(CLS), ...I('user32.dll!RegisterClassA'),
+        0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 100, 0x6a, 100, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(NAME), 0x6a, 0, ...I('user32.dll!CreateWindowExA'),
+        0xa3, ...D(HWND), 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(THR), 0x6a, 0, 0x6a, 0, ...I('kernel32.dll!CreateThread')];
+      const loop = main.length;
+      main.push(0x6a, 1, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(MSG), ...I('user32.dll!PeekMessageA'), 0xff, 0x05, ...D(SPIN), 0x83, 0x3d, ...D(DONE), 0, 0x74, 0);
+      main[main.length - 1] = (loop - main.length) & 255;
+      main.push(0xa1, ...D(LATE), 0x2b, 0x05, ...D(S0), 0x83, 0xf8, 16, 0x19, 0xc0, 0x83, 0xc0, 2,     // eax = late - s0; 1 if below 16, else 2
+        0x50, ...I('kernel32.dll!ExitProcess'), 0xf4);
+      const thr = [0xa1, ...D(SPIN), 0xa3, ...D(S0), 0x6a, 0, 0x6a, 0, 0x68, 0, 4, 0, 0, 0xff, 0x35, ...D(HWND), ...I('user32.dll!SendMessageA'),
+        0xa1, ...D(SPIN), 0xa3, ...D(LATE), 0xc7, 0x05, ...D(DONE), 1, 0, 0, 0, 0x6a, 0, ...I('kernel32.dll!ExitThread')];
+      const proc = [0x81, 0x7c, 0x24, 0x08, 0, 4, 0, 0, 0x75, 5, 0x31, 0xc0, 0xc2, 0x10, 0x00, 0xff, 0x25, ...le(at.iat['user32.dll!DefWindowProcA'])];
+      const img = new Uint8Array(0x500); img.set(main); img.set(thr, THR); img.set(proc, PROC);
+      img.set(le(at.d(PROC)), CLS + 4); img.set(le(at.d(NAME)), CLS + 36); img.set([0x54, 0], NAME);
+      return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a SendMessage answered, its sender runs next', got, '1'); })();
+// msvcrt's exit ends the process from any thread, its other threads with it: java.exe's main thread returned
+// through it, and the virtual machine's threads kept the process alive. The main thread waits for ever; a
+// second thread calls exit(7).
+await (async () => { let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'msvcrt.dll', names: ['exit'] }, { dll: 'kernel32.dll', names: ['CreateThread', 'Sleep', 'ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])];
+      const main = [0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...le(at.d(0x100)), 0x6a, 0, 0x6a, 0, ...I('kernel32.dll!CreateThread'),
+        0x6a, 10, ...I('kernel32.dll!Sleep'), 0xeb, 0xf6];                                         // sleep for ever
+      const thr = [0x6a, 7, ...I('msvcrt.dll!exit'), 0xf4];
+      const img = new Uint8Array(0x200); img.set(main); img.set(thr, 0x100); return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: msvcrt exit from a thread ends the process', got, '7'); })();
+// A C++ exception as Visual C++ makes it: a function's frame at fs:[0] (EBP-0Ch), its handler `mov eax,
+// FuncInfo ; jmp __CxxFrameHandler`, in state 1 (an object with a destructor) inside a try (states 0-1) whose
+// catch takes `e&`; it throws an `e` holding 40 (_CxxThrowException, its ThrowInfo naming .?AVe@@ in a type
+// descriptor of its own). The handler runs the destructor (which adds 2), puts the reference at EBP-14h,
+// calls the catch block, which returns where to go on; the frame's ESP back from EBP-10h. Exit code 42:
+// 40 caught, 2 unwound. A throw ended the program (99); AWT throws and catches so when its toolkit has ended.
+await (async () => { let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'msvcrt.dll', names: ['_CxxThrowException', '__CxxFrameHandler'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])], D = (o) => le(at.d(o)), A = (o) => at.d(o);
+      const FI = 0x300, UMAP = 0x320, TMAP = 0x340, HT = 0x360, TI = 0x380, CTA = 0x3a0, CT = 0x3b0, TD1 = 0x3e0, TD2 = 0x400, OBJ = 0x420, FLAG = 0x424, RES = 0x428;
+      const THUNK = 0x180, CATCH = 0x1a0, DTOR = 0x1c0, CONT = 0x1d0;
+      const main = [0x55, 0x89, 0xe5, 0x6a, 0xff, 0x68, ...D(THUNK), 0x64, 0xa1, 0, 0, 0, 0, 0x50, 0x64, 0x89, 0x25, 0, 0, 0, 0,   // push ebp; mov ebp,esp; push -1; push thunk; push fs:[0]; mov fs:[0],esp
+        0x83, 0xec, 0x08, 0x89, 0x65, 0xf0, 0xc7, 0x45, 0xfc, 0, 0, 0, 0, 0xc7, 0x45, 0xfc, 1, 0, 0, 0,                   // sub esp,8; [ebp-10h]=esp; state 0, then 1
+        0x68, ...D(TI), 0x68, ...D(OBJ), ...I('msvcrt.dll!_CxxThrowException'), 0xf4];
+      const thunk = [0xb8, ...D(FI), 0xff, 0x25, ...le(at.iat['msvcrt.dll!__CxxFrameHandler'])];
+      const katch = [0x8b, 0x45, 0xec, 0x8b, 0x00, 0x03, 0x05, ...D(FLAG), 0xa3, ...D(RES), 0xb8, ...D(CONT), 0xc3];   // eax = *[ebp-14h] + flag; result; return cont
+      const dtor = [0x83, 0x05, ...D(FLAG), 2, 0xc3];
+      const cont = [0x8b, 0x4d, 0xf4, 0x64, 0x89, 0x0d, 0, 0, 0, 0, 0xff, 0x35, ...D(RES), ...I('kernel32.dll!ExitProcess'), 0xf4];
+      const img = new Uint8Array(0x500); img.set(main); img.set(thunk, THUNK); img.set(katch, CATCH); img.set(dtor, DTOR); img.set(cont, CONT);
+      const w = (o, ...v) => v.forEach((n, i) => img.set(le(n >>> 0), o + 4 * i));
+      w(FI, 0x19930520, 2, A(UMAP), 1, A(TMAP), 0, 0);
+      w(UMAP, -1, 0, 0, A(DTOR));                                                 // state 0: to -1; state 1: to 0, the destructor
+      w(TMAP, 0, 1, 2, 1, A(HT));                                                  // try 0-1, catch state 2, one catch
+      w(HT, 8, A(TD1), -0x14, A(CATCH));                                          // e& at EBP-14h
+      w(TI, 0, 0, 0, A(CTA)); w(CTA, 1, A(CT)); w(CT, 0, A(TD2), 0, -1, 0, 4, 0);
+      img.set(new TextEncoder().encode('.?AVe@@\0'), TD1 + 8); img.set(new TextEncoder().encode('.?AVe@@\0'), TD2 + 8);
+      w(OBJ, 40);
+      return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a C++ exception caught by reference, the destructor between unwound', got, '42'); })();
 // HotSpot's strictfp multiply and divide (its interpreter's, and so StrictMath's and Math.toRadians'): the
 // operand times 2^-15360, the operation, times 2^+15360 -- two 80-bit constants a double cannot hold (0 and
 // Infinity, and the result NaN). Loaded, each is 1: 40 x 0.5 = 20.

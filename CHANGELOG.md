@@ -6,6 +6,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 ## 2026-11-18
 
 - **Warcraft III's demo installs and starts** on the Windows machine, its 3D main menu with its buttons' text (tested locally).
+- Java programs end when they are done or closed, and C++ exceptions in Windows programs are caught as Visual C++ catches them.
 - **Java2Demo**, Sun's Java 2D showcase, runs on the Java 2 Runtime 1.4.2: its Swing window, its tabs and their animations (tested locally).
 - **Java 2 Runtime 1.4.2** starts on the Windows machine: `java -version` answers, and Swing programs begin to open their windows (tested locally).
 - **NESticle for Windows 95** (Bloodlust Software, 1997) emulates the NES on the Windows machine, at 60 frames a second (tested locally with freeware homebrew games).

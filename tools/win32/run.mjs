@@ -76,7 +76,7 @@ const traceStr = (a) => {
   if (!process.env.MIRAGE_W32TRACESTR || a < 0x10000) return '';
   try { const b = lx.rdBytes(a >>> 0, 96); let n = 0; while (n < b.length && b[n] >= 0x20 && b[n] < 0x7f) n++; return n >= 2 && (n === b.length || b[n] === 0) ? ` '${String.fromCharCode(...b.subarray(0, n))}'` : ''; } catch { return ''; }
 };
-if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { if (traceFrom && lx.mono() < traceFrom) { if (t0) t0(name, args); return; } traceOut('w32 ' + lx.mono().toFixed(3) + ': ' + name + ' ' + args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) + traceStr(a) : a)).join(' ') + '\n'); if (t0) t0(name, args); }; }
+if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { if (traceFrom && lx.mono() < traceFrom) { if (t0) t0(name, args); return; } traceOut('w32 ' + lx.mono().toFixed(3) + ': ' + name + ' ' + args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) + traceStr(a) : a)).join(' ') + (lx.procs.length ? ' #t' + lx.pid : '') + '\n'); if (t0) t0(name, args); }; }
 const files = {};
 if (process.env.MIRAGE_W32DIR) (function walk(d, rel) { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p, rel + n + '/'); else files[rel + n] = new Uint8Array(readFileSync(p)); } })(process.env.MIRAGE_W32DIR, '');
 // MIRAGE_W32FONTS=arial=/path/Arial.ttf,arial:bold=/path/Arial Bold.ttf: TrueType fonts, as the page's machine.fonts.
@@ -327,6 +327,7 @@ const MOUSE = (process.env.MIRAGE_W32MOUSE || '').split('|').filter(Boolean).map
 // seconds, each file its base (4 bytes) then the bytes -- to compare with the same dump from Wine.
 const MEMDUMP = (() => { const v = process.env.MIRAGE_W32MEMDUMP; if (!v) return null; const [what, rest] = v.split('@'), [mod, rva, size] = what.split(':'), [times, prefix] = rest.split(':');
   return { mod, rva: parseInt(rva, 16), size: parseInt(size, 16), times: times.split(',').map(Number), prefix, n: 0 }; })();
+const T0 = Date.now();                                                 // MIRAGE_W32STATS: the host's time from here
 while (!lx.done && mc.cpu.cycles < LIMIT) {
   if (MEMDUMP && MEMDUMP.times.length && lx.mono() >= MEMDUMP.times[0]) {
     MEMDUMP.times.shift(); const m = MEMDUMP.mod === "abs" ? { base: 0 } : loaded.x.win.modules.get(MEMDUMP.mod), out = Buffer.alloc(4 + MEMDUMP.size);
@@ -379,6 +380,10 @@ if (process.env.MIRAGE_W32BLOCKS) {
   for (const [page, set] of mc.rec.pageBlocks) if ((page << 12) + 0xfff >= lo + rel && page << 12 <= hi + rel) for (const lin of set) if (lin >= lo + rel && lin < hi + rel) out.push(lin - rel);
   console.error('w32 blocks:', [...new Set(out)].sort((a, b) => a - b).map((v) => v.toString(16)).join(' '));
 }
+// MIRAGE_W32STATS=1: what the recompiler did -- instructions, blocks run, instructions a block, translations,
+// invalidations, flushes; and the host's speed, millions of instructions a second of wall clock.
+if (process.env.MIRAGE_W32STATS) { const st = mc.rec.stats, ins = mc.cpu.cycles, secs = (Date.now() - T0) / 1000;
+  console.error('w32 stats:', JSON.stringify({ instructions: ins, blocks: st.exec, perBlock: +(ins / Math.max(1, st.exec)).toFixed(2), compiles: st.compiles, memoHits: st.memoHits, invalidations: st.invalidations, flushes: st.flushes, hostMips: +(ins / 1e6 / secs).toFixed(1) })); }
 // MIRAGE_W32WINS=1: the windows at the end, one a line.
 if (process.env.MIRAGE_W32WINS && apis.windows) for (const w of apis.windows()) console.error('w32 window:', JSON.stringify(w));
 const t = backend.summary();

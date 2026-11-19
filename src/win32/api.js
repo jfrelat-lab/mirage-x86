@@ -2088,7 +2088,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       const r = st.sent.splice(i, 1)[0];
       if (!procOf(r.hwnd)) { r.result = 0; r.done = true; continue; }
       const c = x.cpu, at = (c.eip - 2) >>> 0, n = c.reg[0];
-      return send(x, [[r.msg, r.wp, r.lp, r.hwnd]], (eax) => { r.result = eax; r.done = true; c.eip = at; st.resumed = true; return n; }, 0);
+      // Answered, the sender runs next, as Windows wakes it: AWT's shutdown hook sent WM_AWT_QUIT and,
+      // reading its answer only once the toolkit's thread had ended, found the toolkit gone and waited for ever.
+      return send(x, [[r.msg, r.wp, r.lp, r.hwnd]], (eax) => { r.result = eax; r.done = true; x.lx.runNext(r.from); c.eip = at; st.resumed = true; return n; }, 0);
     }
     return null;
   };
@@ -2096,7 +2098,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   const sendAcross = (x, hwnd, msg, wp, lp, answer) => {
     const me = x.lx.pid;
     let r = st.sending.get(me);
-    if (!r) { r = { tid: ownerOf(hwnd), hwnd, msg, wp, lp, done: false, result: 0 }; st.sending.set(me, r); st.sent.push(r); }
+    if (!r) { r = { tid: ownerOf(hwnd), from: me, hwnd, msg, wp, lp, done: false, result: 0 }; st.sending.set(me, r); st.sent.push(r); }
     if (r.done || !x.lx.alive(r.tid)) { st.sending.delete(me); const i = st.sent.indexOf(r); if (i >= 0) st.sent.splice(i, 1); return answer(r.result); }
     const s = takeSent(x); if (s !== null) return s;
     return x.waitUntil(x.lx.mono() + 0.001);
@@ -2166,6 +2168,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       return next();
     },
   };
+  st.seh = seh;                                                       // for Visual C++'s exceptions (src/win32/ucrt.js)
   // The window made w x h (its frame included): the client area inside the frame its style has, as
   // AdjustWindowRectEx adds it -- what the screen shows.
   const resize = (w, h) => {
@@ -3565,7 +3568,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     strlen: ['p', (x, p) => x.str(p).length, cd],
     time: ['p', (x, p) => { const t = x.lx.now ? x.lx.now() : Math.floor(Date.now() / 1000); if (p) x.w32(p, t); return t; }, cd],
     clock: ['', (x) => ms(x), cd],
-    exit: ['i', (x, c) => { x.lx.exit(c); return 0; }, cd],
+    // exit ends the process, whichever thread calls it, its other threads with it: java.exe's main thread
+    // returned through it, and HotSpot's threads kept the process alive.
+    exit: ['i', (x, c) => { x.lx.exitProcess(c >>> 0); return 0; }, cd],
     /*
      * A Visual C++ 4-6 program's start-up (mainCRTStartup in its own code): its app type, the C
      * initializers (_initterm, through the UCRT's), its arguments (__getmainargs: argc, argv and the
@@ -4185,6 +4190,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // The window under the pointer (main-window client coordinates): the one with the capture, else the
   // highest visible popup there or the main window, down to its deepest visible child; null for the
   // main window itself (its messages as before). A disabled window gets nothing.
+  // The top-level window whose close box is at (X, Y) on a dialog application's desktop, or 0: the topmost
+  // window there, its caption's box as wm.js draws it (WS_SYSMENU).
+  const deskCloseAt = (X, Y) => {
+    const tops = [...st.wins.values()].filter(shownTop).sort((a, c) => zKey(c) - zKey(a));
+    const t = tops.find((w) => { const r = topRect(w); return X >= r.l && X < r.r && Y >= r.t && Y < r.b; });
+    if (!t) return 0;
+    const r = topRect(t), { b, cap } = r.f, style = t.main ? st.style : t.style;
+    if (!cap || !(style & 0x80000)) return 0;
+    const bx = r.r - b - 2 - 16, by = r.t + b + 2;
+    return X >= bx && X < bx + 16 && Y >= by && Y < by + 14 ? (t.main ? st.hwnd : t.hwnd) : 0;
+  };
   const windowAt = (X, Y) => {
     if (st.capture && win(st.capture)) return st.capture;
     const size = (h) => { if (h === st.hwnd) return { w: st.w, h: st.h }; const w = win(h); return w && isDrop(w) && !w.dropped ? { w: w.w, h: Math.min(w.h, w.fieldH || 21) } : w; };
@@ -4292,6 +4308,13 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         if (down && where === 'close') { wm.closeArmed = true; wm.redraw(); return; }
         if (where !== 'client') return;
       } else if (free() && wm.hit(X, Y) !== 'client') return;
+      // On a dialog application's desktop, a window's close box (its frame's, ncPaint's): pressed and let go on
+      // it, WM_CLOSE to that window. Java2Demo's frame (AWT's toolkit window the hidden main one) closed so.
+      if (b === 0 && deskMode() && !captured()) {
+        const h = deskCloseAt(X, Y);
+        if (down && h) { st.closeArmed = h; return; }
+        if (!down && st.closeArmed) { const was = st.closeArmed; st.closeArmed = null; if (h === was) st.msgs.push({ msg: 0x10, wp: 0, lp: 0, ...(was !== st.hwnd ? { hwnd: was } : {}) }); return; }
+      }
       const bit = [1, 2, 0x10][b], msg = [0x201, 0x204, 0x207][b] + (down ? 0 : 1);
       // A press on a dialog application's window brings it to the top, painted again whole.
       if (down && deskMode()) {

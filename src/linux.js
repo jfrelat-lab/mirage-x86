@@ -497,6 +497,12 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   // Threads held (src/win32's SuspendThread) wait in the queue and are passed over until let go.
   lx.held = new Set();
+  /** `pid` runs next: put first in the queue, and the running thread gives way at the end of its call. */
+  lx.runNext = (pid) => {
+    const i = lx.procs.findIndex((q) => q.pid === pid); if (i < 0) return;
+    if (i > 0) lx.procs.unshift(lx.procs.splice(i, 1)[0]);
+    lx.yieldAfter = true;
+  };
   const yieldTo = () => {
     const i = lx.procs.findIndex((q) => !lx.held.has(q.pid));
     if (i < 0) return;

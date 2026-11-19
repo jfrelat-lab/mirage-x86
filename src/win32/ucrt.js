@@ -123,6 +123,79 @@ export function cscanf(x, s, fmt, ap) {
  * its atexit functions); `kernel32`: the table whose file functions open the disk.
  */
 export function ucrtApis({ st, send }) {
+  /*
+   * Visual C++'s exceptions (x86). `throw` is _CxxThrowException(object, ThrowInfo): RaiseException of
+   * E06D7363h, non-continuable, its parameters 19930520h, the object and the ThrowInfo (whose catchable
+   * types name the classes the object is). Each function with a try or a destructor to run registers a
+   * frame at fs:[0] whose handler is `mov eax, FuncInfo ; jmp __CxxFrameHandler`: its states' unwind map
+   * (to state, action), its try blocks (states low-high, their catches: adjectives, type, where the object
+   * goes from EBP, the catch block). The registration node is EBP-0Ch, its state at +8, the frame's ESP
+   * at -4. A handler that matches unwinds the frames above it (their destructors), its own frame down to
+   * the try's low state, puts the object where the catch wants it, sets the state past the try, calls the
+   * catch block with the frame's EBP, and goes on at the address it returns, the frame's ESP -- never
+   * back to the dispatcher. AWT throws so when its toolkit has ended, and catches; the throw ended Java.
+   */
+  const cxxThrow = (x, obj, ti) => {
+    if (!obj && !ti && st.cxxCurrent) ({ obj, ti } = st.cxxCurrent);  // throw; -- the one being caught, again
+    const a = x.win.heapAlloc(12); x.w32(a, 0x19930520); x.w32(a + 4, obj); x.w32(a + 8, ti);
+    return st.seh.raise(x, 0xe06d7363, 1, 3, a);
+  };
+  const cxxFrameHandler = (x, fi, rec, rn, ctx) => {
+    const c = x.cpu, ebp0 = c.reg[5], ebp = (rn + 12) >>> 0;
+    const back = (v) => { c.reg[5] = ebp0; return v; };
+    if (((x.r32(fi) >>> 0) & ~3) !== 0x19930520) return 1;               // not a FuncInfo: ExceptionContinueSearch
+    const maxState = x.r32(fi + 4) | 0, umap = x.r32(fi + 8), nTry = x.r32(fi + 12), tmap = x.r32(fi + 16);
+    const state = () => x.r32(rn + 8) | 0;
+    // The frame's unwind actions (destructors) from its state down to `to`, each with the frame's EBP.
+    const unwindTo = (to, k) => {
+      const s = state(); if (s <= to || s >= maxState) return k();
+      const act = x.r32(umap + 8 * s + 4); x.w32(rn + 8, x.r32(umap + 8 * s));
+      if (!act) return unwindTo(to, k);
+      c.reg[5] = ebp; return send(x, [{ fn: act, args: [] }], () => unwindTo(to, k), null);
+    };
+    if (x.r32(rec + 4) & 6) return unwindTo(-1, () => back(1));          // EXCEPTION_UNWINDING: its destructors
+    if ((x.r32(rec) >>> 0) !== 0xe06d7363 || !nTry) return 1;
+    const obj = x.r32(rec + 24), ti = x.r32(rec + 28), cta = ti && x.r32(ti + 12);
+    const types = cta ? Array.from({ length: x.r32(cta) }, (_, i) => x.r32(cta + 4 + 4 * i)) : [];
+    const name = (td) => (td ? x.str(td + 8, 256) : '');
+    const s = state();
+    for (let i = 0; i < nTry; i++) {
+      const tb = tmap + 20 * i, lo = x.r32(tb) | 0, hi = x.r32(tb + 4) | 0;
+      if (s < lo || s > hi) continue;
+      for (let j = 0, n = x.r32(tb + 12), hs = x.r32(tb + 16); j < n; j++) {
+        const h = hs + 16 * j, ht = x.r32(h + 4), hn = name(ht);
+        const ct = hn ? types.find((t) => name(x.r32(t + 4)) === hn) : (types[0] || 0);   // catch (...) takes any
+        if (hn && !ct) continue;
+        // The frames above, unwound (fs:[0] back to this one), then this one down to the try's state.
+        const teb = st.seh.fs(x);
+        x.w32(rec + 4, x.r32(rec + 4) | 2);
+        const above = (k) => {
+          const f = x.r32(teb); if (f === rn || f === 0xffffffff || !f) return k();
+          x.w32(teb, x.r32(f));
+          return send(x, [{ fn: x.r32(f + 4), args: [rec, f, ctx, 0] }], () => above(k), null);
+        };
+        return above(() => unwindTo(lo, () => {
+          x.w32(rec + 4, x.r32(rec + 4) & ~2);
+          const disp = x.r32(h + 8) | 0;
+          if (disp && obj && ct) {
+            const dest = (ebp + disp) >>> 0, at = (obj + (x.r32(ct + 8) | 0)) >>> 0;
+            if (x.r32(h) & 8) x.w32(dest, at);                                // by reference
+            else x.write(dest, x.bytes(at, Math.max(4, x.r32(ct + 20)) >>> 0));   // by value: its bytes (no copy constructor)
+          }
+          st.cxxCurrent = { obj, ti };
+          x.w32(rn + 8, hi + 1);
+          c.reg[5] = ebp;
+          return send(x, [{ fn: x.r32(h + 12), args: [] }], (cont) => {       // the catch block: where to go on
+            c.reg[4] = x.r32(rn - 4); c.reg[5] = ebp; c.eip = cont >>> 0; st.resumed = true;
+            return cont;
+          }, null);
+        }));
+      }
+    }
+    return 1;
+  };
+  // The handler's FuncInfo comes in EAX: pushed as its first argument, under the return address.
+  const CXXFH = { cdecl: true, x86: (at, stub) => { const rel = stub - (at + 8); return Uint8Array.of(0x59, 0x50, 0x51, 0xe9, rel & 255, (rel >>> 8) & 255, (rel >>> 16) & 255, (rel >>> 24) & 255); } };
   const heap = (x) => x.win;
   const malloc = (x, n) => heap(x).heapAlloc(Math.max(1, n >>> 0));
   const free = (x, p) => { if (p) heap(x).heapFree(p); };
@@ -515,9 +588,9 @@ export function ucrtApis({ st, send }) {
     __current_exception_context: ['', (x) => (st.curExcCtx ||= (() => { const p = malloc(x, 4); x.w32(p, 0); return p; })()), cd],
     __std_exception_copy: ['pp', (x, from, to) => { const w = x.r32(from); x.w32(to, w ? putStr(x, x.str(w)) : 0); x.w8(to + 4, 1); return 0; }, cd],
     __std_exception_destroy: ['p', (x, p) => { if (x.r8(p + 4)) free(x, x.r32(p)); x.w32(p, 0); x.w8(p + 4, 0); return 0; }, cd],
-    // C++ exceptions: one thrown stops the program, named; a frame's handler is never reached otherwise.
-    _CxxThrowException: ['pp', (x) => { x.win.say('C++ exception thrown'); x.lx.exitProcess(0xe06d7363); return 0; }],
-    __CxxFrameHandler3: ['pppp', () => 1, cd],                      // ExceptionContinueSearch
+    // C++ exceptions, as Visual C++ makes them (cxxThrow, cxxFrameHandler above).
+    _CxxThrowException: ['pp', (x, obj, ti) => cxxThrow(x, obj, ti)],
+    __CxxFrameHandler3: ['ppppp', (x, fi, rec, rn, ctx) => cxxFrameHandler(x, fi, rec, rn, ctx), CXXFH],
     _except_handler4_common: ['pppppp', () => 1, cd],
     _local_unwind4: ['ppu', () => 0, cd],
     __telemetry_main_invoke_trigger: ['p', () => 0, cd], __telemetry_main_return_trigger: ['p', () => 0, cd],
@@ -613,7 +686,7 @@ export function ucrtApis({ st, send }) {
     // undecorated name's pointer -- Warcraft III's installer compares classes so.
     '?raw_name@type_info@@QBEPBDXZ': ['', (x) => ((x.cpu.reg[1] >>> 0) + 8) >>> 0],
     '?terminate@@YAXXZ': ['', (x) => { x.win.say('terminate()'); x.lx.exitProcess(3); return 0; }, cd],
-    __CxxFrameHandler: ['pppp', () => 1, cd],
+    __CxxFrameHandler: ['ppppp', (x, fi, rec, rn, ctx) => cxxFrameHandler(x, fi, rec, rn, ctx), CXXFH],
   };
   // Every set's functions are ucrtbase's: a name any program imports from any set answers the same.
   const ucrtbase = { ...runtime, ...heapFns, ...math, ...stdio, ...str, ...convert, ...timeFns, ...utility, ...env, ...fs, ...locale, ...vc };
