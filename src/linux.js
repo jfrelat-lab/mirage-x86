@@ -495,12 +495,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     restore(next);
     lx.sliceStart = cpu.cycles;
   };
+  // Threads held (src/win32's SuspendThread) wait in the queue and are passed over until let go.
+  lx.held = new Set();
   const yieldTo = () => {
-    if (!lx.procs.length) return;
-    const me = snapshot();
-    if (lx.procs[0].vm !== lx.vm) releasePages(lx.pages, false);      // a thread of the same process keeps them
+    const i = lx.procs.findIndex((q) => !lx.held.has(q.pid));
+    if (i < 0) return;
+    const me = snapshot(), next = lx.procs.splice(i, 1)[0];
+    if (next.vm !== lx.vm) releasePages(lx.pages, false);             // a thread of the same process keeps them
     lx.procs.push(me);
-    switchTo(lx.procs.shift());
+    switchTo(next);
   };
   // The clock's preemption: a process that computes without a system call keeps the CPU no longer
   // than its quantum — the kernel takes it back on a timer tick. Between slices the CPU is between
@@ -533,7 +536,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.threadExits = new Map();
   lx.exitThread = (code) => {
     lx.threadExits.set(lx.pid, code >>> 0);
-    const next = lx.procs.findIndex((q) => q.vm === lx.vm);
+    lx.held.delete(lx.pid);
+    let next = lx.procs.findIndex((q) => q.vm === lx.vm && !lx.held.has(q.pid));
+    if (next < 0) next = lx.procs.findIndex((q) => q.vm === lx.vm);   // only held ones left: one runs all the same
     if (next < 0) { exit(code); return; }                                // the last thread: the process ends
     lx.switches++;
     restore(lx.procs.splice(next, 1)[0]);

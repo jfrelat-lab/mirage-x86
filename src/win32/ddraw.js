@@ -108,8 +108,27 @@ export function ddrawApis(st, wm, send) {
   const primary = () => [...objs.values()].find((s) => s.primary);
   // Full screen the whole surface is the picture; on the desktop (no mode set) the window's client area
   // is cut from it where the window is -- Cave Story in a window blits its frame there, through a clipper.
-  const show = (x) => {
+  // On a dialog application's desktop (AWT's: its toolkit's window hidden, each frame a window of its
+  // own) the primary surface is the desktop: what was drawn -- `r`, inside the clipper's window -- is
+  // copied there. Shown as a 640x480 window, Java2Demo's frame was cut at a corner.
+  const toDesk = (x, s, r, sc) => {
+    const cw = s.clipper && o(s.clipper) && o(s.clipper).hwnd && st.clientOnScreen(o(s.clipper).hwnd);
+    if (cw) r = { l: Math.max(r.l, cw.l), t: Math.max(r.t, cw.t), r: Math.min(r.r, cw.r), b: Math.min(r.b, cw.b) };
+    const l = Math.max(0, r.l), t = Math.max(0, r.t), R = Math.min(r.r, s.w, sc.w), B = Math.min(r.b, s.h, sc.h), N = s.bpp >> 3;
+    if (R <= l || B <= t) return;
+    for (let y = t; y < B; y++) {
+      const raw = x.bytes(s.mem + y * s.pitch + l * N, (R - l) * N);
+      for (let i = 0, X = l; X < R; i += N, X++) {
+        sc.px[y * sc.w + X] = N === 4 || N === 3 ? raw[i + 2] << 16 | raw[i + 1] << 8 | raw[i]
+          : N === 2 ? (((raw[i] | raw[i + 1] << 8) >> 11) & 31) << 19 | (((raw[i] | raw[i + 1] << 8) >> 5) & 63) << 10 | (raw[i] & 31) << 3 : raw[i] * 0x010101;
+      }
+    }
+    wm.presentDesk(x.lx, sc);
+  };
+  const show = (x, r = null) => {
     const s = primary(); if (!s) return;
+    const sc = s.desktop && !st.modeSet && st.deskScreen && st.deskScreen();
+    if (sc) { if (r) toDesk(x, s, r, sc); return; }
     const c = s.desktop && !st.modeSet ? (wm.framed() ? wm.client() : { x: st.x | 0, y: st.y | 0, w: st.w, h: st.h }) : { x: 0, y: 0, w: s.w, h: s.h };
     const px = new Uint32Array(c.w * c.h), B = s.bpp >> 3;
     const pal = s.palette && o(s.palette) ? o(s.palette).colors : null;
@@ -269,8 +288,8 @@ export function ddrawApis(st, wm, send) {
       GetPixelFormat: (x, self, p) => { putFormat(x, p, o(self).bpp); return DD_OK; },
       GetCaps: (x, self, p) => { const s = o(self); x.w32(p, s.primary ? DDSCAPS_PRIMARYSURFACE : s.back ? DDSCAPS_BACKBUFFER : DDSCAPS_OFFSCREENPLAIN); return DD_OK; },
       // Lock hands out the surface's memory (at the rectangle's corner); Unlock of the primary shows it.
-      Lock: (x, self, r, d) => { const s = o(self), rc = rect(x, r, s); putDesc(x, d, s, s.mem + rc.t * s.pitch + rc.l * (s.bpp >> 3)); return DD_OK; },
-      Unlock: (x, self) => { if (o(self).primary) show(x); return DD_OK; },
+      Lock: (x, self, r, d) => { const s = o(self), rc = rect(x, r, s); s.locked = rc; putDesc(x, d, s, s.mem + rc.t * s.pitch + rc.l * (s.bpp >> 3)); return DD_OK; },
+      Unlock: (x, self) => { const s = o(self); if (s.primary) show(x, s.locked); return DD_OK; },
       // Flip: the back buffer's memory becomes the front's, and is shown -- at the screen's next
       // vertical blank, 60 times a second, as a card flips: the call waits for it. Returning at once,
       // NESticle (1997) flipped 700 frames a second and its emulation got a twentieth of the machine.
@@ -287,13 +306,14 @@ export function ddrawApis(st, wm, send) {
         const d = o(self);
         if (flags & DDBLT_COLORFILL) fill(x, d, rect(x, dr, d), fx ? x.r32(fx + 80) : 0);
         else if (src && o(src)) copy(x, d, rect(x, dr, d), o(src), rect(x, sr, o(src)), !!(flags & DDBLT_KEYSRC));
-        if (d.primary) show(x); return DD_OK;
+        if (d.primary) show(x, rect(x, dr, d)); return DD_OK;
       },
       BltFast: (x, self, X, Y, src, sr, flags) => {
         const d = o(self), s = o(src); if (!s) return DDERR_INVALIDPARAMS;
         const r = rect(x, sr, s);
-        copy(x, d, { l: X, t: Y, r: X + r.r - r.l, b: Y + r.b - r.t }, s, r, !!(flags & DDBLTFAST_SRCCOLORKEY));
-        if (d.primary) show(x); return DD_OK;
+        const dr = { l: X, t: Y, r: X + r.r - r.l, b: Y + r.b - r.t };
+        copy(x, d, dr, s, r, !!(flags & DDBLTFAST_SRCCOLORKEY));
+        if (d.primary) show(x, dr); return DD_OK;
       },
       BltBatch: () => DD_OK,
       // DDCOLORKEY: the low colour of the range; DDCKEY_SRCBLT (8) is the one copies honour.
@@ -305,7 +325,7 @@ export function ddrawApis(st, wm, send) {
       GetDC: (x, self, pdc) => {
         const s = o(self); if (s.dc) return 0x8876021c;                // DDERR_DCALREADYCREATED
         const px = new Uint32Array(s.w * s.h);
-        const bm = st.newHandle('bitmap', { w: s.w, h: s.h, px, load: (x) => toPx(x, s, px), store: (x) => { fromPx(x, s, px); if (s.primary) show(x); } });
+        const bm = st.newHandle('bitmap', { w: s.w, h: s.h, px, load: (x) => toPx(x, s, px), store: (x) => { fromPx(x, s, px); if (s.primary) show(x, { l: 0, t: 0, r: s.w, b: s.h }); } });
         const dc = st.newHandle('dc', {}); st.dcBitmaps.set(dc, bm);
         s.dc = { dc, bm }; x.w32(pdc, dc); return DD_OK;
       },
@@ -313,7 +333,7 @@ export function ddrawApis(st, wm, send) {
         const s = o(self); if (!s.dc) return DDERR_INVALIDPARAMS;
         st.dcBitmaps.delete(s.dc.dc); st.gdi.delete(s.dc.bm); st.gdi.delete(s.dc.dc); s.dc = null; return DD_OK;
       },
-      SetClipper: () => DD_OK, GetClipper: () => DDERR_NOTFOUND, IsLost: () => DD_OK, Restore: () => DD_OK,
+      SetClipper: (x, self, c) => { o(self).clipper = c >>> 0; return DD_OK; }, GetClipper: () => DDERR_NOTFOUND, IsLost: () => DD_OK, Restore: () => DD_OK,
       GetBltStatus: () => DD_OK, GetFlipStatus: () => DD_OK, Initialize: () => DD_OK,
     },
     IDirectDrawPalette: {

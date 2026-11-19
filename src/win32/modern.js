@@ -267,7 +267,9 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     // WNDCLASSEXA: its size, then a WNDCLASSA's fields, then the small icon.
     GetClassInfoExA: ['ppp', (x, inst, name, wcx) => { const t = x.win.heapAlloc(40); try { if (!A(user32, 'GetClassInfoA')(x, inst, name, t)) return 0; x.write(wcx + 4, x.bytes(t, 40)); x.w32(wcx + 44, 0); return 1; } finally { x.win.heapFree(t); } }],
     GetClassInfoW: ['ppp', (x, inst, name, wc) => (name < 0x10000 ? A(user32, 'GetClassInfoA')(x, inst, name, wc) : withA(x, name, (a) => A(user32, 'GetClassInfoA')(x, inst, a, wc)))],
-    InvalidateRgn: ['ppi', (x, h, rgn, erase) => A(user32, 'InvalidateRect')(x, h, 0, erase)], ValidateRgn: ['pp', () => 1],
+    InvalidateRgn: ['ppi', (x, h, rgn, erase) => A(user32, 'InvalidateRect')(x, h, 0, erase)],
+    // ValidateRgn: the window painted, as ValidateRect has it (AWT's WM_PAINT validates so, after GetUpdateRgn).
+    ValidateRgn: ['pp', (x, h) => A(user32, 'ValidateRect')(x, h, 0)],
     ScrollDC: ['piipppp', (x, hdc, dx, dy, scroll, clip, rgn, upd) => { if (upd) x.write(upd, new Uint8Array(16)); return 1; }],
     GetCaretPos: ['p', (x, p) => { x.w32(p, 0); x.w32(p + 4, 0); return 1; }], mouse_event: ['uiiuu', () => 0],
     LoadCursorFromFileA: ['p', () => 0],

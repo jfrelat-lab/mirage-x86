@@ -144,6 +144,12 @@ export function installFPU(cpu) {
     const m = v80.getBigUint64(a, true), se = v80.getUint16(a + 8, true);
     const sign = se & 0x8000 ? -1 : 1, exp = se & 0x7fff;
     if (exp === 0x7fff) return (m & 0x7fffffffffffffffn) === 0n ? sign * Infinity : NaN;
+    // 2^-15360 and 2^+15360: HotSpot's strictfp bias. Its interpreter multiplies a product or quotient by
+    // the one, then by the other (StubRoutines' fpu_subnormal_bias1 and 2), so that the 80-bit register
+    // rounds as a double would. Here a register is a double already, and they were 0 and Infinity:
+    // 0 x Infinity, and Math.toRadians was NaN -- Java2Demo's rotated text a "bad path". The pair cancels;
+    // each is 1.
+    if (m === 0x8000000000000000n && Math.abs(exp - 16383) === 15360) return sign;
     return sign * Number(m) * Math.pow(2, exp - 16383 - 63);
   };
   const f80s = (a, v) => {

@@ -5962,6 +5962,42 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: TLS in the TEB, setjmp/longjmp, EnumDisplayDevicesA within cb, MapWindowPoints, BI_BITFIELDS masks', got,
     '1234,1234 0,5,33,55,true,401234 1,MIRAGE Display Adapter,eeeeeeee 4 ff0000,ff00,ff');
+  // AWT's windows on the desktop: ValidateRgn validates as ValidateRect does (AWT's WM_PAINT validates so, and
+  // its WM_PAINT came again and again); DirectDraw's primary surface, its toolkit's window hidden, is the
+  // desktop -- what is drawn there, inside the clipper's window, shown where it is (it was a 640x480 cut).
+  try { const { fn, x, apis, str, lx } = await w32(), u = (n) => fn('user32.dll', n), m = x.win.heapAlloc(28);
+    u('CreateWindowExA')(0, str('TApplication'), 0, 0x84ca0000, 0, 0, 0, 0); u('CreateWindowExA')(0, str('TForm'), 0, 0x96000000, 100, 50, 64, 32);
+    const form = parseInt(apis.windows().find((w) => w.cls === 'tform').hwnd, 16);
+    for (const w of apis.windows()) u('ValidateRect')(parseInt(w.hwnd, 16), 0);
+    u('InvalidateRect')(form, 0, 0); const due = u('PeekMessageA')(m, 0, 0x0f, 0x0f, 0);
+    fn('user32.dll', 'ValidateRgn')(form, 0); const after = u('PeekMessageA')(m, 0, 0x0f, 0x0f, 0);
+    const dd = apis.find((d) => d.dll === 'ddraw.dll').fns, call = (n, ...a) => dd[n][1](x, ...a), pp = x.win.heapAlloc(4);
+    let shown = null; lx.fbView = (w, h) => (shown = { w, h, px: new Uint32Array(w * h) }).px;
+    call('DirectDrawCreate', 0, pp, 0); const ddo = x.r32(pp);
+    const d = x.win.heapAlloc(108); x.write(d, new Uint8Array(108)); x.w32(d, 108); x.w32(d + 4, 1); x.w32(d + 104, 0x200);
+    call('IDirectDraw::CreateSurface', ddo, d, pp, 0); const prim = x.r32(pp);
+    call('IDirectDraw::CreateClipper', ddo, 0, pp, 0); const clip = x.r32(pp);
+    call('IDirectDrawClipper::SetHWnd', clip, 0, form); call('IDirectDrawSurface::SetClipper', prim, clip);
+    call('IDirectDrawSurface::Lock', prim, 0, d, 1, 0); const bits = x.r32(d + 36), pitch = x.r32(d + 16);
+    x.w32(bits + 60 * pitch + 110 * 4, 0x123456); x.w32(bits + 10 * pitch + 10 * 4, 0x654321);   // in the form; outside it
+    call('IDirectDrawSurface::Unlock', prim, 0);
+    const at = (X, Y) => (shown.px[Y * shown.w + X] & 0xffffff).toString(16);
+    got = [due, after, shown ? [shown.w, shown.h, at(110, 60), at(10, 10)].join(' ') : 'nothing shown'].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: ValidateRgn validates; DirectDraw\'s primary on a desktop of windows, inside its clipper\'s', got, '1 0 1024 768 123456 3a6ea5');
+  // HotSpot keeps each thread's handle (DuplicateHandle of GetCurrentThread's pseudo-handle: the thread's own),
+  // suspends a thread and reads where it is, and may move it on: SuspendThread holds it out of the queue,
+  // GetThreadContext and SetThreadContext are its registers as its last switch kept them, ResumeThread lets it go.
+  try { const { fn, x, lx } = await w32(), k = (n) => fn('kernel32.dll', n), out = x.win.heapAlloc(4), ctx = x.win.heapAlloc(0x2cc);
+    k('DuplicateHandle')(0xffffffff, 0xfffffffe, 0xffffffff, out, 0, 0, 2);
+    const own = x.r32(out) === 0x2000 + lx.pid, tid = x.win.createThread(x.win.base + 0x1000, 0), h = 0x2000 + tid, q = lx.procs.find((t) => t.pid === tid);
+    const s = k('SuspendThread')(h), held = lx.held.has(tid);
+    x.w32(ctx, 0x10007); const g = k('GetThreadContext')(h, ctx), same = x.r32(ctx + 0xb8) === q.eip && x.r32(ctx + 0xc4) === q.reg[4];
+    x.w32(ctx, 0x10001); x.w32(ctx + 0xb8, 0x401234); k('SetThreadContext')(h, ctx);
+    const r = k('ResumeThread')(h);
+    got = [own, s, held, g, same, q.eip.toString(16), r, lx.held.has(tid)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a thread\'s own handle; SuspendThread holds it, its context read and set, ResumeThread', got, 'true 0 true 1 true 401234 1 false');
   // LoadImageA(LR_LOADFROMFILE): a .bmp of the program's disk (Cave Story's .pbm pictures) as a bitmap.
   try { const bmp = new Uint8Array(54 + 8), v = new DataView(bmp.buffer);
     bmp.set([0x42, 0x4d]); v.setUint32(2, bmp.length, true); v.setUint32(10, 54, true); v.setUint32(14, 40, true); v.setInt32(18, 2, true); v.setInt32(22, 1, true);
@@ -6524,6 +6560,50 @@ await (async () => { let got;
     got = [await runPE(prog(false)), await runPE(prog(true))].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a critical section entered and left in kernel32\'s x86 code; one held elsewhere waits', got, '1 running'); })();
+// SendMessage to another thread's window runs on that thread, as Windows runs it: a second thread sends WM_USER
+// (wParam 5) to the main thread's window and waits; the main thread, in GetMessageA, runs the procedure, which
+// answers wParam * 3 and notes whether GetCurrentThreadId was the main thread's (100). Then the sender posts
+// WM_USER+1 to wake the main thread, which exits with 100 + the answer: 115. Run on the sender, AWT's window
+// procedures found no component for their window, and faulted.
+await (async () => { let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['RegisterClassA', 'CreateWindowExA', 'GetMessageA', 'SendMessageA', 'PostMessageA', 'DefWindowProcA'] },
+      { dll: 'kernel32.dll', names: ['GetCurrentThreadId', 'CreateThread', 'ExitThread', 'ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])], D = (o) => le(at.d(o));
+      const HWND = 0x400, MTID = 0x404, RES = 0x408, DONE = 0x40c, OK = 0x410, MSG = 0x420, THR = 0x100, PROC = 0x180, CLS = 0x300, NAME = 0x380;
+      const main = [0x68, ...D(CLS), ...I('user32.dll!RegisterClassA'),
+        0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 100, 0x6a, 100, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(NAME), 0x6a, 0, ...I('user32.dll!CreateWindowExA'),
+        0xa3, ...D(HWND), ...I('kernel32.dll!GetCurrentThreadId'), 0xa3, ...D(MTID),
+        0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(THR), 0x6a, 0, 0x6a, 0, ...I('kernel32.dll!CreateThread')];
+      const loop = main.length;
+      main.push(0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(MSG), ...I('user32.dll!GetMessageA'), 0x83, 0x3d, ...D(DONE), 0, 0x74, 0);
+      main[main.length - 1] = (loop - main.length) & 255;
+      main.push(0xa1, ...D(RES), 0x03, 0x05, ...D(OK), 0x50, ...I('kernel32.dll!ExitProcess'), 0xf4);
+      const thr = [0x6a, 0, 0x6a, 5, 0x68, 0, 4, 0, 0, 0xff, 0x35, ...D(HWND), ...I('user32.dll!SendMessageA'), 0xa3, ...D(RES), 0xc7, 0x05, ...D(DONE), 1, 0, 0, 0,
+        0x6a, 0, 0x6a, 0, 0x68, 1, 4, 0, 0, 0xff, 0x35, ...D(HWND), ...I('user32.dll!PostMessageA'), 0x6a, 0, ...I('kernel32.dll!ExitThread')];
+      const body = [...I('kernel32.dll!GetCurrentThreadId'), 0x3b, 0x05, ...D(MTID), 0x75, 10, 0xc7, 0x05, ...D(OK), 100, 0, 0, 0,
+        0x8b, 0x44, 0x24, 0x0c, 0x6b, 0xc0, 0x03, 0xc2, 0x10, 0x00];
+      const proc = [0x81, 0x7c, 0x24, 0x08, 0, 4, 0, 0, 0x75, body.length, ...body, 0xff, 0x25, ...le(at.iat['user32.dll!DefWindowProcA'])];
+      const img = new Uint8Array(0x500); img.set(main); img.set(thr, THR); img.set(proc, PROC);
+      img.set(le(at.d(PROC)), CLS + 4); img.set(le(at.d(NAME)), CLS + 36); img.set([0x54, 0], NAME);
+      return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: SendMessage to another thread\'s window runs on that thread, the sender waiting for its answer', got, '115'); })();
+// HotSpot's strictfp multiply and divide (its interpreter's, and so StrictMath's and Math.toRadians'): the
+// operand times 2^-15360, the operation, times 2^+15360 -- two 80-bit constants a double cannot hold (0 and
+// Infinity, and the result NaN). Loaded, each is 1: 40 x 0.5 = 20.
+await (async () => { let got;
+  try { const mc = new Machine({ memSize: 1 << 20, cpu: '686' }), c = mc.cpu, f = new DataView(new ArrayBuffer(8));
+    const f64 = (v) => { f.setFloat64(0, v, true); return new Uint8Array(f.buffer.slice(0)); };
+    mc.mem.blit(0x2000, f64(40)); mc.mem.blit(0x2008, f64(0.5));
+    mc.mem.blit(0x2010, Uint8Array.of(0, 0, 0, 0, 0, 0, 0, 0x80, 0xff, 0x03)); mc.mem.blit(0x2020, Uint8Array.of(0, 0, 0, 0, 0, 0, 0, 0x80, 0xff, 0x7b));
+    c.fpuMem(0xdd, 0, 0x2000); c.fpuMem(0xdb, 5, 0x2010); c.fpuReg(0xde, 1, 1);           // fld qword; fld tbyte bias1; fmulp
+    c.fpuMem(0xdc, 1, 0x2008); c.fpuMem(0xdb, 5, 0x2020); c.fpuReg(0xde, 1, 1);           // fmul qword; fld tbyte bias2; fmulp
+    got = String(c.fst[c.ftop]);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('x87: HotSpot\'s strictfp bias, 2^-15360 and 2^+15360 in 80 bits, cancels', got, '20'); })();
 // msvcrt's _ftol: ST(0) truncated to EDX:EAX, without BigInt -- a fraction each way, a value past 32
 // bits, and a NaN as FISTP gives it (8000000000000000h).
 await (async () => { let got;

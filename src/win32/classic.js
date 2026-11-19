@@ -784,6 +784,7 @@ export function classicApis({ st, wm }) {
     }],
     // OLE drag and drop and class objects: registered, never called here (nothing is dropped).
     RegisterDragDrop: ['pp', () => 0], RevokeDragDrop: ['p', () => 0], CoDisconnectObject: ['pu', () => 0],
+    CoLockObjectExternal: ['pii', () => 0],                            // an object kept alive by its strong lock (AWT's drop targets): S_OK
     CoRegisterClassObject: ['ppuup', (x, clsid, unk, ctx, flags, cookie) => { if (cookie) x.w32(cookie, 1); return 0; }],
     CoRevokeClassObject: ['u', () => 0],
     ProgIDFromCLSID: ['pp', () => 0x80040154],                       // REGDB_E_CLASSNOTREG

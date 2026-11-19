@@ -363,6 +363,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }
     return x.waitUntil(now + 0.001);
   };
+  // A thread handle's thread (its id plus 2000h, GetCurrentThread's pseudo-handle the caller's), or null.
+  const threadOf = (x, h) => (h === 0xfffffffe ? x.lx.pid : h > 0x2000 && h < 0x3000 ? h - 0x2000 : null);
+  st.suspends = new Map();                                           // SuspendThread's counts, by thread
   const kernel32 = {
     // Crinkler's header calls it once more on the byte after its list of DLL names, and takes the NULL
     // Windows answers as the list's end: only a name that looks like one is worth a line in the log.
@@ -552,12 +555,54 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
         0xc7, 0x41, 0x0c, 0, 0, 0, 0,                 // mov dword [ecx+12], 0  free
         0x31, 0xc0, 0xc2, 0x04, 0x00) }],             // done: xor eax, eax ; ret 4
     GetExitCodeThread: ['pp', (x, h, p) => { const c = x.lx.threadExits.get(h - 0x2000); x.w32(p, c === undefined ? 259 : c); return 1; }],   // STILL_ACTIVE
-    TerminateThread: ['pu', () => 1], ResumeThread: ['p', () => 1], SuspendThread: ['p', () => 0],
+    TerminateThread: ['pu', () => 1],
+    /*
+     * SuspendThread and ResumeThread: a count per thread; a thread whose count is above zero is not run
+     * (src/linux.js lx.held) until it comes back to zero. HotSpot suspends a thread to read where it is
+     * (GetThreadContext) and may move it on (SetThreadContext), its registers those its last switch kept.
+     * (ResumeThread of a thread never suspended answers 1, as one made CREATE_SUSPENDED would.)
+     */
+    SuspendThread: ['p', (x, h) => {
+      const t = threadOf(x, h); if (t === null || !x.lx.alive(t)) return 0xffffffff;
+      const n = st.suspends.get(t) | 0; st.suspends.set(t, n + 1);
+      if (t !== x.lx.pid) x.lx.held.add(t);
+      return n;
+    }],
+    ResumeThread: ['p', (x, h) => {
+      const t = threadOf(x, h); if (t === null) return 0xffffffff;
+      const n = st.suspends.get(t) | 0;
+      if (n <= 1) { st.suspends.delete(t); x.lx.held.delete(t); } else st.suspends.set(t, n - 1);
+      return n || 1;
+    }],
+    // CONTEXT (i386): ContextFlags at 0; Edi, Esi, Ebx, Edx, Ecx, Eax at 9Ch-B0h; Ebp, Eip, SegCs, EFlags,
+    // Esp, SegSs at B4h-C8h; Gs, Fs, Es, Ds at 8Ch-98h. Another thread's from what its last switch kept;
+    // the caller's own as the call's return will leave them.
+    GetThreadContext: ['pp', (x, h, ctx) => {
+      const t = threadOf(x, h), q = t === x.lx.pid ? null : x.lx.procs.find((p) => p.pid === t);
+      if (t === null || (t !== x.lx.pid && !q)) { setError(x, 6); return 0; }
+      const c = x.cpu, esp = c.reg[4] >>> 0;
+      const reg = q ? q.reg : Uint32Array.from(c.reg, (v, i) => (i === 4 ? esp + 12 : v));
+      const eip = q ? q.eip : x.r32(esp), flags = q ? q.flags : c.flags, seg = q ? q.seg : Array.from(c.seg);
+      [[0x9c, 7], [0xa0, 6], [0xa4, 3], [0xa8, 2], [0xac, 1], [0xb0, 0], [0xb4, 5], [0xc4, 4]].forEach(([o, r]) => x.w32(ctx + o, reg[r] >>> 0));
+      x.w32(ctx + 0xb8, eip >>> 0); x.w32(ctx + 0xc0, (flags | 2) >>> 0);
+      [[0xbc, 1], [0xc8, 2], [0x98, 3], [0x94, 0], [0x90, 4], [0x8c, 5]].forEach(([o, s]) => x.w32(ctx + o, seg[s] & 0xffff));
+      return 1;
+    }],
+    SetThreadContext: ['pp', (x, h, ctx) => {
+      const t = threadOf(x, h), q = t === x.lx.pid ? null : x.lx.procs.find((p) => p.pid === t);
+      if (!q) return t === x.lx.pid ? 1 : 0;
+      const f = x.r32(ctx);
+      if ((f & 0x10002) === 0x10002) [[0x9c, 7], [0xa0, 6], [0xa4, 3], [0xa8, 2], [0xac, 1], [0xb0, 0]].forEach(([o, r]) => { q.reg[r] = x.r32(ctx + o); });
+      if ((f & 0x10001) === 0x10001) { q.reg[5] = x.r32(ctx + 0xb4); q.reg[4] = x.r32(ctx + 0xc4); q.eip = x.r32(ctx + 0xb8); q.flags = x.r32(ctx + 0xc0); }
+      return 1;
+    }],
     GetCurrentThreadId: ['', (x) => x.lx.pid], GetCurrentProcessId: ['', () => 0x100],
     SetThreadPriority: ['pi', () => 1], SetPriorityClass: ['pu', () => 1], GetCurrentThread: ['', () => 0xfffffffe], GetCurrentProcess: ['', () => 0xffffffff],
     // DuplicateHandle: the same handle back (a pseudo-handle -- GetCurrentThread's -- stays one: every call here
     // that takes a thread handle answers for the program's own threads alike).
-    DuplicateHandle: ['ppppuiu', (x, sp, h, dp, out) => { if (out) x.w32(out, h); return 1; }],
+    // ...but GetCurrentThread's becomes the thread's own handle, as Windows makes it: HotSpot keeps each thread's
+    // so, and suspends them by it.
+    DuplicateHandle: ['ppppuiu', (x, sp, h, dp, out) => { if (out) x.w32(out, h === 0xfffffffe ? 0x2000 + x.lx.pid : h); return 1; }],
     GetCommandLineA: ['', (x) => (st.cmd ||= (() => { const b = new TextEncoder().encode(`"${x.win.path}"${x.win.args ? ' ' + x.win.args : ''}\0`), p = x.win.heapAlloc(b.length); x.write(p, b); return p; })())],   // the program's path quoted, then its arguments
     GetVersion: ['', () => 0x0a280105],                                 // 5.1, build 2600: Windows XP
     // The last error, a thread's own: what SetLastError put there, or a call made here that failed. Storm.dll
@@ -1214,6 +1259,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (!st.deskPx || st.deskPx.length !== D.w * D.h) st.deskPx = new Uint32Array(D.w * D.h).fill(0x3a6ea5);
     return { w: D.w, h: D.h, px: st.deskPx };
   };
+  // For DirectDraw's primary surface on a dialog application's desktop (src/win32/ddraw.js): the desktop
+  // drawn on, and a window's client area on the screen.
+  st.deskScreen = () => (deskMode() ? deskScreen() : null);
+  st.clientOnScreen = (h) => { const w = win(h); if (!w || w.main) return null; const o = screenOrigin(h); return { l: o.x, t: o.y, r: o.x + (w.w | 0), b: o.y + (w.h | 0) }; };
   // What a hidden or moved window leaves: the desktop there, and the windows that were under it to paint.
   const uncoverRect = (o, W, H, w = null) => {
     // A layer gone: the screen composed again, now (Pinball's splash, destroyed while the table loads for
@@ -1974,9 +2023,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
    * procedure is entered with its four arguments and a return into user32's ordinal-only stub 2600
    * (mirageReturn), which enters it again for the next message, and after the last returns to the
    * API's caller with `result(eax)` in EAX and the API's own `pop` bytes of arguments taken, as its
-   * stdcall return would. Sends nest (a procedure calling an API that sends): each its frame.
+   * stdcall return would. Sends nest (a procedure calling an API that sends): each its frame -- each
+   * thread its own frames, as each its stack (a thread's frames taken for another's, the other's lost).
    */
-  st.sends = [];
+  st.sendStacks = new Map();
+  const sendsOf = (x) => { let s = st.sendStacks.get(x.lx.pid); if (!s) st.sendStacks.set(x.lx.pid, s = []); return s; };
   // A call into the program: a window message [msg, wp, lp] to the window's procedure, or { fn, args }
   // (a DLL's DllMain), stdcall, returning into the stub.
   const callProc = (x, m, ret) => {
@@ -1994,29 +2045,61 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     msgs = msgs.filter((m) => !Array.isArray(m) || procOf(m[3] ?? st.hwnd));
     if (!msgs.length) return result(0);
     const esp0 = x.cpu.reg[4] >>> 0;                                  // the caller's return address, its arguments above
-    st.sends.push({ msgs: msgs.slice(1), result, pop, esp0 });
+    sendsOf(x).push({ msgs: msgs.slice(1), result, pop, esp0 });
     callProc(x, msgs[0], back(x));
     return 0;
   };
   const mirageReturn = (x) => {
-    const c = x.cpu, eax = x.r32(c.reg[4] >>> 0);                      // pushed by its stub
+    const c = x.cpu, eax = x.r32(c.reg[4] >>> 0), sends = sendsOf(x);  // pushed by its stub
     // A call returns below the frame it was made from (its arguments, its return address, EAX pushed).
     // Calls whose frame is below this one were abandoned: an exception handler jumped out of them (seh).
-    while (st.sends.length > 1 && st.sends[st.sends.length - 1].esp0 < (c.reg[4] >>> 0)) st.sends.pop();
-    const f = st.sends[st.sends.length - 1];
+    while (sends.length > 1 && sends[sends.length - 1].esp0 < (c.reg[4] >>> 0)) sends.pop();
+    const f = sends[sends.length - 1];
     if (f.msgs.length) { c.reg[4] = f.esp0; callProc(x, f.msgs.shift(), back(x)); return eax; }
     // `result` runs on the API's own frame (its return address and arguments still on the stack): one
     // that sends again (DefDlgProc's FALSE going on to DefWindowProc, which sends WM_ERASEBKGND) starts
     // its sequence from that frame, and it is that sequence's end that returns to the caller. Run after
     // the frame was taken off, a nested send found no return address there, and the stack drifted.
-    st.sends.pop();
-    const depth = st.sends.length, ret = x.r32(f.esp0);
+    sends.pop();
+    const depth = sends.length, ret = x.r32(f.esp0);
     c.reg[4] = f.esp0;
     const r = f.result(eax);
     if (st.resumed) { st.resumed = false; return r; }                // an exception's context resumed (seh)
-    if (st.sends.length > depth) return r;                           // a new sequence: it returns, later
+    if (sends.length > depth) return r;                           // a new sequence: it returns, later
     c.reg[4] = (f.esp0 + 4 + f.pop) >>> 0; c.eip = ret;
     return r;
+  };
+  /*
+   * A message sent to another thread's window runs on that thread, as Windows runs it: the sender waits
+   * (its call made again until the answer is there) and the window's thread takes it when it next looks
+   * for messages -- GetMessage, PeekMessage, WaitMessage -- or while it waits on a send of its own. AWT's
+   * toolkit thread owns every window of Java's, and the other threads send to it; run on the sender, a
+   * procedure asking whose window it was (GetWindowThreadProcessId) found no component and AWT faulted.
+   */
+  st.sent = [];                                                      // { tid, hwnd, msg, wp, lp, done, result }
+  st.sending = new Map();                                            // a waiting sender's thread -> its message
+  const ownerOf = (h) => (win(h) && win(h).tid !== undefined ? win(h).tid : h === st.hwnd ? st.guiTid : undefined);
+  const elsewhere = (x, h) => { const t = ownerOf(h); return t !== undefined && t !== x.lx.pid && x.lx.alive(t); };
+  // A message sent to this thread: its procedure called, the answer left for the sender, and then the API
+  // that looked (its INT 80h, EAX its number) made again from the start, as if nothing had come.
+  const takeSent = (x) => {
+    const me = x.lx.pid;
+    for (let i; (i = st.sent.findIndex((r) => r.tid === me)) >= 0;) {
+      const r = st.sent.splice(i, 1)[0];
+      if (!procOf(r.hwnd)) { r.result = 0; r.done = true; continue; }
+      const c = x.cpu, at = (c.eip - 2) >>> 0, n = c.reg[0];
+      return send(x, [[r.msg, r.wp, r.lp, r.hwnd]], (eax) => { r.result = eax; r.done = true; c.eip = at; st.resumed = true; return n; }, 0);
+    }
+    return null;
+  };
+  // The sender's side: `answer(result)` once the window's thread has run it.
+  const sendAcross = (x, hwnd, msg, wp, lp, answer) => {
+    const me = x.lx.pid;
+    let r = st.sending.get(me);
+    if (!r) { r = { tid: ownerOf(hwnd), hwnd, msg, wp, lp, done: false, result: 0 }; st.sending.set(me, r); st.sent.push(r); }
+    if (r.done || !x.lx.alive(r.tid)) { st.sending.delete(me); const i = st.sent.indexOf(r); if (i >= 0) st.sent.splice(i, 1); return answer(r.result); }
+    const s = takeSent(x); if (s !== null) return s;
+    return x.waitUntil(x.lx.mono() + 0.001);
   };
   /*
    * Structured exception handling, as ntdll dispatches it on x86. RaiseException makes an EXCEPTION_RECORD
@@ -2279,6 +2362,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // hwnd, message, wParam, lParam, time, pt; PM_REMOVE (1) takes it off the queue.
     // The filters: a window (its children's messages too) and a range of messages, both 0 for any.
     PeekMessageA: ['ppuuu', (x, m, hwnd, min, max, remove) => {
+      const sent = takeSent(x); if (sent !== null) return sent;
       if (st.videoTick) st.videoTick(x);                              // a playing video's frame due (MCI)
       const peek = () => {
         const i = firstMsg(hwnd, min, max, x);
@@ -2298,6 +2382,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // GetMessageA waits for one, as an idle window does (the call is made again when the time comes);
     // WM_QUIT (12h) makes it return 0.
     GetMessageA: ['ppuu', (x, m, hwnd, min, max) => {
+      const sent = takeSent(x); if (sent !== null) return sent;
       if (st.pendingMove) { putMsg(x, m, { msg: 0x03, wp: 0, lp: takeMove() }); return 1; }
       const i = firstMsg(hwnd, min, max, x);
       if (i < 0) {
@@ -2526,7 +2611,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     // WaitMessage: until something is queued, as GetMessage waits.
     // A timer due is a message waiting, as for GetMessage (Delphi's TTimer: its window's WM_TIMER).
-    WaitMessage: ['', (x) => (st.msgs.length || st.pendingMove || (st.paintDue && st.paintDue()) || timerNext() <= x.lx.mono() ? 1 : x.waitUntil(Math.min(x.lx.mono() + 0.01, timerNext())))],
+    WaitMessage: ['', (x) => (st.sent.some((r) => r.tid === x.lx.pid) || st.msgs.length || st.pendingMove || (st.paintDue && st.paintDue()) || timerNext() <= x.lx.mono() ? 1 : x.waitUntil(Math.min(x.lx.mono() + 0.01, timerNext())))],
     // GetKeyNameTextA(lParam, buf, n): the key's name, from its scancode (bits 16-23) and extended bit (24).
     GetKeyNameTextA: ['ipi', (x, lp, buf, n) => {
       const vk = scanToVk((lp >> 16) & 0xff, !!(lp & 0x1000000));
@@ -2568,10 +2653,11 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ClipCursor: ['p', (x, r) => { st.clip = r ? { l: x.r32(r) | 0, t: x.r32(r + 4) | 0, r: x.r32(r + 8) | 0, b: x.r32(r + 12) | 0 } : null; return 1; }],
     // InvalidateRect: a WM_PAINT due, the main window's too (Minesweeper's new game).
     InvalidateRect: ['ppi', (x, h, r, erase) => { invalidate(h || st.hwnd, !!erase); return 1; }], PostMessageA: ['puuu', (x, hwnd, msg, wp, lp) => { st.msgs.push({ msg, wp, lp, ...(hwnd && hwnd !== st.hwnd ? { hwnd } : {}) }); return 1; }],
-    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp, pop = 16) => (procOf(hwnd) ? send(x, [[msg, wp, lp, hwnd]], (eax) => eax, pop) : 0)],
+    SendMessageA: ['puuu', (x, hwnd, msg, wp, lp, pop = 16) => (!procOf(hwnd) ? 0 : elsewhere(x, hwnd) ? sendAcross(x, hwnd, msg, wp, lp, (eax) => eax) : send(x, [[msg, wp, lp, hwnd]], (eax) => eax, pop))],
     // SendMessageTimeoutA: sent as SendMessageA, the answer at `out`; never timed out here.
     SendMessageTimeoutA: ['puuuuup', (x, hwnd, msg, wp, lp, flags, ms, out) => {
       if (!procOf(hwnd)) { if (out) x.w32(out, 0); return hwnd === 0xffff ? 1 : 0; }
+      if (elsewhere(x, hwnd)) return sendAcross(x, hwnd, msg, wp, lp, (eax) => { if (out) x.w32(out, eax); return 1; });
       return send(x, [[msg, wp, lp, hwnd]], (eax) => { if (out) x.w32(out, eax); return 1; }, 28);
     }], KillTimer: ['pu', (x, hwnd, id) => (st.timers.delete(`${hwnd}:${id}`) ? 1 : 0)],
     // GWL_STYLE (-16): the frame the window's size includes from now on (WinQuake's windowed and full-screen modes).
@@ -2679,7 +2765,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     RedrawWindow: ['pppu', () => 1], ExcludeUpdateRgn: ['pp', () => 1],
     FindWindowA: ['pp', () => 0],
     DestroyCaret: ['', () => 1], ShowCaret: ['p', () => 1], HideCaret: ['p', () => 1],
-    MsgWaitForMultipleObjects: ['upiuu', (x, n, handles, all, ms) => { if (!ms) return 0x102; const r = x.sleep(Math.min(ms, 1000) / 1000); return r === 0 ? 0x102 : r; }],
+    // A message sent to this thread ends the wait as input does (WAIT_OBJECT_0 + n): the caller takes it.
+    MsgWaitForMultipleObjects: ['upiuu', (x, n, handles, all, ms) => { if (st.sent.some((r) => r.tid === x.lx.pid)) return n; if (!ms) return 0x102; const r = x.sleep(Math.min(ms, 1000) / 1000); return r === 0 ? 0x102 : r; }],
   };
   // ---- gdi32 ---------------------------------------------------------------------------------------
   // Text drawn into a bitmap (ExtTextOutA), at the pen (X, Y), the cell's top.
