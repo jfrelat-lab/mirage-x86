@@ -1187,9 +1187,12 @@ export function translateCom(com, state, opts = {}) {
   }
   let body = null, mode = 'goto', structureRefused = null;
   if (structured) {
-    try { body = emitStructured(blocks, entry); mode = 'structured'; } catch (e) { if (!(e instanceof Refused)) throw e; structureRefused = e.message; }
+    try { body = emitStructured(singleExitLoops(blocks, entry), entry); mode = 'structured'; } catch (e) { if (!(e instanceof Refused)) throw e; structureRefused = e.message; }
   }
   if (!body) body = emitGotos(blocks, entry);
+  // No FLDCW anywhere: the rounding control is the reset's (nearest) for the whole run, so FIST and
+  // FRNDINT round without consulting it (tube's two FISTPs a pixel: 3.7 -> 3.0 ms a frame in PRISM).
+  if (![...decoded.values()].some((R) => /^fldcw/.test(R.text))) body = body.map((l) => l.replace(/fi16\(([^;]*?),fcw\)/g, 'fi16n($1)').replace(/fround\(([^;]*?),fcw\)/g, 'frnear($1)'));
   const c = cSource({ name, state, image: snap ? Array.from(m) : Array.from(com), base: imageStart, body, guard: [...guardSet].sort((a, b) => a - b), platform, needIc, snap });
   return { c, nodes, decoded, fpuDyn: !!opts.fpuDyn, optimisticShift: !!opts.optimisticShift, nInsns: decoded.size, nNodes: nodes.length, nBlocks: blocks.size, mode, structureRefused, frameIns, syncAt: syncAt === null ? null : nodes[syncAt].ip, guardBytes: guardSet.size };
 }
@@ -1278,6 +1281,52 @@ function findLoops(blocks, entry) {
  * this does not cover: an irreducible graph, a loop with two exit targets, an exit from an inner loop
  * straight out of an outer one, or a block reached twice.
  */
+/**
+ * A loop with several exit targets made a loop with one: every exit edge u->t goes through a block
+ * setting xs=k, to one dispatch block after the loop (xs==1 ? t1 : xs==2 ? t2 : ...). Innermost loops
+ * first; the dispatch belongs to the enclosing loop, which may then have several exits in its turn.
+ * Works on a copy: the goto fallback keeps the original blocks.
+ */
+function singleExitLoops(orig, entry) {
+  const blocks = new Map([...orig].map(([k, b]) => [k, { ...b, term: { ...b.term }, succ: [...b.succ] }]));
+  let next = Math.max(...blocks.keys()) + 1;
+  // The edge's own code (xs=k) rides on the terminator: takenPre / fallPre / toPre.
+  const retarget = (b, from, to, pre) => {
+    const t = b.term;
+    if (t.kind === 'cond') { if (t.taken === from) { t.taken = to; t.takenPre = pre; } if (t.fall === from) { t.fall = to; t.fallPre = pre; } }
+    else if (t.kind === 'go' && t.to === from) { t.to = to; t.toPre = pre; }
+    b.succ = blockSucc(b);
+  };
+  for (let round = 0; round < 64; round++) {
+    const loops = findLoops(blocks, entry);
+    const multi = [...loops.values()].sort((a, b) => a.body.size - b.body.size).find((L) => {
+      const ex = new Set();
+      for (const b of L.body) for (const t of blocks.get(b).succ) if (!L.body.has(t)) ex.add(t);
+      L.exits = [...ex];
+      return ex.size > 1;
+    });
+    if (!multi) return blocks;
+    const ip = blocks.get(multi.header).ip;
+    const D = next++;
+    multi.exits.forEach((t, k) => {
+      for (const u of multi.body) {
+        const b = blocks.get(u);
+        if (!b.succ.includes(t)) continue;
+        retarget(b, t, D, `xs=${k};`);
+      }
+    });
+    // The dispatch: a chain of two-way blocks, the last exit the final else.
+    let at = D;
+    const X = multi.exits;
+    for (let k = 0; k + 1 < X.length; k++) {
+      const nx = k + 2 === X.length ? X[k + 1] : next++;
+      blocks.set(at, { ip, nodes: [], n: 0, lines: [], term: { kind: 'cond', cond: `(xs==${k})`, taken: X[k], fall: nx }, succ: [X[k], nx], synthetic: true });
+      at = nx;
+    }
+  }
+  refuse(blocks.get(entry).ip, 'loops whose exits do not reduce to one');
+}
+
 function emitStructured(blocks, entry) {
   const ids = [...blocks.keys()];
   const ipOf = (b) => blocks.get(b).ip;
@@ -1334,6 +1383,7 @@ function emitStructured(blocks, entry) {
 
   const out = [];
   const emitted = new Set();
+  let dup = 0;
   const ind = (d) => '  '.repeat(d);
   function edge(s, ctx, stop, d) {
     if (ctx.L && s === ctx.L.header) { out.push(`${ind(d)}continue;`); return; }
@@ -1357,7 +1407,9 @@ function emitStructured(blocks, entry) {
         continue;
       }
       ctx = { L: ctx.L, inHeader: false };
-      if (emitted.has(n)) refuse(ipOf(n), 'a block reached twice');
+      // A block reached on two paths that do not join before it (a post-dominator further on): emitted
+      // again on the second -- tail duplication, bounded.
+      if (emitted.has(n)) { dup += blocks.get(n).lines.length + 1; if (dup > 4000) refuse(ipOf(n), 'a block reached twice, too often to duplicate'); }
       emitted.add(n);
       const b = blocks.get(n);
       out.push(`${ind(d)}/* ${hex(b.ip)} */`, ...b.lines.map((l) => ind(d) + l));
@@ -1365,14 +1417,15 @@ function emitStructured(blocks, entry) {
       if (t.kind === 'exit') { out.push(ind(d) + t.c); return; }
       if (t.kind === 'go') {
         const s = t.to;
+        if (t.toPre) out.push(ind(d) + t.toPre);
         if ((ctx.L && (s === ctx.L.header || s === ctx.L.follow)) || stop.has(s)) { edge(s, ctx, stop, d); return; }
         n = s; continue;
       }
       const m = regionIpdom(ctx.L).get(n);
       const join = m >= 0 ? m : null;
       const st2 = join === null ? stop : new Set([...stop, join]);
-      const arm = (s) => { const at = out.length; edge(s, ctx, st2, d + 1); return out.splice(at); };
-      const a = arm(t.taken), e = arm(t.fall);
+      const arm = (s, pre) => { const at = out.length; if (pre) out.push(ind(d + 1) + pre); edge(s, ctx, st2, d + 1); return out.splice(at); };
+      const a = arm(t.taken, t.takenPre), e = arm(t.fall, t.fallPre);
       if (a.length) {
         out.push(`${ind(d)}if (${t.cond}) {`, ...a);
         out.push(e.length ? `${ind(d)}} else {` : `${ind(d)}}`);
@@ -1382,7 +1435,7 @@ function emitStructured(blocks, entry) {
     }
   }
   region(entry, { L: null, inHeader: false }, new Set(), 0);
-  for (const b of ids) if (!emitted.has(b)) refuse(ipOf(b), 'a block the structured walk never reached');
+  for (const b of ids) if (!emitted.has(b)) { if (process.env.RC_DEBUG) console.log('unreached', b, JSON.stringify(blocks.get(b).term), blocks.get(b).synthetic, [...blocks].filter(([k, x]) => x.succ.includes(b)).map(([k]) => k), out.join('\n')); refuse(ipOf(b), 'a block the structured walk never reached'); }
   return out;
 }
 
@@ -1449,6 +1502,11 @@ const byteRows = (bytes) => {
  * native runtime (tools/recomp/native/rc_sdl.c, clang + SDL2), where it is an array.
  */
 function cSource({ name, state, image, base, body, guard, platform, needIc, snap }) {
+  // A local is declared only if the body names it: PRISM keeps a function whose locals include an
+  // array (F[8]) or a 64-bit integer differently (measured: tube 3.0 -> 3.7 ms a frame with both
+  // declared and unused).
+  const text = body.join('\n');
+  const uses = (re) => re.test(text);
   const r = state.reg, hi = state.regHi ?? [0, 0, 0, 0, 0, 0, 0, 0];
   const par = Array.from({ length: 256 }, (_, v) => { let p = 1; for (let x = v; x; x >>= 1) p ^= x & 1; return p; });
   // The guard as runs [offset, length] over the image.
@@ -1489,6 +1547,15 @@ static double fround(double x, int fcw) {
   fl = floor(x); d = x - fl;
   return d < 0.5 ? fl : d > 0.5 ? fl + 1 : (fmod(fl, 2.0) == 0 ? fl : fl + 1);
 }
+static double frnear(double x) {
+  double fl = floor(x), d = x - fl;
+  return d < 0.5 ? fl : d > 0.5 ? fl + 1 : (fmod(fl, 2.0) == 0 ? fl : fl + 1);
+}
+static int fi16n(double x) {
+  double fl = floor(x), d = x - fl, r = d < 0.5 ? fl : d > 0.5 ? fl + 1 : (fmod(fl, 2.0) == 0 ? fl : fl + 1);
+  if (r >= -32768.0 && r < 32768.0) return (int)r;
+  return 0x18000;
+}
 static int fi16(double x, int fcw) {
   double r = fround(x, fcw);
   if (r >= -32768.0 && r < 32768.0) return (int)r;
@@ -1512,19 +1579,17 @@ int rc_main(void) {
   int esb = es << 4, csb = cs << 4, ssb = ss << 4, dsb = ds << 4, fsb = fs << 4, gsb = gs << 4;
   int fC = ${state.flags & 1}, fP = ${(state.flags >> 2) & 1}, fA = ${(state.flags >> 4) & 1}, fZ = ${(state.flags >> 6) & 1}, fS = ${(state.flags >> 7) & 1}, fO = ${(state.flags >> 11) & 1};
   double ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `p${k} = ${snap ? lit(snap.fpu.st[k]) : '0'}`).join(', ')}, d0, d1;
+  int xs = 0;
   int fsw = ${snap ? snap.fpu.fsw : 0}, fcw = ${snap ? snap.fpu.fcw : 0x37f}, ta, t0, t1, t2, t3, t4, t5;
   unsigned ux, u0, u1, u2;
-  long long q0, q2, q3;
-  double F[8] = { ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => (snap ? lit(snap.fpu.st[k]) : '0')).join(', ')} };
-  int ft = ${snap ? snap.fpu.ftop : (state.ftop ?? 0)};
-  unsigned long long q1;
+${uses(/\bq[0-3]\b/) ? '  long long q0, q2, q3;\n  unsigned long long q1;\n' : ''}${uses(/\bF\[/) ? `  double F[8] = { ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => (snap ? lit(snap.fpu.st[k]) : '0')).join(', ')} };\n  int ft = ${snap ? snap.fpu.ftop : (state.ftop ?? 0)};\n` : ''}
   int axh = ${hi[0]}, cxh = ${hi[1]}, dxh = ${hi[2]}, bxh = ${hi[3]}, bph = ${hi[5]}, sih = ${hi[6]}, dih = ${hi[7]};
   double ic = ${snap ? snap.count : 0};
   rc_regs rg;
   (void)cs; (void)csb; (void)fsb; (void)gsb; (void)fP; (void)fA; (void)fO; (void)fC; (void)fS; (void)fZ; (void)t0; (void)t1; (void)t2; (void)t3; (void)t4; (void)t5; (void)d0; (void)d1;
-  (void)rg; (void)ta; (void)ux; (void)fsw; (void)fcw; (void)ic; (void)esb; (void)dsb; (void)ssb; (void)fround; (void)fi16; (void)rc_guard; (void)PAR;
+  (void)rg; (void)ta; (void)ux; (void)fsw; (void)fcw; (void)ic; (void)esb; (void)dsb; (void)ssb; (void)xs; (void)fround; (void)fi16; (void)frnear; (void)fi16n; (void)rc_guard; (void)PAR;
   (void)es; (void)ss; (void)ds; (void)fs; (void)gs; (void)ax; (void)bx; (void)cx; (void)dx; (void)si; (void)di; (void)bp; (void)sp;
-  (void)u0; (void)u1; (void)u2; (void)F; (void)ft; (void)q0; (void)q1; (void)q2; (void)q3; (void)axh; (void)cxh; (void)dxh; (void)bxh; (void)bph; (void)sih; (void)dih;
+  (void)u0; (void)u1; (void)u2; ${uses(/\bF\[/) ? '(void)F; (void)ft; ' : ''}${uses(/\bq[0-3]\b/) ? '(void)q0; (void)q1; (void)q2; (void)q3; ' : ''}(void)axh; (void)cxh; (void)dxh; (void)bxh; (void)bph; (void)sih; (void)dih;
   (void)p0; (void)p1; (void)p2; (void)p3; (void)p4; (void)p5; (void)p6; (void)p7;
 ${snap ? snapRestore(snap) : `  /* What the program finds beside its image: ${ivt ? 'the interrupt table and BIOS data area as MIRAGE leaves them, ' : ''}its PSP${psp ? ' (DOS\'s)' : ' (INT 20h)'}, the image at 100h, and the zero word DOS pushes for a RET to reach it. */
 ${state.dac ? '  { int i; rc_out(0x3c8, 0); for (i = 0; i < 768; i++) rc_out(0x3c9, ENTRYDAC[i]); }   /* the DAC as MIRAGE\'s BIOS left it */\n' : ''}${ivt ? '  memcpy(MEM, LOWMEM, sizeof LOWMEM);\n' : ''}${psp ? '  memcpy(MEM + csb, PSP, 0x100);\n' : '  memset(MEM + csb, 0, 0x100);\n  MEM[csb] = 0xcd; MEM[csb + 1] = 0x20;\n'}  memcpy(MEM + csb + 0x100, IMAGE, sizeof IMAGE);

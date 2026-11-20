@@ -37,12 +37,13 @@ export function build(name, prep, opts = {}) {
 }
 
 /** Run the PRISM build; `onFrame(i, fb, dac, ic)` at each frame point. */
-export function runPrism(program, { frames, key = IDLE_KEY, onFrame, argv0 = 'PROG' }) {
+export function runPrism(program, { frames, key = IDLE_KEY, onFrame, argv0 = 'PROG', every = 1 }) {
   const M = program.M;
   const ic = M.mod.symbols.get('rc_ic')?.addr;
   let n = 0;
   M.machine.onPortRead(0x60, () => {
     n++;
+    if (n % every && n < frames) return key;    // --every=K: only each K-th frame point is a frame
     const fb = M.u8.subarray(0xa0000, 0xa0000 + 64000);
     const dac = Uint8Array.from(M.dac.palette, (v) => v >> 2);
     onFrame?.(n, fb, dac, ic !== undefined ? M.mod.dv.getFloat64(ic, true) : NaN);
@@ -71,6 +72,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const opt = (k, d) => { const a = args.find((x) => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : d; };
   const flag = (k) => args.includes(`--${k}`);
   const name = args.find((a) => !a.startsWith('--')) ?? 'tube';
+  const EVERY = +opt('every', 1);
   const FRAMES = +opt('frames', 30);
   const prep = await prepare(name);
   if (!flag('bench')) {
@@ -78,7 +80,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.log(`${name}: ${tr.nInsns} instructions, ${tr.nBlocks} blocks, ${tr.mode}${tr.structureRefused ? ` (${tr.structureRefused})` : ''} -> ${file}: ${tr.c.length} bytes of C; `
       + `${program.src.length} bytes of JavaScript; translate ${ms.translate.toFixed(1)} ms, PRISM ${ms.prism.toFixed(0)} ms`);
     const got = [];
-    const r = runPrism(program, { frames: FRAMES, argv0: name, onFrame: (i, fb, dac, ic) => got.push({ i, ic, hash: frameHash(fb, dac) }) });
+    const r = runPrism(program, { frames: FRAMES * EVERY, every: EVERY, argv0: name, onFrame: (i, fb, dac, ic) => got.push({ i, ic, hash: frameHash(fb, dac) }) });
     const want = got.length ? oracleHashes(prep.path, got.map((g) => g.ic)) : [];
     let same = 0, first = null;
     got.forEach((g, k) => { if (want[k]?.hash === g.hash) same++; else if (!first) first = g; });
@@ -91,7 +93,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const { program, ms } = build(name, prep, { count: !flag('no-count'), structured: !flag('goto') });
     const pt = [], ics = [];
     let last = performance.now();
-    runPrism(program, { frames: WARM + N, argv0: name, onFrame: (i, fb, dac, ic) => { const t = performance.now(); pt.push(t - last); ics.push(ic); last = t; } });
+    runPrism(program, { frames: (WARM + N) * EVERY, every: EVERY, argv0: name, onFrame: (i, fb, dac, ic) => { const t = performance.now(); pt.push(t - last); ics.push(ic); last = t; } });
     // MIRAGE over the same counts (when the C counts; --no-count gives no counts to follow).
     let mm = null;
     if (!flag('no-count')) { const mt = await mirageTimes(prep.path, ics); mm = med(mt.slice(WARM)); }

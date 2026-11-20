@@ -57,9 +57,25 @@ void rc_setmode(int ax);
    the generated file defines them before including this (rc_sdl.c, which includes this too, does not
    need what follows). */
 #ifdef RC_PITBASE
+/* A poll loop reads it every three instructions, so the answer is kept until the next count where
+   it can change: the nearest threshold ahead (line blank, display end, retrace start and end, the
+   frame's end), one instruction short of it for safety. Two fmod()s a read cost xormunch more than
+   all the rest of its frame in PRISM. */
+static double rc_bNext = -1;
+static int rc_bVal;
 static int rc_beam(void) {
-  double pos = fmod(rc_ic, (double)RC_VPERIOD);
-  return (pos >= RC_CBLANK || fmod(pos, RC_CLINE) >= RC_CHD ? 0x01 : 0) | (pos >= RC_CRS && pos < RC_CRE ? 0x08 : 0);
+  double pos, lp, m;
+  if (rc_ic < rc_bNext) return rc_bVal;
+  pos = fmod(rc_ic, (double)RC_VPERIOD);
+  lp = fmod(pos, RC_CLINE);
+  rc_bVal = (pos >= RC_CBLANK || lp >= RC_CHD ? 0x01 : 0) | (pos >= RC_CRS && pos < RC_CRE ? 0x08 : 0);
+  m = lp < RC_CHD ? RC_CHD - lp : RC_CLINE - lp;
+  if (pos < RC_CBLANK && RC_CBLANK - pos < m) m = RC_CBLANK - pos;
+  if (pos < RC_CRS && RC_CRS - pos < m) m = RC_CRS - pos;
+  if (pos < RC_CRE && RC_CRE - pos < m) m = RC_CRE - pos;
+  if (RC_VPERIOD - pos < m) m = RC_VPERIOD - pos;
+  rc_bNext = rc_ic + floor(m) - 1;
+  return rc_bVal;
 }
 
 /* PIT channel 0 as MIRAGE counts it headless with its timer off (src/machine.js, ports 40h/43h): the
@@ -98,7 +114,9 @@ static int rc_pitr(void) {
   rc_pitReadHi = !rc_pitReadHi;
   return b;
 }
-static int rc_inp(int p) { return p == 0x3da ? rc_beam() : p == 0x40 ? rc_pitr() : rc_in(p); }
+/* Macros, not functions: a static function calling another is not inlined by V8 in PRISM's output
+   (measured, tools/recomp/run.mjs), and a poll loop runs this every three instructions. */
+#define rc_inp(p) ((p) == 0x3da ? rc_beam() : (p) == 0x40 ? rc_pitr() : rc_in(p))
 static void rc_outp(int p, int v) { if (p == 0x40 || p == 0x43) rc_pitw(p, v); rc_out(p, v); }
 #endif
 
