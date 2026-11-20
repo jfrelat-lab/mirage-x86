@@ -2703,7 +2703,7 @@ export class Recompiler {
           const o = modrm(), src = xmmSrc(o, 8), v = NT(), t = NT();
           P(`var ${v}=cpu.xmm.d[${src * 2}];`);
           P(op2 === 0x2c ? `var ${t}=Math.trunc(${v});`
-            : `var ${t}=Math.floor(${v});if(${v}-${t}>0.5||(${v}-${t}===0.5&&(${t}%2)!==0))${t}++;`);
+            : `var ${t}=cpu.xmm.round(${v});`);
           P(`r[${o.reg}]=(${t}!==${t}||${t}>2147483647||${t}<-2147483648)?0x80000000:(${t}>>>0);`);
           return;
         }
@@ -2726,11 +2726,32 @@ export class Recompiler {
           const o = modrm(), src = xmmSrc(o, 4), v = NT(), t = NT();
           P(`var ${v}=cpu.xmm.f[${src * 4}];`);
           P(op2 === 0x2c ? `var ${t}=Math.trunc(${v});`
-            : `var ${t}=Math.floor(${v});if(${v}-${t}>0.5||(${v}-${t}===0.5&&(${t}%2)!==0))${t}++;`);
+            : `var ${t}=cpu.xmm.round(${v});`);
           P(`r[${o.reg}]=(${t}!==${t}||${t}>2147483647||${t}<-2147483648)?0x80000000:(${t}>>>0);`);
           return;
         }
         if (pF3 && op2 === 0x2a) { const o = modrm(); P(`cpu.xmm.f[${o.reg * 4}]=Math.fround(${rmR(o, 32)}|0);`); return; }
+        // Between MMX and SSE (no prefix): CVTPI2PS xmm, mm/m64 -- two integers to the two low floats, the upper
+        // two kept -- and CVTTPS2PI / CVTPS2PI mm, xmm/m64, the two low floats to integers (truncated; rounded to
+        // nearest even), 80000000h out of range. Unreal Tournament's Pentium III code (1999) converts its vertices so.
+        if (!p66 && !pF3 && !pF2 && op2 === 0x2a) {
+          const o = modrm(), src = o.isReg ? -1 : xmmSrc(o, 8);
+          const lane = (k) => (o.isReg ? `cpu.mm.i32[${o.rm * 2 + k}]` : `cpu.xmm.i32[${src * 4 + k}]`);
+          P(`${MM_ENTER}cpu.xmm.f[${o.reg * 4}]=Math.fround(${lane(0)});cpu.xmm.f[${o.reg * 4 + 1}]=Math.fround(${lane(1)});`);
+          return;
+        }
+        if (!p66 && !pF3 && !pF2 && (op2 === 0x2c || op2 === 0x2d)) {
+          const o = modrm(), src = xmmSrc(o, 8);
+          P(MM_ENTER);
+          for (let k = 0; k < 2; k++) {
+            const v = NT(), t = NT();
+            P(`var ${v}=cpu.xmm.f[${src * 4 + k}];`);
+            P(op2 === 0x2c ? `var ${t}=Math.trunc(${v});`
+              : `var ${t}=cpu.xmm.round(${v});`);
+            P(`cpu.mm.i32[${o.reg * 2 + k}]=(${t}!==${t}||${t}>2147483647||${t}<-2147483648)?-2147483648:${t};`);
+          }
+          return;
+        }
         if (!p66 && !pF3 && op2 === 0x58) { simple(SSE.ADDPS); return; }
         if (!p66 && !pF3 && op2 === 0x59) { simple(SSE.MULPS); return; }
         if (!p66 && !pF3 && op2 === 0x5c) { simple(SSE.SUBPS); return; }

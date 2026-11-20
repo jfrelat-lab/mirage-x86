@@ -4024,6 +4024,42 @@ await (async () => { const hex = (                                         // na
   let got; try { got = runLinux(hex, ['/w/CVT']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: CVTTSS2SI, CVTSS2SI and CVTSI2SS, as Docker i386 computes them', got,
     '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); })();
+// tools/linux/cvtpi.asm: the conversions between SSE and MMX with no prefix (Unreal Tournament's Pentium III code):
+// CVTPS2PI of 2.5 and -2.5 under each of MXCSR's rounding controls (nearest even, down, up, toward zero) --
+// it was always to nearest, MXCSR unread -- CVTTPS2PI of 3.9 and -3.9 (truncated), CVTPI2PS of -7 and 9.
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/cvtpi.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004082d0100003d0100000700000000100000bef5800408bf040000000fae' +
+    '160f2d0505810408e83a00000083c6044f75eb0f2c050d810408e8280000000f2a0d15810408660f7ec8e82d0000000f' +
+    'c6c955660f7ec8e8200000000f77b80100000031dbcd800f7ec0e80d0000000f73d0200f7ec0e801000000c360bf2d81' +
+    '0408b908000000c1c00489c283e20f8a921d810408881747e2edc6070ab804000000bb01000000b92d810408ba090000' +
+    '00cd8061c3801f0000803f0000805f0000807f000000002040000020c09a9979409a9979c0f9ffffff09000000303132' +
+    '33343536373839616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: 'pentium3' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/CVTPI']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('SSE: CVTPS2PI by MXCSR\'s rounding, CVTTPS2PI, CVTPI2PS', got,
+    '00000002\nfffffffe\n00000002\nfffffffd\n00000003\nfffffffe\n00000002\nfffffffe\n00000003\nfffffffd\nc0e00000\n41100000\n'); })();
+// A thread's or a process's MMX registers and MXCSR are its own across a switch, as Windows saves them with the
+// FPU's state: Unreal Tournament's sound thread (Galaxy, MMX) took the renderer's registers, which then
+// converted its vertices to wild addresses. The parent's state, put aside by lx.newProcess, comes back whole
+// when the child ends.
+await (async () => { let got;
+  try {
+    const mc = new Machine({ memSize: 16 << 20, cpu: 'pentium3' }), lx = installLinux(mc), c = mc.cpu;
+    c.mm.i32[0] = 0x1234; c.mm.i32[3] = 0x5678; c.xmm.mxcsr = 0x7f80;
+    lx.newProcess(0);
+    const child = [c.mm.i32[0], c.xmm.mxcsr.toString(16)].join(',');
+    c.mm.i32[0] = 0xdead; c.mm.i32[3] = 0xbeef; c.xmm.mxcsr = 0x3f80;
+    lx.exitProcess(0);
+    got = [child, c.mm.i32[0].toString(16), c.mm.i32[3].toString(16), c.xmm.mxcsr.toString(16)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('MMX registers and MXCSR kept by each thread and process', got, '0,1f80 1234 5678 7f80'); })();
 // tools/linux/fistind.asm: FIST and FISTP of a value their integer cannot hold store the integer
 // indefinite and raise IE; they wrapped (Docker i386 printed 0x80000000 where MIRAGE stored 1.5e11's low
 // 32 bits). The limits that fit first, IE clear; a quadword overflow and IE set; then, IE cleared by FNCLEX

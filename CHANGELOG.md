@@ -7,6 +7,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 - **Unreal Tournament** (1999) starts on the Windows machine: its first-run configuration, its intro and its menu, in software rendering (tested locally).
 - Windows programs can start other programs, and a thread's windows close when it ends.
+- Windows programs that use MMX on several threads no longer corrupt one another (Unreal Tournament on a Pentium III, Winamp's visualizer).
 
 ## 2026-11-18
 

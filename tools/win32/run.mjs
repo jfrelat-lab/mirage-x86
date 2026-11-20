@@ -39,6 +39,7 @@ import { installBIOS } from '../../src/bios.js';
 import { loadPE, win32Memory } from '../../src/win32/index.js';
 import { win32Apis } from '../../src/win32/api.js';
 import { traceBackend } from '../../src/hle/trace.js';
+import { recentBlocks } from '../../src/derail.js';
 
 const [prog, ...args] = process.argv.slice(2);
 if (!prog) { console.error('usage: node tools/win32/run.mjs <program.exe>'); process.exit(2); }
@@ -404,7 +405,12 @@ if (!lx.done && process.env.MIRAGE_W32THREADS) for (const t of [{ pid: lx.pid, e
 if (!lx.done) { console.error(SECS ? `mirage-win32: stopped after ${SECS} guest seconds` : `mirage-win32: still running after ${LIMIT} cycles`); process.exit(SECS ? 0 : 124); }
 if (lx.signal) {
   const f = lx.faultInfo;
-  console.error(`mirage-win32: fault` + (f ? ` (exception ${f.n} err ${f.err} at eip ${f.eip.toString(16)}, cr2 ${f.cr2.toString(16)}, esp ${(f.esp ?? 0).toString(16)}, [esp] ${(f.top ?? 0).toString(16)})` : ''));
+  // The blocks run last before it (src/derail.js), with MIRAGE_W32TRAIL=1: where a program went astray.
+  if (process.env.MIRAGE_W32TRAIL) {
+    const at = (a) => { const m = loaded.x.win.moduleHolding(a); return m ? `${m.name}+${(a - m.base).toString(16)}` : a.toString(16); };
+    console.error(`mirage-win32: trail ${recentBlocks(mc.rec, 16).replace(/[0-9a-f]{4}:([0-9a-f]+)/g, (t, v) => at(parseInt(v, 16)))} -> fault at ${f ? at(f.eip) : '?'}`);
+  }
+  console.error(`mirage-win32: fault` + (f ? ` (exception ${f.n} err ${f.err} at eip ${f.eip.toString(16)}, cr2 ${f.cr2.toString(16)}, esp ${(f.esp ?? 0).toString(16)}, [esp] ${(f.top ?? 0).toString(16)})` : '') + (f && f.code && f.code.length ? ` code ${f.code.map((b) => b.toString(16).padStart(2, '0')).join(' ')}` : ''));
   process.exit(1);
 }
 console.error(`mirage-win32: exited with ${lx.status}`);

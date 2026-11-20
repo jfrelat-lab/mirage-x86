@@ -87,6 +87,16 @@ export function installSSE(cpu) {
   // What SSE adds lives on cpu.xmm, not on the CPU object: its shape is what every recompiled block's
   // cpu.* reads go through, and three more properties on it cost Chrome Revenge 1.5%.
   const X = cpu.xmm = { buf, f, i32, u8, d: d64, mxcsr: 0x1f80, comi: null, op: null };   // MXCSR: every exception masked, round to nearest
+  /** A conversion to an integer as MXCSR's rounding control says (bits 13-14): to nearest even, down, up, toward
+   *  zero. Unreal Tournament's Pentium III code sets it so and converts with CVTPS2PI. */
+  X.round = (v) => {
+    switch ((X.mxcsr >> 13) & 3) {
+      case 1: return Math.floor(v);
+      case 2: return Math.ceil(v);
+      case 3: return Math.trunc(v);
+      default: { let t = Math.floor(v); if (v - t > 0.5 || (v - t === 0.5 && (t % 2) !== 0)) t++; return t; }
+    }
+  };
   const T = new Int32Array(4), Tf = new Float32Array(T.buffer), Td = new Float64Array(T.buffer);
   // MINSS/MAXSS and their kin return the SOURCE when the comparison is false — either operand a NaN,
   // or both zeros of either sign (Intel's pseudocode: DEST := (DEST < SRC) ? DEST : SRC).

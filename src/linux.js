@@ -433,7 +433,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // Memory reserved and committed on first touch (src/win32: an image's SizeOfImage, a stack).
     if (n === 14 && !(err & 1) && lx.lazy && lx.lazy.some(([a, b]) => cr2 >= a && cr2 < b)) { mapPage(cr2 >>> 12, true); return; }
     const sig = n === 0 ? SIG.SIGFPE : n === 6 ? SIG.SIGILL : n === 16 || n === 19 ? SIG.SIGFPE : SIG.SIGSEGV;
-    lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0, esp: cpu.reg[4] >>> 0, top: (() => { try { return lx.rdBytes(cpu.reg[4] >>> 0, 4).reduce((v, b, i) => v | (b << (8 * i)), 0) >>> 0; } catch { return 0; } })() };
+    lx.faultInfo = { n, err, eip: cpu.eip >>> 0, cr2: cpu.cr2 >>> 0, esp: cpu.reg[4] >>> 0, code: (() => { try { return Array.from(lx.rdBytes(cpu.eip >>> 0, 12)); } catch { return []; } })(), top: (() => { try { return lx.rdBytes(cpu.reg[4] >>> 0, 4).reduce((v, b, i) => v | (b << (8 * i)), 0) >>> 0; } catch { return 0; } })() };
     const h = lx.sigHandlers[sig] || 0;
     if (h > 1 && !blockedSig(lx.sigBlocked, sig)) { setupFrame(sig, h, r0Now()); return; }   // the program's handler (it may longjmp)
     exit(0, sig);
@@ -461,7 +461,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames, pgid: lx.pgid, sid: lx.sid, ctty: lx.ctty,
     reg: cpu.reg.slice(), eip: cpu.eip, flags: cpu.flags, seg: Array.from(cpu.seg),
     fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
-    xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null,
+    xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null, mxcsr: cpu.xmm ? cpu.xmm.mxcsr : 0x1f80,   // a thread's own, as Windows saves it
+    mm: cpu.mm ? cpu.mm.u8.slice() : null,                               // the MMX registers too (src/mmx.js keeps them beside the x87 stack)
     tls: mem.u8.slice(TLS_A, TLS_Z), io: mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1),
     hle: lx.hle, hleTable: lx.hleTable,                                  // a Windows process's own DLLs in JavaScript (src/win32)
   });
@@ -486,7 +487,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     cpu.reg.set(s.reg); cpu.eip = s.eip; cpu.flags = s.flags;
     for (let i = 0; i < 6; i++) cpu.setSeg(i, s.seg[i]);
     if (s.fst) { cpu.fst.set(s.fst); cpu.ftop = s.ftop; cpu.fsw = s.fsw; cpu.fcw = s.fcw; cpu.focc.set(s.focc); }
-    if (s.xmm) cpu.xmm.u8.set(s.xmm);
+    if (s.xmm) { cpu.xmm.u8.set(s.xmm); cpu.xmm.mxcsr = s.mxcsr ?? 0x1f80; }
+    if (s.mm && cpu.mm) cpu.mm.u8.set(s.mm);
     if (s.hle) { lx.hle = s.hle; lx.hleTable = s.hleTable; }
     cpu.halted = false; lx.done = false;
   };
@@ -529,7 +531,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     const me = snapshot(), tid = lx.nextPid++;
     const t = { ...me, pid: tid, ppid: lx.pid, reg: new Uint32Array(8), eip: eip >>> 0, flags: 0x0002, wake: null,
       fst: me.fst ? new Float64Array(me.fst.length) : null, ftop: 0, fsw: 0, fcw: 0x037f, focc: me.focc ? new Uint8Array(me.focc.length) : null,
-      xmm: me.xmm ? new Uint8Array(me.xmm.length) : null, tls: me.tls.slice() };
+      xmm: me.xmm ? new Uint8Array(me.xmm.length) : null, mxcsr: 0x1f80, mm: me.mm ? new Uint8Array(me.mm.length) : null, tls: me.tls.slice() };
     t.reg[4] = esp >>> 0;
     if (fsIndex !== undefined) {                                          // its own descriptor in its copy of the TLS slots
       const a = (fsIndex - TLS_MIN) * 8, lim = 0xfff;
@@ -583,6 +585,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map(); lx.wake = null;
     lx.sigInfo = lx.sigInfo.slice(); lx.sigHandlers = lx.sigHandlers.slice(); lx.sigBlocked = lx.sigBlocked.slice();
     lx.sigPend = new Set(); lx.sigSaved = null; lx.alarmAt = null; lx.alarmEvery = 0; lx.fpuFrames = new Map();
+    if (cpu.mm) cpu.mm.u8.fill(0);                                     // its own MMX and SSE state, fresh
+    if (cpu.xmm) { cpu.xmm.u8.fill(0); cpu.xmm.mxcsr = 0x1f80; }
     lx.switches++; lx.sliceStart = cpu.cycles;
     return pid;
   };
