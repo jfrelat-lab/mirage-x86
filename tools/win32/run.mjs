@@ -74,7 +74,13 @@ const traceFrom = Number(process.env.MIRAGE_W32TRACEFROM) || 0;
 // an installer builds in its variables, which the bare pointers do not tell.
 const traceStr = (a) => {
   if (!process.env.MIRAGE_W32TRACESTR || a < 0x10000) return '';
-  try { const b = lx.rdBytes(a >>> 0, 96); let n = 0; while (n < b.length && b[n] >= 0x20 && b[n] < 0x7f) n++; return n >= 2 && (n === b.length || b[n] === 0) ? ` '${String.fromCharCode(...b.subarray(0, n))}'` : ''; } catch { return ''; }
+  try {
+    const b = lx.rdBytes(a >>> 0, 192); let n = 0; while (n < 96 && b[n] >= 0x20 && b[n] < 0x7f) n++;
+    if (n >= 2 && (n === 96 || b[n] === 0)) return ` '${String.fromCharCode(...b.subarray(0, n))}'`;
+    // ...or UTF-16 (a Unicode program's: Unreal Tournament's), its ASCII characters each followed by a zero.
+    let k = 0; while (k < 96 && b[2 * k] >= 0x20 && b[2 * k] < 0x7f && b[2 * k + 1] === 0) k++;
+    return k >= 2 && (k === 96 || (b[2 * k] === 0 && b[2 * k + 1] === 0)) ? ` L'${Array.from({ length: k }, (_, i) => String.fromCharCode(b[2 * i])).join('')}'` : '';
+  } catch { return ''; }
 };
 if (process.env.MIRAGE_W32TRACE) { const t0 = backend.trace; backend.trace = (name, args) => { if (traceFrom && lx.mono() < traceFrom) { if (t0) t0(name, args); return; } traceOut('w32 ' + lx.mono().toFixed(3) + ': ' + name + ' ' + args.map((a) => (typeof a === 'number' && Number.isInteger(a) && a > 9 ? '0x' + (a >>> 0).toString(16) + traceStr(a) : a)).join(' ') + (lx.procs.length ? ' #t' + lx.pid : '') + '\n'); if (t0) t0(name, args); }; }
 const files = {};

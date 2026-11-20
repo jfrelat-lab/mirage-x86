@@ -6009,6 +6009,27 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
     got = [away, on, x.r32(m) === form].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a desktop window\'s close box sends it WM_CLOSE', got, '0 1 true');
+  // Unreal Tournament's Unicode user32: a class made from a system one (GetClassInfoExW of LISTBOX, then
+  // RegisterClassExW from the same structure, its own name and procedure) makes windows that behave as list
+  // boxes, named as their own; DefWindowProcW's WM_SETTEXT text made ANSI and WM_GETTEXT's widened (the
+  // title read "U"); _vsnwprintf at most n characters, -1 when the text did not fit.
+  try { const { fn, x, apis } = await w32(), u = (n) => fn('user32.dll', n), m = (n) => fn('msvcrt.dll', n);
+    const W = (t) => { const p = x.win.heapAlloc(2 * t.length + 2); for (let i = 0; i < t.length; i++) x.w16(p + 2 * i, t.charCodeAt(i)); x.w16(p + 2 * t.length, 0); return p; };
+    const R = (p) => { let t = ''; for (let i = 0; x.r16(p + 2 * i); i++) t += String.fromCharCode(x.r16(p + 2 * i)); return t; };
+    u('CreateWindowExA')(0, 0, 0, 0x10cf0000, 0, 0, 320, 200);
+    const main = parseInt(apis.windows()[0].hwnd, 16), wc = x.win.heapAlloc(48);
+    const got1 = u('GetClassInfoExW')(0, W('LISTBOX'), wc);
+    x.w32(wc, 48); x.w32(wc + 40, W('WListBox')); x.w32(wc + 8, 0); u('RegisterClassExW')(wc);
+    u('CreateWindowExW')(0, W('WListBox'), 0, 0x50000000, 0, 0, 100, 50, main, 7, 0, 0);
+    const lb = apis.windows().find((w) => w.id === 7), name = x.win.heapAlloc(64); u('GetClassNameA')(parseInt(lb.hwnd, 16), name, 64);
+    u('DefWindowProcW')(main, 0x0c, 0, W('Unreal')); const t = x.win.heapAlloc(64); u('GetWindowTextA')(main, t, 32);
+    const back = x.win.heapAlloc(64); u('DefWindowProcW')(main, 0x0d, 32, back);
+    const buf = x.win.heapAlloc(64); x.write(buf, new Uint8Array(64).fill(0x55));
+    const ap = x.win.heapAlloc(8); x.w32(ap, W('Tournament'));
+    const n1 = m('_vsnwprintf')(buf, 4, W('%s'), ap), cut = R(buf).slice(0, 4) + x.r16(buf + 8).toString(16), n2 = m('_vsnwprintf')(buf, 32, W('%s'), ap);
+    got = [got1, lb.cls, x.str(name), x.str(t), R(back), n1, cut, n2, R(buf)].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a class made from LISTBOX, DefWindowProcW\'s text, _vsnwprintf', got, '1 listbox wlistbox Unreal Unreal -1 Tour5555 10 Tournament');
   // LoadImageA(LR_LOADFROMFILE): a .bmp of the program's disk (Cave Story's .pbm pictures) as a bitmap.
   try { const bmp = new Uint8Array(54 + 8), v = new DataView(bmp.buffer);
     bmp.set([0x42, 0x4d]); v.setUint32(2, bmp.length, true); v.setUint32(10, 54, true); v.setUint32(14, 40, true); v.setInt32(18, 2, true); v.setInt32(22, 1, true);
@@ -6106,10 +6127,10 @@ const mkPE = ({ base = 0x400000, dll = false, entry = 0, imports = [], exports =
   return b;
 };
 const le = (n) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
-const runPE = async (exe, readFile) => {
+const runPE = async (exe, readFile, files = {}) => {
   const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
   const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
-  loadPE(lx, mc.mem, mc.cpu, exe, { apis: win32Apis(), readFile, backend: traceBackend() });
+  loadPE(lx, mc.mem, mc.cpu, exe, { apis: win32Apis({ files }), readFile, backend: traceBackend() });
   for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
   return lx.done ? lx.status : 'running';
 };
@@ -6645,6 +6666,65 @@ await (async () => { let got;
     got = String(await runPE(exe));
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: msvcrt exit from a thread ends the process', got, '7'); })();
+// EnumChildWindows calls its callback for each descendant (Unreal Tournament localizes its dialogs' controls
+// so; nothing was ever called): a window, two buttons in it and one in the first, the callback counting them
+// and answering TRUE. Exit code: the count, 3.
+await (async () => { let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['CreateWindowExA', 'EnumChildWindows'] }, { dll: 'kernel32.dll', names: ['ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])], D = (o) => le(at.d(o)), BTN = 0x300, CNT = 0x310, MAIN = 0x314, B1 = 0x318;
+      const make = (parent, id) => [0x6a, 0, 0x6a, 0, 0x6a, id, ...(parent === null ? [0x6a, 0] : [0xff, 0x35, ...D(parent)]), 0x6a, 20, 0x6a, 60, 0x6a, 0, 0x6a, 0,
+        0x68, ...le(parent === null ? 0x10cf0000 : 0x50000000), 0x6a, 0, 0x68, ...D(BTN), 0x6a, 0, ...I('user32.dll!CreateWindowExA')];
+      const main = [...make(null, 0), 0xa3, ...D(MAIN), ...make(MAIN, 1), 0xa3, ...D(B1), ...make(MAIN, 2), ...make(B1, 3),
+        0x6a, 0, 0x68, ...D(0x100), 0xff, 0x35, ...D(MAIN), ...I('user32.dll!EnumChildWindows'),
+        0xff, 0x35, ...D(CNT), ...I('kernel32.dll!ExitProcess'), 0xf4];
+      const cb = [0xff, 0x05, ...D(CNT), 0xb8, 1, 0, 0, 0, 0xc2, 8, 0];
+      const img = new Uint8Array(0x400); img.set(main); img.set(cb, 0x100); img.set([0x42, 0x55, 0x54, 0x54, 0x4f, 0x4e, 0], BTN); return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: EnumChildWindows calls back for every descendant', got, '3'); })();
+// A thread's end destroys the windows it made, as Windows does: a second thread makes a top-level window and
+// returns; once it has ended (its handle signalled) the main thread finds the window gone (IsWindow 0): exit 1,
+// 2 when it is still there. Unreal Tournament's splash thread, told WM_QUIT, left its picture on the screen.
+await (async () => { let got;
+  try {
+    const exe = mkPE({ imports: [{ dll: 'user32.dll', names: ['CreateWindowExA', 'IsWindow'] }, { dll: 'kernel32.dll', names: ['CreateThread', 'WaitForSingleObject', 'ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])], D = (o) => le(at.d(o)), H = 0x310, CLS = 0x300;
+      const main = [0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(0x100), 0x6a, 0, 0x6a, 0, ...I('kernel32.dll!CreateThread'),
+        0x6a, 0xff, 0x50, ...I('kernel32.dll!WaitForSingleObject'),
+        0xff, 0x35, ...D(H), ...I('user32.dll!IsWindow'), 0x40, 0x50, ...I('kernel32.dll!ExitProcess'), 0xf4];   // IsWindow + 1
+      const thr = [0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 60, 0x6a, 80, 0x6a, 10, 0x6a, 10, 0x68, ...le(0x10cf0000), 0x6a, 0, 0x68, ...D(CLS), 0x6a, 0,
+        ...I('user32.dll!CreateWindowExA'), 0xa3, ...D(H), 0x31, 0xc0, 0xc2, 4, 0];
+      const img = new Uint8Array(0x400); img.set(main); img.set(thr, 0x100); img.set([0x54, 0], CLS); return img;
+    } });
+    got = String(await runPE(exe));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a thread\'s windows end with it', got, '1'); })();
+// CreateProcessA runs another program of the disk as a process of its own, on the same disk: the child makes
+// made.txt and exits with 9; the parent waits for its process handle, reads its exit code, and adds 100 when
+// it finds made.txt. Exit code 109. Unreal Tournament runs itself so to try a renderer, and reads what it wrote.
+await (async () => { let got;
+  try {
+    const child = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['CreateFileA', 'CloseHandle', 'ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])];
+      const c = [0x6a, 0, 0x68, 0x80, 0, 0, 0, 0x6a, 2, 0x6a, 0, 0x6a, 0, 0x68, 0, 0, 0, 0x40, 0x68, ...le(at.d(0x100)), ...I('kernel32.dll!CreateFileA'),
+        0x50, ...I('kernel32.dll!CloseHandle'), 0x6a, 9, ...I('kernel32.dll!ExitProcess'), 0xf4];
+      const img = new Uint8Array(0x200); img.set(c); img.set(new TextEncoder().encode('made.txt\0'), 0x100); return img;
+    } });
+    const parent = mkPE({ imports: [{ dll: 'kernel32.dll', names: ['CreateProcessA', 'WaitForSingleObject', 'GetExitCodeProcess', 'GetFileAttributesA', 'ExitProcess'] }], code: (at) => {
+      const I = (n) => [0xff, 0x15, ...le(at.iat[n])], D = (o) => le(at.d(o)), NAME = 0x100, MADE = 0x110, SI = 0x120, PI = 0x170, CODE = 0x180;
+      const c = [0x68, ...D(PI), 0x68, ...D(SI), 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0x68, ...D(NAME), ...I('kernel32.dll!CreateProcessA'),
+        0x6a, 0xff, 0xff, 0x35, ...D(PI), ...I('kernel32.dll!WaitForSingleObject'),
+        0x68, ...D(CODE), 0xff, 0x35, ...D(PI), ...I('kernel32.dll!GetExitCodeProcess'),
+        0x68, ...D(MADE), ...I('kernel32.dll!GetFileAttributesA'), 0x83, 0xf8, 0xff, 0x74, 7, 0x83, 0x05, ...D(CODE), 100,
+        0xff, 0x35, ...D(CODE), ...I('kernel32.dll!ExitProcess'), 0xf4];
+      const img = new Uint8Array(0x200); img.set(c); img.set(new TextEncoder().encode('child.exe\0'), NAME); img.set(new TextEncoder().encode('made.txt\0'), MADE);
+      img.set(le(68), SI); return img;
+    } });
+    got = String(await runPE(parent, null, { 'child.exe': child }));
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: CreateProcessA runs a program of the disk, its own process on the same disk', got, '109'); })();
 // A C++ exception as Visual C++ makes it: a function's frame at fs:[0] (EBP-0Ch), its handler `mov eax,
 // FuncInfo ; jmp __CxxFrameHandler`, in state 1 (an object with a destructor) inside a try (states 0-1) whose
 // catch takes `e&`; it throws an `e` holding 40 (_CxxThrowException, its ThrowInfo naming .?AVe@@ in a type

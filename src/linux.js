@@ -463,6 +463,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
     xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null,
     tls: mem.u8.slice(TLS_A, TLS_Z), io: mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1),
+    hle: lx.hle, hleTable: lx.hleTable,                                  // a Windows process's own DLLs in JavaScript (src/win32)
   });
   const restore = (s) => {
     // Threads share their process's address space (the same lx.vm): its page map is the same object,
@@ -486,6 +487,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     for (let i = 0; i < 6; i++) cpu.setSeg(i, s.seg[i]);
     if (s.fst) { cpu.fst.set(s.fst); cpu.ftop = s.ftop; cpu.fsw = s.fsw; cpu.fcw = s.fcw; cpu.focc.set(s.focc); }
     if (s.xmm) cpu.xmm.u8.set(s.xmm);
+    if (s.hle) { lx.hle = s.hle; lx.hleTable = s.hleTable; }
     cpu.halted = false; lx.done = false;
   };
   /** Put the running process aside (its pages unmapped, not freed) and run `next`. */
@@ -552,8 +554,39 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   /** A thread taken out of the queue unfinished (SDL_KillThread, TerminateThread). */
   lx.killThread = (tid) => { const i = lx.procs.findIndex((q) => q.pid === tid); if (i >= 0) lx.procs.splice(i, 1); lx.threadExits.set(tid, 0); };
-  /** The whole process ends (ExitProcess), whichever thread asks: its threads with it. */
-  lx.exitProcess = (code) => { lx.procs.length = 0; lx.rootPid = lx.pid; exit(code); };
+  /**
+   * The whole process ends (ExitProcess), whichever thread asks: its threads with it. The first process's end
+   * ends the run; another's (a Windows program's child, lx.newProcess) leaves the others running, its code kept
+   * for whoever waits for it (lx.threadExits, by its threads' ids).
+   */
+  lx.exitProcess = (code) => {
+    if (lx.vm === rootVm()) { lx.procs.length = 0; lx.rootPid = lx.pid; exit(code); return; }
+    for (let i = lx.procs.length - 1; i >= 0; i--) if (lx.procs[i].vm === lx.vm) { lx.threadExits.set(lx.procs[i].pid, code >>> 0); lx.procs.splice(i, 1); }
+    lx.threadExits.set(lx.pid, code >>> 0);
+    exit(code);
+  };
+  // The first process's address space: where the run's own program lives.
+  let firstVm = null; const rootVm = () => (firstVm ??= lx.vm);
+  /**
+   * A new process with an address space of its own and nothing in it, its parent put aside answering `ret`
+   * to the call it made (src/win32's CreateProcess: the loader then maps the program there). It runs now;
+   * its id is returned.
+   */
+  lx.newProcess = (ret) => {
+    rootVm();
+    const parent = snapshot(), pid = lx.nextPid++;
+    parent.reg[0] = ret >>> 0;
+    releasePages(lx.pages, false);
+    lx.procs.push(parent);
+    lx.pages = new Map(); installPages(lx.pages); cpu.setCR3(cpu.cr3);
+    lx.vm = nextVm++; lx.lazy = []; lx.elfMaps = [];
+    lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map(); lx.wake = null;
+    lx.sigInfo = lx.sigInfo.slice(); lx.sigHandlers = lx.sigHandlers.slice(); lx.sigBlocked = lx.sigBlocked.slice();
+    lx.sigPend = new Set(); lx.sigSaved = null; lx.alarmAt = null; lx.alarmEvery = 0; lx.fpuFrames = new Map();
+    lx.switches++; lx.sliceStart = cpu.cycles;
+    return pid;
+  };
+  lx.nextProcessId = () => lx.nextPid;
   const fork = (flags = 0x11, ctid = 0) => {
     if (flags & 0x100) return -E.ENOSYS;                                 // CLONE_VM: threads, not here
     const parent = snapshot(), pid = lx.nextPid++;

@@ -408,6 +408,15 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
       const n = Math.ceil((a + 1 - THREAD_STACKS) / STACK_RESERVE);
       return a >= THREAD_STACKS && n >= 1 && n <= threads ? { base: THREAD_STACKS + (n - 1) * STACK_RESERVE, top: THREAD_STACKS + n * STACK_RESERVE } : null;
     },
+    /**
+     * Another program run as a process of its own (CreateProcess, ShellExecute): its own address space and
+     * its own Windows (apis.childApis: the same disk), this process put aside answering `ret`. It runs now.
+     */
+    spawn: (bytes, path, args, ret) => {
+      const pid = lx.newProcess(ret);
+      loadPE(lx, mem, cpu, bytes, { path, args, apis: apis.childApis ? apis.childApis() : apis, backend });
+      return pid;
+    },
     /** A line for the log: what a program asked that is not here. */
     say: (t) => { if (lx.onOutput) lx.onOutput(2, enc.encode(`mirage-win32: ${t}\n`)); },
   };

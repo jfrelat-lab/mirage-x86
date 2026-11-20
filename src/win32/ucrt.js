@@ -601,6 +601,10 @@ export function ucrtApis({ st, send }) {
   // swprintf with no count, its character-class table (_pctype, a variable), _stat's 36 bytes.
   const W = (x, p, s) => { for (let i = 0; i < s.length; i++) x.w16(p + 2 * i, s.charCodeAt(i)); x.w16(p + 2 * s.length, 0); };
   const va = (x, k) => (x.cpu.reg[4] >>> 0) + 4 + 4 * k;            // the k-th 4-byte argument's address
+  const clock = (x) => new Date((x.lx.now ? x.lx.now() : Math.floor(Date.now() / 1000)) * 1000), two = (v) => String(v).padStart(2, '0');
+  const dateText = (x) => { const d = clock(x); return `${two(d.getUTCMonth() + 1)}/${two(d.getUTCDate())}/${two(d.getUTCFullYear() % 100)}`; };
+  const timeText = (x) => { const d = clock(x); return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}:${two(d.getUTCSeconds())}`; };
+  const wn = (x, p, n, s) => { const k = Math.min(s.length, n); for (let i = 0; i < k; i++) x.w16(p + 2 * i, s.charCodeAt(i)); if (s.length < n) x.w16(p + 2 * s.length, 0); return s.length < n ? s.length : -1; };
   const ctypeTable = (x) => st.pctype ||= (() => {
     const t = malloc(x, 2 * 257); x.w16(t, 0);
     for (let c = 0; c < 256; c++) {
@@ -644,6 +648,20 @@ export function ucrtApis({ st, send }) {
     _snprintf: ['pup', (x, buf, n, fmt) => { const s = cprintf(x, x.str(fmt), va(x, 3)); setStr(x, buf, s.slice(0, n)); if (s.length >= n) { if (s.length > n) return -1; } return s.length; }, cd],
     swprintf: ['pp', (x, buf, fmt) => { const s = cprintf(x, wstr(x, fmt), va(x, 2), true); W(x, buf, s); return s.length; }, cd],
     vswprintf: ['ppp', (x, buf, fmt, ap) => { const s = cprintf(x, wstr(x, fmt), ap, true); W(x, buf, s); return s.length; }, cd],
+    // _vsnwprintf / _snwprintf: at most n characters; the terminator only when it fits, -1 when the text did not.
+    // Unreal Tournament's C runtime: the date and time as text (MM/DD/YY, HH:MM:SS, the clock's), wide twins,
+    // mktime (a struct tm taken as UTC, as localtime gives it) and difftime; no keyboard at the console.
+    _strdate: ['p', (x, p) => { setStr(x, p, dateText(x)); return p; }, cd], _strtime: ['p', (x, p) => { setStr(x, p, timeText(x)); return p; }, cd],
+    _wstrdate: ['p', (x, p) => { W(x, p, dateText(x)); return p; }, cd], _wstrtime: ['p', (x, p) => { W(x, p, timeText(x)); return p; }, cd],
+    mktime: ['p', (x, tm) => { const f = (i) => x.r32(tm + 4 * i) | 0; return (Date.UTC(1900 + f(5), f(4), f(3), f(2), f(1), f(0)) / 1000) | 0; }, cd],
+    difftime: ['ii', (x, a, b) => ({ st0: a - b }), cd],
+    wcstoul: ['ppi', (x, p, end, base) => { const s = wstr(x, p), m = /^\s*[-+]?(0x)?[0-9a-fA-F]*/.exec(s), v = parseInt(m[0], base || 10); if (end) x.w32(end, p + 2 * m[0].length); return Number.isNaN(v) ? 0 : v >>> 0; }, cd],
+    _wcsupr: ['p', (x, p) => { W(x, p, wstr(x, p).toUpperCase()); return p; }, cd], _wcslwr: ['p', (x, p) => { W(x, p, wstr(x, p).toLowerCase()); return p; }, cd],
+    _wstat: ['pp', (x, name, buf) => statOf(x, wstr(x, name), buf), cd],
+    wprintf: ['p', (x, fmt) => { const s = cprintf(x, wstr(x, fmt), va(x, 1), true); out(x, fileOf(x, stdFile(x, 1)), enc(s)); return s.length; }, cd],
+    getchar: ['', () => -1, cd], _getch: ['', () => 0x0d, cd], _kbhit: ['', () => 0, cd], _heapchk: ['', () => -2, cd],   // EOF; Enter; none; _HEAPOK
+    _vsnwprintf: ['pupp', (x, buf, n, fmt, ap) => wn(x, buf, n, cprintf(x, wstr(x, fmt), ap, true)), cd],
+    _snwprintf: ['pup', (x, buf, n, fmt) => wn(x, buf, n, cprintf(x, wstr(x, fmt), va(x, 3), true)), cd],
     _fsopen: ['ppi', (x, name, mode) => { const m = x.str(mode), h = open(x, x.str(name), m); return h ? fileBlock(x, { h, text: !m.includes('b') }) : 0; }, cd],
     _wfsopen: ['ppi', (x, name, mode) => { const h = open(x, wstr(x, name), wstr(x, mode)); return h ? fileBlock(x, { h }) : 0; }, cd],
     _fdopen: ['ip', (x, fd) => (fd >= 0x4000 ? fileBlock(x, { h: fd }) : 0), cd],

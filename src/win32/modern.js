@@ -30,7 +30,56 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     try { return fn(p); } finally { x.win.heapFree(p); }
   };
   const A = (t, name) => t[name][1];
+  // Messages whose lParam is a string in: WM_SETTEXT, EM_REPLACESEL, CB_ADDSTRING, CB_INSERTSTRING, CB_FINDSTRING,
+  // CB_SELECTSTRING, CB_FINDSTRINGEXACT, LB_ADDSTRING, LB_INSERTSTRING, LB_SELECTSTRING, LB_FINDSTRING, LB_FINDSTRINGEXACT.
+  const TEXT_IN = new Set([0x0c, 0xc2, 0x143, 0x14a, 0x14c, 0x14d, 0x158, 0x180, 0x181, 0x18c, 0x18f, 0x1a2]);
+  // A window whose procedure lies in MIRAGE's own user32 or comctl32.
+  // A system class's information just read into `at` (GetClassInfo of BUTTON, LISTBOX...): a class registered next
+  // from that same structure is made from it (st.superOf: its name -> the system class).
+  const superHint = (x, name, at, ansi = false) => {
+    const key = name < 0x10000 ? name : (ansi ? x.str(name, 256) : wstr(x, name)).toLowerCase();
+    st.superHint = st.classInfo.has(key) ? null : { at, key };
+  };
+  const superOf = (x, wc, name, wide, atom) => {
+    const h = st.superHint; st.superHint = null;
+    if (atom && h && h.at === wc && name >= 0x10000) (st.superOf ||= new Map()).set((wide ? wstr(x, name) : x.str(name, 256)).toLowerCase(), h.key);
+    return atom;
+  };
+  const shellExec = (x, op, file, params) => {
+    if ((op && !/^open$/i.test(op)) || !file || !/\.exe$/i.test(file)) return 2;
+    return st.spawnExe(x, file, params, 0, 42) ? 42 : 2;
+  };
+  const mirageCode = (x, p) => ['user32.dll', 'comctl32.dll'].some((n) => { const m = x.win.modules.get(n); return m && p >= m.base && p < m.base + m.size; });
+  const mirageProc = (x, h) => mirageCode(x, user32.GetWindowLongA[1](x, h, -4) >>> 0);
+  // A message's text widened or narrowed for MIRAGE's own procedure (see SendMessageW), else null: `send` the A call.
+  const textFor = (x, h, m, wp, lp, send) => {
+    if (TEXT_IN.has(m)) { const s = wstr(x, lp), a = x.win.heapAlloc(s.length + 1); x.write(a, Uint8Array.from(s + '\0', (c) => c.charCodeAt(0) & 0xff)); return send(a); }
+    if (m === 0x0d) return u32.GetWindowTextW[1](x, h, lp, wp);
+    return null;
+  };
   const k32 = {
+    // Unreal Tournament's (1999, a Unicode build) kernel32: the W twins of what the A side answers, and the rest.
+    CreateMutexW: ['pup', (x, sa, owned, name) => withA(x, name, (n) => A(kernel32, 'CreateMutexA')(x, sa, owned, n))],
+    GlobalAddAtomW: ['p', (x, name) => withA(x, name, (n) => A(kernel32, 'GlobalAddAtomA')(x, n))],
+    GetDiskFreeSpaceW: ['ppppp', (x, root, a, b, c, d) => withA(x, root, (n) => A(kernel32, 'GetDiskFreeSpaceA')(x, n, a, b, c, d))],
+    GetSystemDirectoryW: ['pu', (x, buf, n) => { const s = 'C:\\WINDOWS\\system32'; if (n > s.length) { putW(x, buf, n, s); return s.length; } return s.length + 1; }],
+    GetWindowsDirectoryW: ['pu', (x, buf, n) => { const s = 'C:\\WINDOWS'; if (n > s.length) { putW(x, buf, n, s); return s.length; } return s.length + 1; }],
+    GetComputerNameW: ['pp', (x, buf, pn) => { const s = 'MIRAGE'; if (x.r32(pn) <= s.length) { x.w32(pn, s.length + 1); return 0; } putW(x, buf, s.length + 1, s); x.w32(pn, s.length); return 1; }],
+    // BY_HANDLE_FILE_INFORMATION: FILE_ATTRIBUTE_ARCHIVE, no times, the size (high at 32, low at 36), one link.
+    GetFileInformationByHandle: ['pp', (x, h, info) => {
+      const size = A(kernel32, 'GetFileSize')(x, h, 0); if (size === 0xffffffff) return 0;
+      x.write(info, new Uint8Array(52)); x.w32(info, 0x20); x.w32(info + 36, size); x.w32(info + 40, 1); return 1;
+    }],
+    GetProcessWorkingSetSize: ['ppp', (x, h, lo, hi) => { if (lo) x.w32(lo, 0x32000); if (hi) x.w32(hi, 0x2d0000); return 1; }],   // XP's defaults: 200 KiB, 1380 KiB
+    HeapCompact: ['pu', () => 0x100000],
+    LockFile: ['puuuu', () => 1], UnlockFile: ['puuuu', () => 1], Beep: ['uu', () => 1],
+    // The program's own process (GetCurrentProcessId's), as its pseudo-handle; any other none.
+    OpenProcess: ['uiu', (x, access, inherit, pid) => (pid === 0x100 ? 0xffffffff : 0)],
+    // The console: what is written goes where WriteFile writes it; nothing is ever typed.
+    SetConsoleMode: ['pu', () => 1],
+    WriteConsoleA: ['ppupp', (x, h, buf, n, pw) => A(kernel32, 'WriteFile')(x, h, buf, n, pw, 0)],
+    ReadConsoleA: ['ppupp', (x, h, buf, n, pr) => { if (pr) x.w32(pr, 0); return 1; }],
+    PeekConsoleInputA: ['ppup', (x, h, buf, n, pr) => { if (pr) x.w32(pr, 0); return 1; }],
     // ExpandEnvironmentStringsA: %NAME% as the environment has it (GetEnvironmentVariableA), kept when it has not.
     ExpandEnvironmentStringsA: ['ppu', (x, src, dst, n) => {
       const out = x.str(src).replace(/%([^%]+)%/g, (m, k) => { const t = x.win.heapAlloc(1024); try { const r = A(kernel32, 'GetEnvironmentVariableA')(x, (() => { const q = x.win.heapAlloc(k.length + 1); x.write(q, Uint8Array.from(k + '\0', (c) => c.charCodeAt(0))); return q; })(), t, 1024); return r ? x.str(t) : m; } finally { x.win.heapFree(t); } });
@@ -152,21 +201,47 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     DdeCreateStringHandleA: ['upi', () => 0xdde1], DdeFreeStringHandle: ['up', () => 1],
     DdeConnect: ['uppp', () => 0], DdeDisconnect: ['p', () => 1], DdeClientTransaction: ['puppuuup', () => 0],
     SendInput: ['upi', (x, n) => n],
-    RegisterClassW: ['p', (x, wc) => classA(x, wc, 40, 32, 36, (t) => A(user32, 'RegisterClassA')(x, t))],
-    RegisterClassExW: ['p', (x, wc) => classA(x, wc, 48, 36, 40, (t) => A(user32, 'RegisterClassExA')(x, t))],
+    RegisterClassW: ['p', (x, wc) => superOf(x, wc, x.r32(wc + 36), true, classA(x, wc, 40, 32, 36, (t) => A(user32, 'RegisterClassA')(x, t)))],
+    RegisterClassExW: ['p', (x, wc) => superOf(x, wc, x.r32(wc + 40), true, classA(x, wc, 48, 36, 40, (t) => A(user32, 'RegisterClassExA')(x, t)))],
     UnregisterClassW: ['pp', () => 1],
     // Only a class the program registered: SDL asks before it registers its own.
-    GetClassInfoExW: ['ppp', (x, inst, name, wc) => {
-      const key = name < 0x10000 ? name : wstr(x, name).toLowerCase(), info = st.classInfo.get(key);
-      if (!info) return 0;
-      x.w32(wc, 48); x.write(wc + 4, info); return 1;
+    // GetClassInfoExW: as GetClassInfoExA, a system class's (BUTTON, EDIT...) too -- Unreal Tournament's
+    // windowing subclasses them, and asserted when none was found.
+    GetClassInfoExW: ['ppp', (x, inst, name, wc) => withAR(x, name, (a) => u32.GetClassInfoExA[1](x, inst, a, wc))],
+    GetClassInfoW: ['ppp', (x, inst, name, wc) => {
+      const r = name < 0x10000 ? A(user32, 'GetClassInfoA')(x, inst, name, wc) : withA(x, name, (a) => A(user32, 'GetClassInfoA')(x, inst, a, wc));
+      if (r) superHint(x, name, wc); return r;
     }],
-    DefWindowProcW: ['puuu', (x, h, m, wp, lp) => A(user32, 'DefWindowProcA')(x, h, m, wp, lp)],
-    CallWindowProcW: ['ppuuu', (x, fn, h, m, wp, lp) => A(user32, 'CallWindowProcA')(x, fn, h, m, wp, lp)],
+    // DefWindowProcW: WM_SETTEXT's text made ANSI and WM_GETTEXT's widened, as for MIRAGE's own procedures
+    // (textFor) -- Unreal Tournament's window passed its title on so, and read "U".
+    DefWindowProcW: ['puuu', (x, h, m, wp, lp) => {
+      const r = lp && (m === 0x0c || m === 0x0d) ? textFor(x, h, m, wp, lp, (a) => A(user32, 'DefWindowProcA')(x, h, m, wp, a)) : null;
+      return r !== null ? r : A(user32, 'DefWindowProcA')(x, h, m, wp, lp);
+    }],
+    // ...and CallWindowProcW to MIRAGE's own procedure: a program that subclasses a button or a list box (Unreal's
+    // WControl) hands it its messages so.
+    CallWindowProcW: ['ppuuu', (x, fn, h, m, wp, lp) => {
+      const r = lp && mirageCode(x, fn >>> 0) ? textFor(x, h, m, wp, lp, (a) => A(user32, 'CallWindowProcA')(x, fn, h, m, wp, a)) : null;
+      return r !== null ? r : A(user32, 'CallWindowProcA')(x, fn, h, m, wp, lp);
+    }],
     GetMessageW: ['ppuu', (x, m, h, a, b) => A(user32, 'GetMessageA')(x, m, h, a, b)],
     DispatchMessageW: ['p', (x, m) => A(user32, 'DispatchMessageA')(x, m)],
     PostMessageW: ['puuu', (x, h, m, wp, lp) => A(user32, 'PostMessageA')(x, h, m, wp, lp)],
-    SendMessageW: ['puuu', (x, h, m, wp, lp) => A(user32, 'SendMessageA')(x, h, m, wp, lp)],
+    /*
+     * SendMessageW to a window whose procedure is MIRAGE's own (a button, an edit, a list box: user32's and
+     * comctl32's, which read ANSI): the text a message carries in, made ANSI -- a copy kept, the procedure
+     * running after this returns -- and WM_GETTEXT's out, as GetWindowTextW gives it. A program's own
+     * procedure takes its messages as they are. Unreal Tournament's setup wizard set its texts so, and its
+     * title read "U".
+     */
+    SendMessageW: ['puuu', (x, h, m, wp, lp) => {
+      const r = lp && mirageProc(x, h) ? textFor(x, h, m, wp, lp, (a) => A(user32, 'SendMessageA')(x, h, m, wp, a)) : null;
+      return r !== null ? r : A(user32, 'SendMessageA')(x, h, m, wp, lp);
+    }],
+    SendMessageTimeoutW: ['puuuuup', (x, h, m, wp, lp, f, ms, out) => A(user32, 'SendMessageTimeoutA')(x, h, m, wp, lp, f, ms, out)],
+    FindWindowExW: ['pppp', (x, parent, after, cls, title) => withAR(x, cls, (c) => withA(x, title, (t) => A(user32, 'FindWindowExA')(x, parent, after, c, t)))],
+    DrawTextExW: ['ppipup', (x, dc, s, n, r, f, p) => A(user32, 'DrawTextW')(x, dc, s, n, r, f)],
+    SetMessageQueue: ['i', () => 1],
     PostThreadMessageW: ['uuuu', (x, t, m, wp, lp) => A(user32, 'PostThreadMessageA')(x, t, m, wp, lp)],
     GetWindowLongW: ['pi', (x, h, i) => A(user32, 'GetWindowLongA')(x, h, i)],
     SetWindowLongW: ['pii', (x, h, i, v) => A(user32, 'SetWindowLongA')(x, h, i, v)],
@@ -265,8 +340,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     ToAscii: ['uuppu', (x, vk, scan, state, buf) => { const shift = state && (x.r8(state + 0x10) & 0x80), c = vkChar(vk, shift); if (!c) return 0; x.w16(buf, c.charCodeAt(0) & 0xff); return 1; }],
     ToAsciiEx: ['uuppup', (x, vk, scan, state, buf) => { const shift = state && (x.r8(state + 0x10) & 0x80), c = vkChar(vk, shift); if (!c) return 0; x.w16(buf, c.charCodeAt(0) & 0xff); return 1; }],
     // WNDCLASSEXA: its size, then a WNDCLASSA's fields, then the small icon.
-    GetClassInfoExA: ['ppp', (x, inst, name, wcx) => { const t = x.win.heapAlloc(40); try { if (!A(user32, 'GetClassInfoA')(x, inst, name, t)) return 0; x.write(wcx + 4, x.bytes(t, 40)); x.w32(wcx + 44, 0); return 1; } finally { x.win.heapFree(t); } }],
-    GetClassInfoW: ['ppp', (x, inst, name, wc) => (name < 0x10000 ? A(user32, 'GetClassInfoA')(x, inst, name, wc) : withA(x, name, (a) => A(user32, 'GetClassInfoA')(x, inst, a, wc)))],
+    GetClassInfoExA: ['ppp', (x, inst, name, wcx) => { const t = x.win.heapAlloc(40); try { if (!A(user32, 'GetClassInfoA')(x, inst, name, t)) return 0; x.write(wcx + 4, x.bytes(t, 40)); x.w32(wcx + 44, 0); superHint(x, name, wcx, true); return 1; } finally { x.win.heapFree(t); } }],
     InvalidateRgn: ['ppi', (x, h, rgn, erase) => A(user32, 'InvalidateRect')(x, h, 0, erase)],
     // ValidateRgn: the window painted, as ValidateRect has it (AWT's WM_PAINT validates so, after GetUpdateRgn).
     ValidateRgn: ['pp', (x, h) => A(user32, 'ValidateRect')(x, h, 0)],
@@ -285,6 +359,14 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     Arc: ['piiiiiiii', () => 1], Pie: ['piiiiiiii', () => 1], AbortPath: ['p', () => 1], CloseFigure: ['p', () => 1], ResetDCA: ['pp', (x, hdc) => hdc],
     CreateDCW: ['pppp', (x, drv, dev, out, dm) => withA(x, drv, (a) => A(gdi32, 'CreateDCA')(x, a, 0, 0, 0))],
     // LOGFONTW: LOGFONTA's fields, its face name 32 WCHARs.
+    // CreateFontW: its LOGFONTW made of its arguments, as CreateFontIndirectW takes it.
+    CreateFontW: ['iiiiiuuuuuuuup', (x, h, w, esc, ori, wt, it, ul, so, cs, op, cp, q, pf, face) => {
+      const lf = x.win.heapAlloc(92); x.write(lf, new Uint8Array(92));
+      [h, w, esc, ori, wt].forEach((v, i) => x.w32(lf + 4 * i, v >>> 0));
+      [it, ul, so, cs, op, cp, q, pf].forEach((v, i) => x.w8(lf + 20 + i, v & 255));
+      if (face) x.write(lf + 28, wbytes(wstr(x, face).slice(0, 31)));
+      try { return g32.CreateFontIndirectW[1](x, lf); } finally { x.win.heapFree(lf); }
+    }],
     CreateFontIndirectW: ['p', (x, lf) => {
       const t = x.win.heapAlloc(60); x.write(t, x.bytes(lf, 28)); x.write(t + 28, Uint8Array.from(wstr(x, lf + 28, 32).replace(/\0.*$/, '').slice(0, 31) + '\0', (c) => c.charCodeAt(0) & 0xff));
       try { return A(gdi32, 'CreateFontIndirectA')(x, t); } finally { x.win.heapFree(t); }
@@ -308,6 +390,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     GetUserNameA: ['pp', (x, buf, pn) => { const n = x.r32(pn); x.w32(pn, 7); if (n < 7) return 0; putA(x, buf, n, 'mirage'); return 1; }],
     GetUserNameW: ['pp', (x, buf, pn) => { const n = x.r32(pn); x.w32(pn, 7); if (n < 7) return 0; putW(x, buf, n, 'mirage'); return 1; }],
     RegOpenKeyExW: ['ppuup', () => 2], RegQueryValueExW: ['pppppp', () => 2],
+    RegQueryInfoKeyW: ['pppppppppppp', () => 2], RegDeleteKeyW: ['pp', () => 2],   // ERROR_FILE_NOT_FOUND, as the keys above
   };
   // shell32: the folders a program keeps its settings in (CSIDL_APPDATA and the like), all on C:; no
   // icons in its executable to extract; files dropped on the window never.
@@ -326,7 +409,11 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     SHGetKnownFolderPath: ['pupp', (x, id, flags, tok, out) => { const b = wbytes(APPDATA), p = x.win.heapAlloc(b.length); x.write(p, b); x.w32(out, p); return 0; }],
     ExtractIconExW: ['pippu', () => 0], ExtractIconExA: ['pippu', () => 0],
     DragAcceptFiles: ['pi', () => 0], DragFinish: ['p', () => 0], DragQueryFileW: ['pupu', () => 0],
-    ShellExecuteW: ['pppppi', () => 2], ShellExecuteA: ['pppppi', () => 2],                // SE_ERR_FNF: nothing opens
+    // ShellExecute of a program ("open", or no verb): run as CreateProcess runs it, 42 (above 32: done); anything
+    // else (a document, a URL) has nothing to open it, SE_ERR_FNF. Unreal Tournament runs itself so to try a
+    // renderer (testrendev=...), and waits for what that one writes.
+    ShellExecuteW: ['pppppi', (x, h, op, file, params, dir, show) => shellExec(x, op && wstr(x, op), file && wstr(x, file), params ? wstr(x, params) : '')],
+    ShellExecuteA: ['pppppi', (x, h, op, file, params, dir, show) => shellExec(x, op && x.str(op, 64), file && x.str(file, 260), params ? x.str(params, 32768) : '')],                // SE_ERR_FNF: nothing opens
   };
   // imm32: no input method; a key types its character directly.
   const imm32 = {
@@ -358,6 +445,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     }],
     PropVariantClear: ['p', (x, p) => { x.write(p, new Uint8Array(16)); return 0; }],
     CLSIDFromString: ['pp', () => 0x800401f3],                      // CO_E_CLASSSTRING
+    CoGetMalloc: ['up', (x, ctx, pp) => { if (pp) x.w32(pp, 0); return 0x80004001; }],   // E_NOTIMPL: no IMalloc here (CoTaskMemAlloc is)
   };
   const oleaut32 = { SysFreeString: ['p', () => 0, { ordinal: 6 }] };
   // ws2_32: Winsock 2 by the ordinals Winsock 1.1 gives the same functions (accept 1 ... WSAStartup 115)
@@ -512,7 +600,7 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
     GetDateFormatW: ['uupppi', (x, lcid, flags, date, fmt, buf, n) => (n ? intoW(x, buf, n, (t, k) => A(kernel32, 'GetDateFormatA')(x, lcid, flags, date, 0, t, k)) : A(kernel32, 'GetDateFormatA')(x, lcid, flags, date, 0, 0, 0))],
     // The time zone is UTC here: the local time is the time given.
     SystemTimeToTzSpecificLocalTime: ['ppp', (x, tz, utc, local) => { x.write(local, x.bytes(utc, 16)); return 1; }],
-    CreateProcessW: ['pppppiuppp', () => 0],
+    CreateProcessW: ['pppppiuppp', (x, app, cmd, psa, tsa, inherit, flags, envp, cwd, si, pi) => st.spawnExe(x, app ? wstr(x, app) : null, cmd ? wstr(x, cmd) : '', pi, 1)],
     CreateWaitableTimerW: ['pip', (x, sa, manual) => timer(x, manual)],
     CreateWaitableTimerExW: ['ppuu', (x, sa, name, flags) => timer(x, flags & 1)],
     // SetWaitableTimer(timer, &due, period ms, ...): a due time below zero is relative, in 100 ns; above,

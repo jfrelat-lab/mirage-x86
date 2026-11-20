@@ -29,3 +29,4 @@ tools/sst386/
 
 # fetched for the static export (tools/freedos-sources.mjs), never committed
 /dist/
+tools/recomp/out/

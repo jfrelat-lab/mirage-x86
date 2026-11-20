@@ -179,7 +179,7 @@ export function langIdOf(tag, codepage = 1252) {
 // (only the text's black shadow showed).
 export const WIN32_GL_EXTENSIONS = ['GL_ARB_multitexture'];
 
-export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null, lang = 0x409 } = {}) {
+export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null, lang = 0x409, disk = null } = {}) {
   const st = windowState(fonts);
   // The system's code page (GetACP): 1252, a Western Windows XP's, or 932, a Japanese one's -- what the
   // ANSI calls' bytes mean, Shift-JIS there (Cave Story's text, 2004). An image's `machine.codepage`.
@@ -314,7 +314,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return out.join('/');
   };
   const baseName = (p) => p.replace(/^.*[\\/]/, '').toLowerCase();
-  st.disk = new Map(Object.entries(files).map(([n, b]) => [relPath(n), { bytes: b, size: b.length }]));
+  // The disk (C:): the files given; a child process's (CreateProcess) its parent's, the same map -- what the one
+  // writes the other reads (Unreal Tournament's Detected.ini).
+  st.disk = disk || new Map(Object.entries(files).map(([n, b]) => [relPath(n), { bytes: b, size: b.length }]));
   const diskFile = (p) => st.disk.get(relPath(p)) || [...st.disk].find(([k]) => baseName(k) === baseName(p))?.[1]
     || (baseName(p) === 'gm.dls' ? { bytes: null, size: GM_DLS_SIZE } : null);
   // A directory of the disk: its root, or a path some file lies under.
@@ -400,7 +402,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     GetModuleHandleA: ['p', (x, name) => { if (!name) return x.win.base; const m = x.win.modules.get(x.str(name).toLowerCase().replace(/^.*\\/, '')); return m ? m.base : 0; }],
     ExitProcess: ['u', (x, code) => { x.lx.exitProcess(code); return 0; }],
-    ExitThread: ['u', (x, code) => { x.lx.exitThread(code); return 0; }],
+    ExitThread: ['u', (x, code) => { if (st.threadWindowsGone) st.threadWindowsGone(x, x.lx.pid); x.lx.exitThread(code); return 0; }],
     GetTickCount: ['', (x) => ms(x)],
     // Sleep(0) gives the CPU to another thread, as Windows' does.
     Sleep: ['u', (x, n) => { if (n === 0) { x.lx.yieldAfter = true; return 0; } return x.sleep(n / 1000); }],
@@ -1000,7 +1002,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const bar = style & 0x40000000 ? 0 : menu || classMenu(x, key);  // a top-level window's menu bar, kept for when it is the screen's
     // A top-level window's size is its frame's, as CreateWindowEx takes it; kept as its client area's.
     if (top) { const f = popFrame({ style }); w = Math.max(0, (w | 0) - 2 * f.b); h = Math.max(0, (h | 0) - 2 * f.b - f.cap); }
-    const rec = { hwnd, cls: key, proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, bar, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
+    // A class made from a system one (its GetClassInfo, then RegisterClass with the same structure: Unreal's
+    // WControl superclasses BUTTON, LISTBOX...): the window behaves as the system class, named as its own.
+    const base = st.superOf && st.superOf.get(key);
+    const rec = { hwnd, cls: base || key, ...(base ? { clsName: key } : {}), proc, style: style >>> 0, parent, id: style & 0x40000000 ? menu : 0, bar, x: X | 0, y: Y | 0, w: w | 0, h: h | 0,
       title: t, visible: !!(style & 0x10000000), enabled: !(style & 0x08000000), long: new Map(), z: zNext(), ...extra };
     if (rec.ex) rec.long.set(-20, rec.ex);                            // GWL_EXSTYLE: what it was made with
     rec.tid = x.lx.pid;                                             // the thread that made it (GetWindowThreadProcessId)
@@ -1274,6 +1279,22 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     for (let j = Math.max(0, o.y); j < Math.min(sc.h, o.y + H); j++) sc.px.fill(0x3a6ea5, j * sc.w + Math.max(0, o.x), j * sc.w + Math.max(0, Math.min(sc.w, o.x + W)));
     for (const w of st.wins.values()) if (!w.dead && (w.main ? st.shown : w.visible && !(w.style & 0x40000000))) invalidate(w.hwnd, true, true);
   };
+  /*
+   * A thread's end destroys the windows it made, as Windows does -- with no messages, nobody being left to
+   * take them -- and what they covered is shown again. Unreal Tournament's splash thread, told WM_QUIT, ended
+   * and left its picture on the screen.
+   */
+  st.threadWindowsGone = (x, tid) => {
+    // The main window too (Unreal's splash is its first window), ended as DestroyWindow ends it: destroyed, not shown.
+    const main = win(st.hwnd), mainGoes = main && main.tid === tid && !st.destroyed;
+    const mine = [...st.wins.values()].filter((w) => w.tid === tid && !w.main && !w.dead);
+    if (!mine.length && !mainGoes) return;
+    const tops = mine.filter((w) => w.visible && !(w.style & 0x40000000)).map((w) => ({ o: screenOrigin(w.hwnd), W: w.w, H: w.h, w }));
+    if (mainGoes && st.shown) tops.push({ o: screenOrigin(st.hwnd), W: st.w, H: st.h, w: main });
+    for (const w of mine) { w.dead = true; st.wins.delete(w.hwnd); st.invalid.delete(w.hwnd); if (st.focus === w.hwnd) st.focus = 0; }
+    if (mainGoes) { st.destroyed = true; st.shown = false; st.invalid.delete(st.hwnd); wm.dirty = true; }
+    for (const t of tops) uncoverRect(t.o, t.W, t.H, t.w);
+  };
   const dcFor = (h) => (!h || h === st.hwnd ? st.hdc : (0x02000000 | (h & 0xffffff)) >>> 0);
   const hwndOfDC = (hdc) => (hdc === st.hdc ? st.hwnd : ((hdc & 0xff000000) >>> 0) === 0x02000000 ? hdc & 0xffffff : 0);
   const shown = (h) => { for (let w = win(h); w; w = win(w.parent)) { if (w.main) return st.shown; if (!w.visible || w.dead) return false; if (!(w.style & 0x40000000)) return true; } return false; };
@@ -1340,13 +1361,18 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     loadBitmap: (x, inst, id) => st.gdi.get(user32.LoadBitmapA[1](x, inst, id)) || null }));
   const defWindow = (x, hwnd, msg, wp, lp) => {
     const w = win(hwnd); if (!w) return undefined;
-    if (w.main && !st.mainDialog && msg !== 0x14) return undefined;      // a game's or an intro's window: as it always was, but erased with its class's brush
+    // A game's or an intro's window: as it always was, but erased with its class's brush, and its text set and
+    // read (WM_SETTEXT, WM_GETTEXT, WM_GETTEXTLENGTH) -- Unreal Tournament titles its window so.
+    if (w.main && !st.mainDialog && msg !== 0x14 && msg !== 0x0c && msg !== 0x0d && msg !== 0x0e) return undefined;
     if ((w.cls === 'combobox' || w.cls === 'listbox') && LIST_OPS[w.cls][msg]) return listOp(x, hwnd, w, LIST_OPS[w.cls][msg], wp, lp);
     if (w.cls === 'combobox' || w.cls === 'listbox') { const r = listInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
     if (w.cls === 'systreeview32') { const r = msg >= 0x1100 && msg < 0x1200 ? treeOp(x, hwnd, w, msg, wp, lp) : treeInput(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }
     if (COMMON_CONTROLS.has(w.cls)) { const r = comctl().message(x, hwnd, w, msg, wp, lp); if (r !== undefined) return r; }   // src/win32/comctl.js
     switch (msg) {
-      case 0x0c: w.title = lp ? x.str(lp, 0x8000) : ''; if (hwnd === st.hwnd) st.title = w.title; invalidate(hwnd, true); return 1;   // WM_SETTEXT
+      case 0x0c:                                                         // WM_SETTEXT: a game's main window its caption only, redrawn
+        w.title = lp ? x.str(lp, 0x8000) : ''; if (hwnd === st.hwnd) st.title = w.title;
+        if (w.main && !st.mainDialog) wm.dirty = true; else invalidate(hwnd, true);
+        return 1;
       case 0x0d: { const t = (w.title || '').slice(0, Math.max(0, wp - 1)); if (wp) x.write(lp, ansi(t + '\0')); return t.length; }   // WM_GETTEXT
       case 0x0e: return (w.title || '').length;                          // WM_GETTEXTLENGTH
       case 0x30: w.font = wp; if (lp & 0xffff) invalidate(hwnd, true); return 0;   // WM_SETFONT
@@ -2754,7 +2780,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     }],
     GetDlgCtrlID: ['p', (x, h) => (win(h) ? win(h).id : 0)],
     GetClassNameA: ['ppi', (x, h, buf, n) => {
-      const w = win(h), k = w ? w.cls : st.mainClass, name = typeof k === 'number' ? (st.classNames.get(k) || '#' + k) : k || '';
+      const w = win(h), k = w ? w.clsName || w.cls : st.mainClass, name = typeof k === 'number' ? (st.classNames.get(k) || '#' + k) : k || '';
       if (n <= 0) return 0; const t = name.slice(0, n - 1); x.write(buf, new TextEncoder().encode(t + '\0')); return t.length;
     }],
     GetWindowTextLengthA: ['p', (x, h) => (h === st.hwnd ? (st.title || '').length : win(h) ? (win(h).title || '').length : 0)],
@@ -3445,6 +3471,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     PlaySoundA: ['ppu', (x, p, mod, flags) => playMemory(x, p, flags), { ordinal: 2 }],   // winmm's ordinal 2 (Spider imports it so)
     waveOutGetNumDevs: ['', () => 1],
     // The mixer and the auxiliary devices (CD audio's volume): none here, MMSYSERR_BADDEVICEID / NODRIVER.
+    mixerGetDevCapsA: ['upu', () => 2],                                // MMSYSERR_BADDEVICEID: no mixer
     mixerGetNumDevs: ['', () => 0], mixerOpen: ['ppuuu', (x, ph) => { if (ph) x.w32(ph, 0); return 6; }], mixerClose: ['p', () => 0],
     mixerGetLineInfoA: ['ppu', () => 5], mixerGetLineControlsA: ['ppu', () => 5], mixerGetControlDetailsA: ['ppu', () => 5], mixerSetControlDetails: ['ppu', () => 5],
     auxGetNumDevs: ['', () => 0], auxGetDevCapsA: ['upu', () => 2], auxGetVolume: ['up', () => 2], auxSetVolume: ['uu', () => 2],
@@ -3932,7 +3959,10 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // 512-byte sectors, 8 to a cluster: 256 MiB free of 512.
     GetDiskFreeSpaceA: ['ppppp', (x, root, spc, bps, free, total) => { if (spc) x.w32(spc, 8); if (bps) x.w32(bps, 512); if (free) x.w32(free, 0x10000); if (total) x.w32(total, 0x20000); return 1; }],
     VirtualLock: ['pu', () => 1], VirtualUnlock: ['pu', () => 1],
-    CreateProcessA: ['pppppiuppp', () => 0], GetExitCodeProcess: ['pp', () => 0], LoadModule: ['pp', () => 2],
+    // CreateProcessA: the program (lpApplicationName, else the command line's first word) as a process of its own
+    // (src/win32/index.js spawn), PROCESS_INFORMATION its handles and ids -- a process's handle its first thread's.
+    CreateProcessA: ['pppppiuppp', (x, app, cmd, psa, tsa, inherit, flags, envp, cwd, si, pi) => st.spawnExe(x, app ? x.str(app, 260) : null, cmd ? x.str(cmd, 32768) : '', pi, 1)],
+    GetExitCodeProcess: ['pp', (x, h, p) => { const c = x.lx.threadExits.get(h - 0x2000); x.w32(p, c === undefined ? 259 : c); return 1; }],   // STILL_ACTIVE LoadModule: ['pp', () => 2],
     GetTempPathA: ['up', (x, n, buf) => putOut(x, buf, n, 'C:\\') - 1],
     // Blizzard's network providers (standard.snp, battle.snp): no serial port to set (the modem and
     // direct-cable games fail, as with none), the machine's name, the system's locale (US English).
@@ -3961,7 +3991,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
       for (const w of st.wins.values()) {
         if (w.parent !== parent || w.dead || !(w.style & 0x40000000)) continue;
         if (!past) { past = w.hwnd === after; continue; }
-        if ((k === null || w.cls === k) && (t === null || w.title === t)) return w.hwnd;
+        if ((k === null || (w.clsName || w.cls) === k) && (t === null || w.title === t)) return w.hwnd;
       }
       return 0;
     }],
@@ -4016,7 +4046,15 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     GetKeyboardLayoutList: ['ip', (x, n, p) => { if (n && p) x.w32(p, 0x04090409); return 1; }],
     GetKeyboardLayoutNameA: ['p', (x, p) => { x.write(p, new TextEncoder().encode('00000409\0')); return 1; }],
     LoadKeyboardLayoutA: ['pu', () => 0x04090409], ActivateKeyboardLayout: ['pu', () => 0x04090409],
-    GetCursor: ['', () => st.cursor || 0], GetSystemMenu: ['pi', () => 0], EnumThreadWindows: ['upp', () => 1], EnumChildWindows: ['ppp', () => 1],
+    GetCursor: ['', () => st.cursor || 0], GetSystemMenu: ['pi', () => 0], EnumThreadWindows: ['upp', () => 1],
+    // EnumChildWindows: the callback (stdcall: the window, lParam) for each descendant, children before their own,
+    // until it answers FALSE. Unreal Tournament localizes its dialogs' controls so; nothing was ever called.
+    EnumChildWindows: ['ppp', (x, parent, fn, lp) => {
+      const kids = [], walk = (h) => { for (const w of st.wins.values()) if (w.parent === h && !w.dead && (w.style & 0x40000000)) { kids.push(w.hwnd); walk(w.hwnd); } };
+      walk(parent);
+      const next = (i) => (i >= kids.length ? 1 : send(x, [{ fn, args: [kids[i], lp] }], (r) => (r ? next(i + 1) : 1), 12));
+      return next(0);
+    }],
     // An icon made from masks (Delphi's TIcon): its size kept, drawn as nothing.
     CreateIcon: ['piiuupp', (x, inst, w, h) => st.newHandle('icon', { w, h, px: new Uint32Array(Math.max(0, w * h)), mask: new Uint8Array(Math.max(0, w * h)).fill(1) })],
     RegisterClipboardFormatA: ['p', () => (st.clipFormats = (st.clipFormats || 0xc000) + 1)],
@@ -4088,6 +4126,24 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     TransparentBlt: ['piiiipiiiiu', (x, d, dx, dy, dw, dh, s, sx, sy, sw, sh) => gdi32.StretchBlt[1](x, d, dx, dy, dw, dh, s, sx, sy, sw, sh, 0xcc0020)],
   };
   const mpr = { WNetGetConnectionA: ['ppp', () => 2250] };
+  /*
+   * Another program run as a process of its own: `app` its path (or null: the command line's first word, quoted
+   * or not, .exe added when it has no extension), the rest of the line its arguments. PROCESS_INFORMATION at `pi`
+   * (hProcess and hThread its first thread's handle, its id twice) written before the switch: the new process
+   * runs at once, this one answering `ret` to its call. 0 (ERROR_FILE_NOT_FOUND) when no such file is on the disk.
+   */
+  st.spawnExe = (x, app, cmd, pi, ret) => {
+    let line = (cmd || '').trim(), prog = app;
+    if (!prog) { const m = /^"([^"]*)"\s*|^(\S+)\s*/.exec(line); prog = m ? (m[1] ?? m[2]) : ''; line = m ? line.slice(m[0].length) : ''; }
+    else if (line) { const m = /^"([^"]*)"\s*|^(\S+)\s*/.exec(line); if (m && /\.exe$/i.test(m[1] ?? m[2])) line = line.slice(m[0].length); }
+    let f = prog && st.diskFile(prog);
+    if (!f && prog && !/\.[^\\.]+$/.test(prog)) { prog += '.exe'; f = st.diskFile(prog); }
+    if (!f || !f.bytes || !x.win.spawn) { setError(x, 2); return 0; }
+    const pid = x.lx.nextProcessId(), full = /^[a-z]:\\/i.test(prog) ? prog : 'C:\\' + prog.replace(/^\\+/, '');
+    if (pi) { x.w32(pi, 0x2000 + pid); x.w32(pi + 4, 0x2000 + pid); x.w32(pi + 8, pid); x.w32(pi + 12, pid); }
+    x.win.spawn(f.bytes.subarray(0, f.size), full, line, ret);
+    return ret;
+  };
   const tables = [
     { dll: 'msimg32.dll', fns: msimg32 }, { dll: 'mpr.dll', fns: mpr },
     // msvcrt.dll: its own functions, and the Universal CRT's (src/win32/ucrt.js) for the rest, as crtdll.dll's
@@ -4342,6 +4398,8 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   tables.wm = { clientRect: () => glRect() || (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0, version: () => wm.version | 0,
     // The program's icon (its first RT_GROUP_ICON's first image): { w, h, px 0x00RRGGBB, mask 1 transparent }, or null.
     icon: (x) => { try { const b = st.gdi.get(loadIcon(x, x.win.base, null)); return b && b.px ? { w: b.w, h: b.h, px: b.px, mask: b.mask } : null; } catch { return null; } } };   // GDI frames shown
+  // The Windows a child process gets (CreateProcess): its own state, on the same disk.
+  tables.childApis = () => win32Apis({ gl, glu, fonts, env, codepage, desk, lang, disk: st.disk });
   return tables;
 }
 

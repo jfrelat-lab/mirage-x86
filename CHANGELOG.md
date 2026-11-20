@@ -3,6 +3,11 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-20
+
+- **Unreal Tournament** (1999) starts on the Windows machine: its first-run configuration, its intro and its menu, in software rendering (tested locally).
+- Windows programs can start other programs, and a thread's windows close when it ends.
+
 ## 2026-11-18
 
 - **Warcraft III's demo installs and starts** on the Windows machine, its 3D main menu with its buttons' text (tested locally).

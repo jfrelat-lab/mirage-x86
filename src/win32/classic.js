@@ -822,7 +822,7 @@ export function classicApis({ st, wm }) {
     Shell_NotifyIconA: ['up', () => 1], DragQueryPoint: ['pp', () => 0],
     DragAcceptFiles: ['pi', () => 0], DragFinish: ['p', () => 0],
     DragQueryFileA: ['pupu', () => 0],
-    ShellExecuteA: ['ppppppi', () => 31],
+
     // The shell's allocator (the process heap's) and its namespace: a desktop folder with nothing in it
     // (COM objects below). The StarCraft installer fills its folder tree from it, and stopped when there was
     // none ("exp1: Error 0"). A file's information: none (0).
