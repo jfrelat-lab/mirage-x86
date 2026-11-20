@@ -12,9 +12,18 @@
 // --bench: no comparison; ms per frame over the same instruction counts for MIRAGE's dynamic
 // recompiler (in this process, its normal configuration) and then PRISM, sequentially.
 //
-// History of a PRISM wall: libm calls used to be emitted as `M.rt.cos(...)`, a property load V8 could
-// not inline through (lattice 61 -> 42 ms a frame once rewritten as Math.cos); PRISM 6391e47 emits
-// Math.x itself.
+// PRISM's walls, measured (PRISM 6391e47, node 22; the reproducers are tools/recomp/walls/):
+//   * fmod() is emitted as M.rt.fmod(...), a call through the runtime object, where sin/cos/sqrt are
+//     Math.x now: 20 M fmods in a loop 203 ms, the same remainder as x - floor(x/y)*y 30 ms (6.8x).
+//     rc.h's 3DAh beam paid it twice a read until it was cached.
+//   * a static function that calls another static function is not inlined through: 50 M calls of
+//     f(x) whose body calls g(x) 451 ms, with g written into f 277 ms (1.6x; clang: equal). Every C
+//     function is a rebindable binding in the output (`case "name": name=fn`), and each begins with
+//     `var _fp=M.sp-0|0`. x86c's FIST helper is self-contained for that (tube 3.29 -> 2.65 ms a
+//     frame), rc_inp is a macro.
+//   * a label makes the whole function PRISM's goto state machine (a switch dispatch per jump), which
+//     is why x86c emits structured loops (tube 1.7x slower as gotos).
+//   * (history) libm calls were `M.rt.cos(...)` until 6391e47 (lattice 61 -> 42 ms a frame).
 import { writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
