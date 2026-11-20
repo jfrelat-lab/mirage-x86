@@ -3,9 +3,9 @@
    from PRISM's: if this matches MIRAGE's frames and PRISM does not, the fault is PRISM's.
 
    What it supplies (rc.h): guest memory as a 1 MiB + 64 KB array, the VGA DAC behind ports
-   3C7h-3C9h (six bits, as MIRAGE's src/bios.js keeps it), INT 10h AH=0 (mode set; 13h clears
-   A000), and port 60h, which both intros poll once per frame after the blit -- so that is where a
-   frame is taken: written raw (64,000 pixels + 768 DAC bytes) for the harness to hash, written as
+   3C7h-3C9h (six bits, as MIRAGE's src/bios.js keeps it), the video mode number, and port 60h,
+   which the intros poll once per frame (rc.h turns INT 16h's key check and a frame point of a
+   program that never polls into the same read) -- so that is where a frame is taken: written raw (64,000 pixels + 768 DAC bytes) for the harness to hash, written as
    a PPM for a person to look at, or shown in an SDL window.
 
      rc_<name> [--frames=N] [--key=156] [--dump=dir] [--ppm=dir --shots=1,84] [--window] [--quiet]
@@ -21,7 +21,7 @@
 unsigned char rc_mem[0x110000];
 static unsigned char dac[768];
 static int dacW, dacR, latchW, latchR, mode = 3;
-static int frames = 30, key = 0x9c, frame, quiet, window, shotList[64], nShots;
+static int frames = 30, key = 0x9c, frame, quiet, every = 1, window, shotList[64], nShots;
 static const char *dumpDir, *ppmDir;
 static SDL_Window *win;
 static SDL_Renderer *ren;
@@ -81,6 +81,7 @@ int rc_in(int port) {
     double ms = last ? (double)(now - last) * 1000.0 / (double)SDL_GetPerformanceFrequency() : 0;
     int i;
     frame++;
+    if (frame % every && frame < frames) return key;   /* --every=K: only each K-th poll is a frame */
     if (dumpDir) writeFrame(dumpDir, frame, 0);
     for (i = 0; i < nShots; i++) if (shotList[i] == frame && ppmDir) writeFrame(ppmDir, frame, 1);
     if (window) present();
@@ -90,15 +91,7 @@ int rc_in(int port) {
   return frame >= frames ? 1 : key;
 }
 
-void rc_int(int n, rc_regs *r) {
-  if (n == 0x10 && (r->ax >> 8) == 0) {
-    mode = r->ax & 0x7f;
-    if (mode == 0x13 && !(r->ax & 0x80)) memset(rc_mem + 0xa0000, 0, 0x10000);
-    return;
-  }
-  fprintf(stderr, "int %02xh ax=%04x: not supplied\n", n, r->ax);
-  exit(3);
-}
+void rc_setmode(int ax) { mode = ax & 0x7f; }
 
 int main(int argc, char **argv) {
   int i, code;
@@ -110,6 +103,7 @@ int main(int argc, char **argv) {
     else if (!strncmp(a, "--ppm=", 6)) ppmDir = a + 6;
     else if (!strncmp(a, "--shots=", 8)) { const char *p = a + 8; while (*p && nShots < 64) { shotList[nShots++] = atoi(p); while (*p && *p != ',') p++; if (*p) p++; } }
     else if (!strcmp(a, "--window")) window = 1;
+    else if (!strncmp(a, "--every=", 8)) every = atoi(a + 8);
     else if (!strcmp(a, "--quiet")) quiet = 1;
     else { fprintf(stderr, "unknown option %s\n", a); return 2; }
   }

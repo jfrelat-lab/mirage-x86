@@ -21,7 +21,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 /** The frame a hash names: 64,000 bytes of A000 and the 768 of the DAC (6-bit, MIRAGE's layout). */
 export const frameHash = (fb, dac) => createHash('sha1').update(fb).update(dac).digest('hex');
 
-export function mirageFrames(path, frames, { dump = null, keep = false, onPoll = null } = {}) {
+export function mirageFrames(path, frames, { dump = null, keep = false, onPoll = null, maxCycles = Infinity } = {}) {
   const mc = new Machine({ memSize: 1 << 20 });
   mc.timerAuto = false;
   installBIOS(mc);
@@ -43,7 +43,7 @@ export function mirageFrames(path, frames, { dump = null, keep = false, onPoll =
     if (out.length >= frames) stop = true;
     return v;
   });
-  while (!stop && !fault && !dos.programDone) mc.runSlice(20000);
+  while (!stop && !fault && !dos.programDone && cpu.cycles < maxCycles) mc.runSlice(20000);
   return { entry, frames: out, fault: fault ? String(fault.message) : null, mc };
 }
 
