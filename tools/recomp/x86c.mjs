@@ -874,7 +874,7 @@ function fpuInsn(m, ip0, I, end, modrm, R) {
   R.len = (end() - ip0) & 0xffff;
   // ST(i): a fixed local when the top is static, F[(ft+i)&7] when it is not (fpuDyn).
   const P = (top, i) => (top === 'dyn' ? `F[(ft+${i})&7]` : `p${(top + i) & 7}`);
-  const T11 = (t) => (t === 'dyn' ? '(ft<<11)' : `${t << 11}`);
+  const T11 = (t) => (t === 'dyn' ? '(ft<<11)' : R.tadj ? `(((${t}+tadj)&7)<<11)` : `${t << 11}`);
   const fdiv = (x, y) => `(${y}==0&&${x}!=0&&${x}==${x}?fsw|=4:0);`;
   const ari = (reg, x, y) => [`${x}+${y}`, `${x}*${y}`, null, null, `${x}-${y}`, `${y}-${x}`, `${x}/${y}`, `${y}/${x}`][reg];
   const divCheck = (reg, x, y) => (reg === 6 ? fdiv(x, y) : reg === 7 ? fdiv(y, x) : '');
@@ -952,7 +952,7 @@ function fpuInsn(m, ip0, I, end, modrm, R) {
     } else if (op === 0xdf && b < 0xc8) {
       delta = 1; text = `ffreep st${i}`; gen = () => '';
     } else if (op === 0xdb && b === 0xe3) {
-      text = 'fninit'; R.fninit = true; gen = (t) => (t === 'dyn' ? 'fsw=0;fcw=0x37f;ft=0;F[0]=F[1]=F[2]=F[3]=F[4]=F[5]=F[6]=F[7]=0;' : 'fsw=0;fcw=0x37f;p0=p1=p2=p3=p4=p5=p6=p7=0;');
+      text = 'fninit'; R.fninit = true; gen = (t) => (t === 'dyn' ? 'fsw=0;fcw=0x37f;ft=0;F[0]=F[1]=F[2]=F[3]=F[4]=F[5]=F[6]=F[7]=0;' : `fsw=0;fcw=0x37f;p0=p1=p2=p3=p4=p5=p6=p7=0;${R.tadj ? 'tadj=0;' : ''}`);
     } else if (op === 0xdb && b === 0xe2) {
       text = 'fnclex'; gen = () => 'fsw&=~0xff;';
     } else if (op === 0xdf && b === 0xe0) {
@@ -1064,27 +1064,43 @@ export function translateCom(com, state, opts = {}) {
   // resets it there); an x87 instruction that meets one is refused.
   const top = new Map();
   // MIRAGE starts a program with the x87 reset (top 0, empty registers that read as 0).
-  const fw = [[entry, state.ftop ?? null]];
+  // ROTATION (fpuRot, the retry when an x87 instruction meets a conflict): where two paths bring
+  // different tops, the second keeps the first one's, and its edge renames the eight registers
+  // (a rotation: the x87 stack is a ring of eight) -- the stack stays static, the cost is on that edge.
+  // TOP itself, which FNSTSW reports, is kept right by `tadj`, the rotations made since FNINIT.
+  const rot = new Map();      // "from>to" -> [top the edge brings, top the node keeps]
+  const fw = [[entry, state.ftop ?? null, -1]];
   while (fw.length) {
-    const [id, t] = fw.pop();
+    const [id, t, from] = fw.pop();
     const N = nodes[id], R = N.R;
-    if (opts.fpuDyn) { if (!top.has(id)) { top.set(id, 'dyn'); for (const s of N.succ) fw.push([s, 'dyn']); } continue; }
+    if (opts.fpuDyn) { if (!top.has(id)) { top.set(id, 'dyn'); for (const s of N.succ) fw.push([s, 'dyn', id]); } continue; }
     let tin = t;
     if (top.has(id)) {
       const was = top.get(id);
       if (was === t || was === -1) continue;
+      if (opts.fpuRot && typeof t === 'number' && typeof was === 'number') { rot.set(`${from}>${id}`, [t, was]); continue; }
       tin = -1;
     }
     top.set(id, tin);
     let tout = tin;
     if (R.fninit) tout = 0;
     else if (R.fpu !== null) {
-      if ((tin === null || tin < 0) && !opts.fpuDyn && process.env.RC_NOFPUDYN === undefined) return translateCom(com, state, { ...opts, fpuDyn: true });
+      if ((tin === null || tin < 0) && !opts.fpuDyn && !opts.fpuRot && tin !== null) return translateCom(com, state, { ...opts, [process.env.RC_FPUDYN ? 'fpuDyn' : 'fpuRot']: true });
       if (tin === null || tin < 0) refuse(N.ip, tin === null ? 'x87 use before FNINIT: the stack top is unknown' : 'the x87 stack top differs between the paths that reach this instruction');
       tout = (tin + R.fpu) & 7;
     }
-    for (const s of N.succ) fw.push([s, tout]);
+    for (const s of N.succ) fw.push([s, tout, id]);
   }
+  if (rot.size) for (const N of nodes) if (N.R.fpu !== null || N.R.fninit) N.R.tadj = true;
+  const rotCode = (from, to) => {
+    const r = rot.get(`${from}>${to}`);
+    if (!r) return '';
+    const [tf, tt] = r;
+    let c = '';
+    for (let i = 0; i < 8; i++) c += `r${i}=p${(tf + i) & 7};`;
+    for (let i = 0; i < 8; i++) c += `p${(tt + i) & 7}=r${i};`;
+    return `${c}tadj=(tadj+${(tf - tt) & 7})&7;`;
+  };
   // 3b. DF, forward, the same way: CLD and STD set it, everything else keeps it; a string
   // instruction where the paths disagree is refused. (POPF of DF=1 stops the program at run time.)
   const dfAt = new Map();
@@ -1167,6 +1183,12 @@ export function translateCom(com, state, opts = {}) {
       lines.push(`${c}${' '.repeat(Math.max(1, 72 - c.length))}/* ${tag} ${R.text} */`);
     });
     b.lines = lines; b.term = term;
+    if (rot.size) {
+      const last = b.nodes[b.n - 1].id;
+      if (term.kind === 'cond') { term.takenPre = rotCode(last, term.taken) || undefined; term.fallPre = rotCode(last, term.fall) || undefined; }
+      else if (term.kind === 'go') term.toPre = rotCode(last, term.to) || undefined;
+      else if (term.kind === 'multi' && term.cases.some(([, id]) => rotCode(last, id))) refuse(b.ip, 'an x87 rotation on a return to a caller from before the snapshot');
+    }
     if (term.kind === 'multi') {
       // A multi-way branch as a chain of two-way ones: synthetic blocks `t0==A ? A : next`.
       let at = b;
@@ -1194,7 +1216,7 @@ export function translateCom(com, state, opts = {}) {
   // FRNDINT round without consulting it (tube's two FISTPs a pixel: 3.7 -> 3.0 ms a frame in PRISM).
   if (![...decoded.values()].some((R) => /^fldcw/.test(R.text))) body = body.map((l) => l.replace(/fi16\(([^;]*?),fcw\)/g, 'fi16n($1)').replace(/fround\(([^;]*?),fcw\)/g, 'frnear($1)'));
   const c = cSource({ name, state, image: snap ? Array.from(m) : Array.from(com), base: imageStart, body, guard: [...guardSet].sort((a, b) => a - b), platform, needIc, snap });
-  return { c, nodes, decoded, fpuDyn: !!opts.fpuDyn, optimisticShift: !!opts.optimisticShift, nInsns: decoded.size, nNodes: nodes.length, nBlocks: blocks.size, mode, structureRefused, frameIns, syncAt: syncAt === null ? null : nodes[syncAt].ip, guardBytes: guardSet.size };
+  return { c, nodes, decoded, fpuRot: rot.size, fpuDyn: !!opts.fpuDyn, optimisticShift: !!opts.optimisticShift, nInsns: decoded.size, nNodes: nodes.length, nBlocks: blocks.size, mode, structureRefused, frameIns, syncAt: syncAt === null ? null : nodes[syncAt].ip, guardBytes: guardSet.size };
 }
 
 function blockSucc(b) {
@@ -1231,8 +1253,8 @@ function emitGotos(blocks, entry) {
     const b = blocks.get(id), next = order[k + 1];
     out.push(`L_${id}:`, ...b.lines.map((l) => `  ${l}`));
     const t = b.term;
-    if (t.kind === 'cond') out.push(`  if(${t.cond})goto L_${t.taken};${t.fall === next ? '' : `goto L_${t.fall};`}`);
-    else if (t.kind === 'go') { if (t.to !== next) out.push(`  goto L_${t.to};`); }
+    if (t.kind === 'cond') out.push(`  if(${t.cond}){${t.takenPre ?? ''}goto L_${t.taken};}${t.fallPre ?? ''}${t.fall === next && !t.fallPre ? '' : `goto L_${t.fall};`}`);
+    else if (t.kind === 'go') { if (t.toPre) out.push(`  ${t.toPre}`); if (t.to !== next || t.toPre) out.push(`  goto L_${t.to};`); }
     else out.push(`  ${t.c}`);
   });
   return out;
@@ -1293,8 +1315,8 @@ function singleExitLoops(orig, entry) {
   // The edge's own code (xs=k) rides on the terminator: takenPre / fallPre / toPre.
   const retarget = (b, from, to, pre) => {
     const t = b.term;
-    if (t.kind === 'cond') { if (t.taken === from) { t.taken = to; t.takenPre = pre; } if (t.fall === from) { t.fall = to; t.fallPre = pre; } }
-    else if (t.kind === 'go' && t.to === from) { t.to = to; t.toPre = pre; }
+    if (t.kind === 'cond') { if (t.taken === from) { t.taken = to; t.takenPre = (t.takenPre ?? '') + pre; } if (t.fall === from) { t.fall = to; t.fallPre = (t.fallPre ?? '') + pre; } }
+    else if (t.kind === 'go' && t.to === from) { t.to = to; t.toPre = (t.toPre ?? '') + pre; }
     b.succ = blockSucc(b);
   };
   for (let round = 0; round < 64; round++) {
@@ -1580,6 +1602,7 @@ int rc_main(void) {
   int fC = ${state.flags & 1}, fP = ${(state.flags >> 2) & 1}, fA = ${(state.flags >> 4) & 1}, fZ = ${(state.flags >> 6) & 1}, fS = ${(state.flags >> 7) & 1}, fO = ${(state.flags >> 11) & 1};
   double ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `p${k} = ${snap ? lit(snap.fpu.st[k]) : '0'}`).join(', ')}, d0, d1;
   int xs = 0;
+${uses(/\btadj\b/) ? `  int tadj = 0;\n  double r0, r1, r2, r3, r4, r5, r6, r7;\n` : ''}
   int fsw = ${snap ? snap.fpu.fsw : 0}, fcw = ${snap ? snap.fpu.fcw : 0x37f}, ta, t0, t1, t2, t3, t4, t5;
   unsigned ux, u0, u1, u2;
 ${uses(/\bq[0-3]\b/) ? '  long long q0, q2, q3;\n  unsigned long long q1;\n' : ''}${uses(/\bF\[/) ? `  double F[8] = { ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => (snap ? lit(snap.fpu.st[k]) : '0')).join(', ')} };\n  int ft = ${snap ? snap.fpu.ftop : (state.ftop ?? 0)};\n` : ''}
