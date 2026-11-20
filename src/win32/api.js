@@ -12,6 +12,7 @@ import { dmusicApis } from './dmusic.js';
 import { d3d11Apis } from './d3d11.js';
 import { dsoundApis } from './dsound.js';
 import { dinputApis } from './dinput.js';
+import { glideApis } from './glide.js';
 import { parseTrueType } from './truetype.js';
 import { parseSMF } from '../midi.js';
 import { windowManager } from './wm.js';
@@ -633,6 +634,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     CreateFileA: ['puupuup', (x, pName, access, share, sa, disp) => {
       const name = x.str(pName);
       let f = diskFile(name);
+      // A DLL made here, opened where Windows keeps it (system32): it is there, as GetFileAttributes says --
+      // its headers' first bytes. Unreal Tournament detects 3dfx's Glide so (C:\WINDOWS\system32\Glide2X.dll).
+      if (!f && disp === 3 && sysDll(x, name)) { const b = new Uint8Array(64); b[0] = 0x4d; b[1] = 0x5a; return openHandle({ bytes: b, size: 64 }); }
       if (disp === 2 || disp === 5 || (!f && (disp === 1 || disp === 4))) {   // CREATE_ALWAYS, TRUNCATE_EXISTING, or made
         if (disp === 5 && !f) { setError(x, 2); return -1; }
         f = { bytes: new Uint8Array(0), size: 0 }; st.disk.set(relPath(name), f);
@@ -4172,6 +4176,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     { dll: 'glu32.dll', fns: glu32 },
     { dll: 'winmm.dll', fns: winmm },
     ...d3d9Apis(st),
+    ...glideApis({ st }),                                             // glide2x.dll: 3dfx's Glide on OpenGL (src/win32/glide.js)
     ...dmusicApis(st, (name) => tables.readFile(name)),
     dsoundApis(),
     dinputApis(),

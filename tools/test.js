@@ -6066,6 +6066,31 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
     got = [got1, lb.cls, x.str(name), x.str(t), R(back), n1, cut, n2, R(buf)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a class made from LISTBOX, DefWindowProcW\'s text, _vsnwprintf', got, '1 listbox wlistbox Unreal Unreal -1 Tour5555 10 Tournament');
+  // glide2x.dll (src/win32/glide.js): 3dfx's Glide 2 on OpenGL. One Voodoo 2 found (num_sst 1, type 3, one TMU);
+  // a 64x32 RGB 565 texture downloaded at address 0 and pointed at; a triangle whose vertices are on the screen
+  // with their 1/w: each given to OpenGL as (x/oow, y/oow, d/oow, 1/oow), the texture coordinates s/w / oow
+  // over 256 (64 wide) and 128 (32 high), the colour over 255. And the file Glide2X.dll opens in system32, as
+  // Unreal Tournament's renderer detection opens it.
+  try { const { fn, x } = await w32(), gd = (n) => fn('glide2x.dll', n), log = [];
+    const gl0 = x.backend.gl; x.backend.gl = (n, a) => { log.push([n, a]); return n === 'glGenTexture' ? 7 : gl0.call(x.backend, n, a); };
+    const hw = x.win.heapAlloc(256); gd('_grSstQueryHardware@4')(hw);
+    gd('_grSstWinOpen@28')(0, 7, 0, 0, 0, 2, 1);
+    const tex = x.win.heapAlloc(64 * 32 * 2); for (let i = 0; i < 64 * 32; i++) x.w16(tex + 2 * i, 0xf800);   // red
+    gd('_grTexDownloadMipMapLevel@32')(0, 0, 2, 2, 2, 0xa, 3, tex);                   // LOD 64 = 2, aspect 2x1, RGB 565
+    gd('_grTexSource@16')(0, 0, 3, 0);
+    const v = x.win.heapAlloc(72 * 3), fv = new DataView(new ArrayBuffer(4)), put = (i, ...f) => f.forEach((val, k) => { fv.setFloat32(0, val, true); x.w32(v + 72 * i + 4 * k, fv.getUint32(0, true)); });
+    // x, y, z, r, g, b, ooz, a, oow, sow, tow, oow
+    put(0, 100, 50, 0, 255, 128, 0, 0, 255, 0.5, 32, 16, 0.5); put(1, 200, 50, 0, 255, 255, 255, 0, 255, 0.5, 0, 0, 0.5); put(2, 150, 150, 0, 0, 0, 0, 0, 255, 0.5, 0, 0, 0.5);
+    gd('_grDrawPolygonVertexList@8')(3, v);
+    const first = (n) => log.find(([k]) => k === n), all = (n) => log.filter(([k]) => k === n).map(([, a]) => a);
+    const img = first('glTexImage2D')[1], px = img[8], v4 = all('glVertex4f')[0], tc = all('glTexCoord2f')[0], col = all('glColor4f')[0];
+    const k = x.win.heapAlloc(64); x.write(k, new TextEncoder().encode('C:\\WINDOWS\\system32\\Glide2X.dll\0'));
+    const h = fn('kernel32.dll', 'CreateFileA')(k, 0x80000000, 1, 0, 3, 0x80, 0);
+    got = [x.r32(hw), x.r32(hw + 4), x.r32(hw + 16), x.win.made('glide2x.dll'), first('glBegin')[1][0], img[3] + 'x' + img[4], px[0], px[1], px[3],
+      v4.map((n) => +n.toFixed(3)).join(','), tc.map((n) => +n.toFixed(3)).join(','), col.map((n) => +n.toFixed(3)).join(','), h !== -1 && h !== 0xffffffff].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Glide 2 on OpenGL -- the board, a 565 texture, a vertex with its 1/w, Glide2X.dll in system32', got,
+    '1 3 1 true 6 64x32 255 0 255 200,100,1.333,2 0.25,0.25 1,0.502,0,1 true');
   // LoadImageA(LR_LOADFROMFILE): a .bmp of the program's disk (Cave Story's .pbm pictures) as a bitmap.
   try { const bmp = new Uint8Array(54 + 8), v = new DataView(bmp.buffer);
     bmp.set([0x42, 0x4d]); v.setUint32(2, bmp.length, true); v.setUint32(10, 54, true); v.setUint32(14, 40, true); v.setInt32(18, 2, true); v.setInt32(22, 1, true);
