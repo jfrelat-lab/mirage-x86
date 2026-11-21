@@ -26,7 +26,10 @@ static const char *dumpDir, *ppmDir;
 static SDL_Window *win;
 static SDL_Renderer *ren;
 static SDL_Texture *tex;
-static Uint64 last;
+static Uint64 last, start, shown;
+int rc_play;                      /* no options: a window, the real clock, the keyboard, until Esc */
+static int scan = 0x9c;           /* the last key's scancode, port 60h's answer in the play mode */
+double rc_seconds(void) { return (double)(SDL_GetPerformanceCounter() - start) / (double)SDL_GetPerformanceFrequency(); }
 
 void rc_out(int port, int v) {
   v &= 0xff;
@@ -50,7 +53,9 @@ static void present(void) {
   SDL_RenderCopy(ren, tex, NULL, NULL);
   SDL_RenderPresent(ren);
   while (SDL_PollEvent(&e)) {
-    if (e.type == SDL_QUIT || (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)) frames = frame;
+    if (e.type == SDL_QUIT || (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)) { frames = frame; scan = 1; }
+    else if (e.type == SDL_KEYDOWN) scan = 0x39;              /* any other key: the space bar's make code */
+    else if (e.type == SDL_KEYUP) scan = 0xb9;
   }
 }
 
@@ -76,6 +81,11 @@ static void writeFrame(const char *dir, int n, int ppm) {
 int rc_in(int port) {
   if (port == 0x3c9) { int v = dac[dacR * 3 + latchR]; if (++latchR == 3) { latchR = 0; dacR = (dacR + 1) & 0xff; } return v; }
   if (port != 0x60) return 0xff;
+  if (rc_play) {                  /* the picture shown at most 70 times a second, whatever the polling */
+    Uint64 now = SDL_GetPerformanceCounter();
+    if (now - shown >= SDL_GetPerformanceFrequency() / 70) { shown = now; present(); }
+    return scan;
+  }
   {
     Uint64 now = SDL_GetPerformanceCounter();
     double ms = last ? (double)(now - last) * 1000.0 / (double)SDL_GetPerformanceFrequency() : 0;
@@ -95,6 +105,8 @@ void rc_setmode(int ax) { mode = ax & 0x7f; }
 
 int main(int argc, char **argv) {
   int i, code;
+  rc_play = argc == 1;
+  if (rc_play) window = 1;
   for (i = 1; i < argc; i++) {
     const char *a = argv[i];
     if (!strncmp(a, "--frames=", 9)) frames = atoi(a + 9);
@@ -109,10 +121,14 @@ int main(int argc, char **argv) {
   }
   if (window) {
     if (SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 2; }
-    win = SDL_CreateWindow("MIRAGE recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 600, 0);
+    const char *name = strrchr(argv[0], '/');
+    char title[256];
+    snprintf(title, sizeof title, "%s -- MIRAGE static recompilation", name ? name + 1 : argv[0]);
+    win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 600, SDL_WINDOW_RESIZABLE);
     ren = SDL_CreateRenderer(win, -1, 0);
     tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 320, 200);
   }
+  start = SDL_GetPerformanceCounter();
   code = rc_main();
   if (window) SDL_Quit();
   fprintf(stderr, "exit %d after %d frames, mode %02xh\n", code, frame, mode);

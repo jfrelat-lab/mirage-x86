@@ -38,12 +38,19 @@ static void rc_setmode(int ax) {
   __dpmi_int(0x10, &d);
 }
 #define RC_ENTRY int main(void) { return rc_main(); }
+#define RC_T rc_ic
 #else
 extern unsigned char rc_mem[];
 #define MEM rc_mem
 int rc_in(int port);
 void rc_out(int port, int v);
 void rc_setmode(int ax);
+/* The native build's play mode (rc_sdl.c with no options): the beam and the PIT on the real clock, in
+   the same units as the instruction count (MIRAGE's headless rate, RC_PITBASE instructions a PIT
+   period), so the program runs at its own speed rather than as fast as the host goes. */
+extern int rc_play;
+double rc_seconds(void);
+#define RC_T (rc_play ? rc_seconds() * (RC_PITBASE * 1193182.0 / 65536.0) : rc_ic)
 #define RC_ENTRY
 #endif
 
@@ -64,9 +71,9 @@ void rc_setmode(int ax);
 static double rc_bNext = -1;
 static int rc_bVal;
 static int rc_beam(void) {
-  double pos, lp, m;
-  if (rc_ic < rc_bNext) return rc_bVal;
-  pos = fmod(rc_ic, (double)RC_VPERIOD);
+  double pos, lp, m, t = RC_T;
+  if (t < rc_bNext) return rc_bVal;
+  pos = fmod(t, (double)RC_VPERIOD);
   lp = fmod(pos, RC_CLINE);
   rc_bVal = (pos >= RC_CBLANK || lp >= RC_CHD ? 0x01 : 0) | (pos >= RC_CRS && pos < RC_CRE ? 0x08 : 0);
   m = lp < RC_CHD ? RC_CHD - lp : RC_CLINE - lp;
@@ -74,7 +81,7 @@ static int rc_beam(void) {
   if (pos < RC_CRS && RC_CRS - pos < m) m = RC_CRS - pos;
   if (pos < RC_CRE && RC_CRE - pos < m) m = RC_CRE - pos;
   if (RC_VPERIOD - pos < m) m = RC_VPERIOD - pos;
-  rc_bNext = rc_ic + floor(m) - 1;
+  rc_bNext = t + floor(m) - 1;
   return rc_bVal;
 }
 
@@ -100,11 +107,11 @@ static void rc_pitw(int port, int v) {
     if (rc_pitAccess == 1) reload = v;
     else if (rc_pitAccess == 2) reload = v << 8;
     else { if (!rc_pitHiNext) { rc_pitLo = v; rc_pitHiNext = 1; return; } reload = (v << 8) | rc_pitLo; rc_pitHiNext = 0; }
-    rc_pitTicks = reload == 0 ? 65536 : reload; rc_pitLoad = rc_ic;
+    rc_pitTicks = reload == 0 ? 65536 : reload; rc_pitLoad = RC_T;
   }
 }
 static int rc_pitr(void) {
-  double el = fmod(floor((rc_ic - rc_pitLoad) * 65536.0 / RC_PITBASE), rc_pitTicks);
+  double el = fmod(floor((RC_T - rc_pitLoad) * 65536.0 / RC_PITBASE), rc_pitTicks);
   int n = (int)rc_pitTicks, e = (int)el, count, b;
   if (rc_pitMode != 3) count = (n - e) & 0xffff;
   else { int h = (n + 1) >> 1; count = ((n & ~1) - 2 * (e < h ? e : e - h)) & 0xffff; }
@@ -116,7 +123,12 @@ static int rc_pitr(void) {
 }
 /* Macros, not functions: a static function calling another is not inlined by V8 in PRISM's output
    (measured, tools/recomp/run.mjs), and a poll loop runs this every three instructions. */
+#ifdef RC_REALTIME
+/* The page (tools/recomp/web): the beam is the worker's, on the real clock, so the intro runs at its own pace. */
+#define rc_inp(p) ((p) == 0x40 ? rc_pitr() : rc_in(p))
+#else
 #define rc_inp(p) ((p) == 0x3da ? rc_beam() : (p) == 0x40 ? rc_pitr() : rc_in(p))
+#endif
 static void rc_outp(int p, int v) { if (p == 0x40 || p == 0x43) rc_pitw(p, v); rc_out(p, v); }
 #endif
 

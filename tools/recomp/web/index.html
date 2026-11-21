@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIRAGE static recompilation</title>
+<style>
+  :root { --bg: #111418; --fg: #d8dde3; --dim: #8a939c; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 ui-monospace, Menlo, monospace; display: flex; flex-direction: column; align-items: center; padding: 16px; }
+  canvas { width: min(960px, 100%); aspect-ratio: 8 / 5; image-rendering: pixelated; background: #000; }
+  #status { color: var(--dim); margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1 style="font-size:16px;font-weight:600">MIRAGE static recompilation <span id="name"></span></h1>
+<canvas id="screen" width="320" height="200"></canvas>
+<div id="status">loading…</div>
+<script type="module">
+// A DOS intro translated to C by tools/recomp/x86c.mjs and compiled by PRISM to JavaScript ahead of time
+// (tools/recomp/run.mjs --web writes the bundle): no emulator here. The program runs in a worker, which
+// answers the VGA beam on the real clock and sends the mode 13h picture with its palette, at most 70 times
+// a second; Escape ends it, as it does on DOS.
+const intro = new URLSearchParams(location.search).get('intro') || 'tube';
+document.getElementById('name').textContent = '— ' + intro;
+const cv = document.getElementById('screen'), cx = cv.getContext('2d'), img = cx.createImageData(320, 200);
+const status = document.getElementById('status');
+const keys = typeof SharedArrayBuffer !== 'undefined' && crossOriginIsolated ? new Int32Array(new SharedArrayBuffer(4)) : null;
+const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+let frames = 0, t0 = performance.now();
+w.onmessage = ({ data }) => {
+  if (data.error) { status.textContent = 'error: ' + data.error; return; }
+  if (data.exit !== undefined) { status.textContent = `ended (exit ${data.exit}) after ${frames} pictures`; return; }
+  const { fb, pal } = data, px = img.data;
+  for (let i = 0; i < 64000; i++) { const c = fb[i] * 3; px[4 * i] = pal[c]; px[4 * i + 1] = pal[c + 1]; px[4 * i + 2] = pal[c + 2]; px[4 * i + 3] = 255; }
+  cx.putImageData(img, 0, 0);
+  frames++;
+  const s = (performance.now() - t0) / 1000;
+  if (frames % 35 === 0) status.textContent = `${(frames / s).toFixed(0)} pictures a second${keys ? '' : ' — Escape needs a cross-origin isolated page'}`;
+};
+addEventListener('keydown', (e) => { if (keys) Atomics.store(keys, 0, e.key === 'Escape' ? 1 : 0x39); });
+addEventListener('keyup', () => { if (keys && Atomics.load(keys, 0) !== 1) Atomics.store(keys, 0, 0xb9); });
+w.postMessage({ intro, keys: keys && keys.buffer });
+</script>
+</body>
+</html>

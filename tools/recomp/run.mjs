@@ -2,6 +2,7 @@
 // headless, and hold every frame to MIRAGE's at the same guest instruction count (oracle.mjs).
 //
 //   node tools/recomp/run.mjs tube [--frames=60] [--goto] [--bench] [--warmup=20] [--no-count]
+//   node tools/recomp/run.mjs tube --web    the page's static bundle (out/web/tube.js, .bin): tools/recomp/web/
 //
 // A frame is a frame point of the C (port 60h, INT 16h, or a never-polling program's main-loop head:
 // rc.h turns all three into a read of port 60h), sampled through PRISM's port table. The key
@@ -31,6 +32,8 @@ import { OUT, prepare, translate } from './common.mjs';
 import { oracleHashes, frameHash, mirageMachine } from './oracle.mjs';
 import { IDLE_KEY } from './native.mjs';
 import { buildTarget } from '../../vendor/prism/src/target.js';
+import { snapshotProgram } from '../../vendor/prism/src/compile.js';
+import { mkdirSync } from 'fs';
 
 /** Translate and compile with PRISM; returns the PRISM program. */
 export function build(name, prep, opts = {}) {
@@ -43,6 +46,27 @@ export function build(name, prep, opts = {}) {
   if (program.undefined?.length) throw new Error(`PRISM: undefined ${program.undefined.map((u) => u.name).join(', ')}`);
   writeFileSync(join(OUT, file.replace(/\.c$/, '.js')), program.src);
   return { program, tr, file, ms: { translate: tms, prism: t2 - t1 } };
+}
+
+/**
+ * The page's build (--web): the same C with RC_REALTIME (the beam answered by the page's worker on the real
+ * clock), compiled by PRISM and written as a static bundle -- out/web/<name>.js (the emitted program as an ES
+ * module) and .bin (its memory image), as PRISM's tools/bundle.mjs writes them -- which tools/recomp/web/
+ * loads with no compiler: `node tools/oasis.mjs serve --static`, then /tools/recomp/web/?intro=<name>.
+ */
+export function buildWeb(name, prep, opts = {}) {
+  const { file } = translate(name, prep, opts);
+  let snap = null;
+  buildTarget({ name: `recomp/${name}`, dir: OUT, units: { list: [file] }, defines: { RC_PRISM: '1', RC_REALTIME: '1' },
+    env: ['stdio', 'go32', 'ports', 'vgadac'], compile: { memory: 16 } }, { root: OUT, onProgram: (p) => { snap = snapshotProgram(p); } });
+  const dir = join(OUT, 'web'); mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.js`), [
+    `// ${name} -- a static bundle of tools/recomp/run.mjs --web: JavaScript emitted by PRISM from the C x86c.mjs made of the intro.`,
+    `export const meta = ${JSON.stringify(snap.meta)};`,
+    `export const env = ${JSON.stringify(['stdio', 'go32', 'ports', 'vgadac'])};`,
+    `export const factory = (function(){\n${snap.src}\n})();`, ''].join('\n'));
+  writeFileSync(join(dir, `${name}.bin`), snap.image);
+  return { js: join(dir, `${name}.js`), bin: join(dir, `${name}.bin`) };
 }
 
 /** Run the PRISM build; `onFrame(i, fb, dac, ic)` at each frame point. */
@@ -84,6 +108,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const EVERY = +opt('every', 1);
   const FRAMES = +opt('frames', 30);
   const prep = await prepare(name);
+  if (flag('web')) {
+    const { js, bin } = buildWeb(name, prep, { structured: !flag('goto') });
+    console.log(`${name}: ${js} and ${bin}\n  node tools/oasis.mjs serve --static   then   /tools/recomp/web/?intro=${name}`);
+    process.exit(0);
+  }
   if (!flag('bench')) {
     const { program, tr, file, ms } = build(name, prep, { structured: !flag('goto') });
     console.log(`${name}: ${tr.nInsns} instructions, ${tr.nBlocks} blocks, ${tr.mode}${tr.structureRefused ? ` (${tr.structureRefused})` : ''} -> ${file}: ${tr.c.length} bytes of C; `
