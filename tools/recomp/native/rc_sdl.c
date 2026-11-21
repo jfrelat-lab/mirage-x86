@@ -29,6 +29,7 @@ static SDL_Texture *tex;
 static Uint64 last, start, shown;
 int rc_play;                      /* no options: a window, the real clock, the keyboard, until Esc */
 static int scan = 0x9c;           /* the last key's scancode, port 60h's answer in the play mode */
+static int fps = 60;              /* the pictures shown a second at most (--fps=N): the program keeps its own pace */
 double rc_seconds(void) { return (double)(SDL_GetPerformanceCounter() - start) / (double)SDL_GetPerformanceFrequency(); }
 
 void rc_out(int port, int v) {
@@ -81,9 +82,9 @@ static void writeFrame(const char *dir, int n, int ppm) {
 int rc_in(int port) {
   if (port == 0x3c9) { int v = dac[dacR * 3 + latchR]; if (++latchR == 3) { latchR = 0; dacR = (dacR + 1) & 0xff; } return v; }
   if (port != 0x60) return 0xff;
-  if (rc_play) {                  /* the picture shown at most 70 times a second, whatever the polling */
+  if (rc_play) {                  /* the picture shown at most `fps` times a second, whatever the polling */
     Uint64 now = SDL_GetPerformanceCounter();
-    if (now - shown >= SDL_GetPerformanceFrequency() / 70) { shown = now; frame++; present(); }   /* a picture shown is a frame */
+    if (now - shown >= SDL_GetPerformanceFrequency() / fps) { shown = now; frame++; present(); }   /* a picture shown is a frame */
     return scan;
   }
   {
@@ -105,7 +106,8 @@ void rc_setmode(int ax) { mode = ax & 0x7f; }
 
 int main(int argc, char **argv) {
   int i, code;
-  rc_play = argc == 1;
+  rc_play = argc == 1 || (argc == 2 && !strncmp(argv[1], "--fps=", 6));
+  if (argc == 2 && !strncmp(argv[1], "--fps=", 6)) { fps = atoi(argv[1] + 6); if (fps < 1) fps = 60; argc = 1; }
   if (rc_play) window = 1;
   for (i = 1; i < argc; i++) {
     const char *a = argv[i];

@@ -3,7 +3,7 @@
 // if native matches MIRAGE and PRISM does not, the wall is PRISM's.
 //
 //   node tools/recomp/native.mjs tube [--frames=60] [--bench] [--warmup=20] [--window] [--ppm=1,84]
-//   node tools/recomp/native.mjs tube --play     the executable (tools/recomp/out/rc_tube), run in its window
+//   node tools/recomp/native.mjs tube --play [--fps=60]   the executable (tools/recomp/out/rc_tube), run in its window
 //                                                at the intro's own speed; it runs alone too, with no options
 //
 // A frame is a frame point of the C (a read of port 60h, an INT 16h, or the head of the main loop of a
@@ -83,7 +83,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (flag('play')) {
     const { exe } = buildNative(name, prep, { structured: !flag('goto') });
     console.log(`${name}: ${exe}`);
-    const r = spawnSync(exe, [], { stdio: 'inherit' });
+    const r = spawnSync(exe, opt('fps', null) ? [`--fps=${opt('fps')}`] : [], { stdio: 'inherit' });
     process.exit(r.status ?? 1);
   }
   if (!flag('bench')) {

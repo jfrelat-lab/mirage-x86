@@ -18,8 +18,8 @@
 <script type="module">
 // A DOS intro translated to C by tools/recomp/x86c.mjs and compiled by PRISM to JavaScript ahead of time
 // (tools/recomp/run.mjs --web writes the bundle): no emulator here. The program runs in a worker, which
-// answers the VGA beam on the real clock and sends the mode 13h picture with its palette, at most 70 times
-// a second; Escape ends it, as it does on DOS.
+// answers the VGA beam on the real clock and sends the mode 13h picture with its palette, at most 60 times
+// a second (&fps=N); Escape ends it, as it does on DOS.
 const intro = new URLSearchParams(location.search).get('intro') || 'tube';
 document.getElementById('name').textContent = '— ' + intro;
 const cv = document.getElementById('screen'), cx = cv.getContext('2d'), img = cx.createImageData(320, 200);
@@ -39,7 +39,7 @@ w.onmessage = ({ data }) => {
 };
 addEventListener('keydown', (e) => { if (keys) Atomics.store(keys, 0, e.key === 'Escape' ? 1 : 0x39); });
 addEventListener('keyup', () => { if (keys && Atomics.load(keys, 0) !== 1) Atomics.store(keys, 0, 0xb9); });
-w.postMessage({ intro, keys: keys && keys.buffer });
+w.postMessage({ intro, keys: keys && keys.buffer, fps: Number(new URLSearchParams(location.search).get('fps')) || 60 });
 </script>
 </body>
 </html>
