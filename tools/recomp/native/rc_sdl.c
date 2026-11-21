@@ -83,7 +83,7 @@ int rc_in(int port) {
   if (port != 0x60) return 0xff;
   if (rc_play) {                  /* the picture shown at most 70 times a second, whatever the polling */
     Uint64 now = SDL_GetPerformanceCounter();
-    if (now - shown >= SDL_GetPerformanceFrequency() / 70) { shown = now; present(); }
+    if (now - shown >= SDL_GetPerformanceFrequency() / 70) { shown = now; frame++; present(); }   /* a picture shown is a frame */
     return scan;
   }
   {
