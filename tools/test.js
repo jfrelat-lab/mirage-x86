@@ -2298,6 +2298,21 @@ await (async () => {
      (mem.r32(0x400000) >>> 0) === 0xdeadbeef, false);
 })();
 
+// A word OUT to the DAC's ports reaches the 8-bit card as two bytes, AL to P and AH to P+1. Dropping AH
+// cost an intro its first red (the static recompiler's wall). DOSBox-X's lines for tools/dacwprobe.asm.
+await (async () => {
+  const mc = new Machine({ memSize: 1 << 20 });
+  installBIOS(mc);
+  const o = (p, s, v) => mc.ioWrite(p, s, v);
+  const entry = (i) => { o(0x3c7, 1, i); return [0, 1, 2].map(() => mc.portRead[0x3c9](0x3c9, 1).toString(16).padStart(2, '0')).join(' '); };
+  o(0x3c8, 2, 0x2a05); o(0x3c9, 1, 0x15); o(0x3c9, 1, 0x3f);
+  eq('out 3C8h, ax: AL the write index, AH its red', entry(5), '2a 15 3f');
+  o(0x3c8, 2, 0x1106); o(0x3c9, 2, 0x2233); o(0x3c9, 1, 0x3c);
+  eq('out 3C9h, ax: AL a component, AH to 3CAh', entry(6), '11 33 3c');
+  o(0x3c7, 2, 0x0907); o(0x3c9, 1, 1); o(0x3c9, 1, 2); o(0x3c9, 1, 3);
+  eq('out 3C7h, ax: AH the write index', entry(9), '01 02 03');
+})();
+
 // ---- Mode X (unchained 256-colour) ----------------------------------------------------------
 // Implemented since the planar work and exercised in anger by Wolf3D (88411 non-zero plane bytes),
 // but nothing in the gate set pinned it, so a regression would have surfaced as "a game looks wrong"

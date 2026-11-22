@@ -5,6 +5,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-22
 
+- DOS programs that set the palette with word writes get their first colour component.
 - Symetrie draws as on a real PC: multiplications now set the sign and zero flags the way the processor does.
 
 ## 2026-11-20

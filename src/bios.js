@@ -1098,12 +1098,17 @@ export function installBIOS(machine, opts = {}) {
   machine.hookInterrupt(0x12, (cpu) => { cpu.ax = mem.r16(BDA + 0x13); });
 
   // ---- VGA DAC palette ports (most demos set the palette this way, not INT 10h) ----
+  // The DAC is an 8-bit device: a word OUT to port P reaches it as two bytes, AL to P and AH to P+1
+  // (`out 3C8h, ax` sets the write index and gives AH to 3C9h as the first component). DOSBox-X and a
+  // Cirrus BIOS under QEMU agree (tools/dacwprobe.asm).
   let dacW = 0, dacR = 0, latch = 0;
-  machine.onPortWrite(0x3c8, (_p, _s, v) => { dacW = v & 0xff; latch = 0; });   // write index
-  machine.onPortWrite(0x3c7, (_p, _s, v) => { dacR = v & 0xff; latch = 0; });   // read index
-  machine.onPortWrite(0x3c9, (_p, _s, v) => {                                   // write R,G,B (6-bit)
+  const rest = (p, s, v) => { for (let i = 1; i < s; i++) machine.ioWrite(p + i, 1, (v >>> (8 * i)) & 0xff); };
+  machine.onPortWrite(0x3c8, (p, s, v) => { dacW = v & 0xff; latch = 0; if (s > 1) rest(p, s, v); });   // write index
+  machine.onPortWrite(0x3c7, (p, s, v) => { dacR = v & 0xff; latch = 0; if (s > 1) rest(p, s, v); });   // read index
+  machine.onPortWrite(0x3c9, (p, s, v) => {                                   // write R,G,B (6-bit)
     bios.dac[dacW * 3 + latch] = v & 0x3f;
     if (++latch === 3) { latch = 0; dacW = (dacW + 1) & 0xff; }
+    if (s > 1) rest(p, s, v);
   });
   machine.onPortRead(0x3c9, () => {
     const v = bios.dac[dacR * 3 + latch];
