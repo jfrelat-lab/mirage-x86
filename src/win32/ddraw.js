@@ -10,6 +10,9 @@
 // 5:6:5 in 16, x8r8g8b8 in 32) and shown through the window manager (src/win32/wm.js), full screen.
 // Quake II's ref_soft.dll is the first program here to use it. Layouts: ddraw.h (Wine's include/).
 
+import { D3D7_VTABLES, IID_D3D7, d3d7Impl } from './d3d7.js';
+import { fvfSize, recordD3D9 } from './d3d9.js';
+
 const DD_OK = 0, E_NOINTERFACE = 0x80004002, DDERR_INVALIDPARAMS = 0x80070057, DDERR_NOTFOUND = 0x887600ff;
 
 const UNK = 'QueryInterface:2 AddRef:0 Release:0';
@@ -32,6 +35,15 @@ const VTABLES = {
 VTABLES.IDirectDraw2 = VTABLES.IDirectDraw.replace('SetDisplayMode:3', 'SetDisplayMode:5') + ' GetAvailableVidMem:3';
 VTABLES.IDirectDrawSurface2 = VTABLES.IDirectDrawSurface + ' GetDDInterface:1 PageLock:1 PageUnlock:1';
 VTABLES.IDirectDrawSurface3 = VTABLES.IDirectDrawSurface2 + ' SetSurfaceDesc:2';
+// DirectX 6 and 7's: IDirectDraw4 and 7 take DDSURFACEDESC2 (124 bytes, DDSCAPS2) and add the device's
+// identifier; the surfaces 4 and 7 add private data, a uniqueness value, and (7) a texture's priority and
+// LOD. Direct3D 7 (d3d7.js) is reached from IDirectDraw7. Unreal Tournament's D3DDrv (1999) asks for them.
+VTABLES.IDirectDraw4 = VTABLES.IDirectDraw2 + ' GetSurfaceFromDC:2 RestoreAllSurfaces:0 TestCooperativeLevel:0 GetDeviceIdentifier:2';
+VTABLES.IDirectDraw7 = VTABLES.IDirectDraw4 + ' StartModeTest:3 EvaluateMode:2';
+VTABLES.IDirectDrawSurface4 = VTABLES.IDirectDrawSurface3 + ' SetPrivateData:4 GetPrivateData:3 FreePrivateData:1 GetUniquenessValue:1 ChangeUniquenessValue:0';
+VTABLES.IDirectDrawSurface7 = VTABLES.IDirectDrawSurface4 + ' SetPriority:1 GetPriority:1 SetLOD:1 GetLOD:1';
+VTABLES.IDirectDrawGammaControl = `${UNK} GetGammaRamp:2 SetGammaRamp:2`;
+Object.assign(VTABLES, D3D7_VTABLES);
 const METHODS = Object.fromEntries(Object.entries(VTABLES).map(([i, s]) => [i, s.trim().split(/\s+/).map((t) => t.split(':'))]));
 // The interfaces by IID (its first dword, then the rest as GUID text), and the family each belongs to:
 // QueryInterface answers within the family, a pointer of its own onto the same object.
@@ -39,11 +51,15 @@ const IIDS = {
   '6c14db80-a733-11ce-a521-0020af0be560': 'IDirectDraw', 'b3a6f3e0-2b43-11cf-a2de-00aa00b93356': 'IDirectDraw2',
   '6c14db81-a733-11ce-a521-0020af0be560': 'IDirectDrawSurface', '57805885-6eef-11cf-9441-a82303c10e27': 'IDirectDrawSurface2',
   'da044e00-69b2-11d0-a1d5-00aa00b8dfbb': 'IDirectDrawSurface3', '00000000-0000-0000-c000-000000000046': 'IUnknown',
+  '9c59509a-39bd-11d1-8c4a-00c04fd930c5': 'IDirectDraw4', '15e65ec0-3b9c-11d2-b92f-00609797ea5b': 'IDirectDraw7',
+  '0b2b8630-ad35-11d0-8ea6-00609797ea5b': 'IDirectDrawSurface4', '06675a80-3b9b-11d2-b92f-00609797ea5b': 'IDirectDrawSurface7',
+  '69c11c3e-b46b-11d1-ad7a-00c04fc29b4e': 'IDirectDrawGammaControl', ...IID_D3D7,
 };
 const FAMILY = (iface) => iface.replace(/\d$/, '');
 
 const DDSD_CAPS = 1, DDSD_HEIGHT = 2, DDSD_WIDTH = 4, DDSD_PITCH = 8, DDSD_BACKBUFFERCOUNT = 0x20, DDSD_LPSURFACE = 0x800, DDSD_PIXELFORMAT = 0x1000;
 const DDSCAPS_BACKBUFFER = 4, DDSCAPS_FLIP = 0x10, DDSCAPS_FRONTBUFFER = 0x20, DDSCAPS_OFFSCREENPLAIN = 0x40, DDSCAPS_PRIMARYSURFACE = 0x200, DDSCAPS_SYSTEMMEMORY = 0x800;
+const DDSCAPS_TEXTURE = 0x1000, DDSCAPS_3DDEVICE = 0x2000, DDSCAPS_VIDEOMEMORY = 0x4000, DDSCAPS_ZBUFFER = 0x20000, DDSCAPS_MIPMAP = 0x400000, DDSD_MIPMAPCOUNT = 0x20000;
 const DDBLT_COLORFILL = 0x400, DDBLT_KEYSRC = 0x8000, DDBLTFAST_SRCCOLORKEY = 1;
 
 /** `st`: the window state (its size, the display mode); `wm`: the window manager, which shows a frame;
@@ -83,23 +99,31 @@ export function ddrawApis(st, wm, send) {
   const surface = (x, w, h, bpp, props = {}) => {
     const pitch = ((w * (bpp >> 3)) + 3) & ~3, mem = x.win.heapAlloc(pitch * h);
     x.write(mem, new Uint8Array(pitch * h));
-    return make(x, 'IDirectDrawSurface', { w, h, bpp, pitch, mem, key: null, palette: 0, ...props });
+    return make(x, props.iface || 'IDirectDrawSurface', { w, h, bpp, pitch, mem, key: null, palette: 0, ...props });
   };
-  // DDPIXELFORMAT (32 bytes at `p`): RGB, its bit count and masks; PALETTEINDEXED8 in 8 bits.
-  const putFormat = (x, p, bpp) => {
+  // DDPIXELFORMAT (32 bytes at `p`): RGB, its bit count and masks (a surface's own, `m`, when it was made
+  // with them -- a texture's 1:5:5:5 or 4:4:4:4, its alpha mask then DDPF_ALPHAPIXELS); PALETTEINDEXED8 in
+  // 8 bits; a z-buffer's DDPF_ZBUFFER, its depth and z mask.
+  const putFormat = (x, p, bpp, m = null) => {
     x.write(p, new Uint8Array(32)); x.w32(p, 32);
-    x.w32(p + 4, bpp === 8 ? 0x60 : 0x40); x.w32(p + 12, bpp);    // DDPF_PALETTEINDEXED8 | RGB, or RGB
-    const masks = bpp === 16 ? [0xf800, 0x7e0, 0x1f] : bpp >= 24 ? [0xff0000, 0xff00, 0xff] : [0, 0, 0];
-    masks.forEach((m, i) => x.w32(p + 16 + 4 * i, m));
+    if (m && m.z) { x.w32(p + 4, 0x400 | (m.s ? 0x4000 : 0)); x.w32(p + 12, bpp); x.w32(p + 16, m.s ? 8 : 0); x.w32(p + 20, m.z); x.w32(p + 24, m.s); return; }
+    x.w32(p + 4, bpp === 8 ? 0x60 : 0x40 | (m && m.a ? 1 : 0)); x.w32(p + 12, bpp);    // DDPF_PALETTEINDEXED8 | RGB, or RGB
+    const masks = m ? [m.r, m.g, m.b, m.a] : bpp === 16 ? [0xf800, 0x7e0, 0x1f, 0] : bpp >= 24 ? [0xff0000, 0xff00, 0xff, 0] : [0, 0, 0, 0];
+    masks.forEach((v, i) => x.w32(p + 16 + 4 * i, v));
   };
+  // A surface's caps (DDSCAPS' first dword) as it was made.
+  const capsOf = (s) => s.primary ? DDSCAPS_PRIMARYSURFACE | DDSCAPS_FRONTBUFFER | (s.three ? DDSCAPS_3DDEVICE : 0) : s.back ? DDSCAPS_BACKBUFFER | (s.three ? DDSCAPS_3DDEVICE : 0)
+    : s.zbuf ? DDSCAPS_ZBUFFER | DDSCAPS_VIDEOMEMORY : s.texture ? DDSCAPS_TEXTURE | (s.mipLevel !== undefined ? DDSCAPS_MIPMAP : 0) | DDSCAPS_VIDEOMEMORY
+      : DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
   // DDSURFACEDESC (108 bytes): what Lock and GetSurfaceDesc fill, the surface's pointer when locked.
   const putDesc = (x, p, s, at) => {
     const size = x.r32(p) || 108;
     x.write(p, new Uint8Array(Math.min(size, 124))); x.w32(p, size);
     x.w32(p + 4, DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PITCH | DDSD_PIXELFORMAT | (at ? DDSD_LPSURFACE : 0));
     x.w32(p + 8, s.h); x.w32(p + 12, s.w); x.w32(p + 16, s.pitch); if (at) x.w32(p + 36, at);
-    putFormat(x, p + 72, s.bpp);
-    x.w32(p + 104, s.primary ? DDSCAPS_PRIMARYSURFACE | DDSCAPS_FRONTBUFFER : s.back ? DDSCAPS_BACKBUFFER : DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY);
+    putFormat(x, p + 72, s.bpp, s.fmt);
+    x.w32(p + 104, capsOf(s));
+    if (s.mips) { x.w32(p + 4, x.r32(p + 4) | DDSD_MIPMAPCOUNT); x.w32(p + 24, s.mips.length); }
   };
   // A RECT (left, top, right, bottom) or the whole surface.
   const rect = (x, p, s) => (p ? { l: x.r32(p) | 0, t: x.r32(p + 4) | 0, r: x.r32(p + 8) | 0, b: x.r32(p + 12) | 0 } : { l: 0, t: 0, r: s.w, b: s.h });
@@ -208,15 +232,41 @@ export function ddrawApis(st, wm, send) {
     x.write(s.mem, out);
   };
 
+  // A surface's pixels as B, G, R, A bytes (A8R8G8B8 in memory), by its format's masks: each channel
+  // scaled to 8 bits, opaque without an alpha mask; a source colour key, where one is set, transparent.
+  const chan = (m) => { if (!m) return null; let sh = 0; while (!((m >>> sh) & 1)) sh++; return [m >>> 0, sh, (m >>> sh) >>> 0]; };
+  const texels = (x, s) => {
+    const B = s.bpp >> 3, out = new Uint8Array(s.w * s.h * 4), raw = x.bytes(s.mem, s.pitch * s.h);
+    const m = s.fmt || (B === 2 ? { r: 0xf800, g: 0x7e0, b: 0x1f, a: 0 } : { r: 0xff0000, g: 0xff00, b: 0xff, a: 0 });
+    const cs = [chan(m.b), chan(m.g), chan(m.r), chan(m.a)], key = s.key;
+    for (let y = 0; y < s.h; y++) for (let i = 0; i < s.w; i++) {
+      const a = y * s.pitch + i * B; let v = 0; for (let k = 0; k < B; k++) v |= raw[a + k] << (8 * k);
+      v >>>= 0;
+      const q = (y * s.w + i) * 4;
+      for (let c = 0; c < 4; c++) { const ch = cs[c]; out[q + c] = ch ? Math.round(((v & ch[0]) >>> ch[1]) * 255 / ch[2]) : 255; }
+      if (key !== null && v === key) out[q + 3] = 0;
+    }
+    return out;
+  };
+  // Direct3D 7's Load: a texture's levels copied from another of the same size and format.
+  const copySurface = (x, dst, src) => {
+    const d = o(dst), s = o(src); if (!d || !s) return;
+    const dl = d.mips || [dst], sl = s.mips || [src];
+    dl.forEach((p, i) => { const a = o(p), b = sl[i] && o(sl[i]); if (!b) return; copy(x, a, { l: 0, t: 0, r: a.w, b: a.h }, b, { l: 0, t: 0, r: b.w, b: b.h }, false); a.dirty = true; });
+  };
+  const d7 = d3d7Impl({ o, make, as: (x, p, i) => as(x, p, i), st, send, texels, copySurface, fvfSize, record: recordD3D9 });
+
   const unknown = {
     QueryInterface: (x, self, riid, pp) => {
       const ob = o(self), want = riid && IIDS[guid(x, riid)];
+      // IDirect3D7 from IDirectDraw7: an object of its own, on this DirectDraw.
+      if (ob && want === 'IDirect3D7' && FAMILY(ob.iface) === 'IDirectDraw') { x.w32(pp, make(x, 'IDirect3D7', { dd: self >>> 0 })); ob.ref++; return DD_OK; }
       const iface = want === 'IUnknown' ? ob.iface : want;
       if (!ob || !iface || FAMILY(iface) !== FAMILY(ob.iface)) { if (pp) x.w32(pp, 0); return E_NOINTERFACE; }
       x.w32(pp, as(x, self, iface)); return DD_OK;
     },
     AddRef: (x, self) => ++o(self).ref,
-    Release: (x, self) => { const ob = o(self); if (!ob) return 0; if (--ob.ref > 0) return ob.ref; objs.delete(self >>> 0); return 0; },
+    Release: (x, self) => { const ob = o(self); if (!ob) return 0; if (--ob.ref > 0) return ob.ref; if (ob.iface === 'IDirect3DDevice7') d7.release(self); objs.delete(self >>> 0); return 0; },
   };
   const IMPL = {
     IDirectDraw: {
@@ -237,7 +287,24 @@ export function ddrawApis(st, wm, send) {
       RestoreDisplayMode: () => { st.modeSet = false; wm.dirty = true; return DD_OK; },
       GetDisplayMode: (x, self, p) => { const m = display(); putDesc(x, p, { w: m.w, h: m.h, bpp: m.bpp, pitch: m.w * (m.bpp >> 3) }, 0); return DD_OK; },
       // DDCAPS: the size the program says, everything else zero (no hardware acceleration to report).
-      GetCaps: (x, self, drv, hel) => { for (const p of [drv, hel]) if (p) { const n = x.r32(p) || 316; x.write(p, new Uint8Array(n)); x.w32(p, n); } return DD_OK; },
+      // DDCAPS: the size the program says. The driver's (`drv`): 3D, blits, colour keys, and the surfaces it
+      // makes -- textures, a 3D device, z-buffers of 16, 24 and 32 bits, 32 MB of video memory; the
+      // emulation layer's (`hel`) zero. Direct3D 7's programs look for DDCAPS_3D and the z depths; Unreal
+      // Tournament's D3DDrv refused a card that cannot render in a window ("D3D Device: Fullscreen only").
+      GetCaps: (x, self, drv, hel) => {
+        for (const p of [drv, hel]) if (p) { const n = x.r32(p) || 316; x.write(p, new Uint8Array(n)); x.w32(p, n); }
+        if (drv && /[47]$/.test(o(self).iface)) {
+          const n = x.r32(drv), caps = DDSCAPS_TEXTURE | DDSCAPS_3DDEVICE | DDSCAPS_ZBUFFER | DDSCAPS_MIPMAP | DDSCAPS_FLIP | DDSCAPS_PRIMARYSURFACE | DDSCAPS_VIDEOMEMORY | DDSCAPS_OFFSCREENPLAIN;
+          x.w32(drv + 4, 0x1 | 0x40 | 0x200 | 0x400000 | 0x4000000);   // DDCAPS_3D, BLT, BLTSTRETCH, COLORKEY, BLTCOLORFILL
+          x.w32(drv + 8, 0x80000 | 0x20000);                            // DDCAPS2_CANRENDERWINDOWED, PRIMARYGAMMA
+          x.w32(drv + 12, 0x200);                                       // DDCKEYCAPS_SRCBLT
+          x.w32(drv + 56, 0x400 | 0x200 | 0x100);                       // z-buffer depths: DDBD_16, 24, 32
+          x.w32(drv + 60, 32 << 20); x.w32(drv + 64, 32 << 20);
+          if (n >= 136) x.w32(drv + 132, caps);
+          if (n >= 380) x.w32(drv + 360, caps);
+        }
+        return DD_OK;
+      },
       GetMonitorFrequency: (x, self, p) => { if (p) x.w32(p, 60); return DD_OK; },
       GetVerticalBlankStatus: (x, self, p) => { if (p) x.w32(p, 1); return DD_OK; },
       WaitForVerticalBlank: () => DD_OK, GetScanLine: (x, self, p) => { if (p) x.w32(p, 0); return DD_OK; },
@@ -250,30 +317,67 @@ export function ddrawApis(st, wm, send) {
         x.w32(pp, make(x, 'IDirectDrawPalette', { colors })); return DD_OK;
       },
       // DDSURFACEDESC's flags at 4, height 8, width 12, back buffer count 20, pixel format 72, caps 104.
+      // From IDirectDraw4 and 7 a surface is of the matching interface; Direct3D 7's surfaces are its
+      // flip chain with DDSCAPS_3DDEVICE, a z-buffer (its depth at the pixel format's bit count), and
+      // textures -- their pixel format's masks kept, a mipmap chain made at once (DDSD_MIPMAPCOUNT's levels,
+      // or down to 1x1), each level a surface the one above hands out (GetAttachedSurface).
       CreateSurface: (x, self, d, pp) => {
         const flags = x.r32(d + 4), caps = x.r32(d + 104), m = display();
+        const iface = { IDirectDraw4: 'IDirectDrawSurface4', IDirectDraw7: 'IDirectDrawSurface7' }[o(self).iface] || 'IDirectDrawSurface';
+        const three = !!(caps & DDSCAPS_3DDEVICE);
         if (caps & DDSCAPS_PRIMARYSURFACE) {
-          const p = surface(x, m.w, m.h, m.bpp, { primary: true, desktop: !st.modeSet });
-          if (flags & DDSD_BACKBUFFERCOUNT && x.r32(d + 20) && caps & DDSCAPS_FLIP) o(p).backBuffer = surface(x, m.w, m.h, m.bpp, { back: true });
+          const p = surface(x, m.w, m.h, m.bpp, { primary: true, desktop: !st.modeSet, iface, three });
+          if (flags & DDSD_BACKBUFFERCOUNT && x.r32(d + 20) && caps & DDSCAPS_FLIP) o(p).backBuffer = surface(x, m.w, m.h, m.bpp, { back: true, iface, three });
           x.w32(pp, p); return DD_OK;
         }
         const w = flags & DDSD_WIDTH ? x.r32(d + 12) : m.w, h = flags & DDSD_HEIGHT ? x.r32(d + 8) : m.h;
         const bpp = flags & DDSD_PIXELFORMAT ? x.r32(d + 84) || m.bpp : m.bpp;
+        if (caps & DDSCAPS_ZBUFFER) {
+          const zb = flags & DDSD_PIXELFORMAT ? x.r32(d + 84) : 16, s = zb === 32 ? x.r32(d + 100) : 0;
+          x.w32(pp, surface(x, w, h, zb === 16 ? 16 : 32, { zbuf: true, iface, fmt: { z: x.r32(d + 92) || (zb === 16 ? 0xffff : 0xffffff), s } })); return DD_OK;
+        }
         if (!w || !h || ![8, 16, 24, 32].includes(bpp)) return DDERR_INVALIDPARAMS;
-        x.w32(pp, surface(x, w, h, bpp)); return DD_OK;
+        const fmt = flags & DDSD_PIXELFORMAT && x.r32(d + 76) & 0x40 ? { r: x.r32(d + 88), g: x.r32(d + 92), b: x.r32(d + 96), a: x.r32(d + 76) & 1 ? x.r32(d + 100) : 0 } : null;
+        if (caps & DDSCAPS_TEXTURE) {
+          let n = 1;
+          if (caps & DDSCAPS_MIPMAP) { if (flags & DDSD_MIPMAPCOUNT) n = Math.max(1, x.r32(d + 24)); else while ((w >> n) || (h >> n)) n++; }
+          const top = surface(x, w, h, bpp, { texture: true, iface, fmt, dirty: true });
+          if (n > 1) {
+            const mips = [top];
+            for (let l = 1; l < n; l++) mips.push(surface(x, Math.max(1, w >> l), Math.max(1, h >> l), bpp, { texture: true, iface, fmt, top, mipLevel: l, dirty: true }));
+            mips.forEach((p, l) => { o(p).next = mips[l + 1] || 0; });
+            o(top).mips = mips; o(top).mipLevel = 0;
+          }
+          x.w32(pp, top); return DD_OK;
+        }
+        x.w32(pp, surface(x, w, h, bpp, { iface, fmt, three })); return DD_OK;
       },
       // Each mode by the program's callback (stdcall: the description, the context), the modes of
       // XP's display list: 640x480 to 1024x768 at 8, 16 and 32 bits.
       EnumDisplayModes: (x, self, flags, want, ctx, cb) => {
         const modes = [[320, 200], [320, 240], [640, 480], [800, 600], [1024, 768]].flatMap(([w, h]) => [8, 16, 32].map((b) => [w, h, b]));
-        const calls = modes.map(([w, h, b]) => { const d = x.win.heapAlloc(108); x.w32(d, 108); putDesc(x, d, { w, h, bpp: b, pitch: w * (b >> 3) }, 0); x.w32(d + 104, 0); return { fn: cb, args: [d, ctx] }; });
+        const size = /[47]$/.test(o(self).iface) ? 124 : 108;
+        const calls = modes.map(([w, h, b]) => { const d = x.win.heapAlloc(size); x.w32(d, size); putDesc(x, d, { w, h, bpp: b, pitch: w * (b >> 3) }, 0); x.w32(d + 104, 0); return { fn: cb, args: [d, ctx] }; });
         return send(x, calls, () => DD_OK, 20);
       },
       EnumSurfaces: () => DD_OK, DuplicateSurface: () => DDERR_INVALIDPARAMS, GetGDISurface: () => DDERR_NOTFOUND,
     },
     IDirectDrawSurface: {
-      GetAttachedSurface: (x, self, caps, pp) => { const b = o(self).backBuffer; if (!b) return DDERR_NOTFOUND; o(b).ref++; x.w32(pp, b); return DD_OK; },
-      AddAttachedSurface: () => DD_OK, DeleteAttachedSurface: () => DD_OK,
+      // The surface attached by its caps: a texture's next mipmap level, a render target's z-buffer, a
+      // primary's back buffer.
+      GetAttachedSurface: (x, self, caps, pp) => {
+        const s = o(self), c = caps ? x.r32(caps) : 0;
+        const b = c & DDSCAPS_MIPMAP ? s.next : c & DDSCAPS_ZBUFFER ? s.zbuffer : s.backBuffer;
+        if (!b) { x.w32(pp, 0); return DDERR_NOTFOUND; }
+        o(b).ref++; x.w32(pp, b); return DD_OK;
+      },
+      // A z-buffer attached to the flip chain is the 3D device's depth buffer.
+      AddAttachedSurface: (x, self, a) => {
+        const s = o(self), z = o(a); if (!z) return DDERR_INVALIDPARAMS;
+        if (z.zbuf) { s.zbuffer = a >>> 0; z.ref++; if (s.backBuffer) o(s.backBuffer).zbuffer = a >>> 0; }
+        return DD_OK;
+      },
+      DeleteAttachedSurface: (x, self, flags, a) => { const s = o(self); if (s.zbuffer === a >>> 0 || !a) s.zbuffer = 0; return DD_OK; },
       // The surfaces attached (a primary's back buffer), each to the program's callback (stdcall: the
       // surface, its description, the context), AddRef'd as Windows hands them. SciTech MGL (WinQuake)
       // finds its back buffer so, and asked again and again while none came.
@@ -286,10 +390,10 @@ export function ddrawApis(st, wm, send) {
       },
       GetSurfaceDesc: (x, self, p) => { putDesc(x, p, o(self), 0); return DD_OK; },
       GetPixelFormat: (x, self, p) => { putFormat(x, p, o(self).bpp); return DD_OK; },
-      GetCaps: (x, self, p) => { const s = o(self); x.w32(p, s.primary ? DDSCAPS_PRIMARYSURFACE : s.back ? DDSCAPS_BACKBUFFER : DDSCAPS_OFFSCREENPLAIN); return DD_OK; },
+      GetCaps: (x, self, p) => { x.w32(p, capsOf(o(self))); return DD_OK; },
       // Lock hands out the surface's memory (at the rectangle's corner); Unlock of the primary shows it.
       Lock: (x, self, r, d) => { const s = o(self), rc = rect(x, r, s); s.locked = rc; putDesc(x, d, s, s.mem + rc.t * s.pitch + rc.l * (s.bpp >> 3)); return DD_OK; },
-      Unlock: (x, self) => { const s = o(self); if (s.primary) show(x, s.locked); return DD_OK; },
+      Unlock: (x, self) => { const s = o(self); if (s.texture) s.dirty = true; if (s.primary && !d7.devices.size) show(x, s.locked); return DD_OK; },
       // Flip: the back buffer's memory becomes the front's, and is shown -- at the screen's next
       // vertical blank, 60 times a second, as a card flips: the call waits for it. Returning at once,
       // NESticle (1997) flipped 700 frames a second and its emulation got a twentieth of the machine.
@@ -298,18 +402,23 @@ export function ddrawApis(st, wm, send) {
         if (vbl.due && now < vbl.due) return x.waitUntil(vbl.due);
         vbl.due = (Math.floor(now * 60) + 1) / 60;
         const f = o(self), b = f.backBuffer && o(f.backBuffer);
+        if (d7.devices.size) return d7.present(x);                   // a Direct3D 7 device's picture
         if (b) [f.mem, b.mem] = [b.mem, f.mem];
         show(x); return DD_OK;
       },
       // Blt: a copy (stretched to the destination rectangle) or a colour fill (DDBLTFX's dwFillColor at 80).
       Blt: (x, self, dr, src, sr, flags, fx) => {
         const d = o(self);
+        // A device's render target copied onto the primary: a windowed Direct3D 7 device's frame.
+        if (d.primary && d7.devices.size && src && o(src) && (o(src).back || o(src).three)) return d7.present(x);
+        if (d.texture) d.dirty = true;
         if (flags & DDBLT_COLORFILL) fill(x, d, rect(x, dr, d), fx ? x.r32(fx + 80) : 0);
         else if (src && o(src)) copy(x, d, rect(x, dr, d), o(src), rect(x, sr, o(src)), !!(flags & DDBLT_KEYSRC));
         if (d.primary) show(x, rect(x, dr, d)); return DD_OK;
       },
       BltFast: (x, self, X, Y, src, sr, flags) => {
         const d = o(self), s = o(src); if (!s) return DDERR_INVALIDPARAMS;
+        if (d.texture) d.dirty = true;
         const r = rect(x, sr, s);
         const dr = { l: X, t: Y, r: X + r.r - r.l, b: Y + r.b - r.t };
         copy(x, d, dr, s, r, !!(flags & DDBLTFAST_SRCCOLORKEY));
@@ -325,7 +434,7 @@ export function ddrawApis(st, wm, send) {
       GetDC: (x, self, pdc) => {
         const s = o(self); if (s.dc) return 0x8876021c;                // DDERR_DCALREADYCREATED
         const px = new Uint32Array(s.w * s.h);
-        const bm = st.newHandle('bitmap', { w: s.w, h: s.h, px, load: (x) => toPx(x, s, px), store: (x) => { fromPx(x, s, px); if (s.primary) show(x, { l: 0, t: 0, r: s.w, b: s.h }); } });
+        const bm = st.newHandle('bitmap', { w: s.w, h: s.h, px, load: (x) => toPx(x, s, px), store: (x) => { fromPx(x, s, px); if (s.texture) s.dirty = true; if (s.primary) show(x, { l: 0, t: 0, r: s.w, b: s.h }); } });
         const dc = st.newHandle('dc', {}); st.dcBitmaps.set(dc, bm);
         s.dc = { dc, bm }; x.w32(pdc, dc); return DD_OK;
       },
@@ -359,10 +468,37 @@ export function ddrawApis(st, wm, send) {
   IMPL.IDirectDrawSurface2 = { ...IMPL.IDirectDrawSurface,
     GetDDInterface: (x, self, pp) => { x.w32(pp, 0); return DDERR_INVALIDPARAMS; }, PageLock: () => DD_OK, PageUnlock: () => DD_OK };
   IMPL.IDirectDrawSurface3 = { ...IMPL.IDirectDrawSurface2, SetSurfaceDesc: () => DDERR_INVALIDPARAMS };
-  const sigOf = (s) => 'p' + 'u'.repeat(+s);
+  IMPL.IDirectDraw4 = { ...IMPL.IDirectDraw2,
+    GetSurfaceFromDC: () => DDERR_NOTFOUND, RestoreAllSurfaces: () => DD_OK, TestCooperativeLevel: () => DD_OK,
+    // DDDEVICEIDENTIFIER(2): the driver's file and description (512 bytes each), its version, vendor and
+    // device ids (none), a GUID -- MIRAGE's display.
+    GetDeviceIdentifier: (x, self, p) => {
+      x.write(p, new Uint8Array(1068)); const enc = (s) => new TextEncoder().encode(`${s}\0`);
+      x.write(p, enc('mirage.drv')); x.write(p + 512, enc('MIRAGE display (Direct3D 7 on WebGL2)')); x.w32(p + 1024, 0x00010000); x.w32(p + 1028, 0x00040005);
+      return DD_OK;
+    } };
+  IMPL.IDirectDraw7 = { ...IMPL.IDirectDraw4, StartModeTest: () => DD_OK, EvaluateMode: () => DD_OK };
+  IMPL.IDirectDrawSurface4 = { ...IMPL.IDirectDrawSurface3, SetPrivateData: () => DD_OK, GetPrivateData: () => DDERR_NOTFOUND, FreePrivateData: () => DD_OK,
+    GetUniquenessValue: (x, self, p) => { x.w32(p, 1); return DD_OK; }, ChangeUniquenessValue: () => DD_OK };
+  IMPL.IDirectDrawSurface7 = { ...IMPL.IDirectDrawSurface4, SetPriority: () => DD_OK, GetPriority: (x, self, p) => { x.w32(p, 0); return DD_OK; },
+    SetLOD: () => DD_OK, GetLOD: (x, self, p) => { x.w32(p, 0); return DD_OK; } };
+  IMPL.IDirectDrawGammaControl = { GetGammaRamp: () => DD_OK, SetGammaRamp: () => DD_OK };
+  Object.assign(IMPL, d7.IMPL);
+  const sigOf = (s) => 'p' + (/^\d+$/.test(s) ? 'u'.repeat(+s) : s);
   const fns = {
     // DirectDrawCreate(guid, lplpDD, outer): the one display.
     DirectDrawCreate: ['ppp', (x, guid, pp) => { x.w32(pp, make(x, 'IDirectDraw', {})); return DD_OK; }],
+    // DirectDrawCreateEx(guid, lplpDD, IID_IDirectDraw7, outer): DirectX 7's.
+    DirectDrawCreateEx: ['pppp', (x, g, pp, riid) => {
+      const want = riid && IIDS[guid(x, riid)];
+      if (want !== 'IDirectDraw7') { x.w32(pp, 0); return DDERR_INVALIDPARAMS; }
+      x.w32(pp, make(x, 'IDirectDraw7', {})); return DD_OK;
+    }],
+    // DirectDrawEnumerateExA(callback(GUID, description, name, context, monitor), context, flags)
+    DirectDrawEnumerateExA: ['ppu', (x, cb, ctx) => {
+      const d = x.win.heapAlloc(64); x.write(d, new TextEncoder().encode('Primary Display Driver\0display\0'));
+      return send(x, [{ fn: cb, args: [0, d, d + 23, ctx, 0] }], () => DD_OK, 12);
+    }],
     DirectDrawCreateClipper: ['upp', (x, flags, pp) => { x.w32(pp, make(x, 'IDirectDrawClipper', { hwnd: 0 })); return DD_OK; }],
     // DirectDrawEnumerateA(callback, context): the primary display driver, once (GUID NULL).
     DirectDrawEnumerateA: ['pp', (x, cb, ctx) => {

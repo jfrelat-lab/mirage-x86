@@ -5,6 +5,8 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-22
 
+- **Direct3D 7** for Windows games: Unreal Tournament's Direct3D renderer draws its intro, full screen (tested locally).
+- Windows programs loaded high in memory no longer have their heap grow over them.
 - DOS programs that set the palette with word writes get their first colour component.
 - Symetrie draws as on a real PC: multiplications now set the sign and zero flags the way the processor does.
 

@@ -4967,6 +4967,7 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
     '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
     '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
     const mc = new Machine({ memSize: 64 << 20, cpu: '686' }); installBIOS(mc); const lx = installLinux(mc);
+    if (opts.imageBase) new DataView(exe.buffer).setUint32(0x38, opts.imageBase, true);   // the program's image base
     const apis = win32Apis(opts), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, args, backend: traceBackend() });
     const fn = (dll, name) => { const f = apis.find((d) => d.dll === dll).fns[name][1]; return (...a) => f(x, ...a); };
     const str = (t) => { const b = new TextEncoder().encode(t + '\0'), p = x.win.heapAlloc(b.length); x.write(p, b); return p; };
@@ -5061,6 +5062,54 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
     got = [c.width, c.height, c.windowed, L.setSamplerState.join(','), L.setTextureStageState.join(','), L.drawIndexedPrimitive.join(','), x.r32(pp + 32 + 16), x.r32(pp + 32 + 24)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: Direct3D 8 -- its present parameters, sampler states, base vertex index, surface size', got, '320 200 true 0,5,2 0,1,4 4,7,0,4,0,2 512 16');
+  // Direct3D 7 from IDirectDraw7 (src/win32/d3d7.js), on the Direct3D 9 device model: a 3D render target with a
+  // 16-bit z-buffer attached; a 4x2 A1R5G5B5 texture of two mipmap levels, written by Lock and sent as A8R8G8B8 at
+  // SetTexture (opaque red, transparent green); the filters as sampler states with Direct3D 9's values; the fog
+  // kept back; DrawPrimitive's vertex count as primitives; WORLD as D3DTS_WORLD; the target copied onto the
+  // primary presents. Unreal Tournament's D3DDrv does all of this, after refusing a card that cannot render in a
+  // window (DDCAPS2_CANRENDERWINDOWED); and DDDEVICEIDENTIFIER2 is 1068 bytes, nothing written past it.
+  try { const { fn, x } = await w32(), { recordD3D9 } = await import('../src/win32/d3d9.js'), rec = recordD3D9(); x.backend.d3d9 = () => rec;
+    const d = (n) => fn('ddraw.dll', n), out = x.win.heapAlloc(16), writes = [];
+    const guid = (h) => { const p = x.win.heapAlloc(16), b = h.replace(/-/g, '').match(/../g).map((v) => parseInt(v, 16));
+      x.write(p, Uint8Array.from([...b.slice(0, 4).reverse(), ...b.slice(4, 6).reverse(), ...b.slice(6, 8).reverse(), ...b.slice(8)])); return p; };
+    const desc = (flags, w, h, caps, more = {}) => { const p = x.win.heapAlloc(124); x.write(p, new Uint8Array(124)); x.w32(p, 124); x.w32(p + 4, flags);
+      x.w32(p + 8, h); x.w32(p + 12, w); x.w32(p + 104, caps); for (const [k, v] of Object.entries(more)) x.w32(p + +k, v); return p; };
+    const surf = (dd, ...a) => { d('IDirectDraw7::CreateSurface')(dd, desc(...a), out, 0); return x.r32(out); };
+    d('DirectDrawCreateEx')(0, out, guid('15e65ec0-3b9c-11d2-b92f-00609797ea5b'), 0); const dd = x.r32(out);
+    d('IDirectDraw7::QueryInterface')(dd, guid('f5049e77-4861-11d2-a407-00a0c90629a8'), out); const d3d = x.r32(out);
+    const dc = x.win.heapAlloc(380); x.write(dc, new Uint8Array(380)); x.w32(dc, 380); d('IDirectDraw7::GetCaps')(dd, dc, 0);
+    const id = x.win.heapAlloc(1072); x.write(id, new Uint8Array(1072).fill(0x55)); d('IDirectDraw7::GetDeviceIdentifier')(dd, id, 0);
+    const ddInfo = `${(x.r32(dc + 8) & 0x80000) !== 0}/${x.r8(id + 1067)}/${x.r8(id + 1068)}`;
+    const primary = surf(dd, 1, 0, 0, 0x200), rt = surf(dd, 7, 64, 32, 0x2040), z = surf(dd, 0x1007, 64, 32, 0x20000, { 84: 16 });
+    d('IDirectDrawSurface7::AddAttachedSurface')(rt, z);
+    const tex = surf(dd, 0x21007, 4, 2, 0x401008, { 24: 2, 76: 0x41, 84: 16, 88: 0x7c00, 92: 0x3e0, 96: 0x1f, 100: 0x8000 });
+    const ld = desc(0, 0, 0, 0); d('IDirectDrawSurface7::Lock')(tex, 0, ld, 1, 0); const bits = x.r32(ld + 36);
+    x.w16(bits, 0xfc00); x.w16(bits + 2, 0x03e0); d('IDirectDrawSurface7::Unlock')(tex, 0);
+    const caps = x.win.heapAlloc(16); x.write(caps, new Uint8Array(16)); x.w32(caps, 0x400000);
+    d('IDirectDrawSurface7::GetAttachedSurface')(tex, caps, out); const mip1 = x.r32(out); d('IDirectDrawSurface7::GetSurfaceDesc')(mip1, ld);
+    d('IDirect3D7::CreateDevice')(d3d, guid('84e63de0-46aa-11cf-816f-0000c020156e'), rt, out); const dev = x.r32(out);
+    rec.device.textureWrite = (...a) => { writes.push(a); return 0; };
+    d('IDirect3DDevice7::SetTexture')(dev, 0, tex);
+    const L = rec.device.last, sampler = [];
+    for (const [t, v] of [[16, 5], [18, 3], [13, 3]]) { d('IDirect3DDevice7::SetTextureStageState')(dev, 0, t, v); sampler.push(L.setSamplerState.join(',')); }
+    d('IDirect3DDevice7::SetTextureStageState')(dev, 0, 1, 4);
+    d('IDirect3DDevice7::SetRenderState')(dev, 7, 1); d('IDirect3DDevice7::SetRenderState')(dev, 28, 1);
+    const v = x.win.heapAlloc(32 * 6); d('IDirect3DDevice7::DrawPrimitive')(dev, 4, 0x1c4, v, 6, 0);
+    const m = x.win.heapAlloc(64); d('IDirect3DDevice7::SetTransform')(dev, 1, m);
+    d('IDirectDrawSurface7::Blt')(primary, 0, rt, 0, 0, 0);
+    const c = L.createDevice[0], w0 = writes.find((w) => w[1] === 0), dp = L.drawPrimitiveUP;
+    got = [ddInfo, c.width, c.height, c.autoDepthStencilFormat, x.r32(ld + 12) + 'x' + x.r32(ld + 8), writes.length, [...w0[3].slice(0, 8)].join(','), w0[4],
+      sampler.join(' '), L.setTextureStageState.join(','), L.setRenderState.join(','), dp[0], dp[1], dp[3], L.setTransform[0], rec.device.presents].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: Direct3D 7 -- target, z-buffer, a 1555 mipmapped texture as 8888, samplers, fog kept back, draws, present', got,
+    'true/0/85 64 32 80 2x1 2 0,0,255,255,0,255,0,0 16 0,5,3 0,7,2 0,1,3 0,1,4 7,1 4 2 32 256 1');
+  // The heap's second segment is cut around a program whose image is in it: Unreal Tournament's is at 10900000h,
+  // and its Direct3D 7 textures, allocated there, wrote over the program's data.
+  try { const { x } = await w32('', { imageBase: 0x10900000 });
+    let inside = 0, last = 0; while (last < 0x10a00000) { last = x.win.heapAlloc(0x70000); if (last + 0x70000 > 0x10900000 && last < 0x10901000) inside++; }
+    got = String(inside);
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: the heap goes around a program\'s image at 10900000h', got, '0');
   // The device's own back buffer lives as long as the device: GameMaker 8 releases the render target it got
   // and set back, and the model's back buffer was deleted. And in a dialog application's desktop (Delphi:
   // a main window of no size, its forms on the desktop) the picture goes in the device's window.

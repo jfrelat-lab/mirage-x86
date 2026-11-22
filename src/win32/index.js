@@ -101,7 +101,12 @@ export function loadPE(lx, mem, cpu, exe, { path = 'C:\\intro.exe', args = '', a
   // of sizes that never repeat; kept on the lists by size, they ran the machine out of memory a minute
   // into the Undertale demo. Smaller blocks stay readable once freed, as in XP's heap: Diablo reads one
   // after freeing it (from 64 KiB, its pages read as zeros and it called address 4).
-  const segments = [[HEAP, Math.min(HEAP + HEAP_SIZE, base > HEAP ? base : HEAP + HEAP_SIZE)], [0x10000000, 0x20000000]];
+  // A program whose image is in that range (Unreal Tournament's is at 10900000h) has the segment cut
+  // around it: grown into it, the heap -- Direct3D 7's textures, hundreds of mipmap levels -- wrote over
+  // the program's data, and its allocator's vtable read as zero.
+  const imageEnd = base + Math.ceil(h.sizeImage / PAGE) * PAGE;
+  const around = (a, b) => (base < b && imageEnd > a ? [[a, base], [imageEnd, b]].filter(([s, e]) => e - s >= 0x100000) : [[a, b]]);
+  const segments = [[HEAP, Math.min(HEAP + HEAP_SIZE, base > HEAP ? base : HEAP + HEAP_SIZE)], ...around(0x10000000, 0x20000000)];
   const BIG = 0x7f000, BIG_BASE = 0x20000000, BIG_END = 0x30000000;
   for (const [a, b] of [...segments, [BIG_BASE, BIG_END]]) lx.lazy.push([a, b]);
   let seg = 0, heapNext = HEAP + 8;
