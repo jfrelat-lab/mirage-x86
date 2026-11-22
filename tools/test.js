@@ -4024,6 +4024,28 @@ await (async () => { const hex = (                                         // na
   let got; try { got = runLinux(hex, ['/w/CVT']).out; } catch (e) { got = e.message.slice(0, 80); }
   eq('linux: CVTTSS2SI, CVTSS2SI and CVTSI2SS, as Docker i386 computes them', got,
     '00000002\n00000002\nfffffffe\nfffffffe\n00000003\n00000004\nfffffffd\nfffffffc\n80000000\n80000000\n80000000\n80000000\nc0e00000\n'); })();
+// tools/linux/imulflags.asm: the flags MUL and IMUL leave -- each form (two operands, three, one of 32, 16 and
+// 8 bits, MUL) on products positive, negative, zero, overflowing to a zero or a negative low half: SF, ZF and
+// PF those of the low part of the result at the operation's size, AF clear, as Docker i386 prints them. They
+// were left as the instruction before had them (symetrie, a 256-byte intro, branches on SF after IMUL).
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/imulflags.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004083f0100004f0100000700000000100000beef800408bf080000008b06' +
+    '8b5e040fafc3e8440000008b066bc0fde83a0000008b06f76e04e8300000008b06f76604e826000000668b06660faf46' +
+    '04e8190000008a06f66e04e80f00000083c6084f75b8b80100000031dbcd809c5825d508000060bf3f810408b9080000' +
+    '00c1c00489c283e20f8a922f810408881747e2edc6070ab804000000bb01000000b93f810408ba09000000cd8061c303' +
+    '00000005000000f9ffffff09000000000000003930000000000100000001000000004003000000ffffffffffffffff45' +
+    '23010089670000800000000200000030313233343536373839616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: 'pentium3' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/IMULF']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('MUL and IMUL: SF, ZF, PF of the low result, AF clear, as Docker i386 computes them', got,
+    '00000004\n00000080\n00000004\n00000004\n00000004\n00000004\n00000080\n00000000\n00000080\n00000881\n00000080\n00000080\n00000044\n00000044\n00000044\n00000044\n00000044\n00000044\n00000845\n00000084\n00000845\n00000845\n00000044\n00000044\n00000885\n00000805\n00000885\n00000084\n00000044\n00000044\n00000000\n00000004\n00000000\n00000801\n00000000\n00000000\n00000004\n00000080\n00000004\n00000004\n00000885\n00000885\n00000004\n00000080\n00000004\n00000004\n00000004\n00000845\n'); })();
 // tools/linux/cvtpi.asm: the conversions between SSE and MMX with no prefix (Unreal Tournament's Pentium III code):
 // CVTPS2PI of 2.5 and -2.5 under each of MXCSR's rounding controls (nearest even, down, up, toward zero) --
 // it was always to nearest, MXCSR unread -- CVTTPS2PI of 3.9 and -3.9 (truncated), CVTPI2PS of -7 and 9.

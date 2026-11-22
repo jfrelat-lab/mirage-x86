@@ -2412,13 +2412,13 @@ export class Recompiler {
         case 4:                                                                         // MUL
           if (size === 16) { const s = NT(), p = NT(), hi = NT();
             P(`var ${s}=(${rmR(o, 16)})&0xffff;var ${p}=(r[0]&0xffff)*${s};var ${hi}=(${p}/65536)&0xffff;r[0]=(r[0]&~0xffff)|(${p}&0xffff);r[2]=(r[2]&~0xffff)|${hi};`);
-            PFLAG(`cpu.setShiftResult(0,16,${hi}!==0,${hi}!==0,false);`, lC | lO);
+            PFLAG(`cpu.setMul(${p},16,${hi}!==0);`, lALL);
           } else P(`cpu.${size === 8 ? 'mul8' : 'mul32'}(${rmR(o, size)});`);   // 8-bit or 32-bit (66h)
           break;
         case 5:                                                                         // IMUL
           if (size === 16) { const s = NT(), a = NT(), p = NT();
             P(`var ${s}=((${rmR(o, 16)})<<16)>>16;var ${a}=((r[0]&0xffff)<<16)>>16;var ${p}=${a}*${s};r[0]=(r[0]&~0xffff)|(${p}&0xffff);r[2]=(r[2]&~0xffff)|((${p}>>16)&0xffff);`);
-            PFLAG(`cpu.setShiftResult(0,16,(${p}<-32768||${p}>32767),(${p}<-32768||${p}>32767),false);`, lC | lO);
+            PFLAG(`cpu.setMul(${p},16,(${p}<-32768||${p}>32767));`, lALL);
           } else P(`cpu.${size === 8 ? 'imul8' : 'imul32'}(${rmR(o, size)});`);
           break;
         // DIV/IDIV can raise #DE. The helper vectors the ISR and returns true; we must set eip to the

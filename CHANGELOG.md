@@ -3,6 +3,10 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-22
+
+- Symetrie draws as on a real PC: multiplications now set the sign and zero flags the way the processor does.
+
 ## 2026-11-20
 
 - **Unreal Tournament** (1999) starts on the Windows machine: its first-run configuration, its intro and its menu, in software rendering and in 3dfx Glide (tested locally).
