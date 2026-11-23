@@ -322,10 +322,96 @@ async function linux(world = 'linux') {
   // Another program from the shelf replaces the running one in place: the page and the shelf's
   // scroll stay, the log starts afresh; the address names the new one, so a reload starts it again.
   const replace = (q) => {
+    clearInterval(homeSaver); homeSaver = 0; forgetBtn.hidden = true;  // the home being kept was the previous program's
     if (window.mirage && window.mirage.stop) window.mirage.stop();
     session = null;
     logEl.replaceChildren(); logPartial = '';                          // the log is the new program's
     history.replaceState(null, '', '?' + new URLSearchParams(q).toString());
+  };
+  /*
+   * An image built in this page (src/oasis-layers.js through the oasis-fetch relay), started on the canvas,
+   * its home directory kept in this browser between visits (src/oasis-home.js): what the program made or
+   * changed under $HOME is saved every few seconds and when the page is hidden, and laid over the image's
+   * tree at the next start. "Forget files" drops it. `fail(text)` shows why it did not start.
+   */
+  const dockerBtn = $('dockerBtn'), forgetBtn = $('forgetBtn');
+  let homeSaver = 0;
+  const runImage = async (m, img, again, fail) => {
+    over.hidden = true; setState('building', ''); showLog();
+    log(`${m.name}: ${(img.layers || []).length} layers`);
+    const [{ buildTree }, { webIO }, H] = await Promise.all([import('./oasis-layers.js'), import('./oasis-web.js'), import('./oasis-home.js')]);
+    const t0 = performance.now();
+    // A build's line comes back each second with its time: the log takes each new step once.
+    let logged = '';
+    const io = webIO({ onProgress: (t) => { status.textContent = `${m.title}: ${t}…`; const step = t.replace(/^building \(\d+ s\)/, 'building'); if (step !== logged) log(logged = step); } });
+    io.onOutput = (t) => { logOutput(t); const l = t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '').split('\n').filter(Boolean).pop(); if (l) hint.textContent = l.slice(-120); };
+    let tree;
+    try { tree = await buildTree(img, io); } catch (e) { log(String(e.message || e)); setState('failed', 'err'); return fail(String(e.message || e)); }
+    const e = img.entry || {};
+    // A Docker image's command named without its path: found on its PATH, in the tree, as docker run finds it.
+    if (e.run && !e.run.startsWith('/')) {
+      const host0 = tree.host(), dirs = ((e.env && e.env.PATH) || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin').split(':');
+      const hit = dirs.map((d) => `${d.replace(/\/$/, '')}/${e.run}`).find((f) => host0.lstat(f));
+      if (!hit) { setState('failed', 'err'); return fail(`${e.run} is not on the image's PATH`); }
+      img = { ...img, entry: { ...e, run: hit } };
+    }
+    const keep = isLinux && img.name, home = keep ? H.homeOf(img, tree.host()) : null, key = keep ? `home:${img.name}` : null;
+    const kept = keep ? await io.cache.get(key) : null;
+    if (kept) { const n = H.applyHome(tree, kept); log(`${home}: ${n} paths of yours, kept in this browser`); }
+    log(`the tree is built (${tree.nodes.size} paths, ${((performance.now() - t0) / 1000).toFixed(1)} s); starting ${img.entry && img.entry.run}`);
+    status.textContent = `starting ${m.title}…`;
+    await start(m, img, tree.host(), again);
+    if (!keep) return;
+    const s = window.mirage;
+    let last = kept ? kept.length + ':' + H.homeSum(kept) : '';
+    forgetBtn.hidden = !kept;
+    const save = async () => {
+      if (window.mirage !== s || !s || !s.lx) return;
+      const tar = H.homeTar(kept, s.lx.changes(), home);
+      const sig = tar ? tar.length + ':' + H.homeSum(tar) : '';
+      if (sig === last) return;
+      last = sig;
+      if (tar && tar.length > (64 << 20)) { log(`${home} is over 64 MB: not kept`); return; }
+      if (tar) { await io.cache.put(key, tar); forgetBtn.hidden = false; } else await io.cache.del(key);
+    };
+    homeSaver = setInterval(save, 5000);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+    forgetBtn.onclick = async () => {
+      if (!confirm(`Forget the files ${m.title} keeps in ${home}, in this browser? It starts again as the image has it.`)) return;
+      clearInterval(homeSaver); homeSaver = 0;
+      if (window.mirage && window.mirage.stop) window.mirage.stop();
+      await io.cache.del(key); forgetBtn.hidden = true; log(`${home}: forgotten`);
+      again();
+    };
+  };
+  /*
+   * A Docker Hub image run in this page, with no Docker: "i386/alpine", "i386/python:3.12-alpine". Its
+   * manifest made here as `node tools/oasis.mjs import` makes it -- the linux/386 manifest's digest, the
+   * image's own entry, its shell on the page's console -- then built as any image is (src/oasis-docker.js
+   * through the relay). The address names it (?m=linux&docker=...), so a reload or a link starts it again.
+   */
+  const runDocker = async (ref, fail = (t) => { status.textContent = t; }) => {
+    let D, img;
+    try {
+      D = await import('./oasis-docker.js');
+      const { repo, ref: tag } = D.dockerRef(ref);
+      replace({ m: world, docker: `${repo}${tag.startsWith('sha256:') ? '@' : ':'}${tag}` });
+      over.hidden = true; setState('building', ''); showLog();
+      const { webIO } = await import('./oasis-web.js'), io = webIO({ onProgress: (t) => { status.textContent = t; log(t); } });
+      const { config, digest } = await D.dockerPull(io.docker, repo, tag, 'linux/386', (t) => { status.textContent = t; }, { withLayers: false });
+      const entry = { ...D.dockerEntry(config), console: 'page' };
+      if (!entry.env.TERM) entry.env.TERM = 'linux';
+      img = { oasis: 1, name: `docker/${repo.slice(5)}:${tag}`, title: `${repo}:${tag}`, world: 'linux', machine: { cpu: '686' },
+        layers: [{ docker: `${repo}@${digest}`, platform: 'linux/386' }], entry, output: 'window' };
+    } catch (e) { setState('failed', 'err'); log(String(e.message || e)); return fail(String(e.message || e)); }
+    try { localStorage.setItem('mirage.docker', ref); } catch { /* storage refused */ }
+    await runImage({ name: img.name, title: img.title }, img, () => runDocker(ref, fail), fail);
+  };
+  dockerBtn.hidden = !isLinux;
+  dockerBtn.onclick = () => {
+    let last = 'i386/alpine'; try { last = localStorage.getItem('mirage.docker') || last; } catch { /* storage refused */ }
+    const ref = prompt('An i386 image from Docker Hub, run in this page with no Docker (i386/alpine, i386/python:3.12-alpine, i386/debian):', last);
+    if (ref && ref.trim()) runDocker(ref.trim());
   };
   let images = [];
   // Images meant for a window; the terminal ones (a shell) run with `oasis run` in a terminal.
@@ -401,7 +487,7 @@ async function linux(world = 'linux') {
         ${m ? `<p>${esc(why)}</p>` : `<p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
         OASIS images, which bring their files from where their authors published them: Debian's archive, idgames. Choose an image:
         this page fetches its layers once, keeps them in your browser, and starts it.</p>`}
-        <p class="dim">On a computer, every image: <code>node tools/oasis.mjs serve --open</code>; a Docker Hub i386 image: <code>node tools/oasis.mjs import docker://i386/alpine</code></p>
+        <p class="dim">An i386 image from Docker Hub, here with no Docker: <b>Docker…</b> above (i386/alpine, i386/python:3.12-alpine). On a computer, every image: <code>node tools/oasis.mjs serve --open</code></p>
         <p><a href="oasis.html${m ? '#' + esc(m.name) : ''}">See ${m ? 'this image\'s' : 'each image\'s'} recipe →</a></p></div>`;
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
     };
@@ -410,24 +496,13 @@ async function linux(world = 'linux') {
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(items[+el.dataset.i].id === m.name));
       let img;
       try { img = { ...(await (await fetch(`oasis/images/${m.name}.json`)).json()), name: m.name }; } catch { return needs(m, 'Its manifest could not be read.'); }
-      over.hidden = true; setState('building', ''); showLog();
-      log(`${m.name}: ${(img.layers || []).length} layers`);
-      const [{ buildTree }, { webIO }] = await Promise.all([import('./oasis-layers.js'), import('./oasis-web.js')]);
-      const t0 = performance.now();
-      // A build's line comes back each second with its time: the log takes each new step once.
-      let logged = '';
-      const io = webIO({ onProgress: (t) => { status.textContent = `${m.title}: ${t}…`; const step = t.replace(/^building \(\d+ s\)/, 'building'); if (step !== logged) log(logged = step); } });
-      io.onOutput = (t) => { logOutput(t); const l = t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '').split('\n').filter(Boolean).pop(); if (l) hint.textContent = l.slice(-120); };
-      let tree;
-      try { tree = await buildTree(img, io); } catch (e) { log(String(e.message || e)); setState('failed', 'err'); return needs(m, String(e.message || e)); }
-      log(`the tree is built (${tree.nodes.size} paths, ${((performance.now() - t0) / 1000).toFixed(1)} s); starting ${img.entry && img.entry.run}`);
-      status.textContent = `starting ${m.title}…`;
-      await start(m, img, tree.host(), () => runHere(m));
+      await runImage(m, img, () => runHere(m), (why) => needs(m, why));
     };
     const items = [...introItems, ...listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => runHere(m) }))];
     shelf(shelfTitle, items, params.get('prog') || params.get('run'));
     const wanted = listed.find((m) => m.name === params.get('run'));
     if (wantedIntro) runIntro(wantedIntro);
+    else if (isLinux && params.get('docker')) runDocker(params.get('docker'), (why) => needs({ name: '', title: params.get('docker') }, why));
     else if (wanted) runHere(wanted); else { needs(null); setState('choose', ''); status.textContent = 'choose an intro or an image — or drop a Linux program on the screen'; }
     return;
   }
@@ -444,6 +519,7 @@ async function linux(world = 'linux') {
   // The machine boots into a real shell: bash on tty1 of the image that has one (linux/mirage),
   // typed at as a console is; the shelf starts any image instead.
   if (wantedIntro) { runIntro(wantedIntro); return; }
+  if (isLinux && params.get('docker')) { runDocker(params.get('docker')); return; }
   const wanted = images.find((m) => m.name === params.get('run')) || images.find((m) => m.name === 'linux/mirage') || images[0];   // linux/mirage: Linux's shell
   if (wanted) run(wanted);
 }

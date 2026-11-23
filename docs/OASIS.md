@@ -27,7 +27,11 @@ the hosts the images use (`src/oasis-hosts.js`): `functions/oasis-fetch.js` on C
 `node tools/oasis.mjs serve --static` on a computer (the files and the relay only, as such a host
 serves them). A `docker` layer comes the same way: the relay's `?docker=<i386/repo>&manifest=|blob=`
 fetches Docker Hub's registry with an anonymous token, for its public `i386/` images only
-(`src/oasis-docker.js`).
+(`src/oasis-docker.js`). The machine's **Docker…** button (or `machines.html?m=linux&docker=i386/alpine`) makes such an
+image in the page itself and runs it: its linux/386 manifest pinned, the image's own entry, its shell on
+the page's console. A Linux image's home directory ($HOME) is kept in the browser between visits
+(`src/oasis-home.js`): what the program made, changed or removed there, saved every few seconds and when
+the page is hidden, laid over the image's tree at the next start; **Forget files** drops it.
 
 ## The window
 

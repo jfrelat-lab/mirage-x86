@@ -1467,6 +1467,17 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     wrBytes(buf, b); return 0;
   };
   const oldStat = (p, buf) => { const n = p && getNode(p); return n ? putOldStat(buf, n, p) : -E.ENOENT; };
+  // A file's modification time from [seconds, nanoseconds] (null: now; UTIME_NOW 0x3fffffff, UTIME_OMIT
+  // 0x3ffffffe), the file by path from dirfd (AT_SYMLINK_NOFOLLOW 0x100), or dirfd's own when path is null.
+  const utimeAt = (dirfd, path, flags, t) => {
+    let n;
+    if (!path) { const f = fdOf(dirfd); n = f && f.node; }
+    else { const p = resolve(rdStr(path), atBase(dirfd), !(flags & 0x100)); n = p && getNode(p); }
+    if (!n) return -E.ENOENT;
+    if (t && t[1] === 0x3ffffffe) return 0;
+    n.mtime = !t || t[1] === 0x3fffffff ? lx.now() : t[0] + t[1] / 1e9;
+    return 0;
+  };
   const statPath = (base, path, buf, follow = true) => {
     const p = resolve(rdStr(path), base, follow), node = p && getNode(p);
     return node ? putStat(buf, node, p) : -E.ENOENT;
@@ -2242,6 +2253,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     439: (dirfd, path) => { const r = resolve(rdStr(path), atBase(dirfd)); return r && getNode(r) ? 0 : -E.ENOENT; },   // faccessat2
     // chmod, fchmod, fchmodat: the mode is kept (stat reports it; a.out and ELF run whatever it says).
     15: (path, mode) => { const p = resolve(rdStr(path)), n = p && getNode(p); if (!n) return -E.ENOENT; n.mode = mode & 0o7777; return 0; },
+    // A file's times (touch): utimensat and its 64-bit form, utimes, futimesat, utime. The modification time
+    // is kept (the access time is not: none is); a null times pointer, or UTIME_NOW, is now; UTIME_OMIT
+    // leaves it. musl's touch calls utimensat first, and stopped at ENOSYS without creating the file.
+    320: (dirfd, path, ts, flags) => utimeAt(dirfd, path, flags, ts ? [rd32(ts + 8), rd32(ts + 12)] : null),   // utimensat
+    412: (dirfd, path, ts, flags) => utimeAt(dirfd, path, flags, ts ? [rd32(ts + 16) + rd32(ts + 20) * 4294967296, rd32(ts + 24)] : null),   // utimensat_time64
+    271: (path, tv) => utimeAt(-100, path, 0, tv ? [rd32(tv + 8), rd32(tv + 12) * 1000] : null),   // utimes
+    299: (dirfd, path, tv) => utimeAt(dirfd, path, 0, tv ? [rd32(tv + 8), rd32(tv + 12) * 1000] : null),   // futimesat
+    30: (path, buf) => utimeAt(-100, path, 0, buf ? [rd32(buf + 4), 0] : null),   // utime
     94: (fd, mode) => { const f = fdOf(fd); if (f.node) f.node.mode = mode & 0o7777; return 0; },
     306: (dirfd, path, mode) => { const p = resolve(rdStr(path), atBase(dirfd)), n = p && getNode(p); if (!n) return -E.ENOENT; n.mode = mode & 0o7777; return 0; },
     82: (args) => select(rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12), rd32(args + 16)),   // select (old: its arguments in a struct)

@@ -5,6 +5,9 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-23
 
+- **Docker…** on the Linux machine runs an i386 image from Docker Hub by its name, and a link starts it again.
+- Linux images keep your files in their home directory between visits, in your browser (Forget files drops them).
+- `touch` and programs that set a file's time work on the Linux machine.
 - Docker images run as the user they declare.
 - **SuperTuxKart** (2009) races on the Linux machine: Debian's own build, at the keyboard (no sound yet).
 - **Docker Hub images in the browser**: an i386 image (BusyBox, Python on Alpine) runs on the Linux machine with no Docker anywhere.

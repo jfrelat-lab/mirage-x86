@@ -4104,6 +4104,30 @@ await (async () => { let got;
   } catch (err) { got = err.message.slice(0, 80); }
   eq('identities: runAs resolves a Docker User in /etc/passwd and /etc/group; an imported entry keeps it', got,
     'app:1001:1002:/home/app:1001/1002/1002+29 app:1001:50:/home/app:1001/50/50+29 app:1001:50:/home/app:1001/50/50+29 4242:4242:0:/:4242/0/0 refused app true'); })();
+// tools/linux/utime.asm: a file's modification time as Linux sets it -- utimensat with a time, with UTIME_OMIT,
+// utimes, utimensat on a missing file (ENOENT) -- as Docker i386 prints it. They were not answered (ENOSYS),
+// and musl's touch, calling utimensat first, stopped without making the file.
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/utime.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408b6010000360200000700000000100000b805000000bb53810408b941' +
+    '020000baa4010000cd8089c3b806000000cd80b840010000bb9cffffffb953810408ba7681040831f6cd80e88a000000' +
+    'e86f000000b840010000bb9cffffffb953810408ba8681040831f6cd80e868000000e84d000000b80f010000bb538104' +
+    '08b996810408cd80e84d000000e832000000b840010000bb9cffffffb964810408ba7681040831f6cd80e82b000000b8' +
+    '0a000000bb53810408cd80b80100000031dbcd80b8c3000000bb53810408b9b6810408cd80a1fe81040860bf16820408' +
+    'b908000000c1c00489c283e20f8a92a6810408881747e2edc6070ab804000000bb01000000b916820408ba09000000cd' +
+    '8061c32f746d702f7574696d652d70726f6265002f746d702f7574696d652d6e6f6e652f780000000000ffffff3fa55d' +
+    '0d5e0000000000000000ffffff3f00000000feffff3f000000000000000000ca9a3b0000000030313233343536373839' +
+    '616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    lx.mkdir('/tmp'); lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/UTIME']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('utimensat, UTIME_OMIT, utimes and ENOENT: a file\'s modification time as Docker i386 sets it', got,
+    "00000000\n5e0d5da5\n00000000\n5e0d5da5\n00000000\n3b9aca00\nfffffffe\n"); })();
 // tools/linux/cvtpi.asm: the conversions between SSE and MMX with no prefix (Unreal Tournament's Pentium III code):
 // CVTPS2PI of 2.5 and -2.5 under each of MXCSR's rounding controls (nearest even, down, up, toward zero) --
 // it was always to nearest, MXCSR unread -- CVTTPS2PI of 3.9 and -3.9 (truncated), CVTPI2PS of -7 and 9.
@@ -7449,6 +7473,28 @@ await (async () => { let got;
     got = `${bad.join(',') || 'all'} ${two.length === words.length + inputs[3].length}`;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('zstd: the page\'s decompressor gives libzstd\'s input back, every level, block type and window', got, 'all true'); })();
+// A home kept in the browser between visits (src/oasis-home.js): a visit's changes under $HOME -- a file made,
+// one of the image's changed, one removed, a link, and /tmp left out -- saved as a tar; laid over the image's
+// tree at the next visit, which then removes the saved file and adds another: the save is computed afresh
+// from the visit's start, so the removed file goes and its removal is kept. homeOf: HOME, else entry.user's.
+await (async () => { let got;
+  try { const { Tree } = await import('../src/oasis-layers.js'), H = await import('../src/oasis-home.js'), enc = new TextEncoder(), dec = (b) => b && new TextDecoder().decode(b);
+    const image = () => { const t = new Tree(); t.file('/root/.profile', enc.encode('image')); t.file('/root/.cache', enc.encode('x')); t.file('/etc/os', enc.encode('alpine')); return t; };
+    const c1 = { files: [{ path: '/root/note', bytes: enc.encode('one'), mode: 0o644 }, { path: '/root/.profile', bytes: enc.encode('mine'), mode: 0o644 }, { path: '/tmp/junk', bytes: enc.encode('t') }],
+      dirs: [], links: [{ path: '/root/latest', target: 'note' }], removed: ['/root/.cache', '/etc/os'] };
+    const tar1 = H.homeTar(null, c1, '/root');
+    const t2 = image(); H.applyHome(t2, tar1); const h2 = t2.host();
+    const visit2 = [dec(h2.read('/root/note')), dec(h2.read('/root/.profile')), h2.lstat('/root/.cache'), h2.lstat('/root/latest').target, h2.lstat('/tmp/junk'), dec(h2.read('/etc/os'))].join('/');
+    const tar2 = H.homeTar(tar1, { files: [{ path: '/root/two', bytes: enc.encode('2') }], dirs: [], links: [], removed: ['/root/note'] }, '/root');
+    const t3 = image(); H.applyHome(t3, tar2); const h3 = t3.host();
+    const visit3 = [h3.lstat('/root/note'), dec(h3.read('/root/two')), dec(h3.read('/root/.profile')), h3.lstat('/root/.cache')].join('/');
+    const nothing = H.homeTar(null, { files: [{ path: '/tmp/x', bytes: enc.encode('x') }], dirs: [], links: [], removed: [] }, '/root');
+    const pw = new Tree(); pw.file('/etc/passwd', enc.encode('root:x:0:0::/root:/bin/sh\napp:x:1001:1001::/home/app:/bin/sh\n'));
+    const homes = [H.homeOf({ entry: { env: { HOME: '/data' } } }, pw.host()), H.homeOf({ entry: { user: 'app' } }, pw.host()), H.homeOf({ entry: {} }, pw.host())].join(',');
+    got = [visit2, visit3, nothing, homes, H.homeSum(tar2) === H.homeSum(H.homeTar(tar1, { files: [{ path: '/root/two', bytes: enc.encode('2') }], dirs: [], links: [], removed: ['/root/note'] }, '/root'))].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis: a home kept between visits -- made, changed, removed, linked; /tmp and the image left; saved afresh', got,
+    'one/mine//note//alpine /2/mine/  /data,/home/app,/root true'); })();
 // The relay a page reads Debian's and idgames' archives through: only the hosts the images use, so it
 // is no open proxy — and those hosts are every one oasis/images/ names.
 await (async () => { let got;

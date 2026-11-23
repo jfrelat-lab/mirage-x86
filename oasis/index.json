@@ -42,6 +42,14 @@
     "output": "terminal"
   },
   {
+    "name": "linux/docker-alpine",
+    "title": "i386/alpine:latest from Docker Hub (linux/386)",
+    "world": "linux",
+    "year": 2026,
+    "author": "Docker Hub, i386/alpine",
+    "output": "window"
+  },
+  {
     "name": "linux/docker-busybox",
     "title": "i386/busybox:latest from Docker Hub (linux/386)",
     "world": "linux",

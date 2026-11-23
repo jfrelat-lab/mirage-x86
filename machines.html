@@ -69,7 +69,8 @@
 
   /* The machine's window: its title strip, then its screen. */
   #vm { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; min-height: 0; padding: 12px; }
-  .vmtop { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto; background: var(--panel);
+  /* Wrapped to a second line rather than scrolled: a button out of view (Fullscreen, behind Docker… and Forget files) was a button lost. */
+  .vmtop { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; background: var(--panel);
            border: 1px solid var(--edge); border-bottom: none; border-radius: 9px 9px 0 0; padding: 7px 10px; }
   .vmtop > * { flex: none; }
   /* The machine's description gives way first (an ellipsis) when the buttons need the room. */
@@ -171,6 +172,8 @@
       <button id="recBtn" aria-pressed="false" title="Record the screen and its sound to a video file (MP4 where the browser writes it, else WebM)" hidden>Record</button>
       <button id="userBtn" hidden title="Your name inside the Linux machine (kept in this browser)">User</button>
       <button id="openBtn" hidden title="Run a Linux program (an i386 ELF) from your computer — or drop it on the screen">Open…</button>
+      <button id="dockerBtn" hidden title="Run an i386 image from Docker Hub in this page — no Docker: its layers come through the relay">Docker…</button>
+      <button id="forgetBtn" hidden title="Forget the files this image's home directory keeps in this browser">Forget files</button>
       <select id="fbSel" hidden title="The framebuffer /dev/fb0 a dropped program gets: 32 bits, at this size"><option>640x480</option><option>800x600</option><option selected>1024x768</option><option>1280x720</option><option>1920x1080</option></select>
       <input id="openFile" type="file" hidden>
       <button id="logBtn" aria-pressed="false" title="What the machine is doing: layers fetched and built, its output">Log</button>

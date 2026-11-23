@@ -1,0 +1,28 @@
+{
+  "oasis": 1,
+  "title": "i386/alpine:latest from Docker Hub (linux/386)",
+  "year": 2026,
+  "author": "Docker Hub, i386/alpine",
+  "world": "linux",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "docker": "i386/alpine@sha256:55d68c85222dd92297b0f8885354739d89f0dc17fc2f903c49dc1d9c129c3d6a",
+      "platform": "linux/386"
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "cwd": "/",
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "notes": "Imported by node tools/oasis.mjs import docker://i386/alpine:latest: the image's layers pulled from Docker Hub's registry (pinned by sha256:55d68c85222dd92297b0f8885354739d89f0dc17fc2f903c49dc1d9c129c3d6a) and laid over one another, its whiteouts applied; no Docker."
+}
