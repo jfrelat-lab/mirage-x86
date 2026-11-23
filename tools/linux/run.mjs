@@ -67,10 +67,10 @@ if (process.env.MIRAGE_LXHLE) {
   const { installHLE } = await import('../../src/hle/index.js');
   const { traceBackend } = await import('../../src/hle/trace.js');
   const { sdl12 } = await import('../../src/hle/sdl12.js');
-  const { gl, glu } = await import('../../src/hle/gl.js');
+  const { gl, glu, glut } = await import('../../src/hle/gl.js');
   const { asound } = await import('../../src/hle/asound.js');
   const { fxmesa, glide } = await import('../../src/hle/fxmesa.js');
-  const pick = { sdl12, gl, glu, asound, fxmesa: () => fxmesa(gl()), glide };
+  const pick = { sdl12, gl, glu, glut, asound, fxmesa: () => fxmesa(gl()), glide };
   hleTrace = traceBackend();
   const libs = process.env.MIRAGE_LXHLE.split(',').map((n) => pick[n] && pick[n]()).filter(Boolean);
   for (const f of installHLE(lx, mc.mem, mc.cpu, libs, hleTrace)) { lx.addFile(f.path, f.bytes); for (const l of f.links) lx.addFile(l, f.bytes); }

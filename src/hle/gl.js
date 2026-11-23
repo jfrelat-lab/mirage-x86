@@ -40,7 +40,7 @@ glBindFramebuffer uu; glFramebufferTexture2D uuuui; glCheckFramebufferStatus u; 
 glFramebufferRenderbuffer uuuu; glGenerateMipmap u; glBlitFramebuffer iiiiiiiiuu; glIsFramebuffer u; glIsRenderbuffer u;
 glBindFramebufferEXT uu; glFramebufferTexture2DEXT uuuui; glCheckFramebufferStatusEXT u; glBindRenderbufferEXT uu; glRenderbufferStorageEXT uuii;
 glFramebufferRenderbufferEXT uuuu; glGenerateMipmapEXT u; glBlitFramebufferEXT iiiiiiiiuu; glIsFramebufferEXT u; glIsRenderbufferEXT u;
-glFogi ui; glFogf uf; glAccum uf; glClearAccum ffff; glStencilFunc uiu; glStencilOp uuu; glColorMask uuuu; glDrawBuffer u; glReadBuffer u; glCallList u; glEndList ; glNewList uu;
+glScaled ddd; glIsList u; glFogi ui; glFogf uf; glAccum uf; glClearAccum ffff; glStencilFunc uiu; glStencilOp uuu; glColorMask uuuu; glDrawBuffer u; glReadBuffer u; glCallList u; glEndList ; glNewList uu;
 `;
 
 /** The vectors some entry points take by pointer: their length in floats (or doubles, `d`). */
@@ -155,6 +155,9 @@ export function gl() {
     x.backend.gl('glTexImage3D', [target, level, ifmt, w, h, d, border, fmt, type, p ? x.bytes(p, texBytes(fmt, type, w, h, d)) : null])];
   // Extensions by name: a pointer to the entry point the program asks for, when we have it.
   const proc = (x, name) => x.entry(x.str(name));
+  // The current context and drawable: SDL's window, always (PLIB's ssgInit checks there is one).
+  fns.glXGetCurrentContext = ['', () => 1];
+  fns.glXGetCurrentDrawable = ['', () => 1];
   fns.glXGetProcAddressARB = ['p', proc];
   fns.glXGetProcAddress = ['p', proc];
   return { soname: 'libGL.so.1', links: ['libGL.so'], fns };
@@ -168,5 +171,46 @@ export function glu() {
     // Mipmaps and scaling of the program's pixels (pointers into its memory, read and written by PRISM's glu.js).
     gluBuild2DMipmaps: ['uiiiuup', (x, ...a) => x.backend.gl('gluBuild2DMipmaps', a)],
     gluScaleImage: ['uiiupiiup', (x, ...a) => x.backend.gl('gluScaleImage', a)],
+    // Quadrics (SuperTuxKart's shadows and particles): PRISM's handles, as the program's pointers.
+    gluNewQuadric: ['', (x) => x.backend.gl('gluNewQuadric', []) || 1],
+    gluDeleteQuadric: ['p', (x, ...a) => x.backend.gl('gluDeleteQuadric', a)],
+    gluQuadricNormals: ['pu', (x, ...a) => x.backend.gl('gluQuadricNormals', a)],
+    gluQuadricDrawStyle: ['pu', (x, ...a) => x.backend.gl('gluQuadricDrawStyle', a)],
+    gluQuadricTexture: ['pi', (x, ...a) => x.backend.gl('gluQuadricTexture', a)],
+    gluCylinder: ['pdddii', (x, ...a) => x.backend.gl('gluCylinder', a)],
+    gluSphere: ['pdii', (x, ...a) => x.backend.gl('gluSphere', a)],
+    gluDisk: ['pddii', (x, ...a) => x.backend.gl('gluDisk', a)],
   } };
+}
+
+/**
+ * libglut.so.3, as far as a program that draws with SDL uses it: glutInit, and GLUT 3.7's solid shapes
+ * (glut_shapes.c) -- the sphere and the cone as GLU quadrics, the cube as six quads. SuperTuxKart 0.6
+ * links freeglut for these alone.
+ */
+export const GLUT_BOX = { n: [[-1, 0, 0], [0, 1, 0], [1, 0, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]],
+  faces: [[0, 1, 2, 3], [3, 2, 6, 7], [7, 6, 5, 4], [4, 5, 1, 0], [5, 6, 2, 1], [7, 4, 0, 3]],
+  v: (s) => [[-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1], [1, -1, -1], [1, -1, 1], [1, 1, 1], [1, 1, -1]].map((c) => c.map((k) => k * s / 2)) };
+export function glutShapes(call) {
+  let quad = 0;
+  const q = (x) => quad || (quad = call(x, 'gluNewQuadric', []) || 1);
+  const solid = (x, draw) => { const Q = q(x); call(x, 'gluQuadricDrawStyle', [Q, 100012]); call(x, 'gluQuadricNormals', [Q, 100000]); draw(Q); return 0; };
+  return {
+    glutInit: ['pp', () => 0],
+    glutSolidSphere: ['dii', (x, r, slices, stacks) => solid(x, (Q) => call(x, 'gluSphere', [Q, r, slices, stacks]))],
+    glutSolidCone: ['ddii', (x, base, height, slices, stacks) => solid(x, (Q) => call(x, 'gluCylinder', [Q, base, 0, height, slices, stacks]))],
+    glutSolidCube: ['d', (x, size) => {
+      const v = GLUT_BOX.v(size);
+      for (let i = 5; i >= 0; i--) {
+        call(x, 'glBegin', [7]); call(x, 'glNormal3f', GLUT_BOX.n[i]);
+        for (const k of GLUT_BOX.faces[i]) call(x, 'glVertex3f', v[k].map(Math.fround));
+        call(x, 'glEnd', []);
+      }
+      return 0;
+    }],
+  };
+}
+/** libglut.so.3 on a backend's gl(name, args) (a recorder's); PRISM's is made in prism-gl.js on its rt. */
+export function glut(call = (x, n, a) => x.backend.gl(n, a)) {
+  return { soname: 'libglut.so.3', links: ['libglut.so'], fns: glutShapes(call) };
 }

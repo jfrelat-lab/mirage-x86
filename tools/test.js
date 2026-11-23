@@ -4636,6 +4636,36 @@ await (async () => { let got;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: libSDL for a game -- keys as SDLK, mouse events and state, no joystick, semaphores; gluBuild2DMipmaps', got,
     '2:97 2:273 3:13 4:100,50,100 5:1,110 1 110 60 0 2 gluBuild2DMipmaps 3553,3,64,32,6407,5121,4660'); })();
+// ...and for SuperTuxKart 0.6: a WAV file read through SDL_RWFromFile and SDL_LoadWAV_RW (its spec: 22050 Hz,
+// AUDIO_S16LSB, mono, its data), an event it pushes itself coming back first, a key's name, a timer's wait (due
+// after its interval, ended by a callback's 0), and libglut's solid cube as six quads with their normals.
+await (async () => { let got;
+  try { const { sdl12 } = await import('../src/hle/sdl12.js'), { glut } = await import('../src/hle/gl.js'), { guestMemory } = await import('../src/hle/memory.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
+    const wav = new Uint8Array(48), dv = new DataView(wav.buffer), tag = (o, t) => [...t].forEach((c, i) => { wav[o + i] = c.charCodeAt(0); });
+    tag(0, 'RIFF'); dv.setUint32(4, 40, true); tag(8, 'WAVE'); tag(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+    dv.setUint32(24, 22050, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); tag(36, 'data'); dv.setUint32(40, 4, true); dv.setUint16(44, 0x1234, true); dv.setUint16(46, 0xfedc, true);
+    lx.addFile('/root/beep.wav', wav); lx.cwd = '/root';
+    const gls = [], x = { ...guestMemory(lx, mc.mem), lx, backend: { nextEvent: () => ({ type: 'keydown', scancode: 0x1c }), gl: (n, a) => { gls.push(n === 'glNormal3f' ? `N${a.join(',')}` : n); return 0; } } };
+    const f = sdl12().fns, str = (t) => { const b = new TextEncoder().encode(t + '\0'), p = lx.alloc(b.length); x.write(p, b); return p; };
+    const rw = f.SDL_RWFromFile[1](x, str('beep.wav'), str('rb')), spec = lx.alloc(24), pb = lx.alloc(4), pl = lx.alloc(4);
+    const r = f.SDL_LoadWAV_RW[1](x, rw, 1, spec, pb, pl);
+    const wavInfo = [r === spec, x.r32(spec), x.r16(spec + 4).toString(16), x.r8(spec + 6), x.r32(pl), x.r16(x.r32(pb)).toString(16), f.SDL_RWFromFile[1](x, str('none.wav'), str('rb'))].join('/');
+    const ev = lx.alloc(24); x.write(ev, new Uint8Array(24)); x.w8(ev, 24); x.w32(ev + 4, 77); f.SDL_PushEvent[1](x, ev);
+    const back = lx.alloc(24); f.SDL_PollEvent[1](x, back); const pushed = `${x.r8(back)}:${x.r32(back + 4)}`; f.SDL_PollEvent[1](x, back);
+    const name = x.str(f.SDL_GetKeyName[1](x, 273)), after = x.r8(back);
+    const timer = lx.alloc(8); x.w32(timer, 50);
+    const st = sdl12(); const g = st.fns; g.SDL_AddTimer && 0;
+    const fns2 = st.fns; st.state.timers.set(timer, { due: lx.mono() + 0.05, removed: false });
+    let w1 = fns2.SDL_mirage_timer[1]({ ...x, waitUntil: (t) => `wait${Math.round((t - lx.mono()) * 1000)}` }, timer);
+    x.w32(timer, 0); const w2 = fns2.SDL_mirage_timer[1](x, timer);
+    glut().fns.glutSolidCube[1](x, 2);
+    const cube = [gls.filter((n) => n === 'glBegin').length, gls.filter((n) => n === 'glVertex3f').length, gls[1]].join('/');
+    got = [wavInfo, pushed, after, name, w1, w2, cube].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: SDL for SuperTuxKart -- a WAV through RWops, a pushed event first, key names, a timer; libglut\'s cube', got,
+    'true/22050/8010/1/4/1234/0 24:77 2 up wait50 1 6/24/N0,0,-1'); })();
 // MIRAGE-WIN32 (src/win32): tools/win32/pebwalk.asm finds ExitProcess as Crinkler's header finds what it
 // imports -- fs:[30h] to the PEB, its loader data, the load-order list (exe, ntdll, kernel32), kernel32's
 // export directory -- and calls it with 42; the loader has bound its import of lz32.dll's ordinal 4.
@@ -7377,11 +7407,11 @@ await (async () => { let got;
 // lists, glGetFloatv and vertex arrays have their signatures here and their implementations there, and
 // nothing here is missing there.
 await (async () => { let got;
-  try { const { prismM } = await import('../src/hle/prism-gl.js'), { gl } = await import('../src/hle/gl.js');
+  try { const { prismM, shimGL } = await import('../src/hle/prism-gl.js'), { gl } = await import('../src/hle/gl.js');
     const { installGL } = await import('../vendor/prism/src/env/gl.js');
     const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
-    const M = prismM(lx, mc.mem); installGL(M);
+    const M = prismM(lx, mc.mem); installGL(M); shimGL(M);
     const fns = gl().fns, names = [];
     for (const ext of ['', 'EXT']) for (const f of ['GenFramebuffers', 'DeleteFramebuffers', 'BindFramebuffer', 'FramebufferTexture2D', 'CheckFramebufferStatus',
       'GenRenderbuffers', 'DeleteRenderbuffers', 'BindRenderbuffer', 'RenderbufferStorage', 'FramebufferRenderbuffer', 'GenerateMipmap', 'BlitFramebuffer']) names.push(`gl${f}${ext}`);

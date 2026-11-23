@@ -47,8 +47,41 @@ const audioLoop = (play, len, buf, userdata, callback) => [
  *  trap reads its argument above a return address, as a stub's caller leaves one). */
 const threadCall = (fn, data, exit) => [0x68, ...b32(data), 0xb8, ...b32(fn), 0xff, 0xd0, 0x50, 0x50, 0xb8, ...b32(HLE_BASE + exit), 0xcd, 0x80];
 
+/*
+ * SDL_AddTimer's thread, as guest code: wait for the timer (the trap answers when it is due, or nonzero when
+ * the timer was removed or its callback returned 0), call callback(interval, param), keep what it returned
+ * as the next interval (at `rec`), again:
+ *     L: push rec ; push rec ; mov eax, HLE(SDL_mirage_timer) ; int 80h ; add esp, 8 ; test eax, eax ; jnz X
+ *        push param ; push [rec] ; mov eax, callback ; call eax ; add esp, 8 ; mov [rec], eax ; jmp L
+ *     X: push 0 ; push 0 ; mov eax, HLE(SDL_mirage_thread_exit) ; int 80h
+ */
+const timerLoop = (wait, exit, rec, callback, param) => [
+  0x68, ...b32(rec), 0x68, ...b32(rec), 0xb8, ...b32(HLE_BASE + wait), 0xcd, 0x80, 0x83, 0xc4, 0x08, 0x85, 0xc0, 0x75, 0x1c,
+  0x68, ...b32(param), 0xff, 0x35, ...b32(rec), 0xb8, ...b32(callback), 0xff, 0xd0, 0x83, 0xc4, 0x08, 0xa3, ...b32(rec), 0xeb, 0x100 - 52,
+  0x6a, 0x00, 0x6a, 0x00, 0xb8, ...b32(HLE_BASE + exit), 0xcd, 0x80];
+// SDL_GetKeyName's names (SDL_keyboard.c's keynames) for the keys a game shows in its key settings.
+const KEYNAMES = { 8: 'backspace', 9: 'tab', 13: 'return', 27: 'escape', 32: 'space', 127: 'delete', 271: 'enter', 273: 'up', 274: 'down',
+  275: 'right', 276: 'left', 277: 'insert', 278: 'home', 279: 'end', 280: 'page up', 281: 'page down', 301: 'caps lock', 303: 'right shift',
+  304: 'left shift', 305: 'right ctrl', 306: 'left ctrl', 307: 'right alt', 308: 'left alt' };
+const keyName = (sym) => KEYNAMES[sym] || (sym >= 282 && sym <= 296 ? `f${sym - 281}` : sym >= 256 && sym <= 265 ? `[${sym - 256}]` : sym > 32 && sym < 127 ? String.fromCharCode(sym) : 'unknown key');
+
+/** A RIFF WAVE file's PCM: { rate, channels, bits, data } (its fmt and data chunks), or null. */
+export function parseWav(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), tag = (o) => String.fromCharCode(...b.subarray(o, o + 4));
+  if (b.length < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') return null;
+  let fmt = null;
+  for (let o = 12; o + 8 <= b.length; ) {
+    const id = tag(o), n = dv.getUint32(o + 4, true);
+    if (id === 'fmt ') fmt = { format: dv.getUint16(o + 8, true), channels: dv.getUint16(o + 10, true), rate: dv.getUint32(o + 12, true), bits: dv.getUint16(o + 22, true) };
+    else if (id === 'data' && fmt && fmt.format === 1) return { rate: fmt.rate, channels: fmt.channels, bits: fmt.bits, data: b.subarray(o + 8, Math.min(b.length, o + 8 + n)) };
+    o += 8 + n + (n & 1);
+  }
+  return null;
+}
+
 export function sdl12() {
-  const st = { t0: null, w: 0, h: 0, surface: 0, lastSwap: 0, events: [], audio: null, mouse: { x: 0, y: 0, buttons: 0 } };
+  const st = { t0: null, w: 0, h: 0, surface: 0, lastSwap: 0, events: [], audio: null, mouse: { x: 0, y: 0, buttons: 0 },
+    pushed: [], unicode: 0, files: new Map(), timers: new Map(), names: new Map() };
   return {
     soname: 'libSDL-1.2.so.0', links: ['libSDL.so', 'libSDL-1.2.so'],
     state: st,
@@ -90,6 +123,7 @@ export function sdl12() {
       // button at 2, state at 3, x and y at 4 and 6. The mouse's last place and buttons are kept for
       // SDL_GetMouseState.
       SDL_PollEvent: ['p', (x, ev) => {
+        if (st.pushed.length) { const b = st.pushed.shift(); if (ev) x.write(ev, b); return 1; }   // SDL_PushEvent's first
         const e = x.backend.nextEvent ? x.backend.nextEvent() : null;
         if (!e) return 0;
         const m = st.mouse;
@@ -118,8 +152,57 @@ export function sdl12() {
       SDL_NumJoysticks: ['', () => 0], SDL_JoystickOpen: ['i', () => 0], SDL_JoystickName: ['i', () => 0],
       SDL_JoystickNumAxes: ['p', () => 0], SDL_JoystickNumButtons: ['p', () => 0], SDL_JoystickUpdate: ['', () => 0],
       SDL_JoystickGetAxis: ['pi', () => 0], SDL_JoystickGetButton: ['pi', () => 0],
-      // Files as SDL_RWops: none yet (SDL_mixer's Mix_LoadWAV is all that opens one, and the sound is off).
-      SDL_RWFromFile: ['pp', () => 0],
+      // An event the program sends itself (SDL_Event: 20 bytes), taken before the page's.
+      SDL_PushEvent: ['p', (x, ev) => { st.pushed.push(x.bytes(ev, 20).slice()); return 0; }],
+      SDL_EnableUNICODE: ['i', (x, on) => { const was = st.unicode; if (on >= 0) st.unicode = on; return was; }],
+      SDL_GetKeyName: ['u', (x, sym) => {
+        if (!st.names.has(sym)) { const t = new TextEncoder().encode(keyName(sym) + '\0'), p = x.alloc(t.length); x.write(p, t); st.names.set(sym, p); }
+        return st.names.get(sym);
+      }],
+      // Every mode is available ((SDL_Rect **)-1); the video surface is SDL_SetVideoMode's.
+      SDL_ListModes: ['pu', () => 0xffffffff],
+      SDL_GetVideoSurface: ['', () => st.surface],
+      SDL_FreeSurface: ['p', () => 0],
+      SDL_JoystickClose: ['p', () => 0], SDL_JoystickEventState: ['i', () => 0],
+      // A file as SDL_RWops: a block whose bytes are kept here, read whole by SDL_LoadWAV_RW (what
+      // SuperTuxKart opens one for). A path is the process's: from its working directory.
+      SDL_RWFromFile: ['pp', (x, pPath) => {
+        const name = x.str(pPath), path = name.startsWith('/') ? name : `${x.lx.cwd.replace(/\/$/, '')}/${name}`, b = x.lx.readFile(path);
+        if (!b) return 0;
+        const rw = x.alloc(32); x.write(rw, new Uint8Array(32)); st.files.set(rw, b); return rw;
+      }],
+      // SDL_LoadWAV_RW(src, freesrc, spec, &buffer, &length): PCM in 8 bits (AUDIO_U8) or 16 (AUDIO_S16LSB);
+      // the SDL_AudioSpec filled -- freq, format, channels, silence, samples 4096, size.
+      SDL_LoadWAV_RW: ['pippp', (x, rw, freesrc, spec, pBuf, pLen) => {
+        const b = st.files.get(rw >>> 0), w = b && parseWav(b);
+        if (freesrc) st.files.delete(rw >>> 0);
+        if (!w || (w.bits !== 8 && w.bits !== 16)) return 0;
+        const buf = x.alloc(Math.max(1, w.data.length)); x.write(buf, w.data);
+        x.write(spec, new Uint8Array(24)); x.w32(spec, w.rate); x.w16(spec + 4, w.bits === 8 ? 0x0008 : 0x8010); x.w8(spec + 6, w.channels);
+        x.w8(spec + 7, w.bits === 8 ? 0x80 : 0); x.w16(spec + 8, 4096); x.w32(spec + 12, w.data.length);
+        x.w32(pBuf, buf); x.w32(pLen, w.data.length);
+        return spec;
+      }],
+      SDL_FreeWAV: ['p', () => 0],
+      // SDL_AddTimer(interval, callback, param): a thread of its own (timerLoop), the callback called every
+      // `interval` ms of the guest's clock until it returns 0 or SDL_RemoveTimer; its id is its block.
+      SDL_AddTimer: ['upp', (x, interval, callback, param) => {
+        const rec = x.alloc(8), code = x.alloc(64), stack = x.alloc(0x10000);
+        x.w32(rec, interval);
+        st.timers.set(rec, { due: x.lx.mono() + interval / 1000, removed: false });
+        x.write(code, Uint8Array.from(timerLoop(x.idOf('SDL_mirage_timer'), x.idOf('SDL_mirage_thread_exit'), rec, callback, param)));
+        x.lx.spawnThread({ eip: code, esp: stack + 0x10000 - 16 });
+        return rec;
+      }],
+      SDL_RemoveTimer: ['p', (x, rec) => { const t = st.timers.get(rec >>> 0); if (!t) return 0; t.removed = true; return 1; }],
+      SDL_mirage_timer: ['p', (x, rec) => {
+        const t = st.timers.get(rec >>> 0), ms = x.r32(rec);
+        if (!t || t.removed || !ms) { st.timers.delete(rec >>> 0); return 1; }
+        const now = x.lx.mono();
+        if (now < t.due) return x.waitUntil(t.due);
+        t.due = now + ms / 1000;
+        return 0;
+      }],
       // Mutexes and semaphores (SDL_mixer's, smpeg's): a mutex never waits, the guest's threads taking turns
       // only at system calls; a semaphore's count is kept, a wait on zero waits for a post.
       SDL_CreateMutex: ['', (x) => x.alloc(8)], SDL_DestroyMutex: ['p', () => 0], SDL_mutexP: ['p', () => 0], SDL_mutexV: ['p', () => 0],

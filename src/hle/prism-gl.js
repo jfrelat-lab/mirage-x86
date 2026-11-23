@@ -5,7 +5,7 @@
 // the page map and whose dv is a DataView-like object over the same. libSDL and libasound are MIRAGE's
 // (sdl12.js, asound.js): the window is gl.js's framebuffer, the sound the emulated card.
 import { guestMemory } from './memory.js';
-import { gl as glTable, glu as gluTable } from './gl.js';
+import { gl as glTable, glu as gluTable, glut as glutTable } from './gl.js';
 import { asound } from './asound.js';
 import { sdl12 } from './sdl12.js';
 import { fxmesa, glide } from './fxmesa.js';
@@ -38,6 +38,17 @@ export function prismM(lx, mem) {
   const intern = (bytes) => { const p = lx.alloc(bytes.length); m.write(p, Uint8Array.from(bytes)); return p; };
   const rt = { calloc: (n, size) => lx.alloc(n * size), free: () => {}, malloc: (n) => lx.alloc(n) };
   return { u8, cstr, rt, mod: { dv, cstr, intern } };
+}
+
+/**
+ * What PRISM's gl.js does not have yet, in its own terms (requested of PRISM; each only where it is missing):
+ * glScaled as gl.js does glTranslated (single precision), glIsList for a list number glGenLists may have
+ * given, and GLX's current context and drawable -- SDL's window, always (PLIB's ssgInit asks).
+ */
+export function shimGL(M) {
+  const SHIM = { glScaled: (x, y, z) => M.rt.glScalef(Math.fround(x), Math.fround(y), Math.fround(z)), glIsList: (n) => (n ? 1 : 0),
+    glXGetCurrentContext: () => 1, glXGetCurrentDrawable: () => 1 };
+  for (const [k, f] of Object.entries(SHIM)) if (!M.rt[k]) M.rt[k] = f;
 }
 
 /**
@@ -104,8 +115,10 @@ export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'as
     }
     return { soname: table.soname, links: table.links, fns };
   };
-  const make = { sdl12, gl: () => viaPrism(glTable()), glu: () => viaPrism(gluTable()), asound, fxmesa: () => fxmesa(viaPrism(glTable())), glide };
+  shimGL(M);
+  const make = { sdl12, gl: () => viaPrism(glTable()), glu: () => viaPrism(gluTable()), asound, fxmesa: () => fxmesa(viaPrism(glTable())), glide,
+    glut: () => glutTable((x, n, a) => M.rt[n](...a)) };
   const unknown = names.find((n) => !make[n]);
-  if (unknown) throw new Error(`machine.hle: no library '${unknown}' (sdl12, gl, glu, asound, fxmesa, glide)`);
+  if (unknown) throw new Error(`machine.hle: no library '${unknown}' (sdl12, gl, glu, glut, asound, fxmesa, glide)`);
   return { libs: names.map((n) => make[n]()), backend, frame: () => { shown = true; return frame; }, size: () => size, gamma: () => backend.gamma, gl, M };
 }
