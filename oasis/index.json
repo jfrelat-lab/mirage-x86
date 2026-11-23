@@ -299,6 +299,22 @@
     ]
   },
   {
+    "name": "linux/supertuxkart-2010",
+    "title": "SuperTuxKart 0.6.2 (2009) — Debian squeeze's, its OpenGL drawn by WebGL",
+    "world": "linux",
+    "year": 2009,
+    "author": "The SuperTuxKart team, the Debian project, busybox, PRISM",
+    "thumb": "oasis/thumbs/linux-supertuxkart-2010.png",
+    "output": "window",
+    "tags": [
+      "game",
+      "OpenGL",
+      "SDL",
+      "OpenAL"
+    ],
+    "sound": true
+  },
+  {
     "name": "linux/tuxracer-2001",
     "title": "Tux Racer 0.61 (Sunspire Studios, 2001) — Debian woody's, its OpenGL drawn by WebGL",
     "world": "linux",

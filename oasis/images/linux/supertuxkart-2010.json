@@ -1,0 +1,120 @@
+{
+  "oasis": 1,
+  "title": "SuperTuxKart 0.6.2 (2009) \u2014 Debian squeeze's, its OpenGL drawn by WebGL",
+  "year": 2009,
+  "author": "The SuperTuxKart team, the Debian project, busybox, PRISM",
+  "world": "linux",
+  "machine": {
+    "cpu": "686",
+    "mem": 256,
+    "hle": [
+      "sdl12",
+      "gl",
+      "glu",
+      "glut"
+    ]
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/e/eglibc/libc6_2.11.3-4_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/e/eglibc/libc-bin_2.11.3-4_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/g/gcc-4.4/libgcc1_4.4.5-8_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/g/gcc-4.4/libstdc++6_4.4.5-8_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libxau/libxau6_1.0.6-1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libxdmcp/libxdmcp6_1.0.3-2_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libxcb/libxcb1_1.6-1+squeeze1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libx11/libx11-6_1.3.3-4+squeeze1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libxext/libxext6_1.1.2-1+squeeze1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libxi/libxi6_1.3-8_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/u/util-linux/libuuid1_2.17.2-9_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libi/libice/libice6_1.0.6-2_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libs/libsm/libsm6_1.1.1-1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libxt/libxt6_1.0.7-1+squeeze1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libx/libxmu/libxmu6_1.0.5-2_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/p/plib/libplib1_1.8.5-5+squeeze1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/e/enet/libenet0debian1_1.2.1-1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/o/openal-soft/libopenal1_1.12.854-2_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libo/libogg/libogg0_1.2.0~dfsg-1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libv/libvorbis/libvorbis0a_1.3.1-1+squeeze1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libv/libvorbis/libvorbisfile3_1.3.1-1+squeeze1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/s/supertuxkart/supertuxkart-data_0.6.2+dfsg1-2_all.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/s/supertuxkart/supertuxkart_0.6.2+dfsg1-2_i386.deb"
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/root"
+      ]
+    },
+    {
+      "run": "/sbin/ldconfig",
+      "cwd": "/"
+    }
+  ],
+  "entry": {
+    "run": "/usr/games/supertuxkart",
+    "cwd": "/root",
+    "env": {
+      "HOME": "/root",
+      "PATH": "/bin:/usr/bin:/usr/games"
+    }
+  },
+  "output": "window",
+  "notes": "SuperTuxKart 0.6.2 as Debian squeeze (2011) packaged it, the last before Irrlicht: its own i386 binary on eglibc 2.11, PLIB 1.8.5 for its scene graph, OpenAL Soft and Ogg Vorbis for its sound. Its libSDL, libGL, libGLU and the few GLUT shapes it uses are made in JavaScript: the OpenGL calls go to PRISM's gl.js, drawn by WebGL2; The sound is off for now (OpenAL Soft finds no device). Accelerate with Up, steer with Left and Right: the 4th place on the grid rolls back down its slope until you do.",
+  "tags": [
+    "game",
+    "OpenGL",
+    "SDL",
+    "OpenAL"
+  ],
+  "sound": true,
+  "thumb": "oasis/thumbs/linux-supertuxkart-2010.png",
+  "licenseName": "GNU General Public License (SuperTuxKart 0.6.2 and its data, as Debian main ships them)"
+}
