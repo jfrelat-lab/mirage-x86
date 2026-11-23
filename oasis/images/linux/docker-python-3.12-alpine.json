@@ -9,7 +9,7 @@
   },
   "layers": [
     {
-      "docker": "i386/python@sha256:09bf4247e233d49799c0676ffac1c0dbeda27152087379b0ef034db886be64f7",
+      "docker": "i386/python@sha256:9a8b2d12aab5e488812d95c17b74d47cf98e6e6952d2a749ee96e6dc0954efc8",
       "platform": "linux/386"
     }
   ],
@@ -28,5 +28,5 @@
     "console": "page"
   },
   "output": "window",
-  "notes": "Imported by node tools/oasis.mjs import docker://i386/python:3.12-alpine: the image's layers pulled from Docker Hub's registry (pinned by sha256:09bf4247e233d49799c0676ffac1c0dbeda27152087379b0ef034db886be64f7) and laid over one another, its whiteouts applied; no Docker."
+  "notes": "Imported by node tools/oasis.mjs import docker://i386/python:3.12-alpine: the image's layers pulled from Docker Hub's registry (pinned by sha256:9a8b2d12aab5e488812d95c17b74d47cf98e6e6952d2a749ee96e6dc0954efc8) and laid over one another, its whiteouts applied; no Docker."
 }

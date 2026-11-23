@@ -12,9 +12,14 @@ export async function onRequestGet({ request }) {
   const params = new URL(request.url).searchParams;
   // Docker Hub's public i386/ images (src/oasis-docker.js): an anonymous token, a manifest or a blob, nothing else.
   if (params.has('docker')) {
+    // What a digest names never changes: kept at the edge, so Docker Hub and its mirror see it once.
+    const fixed = params.has('blob') || /^sha256:/.test(params.get('manifest') || ''), key = new Request(request.url), cache = caches.default;
+    if (fixed) { const hit = await cache.match(key); if (hit) return hit; }
     const r = await relayDocker(params);
-    return new Response(r.body, { status: r.status, headers: { 'Content-Type': r.type || 'text/plain', 'Access-Control-Allow-Origin': '*',
-      ...(r.status === 200 && params.has('blob') ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {}), 'Cross-Origin-Resource-Policy': 'cross-origin' } });
+    const out = new Response(r.body, { status: r.status, headers: { 'Content-Type': r.type || 'text/plain', 'Access-Control-Allow-Origin': '*',
+      ...(r.status === 200 && fixed ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {}), 'Cross-Origin-Resource-Policy': 'cross-origin' } });
+    if (r.status === 200 && fixed) await cache.put(key, out.clone());
+    return out;
   }
   const target = relayTarget(new URL(request.url).searchParams.get('url') || '');
   if (!target) return new Response('oasis-fetch: not a host OASIS images use', { status: 403 });

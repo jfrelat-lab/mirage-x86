@@ -37,24 +37,45 @@ const platformOf = (p) => { const [os, architecture, variant] = String(p || 'lin
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 export async function sha256(bytes) { return 'sha256:' + hex(await crypto.subtle.digest('SHA-256', bytes)); }
 
+/*
+ * Where an i386/ image can be read: Docker Hub itself, and AWS's public mirror of Docker's official
+ * images (public.ecr.aws/docker/library/<name>), whose linux/386 manifests and layers are the same bytes
+ * under the same digests -- i386/<name> is the official image's linux/386 build. Docker Hub limits
+ * anonymous pulls per address, and the relay's addresses are shared: it reads the mirror first.
+ */
+export const REGISTRIES = {
+  hub: { base: REGISTRY, token: (repo) => `${AUTH}?service=registry.docker.io&scope=repository:${repo}:pull`, path: (repo) => repo },
+  ecr: { base: 'https://public.ecr.aws', token: (repo) => `https://public.ecr.aws/token/?scope=repository:${repo}:pull&service=public.ecr.aws`,
+    path: (repo) => `docker/library/${repo.slice(5)}` },
+};
+
 /**
  * A registry client over `fetch` (Node's, or a Worker's): { manifest(repo, ref) -> { json, bytes },
- * blob(repo, digest) -> Uint8Array }, an anonymous pull token kept per repository.
+ * blob(repo, digest) -> Uint8Array }, an anonymous pull token kept per registry and repository. `order`
+ * names the registries tried in turn (REGISTRIES): the next one when one refuses (a 429, a 404, an error).
  */
-export function registryClient(fetchFn = fetch) {
+export function registryClient(fetchFn = fetch, order = ['hub', 'ecr']) {
   const tokens = new Map();
-  const token = async (repo) => {
-    if (!tokens.has(repo)) {
-      const r = await fetchFn(`${AUTH}?service=registry.docker.io&scope=repository:${repo}:pull`);
-      if (!r.ok) throw new Error(`oasis: a Docker Hub token for ${repo}: HTTP ${r.status}`);
-      tokens.set(repo, (await r.json()).token);
+  const token = async (reg, path) => {
+    const k = reg.base + ' ' + path;
+    if (!tokens.has(k)) {
+      const r = await fetchFn(reg.token(path));
+      if (!r.ok) throw new Error(`a token: HTTP ${r.status}`);
+      tokens.set(k, (await r.json()).token);
     }
-    return tokens.get(repo);
+    return tokens.get(k);
   };
-  const get = async (repo, path, accept) => {
-    const r = await fetchFn(`${REGISTRY}/v2/${repo}/${path}`, { headers: { Authorization: `Bearer ${await token(repo)}`, ...(accept ? { Accept: accept } : {}) } });
-    if (!r.ok) throw new Error(`oasis: ${repo} ${path}: HTTP ${r.status}`);
-    return new Uint8Array(await r.arrayBuffer());
+  const get = async (repo, what, accept) => {
+    const tried = [];
+    for (const name of order) {
+      const reg = REGISTRIES[name], path = reg.path(repo);
+      try {
+        const r = await fetchFn(`${reg.base}/v2/${path}/${what}`, { headers: { Authorization: `Bearer ${await token(reg, path)}`, ...(accept ? { Accept: accept } : {}) } });
+        if (r.ok) return new Uint8Array(await r.arrayBuffer());
+        tried.push(`${name} HTTP ${r.status}`);
+      } catch (e) { tried.push(`${name} ${e.message}`); }
+    }
+    throw new Error(`oasis: ${repo} ${what}: ${tried.join(', ')}`);
   };
   return {
     manifest: async (repo, ref) => { const bytes = await get(repo, `manifests/${ref}`, ACCEPT); return { bytes, json: JSON.parse(new TextDecoder().decode(bytes)) }; },
@@ -64,14 +85,14 @@ export function registryClient(fetchFn = fetch) {
 
 /**
  * Pull an image: { config, layers: [{ digest, bytes }], digest } -- `bytes` each layer's tar as the
- * registry keeps it (gzip), `digest` the manifest's (or index's) the reference named, which pins it;
+ * registry keeps it (gzip), `digest` the platform's own image manifest's, which pins it -- the same on
+ * Docker Hub and its mirrors, where an index (i386/<name>'s, library/<name>'s) is not;
  * `withLayers: false` stops at the config. `client` is registryClient's interface (or the page's, through the relay).
  */
 export async function dockerPull(client, repo, ref, platform = 'linux/386', onProgress = () => {}, { withLayers = true } = {}) {
   const want = platformOf(platform);
   onProgress(`fetching ${repo}:${ref}'s manifest`);
   let { json: m, bytes } = await client.manifest(repo, ref);
-  const digest = DIGEST.test(ref) ? ref : await sha256(bytes);        // what pins the image: the tag's manifest (or index) as it is now
   if (DIGEST.test(ref) && (await sha256(bytes)) !== ref) throw new Error(`oasis: ${repo}@${ref}: the manifest does not match its digest`);
   if (m.manifests) {                                                   // an index: the platform's own manifest
     const e = m.manifests.find((x) => x.platform && x.platform.os === want.os && x.platform.architecture === want.architecture && (!want.variant || x.platform.variant === want.variant));
@@ -80,6 +101,7 @@ export async function dockerPull(client, repo, ref, platform = 'linux/386', onPr
     if ((await sha256(bytes)) !== e.digest) throw new Error(`oasis: ${repo}@${e.digest}: the manifest does not match its digest`);
   }
   if (!m.layers || !m.config) throw new Error(`oasis: ${repo}:${ref}: not an image manifest (${m.mediaType || 'no media type'})`);
+  const digest = await sha256(bytes);                                   // what pins the image: its linux/386 manifest
   const blob = async (d, what) => { onProgress(`fetching ${what}`); const b = await client.blob(repo, d.digest); if ((await sha256(b)) !== d.digest) throw new Error(`oasis: ${repo}: ${d.digest} does not match its digest`); return b; };
   const config = JSON.parse(new TextDecoder().decode(await blob(m.config, `${repo}'s config`)));
   if (config.architecture && config.architecture !== want.architecture) throw new Error(`oasis: ${repo}:${ref} is ${config.architecture}, not ${want.architecture}`);
@@ -123,14 +145,14 @@ export function dockerEntry(config) {
  * sends no credentials, and gets nothing but Docker Hub's public i386 images. Returns
  * { status, body, type }.
  */
-export async function relayDocker(params, fetchFn = fetch) {
+export async function relayDocker(params, fetchFn = fetch, order = ['ecr', 'hub']) {
   const repo = params.get('docker') || '', manifest = params.get('manifest'), blob = params.get('blob');
   if (!REPO.test(repo)) return { status: 403, body: 'oasis-fetch: only Docker Hub\'s i386/ repositories' };
   if (manifest !== null && !TAG.test(manifest) && !DIGEST.test(manifest)) return { status: 400, body: 'oasis-fetch: not a tag or digest' };
   if (blob !== null && !DIGEST.test(blob)) return { status: 400, body: 'oasis-fetch: not a digest' };
   if ((manifest === null) === (blob === null)) return { status: 400, body: 'oasis-fetch: a manifest or a blob' };
   try {
-    const c = registryClient(fetchFn);
+    const c = registryClient(fetchFn, order);
     const body = manifest !== null ? (await c.manifest(repo, manifest)).bytes : await c.blob(repo, blob);
     return { status: 200, body, type: manifest !== null ? 'application/json' : 'application/octet-stream' };
   } catch (e) { return { status: 502, body: `oasis-fetch: ${e.message}` }; }

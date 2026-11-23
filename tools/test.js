@@ -7347,7 +7347,7 @@ await (async () => { let got;
 // pulled and laid one over the other in a page (buildTree) and on disk (tools/oasis.mjs's dockerLayer): the
 // second layer's ".wh.a" removes the first's /etc/a, its opaque ".wh..wh..opq" what /var/x held below it
 // (its own file stays). A blob that does not match its digest is refused; the reference is pinned by the
-// digest of what the tag named; the entry is Entrypoint and Cmd, with HOME; the relay takes only i386/.
+// digest of the linux/386 manifest (the same on Docker Hub and its mirror, read when Hub answers 429); the entry is Entrypoint and Cmd, with HOME; the relay takes only i386/.
 await (async () => { let got;
   try { const { buildTree, tarWrite, tarEntries } = await import('../src/oasis-layers.js');
     const D = await import('../src/oasis-docker.js'), { dockerLayer } = await import('./oasis.mjs');
@@ -7376,11 +7376,15 @@ await (async () => { let got;
     const e = D.dockerEntry(JSON.parse(new TextDecoder().decode(blobs.get(config))));
     const q = (s2) => new URLSearchParams(s2), noNet = () => { throw new Error('fetched'); };
     const relay = [(await D.relayDocker(q('docker=library/ubuntu&manifest=latest'), noNet)).status, (await D.relayDocker(q('docker=i386/alpine&blob=sha256:00'), noNet)).status].join(',');
-    got = [page, disk, pulled.digest === await D.sha256(index), refused, refs, lib, `${e.run} ${e.args.join(' ')} ${e.cwd} ${e.env.HOME}`, relay].join(' ');
+    // Docker Hub refusing (429, its anonymous limit): the same digest read from AWS's mirror of the official images.
+    const asked = [], fake = async (url) => { asked.push(url.replace(/\?.*/, '')); const ok = (b) => ({ ok: true, status: 200, json: async () => ({ token: 't' }), arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) });
+      if (/token/.test(url)) return ok(enc.encode('{}')); if (url.startsWith('https://registry-1.docker.io')) return { ok: false, status: 429 }; return ok(man); };
+    const mirrored = (await D.registryClient(fake).manifest('i386/python', md)).bytes.length === man.length && asked.some((u) => u === `https://public.ecr.aws/v2/docker/library/python/manifests/${md}`);
+    got = [page, disk, pulled.digest === md, mirrored, refused, refs, lib, `${e.run} ${e.args.join(' ')} ${e.cwd} ${e.env.HOME}`, relay].join(' ');
     void tarEntries;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis: a Docker image pulled from a registry, its whiteouts applied in a page and on disk; digests, refs, entry, relay', got,
-    '/B/3 false/B/3/false true refused i386/debian:bookworm-slim,i386/alpine:latest refused /bin/tini -- app /srv /root 403,400'); })();
+    '/B/3 false/B/3/false true true refused i386/debian:bookworm-slim,i386/alpine:latest refused /bin/tini -- app /srv /root 403,400'); })();
 // The relay a page reads Debian's and idgames' archives through: only the hosts the images use, so it
 // is no open proxy — and those hosts are every one oasis/images/ names.
 await (async () => { let got;

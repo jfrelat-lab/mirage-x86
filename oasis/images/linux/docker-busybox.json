@@ -9,7 +9,7 @@
   },
   "layers": [
     {
-      "docker": "i386/busybox@sha256:33a3e037a6d1ad471f06029fd4bf9c9101bfd654b7524d9843535b4a070624cc",
+      "docker": "i386/busybox@sha256:79b6957454b0506796c042e9e2dfedd996c7efc93e701166d2dc9569bc9cc096",
       "platform": "linux/386"
     }
   ],
@@ -24,5 +24,5 @@
     "console": "page"
   },
   "output": "window",
-  "notes": "Imported by node tools/oasis.mjs import docker://i386/busybox:latest: the image's layers pulled from Docker Hub's registry (pinned by sha256:33a3e037a6d1ad471f06029fd4bf9c9101bfd654b7524d9843535b4a070624cc) and laid over one another, its whiteouts applied; no Docker."
+  "notes": "Imported by node tools/oasis.mjs import docker://i386/busybox:latest: the image's layers pulled from Docker Hub's registry (pinned by sha256:79b6957454b0506796c042e9e2dfedd996c7efc93e701166d2dc9569bc9cc096) and laid over one another, its whiteouts applied; no Docker."
 }
