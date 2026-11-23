@@ -141,7 +141,7 @@ export function sdl12() {
         const sym = e.sym || sdlKey(e.scancode || 0, e.e0);
         x.w8(ev, e.type === 'quit' ? SDL_QUIT : e.type === 'keyup' ? SDL_KEYUP : SDL_KEYDOWN);
         x.w8(ev + 1, 0); x.w8(ev + 2, e.type === 'keyup' ? 0 : 1); x.w8(ev + 4, e.scancode || 0); x.w32(ev + 8, sym); x.w32(ev + 12, 0);
-        x.w16(ev + 16, sym < 128 ? sym : 0);
+        x.w16(ev + 16, st.unicode && e.type !== 'keyup' && sym < 128 ? sym : 0);   // only while SDL_EnableUNICODE(1), as SDL fills it
         return 1;
       }],
       // SDL_GetMouseState(&x, &y): the buttons, the place.

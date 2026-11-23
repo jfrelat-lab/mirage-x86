@@ -8,7 +8,8 @@
 //   DOWNLOADS=<dir> keeps the page's downloads (the Record button's video, clicked with EVALS);
 //   SHOT=<file.png> takes a screenshot at the end; SHOTS=20,40 SHOTPREFIX=/tmp/x one at each of those seconds.
 //   DIAG=<js expression> DIAGFROM=<s> prints its value each second.
-//   KEYS items are separated by '|' when one holds a comma; "12:type=cd \\games\\liquiwar\n" types text.
+//   KEYS items are separated by '|' when one holds a comma; "12:type=cd \\games\\liquiwar\n" types text;
+//   "100:down=ArrowUp,130:up=ArrowUp" holds a key from one second to another.
 //   Works on dos.html (window.mirage is the app) and boot.html (window.mirage is the session).
 //
 // Why: a tab driven by automation in the app's own browser pane is hidden, and a hidden tab gets no
@@ -75,6 +76,9 @@ const press = async (key) => { const [vk, k] = CODES[key] || [key.toUpperCase().
   // Held ~100 ms, as a hand does: a game that polls a key-state table once a frame (C-Dogs) never
   // sees a press whose release came in the same frame.
   for (const type of ['rawKeyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: vk, key: k, code: key.length === 1 ? 'Key' + key.toUpperCase() : key }); if (type !== 'keyUp') await sleep(100); } };
+// A key held down from one second to another (KEYS "100:down=ArrowUp,130:up=ArrowUp"): a kart's accelerator.
+const hold = async (key, down) => { const [vk, k] = CODES[key] || [key.toUpperCase().charCodeAt(0), key];
+  await send('Input.dispatchKeyEvent', { type: down ? 'rawKeyDown' : 'keyUp', windowsVirtualKeyCode: vk, key: k, code: key.length === 1 ? 'Key' + key.toUpperCase() : key }); };
 const CHAR = (c) => /[a-z]/i.test(c) ? [c.toUpperCase().charCodeAt(0), c, 'Key' + c.toUpperCase()]
   : /[0-9]/.test(c) ? [c.charCodeAt(0), c, 'Digit' + c] : c === ' ' ? [32, ' ', 'Space'] : c === '\\' ? [220, '\\', 'Backslash']
   : c === '.' ? [190, '.', 'Period'] : c === '-' ? [189, '-', 'Minus'] : c === '/' ? [191, '/', 'Slash'] : c === ';' ? [186, ';', 'Semicolon'] : c === '\n' ? [13, 'Enter', 'Enter'] : null;
@@ -107,7 +111,7 @@ for (let s = 1; s <= SECS; s++) {
   if (process.env.STATUS) console.log('status', s, JSON.stringify(await evaluate("(document.getElementById('status') || {}).textContent")));
   // DIAG=<js expression>: its value each second (from DIAGFROM=<s> on), printed as JSON -- a machine's state the status line does not show.
   if (process.env.DIAG && s >= Number(process.env.DIAGFROM || 0)) console.log('diag', s, JSON.stringify(await evaluate(process.env.DIAG)));
-  for (const k of KEYS) if (k.t === s) { if (k.key.startsWith('type=')) await typeText(k.key.slice(5)); else await press(k.key); }
+  for (const k of KEYS) if (k.t === s) { if (k.key.startsWith('type=')) await typeText(k.key.slice(5)); else if (/^(down|up)=/.test(k.key)) await hold(k.key.slice(k.key.indexOf('=') + 1), k.key.startsWith('down')); else await press(k.key); }
   // PROBE=<s>: from that second, count port reads/writes and sample CS:IP and the mode for 5 s.
   if (Number(process.env.PROBE) === s) await evaluate(`(() => { const m = window.mirage.machine || window.mirage.mc, c = m.cpu; window.__io = new Map(); window.__ip = new Map();
     const r0 = c.ioRead, w0 = c.ioWrite; c.ioRead = (p, z) => { const k = 'r' + p.toString(16); window.__io.set(k, (window.__io.get(k) || 0) + 1); return r0(p, z); };
