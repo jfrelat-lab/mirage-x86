@@ -1,0 +1,32 @@
+{
+  "oasis": 1,
+  "title": "i386/python:3.12-alpine from Docker Hub (linux/386)",
+  "year": 2026,
+  "author": "Docker Hub, i386/python",
+  "world": "linux",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "docker": "i386/python@sha256:09bf4247e233d49799c0676ffac1c0dbeda27152087379b0ef034db886be64f7",
+      "platform": "linux/386"
+    }
+  ],
+  "entry": {
+    "run": "/usr/local/bin/python3",
+    "cwd": "/",
+    "env": {
+      "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "LANG": "C.UTF-8",
+      "GPG_KEY": "7169605F62C751356D054A26A821E680E5FA6305",
+      "PYTHON_VERSION": "3.12.16",
+      "PYTHON_SHA256": "b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "notes": "Imported by node tools/oasis.mjs import docker://i386/python:3.12-alpine: the image's layers pulled from Docker Hub's registry (pinned by sha256:09bf4247e233d49799c0676ffac1c0dbeda27152087379b0ef034db886be64f7) and laid over one another, its whiteouts applied; no Docker."
+}

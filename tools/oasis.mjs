@@ -5,6 +5,8 @@
 //   node tools/oasis.mjs list                       the images in oasis/images/
 //   node tools/oasis.mjs inspect <image>            its manifest, and which layers are cached
 //   node tools/oasis.mjs pull <image>               fetch and unpack its remote layers into the cache
+//   node tools/oasis.mjs import docker://i386/<name>[:tag] [--as=<image>] [--platform=linux/386]
+//                                                   an image of Docker Hub's, pulled from its registry (no Docker)
 //   node tools/oasis.mjs run <image> [args...]      run it (pulls first if needed); --user=<name> names the Linux user
 //                                                   (default $OASIS_USER, else this computer's login)
 //   node tools/oasis.mjs serve [--open]             every image, for machines.html (Linux images need it)
@@ -72,7 +74,7 @@ async function fetchBytes(src) {
 
 /** ustar / GNU tar, as `docker export` and Debian packages write it: files, directories, symbolic
  *  and hard links, long names. Device nodes and FIFOs are skipped (MIRAGE-LINUX provides /dev). */
-function untar(buf, dest) {
+function untar(buf, dest, { whiteouts = false } = {}) {
   let o = 0, longName = null;
   const str = (a, n) => { let s = ''; for (let i = 0; i < n && buf[a + i]; i++) s += String.fromCharCode(buf[a + i]); return s; };
   const oct = (a, n) => parseInt(str(a, n).trim() || '0', 8);
@@ -89,6 +91,7 @@ function untar(buf, dest) {
     if (type === 'x' || type === 'g') continue;                                // pax headers
     name = name.replace(/^\.?\/+/, '');
     if (!name || name.split('/').includes('..')) continue;
+    if (whiteouts && /(^|\/)\.wh\./.test(name)) continue;            // a Docker layer's whiteouts: applied before (dockerLayer)
     const to = join(dest, name);
     if (type === '5') { mkdirSync(to, { recursive: true }); continue; }
     mkdirSync(dirname(to), { recursive: true });
@@ -118,19 +121,32 @@ function undeb(buf, dest) {
   throw new Error('oasis: no data.tar in the .deb');
 }
 
+/**
+ * A Docker image's layer over what the layers below it made in `dest`: its whiteouts first -- ".wh.<name>"
+ * removes <name>, ".wh..wh..opq" what its directory held -- then its files (src/oasis-docker.js's applyLayer).
+ */
+async function dockerLayer(buf, dest) {
+  const { applyLayer } = await import(join(ROOT, 'src', 'oasis-docker.js'));
+  const { tarEntries } = await import(join(ROOT, 'src', 'oasis-layers.js'));
+  const tar = buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf) : buf;
+  const inside = (p) => { const to = join(dest, p); return relative(dest, to).startsWith('..') ? null : to; };
+  applyLayer(tarEntries(tar), {
+    remove: (p) => { const to = inside(p); if (to) rmSync(to, { recursive: true, force: true }); },
+    children: (d) => { const to = inside(d || '.'); try { return to && !isLink(to) ? readdirSync(to) : []; } catch { return []; } },
+    add: () => untar(tar, dest, { whiteouts: true }),
+  });
+}
+
 async function pullLayer(l) {
   const dir = cacheDir(l);
   if (existsSync(join(dir, '.oasis-done'))) return dir;
   rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true });
   if (l.docker) {
-    process.stderr.write(`oasis: exporting the Docker image ${l.docker} (${l.platform || 'linux/386'})\n`);
-    const c = spawnSync('docker', ['create', '--platform', l.platform || 'linux/386', l.docker], { encoding: 'utf8' });
-    if (c.status !== 0) throw new Error(`oasis: docker create ${l.docker}: ${c.stderr}`);
-    const id = c.stdout.trim();
-    const e = spawnSync('docker', ['export', id], { maxBuffer: 1 << 30 });
-    spawnSync('docker', ['rm', id]);
-    if (e.status !== 0) throw new Error(`oasis: docker export: ${e.stderr}`);
-    untar(e.stdout, dir);
+    // Pulled from Docker Hub's registry itself (src/oasis-docker.js): no docker command, no daemon.
+    const { dockerRef, dockerPull, registryClient } = await import(join(ROOT, 'src', 'oasis-docker.js'));
+    const { repo, ref } = dockerRef(l.docker);
+    const { layers } = await dockerPull(registryClient(), repo, ref, l.platform || 'linux/386', (t) => process.stderr.write(`oasis: ${t}\n`));
+    for (const { bytes } of layers) await dockerLayer(Buffer.from(bytes), dir);
   } else if (l.deb) undeb(await fetchBytes(l.deb), l.into ? join(dir, l.into) : dir);
   else if (l.tar) { const b = await fetchBytes(l.tar); untar(/\.(tgz|gz)$/.test(l.tar) ? gunzipSync(b) : b, l.into ? join(dir, l.into) : dir); }
   else if (l.busybox) {                // a static busybox, and a link per applet as `busybox --install -s` makes
@@ -332,6 +348,11 @@ function serve(img, host, port = 0) {
         } catch (e) { return send(404, String(e.message)); }
         return send(400, 'unknown');
       }
+      if (u.pathname === '/oasis-fetch' && u.searchParams.has('docker')) {   // Docker Hub's i386 images, for a page (src/oasis-docker.js)
+        const { relayDocker } = await import(join(ROOT, 'src', 'oasis-docker.js'));
+        const r = await relayDocker(u.searchParams);
+        return send(r.status, r.status === 200 ? Buffer.from(r.body) : r.body, r.type);
+      }
       if (u.pathname === '/oasis-fetch') {                                    // the relay a page uses to build an image itself (src/oasis-web.js)
         const { relayTarget } = await import(join(ROOT, 'src', 'oasis-hosts.js'));
         const target = relayTarget(u.searchParams.get('url') || '');
@@ -401,7 +422,7 @@ async function run(img, args, out) {
     const spec = join(CACHE, 'run-' + process.pid + '.json');
     mkdirSync(CACHE, { recursive: true });
     writeFileSync(spec, JSON.stringify({ dirs: root.dirs, files: [...root.files], links: [...root.links], mkdirs: [...root.mkdirs] }));
-    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console ? '1' : '', MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}), MIRAGE_LXUSER: hostUser(), MIRAGE_LXHZ: String((img.machine && img.machine.hz) || ''), ...(img.machine && img.machine.vga ? { MIRAGE_VGA: img.machine.vga } : {}), ...(img.machine && img.machine.hle && !process.env.MIRAGE_LXHLE ? { MIRAGE_LXHLE: img.machine.hle.join(',') } : {}) }, () => rmSync(spec, { force: true }));
+    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console === true ? '1' : '', MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}), MIRAGE_LXUSER: hostUser(), MIRAGE_LXHZ: String((img.machine && img.machine.hz) || ''), ...(img.machine && img.machine.vga ? { MIRAGE_VGA: img.machine.vga } : {}), ...(img.machine && img.machine.hle && !process.env.MIRAGE_LXHLE ? { MIRAGE_LXHLE: img.machine.hle.join(',') } : {}) }, () => rmSync(spec, { force: true }));
   }
   throw new Error(`oasis: world "${world}" cannot run yet`);
 }
@@ -428,7 +449,7 @@ function imageIndex() {
 const indexText = () => JSON.stringify(imageIndex(), null, 2) + '\n';
 
 // ---- command line ---------------------------------------------------------------------------------
-export { findImage, listImages, linuxRoot, hostOver, untar, undeb, indexText, dosDir };
+export { findImage, listImages, linuxRoot, hostOver, untar, undeb, indexText, dosDir, dockerLayer };
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [cmd, name, ...rest] = process.argv.slice(2);
   const flags = rest.filter((a) => a === '--window' || a === '--terminal' || a === '--serve'), args = rest.filter((a) => !flags.includes(a) && !a.startsWith('--user='));
@@ -444,6 +465,32 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       }
     }
     else if (cmd === 'pull') { await pull(findImage(name)); console.error('oasis: pulled'); }
+    // import docker://i386/<name>[:tag]: an OASIS image of a Docker Hub image, pinned by its digest, its
+    // entry the image's own (Entrypoint and Cmd, WorkingDir, Env), then pulled -- no Docker needed.
+    else if (cmd === 'import') {
+      const { dockerRef, dockerPull, registryClient, dockerEntry } = await import(join(ROOT, 'src', 'oasis-docker.js'));
+      const { repo, ref } = dockerRef(name), platform = (rest.find((a) => a.startsWith('--platform=')) || '--platform=linux/386').slice(11);
+      const as = (rest.find((a) => a.startsWith('--as=')) || '').slice(5) || `linux/docker-${repo.split('/')[1]}${ref === 'latest' || ref.startsWith('sha256:') ? '' : '-' + ref.replace(/[^A-Za-z0-9_.-]/g, '-')}`;
+      const { config, digest } = await dockerPull(registryClient(), repo, ref, platform, (t) => process.stderr.write(`oasis: ${t}\n`), { withLayers: false });
+      const year = Number(String(config.created || '').slice(0, 4)) || new Date().getFullYear();
+      const img = { oasis: 1, title: `${repo}:${ref} from Docker Hub (${platform})`, year, author: `Docker Hub, ${repo}`, world: 'linux', machine: { cpu: '686' },
+        layers: [{ docker: `${repo}@${digest}`, platform }], entry: { ...dockerEntry(config), console: 'page' }, output: 'window',
+        notes: `Imported by node tools/oasis.mjs import docker://${repo}:${ref}: the image's layers pulled from Docker Hub's registry (pinned by ${digest}) and laid over one another, its whiteouts applied; no Docker.` };
+      const p = join(IMAGES, as + '.json');
+      mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(img, null, 2) + '\n');
+      console.error(`oasis: wrote ${relative(ROOT, p)}`);
+      await pull(findImage(as));
+      // A command named without its path is found as Docker finds it: on the image's PATH, in its layers.
+      if (!img.entry.run.startsWith('/')) {
+        const root = cacheDir(img.layers[0]), dirs = (img.entry.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin').split(':');
+        const hit = dirs.map((d) => `${d.replace(/\/$/, '')}/${img.entry.run}`).find((f) => existsSync(join(root, f)) || isLink(join(root, f)));
+        if (!hit) throw new Error(`oasis: ${img.entry.run} is not on the image's PATH`);
+        img.entry.run = hit;
+      }
+      if (!img.entry.env.TERM) img.entry.env.TERM = 'linux';              // the console it is shown on (the VGA text screen)
+      writeFileSync(p, JSON.stringify(img, null, 2) + '\n');
+      console.error(`oasis: pulled; run it with node tools/oasis.mjs run ${as}`);
+    }
     else if (cmd === 'index') { writeFileSync(join(ROOT, 'oasis', 'index.json'), indexText()); console.error('oasis: wrote oasis/index.json'); }
     else if (cmd === 'serve') {
       const port = Number(process.env.OASIS_PORT) || 0;
@@ -455,6 +502,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       await new Promise(() => {});
     }
     else if (cmd === 'run') { SERVE_ONLY = flags.includes('--serve'); await run(findImage(name), args, flags.includes('--window') || SERVE_ONLY ? 'window' : flags.includes('--terminal') ? 'terminal' : null); }
-    else { console.error('usage: node tools/oasis.mjs list | inspect <image> | pull <image> | run <image> [--window|--terminal] [args...]'); process.exitCode = 2; }
+    else { console.error('usage: node tools/oasis.mjs list | inspect <image> | pull <image> | import docker://i386/<name>[:tag] [--as=<image>] | run <image> [--window|--terminal] [args...]'); process.exitCode = 2; }
   } catch (e) { console.error(String(e.message || e)); process.exitCode = 1; }
 }

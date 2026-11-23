@@ -1,0 +1,28 @@
+{
+  "oasis": 1,
+  "title": "i386/busybox:latest from Docker Hub (linux/386)",
+  "year": 2026,
+  "author": "Docker Hub, i386/busybox",
+  "world": "linux",
+  "machine": {
+    "cpu": "686"
+  },
+  "layers": [
+    {
+      "docker": "i386/busybox@sha256:33a3e037a6d1ad471f06029fd4bf9c9101bfd654b7524d9843535b4a070624cc",
+      "platform": "linux/386"
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "cwd": "/",
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "notes": "Imported by node tools/oasis.mjs import docker://i386/busybox:latest: the image's layers pulled from Docker Hub's registry (pinned by sha256:33a3e037a6d1ad471f06029fd4bf9c9101bfd654b7524d9843535b4a070624cc) and laid over one another, its whiteouts applied; no Docker."
+}

@@ -25,7 +25,9 @@ send no CORS headers — and unpacked in the page, `busybox` and `run` layers ru
 archives and run layers' results kept in the browser's Cache Storage. The relay lets through only
 the hosts the images use (`src/oasis-hosts.js`): `functions/oasis-fetch.js` on Cloudflare Pages,
 `node tools/oasis.mjs serve --static` on a computer (the files and the relay only, as such a host
-serves them). Images made from a Docker export still need the server: the page has no docker.
+serves them). A `docker` layer comes the same way: the relay's `?docker=<i386/repo>&manifest=|blob=`
+fetches Docker Hub's registry with an anonymous token, for its public `i386/` images only
+(`src/oasis-docker.js`).
 
 ## The window
 
@@ -63,7 +65,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `world` | `dos` (MIRAGE-DOS: DOS, BIOS, XMS, EMS and DPMI in the emulator), `linux` (MIRAGE-LINUX: Linux system calls answered in JavaScript) or `win32` (MIRAGE-WIN32: a PE `.exe`, every DLL in JavaScript; in `machines.html?m=win32` through `serve`, not yet by `oasis run`). Planned: `win16`, `pc` (boot a disk or CD image) |
 | `machine` | `cpu` — a profile of `src/cpu-profile.js` (`386`, `586`, `pentium`, `pentiummmx`, `686`, `pentiumpro`, `pentium3`, `pentium4` — the Direct3D 9 intros want SSE or SSE2); `mem` — MiB; `vga` — `cirrus` for a Cirrus Logic CL-GD5446 on the VGA; `hz` — (Linux) timeouts in clock ticks as a 1997 kernel counted them (`100`: Linux 2.0's 10 ms ticks, which period programs paced on), else to the microsecond; `fonts` — (Win32) the TrueType fonts the program selects, `["Tahoma"]`: the page reads the visitor's own (Chrome asks first) or uses DejaVu Sans, regular and bold — MIRAGE ships no Windows font |
 | `layers` | the file tree, bottom to top, later layers winning (below) |
-| `entry` | `run` — the program (a DOS name, or a path in the Linux tree); `args`; `env`; `cwd`; `console` — Linux stdio on a virtual console, `/dev/tty1` (SVGAlib wants one); `root` — Windows: the folder that is C:'s root, the program in a folder of it keeping its path there (default: the program's own folder) |
+| `entry` | `run` — the program (a DOS name, or a path in the Linux tree); `args`; `env`; `cwd`; `console` — Linux stdio on a virtual console, `/dev/tty1` (SVGAlib wants one); `"page"`: on the page's console only, a terminal run keeping its own stdio (an imported Docker image's shell); `root` — Windows: the folder that is C:'s root, the program in a folder of it keeping its path there (default: the program's own folder) |
 | `output` | `window` or `terminal`, when the command line does not say |
 | `user` | (Linux) the user's name by default, `player` without it. It is set on uid 0, first in `/etc/passwd`, with `USER` and `LOGNAME`: `oasis run` gives the computer's login (or `--user=<name>`, `$OASIS_USER`), the machines page the visitor's choice (its User button, kept in the browser) |
 | `license`, `licenseName`, `caution`, `notes` | for people: where the redistribution terms are (a URL or a file of this repository) and what they are called; a note shown first where the terms are not a free licence (Quake's shareware); what the image is made of. oasis.html shows them, with each layer's origin, under the image's *source & licence* |
@@ -81,7 +83,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `{ "deb": URL }` | a Debian package | its `data.tar` |
 | `{ "busybox": path or URL, "into": dir }` | a static busybox | `/bin/busybox` (or `into`) and a link per applet, as `busybox --install -s` makes them — the list is the binary's own `--list`, run on MIRAGE-LINUX at `pull` |
 | `{ "zip": path or URL, "lha": member, "into": dir, "files": { name: path } }` | an LHA archive inside a ZIP (an "LHA's SFX" self-extractor, as id's `quake106.zip` holds) — `-lh0-` and `-lh5-`, read by `src/lha.js` | the files `files` names, renamed (all of them without it), under `into` |
-| `{ "docker": image, "platform": "linux/386" }` | a Docker image | its whole file system (`docker create` + `docker export`; Docker is needed for `pull` only) |
+| `{ "docker": image, "platform": "linux/386" }` | a Docker Hub image, `i386/<name>:<tag>` or `@sha256:<digest>` | its root file system: the manifest for the platform (an index resolved to linux/386), then each layer from the registry, every blob checked against its digest, laid in order with their whiteouts (`.wh.<name>`, `.wh..wh..opq`) — no Docker, in Node and in a page (`src/oasis-docker.js`) |
 | `{ "dir": path }` | a directory of the repository | used where it is |
 | `{ "links": { path: target } }` | symbolic links | — |
 | `{ "mkdir": [paths] }` | empty directories | — |
@@ -119,6 +121,7 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 | `linux/doom-mini` | linux | a Linux with no distribution: busybox 1.35 (static, musl, 1 MB, 402 applets), the three a.out libraries linuxsdoom needs, the binary and its WAD — about 4 MB. A busybox shell on the console; `doom` starts the game |
 | `linux/quake-1997` | linux | `squake` 1.1, id's svgalib Quake of August 1997 — an ELF binary on libc5 and svgalib from Debian 1.3, the shareware `pak0.pak` from id's own `quake106.zip` (its LHA self-extractor read by `src/lha.js`). It plays its demos with sound — /dev/dsp in mmap mode, as Quake's snd_linux.c uses it; run with `-noudp` (no network yet) |
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
+| `linux/docker-busybox`, `linux/docker-python-3.12-alpine` | linux | made by `node tools/oasis.mjs import docker://i386/busybox` and `docker://i386/python:3.12-alpine`: Docker Hub's images pinned by digest, their entry the image's own (Entrypoint and Cmd, WorkingDir, Env); BusyBox's shell and Python 3.12's REPL on the page's console, or `run ... --terminal -c "..."` |
 | `linux/clod-2008`, `laminator-2009`, `makeit4k-2005`, `metatunnel-2009`, `retrospection-2010`, `ribbon-2009`, `yellowrose-2003` | linux | the scene's Linux OpenGL intros of 2003-2010, their libSDL, libGL and libGLU made in JavaScript, drawn by PRISM's `gl.js` |
 | `win32/ribbon-2009`, `flow2-2007`, `chocolux-2008`, `retrospection-2010`, `paradistance-2009`, `hartverdrahtet-2012`, `absoluteterritory-2017` | win32 | the scene's Windows OpenGL intros, packed by Crinkler: the process laid out as Windows XP lays it out, opengl32 on PRISM's `gl.js`, the music through waveOut |
 | `win32/cdak-2010`, `yeswecan-2009`, `photonrace2-2008`, `elevated-2009`, `ergon-2010` | win32 | the scene's Direct3D 9 intros: d3d9.dll and d3dx9 in JavaScript, HLSL translated and drawn by PRISM's `d3d9.js` |

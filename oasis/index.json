@@ -42,6 +42,22 @@
     "output": "terminal"
   },
   {
+    "name": "linux/docker-busybox",
+    "title": "i386/busybox:latest from Docker Hub (linux/386)",
+    "world": "linux",
+    "year": 2026,
+    "author": "Docker Hub, i386/busybox",
+    "output": "window"
+  },
+  {
+    "name": "linux/docker-python-3.12-alpine",
+    "title": "i386/python:3.12-alpine from Docker Hub (linux/386)",
+    "world": "linux",
+    "year": 2026,
+    "author": "Docker Hub, i386/python",
+    "output": "window"
+  },
+  {
     "name": "linux/doom-1994",
     "title": "Linux DOOM 1.8 for SVGAlib (id Software, December 1994)",
     "world": "linux",

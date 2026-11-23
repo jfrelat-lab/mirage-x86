@@ -391,7 +391,7 @@ async function linux(world = 'linux') {
     // A static host: the images are listed (oasis/index.json) and their manifests are beside the page
     // (oasis/images/); the page builds an image's tree itself, its archives fetched through the
     // oasis-fetch relay (Debian's and idgames' servers send no CORS headers) and kept in the browser.
-    // An image made from a Docker export needs the docker command: the OASIS server, on a computer.
+    // A Docker image's layers come from Docker Hub's registry through the same relay (src/oasis-docker.js).
     let listed = [];
     try { listed = (await (await fetch('oasis/index.json')).json()).filter((m) => m.world === world && m.output === 'window'); } catch { /* none */ }
     const needs = (m, why) => {
@@ -401,7 +401,7 @@ async function linux(world = 'linux') {
         ${m ? `<p>${esc(why)}</p>` : `<p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
         OASIS images, which bring their files from where their authors published them: Debian's archive, idgames. Choose an image:
         this page fetches its layers once, keeps them in your browser, and starts it.</p>`}
-        <p class="dim">On a computer, every image, Docker ones included: <code>node tools/oasis.mjs serve --open</code></p>
+        <p class="dim">On a computer, every image: <code>node tools/oasis.mjs serve --open</code>; a Docker Hub i386 image: <code>node tools/oasis.mjs import docker://i386/alpine</code></p>
         <p><a href="oasis.html${m ? '#' + esc(m.name) : ''}">See ${m ? 'this image\'s' : 'each image\'s'} recipe →</a></p></div>`;
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
     };
@@ -410,7 +410,6 @@ async function linux(world = 'linux') {
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(items[+el.dataset.i].id === m.name));
       let img;
       try { img = { ...(await (await fetch(`oasis/images/${m.name}.json`)).json()), name: m.name }; } catch { return needs(m, 'Its manifest could not be read.'); }
-      if ((img.layers || []).some((l) => l.docker)) return needs(m, 'This image is made from a Docker image\'s export, which takes the docker command: it runs from the OASIS server on a computer.');
       over.hidden = true; setState('building', ''); showLog();
       log(`${m.name}: ${(img.layers || []).length} layers`);
       const [{ buildTree }, { webIO }] = await Promise.all([import('./oasis-layers.js'), import('./oasis-web.js')]);

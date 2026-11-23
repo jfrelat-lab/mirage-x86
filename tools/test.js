@@ -7342,6 +7342,45 @@ await (async () => { let got;
       h.lstat('/usr/lib/libz.so').target, h.lstat('/tmp').type, dec('/built'), h.lstat('/bin/old'), h.list('/bin').join()].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis in a page: tar, deb, file, links, mkdir, a run layer, case kept apart', got, 'XF86_NONE policy 755 elf conf libz.so.1 dir made  tool'); })();
+// Docker Hub's images without Docker (src/oasis-docker.js): a registry made here -- an index whose linux/386
+// entry is taken over its amd64 one, the manifest, the config, two gzipped layers, every blob by its sha256 --
+// pulled and laid one over the other in a page (buildTree) and on disk (tools/oasis.mjs's dockerLayer): the
+// second layer's ".wh.a" removes the first's /etc/a, its opaque ".wh..wh..opq" what /var/x held below it
+// (its own file stays). A blob that does not match its digest is refused; the reference is pinned by the
+// digest of what the tag named; the entry is Entrypoint and Cmd, with HOME; the relay takes only i386/.
+await (async () => { let got;
+  try { const { buildTree, tarWrite, tarEntries } = await import('../src/oasis-layers.js');
+    const D = await import('../src/oasis-docker.js'), { dockerLayer } = await import('./oasis.mjs');
+    const enc = new TextEncoder(), gz = async (u8) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+    const f = (path, t) => ({ path, type: 'file', mode: 0o644, data: enc.encode(t) });
+    const l1 = await gz(tarWrite([{ path: 'etc', type: 'dir', mode: 0o755 }, f('etc/a', 'A'), f('etc/b', 'B'), { path: 'var/x', type: 'dir', mode: 0o755 }, f('var/x/1', '1'), f('var/x/2', '2')]));
+    const l2 = await gz(tarWrite([f('etc/.wh.a', ''), f('var/x/.wh..wh..opq', ''), f('var/x/3', '3')]));
+    const blobs = new Map(), put = async (b) => { const d = await D.sha256(b); blobs.set(d, b); return d; }, js = (o) => enc.encode(JSON.stringify(o));
+    const config = await put(js({ architecture: '386', config: { Entrypoint: ['/bin/tini', '--'], Cmd: ['app'], Env: ['PATH=/bin'], WorkingDir: '/srv' } }));
+    const man = js({ mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { digest: config }, layers: [{ mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: await put(l1), size: l1.length }, { mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: await put(l2), size: l2.length }] });
+    const amd = js({ layers: [], config: { digest: config } }), md = await D.sha256(man), ad = await D.sha256(amd);
+    const index = js({ manifests: [{ digest: ad, platform: { os: 'linux', architecture: 'amd64' } }, { digest: md, platform: { os: 'linux', architecture: '386' } }] });
+    const manifests = new Map([['latest', index], [md, man], [ad, amd]]);
+    const client = { manifest: async (repo, ref) => ({ bytes: manifests.get(ref), json: JSON.parse(new TextDecoder().decode(manifests.get(ref))) }), blob: async (repo, d) => blobs.get(d) };
+    const tree = await buildTree({ layers: [{ docker: 'i386/test' }] }, { docker: client, fetchBytes: async () => null });
+    const h = tree.host(), page = [h.lstat('/etc/a'), new TextDecoder().decode(h.read('/etc/b')), h.list('/var/x').join(',')].join('/');
+    const fsm = await import('fs'), pm = await import('path'), os = await import('os'), dir = fsm.mkdtempSync(pm.join(os.tmpdir(), 'oasis-docker-'));
+    const pulled = await D.dockerPull(client, 'i386/test', 'latest');
+    for (const { bytes } of pulled.layers) await dockerLayer(Buffer.from(bytes), dir);
+    const disk = [fsm.existsSync(pm.join(dir, 'etc/a')), fsm.readFileSync(pm.join(dir, 'etc/b'), 'utf8'), fsm.readdirSync(pm.join(dir, 'var/x')).join(','), fsm.existsSync(pm.join(dir, 'var/x/.wh..wh..opq'))].join('/');
+    fsm.rmSync(dir, { recursive: true, force: true });
+    const bad = { ...client, blob: async (r, d) => (d === config ? js({ architecture: '386' }) : blobs.get(d)) };
+    const refused = await D.dockerPull(bad, 'i386/test', 'latest').then(() => 'taken', (e) => /match its digest/.test(e.message) ? 'refused' : e.message);
+    const refs = [D.dockerRef('docker://i386/debian:bookworm-slim'), D.dockerRef('i386/alpine')].map((r) => `${r.repo}:${r.ref}`).join(',');
+    let lib = 'taken'; try { D.dockerRef('library/ubuntu'); } catch { lib = 'refused'; }
+    const e = D.dockerEntry(JSON.parse(new TextDecoder().decode(blobs.get(config))));
+    const q = (s2) => new URLSearchParams(s2), noNet = () => { throw new Error('fetched'); };
+    const relay = [(await D.relayDocker(q('docker=library/ubuntu&manifest=latest'), noNet)).status, (await D.relayDocker(q('docker=i386/alpine&blob=sha256:00'), noNet)).status].join(',');
+    got = [page, disk, pulled.digest === await D.sha256(index), refused, refs, lib, `${e.run} ${e.args.join(' ')} ${e.cwd} ${e.env.HOME}`, relay].join(' ');
+    void tarEntries;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis: a Docker image pulled from a registry, its whiteouts applied in a page and on disk; digests, refs, entry, relay', got,
+    '/B/3 false/B/3/false true refused i386/debian:bookworm-slim,i386/alpine:latest refused /bin/tini -- app /srv /root 403,400'); })();
 // The relay a page reads Debian's and idgames' archives through: only the hosts the images use, so it
 // is no open proxy — and those hosts are every one oasis/images/ names.
 await (async () => { let got;

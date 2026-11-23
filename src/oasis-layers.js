@@ -194,6 +194,30 @@ export async function runOn(tree, argv, { cwd = '/', env = [], mem = 64, cpu = '
   return { status: lx.signal ? 128 + lx.signal : lx.status, out, lx };
 }
 
+/**
+ * A `docker` layer: the image's own layers pulled from Docker Hub's registry (io.docker: through the relay
+ * in a page) and laid one over the other, their whiteouts applied (src/oasis-docker.js). Each layer's
+ * bytes are kept by digest in io.cache, so a second visit fetches only the manifest.
+ */
+async function dockerLayers(tree, l, io, say) {
+  const { dockerRef, dockerPull, applyLayer } = await import('./oasis-docker.js');
+  if (!io.docker) throw new Error('oasis: this host has no Docker registry client (io.docker)');
+  const { repo, ref } = dockerRef(l.docker);
+  const cached = { manifest: io.docker.manifest, blob: async (r, d) => {
+    const hit = io.cache ? await io.cache.get('docker:' + d) : null; if (hit) return hit;
+    const b = await io.docker.blob(r, d); if (io.cache) await io.cache.put('docker:' + d, b); return b;
+  } };
+  const { layers } = await dockerPull(cached, repo, ref, l.platform || 'linux/386', say);
+  for (const [i, { bytes }] of layers.entries()) {
+    say(`unpacking layer ${i + 1} of ${layers.length}`);
+    applyLayer(tarEntries(isGzip(bytes) ? await gunzip(bytes) : bytes), {
+      remove: (p) => tree.remove(norm('/' + p)),
+      children: (d) => [...(tree.kids.get(norm('/' + d)) || [])],
+      add: (es) => tree.addEntries(es),
+    });
+  }
+}
+
 const RUN_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';   // Docker's default PATH for a RUN
 
 /**
@@ -202,7 +226,8 @@ const RUN_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
  *   cache: { get(key) -> Promise<Uint8Array|null>, put(key, bytes) }   for run layers' results (optional)
  *   onProgress(text)                          what is happening, for a status line
  *   onOutput(text)                            a run layer's output
- * Returns the Tree. Throws on a layer this host cannot make (`docker`).
+ *   docker: { manifest(repo, ref), blob(repo, digest) }   Docker Hub's registry (src/oasis-docker.js), for `docker` layers
+ * Returns the Tree.
  */
 export async function buildTree(img, io) {
   const tree = new Tree(), say = io.onProgress || (() => {});
@@ -210,8 +235,8 @@ export async function buildTree(img, io) {
   let chain = '';
   for (const l of img.layers || []) {
     chain = await sha256(chain + JSON.stringify(l));
-    if (l.docker) throw new Error(`oasis: ${img.name || 'this image'} is a Docker image's export — it needs node tools/oasis.mjs`);
-    if (l.deb) tree.addEntries(tarEntries(await debData(await get(l.deb))), l.into || '');
+    if (l.docker) await dockerLayers(tree, l, io, say);
+    else if (l.deb) tree.addEntries(tarEntries(await debData(await get(l.deb))), l.into || '');
     else if (l.tar) { let b = await get(l.tar); if (isGzip(b)) b = await gunzip(b); tree.addEntries(tarEntries(b), l.into || ''); }
     else if (l.zip && l.files && !l.lha) {        // files of a ZIP, each put where `files` says
       const entries = await unzip(await get(l.zip));

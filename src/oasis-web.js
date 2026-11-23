@@ -40,5 +40,8 @@ export function webIO({ relay = 'oasis-fetch', onProgress = () => {} } = {}) {
     if (remote) await put('url:' + src, b);
     return b;
   };
-  return { fetchBytes, cache: { get, put }, onProgress };
+  // Docker Hub's i386 images through the same relay (?docker=...): src/oasis-docker.js.
+  const docker = { manifest: async (...a) => (await import('./oasis-docker.js')).relayClient(relay).manifest(...a),
+    blob: async (...a) => (await import('./oasis-docker.js')).relayClient(relay).blob(...a) };
+  return { fetchBytes, cache: { get, put }, onProgress, docker };
 }

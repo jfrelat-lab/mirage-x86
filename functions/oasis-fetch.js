@@ -6,8 +6,16 @@
 // the page read them. Nothing is stored here: Cloudflare's cache keeps a copy a while, the browser
 // its own (Cache Storage). The same rule answers on a computer: tools/oasis.mjs serve.
 import { relayTarget } from '../src/oasis-hosts.js';
+import { relayDocker } from '../src/oasis-docker.js';
 
 export async function onRequestGet({ request }) {
+  const params = new URL(request.url).searchParams;
+  // Docker Hub's public i386/ images (src/oasis-docker.js): an anonymous token, a manifest or a blob, nothing else.
+  if (params.has('docker')) {
+    const r = await relayDocker(params);
+    return new Response(r.body, { status: r.status, headers: { 'Content-Type': r.type || 'text/plain', 'Access-Control-Allow-Origin': '*',
+      ...(r.status === 200 && params.has('blob') ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {}), 'Cross-Origin-Resource-Policy': 'cross-origin' } });
+  }
   const target = relayTarget(new URL(request.url).searchParams.get('url') || '');
   if (!target) return new Response('oasis-fetch: not a host OASIS images use', { status: 403 });
   const r = await fetch(target, { cf: { cacheEverything: true, cacheTtl: 7 * 86400 } });
