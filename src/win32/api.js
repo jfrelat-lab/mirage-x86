@@ -4399,7 +4399,14 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
   // Where WebGL's picture goes: a dialog application's desktop (deskMode: Delphi's forms) puts it in the
   // window its device was made for (st.glWindow: GameMaker 8's runner form), at its place on the desktop --
   // it went in the hidden TApplication window's client area, of no size, and the form stayed black.
-  const glRect = () => { const w = st.glWindow && win(st.glWindow); if (!w || w.dead || !deskMode()) return null; const o = screenOrigin(st.glWindow); return { x: o.x, y: o.y, w: w.w, h: w.h, screen: st.desk }; };
+  // Outside that desktop, a device window that is not the main one -- Unreal Tournament's viewport, its main
+  // window (to MIRAGE) the hidden start-up dialog -- has the picture in its client area: it went in the
+  // dialog's, small and off to one side.
+  const glRect = () => {
+    const w = st.glWindow && win(st.glWindow); if (!w || w.dead) return null;
+    if (!deskMode()) { const r = (st.glWindow >>> 0) !== (st.hwnd >>> 0) && w.visible && st.clientOnScreen(st.glWindow); return r ? { x: r.l, y: r.t, w: r.r - r.l, h: r.b - r.t, screen: st.desk } : null; }
+    const o = screenOrigin(st.glWindow); return { x: o.x, y: o.y, w: w.w, h: w.h, screen: st.desk };
+  };
   tables.wm = { clientRect: () => glRect() || (wm.framed() ? { ...wm.client(), screen: st.desk } : null), presented: () => wm.presented | 0, version: () => wm.version | 0,
     // The program's icon (its first RT_GROUP_ICON's first image): { w, h, px 0x00RRGGBB, mask 1 transparent }, or null.
     icon: (x) => { try { const b = st.gdi.get(loadIcon(x, x.win.base, null)); return b && b.px ? { w: b.w, h: b.h, px: b.px, mask: b.mask } : null; } catch { return null; } } };   // GDI frames shown

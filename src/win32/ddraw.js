@@ -254,7 +254,12 @@ export function ddrawApis(st, wm, send) {
     const dl = d.mips || [dst], sl = s.mips || [src];
     dl.forEach((p, i) => { const a = o(p), b = sl[i] && o(sl[i]); if (!b) return; copy(x, a, { l: 0, t: 0, r: a.w, b: a.h }, b, { l: 0, t: 0, r: b.w, b: b.h }, false); a.dirty = true; });
   };
-  const d7 = d3d7Impl({ o, make, as: (x, p, i) => as(x, p, i), st, send, texels, copySurface, fvfSize, record: recordD3D9 });
+  // The window a Direct3D 7 device draws into: the primary's clipper's (a windowed program clips its blits
+  // to its window -- Unreal Tournament's viewport, not the start-up dialog MIRAGE takes as the main window),
+  // else the one given to SetCooperativeLevel, else the main window.
+  let coopWindow = 0;
+  const deviceWindow = () => { const p = primary(), c = p && p.clipper && o(p.clipper); return (c && c.hwnd) || coopWindow || st.hwnd; };
+  const d7 = d3d7Impl({ o, make, st, send, texels, copySurface, fvfSize, record: recordD3D9, deviceWindow });
 
   const unknown = {
     QueryInterface: (x, self, riid, pp) => {
@@ -275,7 +280,7 @@ export function ddrawApis(st, wm, send) {
       // shown, WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE, WM_SETFOCUS, as Windows sends them then.
       // NESticle for Windows 95 never shows its window itself, and runs only once it has been activated.
       SetCooperativeLevel: (x, self, hwnd, flags) => {
-        o(self).exclusive = !!(flags & 0x10);
+        o(self).exclusive = !!(flags & 0x10); if (hwnd) coopWindow = hwnd >>> 0;
         if ((flags & 0x11) !== 0x11 || st.active || (hwnd >>> 0) !== (st.hwnd >>> 0)) return DD_OK;
         st.shown = st.active = true; wm.dirty = true;
         return send(x, [[0x1c, 1, 0, hwnd], [0x86, 1, 0, hwnd], [0x06, 1, 0, hwnd], [0x07, 0, 0, hwnd]], () => DD_OK, 12);
@@ -442,7 +447,8 @@ export function ddrawApis(st, wm, send) {
         const s = o(self); if (!s.dc) return DDERR_INVALIDPARAMS;
         st.dcBitmaps.delete(s.dc.dc); st.gdi.delete(s.dc.bm); st.gdi.delete(s.dc.dc); s.dc = null; return DD_OK;
       },
-      SetClipper: (x, self, c) => { o(self).clipper = c >>> 0; return DD_OK; }, GetClipper: () => DDERR_NOTFOUND, IsLost: () => DD_OK, Restore: () => DD_OK,
+      // The surface holds the clipper (an AddRef, as DirectDraw does): Unreal Tournament releases its own at once.
+      SetClipper: (x, self, c) => { const s = o(self); if (c && o(c)) o(c).ref++; if (s.clipper && o(s.clipper)) unknown.Release(x, s.clipper); s.clipper = c >>> 0; return DD_OK; }, GetClipper: () => DDERR_NOTFOUND, IsLost: () => DD_OK, Restore: () => DD_OK,
       GetBltStatus: () => DD_OK, GetFlipStatus: () => DD_OK, Initialize: () => DD_OK,
     },
     IDirectDrawPalette: {

@@ -5103,6 +5103,29 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: Direct3D 7 -- target, z-buffer, a 1555 mipmapped texture as 8888, samplers, fog kept back, draws, present', got,
     'true/0/85 64 32 80 2x1 2 0,0,255,255,0,255,0,0 16 0,5,3 0,7,2 0,1,3 0,1,4 7,1 4 2 32 256 1');
+  // A windowed Direct3D 7 device draws into the window of the primary's clipper -- held by the surface once the
+  // program released it -- and the page puts the picture in that window's client area, not the main window's
+  // (Unreal Tournament's main window, to MIRAGE, is its hidden start-up dialog; its viewport is another).
+  try { const { fn, x, apis, str } = await w32(), { recordD3D9 } = await import('../src/win32/d3d9.js'), rec = recordD3D9(); x.backend.d3d9 = () => rec;
+    const d = (n) => fn('ddraw.dll', n), u = (n) => fn('user32.dll', n), out = x.win.heapAlloc(16);
+    const wc = x.win.heapAlloc(40); x.write(wc, new Uint8Array(40)); x.w32(wc + 36, str('Viewport')); u('RegisterClassA')(wc);
+    const guid = (h) => { const p = x.win.heapAlloc(16), b = h.replace(/-/g, '').match(/../g).map((v) => parseInt(v, 16));
+      x.write(p, Uint8Array.from([...b.slice(0, 4).reverse(), ...b.slice(4, 6).reverse(), ...b.slice(6, 8).reverse(), ...b.slice(8)])); return p; };
+    const desc = (flags, w, h, caps) => { const p = x.win.heapAlloc(124); x.write(p, new Uint8Array(124)); x.w32(p, 124); x.w32(p + 4, flags); x.w32(p + 8, h); x.w32(p + 12, w); x.w32(p + 104, caps); return p; };
+    u('CreateWindowExA')(0, 0, 0, 0x80000000, 0, 0, 280, 100);                       // the main window: a dialog, hidden
+    u('CreateWindowExA')(0, str('Viewport'), 0, 0x10000000, 30, 40, 320, 240);   // the viewport, shown
+    const view = parseInt(apis.windows().find((w) => w.cls === 'viewport').hwnd, 16);
+    d('DirectDrawCreateEx')(0, out, guid('15e65ec0-3b9c-11d2-b92f-00609797ea5b'), 0); const dd = x.r32(out);
+    d('IDirectDraw7::QueryInterface')(dd, guid('f5049e77-4861-11d2-a407-00a0c90629a8'), out); const d3d = x.r32(out);
+    d('IDirectDraw7::CreateSurface')(dd, desc(1, 0, 0, 0x200), out, 0); const primary = x.r32(out);
+    d('IDirectDraw7::CreateClipper')(dd, 0, out, 0); const clip = x.r32(out);
+    d('IDirectDrawClipper::SetHWnd')(clip, 0, view); d('IDirectDrawSurface7::SetClipper')(primary, clip); d('IDirectDrawClipper::Release')(clip);
+    d('IDirectDraw7::CreateSurface')(dd, desc(7, 320, 240, 0x2040), out, 0); const rt = x.r32(out);
+    d('IDirect3D7::CreateDevice')(d3d, guid('84e63de0-46aa-11cf-816f-0000c020156e'), rt, out);
+    const r = apis.wm.clientRect();
+    got = r ? [r.w, r.h].join('x') : 'none';
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: a windowed Direct3D 7 device draws into its clipper\'s window', got, '320x240');
   // The heap's second segment is cut around a program whose image is in it: Unreal Tournament's is at 10900000h,
   // and its Direct3D 7 textures, allocated there, wrote over the program's data.
   try { const { x } = await w32('', { imageBase: 0x10900000 });

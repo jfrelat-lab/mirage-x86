@@ -166,7 +166,7 @@ export function d3d7Impl(dd) {
       const rt = o(surf); if (!rt) return DDERR_INVALIDPARAMS;
       const z = rt.zbuffer && o(rt.zbuffer);
       const params = { width: rt.w, height: rt.h, backBufferFormat: 22, backBufferCount: 1, autoDepthStencilFormat: z ? (z.bpp === 16 ? 80 : 75) : 0, windowed: !st.modeSet, presentInterval: 0 };
-      st.glWindow = st.hwnd;
+      st.glWindow = dd.deviceWindow();
       if (x.backend.setVideoMode) x.backend.setVideoMode(rt.w, rt.h, false);
       const dev = modelOf(x).createDevice(params);
       const p = make(x, 'IDirect3DDevice7', { dev, d3d: self, target: surf >>> 0, params, transforms: new Map(), tex: [], tss: [] });
