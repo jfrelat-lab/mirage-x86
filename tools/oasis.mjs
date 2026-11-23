@@ -128,7 +128,8 @@ function undeb(buf, dest) {
 async function dockerLayer(buf, dest) {
   const { applyLayer } = await import(join(ROOT, 'src', 'oasis-docker.js'));
   const { tarEntries } = await import(join(ROOT, 'src', 'oasis-layers.js'));
-  const tar = buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf) : buf;
+  const zstd = buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd;   // a tar+zstd layer: Node's own zstd
+  const tar = buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf) : zstd ? (await import('zlib')).zstdDecompressSync(buf) : buf;
   const inside = (p) => { const to = join(dest, p); return relative(dest, to).startsWith('..') ? null : to; };
   applyLayer(tarEntries(tar), {
     remove: (p) => { const to = inside(p); if (to) rmSync(to, { recursive: true, force: true }); },

@@ -210,7 +210,9 @@ async function dockerLayers(tree, l, io, say) {
   const { layers } = await dockerPull(cached, repo, ref, l.platform || 'linux/386', say);
   for (const [i, { bytes }] of layers.entries()) {
     say(`unpacking layer ${i + 1} of ${layers.length}`);
-    applyLayer(tarEntries(isGzip(bytes) ? await gunzip(bytes) : bytes), {
+    const zstd = bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd;   // a tar+zstd layer
+    const tar = isGzip(bytes) ? await gunzip(bytes) : zstd ? (await import('./zstd.js')).zstdDecompress(bytes) : bytes;
+    applyLayer(tarEntries(tar), {
       remove: (p) => tree.remove(norm('/' + p)),
       children: (d) => [...(tree.kids.get(norm('/' + d)) || [])],
       add: (es) => tree.addEntries(es),

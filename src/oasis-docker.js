@@ -5,7 +5,7 @@
 // A pull: an anonymous token for the repository (auth.docker.io), the tag's manifest -- an image index
 // (OCI) or manifest list (Docker) is resolved to the platform's own manifest, linux/386 -- then the
 // image's config (its Cmd, Entrypoint, Env, WorkingDir, User) and each layer, a tar compressed with
-// gzip, every blob checked against its sha256 digest. Layers apply in order; a whiteout (".wh.<name>")
+// gzip or zstd (src/zstd.js in a page), every blob checked against its sha256 digest. Layers apply in order; a whiteout (".wh.<name>")
 // removes what a lower layer put at <name>, an opaque whiteout (".wh..wh..opq") everything a lower
 // layer put in its directory (the OCI image layout's rules).
 //
@@ -108,7 +108,7 @@ export async function dockerPull(client, repo, ref, platform = 'linux/386', onPr
   const layers = [];
   if (!withLayers) return { config, layers, digest };
   for (const [i, l] of m.layers.entries()) {
-    if (!/tar(\+gzip)?$|tar\.gzip$|rootfs\.diff\.tar\.gzip$/.test(l.mediaType || '')) throw new Error(`oasis: ${repo}: a layer of type ${l.mediaType} (only tar and tar+gzip)`);
+    if (!/tar(\+gzip|\+zstd)?$|tar\.gzip$|rootfs\.diff\.tar\.gzip$/.test(l.mediaType || '')) throw new Error(`oasis: ${repo}: a layer of type ${l.mediaType} (only tar, tar+gzip, tar+zstd)`);
     layers.push({ digest: l.digest, bytes: await blob(l, `layer ${i + 1} of ${m.layers.length} (${Math.round(l.size / 1024)} KiB)`) });
   }
   return { config, layers, digest };

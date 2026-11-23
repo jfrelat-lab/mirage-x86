@@ -83,7 +83,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `{ "deb": URL }` | a Debian package | its `data.tar` |
 | `{ "busybox": path or URL, "into": dir }` | a static busybox | `/bin/busybox` (or `into`) and a link per applet, as `busybox --install -s` makes them — the list is the binary's own `--list`, run on MIRAGE-LINUX at `pull` |
 | `{ "zip": path or URL, "lha": member, "into": dir, "files": { name: path } }` | an LHA archive inside a ZIP (an "LHA's SFX" self-extractor, as id's `quake106.zip` holds) — `-lh0-` and `-lh5-`, read by `src/lha.js` | the files `files` names, renamed (all of them without it), under `into` |
-| `{ "docker": image, "platform": "linux/386" }` | a Docker Hub image, `i386/<name>:<tag>` or `@sha256:<digest>` | its root file system: the manifest for the platform (an index resolved to linux/386), then each layer from the registry, every blob checked against its digest, laid in order with their whiteouts (`.wh.<name>`, `.wh..wh..opq`) — no Docker, in Node and in a page (`src/oasis-docker.js`) |
+| `{ "docker": image, "platform": "linux/386" }` | a Docker Hub image, `i386/<name>:<tag>` or `@sha256:<digest>` | its root file system: the manifest for the platform (an index resolved to linux/386), then each layer from the registry (tar, gzip or zstd: src/zstd.js in a page), every blob checked against its digest, laid in order with their whiteouts (`.wh.<name>`, `.wh..wh..opq`) — no Docker, in Node and in a page (`src/oasis-docker.js`) |
 | `{ "dir": path }` | a directory of the repository | used where it is |
 | `{ "links": { path: target } }` | symbolic links | — |
 | `{ "mkdir": [paths] }` | empty directories | — |

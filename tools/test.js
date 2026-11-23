@@ -7387,7 +7387,8 @@ await (async () => { let got;
   eq('oasis in a page: tar, deb, file, links, mkdir, a run layer, case kept apart', got, 'XF86_NONE policy 755 elf conf libz.so.1 dir made  tool'); })();
 // Docker Hub's images without Docker (src/oasis-docker.js): a registry made here -- an index whose linux/386
 // entry is taken over its amd64 one, the manifest, the config, two gzipped layers, every blob by its sha256 --
-// pulled and laid one over the other in a page (buildTree) and on disk (tools/oasis.mjs's dockerLayer): the
+// pulled and laid one over the other in a page (buildTree) and on disk (tools/oasis.mjs's dockerLayer), the
+// second one a tar+zstd (src/zstd.js in a page, Node's zstd on disk): the
 // second layer's ".wh.a" removes the first's /etc/a, its opaque ".wh..wh..opq" what /var/x held below it
 // (its own file stays). A blob that does not match its digest is refused; the reference is pinned by the
 // digest of the linux/386 manifest (the same on Docker Hub and its mirror, read when Hub answers 429); the entry is Entrypoint and Cmd, with HOME; the relay takes only i386/.
@@ -7397,10 +7398,10 @@ await (async () => { let got;
     const enc = new TextEncoder(), gz = async (u8) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
     const f = (path, t) => ({ path, type: 'file', mode: 0o644, data: enc.encode(t) });
     const l1 = await gz(tarWrite([{ path: 'etc', type: 'dir', mode: 0o755 }, f('etc/a', 'A'), f('etc/b', 'B'), { path: 'var/x', type: 'dir', mode: 0o755 }, f('var/x/1', '1'), f('var/x/2', '2')]));
-    const l2 = await gz(tarWrite([f('etc/.wh.a', ''), f('var/x/.wh..wh..opq', ''), f('var/x/3', '3')]));
+    const l2 = new Uint8Array((await import('zlib')).zstdCompressSync(tarWrite([f('etc/.wh.a', ''), f('var/x/.wh..wh..opq', ''), f('var/x/3', '3')])));   // a tar+zstd layer
     const blobs = new Map(), put = async (b) => { const d = await D.sha256(b); blobs.set(d, b); return d; }, js = (o) => enc.encode(JSON.stringify(o));
     const config = await put(js({ architecture: '386', config: { Entrypoint: ['/bin/tini', '--'], Cmd: ['app'], Env: ['PATH=/bin'], WorkingDir: '/srv' } }));
-    const man = js({ mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { digest: config }, layers: [{ mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: await put(l1), size: l1.length }, { mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: await put(l2), size: l2.length }] });
+    const man = js({ mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { digest: config }, layers: [{ mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: await put(l1), size: l1.length }, { mediaType: 'application/vnd.oci.image.layer.v1.tar+zstd', digest: await put(l2), size: l2.length }] });
     const amd = js({ layers: [], config: { digest: config } }), md = await D.sha256(man), ad = await D.sha256(amd);
     const index = js({ manifests: [{ digest: ad, platform: { os: 'linux', architecture: 'amd64' } }, { digest: md, platform: { os: 'linux', architecture: '386' } }] });
     const manifests = new Map([['latest', index], [md, man], [ad, amd]]);
@@ -7428,6 +7429,26 @@ await (async () => { let got;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis: a Docker image pulled from a registry, its whiteouts applied in a page and on disk; digests, refs, entry, relay', got,
     '/B/3 false/B/3/false true true refused i386/debian:bookworm-slim,i386/alpine:latest refused /bin/tini -- app /srv /root 403,400'); })();
+// src/zstd.js, the page's Zstandard decompressor, against libzstd (Node's zlib.zstdCompressSync): nothing, one
+// byte, random bytes (raw blocks), a run (RLE blocks and long matches: the predefined match-length table, 53
+// symbols), text and MIRAGE's own source at levels 1, 3, 19 and 22 with a 128 MiB window, and two frames
+// with a skippable frame between them.
+await (async () => { let got;
+  try { const { zstdDecompress } = await import('../src/zstd.js'), z = await import('zlib'), fsm = await import('fs');
+    let seed = 1; const rnd = (n) => Uint8Array.from({ length: n }, () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 24);
+    const words = new TextEncoder().encode(Array.from({ length: 30000 }, (_, i) => ['alpha', 'beta', 'gamma', 'delta'][(i * 7) % 4] + (i % 97)).join(' '));
+    const inputs = [new Uint8Array(0), Uint8Array.of(97), rnd(100000), new Uint8Array(300000).fill(120), words, new Uint8Array(fsm.readFileSync(new URL('../src/recompiler.js', import.meta.url)))];
+    const P = z.constants, bad = [];
+    for (const [i, input] of inputs.entries()) for (const level of [1, 3, 19, 22]) {
+      const c = z.zstdCompressSync(input, { params: { [P.ZSTD_c_compressionLevel]: level, [P.ZSTD_c_windowLog]: level === 22 ? 27 : 0, [P.ZSTD_c_checksumFlag]: level & 1 } });
+      const d = zstdDecompress(new Uint8Array(c));
+      if (d.length !== input.length || d.some((v, k) => v !== input[k])) bad.push(`${i}@${level}`);
+    }
+    const skip = [0x50, 0x2a, 0x4d, 0x18, 4, 0, 0, 0, 1, 2, 3, 4];   // a skippable frame between them (magic 184D2A50h, four bytes)
+    const two = zstdDecompress(Uint8Array.from([...z.zstdCompressSync(words), ...skip, ...z.zstdCompressSync(inputs[3])]));
+    got = `${bad.join(',') || 'all'} ${two.length === words.length + inputs[3].length}`;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('zstd: the page\'s decompressor gives libzstd\'s input back, every level, block type and window', got, 'all true'); })();
 // The relay a page reads Debian's and idgames' archives through: only the hosts the images use, so it
 // is no open proxy — and those hosts are every one oasis/images/ names.
 await (async () => { let got;
