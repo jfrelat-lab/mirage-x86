@@ -3,6 +3,11 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-23
+
+- **Tux Racer** (2001) plays on the Linux machine: Debian's own build, its menus and races, at the keyboard.
+- Linux programs that sleep briefly each frame are no longer held back in the page.
+
 ## 2026-11-22
 
 - **Direct3D 7** for Windows games: Unreal Tournament's Direct3D renderer draws its intro, full screen or in its window (tested locally).

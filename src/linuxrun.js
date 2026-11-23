@@ -132,8 +132,12 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   // code, E0-prefixed ones as extended keys.
   let e0 = false;
   const toWin32 = (codes) => { for (const c of codes) { if (c === 0xe0) { e0 = true; continue; } w32in.key(!(c & 0x80), c & 0x7f, e0); e0 = false; } };
-  const keyboard = new Keyboard({ keyQueue: w32in ? { length: 0, shift() {}, push() {} } : typed,
-    pushScancodes: (a) => { if (w32in) toWin32(a); else if (lx.tty.kbMode !== 1) lx.keyScancodes(a); } });
+  // A program on MIRAGE's libSDL (machine.hle "sdl12": Tux Racer) gets its keys and its mouse as SDL
+  // events, once it has a window -- the scancodes as SDLK keys (src/hle/sdl12.js) -- not on the console.
+  const sdlIn = hle && m.hle && m.hle.includes('sdl12') && hle.backend.events ? hle.backend : null;
+  const toSdl = (codes) => { for (const c of codes) { if (c === 0xe0) { e0 = true; continue; } sdlIn.events.push({ type: c & 0x80 ? 'keyup' : 'keydown', scancode: c & 0x7f, e0 }); e0 = false; } };
+  const keyboard = new Keyboard({ keyQueue: w32in || sdlIn ? { length: 0, shift() {}, push() {} } : typed,
+    pushScancodes: (a) => { if (w32in) toWin32(a); else if (sdlIn) toSdl(a); else if (lx.tty.kbMode !== 1) lx.keyScancodes(a); } });
   keyboard.attach(window);
   // The mouse: a click on the screen captures it (pointer lock, Esc releases it), and its moves and
   // buttons go to /dev/mouse as a Microsoft serial mouse's packets — SVGAlib's mouse, Quake's aim.
@@ -149,7 +153,9 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     return [Math.floor((ev.clientX - r.left - (r.width - canvas.width * k) / 2) / k), Math.floor((ev.clientY - r.top - (r.height - canvas.height * k) / 2) / k)];
   };
   const wbtn = (ev) => [0, 2, 1][ev.button] ?? 0;
+  const sdlButton = (ev) => [1, 2, 3][ev.button] ?? 1;                   // SDL_BUTTON_LEFT, MIDDLE, RIGHT
   const onDown = (ev) => {
+    if (sdlIn) { const [X, Y] = screenPoint(ev); sdlIn.events.push({ type: 'mousedown', button: sdlButton(ev), x: X, y: Y }); ev.preventDefault(); return; }
     if (w32in && !locked()) {
       if (w32in.captures()) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
       w32in.mouseAt(...screenPoint(ev)); w32in.mouseButton(wbtn(ev), true); ev.preventDefault(); return;
@@ -158,11 +164,13 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     buttons |= btn(ev.button); if (w32in) w32in.mouseButton(wbtn(ev), true); else lx.mouseInput(0, 0, buttons); ev.preventDefault();
   };
   const onUp = (ev) => {
+    if (sdlIn) { const [X, Y] = screenPoint(ev); sdlIn.events.push({ type: 'mouseup', button: sdlButton(ev), x: X, y: Y }); return; }
     if (w32in && !locked()) { w32in.mouseAt(...screenPoint(ev)); w32in.mouseButton(wbtn(ev), false); return; }
     if (!locked()) return;
     buttons &= ~btn(ev.button); if (w32in) w32in.mouseButton(wbtn(ev), false); else lx.mouseInput(0, 0, buttons);
   };
   const onMove = (ev) => {
+    if (sdlIn) { if (ev.target === canvas) { const [X, Y] = screenPoint(ev); sdlIn.events.push({ type: 'mousemove', x: X, y: Y }); } return; }
     if (w32in && !locked()) { if (ev.target === canvas || ev.buttons) w32in.mouseAt(...screenPoint(ev)); return; }
     if (locked() && (ev.movementX || ev.movementY)) { if (w32in) w32in.mouseMove(ev.movementX, ev.movementY); else lx.mouseInput(ev.movementX, ev.movementY, buttons); }
   };
@@ -197,8 +205,13 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     busy += performance.now() - t0;
     if (lx.done) onStatus(`exited with status ${lx.status}` + (lx.signal ? ` (signal ${lx.signal})` : ''));
     else if (fault) onStatus(String(fault.message || fault).split('\n')[0]);
-    else if (paused || waiting) setTimeout(() => tick.port2.postMessage(0), paused ? 50 : 10);
-    else tick.port2.postMessage(0);
+    else if (paused) setTimeout(() => tick.port2.postMessage(0), 50);
+    else if (waiting) {
+      // Every process waits: until its first deadline when that is near -- a game's SDL_Delay(1) each frame
+      // (Tux Racer's loop) waited 10 ms and halved its frame rate -- else 10 ms at a time (input may come).
+      const due = lx.firstWake() * 1000 - performance.now();
+      if (due <= 0.5) tick.port2.postMessage(0); else setTimeout(() => tick.port2.postMessage(0), Math.min(10, due));
+    } else tick.port2.postMessage(0);
   };
   tick.port2.postMessage(0);
   let last = performance.now(), c0 = 0, raf = 0, f0 = 0;

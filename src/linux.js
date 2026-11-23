@@ -2261,6 +2261,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     for (const q of lx.procs) for (const t of [q.wake, q.alarmAt]) if (t !== null && t !== undefined && t < w) w = t;
     return w;
   };
+  lx.firstWake = firstWake;                                            // the page: when to run the machine again
   lx.syscall = () => {
     const r = cpu.reg, n = r[0] >>> 0, sw = lx.switches;
     checkAlarm();

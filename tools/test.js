@@ -4617,6 +4617,25 @@ await (async () => { let got;
     got = [open, h !== 0, set, card, n16, s16, nf, sf, typeof e, x.r8(e)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('hle: libasound plays S16 and float frames on the /dev/dsp card; SDL_GetError is a pointer to ""', got, '0 true 0 22050/16/2 2 1000,-1000,32767,-32768 2 16384,16384,-32767,-32767 number 0'); })();
+// MIRAGE's libSDL for a game (Tux Racer 0.61): the page's scancodes as SDLK keys (a letter, the Up arrow behind
+// E0, Return), mouse moves and buttons as SDL events and in SDL_GetMouseState, no joystick, a semaphore's count;
+// and libGLU's gluBuild2DMipmaps goes to the backend with the program's pointer as it is.
+await (async () => { let got;
+  try { const { sdl12 } = await import('../src/hle/sdl12.js'), { glu } = await import('../src/hle/gl.js'), { guestMemory } = await import('../src/hle/memory.js');
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.load(Uint8Array.from('7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000000000000100000000000000008004080080040858000000580000000500000000100000b801000000cd80'.match(/../g), (x) => parseInt(x, 16)), ['/w/T']);
+    const events = [{ type: 'keydown', scancode: 0x1e }, { type: 'keydown', scancode: 0x48, e0: true }, { type: 'keyup', scancode: 0x1c },
+      { type: 'mousemove', x: 100, y: 50 }, { type: 'mousedown', button: 1, x: 110, y: 60 }], gls = [];
+    const x = { ...guestMemory(lx, mc.mem), lx, backend: { nextEvent: () => events.shift() || null, gl: (n, a) => { gls.push([n, a]); return 0; } } };
+    const f = sdl12().fns, ev = lx.alloc(24), out = [];
+    for (let i = 0; i < 5; i++) { f.SDL_PollEvent[1](x, ev); out.push([x.r8(ev), x.r8(ev) <= 3 ? x.r32(ev + 8) : x.r8(ev) === 4 ? `${x.r16(ev + 4)},${x.r16(ev + 6)},${x.r16(ev + 8)}` : `${x.r8(ev + 2)},${x.r16(ev + 4)}`].join(':')); }
+    const px = lx.alloc(8), buttons = f.SDL_GetMouseState[1](x, px, px + 4), sem = f.SDL_CreateSemaphore[1](x, 1);
+    f.SDL_SemWait[1](x, sem); f.SDL_SemPost[1](x, sem); f.SDL_SemPost[1](x, sem);
+    glu().fns.gluBuild2DMipmaps[1](x, 0xde1, 3, 64, 32, 0x1907, 0x1401, 0x1234);
+    got = [...out, buttons, x.r32(px), x.r32(px + 4), f.SDL_NumJoysticks[1](x), f.SDL_SemValue[1](x, sem), gls[0][0], gls[0][1].join(',')].join(' ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('hle: libSDL for a game -- keys as SDLK, mouse events and state, no joystick, semaphores; gluBuild2DMipmaps', got,
+    '2:97 2:273 3:13 4:100,50,100 5:1,110 1 110 60 0 2 gluBuild2DMipmaps 3553,3,64,32,6407,5121,4660'); })();
 // MIRAGE-WIN32 (src/win32): tools/win32/pebwalk.asm finds ExitProcess as Crinkler's header finds what it
 // imports -- fs:[30h] to the PEB, its loader data, the load-order list (exe, ntdll, kernel32), kernel32's
 // export directory -- and calls it with 42; the loader has bound its import of lz32.dll's ordinal 4.

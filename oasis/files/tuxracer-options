@@ -1,0 +1,6 @@
+# Tux Racer's ~/.tuxracer/options, as its game_config.c reads it (Tcl): a window of 640x480,
+# the sound off until MIRAGE-LINUX's SDL_mixer is there.
+set fullscreen false
+set x_resolution 640
+set y_resolution 480
+set no_audio true

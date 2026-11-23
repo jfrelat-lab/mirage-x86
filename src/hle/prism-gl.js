@@ -75,7 +75,10 @@ export async function prismLibraries(lx, mem, names = ['sdl12', 'gl', 'glu', 'as
     // A display's gamma (fxMesa's, from Glide's SST_GAMMA): the page applies it to the picture.
     gamma: 1,
     setGamma(g) { backend.gamma = g; },
-    nextEvent() { return null; },
+    // The page's keys and mouse for MIRAGE's libSDL (src/linuxrun.js pushes them; SDL_PollEvent takes them).
+    events: [],
+    nextEvent() { return backend.events.shift() || null; },
+    windowed: () => !!size,
     gl() { return 0; },
     d3d9() {
       if (!d3d) {

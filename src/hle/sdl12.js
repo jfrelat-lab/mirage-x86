@@ -9,6 +9,25 @@
 
 const SDL_INIT_VIDEO = 0x20, SDL_OPENGL = 0x2, SDL_QUIT = 12, SDL_KEYDOWN = 2, SDL_KEYUP = 3;
 const HLE_BASE = 0x48000000;
+const SDL_MOUSEMOTION = 4, SDL_MOUSEBUTTONDOWN = 5, SDL_MOUSEBUTTONUP = 6;
+
+/*
+ * A PC scancode (set 1; e0: the extended prefix before it) as SDL 1.2's SDLKey (SDL_keysym.h): letters
+ * and digits their lower-case ASCII, the cursor keys 273-276, F1-F15 282-296, the modifiers 300-313.
+ */
+const SCAN_ROWS = [[0x02, '1234567890-='], [0x10, 'qwertyuiop[]'], [0x1e, "asdfghjkl;'`"], [0x2b, '\\zxcvbnm,./']];
+const SDLK = (() => {
+  const t = {};
+  for (const [at, keys] of SCAN_ROWS) [...keys].forEach((c, i) => { t[at + i] = c.charCodeAt(0); });
+  Object.assign(t, { 0x01: 27, 0x0e: 8, 0x0f: 9, 0x1c: 13, 0x39: 32, 0x1d: 306, 0x2a: 304, 0x36: 303, 0x38: 308, 0x3a: 301,
+    0x57: 292, 0x58: 293, 0x45: 300, 0x46: 302, 0x47: 263, 0x48: 264, 0x49: 265, 0x4a: 269, 0x4b: 260, 0x4c: 261, 0x4d: 262,
+    0x4e: 270, 0x4f: 257, 0x50: 258, 0x51: 259, 0x52: 256, 0x53: 266, 0x37: 268 });
+  for (let i = 0; i < 10; i++) t[0x3b + i] = 282 + i;
+  return t;
+})();
+const SDLK_E0 = { 0x48: 273, 0x50: 274, 0x4d: 275, 0x4b: 276, 0x47: 278, 0x4f: 279, 0x49: 280, 0x51: 281, 0x52: 277, 0x53: 127,
+  0x1c: 271, 0x1d: 305, 0x38: 307, 0x35: 267 };
+export const sdlKey = (scancode, e0) => (e0 ? SDLK_E0[scancode] : SDLK[scancode]) || 0;
 const b32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
 
 /*
@@ -29,7 +48,7 @@ const audioLoop = (play, len, buf, userdata, callback) => [
 const threadCall = (fn, data, exit) => [0x68, ...b32(data), 0xb8, ...b32(fn), 0xff, 0xd0, 0x50, 0x50, 0xb8, ...b32(HLE_BASE + exit), 0xcd, 0x80];
 
 export function sdl12() {
-  const st = { t0: null, w: 0, h: 0, surface: 0, lastSwap: 0, events: [], audio: null };
+  const st = { t0: null, w: 0, h: 0, surface: 0, lastSwap: 0, events: [], audio: null, mouse: { x: 0, y: 0, buttons: 0 } };
   return {
     soname: 'libSDL-1.2.so.0', links: ['libSDL.so', 'libSDL-1.2.so'],
     state: st,
@@ -65,15 +84,51 @@ export function sdl12() {
       SDL_WM_SetCaption: ['pp', () => 0],
       SDL_WM_GrabInput: ['i', () => 0],
       SDL_GetVideoInfo: ['', (x) => { const p = x.alloc(32); x.w32(p + 12, st.w); x.w32(p + 16, st.h); return p; }],
-      // SDL_Event (SDL 1.2): Uint8 type at 0; a key event's keysym.sym (SDLKey, 32 bits) at 8.
+      // SDL_Event (SDL 1.2): Uint8 type at 0. A key event: state at 2, keysym's scancode at 4, sym (SDLKey,
+      // 32 bits) at 8, mod at 12, unicode at 16 -- its sym from the scancode when the page gives only that.
+      // A mouse motion: state at 2, x and y (Uint16) at 4 and 6, xrel and yrel at 8 and 10; a button:
+      // button at 2, state at 3, x and y at 4 and 6. The mouse's last place and buttons are kept for
+      // SDL_GetMouseState.
       SDL_PollEvent: ['p', (x, ev) => {
         const e = x.backend.nextEvent ? x.backend.nextEvent() : null;
         if (!e) return 0;
+        const m = st.mouse;
+        if (e.type === 'mousemove' || e.type === 'mousedown' || e.type === 'mouseup') {
+          const dx = e.x - m.x, dy = e.y - m.y; m.x = e.x; m.y = e.y;
+          if (e.type === 'mousedown') m.buttons |= 1 << (e.button - 1); else if (e.type === 'mouseup') m.buttons &= ~(1 << (e.button - 1));
+          if (!ev) return 1;
+          x.write(ev, new Uint8Array(20));
+          if (e.type === 'mousemove') { x.w8(ev, SDL_MOUSEMOTION); x.w8(ev + 2, m.buttons); x.w16(ev + 8, dx & 0xffff); x.w16(ev + 10, dy & 0xffff); }
+          else { x.w8(ev, e.type === 'mousedown' ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP); x.w8(ev + 2, e.button); x.w8(ev + 3, e.type === 'mousedown' ? 1 : 0); }
+          x.w16(ev + 4, e.x & 0xffff); x.w16(ev + 6, e.y & 0xffff);
+          return 1;
+        }
         if (!ev) return 1;
+        const sym = e.sym || sdlKey(e.scancode || 0, e.e0);
         x.w8(ev, e.type === 'quit' ? SDL_QUIT : e.type === 'keyup' ? SDL_KEYUP : SDL_KEYDOWN);
-        x.w8(ev + 1, 0); x.w8(ev + 2, e.type === 'keyup' ? 0 : 1); x.w8(ev + 4, e.scancode || 0); x.w32(ev + 8, e.sym || 0); x.w32(ev + 12, 0);
+        x.w8(ev + 1, 0); x.w8(ev + 2, e.type === 'keyup' ? 0 : 1); x.w8(ev + 4, e.scancode || 0); x.w32(ev + 8, sym); x.w32(ev + 12, 0);
+        x.w16(ev + 16, sym < 128 ? sym : 0);
         return 1;
       }],
+      // SDL_GetMouseState(&x, &y): the buttons, the place.
+      SDL_GetMouseState: ['pp', (x, px, py) => { if (px) x.w32(px, st.mouse.x); if (py) x.w32(py, st.mouse.y); return st.mouse.buttons; }],
+      SDL_WarpMouse: ['uu', (x, X, Y) => { st.mouse.x = X & 0xffff; st.mouse.y = Y & 0xffff; return 0; }],
+      SDL_EnableKeyRepeat: ['ii', () => 0],
+      // No joystick is plugged in.
+      SDL_NumJoysticks: ['', () => 0], SDL_JoystickOpen: ['i', () => 0], SDL_JoystickName: ['i', () => 0],
+      SDL_JoystickNumAxes: ['p', () => 0], SDL_JoystickNumButtons: ['p', () => 0], SDL_JoystickUpdate: ['', () => 0],
+      SDL_JoystickGetAxis: ['pi', () => 0], SDL_JoystickGetButton: ['pi', () => 0],
+      // Files as SDL_RWops: none yet (SDL_mixer's Mix_LoadWAV is all that opens one, and the sound is off).
+      SDL_RWFromFile: ['pp', () => 0],
+      // Mutexes and semaphores (SDL_mixer's, smpeg's): a mutex never waits, the guest's threads taking turns
+      // only at system calls; a semaphore's count is kept, a wait on zero waits for a post.
+      SDL_CreateMutex: ['', (x) => x.alloc(8)], SDL_DestroyMutex: ['p', () => 0], SDL_mutexP: ['p', () => 0], SDL_mutexV: ['p', () => 0],
+      SDL_CreateSemaphore: ['u', (x, n) => { const p = x.alloc(8); x.w32(p, n); return p; }], SDL_DestroySemaphore: ['p', () => 0],
+      SDL_SemPost: ['p', (x, p) => { x.w32(p, x.r32(p) + 1); return 0; }], SDL_SemValue: ['p', (x, p) => x.r32(p)],
+      SDL_SemWait: ['p', (x, p) => { const n = x.r32(p); if (!n) return x.waitUntil(x.lx.mono() + 0.001); x.w32(p, n - 1); return 0; }],
+      SDL_SetError: ['p', () => 0],
+      // An OpenGL entry point by name, as glXGetProcAddressARB gives it.
+      SDL_GL_GetProcAddress: ['p', (x, name) => x.entry(x.str(name))],
       SDL_PumpEvents: ['', () => 0],
       // Audio (SDL_AudioSpec: freq, format, channels, silence, samples, padding, size, callback,
       // userdata): unsigned 8 or signed 16 bits on /dev/dsp, the callback called by the audio loop.

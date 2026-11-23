@@ -1,0 +1,87 @@
+{
+  "oasis": 1,
+  "title": "Tux Racer 0.61 (Sunspire Studios, 2001) \u2014 Debian woody's, its OpenGL drawn by WebGL",
+  "year": 2001,
+  "author": "Sunspire Studios (Jasmin Patry, Eric Hall, Patrick Gilhuly, Rick Knowles, Mark Riddell), the Debian project, busybox, PRISM",
+  "world": "linux",
+  "machine": {
+    "cpu": "686",
+    "mem": 128,
+    "hle": [
+      "sdl12",
+      "gl",
+      "glu"
+    ]
+  },
+  "layers": [
+    {
+      "busybox": "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/g/glibc/libc6_2.2.5-11.8_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/g/gcc-2.95/libstdc++2.10-glibc2.2_2.95.4-11woody1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/t/tcl8.3/tcl8.3_8.3.3-7_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/x/xfree86/xlibs_4.1.0-16woody6_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libo/libogg/libogg0_1.0rc3-1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/libv/libvorbis/libvorbis0_1.0rc3-1_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/s/smpeg/libsmpeg0_0.4.4-8_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/s/sdl-mixer1.2/libsdl-mixer1.2_1.2.1-5_i386.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/t/tuxracer-data/tuxracer-data_0.61-1_all.deb"
+    },
+    {
+      "deb": "http://archive.debian.org/debian/pool/main/t/tuxracer/tuxracer_0.61-6_i386.deb"
+    },
+    {
+      "file": "oasis/files/ld.so.conf-x11",
+      "to": "/etc/ld.so.conf"
+    },
+    {
+      "file": "oasis/files/tuxracer-options",
+      "to": "/root/.tuxracer/options"
+    },
+    {
+      "mkdir": [
+        "/tmp",
+        "/root"
+      ]
+    },
+    {
+      "run": "ldconfig",
+      "cwd": "/"
+    }
+  ],
+  "entry": {
+    "run": "/usr/games/tuxracer",
+    "cwd": "/root",
+    "env": {
+      "HOME": "/root",
+      "PATH": "/bin:/usr/bin:/usr/games"
+    }
+  },
+  "output": "window",
+  "notes": "Tux Racer 0.61 as Debian woody (2002) packaged it, its own i386 binary: glibc 2.2.5, Tcl 8.3 for its scripts, libstdc++ 2.95 for its terrain's C++. Its libSDL, libGL and libGLU are made in JavaScript: the OpenGL calls go to PRISM's gl.js, drawn by WebGL2. The sound is off for now.",
+  "tags": [
+    "game",
+    "OpenGL",
+    "SDL"
+  ],
+  "sound": false,
+  "thumb": "oasis/thumbs/linux-tuxracer-2001.png",
+  "licenseName": "GNU General Public License (Tux Racer 0.61 and its data, as Debian main ships them)"
+}

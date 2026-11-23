@@ -165,5 +165,8 @@ export function glu() {
     gluPerspective: ['dddd', (x, ...a) => x.backend.gl('gluPerspective', a)],
     gluLookAt: ['ddddddddd', (x, ...a) => x.backend.gl('gluLookAt', a)],
     gluOrtho2D: ['dddd', (x, ...a) => x.backend.gl('glOrtho', [...a, -1, 1])],
+    // Mipmaps and scaling of the program's pixels (pointers into its memory, read and written by PRISM's glu.js).
+    gluBuild2DMipmaps: ['uiiiuup', (x, ...a) => x.backend.gl('gluBuild2DMipmaps', a)],
+    gluScaleImage: ['uiiupiiup', (x, ...a) => x.backend.gl('gluScaleImage', a)],
   } };
 }
