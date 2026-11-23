@@ -100,8 +100,12 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     lx.console = new VtConsole(mc.mem.u8, mc.vga);                       // the tty's text on the VGA screen
     lx.console.clear(); lx.console.row = 0; lx.console.col = 0; lx.console.syncCursor();
   }
-  const env = ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...Object.entries(e.env || {}).map(([k, v]) => `${k}=${v}`)];
-  if (user) { const u = lx.setUser(user); env.push(`USER=${u}`, `LOGNAME=${u}`); }   // the visitor's name, on uid 0
+  // entry.user (a Docker image's User): its own ids and name, its HOME from /etc/passwd unless the image sets one;
+  // else the visitor's name, on uid 0.
+  const as = e.user && !win32 ? lx.runAs(e.user) : null, home = (e.env && e.env.HOME) || (as ? as.home : '/root');
+  const env = ['PATH=/usr/local/bin:/usr/bin:/bin', `HOME=${home}`, 'LANG=C', ...Object.entries(e.env || {}).filter(([k]) => k !== 'HOME').map(([k, v]) => `${k}=${v}`)];
+  if (as) env.push(`USER=${as.name}`, `LOGNAME=${as.name}`);
+  else if (user) { const u = lx.setUser(user); env.push(`USER=${u}`, `LOGNAME=${u}`); }   // the visitor's name, on uid 0
   if (m.fb) { const [w, h] = String(m.fb).split('x').map(Number); lx.setFb(w, h); }   // machine.fb: /dev/fb0's size, "1024x768"
   if (m.hz) lx.hz = m.hz;                                                    // machine.hz: a 1997 kernel's timeouts, in clock ticks
   if (!win32) {

@@ -70,7 +70,8 @@ const sample = () => evaluate(`(() => { const m = (window.mirage && (window.mira
   ctx: window.mirage && window.mirage.audioOut && window.mirage.audioOut.ctx ? window.mirage.audioOut.ctx.state : 'none', t: performance.now() }; })()`);
 let prev = await sample(), profiling = false;
 console.log(' s   Minstr/s  frames  longtask%  PIT Hz  audio');
-const KEYS = (process.env.KEYS || '').split((process.env.KEYS || '').includes('|') ? '|' : ',').filter(Boolean).map((k) => { const i = k.indexOf(':'); return { t: Number(k.slice(0, i)), key: k.slice(i + 1) }; });
+// Items are split only where the next one starts ("<seconds>:"), so a typed text may hold commas and bars.
+const KEYS = (process.env.KEYS || '').split((process.env.KEYS || '').includes('|') ? /\|(?=\d+(?:\.\d+)?:)/ : /,(?=\d+(?:\.\d+)?:)/).filter(Boolean).map((k) => { const i = k.indexOf(':'); return { t: Number(k.slice(0, i)), key: k.slice(i + 1) }; });
 const CODES = { Enter: [13, 'Enter'], ArrowLeft: [37, 'ArrowLeft'], ArrowRight: [39, 'ArrowRight'], ArrowUp: [38, 'ArrowUp'], ArrowDown: [40, 'ArrowDown'], Space: [32, ' '], Escape: [27, 'Escape'], ControlLeft: [17, 'Control'] };
 const press = async (key) => { const [vk, k] = CODES[key] || [key.toUpperCase().charCodeAt(0), key];
   // Held ~100 ms, as a hand does: a game that polls a key-state table once a frame (C-Dogs) never
@@ -79,12 +80,27 @@ const press = async (key) => { const [vk, k] = CODES[key] || [key.toUpperCase().
 // A key held down from one second to another (KEYS "100:down=ArrowUp,130:up=ArrowUp"): a kart's accelerator.
 const hold = async (key, down) => { const [vk, k] = CODES[key] || [key.toUpperCase().charCodeAt(0), key];
   await send('Input.dispatchKeyEvent', { type: down ? 'rawKeyDown' : 'keyUp', windowsVirtualKeyCode: vk, key: k, code: key.length === 1 ? 'Key' + key.toUpperCase() : key }); };
-const CHAR = (c) => /[a-z]/i.test(c) ? [c.toUpperCase().charCodeAt(0), c, 'Key' + c.toUpperCase()]
-  : /[0-9]/.test(c) ? [c.charCodeAt(0), c, 'Digit' + c] : c === ' ' ? [32, ' ', 'Space'] : c === '\\' ? [220, '\\', 'Backslash']
-  : c === '.' ? [190, '.', 'Period'] : c === '-' ? [189, '-', 'Minus'] : c === '/' ? [191, '/', 'Slash'] : c === ';' ? [186, ';', 'Semicolon'] : c === '\n' ? [13, 'Enter', 'Enter'] : null;
+// A character typed as a US keyboard types it: [virtual key, key, code, shifted]. Every printable ASCII
+// character -- `$ ( ) * | " { }` included, which a shell line or a REPL needs -- the shifted ones with
+// Shift really held around them, so a program reading scancodes (SDL, SVGAlib) sees it too.
+const US = { '`': ['~', 192, 'Backquote'], '-': ['_', 189, 'Minus'], '=': ['+', 187, 'Equal'], '[': ['{', 219, 'BracketLeft'], ']': ['}', 221, 'BracketRight'],
+  '\\': ['|', 220, 'Backslash'], ';': [':', 186, 'Semicolon'], "'": ['"', 222, 'Quote'], ',': ['<', 188, 'Comma'], '.': ['>', 190, 'Period'], '/': ['?', 191, 'Slash'] };
+const DIGIT_SHIFT = ')!@#$%^&*(';
+const CHAR = (c) => {
+  if (/[a-z]/.test(c)) return [c.toUpperCase().charCodeAt(0), c, 'Key' + c.toUpperCase(), false];
+  if (/[A-Z]/.test(c)) return [c.charCodeAt(0), c, 'Key' + c, true];
+  if (/[0-9]/.test(c)) return [c.charCodeAt(0), c, 'Digit' + c, false];
+  const d = DIGIT_SHIFT.indexOf(c); if (d >= 0) return [48 + d, c, 'Digit' + d, true];
+  if (US[c]) return [US[c][1], c, US[c][2], false];
+  for (const [base, [shifted, vk, code]] of Object.entries(US)) if (shifted === c) return [vk, c, code, true];
+  return c === ' ' ? [32, ' ', 'Space', false] : c === '\t' ? [9, 'Tab', 'Tab', false] : c === '\n' ? [13, 'Enter', 'Enter', false] : null;
+};
 const typeText = async (text) => {
-  for (const c of text.replace(/\\n/g, '\n')) { const k = CHAR(c); if (!k) continue;
-    for (const type of ['keyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: k[0], key: k[1], code: k[2], text: type === 'keyDown' && k[1].length === 1 ? k[1] : undefined }); if (type === 'keyDown') await sleep(60); }
+  for (const c of text.replace(/\\n/g, '\n').replace(/\\t/g, '\t')) { const k = CHAR(c); if (!k) continue;
+    const mods = k[3] ? 8 : 0;                                         // Input.dispatchKeyEvent's Shift
+    if (k[3]) await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', windowsVirtualKeyCode: 16, key: 'Shift', code: 'ShiftLeft', modifiers: 8 });
+    for (const type of ['keyDown', 'keyUp']) { await send('Input.dispatchKeyEvent', { type, windowsVirtualKeyCode: k[0], key: k[1], code: k[2], modifiers: mods, text: type === 'keyDown' && k[1].length === 1 ? k[1] : undefined }); if (type === 'keyDown') await sleep(60); }
+    if (k[3]) await send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 16, key: 'Shift', code: 'ShiftLeft', modifiers: 0 });
     await sleep(30); } };
 const SHOTS = (process.env.SHOTS || '').split(',').filter(Boolean).map(Number);
 // CLICKS="70:400,300|74:420,360" clicks at those page coordinates at those seconds (a menu on X's

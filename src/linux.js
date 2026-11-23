@@ -450,6 +450,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // writes, both running; until this one process ran at a time, a pipeline's left side to its end
   // before its right side started.
   lx.pid = 1; lx.ppid = 0; lx.nextPid = 100; lx.zombies = new Map();
+  /*
+   * A process's identities, as Linux keeps them: real, effective and saved user and group ids, and its
+   * supplementary groups. Root (euid 0) may take any; another process only one of its own three, as
+   * kernel/sys.c allows. Nothing checks a file's owner or mode against them (MIRAGE-LINUX's files are
+   * all readable and writable): they are what getuid and its kin answer, and what a program refusing
+   * to run as root, or dropping root, sees. A Docker image's User sets them (lx.runAs).
+   */
+  const rootCred = () => ({ ruid: 0, euid: 0, suid: 0, rgid: 0, egid: 0, sgid: 0, groups: [] });
+  lx.cred = rootCred();
   lx.vm = 1; let nextVm = 2;                                             // an address space's id: a process's, its threads'
   lx.rootPid = 1; lx.procs = []; lx.orphans = new Map(); lx.sliceStart = 0; lx.blockRun = 0;
   const QUANTUM = () => 0.02 * (machine.cyclesPerSecond || 1e8);         // 20 ms of guest time
@@ -459,6 +468,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
     sigInfo: lx.sigInfo.slice(), sigBlocked: lx.sigBlocked.slice(), sigPend: new Set(lx.sigPend), sigSaved: lx.sigSaved,
     alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames, pgid: lx.pgid, sid: lx.sid, ctty: lx.ctty,
+    cred: { ...lx.cred, groups: lx.cred.groups.slice() },               // its identities: a fork's child starts with a copy
     reg: cpu.reg.slice(), eip: cpu.eip, flags: cpu.flags, seg: Array.from(cpu.seg),
     fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
     xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null, mxcsr: cpu.xmm ? cpu.xmm.mxcsr : 0x1f80,   // a thread's own, as Windows saves it
@@ -473,7 +483,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: shared ? lx.brkStart : s.brkStart, brk: shared ? lx.brk : s.brk,
       mmapNext: shared ? lx.mmapNext : s.mmapNext, lazy: shared ? lx.lazy : s.lazy || [], elfMaps: shared ? lx.elfMaps : s.elfMaps || [], wake: s.wake ?? null, vm: s.vm,
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
-      sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty });
+      sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty, cred: s.cred || rootCred() });
     fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
     // Another thread of the same address space: the page tables, the TLB and the translated code are
     // its own already -- remapping a Crinkler intro's 51,000 pages at each switch was 3% of its time.
@@ -2143,15 +2153,18 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     },
     238: (tid, sig) => raise(sig),                                         // tkill
     270: (tgid, tid, sig) => raise(sig),                                   // tgkill
-    199: () => 0, 200: () => 0, 201: () => 0, 202: () => 0,                // get[e]uid32, get[e]gid32
-    // Setting identities and owners: everything runs as root here, as the reference container does,
-    // so they succeed and change nothing. xterm drops its privileges with setreuid/setregid before it
-    // runs the shell, and stopped ("seteuid(0): Function not implemented") when they were refused.
-    70: () => 0, 71: () => 0, 203: () => 0, 204: () => 0,                  // setreuid setregid (16 and 32 bits)
-    80: (n, list) => { if (n > 0) { wr8(list, 0); wr8(list + 1, 0); } return 1; },   // getgroups (16-bit): root's group alone
-    205: (n, list) => { if (n > 0) wr32(list, 0); return 1; },             // getgroups32
-    81: () => 0, 206: () => 0,                                             // setgroups (16 and 32 bits)
-    138: () => 0, 139: () => 0, 215: () => 0, 216: () => 0, 164: () => 0, 170: () => 0, 208: () => 0, 210: () => 0,   // setfsuid setfsgid setresuid setresgid
+    199: () => lx.cred.ruid, 200: () => lx.cred.rgid, 201: () => lx.cred.euid, 202: () => lx.cred.egid,   // get[e]uid32, get[e]gid32
+    // Setting identities (lx.cred): root as it pleases, another process among its own ids, EPERM else.
+    // xterm drops its privileges with setreuid/setregid before it runs the shell.
+    70: (r, e) => setre('u', id16(r), id16(e)), 71: (r, e) => setre('g', id16(r), id16(e)),   // setreuid setregid (16-bit)
+    203: (r, e) => setre('u', id32(r), id32(e)), 204: (r, e) => setre('g', id32(r), id32(e)),
+    164: (r, e, sv) => setres('u', id16(r), id16(e), id16(sv)), 170: (r, e, sv) => setres('g', id16(r), id16(e), id16(sv)),   // setresuid setresgid
+    208: (r, e, sv) => setres('u', id32(r), id32(e), id32(sv)), 210: (r, e, sv) => setres('g', id32(r), id32(e), id32(sv)),
+    165: (a, b, c) => getres('u', a, b, c, 2), 171: (a, b, c) => getres('g', a, b, c, 2),   // getresuid getresgid (16-bit)
+    209: (a, b, c) => getres('u', a, b, c, 4), 211: (a, b, c) => getres('g', a, b, c, 4),
+    80: (n, list) => groupsOut(n, list, 2), 205: (n, list) => groupsOut(n, list, 4),   // getgroups (16 and 32 bits)
+    81: (n, list) => groupsIn(n, list, 2), 206: (n, list) => groupsIn(n, list, 4),     // setgroups: root only
+    138: () => lx.cred.euid, 139: () => lx.cred.egid, 215: () => lx.cred.euid, 216: () => lx.cred.egid,   // setfsuid setfsgid: the old one (the fs ids follow the effective ones)
     16: () => 0, 182: () => 0, 95: () => 0, 198: () => 0, 207: () => 0, 212: () => 0,   // lchown chown fchown (and 32)
     60: (m) => { const old = lx.umask; lx.umask = m & 0o777; return old; },  // umask
     191: (res, rl) => { wr32(rl, 0xffffffff); wr32(rl + 4, 0xffffffff); if (res === 3) { wr32(rl, 8 << 20); } return 0; },   // ugetrlimit: stack 8 MiB, the rest unlimited
@@ -2179,8 +2192,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     229: () => -E.ENODATA, 230: () => -E.ENODATA, 231: () => -E.ENODATA,
     232: () => 0, 233: () => 0, 234: () => 0,
     // ---- libc 4 / a.out era ----
-    24: () => 0, 49: () => 0, 47: () => 0, 50: () => 0,                    // get[e]uid, get[e]gid (16-bit): root, as SVGAlib requires
-    23: () => 0, 46: () => 0, 213: () => 0, 214: () => 0,                  // setuid, setgid (16- and 32-bit): root may
+    24: () => lx.cred.ruid & 0xffff, 49: () => lx.cred.euid & 0xffff, 47: () => lx.cred.rgid & 0xffff, 50: () => lx.cred.egid & 0xffff,   // get[e]uid, get[e]gid (16-bit)
+    23: (v) => setid('u', v & 0xffff), 46: (v) => setid('g', v & 0xffff), 213: (v) => setid('u', v >>> 0), 214: (v) => setid('g', v >>> 0),   // setuid, setgid
     101: (from, num, on) => {                                              // ioperm: the ports are the emulated card's
       if (from + num > 0x10000) return -E.EINVAL;
       for (let port = from; port < from + num; port++) {
@@ -2262,6 +2275,71 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     return w;
   };
   lx.firstWake = firstWake;                                            // the page: when to run the machine again
+  // The identity calls' rules (kernel/sys.c): -1 leaves an id as it is; a process that is not root may
+  // set an id only to one of its real, effective or saved ones; the saved one follows a new effective
+  // one when the real one is set (setreuid). `k` is 'u' or 'g'.
+  const id16 = (v) => ((v & 0xffff) === 0xffff ? -1 : v & 0xffff), id32 = (v) => ((v >>> 0) === 0xffffffff ? -1 : v >>> 0);
+  const own = (k, v) => { const c = lx.cred; return v === c[`r${k}id`] || v === c[`e${k}id`] || v === c[`s${k}id`]; };
+  const setid = (k, v) => {
+    const c = lx.cred;
+    if (c.euid === 0) { c[`r${k}id`] = c[`e${k}id`] = c[`s${k}id`] = v; return 0; }
+    if (v === c[`r${k}id`] || v === c[`s${k}id`]) { c[`e${k}id`] = v; return 0; }
+    return -E.EPERM;
+  };
+  const setre = (k, r, e) => {
+    const c = lx.cred, root = c.euid === 0, oldR = c[`r${k}id`];
+    if (!root && ((r !== -1 && r !== c[`r${k}id`] && r !== c[`e${k}id`]) || (e !== -1 && !own(k, e)))) return -E.EPERM;
+    if (r !== -1) c[`r${k}id`] = r;
+    if (e !== -1) c[`e${k}id`] = e;
+    if (r !== -1 || (e !== -1 && e !== oldR)) c[`s${k}id`] = c[`e${k}id`];
+    return 0;
+  };
+  const setres = (k, r, e, sv) => {
+    const c = lx.cred;
+    if (c.euid !== 0 && [r, e, sv].some((v) => v !== -1 && !own(k, v))) return -E.EPERM;
+    if (r !== -1) c[`r${k}id`] = r; if (e !== -1) c[`e${k}id`] = e; if (sv !== -1) c[`s${k}id`] = sv;
+    return 0;
+  };
+  const getres = (k, a, b, d, size) => {
+    const c = lx.cred, put = size === 2 ? (p, v) => { wr8(p, v & 255); wr8(p + 1, (v >>> 8) & 255); } : wr32;
+    put(a, c[`r${k}id`]); put(b, c[`e${k}id`]); put(d, c[`s${k}id`]); return 0;
+  };
+  const groupsOut = (n, list, size) => {
+    const g = lx.cred.groups;
+    if (n === 0) return g.length;
+    if (n < g.length) return -E.EINVAL;
+    g.forEach((v, i) => { if (size === 2) { wr8(list + 2 * i, v & 255); wr8(list + 2 * i + 1, (v >>> 8) & 255); } else wr32(list + 4 * i, v); });
+    return g.length;
+  };
+  const groupsIn = (n, list, size) => {
+    if (lx.cred.euid !== 0) return -E.EPERM;
+    lx.cred.groups = Array.from({ length: n }, (_, i) => (size === 2 ? rd8(list + 2 * i) | (rd8(list + 2 * i + 1) << 8) : rd32(list + 4 * i)));
+    return 0;
+  };
+  /**
+   * Run as `spec` -- a Docker image's User: "name", "uid", "name:group", "uid:gid" -- resolved in the
+   * tree's /etc/passwd and /etc/group as docker run resolves it: a name's uid, primary group and home; a
+   * number with no entry, group 0 and home /; the supplementary groups that list the user's name.
+   * Returns { name, home, uid, gid } for the caller's USER, LOGNAME and HOME.
+   */
+  lx.runAs = (spec) => {
+    const text = (p) => { const b = lx.readFile(p); return b ? new TextDecoder().decode(b) : ''; };
+    const rows = (p) => text(p).split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split(':'));
+    const [u, g] = String(spec).split(':'), pw = rows('/etc/passwd'), gr = rows('/etc/group');
+    const ent = /^\d+$/.test(u) ? pw.find((r) => r[2] === u) : pw.find((r) => r[0] === u);
+    if (!ent && !/^\d+$/.test(u)) throw new Error(`mirage-linux: no user "${u}" in /etc/passwd`);
+    const uid = ent ? +ent[2] : +u, name = ent ? ent[0] : u, home = ent ? ent[5] || '/' : '/';
+    let gid = ent ? +ent[3] : 0;
+    if (g !== undefined && g !== '') {
+      const ge = /^\d+$/.test(g) ? null : gr.find((r) => r[0] === g);
+      if (!/^\d+$/.test(g) && !ge) throw new Error(`mirage-linux: no group "${g}" in /etc/group`);
+      gid = ge ? +ge[2] : +g;
+    }
+    const groups = [...new Set([gid, ...gr.filter((r) => (r[3] || '').split(',').includes(name)).map((r) => +r[2])])];
+    lx.cred = { ruid: uid, euid: uid, suid: uid, rgid: gid, egid: gid, sgid: gid, groups };
+    lx.user = name;
+    return { name, home, uid, gid };
+  };
   lx.syscall = () => {
     const r = cpu.reg, n = r[0] >>> 0, sw = lx.switches;
     checkAlarm();

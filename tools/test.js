@@ -4061,6 +4061,49 @@ await (async () => { const hex = (                                         // na
   } catch (e) { got = e.message.slice(0, 80); }
   eq('MUL and IMUL: SF, ZF, PF of the low result, AF clear, as Docker i386 computes them', got,
     '00000004\n00000080\n00000004\n00000004\n00000004\n00000004\n00000080\n00000000\n00000080\n00000881\n00000080\n00000080\n00000044\n00000044\n00000044\n00000044\n00000044\n00000044\n00000845\n00000084\n00000845\n00000845\n00000044\n00000044\n00000885\n00000805\n00000885\n00000084\n00000044\n00000044\n00000000\n00000004\n00000000\n00000801\n00000000\n00000000\n00000004\n00000080\n00000004\n00000004\n00000885\n00000885\n00000004\n00000080\n00000004\n00000004\n00000004\n00000845\n'); })();
+// tools/linux/creds.asm: a process's identities as Linux changes them, from root -- supplementary groups, the
+// group ids, root kept as the saved uid while the real and effective ones are 1000, root taken back through it,
+// every id given up for 2000, then root, setreuid to 0 and setgroups refused (EPERM) -- as Docker i386 prints
+// them. Every one of these calls succeeded and changed nothing: a Docker image's User had no effect.
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/creds.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004081c0200003c0200000700000000100000b8c7000000cd80e86b010000' +
+    'b8ce000000bb02000000b904820408cd80e855010000b8cd000000bb00000000b900000000cd80e83f010000b8d20000' +
+    '00bb64000000b964000000ba64000000cd80e824010000b8ca000000cd80e818010000b8d0000000bbe8030000b9e803' +
+    '0000ba00000000cd80e8fd000000b8c7000000cd80e8f1000000b8c9000000cd80e8e5000000b8d5000000bb00000000' +
+    'cd80e8d4000000b8c7000000cd80e8c8000000b8c9000000cd80e8bc000000b8d0000000bbd0070000b9d0070000bad0' +
+    '070000cd80e8a1000000b8d1000000bb1c820408b920820408ba24820408cd80e886000000a11c820408e87c000000a1' +
+    '20820408e872000000a124820408e868000000b8d5000000bb00000000cd80e857000000b8cb000000bbffffffffb900' +
+    '000000cd80e841000000b8ce000000bb01000000b904820408cd80e82b000000b8cd000000bb00000000b900000000cd' +
+    '80e815000000b818000000cd80e809000000b80100000031dbcd8060bf28820408b908000000c1c00489c283e20f8a92' +
+    '0c820408881747e2edc6070ab804000000bb01000000b928820408ba09000000cd8061c3050000000700000030313233' +
+    '343536373839616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/CREDS']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('identities: setres[ug]id, setuid through the saved uid, groups, EPERM once root is given up, as Docker i386', got,
+    "00000000\n00000000\n00000002\n00000000\n00000064\n00000000\n000003e8\n000003e8\n00000000\n000003e8\n00000000\n00000000\n00000000\n000007d0\n000007d0\n000007d0\nffffffff\nffffffff\nffffffff\n00000002\n000007d0\n"); })();
+// lx.runAs (a Docker image's User): a name's uid, primary group, home and the supplementary groups listing it,
+// "uid:gid", "name:group", a uid with no /etc/passwd entry (group 0, home /), an unknown name refused; and an
+// imported image's entry carries its User, its HOME then left to /etc/passwd.
+await (async () => { let got;
+  try {
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc), enc = new TextEncoder();
+    lx.addFile('/etc/passwd', enc.encode('root:x:0:0:root:/root:/bin/sh\napp:x:1001:1002:App:/home/app:/bin/sh\n'));
+    lx.addFile('/etc/group', enc.encode('root:x:0:\napp:x:1002:\naudio:x:29:app,bob\nstaff:x:50:\n'));
+    const show = (u) => `${u.name}:${u.uid}:${u.gid}:${u.home}:${lx.cred.euid}/${lx.cred.egid}/${lx.cred.groups.join('+')}`;
+    const a = show(lx.runAs('app')), b = show(lx.runAs('1001:50')), c = show(lx.runAs('app:staff')), d = show(lx.runAs('4242'));
+    let e = 'taken'; try { lx.runAs('nobody-here'); } catch { e = 'refused'; }
+    const { dockerEntry } = await import('../src/oasis-docker.js'), en = dockerEntry({ config: { Cmd: ['/bin/sh'], User: 'app' } });
+    got = [a, b, c, d, e, en.user, en.env.HOME === undefined].join(' ');
+  } catch (err) { got = err.message.slice(0, 80); }
+  eq('identities: runAs resolves a Docker User in /etc/passwd and /etc/group; an imported entry keeps it', got,
+    'app:1001:1002:/home/app:1001/1002/1002+29 app:1001:50:/home/app:1001/50/50+29 app:1001:50:/home/app:1001/50/50+29 4242:4242:0:/:4242/0/0 refused app true'); })();
 // tools/linux/cvtpi.asm: the conversions between SSE and MMX with no prefix (Unreal Tournament's Pentium III code):
 // CVTPS2PI of 2.5 and -2.5 under each of MXCSR's rounding controls (nearest even, down, up, toward zero) --
 // it was always to nearest, MXCSR unread -- CVTTPS2PI of 3.9 and -3.9 (truncated), CVTPI2PS of -7 and 9.

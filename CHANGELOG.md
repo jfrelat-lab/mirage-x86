@@ -5,6 +5,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-23
 
+- Docker images run as the user they declare.
 - **SuperTuxKart** (2009) races on the Linux machine: Debian's own build, at the keyboard (no sound yet).
 - **Docker Hub images in the browser**: an i386 image (BusyBox, Python on Alpine) runs on the Linux machine with no Docker anywhere.
 - **Tux Racer** (2001) plays on the Linux machine: Debian's own build, its menus and races, at the keyboard.

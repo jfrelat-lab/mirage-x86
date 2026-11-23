@@ -81,8 +81,12 @@ if (process.env.MIRAGE_LXCONSOLE) lx.consoleStdio();   // stdio on /dev/tty1, a 
 const extraEnv = Object.entries(JSON.parse(process.env.MIRAGE_LXENV || '{}')).map(([k, v]) => `${k}=${v}`);
 if (process.env.MIRAGE_LXFB) { const [w, h] = process.env.MIRAGE_LXFB.split('x').map(Number); lx.setFb(w, h); }   // /dev/fb0's size (machine.fb)
 if (process.env.MIRAGE_LXHZ) lx.hz = Number(process.env.MIRAGE_LXHZ) || 0;   // a 1997 kernel's timeouts (machine.hz)
-if (process.env.MIRAGE_LXUSER) { const u = lx.setUser(process.env.MIRAGE_LXUSER); extraEnv.push(`USER=${u}`, `LOGNAME=${u}`); }   // the user's name (oasis run: the host's)
-lx.load(image, [ROOT || SPEC ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...extraEnv]);
+// MIRAGE_LXRUNAS=<user[:group]>: run as an image's own user (a Docker image's User, entry.user), resolved in its
+// /etc/passwd: its ids, USER, LOGNAME, and its HOME unless the image sets one. Else MIRAGE_LXUSER names uid 0.
+let home = JSON.parse(process.env.MIRAGE_LXENV || '{}').HOME || '/root';
+if (process.env.MIRAGE_LXRUNAS) { const u = lx.runAs(process.env.MIRAGE_LXRUNAS); extraEnv.push(`USER=${u.name}`, `LOGNAME=${u.name}`); if (!JSON.parse(process.env.MIRAGE_LXENV || '{}').HOME) home = u.home; }
+else if (process.env.MIRAGE_LXUSER) { const u = lx.setUser(process.env.MIRAGE_LXUSER); extraEnv.push(`USER=${u}`, `LOGNAME=${u}`); }   // the user's name (oasis run: the host's)
+lx.load(image, [ROOT || SPEC ? prog : '/w/' + basename(prog), ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', `HOME=${home}`, 'LANG=C', ...extraEnv.filter((kv) => !kv.startsWith('HOME='))]);
 // A guest second as the guest's clock counts it (lx.mono): 18.2 PIT ticks were 3.3 million cycles,
 // a thirtieth of one — MIRAGE_LXSECS=600 stopped after 20 of the program's seconds.
 const SEC = mc.cyclesPerSecond || 1e8, SECS = Number(process.env.MIRAGE_LXSECS) || 0;
@@ -115,6 +119,8 @@ while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (shoot) shoo
 if (process.env.MIRAGE_LXSTATS) {               // what a benchmark's score is made of: instructions and host time
   const n = mc.cpu.cycles - cyc0, s = (performance.now() - hostT0) / 1000;
   console.error(`mirage-linux: ${(n / 1e6).toFixed(1)} M instructions in ${s.toFixed(2)} s of host time, ${(n / s / 1e6).toFixed(0)} M a second, ${(n / (mc.rec.stats.exec - exec0)).toFixed(1)} a dispatch`);
+  const st = mc.rec.stats;                       // what the recompiler did for it: translations, flushes of its cache, invalidations by writes
+  console.error(`mirage-linux: ${st.compiles} blocks compiled (${st.memoHits} from the memo), ${st.flushes} cache flushes, ${st.invalidations} invalidations, ${st.t2compiles} tier-2 regions`);
 }
 if (shoot) shoot(true);                         // the screen as the run left it
 if (WAV) {

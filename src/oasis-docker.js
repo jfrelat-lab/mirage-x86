@@ -135,8 +135,8 @@ export function dockerEntry(config) {
   const c = config.config || {}, argv = [...(c.Entrypoint || []), ...(c.Cmd || [])];
   if (!argv.length) argv.push('/bin/sh');
   const env = Object.fromEntries((c.Env || []).map((kv) => { const i = kv.indexOf('='); return [kv.slice(0, i), kv.slice(i + 1)]; }));
-  if (!env.HOME) env.HOME = '/root';                                   // as docker run sets it for root
-  return { run: argv[0], ...(argv.length > 1 ? { args: argv.slice(1) } : {}), cwd: c.WorkingDir || '/', env };
+  if (!env.HOME && !c.User) env.HOME = '/root';                       // as docker run sets it for root (a User's comes from /etc/passwd)
+  return { run: argv[0], ...(argv.length > 1 ? { args: argv.slice(1) } : {}), cwd: c.WorkingDir || '/', env, ...(c.User ? { user: c.User } : {}) };
 }
 
 /**
