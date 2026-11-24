@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>MIRAGE — OASIS images</title>
-<meta name="description" content="OASIS images: recipes of the period PC, each program fetched from where its authors published it and run by MIRAGE.">
+<title>OASIS — run by MIRAGE, compiled by PRISM</title>
+<meta name="description" content="OASIS: software images for the browser, each program fetched from where its authors published it (Debian, idgames, Docker Hub), run as published by MIRAGE or compiled from its sources by PRISM.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="MIRAGE">
-<meta property="og:title" content="MIRAGE — OASIS images">
-<meta property="og:description" content="OASIS images: recipes of the period PC, each program fetched from where its authors published it and run by MIRAGE.">
+<meta property="og:title" content="OASIS — run by MIRAGE, compiled by PRISM">
+<meta property="og:description" content="OASIS: software images for the browser, each program fetched from where its authors published it (Debian, idgames, Docker Hub), run as published by MIRAGE or compiled from its sources by PRISM.">
 <meta property="og:url" content="https://mirage-x86.pages.dev/oasis.html">
 <meta property="og:image" content="https://mirage-x86.pages.dev/assets/og.png">
 <meta property="og:image:width" content="1200">
@@ -37,6 +37,7 @@
   h1 { font-size: 22px; margin: 0 0 6px; color: #e6f0f6; letter-spacing: .02em; }
   h1 span { color: var(--accent); }
   .lede { color: var(--dim); max-width: 78ch; margin: 0 0 18px; }
+  .lede a { color: var(--accent); }
   pre, code { font: 13px ui-monospace, Menlo, monospace; }
   .cmd { background: #05080b; border: 1px solid var(--edge); border-radius: 7px; padding: 10px 12px; margin: 0 0 22px; color: #cfe3d8; overflow-x: auto; }
   .cmd b { color: var(--accent); font-weight: 400; }
@@ -98,11 +99,14 @@
   <nav class="site" aria-label="Site"><a href="machines.html">Machines</a><a href="oasis.html" aria-current="page">OASIS</a><a href="dos.html">DOS player</a><a href="boot.html">Bare PC</a><a href="changes.html">What's new</a><a href="https://github.com/jfrelat-lab/mirage-x86/tree/main/docs">Docs</a><a href="https://github.com/jfrelat-lab/mirage-x86">Source</a><a class="star" href="https://github.com/jfrelat-lab/mirage-x86" title="MIRAGE on GitHub: a star helps others find it">★ Star on GitHub</a></nav>
 </header>
 <main>
-  <h1><span>OASIS</span> — images of the period PC</h1>
+  <h1><span>OASIS</span> — software images, run by MIRAGE, compiled by PRISM</h1>
   <p class="lede">An OASIS image is a recipe, not an archive: the world a program needs (DOS, Linux user
     space or Win32, all answered in JavaScript), the machine, and layers of files fetched from where their
-    authors published them — Debian's archive, idgames, the examples of this repository. Nothing below
-    is copied into MIRAGE; each layer says where it comes from.</p>
+    authors published them — Debian's archive, idgames, Docker Hub, the examples of this repository. The
+    program runs as it was published, its x86 code by <a href="machines.html">MIRAGE</a>; an image may
+    instead carry its sources, compiled to JavaScript by <a href="https://github.com/jfrelat-lab/prism">PRISM</a>
+    (that half is coming: <a href="https://github.com/jfrelat-lab/mirage-x86/blob/main/docs/ROADMAP.md">the roadmap</a>'s
+    manifest v2). Nothing below is copied in; each layer says where it comes from.</p>
   <pre class="cmd"><b>node tools/oasis.mjs serve --open</b>          every image, in the Machines page, at home
 <b>node tools/oasis.mjs run</b> linux/mirage         one image, in a window of its own
 <b>node tools/oasis.mjs run</b> linux/debian-bookworm -c 'ls /'      in the terminal
