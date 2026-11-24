@@ -3,6 +3,7 @@
 // 0040:0000 and the 80x25 text screen at B800:0000. The text routines are
 // exposed so the JS shell prints through the exact same path as guest code.
 
+import { snapHook } from './snapshot.js';
 import { ZF, CF, ES, CS } from './cpu.js';
 import { installVGA } from './vga.js';
 import { installXMS } from './xms.js';
@@ -1208,6 +1209,10 @@ export function installBIOS(machine, opts = {}) {
   let pelMask = 0xff;                            // 0x3C6 is a real register, not a constant 0xFF:
   machine.onPortRead(0x3c6, () => pelMask);      // the standard VGA probe writes it and reads back
   machine.onPortWrite(0x3c6, (_p, _s, v) => { pelMask = v & 0xff; });
+  // The DAC's indexes, the pel mask and the last retrace reported, for a snapshot (src/snapshot.js); the
+  // beam's cached figures are recomputed from the VGA at the next read (bStamp -1).
+  snapHook(machine, 'vga-ports', () => ({ dacW, dacR, latch, pelMask, vrSeen }),
+    (o) => { ({ dacW, dacR, latch, pelMask, vrSeen } = o); bStamp = -1; });
 
   // The Sound Blaster 16's DSP, mixer and DMA playback are src/sb.js, installed with the DMA controllers.
 

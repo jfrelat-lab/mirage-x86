@@ -3,6 +3,7 @@
 // wiring (drag-drop, URL params, HUD) lives in main.js; this stays focused on
 // orchestration so it could also be driven headlessly.
 
+import { saveMachine, loadMachine, packSnapshot, unpackSnapshot } from './snapshot.js';
 import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
 import { installDOS, DOS_PLAYER_MEM, playerMem } from './dos.js';
@@ -51,7 +52,10 @@ export class Mirage {
     this.machine = new Machine(opts.memSize ? { memSize: opts.memSize } : opts.mem ? playerMem(opts.mem) : DOS_PLAYER_MEM);
     this.machine.timerAuto = false;   // browser paces the PIT to wall-clock (18.2 Hz) in _loop() below
     this.machine.vcpuHz = opts.vcpuHz ?? VCPU_HZ;   // emulated CPU speed cap; null = unthrottled
-    this.machine.wallClockMs = () => performance.now();   // anchors the 0x3DA beam to real 70 Hz
+    // Anchors the 0x3DA beam to real 70 Hz, the PIT's count and the audio's timeline. `wallOffset` keeps
+    // that clock going on from a kept moment (resume, src/snapshot.js): the page's own starts at 0.
+    this.machine.wallOffset = 0;
+    this.machine.wallClockMs = () => performance.now() + this.machine.wallOffset;
     // xms/ems: false boots without that memory manager (src/dos.js playerOptions, ?xms=0 / ?ems=0).
     this.bios = installBIOS(this.machine, { xms: opts.xms, ems: opts.ems });
     this.vfs = new VFS();
@@ -215,6 +219,17 @@ export class Mirage {
     if (this.shell.state !== 'input') return;
     this.shell.print(line + '\r\n');
     this.shell.dispatch(line);        // may mount a game's files first (?run=GAMES\X\Y.EXE)
+  }
+  /** The running machine and its shell, as bytes to keep (src/snapshot.js): `resume` takes them back. */
+  async keep(meta = {}) {
+    return packSnapshot(saveMachine(this.machine, { with: { shell: this.shell } }), { ...meta, kept: Date.now(), cycles: this.machine.cpu.cycles });
+  }
+  /** Go on from bytes `keep` made, in this player as built (the same page, before anything runs). */
+  async resume(bytes) {
+    const { snap, meta } = await unpackSnapshot(bytes);
+    loadMachine(this.machine, snap, { with: { shell: this.shell } });
+    this._lastTick = this._lastLoop = performance.now();
+    return meta;
   }
   setProfiling(on) { this.machine.rec.profiling = on; }
   stats() {

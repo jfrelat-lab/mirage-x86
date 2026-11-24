@@ -30,6 +30,7 @@ import { installAudio } from '../src/audio.js';
 import { createOPL } from '../src/opl.js';
 import { createHash } from 'crypto';
 import { VFS } from '../src/vfs.js';
+import { snapshot as snapGraph, restore as snapRestore, saveMachine, loadMachine, forgetTranslations, packSnapshot, unpackSnapshot } from '../src/snapshot.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -8085,6 +8086,76 @@ await (async () => { let got;
     got = [tries < 32, Math.abs(a - 17045) < 40 ? 'ok' : a, edges >= 70 && edges <= 71].join(' ');
   } catch (e) { got = e.message.slice(0, 80); } finally { performance.now = pn; }
   eq('browser clock: a frame timed by PIT counter 0 between retraces, and every retrace seen (Unreal)', got, 'true ok true'); })();
+
+// ---- src/snapshot.js: a running machine kept and taken back -------------------------------------------
+// The DOS player's machine running PLASMA13 for 20 slices, kept (packed and unpacked as the page keeps
+// it) and taken back into a machine built afresh; then both it and the control -- the same run, which
+// only forgets its translations there -- run 20 slices more: all of memory, the registers and the
+// cycle count the same. (tools/snapcheck.mjs runs the golden set's 42 programs and games this way.)
+await (async () => { const { readFileSync } = await import('fs');
+  let got;
+  try {
+    const mk = () => { const vfs = new VFS(), mc = new Machine(DOS_PLAYER_MEM), bios = installBIOS(mc), dos = installDOS(mc, vfs);
+      dos.load(new Uint8Array(readFileSync(new URL('../demos/PLASMA13.COM', import.meta.url))), '', 'C:\\PROG'); return mc; };
+    const a = mk(); for (let i = 0; i < 20; i++) a.runSlice(200000);
+    const bytes = await packSnapshot(saveMachine(a), { image: 'PLASMA13' });
+    const b = mk(); loadMachine(b, (await unpackSnapshot(bytes)).snap);
+    forgetTranslations(a);
+    for (let i = 0; i < 20; i++) { a.runSlice(200000); b.runSlice(200000); }
+    const h = (mc) => createHash('sha1').update(mc.mem.u8).update(Buffer.from(mc.cpu.reg.buffer)).digest('hex');
+    got = [h(a) === h(b), a.cpu.cycles === b.cpu.cycles, a.cpu.eip === b.cpu.eip, a.cpu.cycles > 4e6, bytes.length < 1 << 20].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: PLASMA13 kept, packed and taken back goes on as the uninterrupted machine', got, 'true true true true true'); })();
+// The recompiler's address mask is state it learned (A20 opened through port 92h), not a cache: a
+// machine taken back with A20 open wrapped its accesses at 1 MiB, and mesha wrote its 32-bit tables
+// over the video BIOS (0xC974D for 0xFC974D).
+await (async () => {
+  let got;
+  try {
+    const a = new Machine({ memSize: 16 << 20 }); installBIOS(a); a.ioWrite(0x92, 1, 2);
+    const b = new Machine({ memSize: 16 << 20 }); installBIOS(b);
+    loadMachine(b, saveMachine(a));
+    got = [b.mem.a20, b.rec.MM.toString(16), b.mem.mask.toString(16)].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: A20 opened before the snapshot is open for the recompiler after it', got, 'true ffffff ffffff'); })();
+// State a module keeps in its closure's own variables comes through snapHook: the DAC's write index and
+// which of R, G, B comes next. A colour begun before the snapshot (index 5, R written) is finished
+// after it (G, B), and lands in entry 5 as R G B.
+await (async () => {
+  let got;
+  try {
+    const a = new Machine({ memSize: 16 << 20 }); const ba = installBIOS(a);
+    a.ioWrite(0x3c8, 1, 5); a.ioWrite(0x3c9, 1, 11);
+    const b = new Machine({ memSize: 16 << 20 }); const bb = installBIOS(b);
+    loadMachine(b, saveMachine(a));
+    b.ioWrite(0x3c9, 1, 22); b.ioWrite(0x3c9, 1, 33);
+    got = [...bb.dac.subarray(15, 18)].join(',');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: the DAC index and component kept by its hook (a colour begun before, finished after)', got, '11,22,33'); })();
+// What JSON alone loses, kept by the packed form: NaN, -0, Infinity, undefined, a bigint; an object shared
+// by two fields stays one object; a field set at run time where the fresh object has none is made.
+await (async () => {
+  let got;
+  try {
+    const shared = { k: 1 }, src = { a: NaN, b: -0, c: -Infinity, d: undefined, e: 12n, f: shared, g: shared, h: new Float64Array([1.5, NaN]), m: new Map([[3, 'x']]) };
+    const { snap } = await unpackSnapshot(await packSnapshot(snapGraph(src)));
+    const dst = { a: 0, b: 0, c: 0, d: 0, e: 0n, f: null, g: null, h: new Float64Array(2), m: new Map() };
+    snapRestore(dst, snap);
+    got = [Number.isNaN(dst.a), Object.is(dst.b, -0), dst.c, 'd' in dst && dst.d === undefined, dst.e, dst.f === dst.g, dst.f.k, dst.h[0], Number.isNaN(dst.h[1]), dst.m.get(3)].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: packed values JSON would lose (NaN, -0, Infinity, undefined, bigint) and shared objects', got, 'true true -Infinity true 12 true 1 1.5 true x'); })();
+
+// Restored in place: a closure that holds the fresh machine's typed array (as installers hold mem.u8,
+// the VGA's planes) sees the snapshot's bytes, and a view on the same buffer (u16 beside u8) with them.
+await (async () => {
+  let got;
+  try {
+    const sbuf = new ArrayBuffer(8), src = { u8: new Uint8Array(sbuf), u16: new Uint16Array(sbuf) }; src.u8.set([1, 2, 3, 4, 5, 6, 7, 8]);
+    const dbuf = new ArrayBuffer(8), dst = { u8: new Uint8Array(dbuf), u16: new Uint16Array(dbuf) }, held = dst.u8, read = () => held[2];
+    snapRestore(dst, snapGraph(src));
+    got = [read(), dst.u8 === held, dst.u16[0].toString(16)].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: typed arrays restored in place, so a closure holding one sees the restored bytes', got, '3 true 201'); })();
 
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }

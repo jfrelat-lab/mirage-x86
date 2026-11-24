@@ -109,6 +109,18 @@ $('recBtn').onclick = async () => {
 // Audio may start only after a gesture: the first key or click starts it.
 for (const ev of ['keydown', 'pointerdown']) window.addEventListener(ev, () => { if (session && session.audio && soundOn) session.audio.start(); }, { once: true, capture: true });
 
+// ---- Kept moments: a running machine saved in this browser (src/snapshot.js), started again from there ----
+// Kept in Cache Storage, one per title: what a demo precalculated, a game loaded or reached, is not
+// done again. Nothing leaves the browser.
+const MOMENTS = 'mirage-moments';
+const momentReq = (world, id) => new Request(`moments/${world}/${encodeURIComponent(id)}`);
+const moments = {
+  async get(world, id) { try { const r = await (await caches.open(MOMENTS)).match(momentReq(world, id)); return r ? new Uint8Array(await r.arrayBuffer()) : null; } catch { return null; } },
+  async put(world, id, bytes) { await (await caches.open(MOMENTS)).put(momentReq(world, id), new Response(bytes)); },
+  async drop(world, id) { try { await (await caches.open(MOMENTS)).delete(momentReq(world, id)); } catch { /* none */ } },
+};
+const kib = (n) => (n < 1 << 20 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
 async function examples() {
   try { return await (await fetch('examples/manifest.json')).json(); } catch { return []; }
 }
@@ -133,8 +145,35 @@ async function dos() {
   syncSound();
   // Every title is a directory of C:\GAMES at once, fetched when first used, and a command of its own.
   for (const e of list) if (e.kind === 'zip') app.registerTitle({ name: e.run, zip: e.file, adds: e.add || [], run: e.run, args: e.args });
+  let current = null;
+  const keepBtn = $('keepBtn'), forgetBtn = $('forgetBtn');
+  keepBtn.hidden = typeof caches === 'undefined';
+  keepBtn.onclick = async () => {
+    if (!current || app.shell.state !== 'running') { log('Keep: nothing runs yet -- start a title, then keep the moment you want to come back to'); return; }
+    const was = app.paused; app.paused = true;
+    try {
+      const bytes = await app.keep({ world: 'dos', id: current.id });
+      await moments.put('dos', current.id, bytes);
+      forgetBtn.hidden = false;
+      log(`${current.run || current.id}: this moment is kept in this browser (${kib(bytes.length)}); its next start goes on from here`);
+    } catch (err) { log(`Keep: ${err.message || err}`); }
+    app.paused = was;
+  };
+  forgetBtn.onclick = async () => { if (!current) return; await moments.drop('dos', current.id); log(`${current.run || current.id}: the kept moment is forgotten`); go({ m: 'dos', run: current.id }); };
   const start = async (e) => {
     if (app.shell.state !== 'input') { go({ m: 'dos', run: e.id }); return; }   // something runs: start afresh
+    current = e;
+    const kept = await moments.get('dos', e.id);
+    forgetBtn.hidden = !kept;
+    if (kept) {
+      try {
+        const meta = await app.resume(kept);
+        log(`${e.run || e.id}: going on from the moment kept ${new Date(meta.kept).toLocaleString()} (${kib(kept.length)}, ${(meta.cycles / 1e6).toFixed(0)} M instructions in) -- Forget starts it afresh`);
+        canvas.focus();
+        for (const c of $('shelf').querySelectorAll('.card')) c.setAttribute('aria-selected', String(list[+c.dataset.i] === e));
+        return;
+      } catch (err) { await moments.drop('dos', e.id); log(`${e.run || e.id}: the kept moment cannot be taken back (${err.message || err}); it is forgotten, starting afresh`); go({ m: 'dos', run: e.id }); return; }
+    }
     if (e.kind === 'dos') {
       const name = e.file.split('/').pop().toUpperCase();
       app.mountFile(name, new Uint8Array(await (await fetch(e.file)).arrayBuffer()));
