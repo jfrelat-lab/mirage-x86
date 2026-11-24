@@ -106,12 +106,12 @@ export async function dockerPull(client, repo, ref, platform = 'linux/386', onPr
   const config = JSON.parse(new TextDecoder().decode(await blob(m.config, `${repo}'s config`)));
   if (config.architecture && config.architecture !== want.architecture) throw new Error(`oasis: ${repo}:${ref} is ${config.architecture}, not ${want.architecture}`);
   const layers = [];
-  if (!withLayers) return { config, layers, digest };
+  if (!withLayers) return { config, layers, digest, manifest: m };
   for (const [i, l] of m.layers.entries()) {
     if (!/tar(\+gzip|\+zstd)?$|tar\.gzip$|rootfs\.diff\.tar\.gzip$/.test(l.mediaType || '')) throw new Error(`oasis: ${repo}: a layer of type ${l.mediaType} (only tar, tar+gzip, tar+zstd)`);
     layers.push({ digest: l.digest, bytes: await blob(l, `layer ${i + 1} of ${m.layers.length} (${Math.round(l.size / 1024)} KiB)`) });
   }
-  return { config, layers, digest };
+  return { config, layers, digest, manifest: m };
 }
 
 /**

@@ -75,6 +75,20 @@
   dialog ul { margin: 0 0 10px; padding-left: 18px; overflow-wrap: anywhere; }
   dialog a { color: #8fd3ff; text-decoration: none; } dialog a:hover { text-decoration: underline; }
   dialog form { text-align: right; margin: 0; }
+  .hub { background: var(--panel); border: 1px solid #1d6a55; border-radius: 10px; padding: 14px; margin: 0 0 18px; }
+  .hub h2, .kept h2 { font-size: 15px; margin: 0 0 6px; color: #e6f0f6; }
+  .hub p, .kept p { color: var(--dim); margin: 0 0 10px; font-size: 13px; }
+  .hub form { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+  .hub input { flex: 1 1 260px; min-width: 0; background: #05080b; color: var(--ink); border: 1px solid var(--edge); border-radius: 6px; padding: 6px 10px; font: inherit; }
+  .hub button.btn { border: none; cursor: pointer; font: inherit; font-weight: 700; }
+  .hub .ex { color: #8fd3ff; cursor: pointer; text-decoration: underline dotted; }
+  #hubOut table { margin: 8px 0 10px; }
+  #hubOut td.k { width: 8ch; white-space: nowrap; }
+  #hubOut .err { color: var(--warn); }
+  .kept { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 14px; margin: 0 0 18px; }
+  .kept li { margin: 3px 0; } .kept ul { margin: 0; padding-left: 18px; }
+  .linkbtn { background: none; border: none; color: #8fd3ff; cursor: pointer; font: inherit; padding: 0; text-decoration: underline dotted; }
+  .badge.home { color: #8fd3ff; border-color: #24506b; }
   details pre { background: #05080b; border: 1px solid var(--edge); border-radius: 7px; padding: 10px; overflow-x: auto; color: #cfe3d8; max-height: 420px; }
 </style>
 </head>
@@ -93,6 +107,24 @@
 <b>node tools/oasis.mjs run</b> linux/mirage         one image, in a window of its own
 <b>node tools/oasis.mjs run</b> linux/debian-bookworm -c 'ls /'      in the terminal
 <b>node tools/oasis.mjs pull</b> linux/doom-1994       fetch its layers into ~/.cache/oasis</pre>
+  <section class="hub" id="docker">
+    <h2>From Docker Hub</h2>
+    <p>An i386 image of Docker Hub's, run here with no Docker: its linux/386 manifest and layers come through
+      this site's relay (anonymous, Docker Hub's public <code>i386/</code> images only), its layers are laid
+      over one another in the page, and its own command starts on the Linux machine's console. Many images
+      need what MIRAGE-LINUX has not yet — a network, above all — and a server waits for clients it cannot get.</p>
+    <form id="hubForm"><input id="hubRef" name="ref" placeholder="i386/alpine" aria-label="A Docker Hub image: i386/name or i386/name:tag" autocomplete="off" spellcheck="false">
+      <button class="btn" type="submit">Look up</button></form>
+    <p>For instance <span class="ex" data-ex="i386/alpine">i386/alpine</span>, <span class="ex" data-ex="i386/busybox">i386/busybox</span>,
+      <span class="ex" data-ex="i386/python:3.12-alpine">i386/python:3.12-alpine</span>, <span class="ex" data-ex="i386/debian:bookworm-slim">i386/debian:bookworm-slim</span>.
+      On a computer: <code>node tools/oasis.mjs import docker://i386/alpine</code>.</p>
+    <div id="hubOut"></div>
+  </section>
+  <section class="kept" id="kept" hidden>
+    <h2>Your files in this browser</h2>
+    <p>What a Linux image's programs wrote in its home directory ($HOME), kept here between visits and laid over the image when it starts again. Nothing leaves this browser.</p>
+    <ul id="keptList"></ul>
+  </section>
   <div id="list">loading…</div>
 </main>
 <dialog id="licdlg" aria-labelledby="licdlg-title">
@@ -105,7 +137,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const REPO = 'https://github.com/jfrelat-lab/mirage-x86/blob/main/';
 const src = (s) => /^https?:/.test(s) ? `<a href="${esc(s)}">${esc(s)}</a>` : `<a href="${esc(REPO + s)}">${esc(s)}</a> <span class="name">(this repository)</span>`;
 const layer = (l) => {
-  if (l.docker) return ['docker', `the Docker image <code>${esc(l.docker)}</code> (${esc(l.platform || 'linux/386')}), exported whole`, '/'];
+  if (l.docker) return ['docker', `the Docker Hub image <code>${esc(l.docker)}</code> (${esc(l.platform || 'linux/386')}): its layers from the registry, laid over one another`, '/'];
   if (l.deb) return ['deb', src(l.deb), l.into ? '/' + l.into : '/'];
   if (l.tar) return ['tar', src(l.tar), l.into ? '/' + l.into : '/'];
   if (l.zip) return ['zip', src(l.zip), 'C:\\ (DOS) or /'];
@@ -127,10 +159,62 @@ const runLink = (m) => {
       return { href: `dos.html?${q}`, note: '' };
     }
   }
-  if (m.world === 'linux') return { href: `machines.html?m=linux&run=${encodeURIComponent(m.name)}`, note: 'needs <code>node tools/oasis.mjs serve</code>: its layers come from Debian\'s and idgames\' servers, which a page cannot read directly' };
+  if (m.world === 'linux' || m.world === 'win32') return { href: `machines.html?m=${m.world}&run=${encodeURIComponent(m.name)}`, note: '' };
   return null;
 };
 const list = document.getElementById('list');
+const size = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const { keptHomes, forgetHome } = await import('./src/oasis-web.js');
+let kept = new Map();
+/*
+ * YOUR FILES: the home directories this browser keeps (src/oasis-home.js, saved by the Machines page),
+ * each forgotten on its own -- the image then starts as its recipe has it.
+ */
+const showKept = async () => {
+  kept = new Map((await keptHomes()).map((h) => [h.name, h.bytes]));
+  const box = document.getElementById('kept');
+  box.hidden = !kept.size;
+  document.getElementById('keptList').innerHTML = [...kept].map(([n, b]) => `<li><code>${esc(n)}</code> · ${size(b)} · <button class="linkbtn" type="button" data-forget="${esc(n)}">forget</button></li>`).join('');
+};
+await showKept();
+document.getElementById('kept').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-forget]'); if (!b) return;
+  if (!confirm(`Forget the files ${b.dataset.forget} keeps in this browser? It starts again as its recipe has it.`)) return;
+  await forgetHome(b.dataset.forget); await showKept();
+  document.querySelectorAll(`[id="${CSS.escape(b.dataset.forget)}"] .badge.home`).forEach((el) => el.remove());
+});
+/*
+ * FROM DOCKER HUB: an image looked up through the relay (src/oasis-docker.js) -- its linux/386 manifest,
+ * its config -- and shown before it runs: the platform, its layers and their size, its command, user and
+ * working directory, the digest that pins it. Run starts it on the Linux machine (machines.html?docker=).
+ */
+const hubOut = document.getElementById('hubOut'), hubRef = document.getElementById('hubRef');
+const lookUp = async (raw) => {
+  const D = await import('./src/oasis-docker.js');
+  hubOut.innerHTML = '<p>looking it up…</p>';
+  try {
+    const { repo, ref } = D.dockerRef(raw.trim() || 'i386/alpine');
+    const { config, digest, manifest } = await D.dockerPull(D.relayClient('oasis-fetch'), repo, ref, 'linux/386', (t) => { hubOut.innerHTML = `<p>${esc(t)}…</p>`; }, { withLayers: false });
+    const e = D.dockerEntry(config), c = config.config || {}, total = manifest.layers.reduce((n, l) => n + (l.size || 0), 0);
+    const name = `docker/${repo.slice(5)}:${ref}`, run = `machines.html?m=linux&docker=${encodeURIComponent(`${repo}:${ref}`)}`;
+    history.replaceState(null, '', `?docker=${encodeURIComponent(`${repo}:${ref}`)}#docker`);
+    const rows = [
+      ['image', `<code>${esc(repo)}:${esc(ref)}</code> · ${esc(config.os || 'linux')}/${esc(config.architecture || '386')}${config.created ? ` · built ${esc(String(config.created).slice(0, 10))}` : ''} · <a href="https://hub.docker.com/r/${esc(repo)}">on Docker Hub</a>`],
+      ['layers', `${manifest.layers.length}, ${size(total)} to fetch (compressed) — kept in this browser after the first run`],
+      ['runs', `<code>${esc([e.run, ...(e.args || [])].join(' '))}</code> in <code>${esc(e.cwd)}</code>${e.user ? ` as <code>${esc(e.user)}</code>` : ' as root'}`],
+      ['env', `<code>${esc(Object.entries(e.env).map(([k, v]) => `${k}=${v}`).join(' ')) || '—'}</code>`],
+      ['pinned', `<code>${esc(digest)}</code>`],
+      ...(c.ExposedPorts ? [['ports', `${esc(Object.keys(c.ExposedPorts).join(', '))} — not reachable: MIRAGE-LINUX has no network yet`]] : []),
+      ...(kept.has(name) ? [['yours', `${size(kept.get(name))} of files kept from your last visit`]] : []),
+    ];
+    hubOut.innerHTML = `<table>${rows.map(([k, v]) => `<tr><td class="k">${k}</td><td>${v}</td></tr>`).join('')}</table>
+      <div class="actions"><a class="btn" href="${esc(run)}">Run</a><span class="name">on the Linux machine, its shell on the console</span></div>`;
+  } catch (err) { hubOut.innerHTML = `<p class="err">${esc(err.message || err)}</p>`; }
+};
+document.getElementById('hubForm').addEventListener('submit', (ev) => { ev.preventDefault(); lookUp(hubRef.value); });
+document.getElementById('docker').addEventListener('click', (ev) => { const x = ev.target.closest('[data-ex]'); if (x) { hubRef.value = x.dataset.ex; lookUp(x.dataset.ex); } });
+const wantDocker = new URLSearchParams(location.search).get('docker');
+if (wantDocker) { hubRef.value = wantDocker; lookUp(wantDocker); }
 try {
   const index = await (await fetch('oasis/index.json')).json();
   const images = await Promise.all(index.map(async (x) => ({ ...(await (await fetch(`oasis/images/${x.name}.json`)).json()), name: x.name })));
@@ -143,7 +227,7 @@ try {
         <div>
           <div class="name">${esc(m.name)}</div>
           <div class="title">${esc(m.title)}</div>
-          <div class="badges"><span class="badge world">${esc(m.world)}</span>${m.year ? `<span class="badge">${esc(m.year)}</span>` : ''}${m.author ? `<span class="badge">${esc(m.author)}</span>` : ''}
+          <div class="badges"><span class="badge world">${esc(m.world)}</span>${kept.has(m.name) ? `<span class="badge home" title="files its programs wrote in its home directory, kept in this browser">your files · ${size(kept.get(m.name))}</span>` : ''}${m.year ? `<span class="badge">${esc(m.year)}</span>` : ''}${m.author ? `<span class="badge">${esc(m.author)}</span>` : ''}
             <span class="badge">${esc((m.machine && m.machine.cpu) || '')} · ${esc((m.machine && m.machine.mem) || 16)} MB</span><span class="badge">${esc(m.output)}</span></div>
           ${m.notes ? `<p class="notes">${esc(m.notes)}</p>` : ''}
           <div class="actions">

@@ -17,6 +17,20 @@ async function openCache() {
   try { return await caches.open(CACHE); } catch { return null; }      // no Cache Storage (an insecure origin)
 }
 
+/** The home directories kept in this browser (src/oasis-home.js): [{ name, bytes }], an image's name each. */
+export async function keptHomes() {
+  const c = await openCache(); if (!c) return [];
+  const pre = keyUrl('home:'), out = [];
+  for (const r of await c.keys()) {
+    if (!r.url.startsWith(pre)) continue;
+    const res = await c.match(r), bytes = res ? (await res.arrayBuffer()).byteLength : 0;
+    out.push({ name: decodeURIComponent(r.url.slice(pre.length)), bytes });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+/** Forget an image's kept home directory. */
+export async function forgetHome(name) { const c = await openCache(); if (c) await c.delete(keyUrl('home:' + name)); }
+
 export function webIO({ relay = 'oasis-fetch', onProgress = () => {} } = {}) {
   const cachePromise = openCache();
   const get = async (key) => {

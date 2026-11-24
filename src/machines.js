@@ -322,7 +322,7 @@ async function linux(world = 'linux') {
   // Another program from the shelf replaces the running one in place: the page and the shelf's
   // scroll stay, the log starts afresh; the address names the new one, so a reload starts it again.
   const replace = (q) => {
-    clearInterval(homeSaver); homeSaver = 0; forgetBtn.hidden = true;  // the home being kept was the previous program's
+    clearInterval(homeSaver); homeSaver = 0;                             // the home being kept was the previous program's
     if (window.mirage && window.mirage.stop) window.mirage.stop();
     session = null;
     logEl.replaceChildren(); logPartial = '';                          // the log is the new program's
@@ -332,9 +332,8 @@ async function linux(world = 'linux') {
    * An image built in this page (src/oasis-layers.js through the oasis-fetch relay), started on the canvas,
    * its home directory kept in this browser between visits (src/oasis-home.js): what the program made or
    * changed under $HOME is saved every few seconds and when the page is hidden, and laid over the image's
-   * tree at the next start. "Forget files" drops it. `fail(text)` shows why it did not start.
+   * tree at the next start; the OASIS page lists what is kept and forgets it. `fail(text)` shows why it did not start.
    */
-  const dockerBtn = $('dockerBtn'), forgetBtn = $('forgetBtn');
   let homeSaver = 0;
   const runImage = async (m, img, again, fail) => {
     over.hidden = true; setState('building', ''); showLog();
@@ -357,32 +356,24 @@ async function linux(world = 'linux') {
     }
     const keep = isLinux && img.name, home = keep ? H.homeOf(img, tree.host()) : null, key = keep ? `home:${img.name}` : null;
     const kept = keep ? await io.cache.get(key) : null;
-    if (kept) { const n = H.applyHome(tree, kept); log(`${home}: ${n} paths of yours, kept in this browser`); }
+    if (kept) { const n = H.applyHome(tree, kept); log(`${home}: ${n} paths of yours, kept in this browser (the OASIS page forgets them)`); }
     log(`the tree is built (${tree.nodes.size} paths, ${((performance.now() - t0) / 1000).toFixed(1)} s); starting ${img.entry && img.entry.run}`);
     status.textContent = `starting ${m.title}…`;
     await start(m, img, tree.host(), again);
     if (!keep) return;
     const s = window.mirage;
     let last = kept ? kept.length + ':' + H.homeSum(kept) : '';
-    forgetBtn.hidden = !kept;
     const save = async () => {
       if (window.mirage !== s || !s || !s.lx) return;
       const tar = H.homeTar(kept, s.lx.changes(), home);
       const sig = tar ? tar.length + ':' + H.homeSum(tar) : '';
       if (sig === last) return;
-      last = sig;
+      const first = !last; last = sig;
       if (tar && tar.length > (64 << 20)) { log(`${home} is over 64 MB: not kept`); return; }
-      if (tar) { await io.cache.put(key, tar); forgetBtn.hidden = false; } else await io.cache.del(key);
+      if (tar) { if (first) log(`${home}: your files are kept in this browser (the OASIS page forgets them)`); await io.cache.put(key, tar); } else await io.cache.del(key);
     };
     homeSaver = setInterval(save, 5000);
     document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
-    forgetBtn.onclick = async () => {
-      if (!confirm(`Forget the files ${m.title} keeps in ${home}, in this browser? It starts again as the image has it.`)) return;
-      clearInterval(homeSaver); homeSaver = 0;
-      if (window.mirage && window.mirage.stop) window.mirage.stop();
-      await io.cache.del(key); forgetBtn.hidden = true; log(`${home}: forgotten`);
-      again();
-    };
   };
   /*
    * A Docker Hub image run in this page, with no Docker: "i386/alpine", "i386/python:3.12-alpine". Its
@@ -404,14 +395,7 @@ async function linux(world = 'linux') {
       img = { oasis: 1, name: `docker/${repo.slice(5)}:${tag}`, title: `${repo}:${tag}`, world: 'linux', machine: { cpu: '686' },
         layers: [{ docker: `${repo}@${digest}`, platform: 'linux/386' }], entry, output: 'window' };
     } catch (e) { setState('failed', 'err'); log(String(e.message || e)); return fail(String(e.message || e)); }
-    try { localStorage.setItem('mirage.docker', ref); } catch { /* storage refused */ }
     await runImage({ name: img.name, title: img.title }, img, () => runDocker(ref, fail), fail);
-  };
-  dockerBtn.hidden = !isLinux;
-  dockerBtn.onclick = () => {
-    let last = 'i386/alpine'; try { last = localStorage.getItem('mirage.docker') || last; } catch { /* storage refused */ }
-    const ref = prompt('An i386 image from Docker Hub, run in this page with no Docker (i386/alpine, i386/python:3.12-alpine, i386/debian):', last);
-    if (ref && ref.trim()) runDocker(ref.trim());
   };
   let images = [];
   // Images meant for a window; the terminal ones (a shell) run with `oasis run` in a terminal.
@@ -487,7 +471,7 @@ async function linux(world = 'linux') {
         ${m ? `<p>${esc(why)}</p>` : `<p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
         OASIS images, which bring their files from where their authors published them: Debian's archive, idgames. Choose an image:
         this page fetches its layers once, keeps them in your browser, and starts it.</p>`}
-        <p class="dim">An i386 image from Docker Hub, here with no Docker: <b>Docker…</b> above (i386/alpine, i386/python:3.12-alpine). On a computer, every image: <code>node tools/oasis.mjs serve --open</code></p>
+        <p class="dim">An i386 image from Docker Hub, here with no Docker: <a href="oasis.html#docker">the OASIS page</a> looks one up and starts it. On a computer, every image: <code>node tools/oasis.mjs serve --open</code></p>
         <p><a href="oasis.html${m ? '#' + esc(m.name) : ''}">See ${m ? 'this image\'s' : 'each image\'s'} recipe →</a></p></div>`;
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
     };
