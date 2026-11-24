@@ -61,3 +61,14 @@ export function homeOf(img, host) {
 
 /** A quick signature of a tar (FNV-1a over its bytes): whether a save changed anything. */
 export function homeSum(u8) { let h = 0x811c9dc5; for (let i = 0; i < u8.length; i++) h = Math.imul(h ^ u8[i], 16777619); return (h >>> 0).toString(16); }
+
+/**
+ * Under which name an image's home is kept: a Docker image's (its one layer a `docker` layer) by its
+ * repository -- i386/alpine whether it was started from the catalogue's card (linux/docker-alpine), a
+ * link (?docker=i386/alpine) or another tag -- as a named volume is the same whatever runs on it;
+ * any other image by its own name.
+ */
+export function homeName(img) {
+  const layers = img.layers || [], d = layers.length === 1 && layers[0].docker;
+  return d ? String(d).split(/[@:]/)[0] : img.name;
+}

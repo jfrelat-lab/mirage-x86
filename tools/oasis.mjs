@@ -423,7 +423,7 @@ async function run(img, args, out) {
     const spec = join(CACHE, 'run-' + process.pid + '.json');
     mkdirSync(CACHE, { recursive: true });
     writeFileSync(spec, JSON.stringify({ dirs: root.dirs, files: [...root.files], links: [...root.links], mkdirs: [...root.mkdirs] }));
-    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console === true ? '1' : '', MIRAGE_LXRUNAS: e.user || '', MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}), MIRAGE_LXUSER: hostUser(), MIRAGE_LXHZ: String((img.machine && img.machine.hz) || ''), ...(img.machine && img.machine.vga ? { MIRAGE_VGA: img.machine.vga } : {}), ...(img.machine && img.machine.hle && !process.env.MIRAGE_LXHLE ? { MIRAGE_LXHLE: img.machine.hle.join(',') } : {}) }, () => rmSync(spec, { force: true }));
+    return child('tools/linux/run.mjs', [e.run, ...argv], { MIRAGE_LXROOTSPEC: spec, MIRAGE_LXCWD: e.cwd || '/', MIRAGE_LXCONSOLE: e.console === true ? '1' : '', MIRAGE_LXRUNAS: e.user || '', MIRAGE_LXMEM: String((img.machine && img.machine.mem) || ''), MIRAGE_CPU: (img.machine && img.machine.cpu) || '686', MIRAGE_LXENV: JSON.stringify(e.env || {}), MIRAGE_LXUSER: hostUser(), MIRAGE_LXHZ: String((img.machine && img.machine.hz) || ''), ...(img.machine && img.machine.vga ? { MIRAGE_VGA: img.machine.vga } : {}), ...(img.machine && img.machine.hle && !process.env.MIRAGE_LXHLE ? { MIRAGE_LXHLE: img.machine.hle.join(',') } : {}) }, () => rmSync(spec, { force: true }));
   }
   throw new Error(`oasis: world "${world}" cannot run yet`);
 }
@@ -474,7 +474,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const as = (rest.find((a) => a.startsWith('--as=')) || '').slice(5) || `linux/docker-${repo.split('/')[1]}${ref === 'latest' || ref.startsWith('sha256:') ? '' : '-' + ref.replace(/[^A-Za-z0-9_.-]/g, '-')}`;
       const { config, digest } = await dockerPull(registryClient(), repo, ref, platform, (t) => process.stderr.write(`oasis: ${t}\n`), { withLayers: false });
       const year = Number(String(config.created || '').slice(0, 4)) || new Date().getFullYear();
-      const img = { oasis: 1, title: `${repo}:${ref} from Docker Hub (${platform})`, year, author: `Docker Hub, ${repo}`, world: 'linux', machine: { cpu: '686' },
+      const img = { oasis: 1, title: `${repo}:${ref} from Docker Hub (${platform})`, year, author: `Docker Hub, ${repo}`, world: 'linux', machine: { cpu: 'pentium4', mem: 256 },
         layers: [{ docker: `${repo}@${digest}`, platform }], entry: { ...dockerEntry(config), console: 'page' }, output: 'window',
         notes: `Imported by node tools/oasis.mjs import docker://${repo}:${ref}: the image's layers pulled from Docker Hub's registry (pinned by ${digest}) and laid over one another, its whiteouts applied; no Docker.` };
       const p = join(IMAGES, as + '.json');

@@ -354,7 +354,7 @@ async function linux(world = 'linux') {
       if (!hit) { setState('failed', 'err'); return fail(`${e.run} is not on the image's PATH`); }
       img = { ...img, entry: { ...e, run: hit } };
     }
-    const keep = isLinux && img.name, home = keep ? H.homeOf(img, tree.host()) : null, key = keep ? `home:${img.name}` : null;
+    const keep = isLinux && img.name, home = keep ? H.homeOf(img, tree.host()) : null, key = keep ? `home:${H.homeName(img)}` : null;
     const kept = keep ? await io.cache.get(key) : null;
     if (kept) { const n = H.applyHome(tree, kept); log(`${home}: ${n} paths of yours, kept in this browser (the OASIS page forgets them)`); }
     log(`the tree is built (${tree.nodes.size} paths, ${((performance.now() - t0) / 1000).toFixed(1)} s); starting ${img.entry && img.entry.run}`);
@@ -392,7 +392,7 @@ async function linux(world = 'linux') {
       const { config, digest } = await D.dockerPull(io.docker, repo, tag, 'linux/386', (t) => { status.textContent = t; }, { withLayers: false });
       const entry = { ...D.dockerEntry(config), console: 'page' };
       if (!entry.env.TERM) entry.env.TERM = 'linux';
-      img = { oasis: 1, name: `docker/${repo.slice(5)}:${tag}`, title: `${repo}:${tag}`, world: 'linux', machine: { cpu: '686' },
+      img = { oasis: 1, name: `docker/${repo.slice(5)}:${tag}`, title: `${repo}:${tag}`, world: 'linux', machine: { cpu: 'pentium4', mem: 256 },
         layers: [{ docker: `${repo}@${digest}`, platform: 'linux/386' }], entry, output: 'window' };
     } catch (e) { setState('failed', 'err'); log(String(e.message || e)); return fail(String(e.message || e)); }
     await runImage({ name: img.name, title: img.title }, img, () => runDocker(ref, fail), fail);

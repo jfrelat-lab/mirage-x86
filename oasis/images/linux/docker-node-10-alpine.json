@@ -1,0 +1,34 @@
+{
+  "oasis": 1,
+  "title": "i386/node:10-alpine from Docker Hub (linux/386)",
+  "year": 2021,
+  "author": "Docker Hub, i386/node",
+  "world": "linux",
+  "machine": {
+    "cpu": "pentium4",
+    "mem": 256
+  },
+  "layers": [
+    {
+      "docker": "i386/node@sha256:8069813a92e14adab731facb7f32908b3d13d9a2614f97e0a65afb5d95735c8d",
+      "platform": "linux/386"
+    }
+  ],
+  "entry": {
+    "run": "/usr/local/bin/docker-entrypoint.sh",
+    "args": [
+      "node"
+    ],
+    "cwd": "/",
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "NODE_VERSION": "10.24.1",
+      "YARN_VERSION": "1.22.5",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "notes": "Imported by node tools/oasis.mjs import docker://i386/node:10-alpine: the image's layers pulled from Docker Hub's registry (pinned by sha256:8069813a92e14adab731facb7f32908b3d13d9a2614f97e0a65afb5d95735c8d) and laid over one another, its whiteouts applied; no Docker."
+}

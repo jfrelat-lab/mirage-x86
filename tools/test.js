@@ -4128,6 +4128,111 @@ await (async () => { const hex = (                                         // na
   } catch (e) { got = e.message.slice(0, 80); }
   eq('utimensat, UTIME_OMIT, utimes and ENOENT: a file\'s modification time as Docker i386 sets it', got,
     "00000000\n5e0d5da5\n00000000\n5e0d5da5\n00000000\n3b9aca00\nfffffffe\n"); })();
+// tools/linux/epoll.asm: eventfd and epoll as Docker i386 answers them -- nothing ready, then ready once the
+// eventfd is written (its mask and 64-bit data back), the count read, EEXIST, EAGAIN on a non-blocking one,
+// EPOLLONESHOT reporting once, DEL then ENOENT, a semaphore eventfd. Unanswered, Node's libuv took ENOSYS
+// for a crash (SIGSEGV) before its first line.
+await (async () => { const hex = (                                          // nasm -f bin tools/linux/epoll.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040860030000c00300000700000000100000b848010000bb00000000b900' +
+    '000000cd80e88d020000a360830408b849010000bb00000000cd80e877020000a364830408b8ff0000008b1d64830408' +
+    'b9010000008b1560830408be30830408cd80e850020000b8ff0000008b1d64830408b9010000008b1560830408be3083' +
+    '0408cd80e82e020000b8000100008b1d64830408b978830408ba04000000be00000000cd80e80d020000b8040000008b' +
+    '1d60830408b948830408ba08000000cd80e8f1010000b8000100008b1d64830408b978830408ba04000000be00000000' +
+    'cd80e8d0010000a178830408e8c6010000a17c830408e8bc010000a180830408e8b2010000b8030000008b1d60830408' +
+    'b970830408ba08000000cd80e896010000a170830408e88c010000b8000100008b1d64830408b978830408ba04000000' +
+    'be00000000cd80e86b010000b848010000bb00000000b900080000cd80e855010000a368830408b8030000008b1d6883' +
+    '0408b970830408ba08000000cd80e834010000b8ff0000008b1d64830408b9030000008b1560830408be3c830408cd80' +
+    'e812010000b8040000008b1d60830408b948830408ba08000000cd80e8f6000000b8000100008b1d64830408b9788304' +
+    '08ba04000000be00000000cd80e8d5000000b8000100008b1d64830408b978830408ba04000000be00000000cd80e8b4' +
+    '000000b8ff0000008b1d64830408b9020000008b1560830408be30830408cd80e892000000b8ff0000008b1d64830408' +
+    'b9020000008b1560830408be30830408cd80e870000000b848010000bb02000000b901000000cd80e85a000000a36c83' +
+    '0408b8030000008b1d6c830408b970830408ba08000000cd80e839000000a170830408e82f000000b8030000008b1d6c' +
+    '830408b970830408ba08000000cd80e813000000a170830408e809000000b8fc00000031dbcd8060bfa8830408b90800' +
+    '0000c1c00489c283e20f8a9250830408881747e2edc6070ab804000000bb01000000b9a8830408ba09000000cd8061c3' +
+    '010000008877665544332211010000408877665544332211030000000000000030313233343536373839616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    const bin = Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16));
+    lx.load(bin, ['/EPOLL']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq("eventfd and epoll: readiness, data, EEXIST, EAGAIN, EPOLLONESHOT, ENOENT, EFD_SEMAPHORE as Docker i386", got,
+    "00000003\n00000004\n00000000\nffffffef\n00000000\n00000008\n00000001\n00000001\n55667788\n11223344\n00000008\n00000003\n00000000\n00000005\nfffffff5\n00000000\n00000008\n00000001\n00000000\n00000000\nfffffffe\n00000006\n00000008\n00000001\n00000008\n00000001\n"); })();
+// tools/linux/clone.asm: a thread as pthread_create makes one (clone with CLONE_VM|THREAD|PARENT_SETTID|
+// CHILD_CLEARTID on its own stack) and joined through private futexes: the thread's line, the tid written
+// back, the same pid with a tid of its own, the tid word cleared at its exit, then EAGAIN, ETIMEDOUT and a
+// wake of no one. Node's uv_thread_create failed without it ("Assertion failed: (0) == (uv_thread_create").
+await (async () => { const hex = (                                          // nasm -f bin tools/linux/clone.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '000000000100000000000000008004080080040831020000650600000700000000100000b878000000bb000f3500b964' +
+    '860408ba3882040831f6bf3c820408cd8085c00f8409010000a340820408833d34820408007517b8f0000000bb348204' +
+    '08b98000000031d231f6cd80ebe08b153c82040885d27415b8f0000000bb3c820408b98000000031f6cd80ebe1a13882' +
+    '04083b05408204080f94c00fb6c0e806010000b814000000cd803b05448204080f94c00fb6c0e8ee000000a148820408' +
+    '3b05408204080f94c00fb6c0e8d8000000a1488204083b05448204080f95c00fb6c0e8c2000000a13c820408e8b80000' +
+    '00b8f0000000bb34820408b980000000ba0500000031f6cd80e89b000000b8f0000000bb34820408b980000000ba0100' +
+    '0000be19820408cd80e87b000000b8f0000000bb34820408b981000000ba01000000cd80e860000000b8fc00000031db' +
+    'cd80b804000000bb01000000b912820408ba07000000cd80b814000000cd80a344820408b8e0000000cd80a348820408' +
+    'c7053482040801000000b8f0000000bb34820408b981000000ba01000000cd80b80100000031dbcd8060bf4c820408b9' +
+    '08000000c1c00489c283e20f8a9221820408881747e2edc6070ab804000000bb01000000b94c820408ba09000000cd80' +
+    '61c37468726561640a000000008096980030313233343536373839616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    const bin = Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16));
+    lx.load(bin, ['/CLONE']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq("clone(CLONE_VM|CLONE_THREAD) and futex: a thread joined, its ids, EAGAIN, ETIMEDOUT as Docker i386", got,
+    "thread\n00000001\n00000001\n00000001\n00000001\n00000000\nfffffff5\nffffff92\n00000000\n"); })();
+// tools/linux/argv.asm run through a script's "#!/t/ARGV -x" line with "a" and "bc": the interpreter, its
+// argument, the script and its arguments, and the strings one after another up to the environment's.
+// Node 10's docker-entrypoint.sh was "not an ELF"; then libuv's uv_setup_args asserted on the layout.
+await (async () => { const hex = (                                          // nasm -f bin tools/linux/argv.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004081c0100003c010000070000000010000089e58b4500e875000000c705' +
+    '1c810408010000008d75048b0e85c9744f89cf31c0baffffffff42803c110075f98d7c1101893d20810408c604110ab8' +
+    '04000000bb0100000042cd8083c6048b0685c075078b460485c074bf3b052081040874b7c7051c81040800000000ebab' +
+    'a11c810408e809000000b80100000031dbcd8060bf24810408b908000000c1c00489c283e20f8a920c810408881747e2' +
+    'edc6070ab804000000bb01000000b924810408ba09000000cd8061c330313233343536373839616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    const bin = Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16));
+    lx.addFile('/t/ARGV', bin); lx.addFile('/t/s.sh', new TextEncoder().encode('#!/t/ARGV -x\n'));
+    lx.load(new TextEncoder().encode('#!/t/ARGV -x\n'), ['/t/s.sh', 'a', 'bc']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq("a \"#!\" script started through its interpreter, the arguments laid out one after another as Docker i386", got,
+    "00000005\n/t/ARGV\n-x\n/t/s.sh\na\nbc\n00000001\n"); })();
+// tools/linux/reserve.asm: 64 MiB mapped PROT_NONE then mprotected readable and writable at once, on a 16 MiB
+// machine, a word written at its end and read back. The mprotect committed every page and ran out of
+// frames ("out of physical memory"), as V8's reservations did in Node.
+await (async () => { const hex = (                                          // nasm -f bin tools/linux/reserve.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '0000000001000000000000000080040800800408fa000000120100000700000000100000b8c000000031dbb900000004' +
+    '31d2be22000000bfffffffff31edcd80a3fc80040889c3b87d000000b900000004ba03000000cd80e8240000008b1dfc' +
+    '800408c783fcffff030df00d608b83fcffff03e809000000b80100000031dbcd8060bf00810408b908000000c1c00489' +
+    'c283e20f8a92ea800408881747e2edc6070ab804000000bb01000000b900810408ba09000000cd8061c3303132333435' +
+    '36373839616263646566');
+  let got;
+  try {
+    let out = '';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc, { onOutput: (fd, b) => { out += new TextDecoder().decode(b); } });
+    const bin = Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16));
+    lx.load(bin, ['/RESERVE']);
+    for (let i = 0; i < 200 && !lx.done; i++) mc.runSlice(20000);
+    got = out;
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq("mprotect over a large reservation: what is untouched stays uncommitted, as on Docker i386", got,
+    "00000000\n600df00d\n"); })();
 // tools/linux/cvtpi.asm: the conversions between SSE and MMX with no prefix (Unreal Tournament's Pentium III code):
 // CVTPS2PI of 2.5 and -2.5 under each of MXCSR's rounding controls (nearest even, down, up, toward zero) --
 // it was always to nearest, MXCSR unread -- CVTTPS2PI of 3.9 and -3.9 (truncated), CVTPI2PS of -7 and 9.
@@ -7266,7 +7371,7 @@ await (async () => { let got;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('midi: the MPU-401 answers UART mode and sounds; an SMF\'s tempo is followed; MCI plays a written .mid', got, 'fe 0 true 0.00,0.50,0.75 0 1 0 true'); })();
 // tools/linux/lsroot.asm: the entries of / by getdents64 — the host's root merged with what MIRAGE-LINUX
-// makes itself. On a host root of etc and var: . .. dev tmp (ours) etc var = 6. Docker's whole root: 22.
+// makes itself. On a host root of etc and var: . .. dev proc tmp (ours) etc var = 7. Docker's whole root: 22.
 // MIRAGE listed / without the host's entries (ls / showed bin dev etc lib proc root tmp usr).
 await (async () => { const hex = (                                         // nasm -f bin tools/linux/lsroot.asm
     '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
@@ -7278,7 +7383,7 @@ await (async () => { const hex = (                                         // na
   lx.host = { lstat: (q) => (dirs[q] ? { type: 'dir' } : null), list: (q) => dirs[q] || [], read: () => null };
   lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/LSROOT']);
   for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
-  eq('linux: / lists the host root merged with its own directories', lx.status, 6); })();
+  eq('linux: / lists the host root merged with its own directories', lx.status, 7); })();
 // lx.changes: what an OASIS `run` layer keeps of a run (tools/oasis.mjs) — tools/linux/commit.asm over a
 // host tree of /keep, /mod, /old. A file only read is the host's still; one appended to, one made, a
 // link, a directory and a removal are the run's. (/tmp is MIRAGE-LINUX's own, absent from this host.)
@@ -7476,7 +7581,8 @@ await (async () => { let got;
 // A home kept in the browser between visits (src/oasis-home.js): a visit's changes under $HOME -- a file made,
 // one of the image's changed, one removed, a link, and /tmp left out -- saved as a tar; laid over the image's
 // tree at the next visit, which then removes the saved file and adds another: the save is computed afresh
-// from the visit's start, so the removed file goes and its removal is kept. homeOf: HOME, else entry.user's.
+// from the visit's start, so the removed file goes and its removal is kept. homeOf: HOME, else entry.user's;
+// homeName: a Docker image's home by its repository, whichever card, link or tag started it.
 await (async () => { let got;
   try { const { Tree } = await import('../src/oasis-layers.js'), H = await import('../src/oasis-home.js'), enc = new TextEncoder(), dec = (b) => b && new TextDecoder().decode(b);
     const image = () => { const t = new Tree(); t.file('/root/.profile', enc.encode('image')); t.file('/root/.cache', enc.encode('x')); t.file('/etc/os', enc.encode('alpine')); return t; };
@@ -7491,10 +7597,12 @@ await (async () => { let got;
     const nothing = H.homeTar(null, { files: [{ path: '/tmp/x', bytes: enc.encode('x') }], dirs: [], links: [], removed: [] }, '/root');
     const pw = new Tree(); pw.file('/etc/passwd', enc.encode('root:x:0:0::/root:/bin/sh\napp:x:1001:1001::/home/app:/bin/sh\n'));
     const homes = [H.homeOf({ entry: { env: { HOME: '/data' } } }, pw.host()), H.homeOf({ entry: { user: 'app' } }, pw.host()), H.homeOf({ entry: {} }, pw.host())].join(',');
-    got = [visit2, visit3, nothing, homes, H.homeSum(tar2) === H.homeSum(H.homeTar(tar1, { files: [{ path: '/root/two', bytes: enc.encode('2') }], dirs: [], links: [], removed: ['/root/note'] }, '/root'))].join(' ');
+    const names = [H.homeName({ name: 'linux/docker-alpine', layers: [{ docker: 'i386/alpine@sha256:ab' }] }), H.homeName({ name: 'docker/alpine:3.20', layers: [{ docker: 'i386/alpine@sha256:cd' }] }),
+      H.homeName({ name: 'linux/tuxracer-2001', layers: [{ deb: 'x' }, { deb: 'y' }] })].join(',');
+    got = [visit2, visit3, nothing, homes, names, H.homeSum(tar2) === H.homeSum(H.homeTar(tar1, { files: [{ path: '/root/two', bytes: enc.encode('2') }], dirs: [], links: [], removed: ['/root/note'] }, '/root'))].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis: a home kept between visits -- made, changed, removed, linked; /tmp and the image left; saved afresh', got,
-    'one/mine//note//alpine /2/mine/  /data,/home/app,/root true'); })();
+    'one/mine//note//alpine /2/mine/  /data,/home/app,/root i386/alpine,i386/alpine,linux/tuxracer-2001 true'); })();
 // The relay a page reads Debian's and idgames' archives through: only the hosts the images use, so it
 // is no open proxy — and those hosts are every one oasis/images/ names.
 await (async () => { let got;

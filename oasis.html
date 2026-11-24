@@ -164,7 +164,7 @@ const runLink = (m) => {
 };
 const list = document.getElementById('list');
 const size = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
-const { keptHomes, forgetHome } = await import('./src/oasis-web.js');
+const { keptHomes, forgetHome } = await import('./src/oasis-web.js'), { homeName } = await import('./src/oasis-home.js');
 let kept = new Map();
 /*
  * YOUR FILES: the home directories this browser keeps (src/oasis-home.js, saved by the Machines page),
@@ -181,7 +181,7 @@ document.getElementById('kept').addEventListener('click', async (ev) => {
   const b = ev.target.closest('[data-forget]'); if (!b) return;
   if (!confirm(`Forget the files ${b.dataset.forget} keeps in this browser? It starts again as its recipe has it.`)) return;
   await forgetHome(b.dataset.forget); await showKept();
-  document.querySelectorAll(`[id="${CSS.escape(b.dataset.forget)}"] .badge.home`).forEach((el) => el.remove());
+  document.querySelectorAll(`.badge.home[data-home="${CSS.escape(b.dataset.forget)}"]`).forEach((el) => el.remove());
 });
 /*
  * FROM DOCKER HUB: an image looked up through the relay (src/oasis-docker.js) -- its linux/386 manifest,
@@ -196,7 +196,7 @@ const lookUp = async (raw) => {
     const { repo, ref } = D.dockerRef(raw.trim() || 'i386/alpine');
     const { config, digest, manifest } = await D.dockerPull(D.relayClient('oasis-fetch'), repo, ref, 'linux/386', (t) => { hubOut.innerHTML = `<p>${esc(t)}…</p>`; }, { withLayers: false });
     const e = D.dockerEntry(config), c = config.config || {}, total = manifest.layers.reduce((n, l) => n + (l.size || 0), 0);
-    const name = `docker/${repo.slice(5)}:${ref}`, run = `machines.html?m=linux&docker=${encodeURIComponent(`${repo}:${ref}`)}`;
+    const name = repo, run = `machines.html?m=linux&docker=${encodeURIComponent(`${repo}:${ref}`)}`;
     history.replaceState(null, '', `?docker=${encodeURIComponent(`${repo}:${ref}`)}#docker`);
     const rows = [
       ['image', `<code>${esc(repo)}:${esc(ref)}</code> · ${esc(config.os || 'linux')}/${esc(config.architecture || '386')}${config.created ? ` · built ${esc(String(config.created).slice(0, 10))}` : ''} · <a href="https://hub.docker.com/r/${esc(repo)}">on Docker Hub</a>`],
@@ -227,7 +227,7 @@ try {
         <div>
           <div class="name">${esc(m.name)}</div>
           <div class="title">${esc(m.title)}</div>
-          <div class="badges"><span class="badge world">${esc(m.world)}</span>${kept.has(m.name) ? `<span class="badge home" title="files its programs wrote in its home directory, kept in this browser">your files · ${size(kept.get(m.name))}</span>` : ''}${m.year ? `<span class="badge">${esc(m.year)}</span>` : ''}${m.author ? `<span class="badge">${esc(m.author)}</span>` : ''}
+          <div class="badges"><span class="badge world">${esc(m.world)}</span>${kept.has(homeName(m)) ? `<span class="badge home" data-home="${esc(homeName(m))}" title="files its programs wrote in its home directory, kept in this browser">your files · ${size(kept.get(homeName(m)))}</span>` : ''}${m.year ? `<span class="badge">${esc(m.year)}</span>` : ''}${m.author ? `<span class="badge">${esc(m.author)}</span>` : ''}
             <span class="badge">${esc((m.machine && m.machine.cpu) || '')} · ${esc((m.machine && m.machine.mem) || 16)} MB</span><span class="badge">${esc(m.output)}</span></div>
           ${m.notes ? `<p class="notes">${esc(m.notes)}</p>` : ''}
           <div class="actions">

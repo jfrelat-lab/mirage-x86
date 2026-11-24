@@ -5,7 +5,8 @@
   "author": "Docker Hub, i386/python",
   "world": "linux",
   "machine": {
-    "cpu": "686"
+    "cpu": "pentium4",
+    "mem": 256
   },
   "layers": [
     {

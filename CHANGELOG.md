@@ -3,6 +3,12 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-24
+
+- **Node.js from Docker Hub**: i386/node:10-alpine starts its REPL on the Linux machine and runs scripts, timers, files and child processes.
+- Linux programs can make their own threads and wait on several files at once.
+- Scripts starting with `#!` run through their interpreter on the Linux machine.
+
 ## 2026-11-23
 
 - **From Docker Hub** on the OASIS page looks up an i386 image, shows what it will run, and starts it on the Linux machine; a link starts it again.

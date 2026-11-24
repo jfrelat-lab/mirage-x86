@@ -347,6 +347,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   Object.assign(lx, { prepareSpace, enterUser, mapRange, setDesc, PAGE, USER_DS });
 
   lx.load = (elf, argv = ['a.out'], envp = []) => {
+    // A script started first, as execve starts one: its #! interpreter, with the script's path among the
+    // arguments (a Docker image's entry is often one: node's docker-entrypoint.sh).
+    if (elf[0] === 0x23 && elf[1] === 0x21) {
+      let line = ''; for (let i = 2; i < elf.length && elf[i] !== 10 && i < 256; i++) line += String.fromCharCode(elf[i]);
+      const [interp, ...rest] = line.trim().split(/\s+/), ib = lx.readFile(interp);
+      if (!ib) throw new Error(`mirage-linux: ${argv[0]}: its interpreter ${interp} is not here`);
+      return lx.load(ib, [interp, ...(rest.length ? [rest.join(' ')] : []), argv[0], ...argv.slice(1)], envp);
+    }
     prepareSpace();
     const ah = aoutHeader(elf);
     const h = ah ? null : elfHeader(elf);
@@ -375,8 +383,18 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     let sp = STACK_TOP;
     const pushStr = (s) => { const b = new TextEncoder().encode(s + '\0'); sp -= b.length; for (let i = 0; i < b.length; i++) mem.u8[phys(sp + i)] = b[i]; return sp; };
     const execfn = pushStr(argv[0] || '');
-    const envAddrs = envp.map(pushStr);
-    const argAddrs = argv.map(pushStr);
+    // The strings as the kernel lays them (create_elf_tables): argv's and then envp's, one after the other
+    // in their order, upward. libuv (node) takes argv[0] to the end of the last argument as one block --
+    // pushed one by one downward, they were reversed, and node stopped at uv_setup_args's assertion.
+    const pushStrs = (list) => {
+      const bufs = list.map((x) => new TextEncoder().encode(x + '\0'));
+      sp -= bufs.reduce((n, b) => n + b.length, 0);
+      const out = []; let at = sp;
+      for (const b of bufs) { out.push(at); for (let i = 0; i < b.length; i++) mem.u8[phys(at + i)] = b[i]; at += b.length; }
+      return out;
+    };
+    const envAddrs = pushStrs(envp);
+    const argAddrs = pushStrs(argv);
     const platform = pushStr('i686');
     sp -= 16; const random = sp;
     for (let i = 0; i < 16; i++) mem.u8[phys(random + i)] = (i * 73 + 41) & 0xff;   // AT_RANDOM: fixed, so runs repeat
@@ -409,7 +427,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       for (let i = lx.procs.length - 1; i >= 0; i--) if (lx.procs[i].vm === lx.vm) { if (lx.procs[i].pid === lx.rootPid) lx.rootPid = lx.pid; lx.procs.splice(i, 1); }
     }
     if (lx.pid !== lx.rootPid && lx.procs.length) {                      // not the first process: another runs
-      const pid = lx.pid, ppid = lx.ppid, code = signal ? signal & 0x7f : (status & 0xff) << 8;
+      const pid = lx.tgid ?? lx.pid, ppid = lx.ppid, code = signal ? signal & 0x7f : (status & 0xff) << 8;
       closeAll();
       releasePages(lx.pages);
       const parent = lx.procs.find((q) => q.pid === ppid);
@@ -459,16 +477,26 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
    */
   const rootCred = () => ({ ruid: 0, euid: 0, suid: 0, rgid: 0, egid: 0, sgid: 0, groups: [] });
   lx.cred = rootCred();
+  /*
+   * The file descriptor table is the process's: its threads share it. The running thread works on `fds`;
+   * a switch writes it back into the table it shares (lx.fdt), which the next thread of the same process
+   * loads -- one runs at a time. A fork's child starts a table of its own (lx.fdt = null: a copy at its
+   * first switch). It used to be copied at every switch: what one thread opened, the others never saw.
+   */
+  lx.fdt = null;
+  const shareFds = () => { const t = lx.fdt || (lx.fdt = []); t.length = 0; fds.forEach((f, i) => { t[i] = f; }); return t; };
+  lx.tgid = undefined; lx.clearTid = 0; lx.fwait = null;
   lx.vm = 1; let nextVm = 2;                                             // an address space's id: a process's, its threads'
   lx.rootPid = 1; lx.procs = []; lx.orphans = new Map(); lx.sliceStart = 0; lx.blockRun = 0;
   const QUANTUM = () => 0.02 * (machine.cyclesPerSecond || 1e8);         // 20 ms of guest time
   const TLS_A = GDT_BASE + TLS_MIN * 8, TLS_Z = GDT_BASE + (TLS_MIN + TLS_ENTRIES) * 8;
   const snapshot = () => ({
     pid: lx.pid, ppid: lx.ppid, vm: lx.vm, pages: lx.pages, brkStart: lx.brkStart, brk: lx.brk, mmapNext: lx.mmapNext, lazy: lx.lazy, elfMaps: lx.elfMaps, wake: lx.wake,
-    fds: fds.slice(), cloexec: new Set(lx.cloexec), cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
+    fds: shareFds(), cloexec: lx.cloexec, cwd: lx.cwd, exe: lx.exe, sig: lx.sigHandlers.slice(), zombies: lx.zombies,
     sigInfo: lx.sigInfo.slice(), sigBlocked: lx.sigBlocked.slice(), sigPend: new Set(lx.sigPend), sigSaved: lx.sigSaved,
     alarmAt: lx.alarmAt, alarmEvery: lx.alarmEvery, fpuFrames: lx.fpuFrames, pgid: lx.pgid, sid: lx.sid, ctty: lx.ctty,
     cred: { ...lx.cred, groups: lx.cred.groups.slice() },               // its identities: a fork's child starts with a copy
+    tgid: lx.tgid, clearTid: lx.clearTid, fwait: lx.fwait,              // a thread's group, its CLONE_CHILD_CLEARTID word, the futex it waits on
     reg: cpu.reg.slice(), eip: cpu.eip, flags: cpu.flags, seg: Array.from(cpu.seg),
     fst: cpu.fst ? cpu.fst.slice() : null, ftop: cpu.ftop, fsw: cpu.fsw, fcw: cpu.fcw, focc: cpu.focc ? cpu.focc.slice() : null,
     xmm: cpu.xmm ? new Uint8Array(cpu.xmm.u8).slice() : null, mxcsr: cpu.xmm ? cpu.xmm.mxcsr : 0x1f80,   // a thread's own, as Windows saves it
@@ -483,8 +511,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     Object.assign(lx, { pid: s.pid, ppid: s.ppid, pages: s.pages, brkStart: shared ? lx.brkStart : s.brkStart, brk: shared ? lx.brk : s.brk,
       mmapNext: shared ? lx.mmapNext : s.mmapNext, lazy: shared ? lx.lazy : s.lazy || [], elfMaps: shared ? lx.elfMaps : s.elfMaps || [], wake: s.wake ?? null, vm: s.vm,
       cwd: s.cwd, exe: s.exe, sigHandlers: s.sig, zombies: s.zombies,
-      sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty, cred: s.cred || rootCred() });
-    fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.cloexec = new Set(s.cloexec || []);
+      sigInfo: s.sigInfo, sigBlocked: s.sigBlocked, sigPend: s.sigPend, sigSaved: s.sigSaved, alarmAt: s.alarmAt, alarmEvery: s.alarmEvery, fpuFrames: s.fpuFrames, pgid: s.pgid ?? s.pid, sid: s.sid ?? 1, ctty: s.ctty, cred: s.cred || rootCred(), tgid: s.tgid, clearTid: s.clearTid || 0, fwait: s.fwait || null });
+    fds.length = 0; s.fds.forEach((f, i) => { fds[i] = f; }); lx.fdt = s.fds; lx.cloexec = s.cloexec || new Set();
     // Another thread of the same address space: the page tables, the TLB and the translated code are
     // its own already -- remapping a Crinkler intro's 51,000 pages at each switch was 3% of its time.
     if (!shared) installPages(s.pages);
@@ -555,6 +583,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
    *  ends the process. Its code stays for whoever waits for it (lx.threadExits). */
   lx.threadExits = new Map();
   lx.exitThread = (code) => {
+    if (lx.clearTid) { try { wr32(lx.clearTid, 0); } catch { /* unmapped already */ } futexWake(lx.clearTid, 1); lx.clearTid = 0; }   // CLONE_CHILD_CLEARTID
     lx.threadExits.set(lx.pid, code >>> 0);
     lx.held.delete(lx.pid);
     let next = lx.procs.findIndex((q) => q.vm === lx.vm && !lx.held.has(q.pid));
@@ -593,6 +622,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.pages = new Map(); installPages(lx.pages); cpu.setCR3(cpu.cr3);
     lx.vm = nextVm++; lx.lazy = []; lx.elfMaps = [];
     lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map(); lx.wake = null;
+    lx.fdt = null; lx.cloexec = new Set(lx.cloexec); lx.tgid = pid; lx.clearTid = 0; lx.fwait = null;   // its own fds, as fork's child
     lx.sigInfo = lx.sigInfo.slice(); lx.sigHandlers = lx.sigHandlers.slice(); lx.sigBlocked = lx.sigBlocked.slice();
     lx.sigPend = new Set(); lx.sigSaved = null; lx.alarmAt = null; lx.alarmEvery = 0; lx.fpuFrames = new Map();
     if (cpu.mm) cpu.mm.u8.fill(0);                                     // its own MMX and SSE state, fresh
@@ -618,11 +648,91 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.vm = nextVm++;                                                    // the child's own address space
     lx.lazy = lx.lazy.slice();                                           // and its own reservations
     lx.sliceStart = cpu.cycles;
-    lx.ppid = lx.pid; lx.pid = pid; lx.zombies = new Map();
+    lx.ppid = lx.tgid ?? lx.pid; lx.pid = pid; lx.tgid = pid; lx.zombies = new Map();
+    lx.fdt = null; lx.cloexec = new Set(lx.cloexec); lx.clearTid = 0; lx.fwait = null;   // its own table of fds; no thread's words
     lx.sigInfo = lx.sigInfo.slice(); lx.sigHandlers = lx.sigHandlers.slice(); lx.sigBlocked = lx.sigBlocked.slice();
     lx.sigPend = new Set(); lx.sigSaved = null; lx.alarmAt = null; lx.alarmEvery = 0; lx.fpuFrames = new Map();
     if ((flags & 0x01000000) && ctid) wr32(ctid, pid);                   // CLONE_CHILD_SETTID
     return 0;
+  };
+  /*
+   * clone with CLONE_VM: a thread (pthread_create: musl's, glibc's). It shares the address space, the fds,
+   * the identities; it starts where the caller returns, with 0 in EAX and its own stack (`sp`), and, with
+   * CLONE_SETTLS (80000h), its own TLS descriptor -- `tls` a struct user_desc, as set_thread_area takes
+   * it, kept in its copy of the TLS slots a switch saves and restores. CLONE_PARENT_SETTID (100000h) and
+   * CLONE_CHILD_SETTID (1000000h) write its id; CLONE_CHILD_CLEARTID (200000h) names the word its exit
+   * clears and wakes (pthread_join waits on it). Returns its id to the caller.
+   */
+  const cloneThread = (flags, sp, ptid, tls, ctid) => {
+    const me = snapshot(), tid = lx.nextPid++;
+    const t = { ...me, pid: tid, reg: me.reg.slice(), wake: null, tgid: lx.tgid ?? lx.pid, fwait: null, clearTid: flags & 0x200000 ? ctid >>> 0 : 0,
+      sigPend: new Set(), alarmAt: null, alarmEvery: 0, fpuFrames: new Map(), tls: me.tls.slice() };
+    t.reg[0] = 0;
+    if (sp) t.reg[4] = sp >>> 0;
+    if (flags & 0x80000) {                                                // CLONE_SETTLS
+      const idx = rd32(tls) | 0, base = rd32(tls + 4), limit = rd32(tls + 8), fl = rd32(tls + 12);
+      if (idx < TLS_MIN || idx >= TLS_MIN + TLS_ENTRIES) return -E.EINVAL;
+      const a = (idx - TLS_MIN) * 8, g = (fl & 1 ? 0x40 : 0) | (fl & 0x10 ? 0x80 : 0);
+      t.tls[a] = limit & 0xff; t.tls[a + 1] = (limit >>> 8) & 0xff; t.tls[a + 2] = base & 0xff; t.tls[a + 3] = (base >>> 8) & 0xff;
+      t.tls[a + 4] = (base >>> 16) & 0xff; t.tls[a + 5] = 0xf2; t.tls[a + 6] = g | ((limit >>> 16) & 0x0f); t.tls[a + 7] = (base >>> 24) & 0xff;
+    }
+    if (flags & 0x100000) wr32(ptid, tid);                                // CLONE_PARENT_SETTID
+    if (flags & 0x1000000) wr32(ctid, tid);                               // CLONE_CHILD_SETTID: the same memory
+    lx.procs.push(t);
+    return tid;
+  };
+  /*
+   * futex: the threads' waits. FUTEX_WAIT (0) and WAIT_BITSET (9) wait while the word still holds `val`
+   * (EAGAIN else), until a WAKE or the timeout (relative for WAIT, absolute for WAIT_BITSET) -- the call
+   * runs again until then, the thread known as waiting (lx.fwait); WAKE (1) and WAKE_BITSET (10) wake up
+   * to `val` of them, first come first woken; REQUEUE (3) and CMP_REQUEUE (4, the word checked against
+   * val3) wake `val` and move up to `val2` (in the timeout's place) to uaddr2. FUTEX_PRIVATE (80h) and
+   * FUTEX_CLOCK_REALTIME (100h) change nothing here: one address space, one clock.
+   */
+  const futexWaiters = new Map(), futexWoken = new Set();
+  const futexWake = (addr, n) => {
+    const q = futexWaiters.get(addr); if (!q) return 0;
+    let k = 0; while (q.length && k < n) { futexWoken.add(q.shift()); k++; }
+    if (!q.length) futexWaiters.delete(addr);
+    return k;
+  };
+  const futex = (uaddr, op, val, timeout, uaddr2, val3) => {
+    const cmd = op & 0x7f, addr = uaddr >>> 0;
+    if (addr & 3) return -E.EINVAL;                                       // a futex word is aligned
+    if (cmd === 0 || cmd === 9) {
+      if (lx.fwait) {                                                     // the wait running again
+        if (futexWoken.delete(lx.pid)) { lx.fwait = null; return 0; }
+        if (lx.fwait.until !== null && lx.mono() >= lx.fwait.until) {
+          const q = futexWaiters.get(lx.fwait.addr); if (q) { const i = q.indexOf(lx.pid); if (i >= 0) q.splice(i, 1); }
+          lx.fwait = null; return -110;                                    // ETIMEDOUT
+        }
+        if (lx.fwait.until !== null && (lx.wake === null || lx.wake > lx.fwait.until)) lx.wake = lx.fwait.until;
+        return BLOCK;
+      }
+      if ((rd32(addr) | 0) !== (val | 0)) return -11;                      // EAGAIN: it changed already
+      let until = null;
+      if (timeout) {
+        const t = rd32(timeout) + rd32(timeout + 4) / 1e9;
+        until = cmd === 0 ? lx.mono() + t : (op & 0x100 ? lx.mono() + (t - lx.now()) : t);
+        if (until <= lx.mono()) return -110;
+      }
+      lx.fwait = { addr, until };
+      (futexWaiters.get(addr) || futexWaiters.set(addr, []).get(addr)).push(lx.pid);
+      if (until !== null && (lx.wake === null || lx.wake > until)) lx.wake = until;
+      return BLOCK;
+    }
+    if (cmd === 1 || cmd === 10) return futexWake(addr, val >>> 0);
+    if (cmd === 3 || cmd === 4) {
+      if (cmd === 4 && (rd32(addr) | 0) !== (val3 | 0)) return -11;
+      const woken = futexWake(addr, val >>> 0), q = futexWaiters.get(addr) || [], moved = q.splice(0, timeout >>> 0);
+      if (!q.length) futexWaiters.delete(addr);
+      if (moved.length) {
+        const q2 = futexWaiters.get(uaddr2 >>> 0) || futexWaiters.set(uaddr2 >>> 0, []).get(uaddr2 >>> 0);
+        for (const tid of moved) { q2.push(tid); const th = lx.procs.find((x) => x.pid === tid); if (th && th.fwait) th.fwait.addr = uaddr2 >>> 0; }
+      }
+      return woken + moved.length;
+    }
+    return -E.ENOSYS;
   };
   const closeAll = () => { fds.length = 0; };
   const wait = (pid, statusPtr, options) => {
@@ -738,6 +848,32 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const RDEV = { console: 0x501, tty: 0x500, tty0: 0x400, null: 0x103, zero: 0x105, full: 0x107, random: 0x108, urandom: 0x109, mem: 0x101 };
   for (const d of ['console', 'tty', 'tty0', 'tty1', 'tty2', 'tty3', 'tty4', 'tty5', 'tty6']) fs.set('/dev/' + d, { dev: 'tty', rdev: RDEV[d] || (0x400 | +d.slice(3)), mtime: 0 });
   for (const d of ['null', 'zero', 'full', 'random', 'urandom', 'mem']) fs.get('/dev/' + d).rdev = RDEV[d];
+  // /proc's few files that programs read for the machine they run on, made afresh at each open: one
+  // processor (cpuinfo, stat's cpu lines), the memory, the time since start, the load. Node's
+  // os.cpus() is libuv's reading of /proc/stat and /proc/cpuinfo: with neither it answered undefined.
+  const memTop = () => (machine.vbeFbBase && machine.vbeFbBase < mem.size ? machine.vbeFbBase : mem.size);
+  const memKiB = () => ({ total: memTop() >> 10, free: (Math.max(0, memTop() - lx.nextFrame) >> 10) + freeFrames.length * 4 });
+  lx.memKiB = memKiB;
+  const procGen = {
+    cpuinfo: () => {
+      const P = cpu.profile || {}, v = (P.vendor || 'MIRAGE').trim(), sig = P.signature || 0x0500;
+      const flags = ['fpu', 'pse', 'tsc', 'cx8', ...(P.p6 ? ['msr', 'cmov'] : []), ...(P.mmx ? ['mmx'] : []), ...(P.sse ? ['fxsr', 'sse'] : []), ...(P.sse2 ? ['sse2'] : [])];
+      return `processor\t: 0\nvendor_id\t: ${v}\ncpu family\t: ${(sig >> 8) & 15}\nmodel\t\t: ${(sig >> 4) & 15}\nmodel name\t: MIRAGE x86 (${P.name || 'cpu'})\n` +
+        `stepping\t: ${sig & 15}\ncpu MHz\t\t: ${((machine.cyclesPerSecond || 1e8) / 1e6).toFixed(3)}\nflags\t\t: ${flags.join(' ')}\nbogomips\t: ${((machine.cyclesPerSecond || 1e8) / 5e5).toFixed(2)}\n\n`;
+    },
+    stat: () => {
+      const t = Math.floor(lx.mono() * 100), u = Math.floor(t * 0.9), id = t - u;
+      return `cpu  ${u} 0 0 ${id} 0 0 0 0 0 0\ncpu0 ${u} 0 0 ${id} 0 0 0 0 0 0\nbtime ${Math.floor(lx.now() - lx.mono())}\nprocesses ${lx.pid}\nprocs_running 1\nprocs_blocked 0\n`;
+    },
+    meminfo: () => {
+      const { total, free } = memKiB();
+      return `MemTotal:${String(total).padStart(16)} kB\nMemFree:${String(free).padStart(17)} kB\nMemAvailable:${String(free).padStart(12)} kB\nBuffers:${'0'.padStart(17)} kB\nCached:${'0'.padStart(18)} kB\nSwapTotal:${'0'.padStart(15)} kB\nSwapFree:${'0'.padStart(16)} kB\n`;
+    },
+    uptime: () => { const t = lx.mono(); return `${t.toFixed(2)} ${(t * 0.1).toFixed(2)}\n`; },
+    loadavg: () => `0.00 0.00 0.00 1/1 ${lx.pid}\n`,
+  };
+  fs.set('/proc', { dir: true, mtime: 0 });
+  for (const k of Object.keys(procGen)) fs.set('/proc/' + k, { data: new Uint8Array(0), size: 0, mtime: 0, mode: 0o444, gen: procGen[k] });
   // A mouse on the first serial port, as SVGAlib assumes one ("Microsoft mouse" on /dev/mouse): it
   // takes the line settings and has nothing to say until lx.mouseIn holds its 3-byte packets.
   fs.set('/dev/mouse', { dev: 'mouse', rdev: 0x440, mtime: 0 }); fs.set('/dev/ttyS0', fs.get('/dev/mouse'));
@@ -1306,6 +1442,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   const doWrite = (fd, bytes) => {
     const f = fdOf(fd);
+    if (f.efd) {                                                         // eventfd: a 64-bit amount added to its count
+      if (bytes.length < 8) return -E.EINVAL;
+      const v = (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0, hi = (bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24)) >>> 0;
+      f.efd.count += v + hi * 4294967296; return 8;
+    }
     if (f.sk) return sockWrite(f, bytes);
     if (f.pp) { if (f.rd) return -E.EBADF; for (const b of bytes) f.pp.buf.push(b); return bytes.length; }
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
@@ -1344,6 +1485,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         return BLOCK;
       }
       wr32(buf, k); wr32(buf + 4, 0); return 8;
+    }
+    if (f.efd) {                                                         // eventfd: its count, or 1 of it as a semaphore
+      if (n < 8) return -E.EINVAL;
+      const e = f.efd;
+      if (!e.count) return f.flags & 0x800 ? -E.EAGAIN : BLOCK;
+      const v = e.sem ? 1 : e.count; e.count -= v;
+      wr32(buf, v % 4294967296); wr32(buf + 4, Math.floor(v / 4294967296)); return 8;
     }
     if (f.sk) { const r = sockRead(f, n); if (typeof r !== 'object') return r; wrBytes(buf, r); return r.length; }
     // A pipe: what its writer left. Its writer has run to its end already (one process at a time), so an
@@ -1413,6 +1561,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       node = { data: new Uint8Array(0), size: 0, mtime: lx.now(), mode: (mode & ~lx.umask) & 0o7777 }; fs.set(p, node);
     }
     if (node.dir && (flags & 3)) return -E.EISDIR;
+    if (node.gen) { node.data = new TextEncoder().encode(node.gen()); node.size = node.data.length; }
     if (!node.dir && !node.dev) dataOf(node);
     if ((flags & 0x10000) && !node.dir) return -E.ENOTDIR;                  // O_DIRECTORY
     if ((flags & 0x200) && !node.dir && (flags & 3)) { node.size = 0; node.mtime = lx.now(); }   // O_TRUNC
@@ -1734,6 +1883,36 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     17: (a) => { const { iov, cnt } = msgIov(a[1]); wr32(a[1] + 20, 0); return SYS[145](a[0], iov, cnt); },   // recvmsg: no ancillary data
     18: (a) => NET.accept(a[0], a[1], a[2], a[3]),                                                            // accept4
   };
+  /** Whether a read of `f` would not wait: what poll, select and epoll_wait each ask. */
+  const fdReadable = (f) => (f.tfd ? tfdReady(f.tfd) : f.efd ? f.efd.count > 0 : f.ep ? epReady(f.ep).length > 0 : f.sk ? sockReady(f) : f.pty ? ptyReady(f)
+    : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
+      : f.node && f.node.dev === 'tty' ? lx.ttyIn.length > 0 : f.node && f.node.dev === 'mice' ? lx.miceIn.length > 0 : f.node && f.node.dev === 'mouse' ? lx.mouseIn.length > 0 : true);
+  /*
+   * epoll (libuv's event loop: node): an interest list per epoll fd, fd -> { events, lo, hi } (the 64-bit
+   * data the program gave). Readiness is poll's, level-triggered (EPOLLET is taken as level: a loop that
+   * drains its fds sees the same); EPOLLONESHOT disables an entry once reported, until EPOLL_CTL_MOD.
+   * EPOLLIN 1, EPOLLOUT 4, EPOLLERR 8, EPOLLHUP 10h; struct epoll_event is 12 bytes on i386 (packed).
+   */
+  const epReady = (ep) => {
+    const out = [];
+    for (const [fd, e] of ep.list) {
+      const f = fds[fd]; if (!f || e.off) continue;
+      let rev = 0;
+      if ((e.events & 1) && fdReadable(f)) rev |= 1;
+      if (e.events & 4) rev |= 4;
+      if (f.sk && f.sk.st === 'connected' && (!f.sk.peer || !sockOpen(f.sk.peer))) rev |= 0x10;
+      if (rev) out.push([fd, e, rev]);
+    }
+    return out;
+  };
+  const epWait = (epfd, evs, max, timeout) => {
+    const f = fdOf(epfd); if (!f.ep) return -E.EINVAL;
+    if (max <= 0) return -E.EINVAL;
+    const ready = epReady(f.ep).slice(0, max);
+    if (!ready.length && timeout !== 0 && (timeout < 0 || !expired(timeout / 1000))) return BLOCK;
+    ready.forEach(([fd, e, rev], i) => { wr32(evs + 12 * i, rev); wr32(evs + 12 * i + 4, e.lo); wr32(evs + 12 * i + 8, e.hi); if (e.events & 0x40000000) e.off = true; });
+    return ready.length;
+  };
   // poll: like select, on struct pollfd { fd, events, revents } — POLLIN 1, POLLOUT 4, POLLHUP 10h, POLLNVAL 20h.
   const poll = (pfds, n, timeout) => {
     let ready = 0, waitsOnInput = false;
@@ -1743,8 +1922,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       let rev = 0;
       if (fd >= 0 && !f) rev = 0x20;
       else if (f) {
-        const readable = f.tfd ? tfdReady(f.tfd) : f.sk ? sockReady(f) : f.pty ? ptyReady(f) : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
-          : f.node && f.node.dev === 'tty' ? lx.ttyIn.length > 0 : f.node && f.node.dev === 'mice' ? lx.miceIn.length > 0 : f.node && f.node.dev === 'mouse' ? lx.mouseIn.length > 0 : true;
+        const readable = fdReadable(f);
         if ((ev & 1) && readable) rev |= 1;
         if (ev & 4) rev |= 4;
         if (f.sk && f.sk.st === 'connected' && (!f.sk.peer || !sockOpen(f.sk.peer))) rev |= 0x10;
@@ -1761,9 +1939,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const selectWait = (tv, ns) => (tv ? rd32(tv) + rd32(tv + 4) / (ns ? 1e9 : 1e6) : Infinity);
   const select = (n, inp, outp, exp, tv, ns = false) => {
     let ready = 0;
-    const has = (fd) => { const f = fds[fd]; if (!f) return false; if (f.tfd) return tfdReady(f.tfd); if (f.sk) return sockReady(f); if (f.pty) return ptyReady(f); if (f.pp) return !f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp); if (f.pipe === 0) return lx.stdinPos < lx.stdin.length;
-      if (f.node && f.node.dev === 'tty') return lx.ttyIn.length > 0; if (f.node && f.node.dev === 'mouse') return lx.mouseIn.length > 0;
-      if (f.node && f.node.dev === 'mice') return lx.miceIn.length > 0; return true; };
+    const has = (fd) => { const f = fds[fd]; return f ? fdReadable(f) : false; };
     const writes = [];
     for (const [set, test] of [[inp, has], [outp, (fd) => !!fds[fd]], [exp, () => false]]) {
       if (!set) continue;
@@ -1815,7 +1991,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // i386 numbers (arch/x86/entry/syscalls/syscall_32.tbl). Arguments in EBX ECX EDX ESI EDI EBP.
   const SYS = {
     1: (status) => { exit(status); },                                      // exit
-    252: (status) => { exit(status); },                                    // exit_group
+    // exit_group: every thread of the process ends with it (exit alone ends only its thread).
+    252: (status) => {
+      for (let i = lx.procs.length - 1; i >= 0; i--) if (lx.procs[i].vm === lx.vm) { if (lx.procs[i].pid === lx.rootPid) lx.rootPid = lx.pid; lx.procs.splice(i, 1); }
+      exit(status);
+    },
     3: (fd, buf, n) => doRead(fd, buf, n),                                 // read
     4: (fd, buf, n) => writeFrom(fd, buf, n),                              // write
     145: (fd, iov, cnt) => {                                               // readv
@@ -1840,6 +2020,25 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       f.pos = lo + hi * 4294967296;
       try { return writeFrom(fd, buf, n); } finally { f.pos = keep; }
     },
+    // eventfd (initial count) and eventfd2 (EFD_SEMAPHORE 1, EFD_NONBLOCK 800h, EFD_CLOEXEC 80000h): libuv's wake-ups.
+    323: (initval) => newFd({ efd: { count: initval >>> 0, sem: false }, node: { dev: 'eventfd' }, flags: 0, pos: 0 }, 0, false),
+    328: (initval, flags) => newFd({ efd: { count: initval >>> 0, sem: !!(flags & 1) }, node: { dev: 'eventfd' }, flags: flags & 0x800, pos: 0 }, 0, !!(flags & 0x80000)),
+    // epoll_create (a size, ignored but positive), epoll_create1 (EPOLL_CLOEXEC 80000h), epoll_ctl, epoll_wait, epoll_pwait.
+    254: (size) => ((size | 0) <= 0 ? -E.EINVAL : newFd({ ep: { list: new Map() }, node: { dev: 'epoll' }, flags: 0, pos: 0 }, 0, false)),
+    329: (flags) => newFd({ ep: { list: new Map() }, node: { dev: 'epoll' }, flags: 0, pos: 0 }, 0, !!(flags & 0x80000)),
+    255: (epfd, op, fd, ev) => {
+      const f = fdOf(epfd); if (!f.ep) return -E.EINVAL;
+      if (!fds[fd]) return -E.EBADF;
+      if (fd === epfd) return -E.EINVAL;
+      const list = f.ep.list, has = list.has(fd);
+      if (op === 2) { if (!has) return -E.ENOENT; list.delete(fd); return 0; }              // EPOLL_CTL_DEL
+      const e = { events: rd32(ev), lo: rd32(ev + 4), hi: rd32(ev + 8), off: false };
+      if (op === 1) { if (has) return -E.EEXIST; list.set(fd, e); return 0; }                // EPOLL_CTL_ADD
+      if (op === 3) { if (!has) return -E.ENOENT; list.set(fd, e); return 0; }               // EPOLL_CTL_MOD
+      return -E.EINVAL;
+    },
+    256: (epfd, evs, max, timeout) => epWait(epfd, evs, max | 0, timeout | 0),             // epoll_wait
+    319: (epfd, evs, max, timeout) => epWait(epfd, evs, max | 0, timeout | 0),             // epoll_pwait (its signal mask left)
     322: (clock, flags) => {                                                // timerfd_create (CLOCK_REALTIME 0, MONOTONIC 1, BOOTTIME 7)
       if (clock !== 0 && clock !== 1 && clock !== 7) return -E.EINVAL;
       return newFd({ tfd: { clock, next: 0, interval: 0 }, node: { dev: 'timerfd' }, flags: flags & 0x800, pos: 0 }, 0, !!(flags & 0x80000));
@@ -2015,9 +2214,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     125: (addr, len, prot) => {
       if (addr & 0xfff) return -E.EINVAL;
       const first = addr >>> 12, end = Math.ceil((addr + len) / PAGE);
-      for (let p = first; p < end; p++) if (!page(p)) return -E.ENOMEM;   // a reserved page committed
+      // A reserved page not yet touched stays reserved, committed (writable) when first touched: V8 and
+      // glibc's thread stacks reserve hundreds of megabytes PROT_NONE and mprotect parts of them, and
+      // committing each such page ran Node out of frames before its first line.
+      const reserved = (p) => lx.lazy && lx.lazy.some(([a, b]) => p * PAGE >= a && p * PAGE < b);
+      for (let p = first; p < end; p++) if (!lx.pages.get(p) && !reserved(p)) return -E.ENOMEM;
       for (let p = first; p < end; p++) {
         const pg = lx.pages.get(p);
+        if (!pg) continue;
         pg.write = !!(prot & 2); pg.none = !(prot & 7);
         if (pg.none) clearPte(p); else setPte(p, pg.frame, pg.write);
       }
@@ -2034,9 +2238,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       wr32(uinfo, idx);
       return 0;
     },
-    258: () => lx.pid,                                                     // set_tid_address -> tid
+    258: (addr) => { lx.clearTid = addr >>> 0; return lx.pid; },           // set_tid_address: the word cleared at the thread's exit; -> tid
     311: () => 0,                                                          // set_robust_list
-    20: () => lx.pid, 64: () => lx.ppid, 224: () => lx.pid,                // getpid, getppid, gettid
+    20: () => lx.tgid ?? lx.pid, 64: () => lx.ppid, 224: () => lx.pid,     // getpid (the thread group's), getppid, gettid
     174: (sig, act, oact) => {                                             // rt_sigaction: struct { handler, flags, restorer, mask[2] }
       if (sig < 1 || sig > 64 || ((sig === 9 || sig === 19) && act)) return -E.EINVAL;
       const i = lx.sigInfo[sig] || { flags: 0, mask: [0, 0], restorer: 0 };
@@ -2221,7 +2425,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     331: (ptr, flags) => pipe(ptr, flags),                                 // pipe2
     2: () => fork(),                                                       // fork
     190: () => fork(),                                                     // vfork: a fork here
-    120: (flags, sp, ptid, tls, ctid) => fork(flags, ctid),                // clone, without CLONE_VM
+    120: (flags, sp, ptid, tls, ctid) => (flags & 0x100 ? cloneThread(flags, sp, ptid, tls, ctid) : fork(flags, ctid)),   // clone: a thread, or a process
+    240: (uaddr, op, val, timeout, uaddr2, val3) => futex(uaddr, op, val, timeout, uaddr2, val3),   // futex
+    422: (uaddr, op, val, timeout, uaddr2, val3) => futex(uaddr, op, val, timeout, uaddr2, val3),   // futex_time64 (the same: the seconds' low word)
     11: (path, argv, envp) => execve(rdStr(path), strings(argv), strings(envp)),   // execve
     114: (pid, st, opt) => wait(pid | 0, st, opt),                         // wait4
     7: (pid, st, opt) => wait(pid | 0, st, opt),                           // waitpid
@@ -2264,6 +2470,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     94: (fd, mode) => { const f = fdOf(fd); if (f.node) f.node.mode = mode & 0o7777; return 0; },
     306: (dirfd, path, mode) => { const p = resolve(rdStr(path), atBase(dirfd)), n = p && getNode(p); if (!n) return -E.ENOENT; n.mode = mode & 0o7777; return 0; },
     82: (args) => select(rd32(args), rd32(args + 4), rd32(args + 8), rd32(args + 12), rd32(args + 16)),   // select (old: its arguments in a struct)
+    // sysinfo: the time since start, the memory in KiB units (mem_unit 1024), no swap. busybox's free
+    // and uptime read it; without it they printed what was on their stack.
+    116: (buf) => {
+      const { total, free } = lx.memKiB();
+      for (let i = 0; i < 64; i++) wr8(buf + i, 0);
+      wr32(buf, Math.floor(lx.mono())); wr32(buf + 16, total); wr32(buf + 20, free);
+      wr8(buf + 40, lx.procs.length + 1); wr32(buf + 52, 1024);
+      return 0;
+    },
     122: (buf) => {                                                        // uname: as the oracle's i386 kernel says
       const f = ['Linux', 'mirage', '2.6.32', '#1', 'i686', '(none)'];
       for (let i = 0; i < 6; i++) { const b = new TextEncoder().encode(f[i]); wrBytes(buf + i * 65, b); wr8(buf + i * 65 + b.length, 0); }
