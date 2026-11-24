@@ -6,6 +6,9 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 ## 2026-11-24
 
 - **Keep** in the DOS player saves the running title in your browser; its next start goes on from that moment (a demo's precalculation, a game's level). **Forget** starts it afresh.
+- **Keep** on the Linux machine too: a shell, a Python or a Node already started comes back as it was, its files and its screen with it.
+- Kept moments are many times smaller.
+- A Linux program that writes over a file of its image now changes its own copy, and the change is kept with your home.
 - **Node.js from Docker Hub**: i386/node:10-alpine starts its REPL on the Linux machine and runs scripts, timers, files and child processes.
 - Linux programs can make their own threads and wait on several files at once.
 - Scripts starting with `#!` run through their interpreter on the Linux machine.

@@ -21,7 +21,7 @@
 const TYPED = { Uint8Array, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array, Float32Array, Float64Array, Uint8ClampedArray, BigInt64Array, BigUint64Array };
 
 /** Keys never kept, on any object: derived caches and the host's things (canvas, audio, workers). */
-const SKIP = new Set(['rec', 'codePage', 'onError', 'canvas', 'ctx', 'audioCtx', 'worker', 'port', 'snapHooks']);
+const SKIP = new Set(['rec', 'host', 'snapExternals', 'codePage', 'onError', 'canvas', 'ctx', 'audioCtx', 'worker', 'port', 'snapHooks']);
 /** Classes whose instances are walked like plain objects (registered by name, recreated with their
  *  prototype). Machine, CPU, Memory and the like are always reached at the same path in a fresh
  *  machine, so only those a program can make while it runs need to be here to be made again. */
@@ -38,7 +38,7 @@ const kindOf = (o) => (Array.isArray(o) ? 'a' : o instanceof Map ? 'm' : o insta
  * ({ k: kind, c: class, f: fields } -- a field a number, string, boolean, null, undefined, a bigint, or
  * { r: i } a reference). Structured-cloneable (IndexedDB keeps it as it is; Node's v8.serialize too).
  */
-export function snapshot(root, { skip = [] } = {}) {
+export function snapshot(root, { skip = [], external = null, pages = null } = {}) {
   const skipKeys = new Set([...SKIP, ...skip]);
   const ids = new Map(), nodes = [];
   const ref = (v, path) => {
@@ -52,7 +52,8 @@ export function snapshot(root, { skip = [] } = {}) {
     if (k === 'o' && !walkable(v)) return { op: v.constructor ? v.constructor.name : '?' };   // opaque: the fresh machine's own
     const id = nodes.length; ids.set(v, id);
     const n = { k }; nodes.push(n);
-    if (k === 'b') n.d = v.slice(0);
+    if (k === 'b' && external && external.has(v)) { n.x = external.get(v); n.len = v.byteLength; }   // kept by its name, not its bytes
+    else if (k === 'b') { n.d = v.slice(0); if (pages && pages.has(v)) { const fill = pages.get(v)(new Uint8Array(n.d)); if (fill.length) n.fill = fill; } }
     else if (k === 't' || k === 'dv') { n.c = k === 't' ? v.constructor.name : 'DataView'; n.b = ref(v.buffer, path + '.buffer'); n.o = v.byteOffset; n.n = k === 't' ? v.length : v.byteLength; }
     else if (k === 'm') n.f = [...v].map(([a, b], i) => [ref(a, path + '.key' + i), ref(b, path + '[' + String(a) + ']')]);
     else if (k === 's') n.f = [...v].map((a, i) => ref(a, path + '.item' + i));
@@ -78,7 +79,7 @@ export function snapshot(root, { skip = [] } = {}) {
  * has at the same place are filled in place; others are made. Throws when a function or an opaque
  * object would be needed where the fresh machine has none.
  */
-export function restore(root, snap, { skip = [] } = {}) {
+export function restore(root, snap, { skip = [], take = null } = {}) {
   const skipKeys = new Set([...SKIP, ...skip]);
   const { nodes } = snap, made = new Map(), claimed = new Set();
   const compatible = (n, t) => {
@@ -100,9 +101,15 @@ export function restore(root, snap, { skip = [] } = {}) {
     if (made.has(id)) return made.get(id);
     const n = nodes[id];
     let t = compatible(n, cur) ? cur : null;
+    if (n.k === 'b' && n.x) {
+      const v = take && take(n.x), b = v && v.buffer;
+      if (!b || b.byteLength !== n.len) throw new Error(`snapshot: ${path} (${n.x[1]}) is not what it was when kept`);
+      made.set(id, b); claimed.add(b); return b;
+    }
     if (n.k === 'b') {
       if (!t || t.byteLength !== n.d.byteLength) t = n.d.slice(0);
       else new Uint8Array(t).set(new Uint8Array(n.d));
+      if (n.fill) fillPages(new Uint8Array(t), n.fill, take, path);
       made.set(id, t); claimed.add(t); return t;
     }
     if (n.k === 't' || n.k === 'dv') {
@@ -162,6 +169,47 @@ export function snapHook(machine, name, save, load) {
   if (!machine.snapHooks) machine.snapHooks = new Map();
   machine.snapHooks.set(name, { save, load });
 }
+/**
+ * Bytes a module can give back by a name, kept by that name instead of themselves: an image's files the
+ * program only read (src/linux.js). `find()` returns Map(Uint8Array -> key), `take(key)` the same bytes
+ * again in the machine built afresh (null when they are not there: the restore fails). Their buffers
+ * are kept by name, and so are the pages of memory that hold a copy of one of their pages (a program's
+ * code, a library's, as the loader copied them in).
+ */
+export function snapExternal(machine, name, { find, take }) {
+  if (!machine.snapExternals) machine.snapExternals = new Map();
+  machine.snapExternals.set(name, { find, take });
+}
+
+// ---- memory's pages that are copies of a file's: kept as where they come from ---------------------------
+const hashPage = (u8, at, n) => { let h = 0x811c9dc5; for (let i = 0; i < n; i += 4) h = Math.imul(h ^ (u8[at + i] | u8[at + i + 1] << 8 | u8[at + i + 2] << 16 | u8[at + i + 3] << 24), 16777619); return h >>> 0; };
+/** The pages of `copy` (memory's bytes as kept) equal to a 4 KiB page of one of `files` ([name, key, u8],
+ *  a file's last page padded with zeros): zeroed in the copy, and listed [page, name, key, offset]. */
+const filePages = (files, copy) => {
+  const index = new Map(), tmp = new Uint8Array(PG);
+  const page = (u8, off) => { if (off + PG <= u8.length) return [u8, off]; tmp.fill(0); tmp.set(u8.subarray(off)); return [tmp, 0]; };
+  files.forEach(([, , u8], f) => { for (let off = 0; off < u8.length; off += PG) { const [b, o] = page(u8, off), h = hashPage(b, o, PG); if (!index.has(h)) index.set(h, [f, off]); } });
+  const fill = [];
+  for (let p = 0; p * PG + PG <= copy.length; p++) {
+    const at = p * PG; let any = false;
+    for (let i = at; i < at + PG; i += 64) if (copy[i] | copy[i + 8] | copy[i + 40]) { any = true; break; }
+    if (!any) continue;
+    const hit = index.get(hashPage(copy, at, PG)); if (!hit) continue;
+    const [name, key, u8] = files[hit[0]], [b, o] = page(u8, hit[1]);
+    let same = true; for (let i = 0; i < PG; i++) if (copy[at + i] !== b[o + i]) { same = false; break; }
+    if (!same) continue;
+    copy.fill(0, at, at + PG); fill.push([p, name, key, hit[1]]);
+  }
+  return fill;
+};
+/** Those pages back from their files. */
+const fillPages = (u8, fill, take, path) => {
+  for (const [p, name, key, off] of fill) {
+    const src = take && take([name, key]);
+    if (!src || off >= src.length) throw new Error(`snapshot: ${path}'s page ${p.toString(16)}h (${key}) is not what it was when kept`);
+    u8.set(src.subarray(off, Math.min(src.length, off + PG)), p * PG);
+  }
+};
 
 const machineClasses = (mc, extra = {}) => { for (const o of [mc, mc.cpu, mc.mem, mc.dos && mc.dos.vfs, ...Object.values(extra)]) if (o) snapshotClass(o.constructor); };
 // The graph's root: the Machine, or { machine, ...with } when the host keeps objects of its own beside
@@ -169,7 +217,10 @@ const machineClasses = (mc, extra = {}) => { for (const o of [mc, mc.cpu, mc.mem
 const rootOf = (mc, w) => (w ? { machine: mc, ...w } : mc);
 export function saveMachine(mc, opts = {}) {
   machineClasses(mc, opts.with);
-  const snap = snapshot(rootOf(mc, opts.with), opts);
+  const external = new Map(), files = [];
+  if (mc.snapExternals) for (const [name, e] of mc.snapExternals) for (const [u8, key] of e.find()) { external.set(u8.buffer, [name, key]); files.push([name, key, u8]); }
+  const pages = new Map(files.length ? [[mc.mem.u8.buffer, (copy) => filePages(files, copy)]] : []);
+  const snap = snapshot(rootOf(mc, opts.with), { ...opts, external, pages });
   snap.wall = mc.wallClockMs ? mc.wallClockMs() : null;                 // the machine's wall clock, to go on from
   snap.hooks = {};
   if (mc.snapHooks) for (const [name, h] of mc.snapHooks) snap.hooks[name] = h.save();
@@ -177,7 +228,15 @@ export function saveMachine(mc, opts = {}) {
 }
 export function loadMachine(mc, snap, opts = {}) {
   machineClasses(mc, opts.with);
-  restore(rootOf(mc, opts.with), snap, opts);
+  // Each named buffer asked once (an image's file read from its tree, or from the disk under Node), whatever
+  // the number of pages taken from it.
+  const taken = new Map();
+  const take = ([name, key]) => {
+    const id = name + '\0' + key;
+    if (!taken.has(id)) { const e = mc.snapExternals && mc.snapExternals.get(name); taken.set(id, e ? e.take(key) : null); }
+    return taken.get(id);
+  };
+  restore(rootOf(mc, opts.with), snap, { ...opts, take });
   // The wall clock went on from where it was kept: a page's performance.now() starts at 0 each visit.
   if (snap.wall != null && mc.wallClockMs && 'wallOffset' in mc) mc.wallOffset += snap.wall - mc.wallClockMs();
   for (const [name, data] of Object.entries(snap.hooks || {})) {
@@ -228,9 +287,24 @@ export function opaquePaths(root) {
 
 // ---- a snapshot as bytes: kept in the browser (Cache Storage) or a file ------------------------------
 // The graph as JSON, its buffers after it, the whole gzipped (CompressionStream, in pages and Node
-// alike): a DOS machine's 45 MiB, mostly zeros, keep in about a megabyte. JSON alone would lose what a
-// field may hold -- undefined, NaN, the infinities, -0, a bigint -- so those are spelled out.
-const MAGIC = 'MIRAGE-SNAPSHOT 1\n';
+// alike). A buffer is written as its pages of 4 KiB that are not all zeros, after a bitmap of which
+// they are: a machine's memory is mostly pages nothing wrote (a Linux machine's 256 MiB), which the
+// compressor then neither reads nor keeps. JSON alone would lose what a field may hold -- undefined,
+// NaN, the infinities, -0, a bigint -- so those are spelled out.
+const MAGIC = 'MIRAGE-SNAPSHOT 2\n', MAGIC1 = 'MIRAGE-SNAPSHOT 1\n', PG = 4096;
+/** A buffer as [bitmap of its non-zero pages, those pages]: what packSnapshot writes of it. */
+const sparse = (u8) => {
+  const n = Math.ceil(u8.length / PG), map = new Uint8Array((n + 7) >> 3), w32 = u8.length % 4 === 0 && u8.byteOffset % 4 === 0
+    ? new Uint32Array(u8.buffer, u8.byteOffset, u8.length >> 2) : null;
+  const kept = [];
+  for (let p = 0; p < n; p++) {
+    let any = false;
+    if (w32 && (p + 1) * PG <= u8.length) { for (let i = p * 1024, e = i + 1024; i < e; i++) if (w32[i]) { any = true; break; } }
+    else for (let i = p * PG, e = Math.min(u8.length, i + PG); i < e; i++) if (u8[i]) { any = true; break; }
+    if (any) { map[p >> 3] |= 1 << (p & 7); kept.push(u8.subarray(p * PG, Math.min(u8.length, (p + 1) * PG))); }
+  }
+  return [map, ...kept];
+};
 const enc = (v) => {
   if (v === undefined) return { u: 1 };
   if (typeof v === 'number') return Number.isFinite(v) ? (Object.is(v, -0) ? { n: '-0' } : v) : { n: String(v) };
@@ -252,16 +326,18 @@ export async function packSnapshot(snap, meta = {}) {
   const bufs = [];
   const nodes = snap.nodes.map((n) => {
     const o = { ...n };
-    if (n.k === 'b') { o.d = bufs.length; bufs.push(new Uint8Array(n.d)); }
+    if (n.k === 'b' && n.x) { /* kept by its name */ }
+    else if (n.k === 'b') { const parts = sparse(new Uint8Array(n.d)); o.d = bufs.length; o.len = n.d.byteLength; bufs.push(parts); }
     else if (n.k === 'o') { o.f = {}; for (const k of Object.keys(n.f)) o.f[k] = enc(n.f[k]); }
     else if (n.k === 'a' || n.k === 's') o.f = n.f.map(enc);
     else if (n.k === 'm') o.f = n.f.map(([a, b]) => [enc(a), enc(b)]);
     return o;
   });
-  const head = new TextEncoder().encode(MAGIC + JSON.stringify({ meta, root: snap.root, hooks: snap.hooks || {}, wall: snap.wall ?? null, nodes, sizes: bufs.map((b) => b.length) }) + '\n');
-  const total = head.length + bufs.reduce((s, b) => s + b.length, 0), all = new Uint8Array(total);
+  const sizes = bufs.map((parts) => parts.reduce((s, b) => s + b.length, 0));
+  const head = new TextEncoder().encode(MAGIC + JSON.stringify({ meta, root: snap.root, hooks: snap.hooks || {}, wall: snap.wall ?? null, nodes, sizes }) + '\n');
+  const total = head.length + sizes.reduce((s, b) => s + b, 0), all = new Uint8Array(total);
   all.set(head, 0); let at = head.length;
-  for (const b of bufs) { all.set(b, at); at += b.length; }
+  for (const parts of bufs) for (const b of parts) { all.set(b, at); at += b.length; }
   return pipe(all, new CompressionStream('gzip'));
 }
 
@@ -270,13 +346,22 @@ export async function unpackSnapshot(bytes) {
   const all = await pipe(bytes, new DecompressionStream('gzip'));
   let nl = MAGIC.length; while (all[nl] !== 10) nl++;
   const td = new TextDecoder();
-  if (td.decode(all.subarray(0, MAGIC.length)) !== MAGIC) throw new Error('snapshot: not a MIRAGE snapshot');
+  const magic = td.decode(all.subarray(0, MAGIC.length));
+  if (magic !== MAGIC && magic !== MAGIC1) throw new Error('snapshot: not a MIRAGE snapshot');
   const h = JSON.parse(td.decode(all.subarray(MAGIC.length, nl)));
   let at = nl + 1;
-  const bufs = h.sizes.map((n) => { const b = all.slice(at, at + n).buffer; at += n; return b; });
+  const bufs = h.sizes.map((n) => { const b = all.subarray(at, at + n); at += n; return b; });
+  // A buffer back from its bitmap and its non-zero pages (a version 1 snapshot: the bytes as they are).
+  const whole = (b, len) => {
+    if (magic === MAGIC1) return b.slice().buffer;
+    const out = new Uint8Array(len), n = Math.ceil(len / PG), mapLen = (n + 7) >> 3;
+    let src = mapLen;
+    for (let p = 0; p < n; p++) if (b[p >> 3] & (1 << (p & 7))) { const k = Math.min(PG, len - p * PG); out.set(b.subarray(src, src + k), p * PG); src += k; }
+    return out.buffer;
+  };
   const nodes = h.nodes.map((n) => {
     const o = { ...n };
-    if (n.k === 'b') o.d = bufs[n.d];
+    if (n.k === 'b' && !n.x) { o.d = whole(bufs[n.d], n.len); delete o.len; }
     else if (n.k === 'o') { o.f = {}; for (const k of Object.keys(n.f)) o.f[k] = dec(n.f[k]); }
     else if (n.k === 'a' || n.k === 's') o.f = n.f.map(dec);
     else if (n.k === 'm') o.f = n.f.map(([a, b]) => [dec(a), dec(b)]);

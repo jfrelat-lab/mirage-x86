@@ -6,6 +6,8 @@
 // the VGA (and so the picture) takes it from, as the Linux console's vgacon sets them. Control characters and the escape sequences the Linux console answers
 // that readline, ls --color and the like use: CR LF BS TAB BEL; CSI A B C D H f J K m, and the
 // private ones they send at start-up (cursor visibility, modes), which are accepted and ignored.
+import { snapshotClass } from './snapshot.js';
+
 const COLS = 80, ROWS = 25, TEXT = 0xb8000;
 const ANSI_TO_VGA = [0, 4, 2, 6, 1, 5, 3, 7];             // ANSI black red green yellow blue magenta cyan white
 
@@ -96,3 +98,5 @@ export class VtConsole {
     }
   }
 }
+// Kept with the machine it draws for (src/snapshot.js): its colours, its escape sequence half read.
+snapshotClass(VtConsole);

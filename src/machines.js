@@ -460,24 +460,54 @@ async function linux(world = 'linux') {
     b.onclick = () => { over.hidden = true; again(); };
     b.focus();
   };
-  const start = async (m, img, host, again = null) => {
+  // A Linux machine's kept moment (src/snapshot.js), one per image: its processes, files and console as
+  // they were -- a Python or a Node already started, a game already loaded. Keep and Forget as for DOS.
+  let current = null;
+  const keepBtn = $('keepBtn'), forgetBtn = $('forgetBtn');
+  keepBtn.hidden = !isLinux || typeof caches === 'undefined';
+  keepBtn.onclick = async () => {
+    const s = window.mirage;
+    if (!current || !s || !s.keep || s.lx.done) { log('Keep: nothing runs yet -- start an image, then keep the moment you want to come back to'); return; }
+    s.pause(true);
+    try {
+      const bytes = await s.keep({ world: 'linux', id: current.id });
+      await moments.put('linux', current.id, bytes);
+      forgetBtn.hidden = false;
+      log(`${current.title}: this moment is kept in this browser (${kib(bytes.length)}); its next start goes on from here`);
+    } catch (err) { log(`Keep: ${err.message || err}`); }
+    s.pause(false);
+  };
+  forgetBtn.onclick = async () => { if (!current) return; await moments.drop('linux', current.id); forgetBtn.hidden = true; log(`${current.title}: the kept moment is forgotten; its next start is afresh`); };
+  const start = async (m, img, host, again = null, fresh = false) => {
     let lastLine = '', s = null;
+    const id = isLinux ? m.name || img.name || m.title : null;
+    current = id ? { id, title: m.title || id } : null;
+    const moment = id && !fresh ? await moments.get('linux', id) : null;
+    forgetBtn.hidden = !moment;
     try {
       const user = isLinux ? linuxUser(img) : null;              // a Linux account; Win32 has none
       if (!isLinux) img = { ...img, machine: { ...img.machine, desktop: fbSel.value } };
       if (user) log(`user: ${user}`);
-      s = await startLinux({ canvas, img, host, user,
+      try {
+        s = await startLinux({ canvas, img, host, user, moment,
         onOutput: (t) => { logOutput(t); lastLine = (lastLine + t.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, '')).split('\n').filter(Boolean).pop() || lastLine; hint.textContent = lastLine.slice(-120); },
         onStatus: (t) => {
           status.textContent = t;
           if (/^exited/.test(t)) { setState('exited', ''); log(t); if (!isLinux && again && /^exited with status 0$/.test(t) && s) desktop(m, s, again); }
         } });
+      } catch (err) {
+        if (!moment) throw err;
+        await moments.drop('linux', id);
+        log(`${current.title}: the kept moment cannot be taken back (${err.message || err}); it is forgotten, starting afresh`);
+        return start(m, img, host, again, true);
+      }
+      if (s.resumed) log(`${current.title}: going on from the moment kept ${new Date(s.resumed.kept).toLocaleString()} (${kib(moment.length)}, ${(s.resumed.cycles / 1e6).toFixed(0)} M instructions in) -- Forget, and its next start is afresh`);
       session = { pause: s.pause, audio: s.audio };
       syncSound();                                                    // chosen from the list: the click came before
       window.mirage = s;
       setState('running');
       canvas.focus();
-      preparing(img.prepare);
+      preparing(s.resumed ? null : img.prepare);                     // a kept moment has computed it already
     } catch (e) { status.textContent = String(e.message || e); setState('failed', 'err'); }
   };
   // "prepare": { "seconds", "note" } in a manifest: what the program computes before its first frame,

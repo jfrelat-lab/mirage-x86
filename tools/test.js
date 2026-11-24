@@ -8157,6 +8157,77 @@ await (async () => {
   } catch (e) { got = String(e.message || e).slice(0, 120); }
   eq('snapshot: typed arrays restored in place, so a closure holding one sees the restored bytes', got, '3 true 201'); })();
 
+// tools/linux/overwrite.asm: a file of the image written over in place. Docker i386/busybox: "Zbc". The
+// program's file changes; the image's tree (lx.host's bytes) does not -- MIRAGE-LINUX wrote into the tree
+// itself, so lx.changes() (the OASIS page's home saving) found the file unchanged. And a kept moment
+// holds the files the program only read by their path, the image giving their bytes back -- the
+// program's own page in memory too, a copy of its file's.
+await (async () => {
+  let got;
+  try {
+    const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004088e0000008e0000000500000000100000b805000000bb83800408b90100000031d2cd8089c3b804000000b98d800408ba01000000cd80b80100000031dbcd802f6574632f6d6f7464005a';
+    const motd = new TextEncoder().encode('abc'), issue = new TextEncoder().encode('read only'), prog = Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16));
+    const files = { '/etc/motd': motd, '/etc/issue': issue, '/bin/ow': prog };
+    const host = { lstat: (p) => (files[p] ? { type: 'file', size: files[p].length } : p === '/' || p === '/etc' || p === '/bin' ? { type: 'dir' } : null), read: (p) => files[p] || null, list: () => [] };
+    const mk = () => { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc); lx.host = host; lx.readFile('/etc/issue'); lx.load(lx.readFile('/bin/ow'), ['/bin/ow']); return { mc, lx }; };
+    const { mc, lx } = mk();
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    const td = new TextDecoder(), snap = saveMachine(mc), kept = snap.nodes.filter((n) => n.k === 'b' && n.x).map((n) => n.x[1]).sort();
+    const fill = snap.nodes.filter((n) => n.fill).flatMap((n) => n.fill.map((f) => f[2]));   // memory's pages kept as the file's
+    const b = mk(); loadMachine(b.mc, (await unpackSnapshot(await packSnapshot(snap))).snap);
+    const same = mc.mem.u8.every((v, i) => b.mc.mem.u8[i] === v);
+    got = [lx.status, td.decode(lx.readFile('/etc/motd')), td.decode(motd), lx.changes().files.map((f) => f.path).join(','), kept.join(','), fill.join(','), same].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('linux: an image\'s file written over changes the program\'s file, not the image\'s; one only read is kept by its path', got, '0 Zbc abc /etc/motd /bin/ow,/etc/issue /bin/ow true'); })();
+// A buffer packed as its non-zero pages: a megabyte with a byte in its 101st page and its odd tail (the
+// last page short) comes back whole, and packs in less than a kilobyte head and all.
+await (async () => {
+  let got;
+  try {
+    const u8 = new Uint8Array((1 << 20) + 5); u8[100 * 4096 + 7] = 9; u8[(1 << 20) + 4] = 7;
+    const bytes = await packSnapshot(snapGraph({ u8 })), { snap } = await unpackSnapshot(bytes), back = {};
+    snapRestore(back, snap);
+    got = [back.u8.length, back.u8[100 * 4096 + 7], back.u8[(1 << 20) + 4], back.u8.reduce((a, v) => a + v, 0), bytes.length < 1024].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: a buffer packed as its non-zero pages comes back whole, and small', got, '1048581 9 7 16 true'); })();
+// The Linux console kept with the machine: Node's REPL writes "\e[90mundefined\e[39m" -- bright grey,
+// then the default colour, still bold -- so the next line's text is bold white; a console taken back
+// fresh drew it grey (VtConsole kept as an opaque object: its class was not registered at the save).
+await (async () => {
+  let got;
+  try {
+    const { VtConsole } = await import('../src/vtconsole.js');
+    const mk = () => { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc); lx.console = new VtConsole(mc.mem.u8, null); return { mc, lx }; };
+    const a = mk(); a.lx.console.write([...new TextEncoder().encode('\x1b[90mundefined\x1b[39m\x1b[')]);   // a sequence half read, too
+    const b = mk(); loadMachine(b.mc, (await unpackSnapshot(await packSnapshot(saveMachine(a.mc)))).snap);
+    b.lx.console.write([...new TextEncoder().encode('1mX')]);
+    got = [b.lx.console.bold, b.lx.console.fg, b.mc.mem.u8[0xb8000 + 2 * 9], b.mc.mem.u8[0xb8000 + 2 * 9 + 1].toString(16)].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: the Linux console kept -- its colour, bold, an escape sequence half read', got, 'true 7 88 f'); })();
+// MIRAGE-LINUX's own state kept with the machine (src/linux.js keeps it on lx): the frames a process
+// gave back when it ended (lx.freeFrames), the image's paths the program removed (lx.gone), a Shift held
+// on the console's keyboard (its hook). fork.asm run to its end: its child's 65 frames free, and zeros
+// (what an ended process left is not kept: a snapshot writes only the pages that are not zeros).
+await (async () => {
+  let got;
+  try {
+    const hex = '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+      '0000000001000000000000000080040800800408d6000000d60000000700000000100000b802000000cd8085c07522b8' +
+      '04000000bb01000000b9c5800408ba06000000cd80b801000000bb03000000cd80b872000000bbffffffffb9d2800408' +
+      '31d231f6cd80b804000000bb01000000b9cb800408ba07000000cd808b1dd2800408c1eb0881e3ff00000083c30ab801' +
+      '000000cd806368696c640a706172656e740a00000000';
+    const host = { lstat: (p) => (p === '/x' ? { type: 'file', size: 1 } : p === '/' ? { type: 'dir' } : null), read: () => new Uint8Array([1]), list: () => [] };
+    const mk = () => { const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc); lx.host = host; lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/FORK']); return { mc, lx }; };
+    const a = mk();
+    for (let i = 0; i < 100 && !a.lx.done; i++) a.mc.runSlice(20000);
+    a.lx.gone.add('/x'); a.lx.keyScancodes([0x2a]);                       // /x removed; Shift down
+    const b = mk(); loadMachine(b.mc, (await unpackSnapshot(await packSnapshot(saveMachine(a.mc)))).snap);
+    b.lx.keyScancodes([0x1e]);                                            // A, with the Shift kept
+    const zeros = a.lx.freeFrames.every((f) => a.mc.mem.u8.subarray(f, f + 4096).every((v) => !v));   // given back zeroed: not kept
+    got = [b.lx.freeFrames.length, b.lx.readFile('/x'), String.fromCharCode(...b.lx.ttyIn, ...b.lx.tty.line), zeros].join(' ');
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('snapshot: MIRAGE-LINUX kept -- the frames given back, a removed path, a Shift held', got, '65  A true'); })();
+
 console.log(`\nmirage recompiler: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFailures:'); for (const f of fails) console.log('  ✗ ' + f); process.exit(1); }
 else console.log('all green ✓');

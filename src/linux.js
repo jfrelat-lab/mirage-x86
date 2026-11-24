@@ -15,6 +15,7 @@
 // its own map of virtual pages (this.pages), so a bad pointer in a system call is -EFAULT, not a
 // fault taken in the kernel.
 import { installMidi } from './midi.js';
+import { snapHook, snapExternal } from './snapshot.js';
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
@@ -64,16 +65,19 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // ---- page tables -------------------------------------------------------------------------------
   // Frames come back when a process exits or execs, so a shell that forks for every command does
   // not run out of memory.
-  const freeFrames = [];
+  // The kernel's own state is kept on lx, where src/snapshot.js sees it: a snapshot of the machine holds it.
+  const freeFrames = lx.freeFrames = [];
+  // A frame given back is zeroed then, not when it is taken again: what an ended process left is not
+  // kept in a snapshot of the machine (src/snapshot.js writes only the pages that are not zeros).
+  const freeFrame = (f) => { mem.u8.fill(0, f, f + PAGE); freeFrames.push(f); };
   const allocFrame = () => {
     let f = freeFrames.pop();
-    if (f === undefined) {
-      f = lx.nextFrame; lx.nextFrame += PAGE;
-      // Not into the card's framebuffer: on a 64 MiB machine it is the last 4 MiB (src/bios.js), and a
-      // process page there would be drawn on the screen — and overwritten by /dev/fb0.
-      const top = machine.vbeFbBase && machine.vbeFbBase < mem.size ? machine.vbeFbBase : mem.size;
-      if (lx.nextFrame > top) throw new Error('mirage-linux: out of physical memory');
-    }
+    if (f !== undefined) return f;
+    f = lx.nextFrame; lx.nextFrame += PAGE;
+    // Not into the card's framebuffer: on a 64 MiB machine it is the last 4 MiB (src/bios.js), and a
+    // process page there would be drawn on the screen — and overwritten by /dev/fb0.
+    const top = machine.vbeFbBase && machine.vbeFbBase < mem.size ? machine.vbeFbBase : mem.size;
+    if (lx.nextFrame > top) throw new Error('mirage-linux: out of physical memory');
     mem.u8.fill(0, f, f + PAGE);
     return f;
   };
@@ -111,7 +115,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     for (const [vpn, pg] of pages) {
       const pde = dv.getUint32(PD_BASE + (vpn >>> 10) * 4, true);
       if (pde & 1) dv.setUint32((pde & 0xfffff000) + (vpn & 0x3ff) * 4, 0, true);
-      if (free && !pg.phys) freeFrames.push(pg.frame);
+      if (free && !pg.phys) freeFrame(pg.frame);
     }
   };
   const clearPte = (vpn) => { const pde = dv.getUint32(PD_BASE + (vpn >>> 10) * 4, true); if (pde & 1) dv.setUint32((pde & 0xfffff000) + (vpn & 0x3ff) * 4, 0, true); };
@@ -121,7 +125,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const had = lx.pages.get(p);
       if (!had) continue;
       lx.pages.delete(p);
-      if (!had.phys) freeFrames.push(had.frame);
+      if (!had.phys) freeFrame(had.frame);
       const pde = dv.getUint32(PD_BASE + (p >>> 10) * 4, true);
       if (pde & 1) dv.setUint32((pde & 0xfffff000) + (p & 0x3ff) * 4, 0, true);
     }
@@ -607,7 +611,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     exit(code);
   };
   // The first process's address space: where the run's own program lives.
-  let firstVm = null; const rootVm = () => (firstVm ??= lx.vm);
+  lx.firstVm = null; const rootVm = () => (lx.firstVm ??= lx.vm);
   /**
    * A new process with an address space of its own and nothing in it, its parent put aside answering `ret`
    * to the call it made (src/win32's CreateProcess: the loader then maps the program there). It runs now;
@@ -689,7 +693,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
    * val3) wake `val` and move up to `val2` (in the timeout's place) to uaddr2. FUTEX_PRIVATE (80h) and
    * FUTEX_CLOCK_REALTIME (100h) change nothing here: one address space, one clock.
    */
-  const futexWaiters = new Map(), futexWoken = new Set();
+  const futexWaiters = lx.futexWaiters = new Map(), futexWoken = lx.futexWoken = new Set();
   const futexWake = (addr, n) => {
     const q = futexWaiters.get(addr); if (!q) return 0;
     let k = 0; while (q.length && k < n) { futexWoken.add(q.shift()); k++; }
@@ -796,7 +800,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // is made the first time a path is looked up, a file's bytes the first time it is opened, and a
   // path the program removed is remembered so the host's copy does not come back.
   lx.host = null;
-  const gone = new Set();
+  const gone = lx.gone = new Set();
   const getNode = (p) => {
     let n = fs.get(p);
     if (n || !lx.host || gone.has(p)) return n;
@@ -808,7 +812,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         : { data: null, size: st.size, host: p, ...meta };
     fs.set(p, n); return n;
   };
-  const dataOf = (n) => { if (n.data === null) { n.data = lx.host.read(n.host); n.size = n.data.length; } return n.data; };
+  // A file of the image is read as the image's own bytes (n.image), shared, not copied: grow copies them
+  // before the first write, so a program writing to it changes its own file, not the image's tree.
+  const dataOf = (n) => { if (n.data === null) { n.data = lx.host.read(n.host); n.size = n.data.length; n.image = true; } return n.data; };
+  // A kept moment holds the image's files by their path, not their bytes (src/snapshot.js snapExternal):
+  // the image's tree gives them back.
+  snapExternal(machine, 'linux-image', {
+    find: () => { const m = new Map(); for (const n of fs.values()) if (n.image && n.data) m.set(n.data, n.host); return m; },
+    take: (p) => (lx.host && lx.host.read(p)) || null,
+  });
   const removeNode = (p) => { fs.delete(p); gone.add(p); };
   /** A path to the canonical one of what it names, every symbolic link on the way followed — the
    *  last one too unless `follow` is false (lstat, unlink, readlink). The last component need not
@@ -1059,6 +1071,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const E0SEQ = { 0x48: '\x1b[A', 0x50: '\x1b[B', 0x4d: '\x1b[C', 0x4b: '\x1b[D', 0x47: '\x1b[1~', 0x4f: '\x1b[4~',
     0x52: '\x1b[2~', 0x53: '\x1b[3~', 0x49: '\x1b[5~', 0x51: '\x1b[6~', 0x1c: '\r', 0x35: '/' };
   let e0 = false, shift = 0, ctrl = 0, caps = false;
+  snapHook(machine, 'linux-keys', () => ({ e0, shift, ctrl, caps }), (o) => { ({ e0, shift, ctrl, caps } = o); });
   lx.keyScancodes = (codes) => {
     for (const c of codes) {
       if (c === 0xe0) { e0 = true; if (lx.tty.kbMode === 0) lx.ttyIn.push(c); continue; }
@@ -1128,7 +1141,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // the slave open) into the slave's input; what the slave writes goes through OPOST/ONLCR to the
   // master. A side with nobody left: the master reads EIO, the slave reads the end (0). Which
   // processes hold a side is read from every descriptor table, as for a pipe's writers.
-  const ptys = new Map();                                                 // 'b0'-'b15' the BSD pairs, 'u0'... Unix98's: two namespaces, as Linux has
+  const ptys = lx.ptys = new Map();                                                 // 'b0'-'b15' the BSD pairs, 'u0'... Unix98's: two namespaces, as Linux has
   const PTY_TERMIOS = () => Uint8Array.from([0x00, 0x05, 0, 0, 0x05, 0x00, 0, 0, 0xbf, 0x04, 0, 0, 0x3b, 0x8a, 0, 0, 0,
     3, 0x1c, 0x7f, 0x15, 4, 0, 1, 0, 0x11, 0x13, 0x1a, 0, 0x12, 0x0f, 0x17, 0x16, 0, 0, 0]);
   const fdTables = () => [fds, ...lx.procs.map((q) => q.fds)];
@@ -1269,7 +1282,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.epoch = 1767225600;                                       // 2026-01-01T00:00:00Z
   lx.realTime = !!realTime;
   lx.now = () => lx.realTime ? Date.now() / 1000 : lx.epoch + cpu.cycles / (machine.cyclesPerSecond || 1e8);
-  lx.mono = () => lx.realTime ? performance.now() / 1000 : cpu.cycles / (machine.cyclesPerSecond || 1e8);
+  // The page's monotonic clock is its machine's wall clock (machine.wallClockMs), which a kept moment
+  // taken back goes on from (src/snapshot.js): a timer's deadline is in the time it was set in.
+  lx.mono = () => lx.realTime ? (machine.wallClockMs ? machine.wallClockMs() : performance.now()) / 1000 : cpu.cycles / (machine.cyclesPerSecond || 1e8);
   if (machine.midi) lx.midi();                                       // the BIOS's MPU-401 made it already: on lx's clock now
 
   // File descriptors: 0-2 are the pipes the oracle has (Docker without -t), never a terminal.
@@ -1281,6 +1296,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   lx.cloexec = new Set();
   const newFd = (f, min = 0, cloexec = false) => { let i = min; while (fds[i]) i++; fds[i] = f; if (cloexec) lx.cloexec.add(i); else lx.cloexec.delete(i); return i; };
   const grow = (node, size) => {
+    if (node.image) { const d = new Uint8Array(Math.max(size, node.data.length)); d.set(node.data); node.data = d; delete node.image; return; }
     if (size <= node.data.length) return;
     const d = new Uint8Array(Math.max(size, node.data.length * 2, 256)); d.set(node.data); node.data = d;
   };
@@ -1318,7 +1334,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.procs.splice(i, 1);
     // Its frames only: the page directory holds the running process's mappings, not q's (clearing
     // q's addresses there took them from the killer — busybox timeout's watcher, after its kill).
-    for (const pg of q.pages.values()) if (!pg.phys) freeFrames.push(pg.frame);
+    for (const pg of q.pages.values()) if (!pg.phys) freeFrame(pg.frame);
     const parent = q.ppid === lx.pid ? lx : lx.procs.find((x) => x.pid === q.ppid);
     ((parent && parent.zombies) || lx.orphans).set(q.pid, sig & 0x7f);
     if (parent) post(parent, 17);

@@ -32,9 +32,11 @@ export function oasisHost(imgName) {
 
 /**
  * Start an image's entry on `canvas`. `onOutput(text)` gets what it writes to its console or stdout,
- * `onStatus(text)` a line a second (speed) and the end. Returns { mc, lx, stop }.
+ * `onStatus(text)` a line a second (speed) and the end. `moment`: a kept moment's bytes (keep's), which the
+ * machine goes on from in place of the entry's start -- its processes, files, console and clock as kept.
+ * Returns { mc, lx, keep, resumed, stop }.
  */
-export async function startLinux({ canvas, img, host, user, onOutput = () => {}, onStatus = () => {} }) {
+export async function startLinux({ canvas, img, host, user, moment = null, onOutput = () => {}, onStatus = () => {} }) {
   const m = img.machine || {};
   // world "win32": the entry is a PE .exe, run by MIRAGE-WIN32 (src/win32) on the same machinery; its
   // RAM is what its image reserves, which a Crinkler intro touches much of.
@@ -53,7 +55,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   const lx = installLinux(mc, { realTime: true, onOutput: (fd, b) => onOutput(new TextDecoder().decode(b)) });
   // Sound: /dev/dsp (src/linux.js) plays on the program's clock, which is the wall clock here; the
   // mixer takes the same one. The output starts with the first click or key, as a browser requires.
-  mc.wallClockMs = () => performance.now();
+  mc.wallOffset = 0; mc.wallClockMs = () => performance.now() + mc.wallOffset;   // a kept moment goes on from its own time (src/snapshot.js)
   installAudio(mc);
   const audio = new AudioOut(mc);
   const wake = () => { audio.start(); window.removeEventListener('keydown', wake); window.removeEventListener('pointerdown', wake); };
@@ -114,6 +116,15 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     lx.load(image, [e.run, ...(e.args || [])], env);
   }
 
+  // A kept moment: the machine built as for a start (the same image, the same objects), then the kept
+  // state written into it (src/snapshot.js). A Windows program's or an HLE library's state is not kept yet.
+  const snap = await import('./snapshot.js');
+  let resumed = null;
+  if (moment) {
+    if (win32 || hle) throw new Error('a kept moment of a Windows program or of HLE libraries cannot be taken back yet');
+    try { const { snap: kept, meta } = await snap.unpackSnapshot(moment); snap.loadMachine(mc, kept); resumed = meta; }
+    catch (err) { audio.close(); window.removeEventListener('keydown', wake); window.removeEventListener('pointerdown', wake); throw err; }
+  }
   const video = new Video(mc, canvas); video.font = mc.font;
   // The page's keys reach the console two ways (src/keyboard.js gives both). In K_XLATE — a shell,
   // anything that reads characters — the CHARACTER the host's own layout produced goes to the line
@@ -265,7 +276,12 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
   };
   draw();
   return {
-    mc, lx, audio, hle,
+    mc, lx, audio, hle, resumed,
+    /** This moment as bytes to keep (src/snapshot.js packSnapshot), `meta` with it. */
+    async keep(meta = {}) {
+      if (win32 || hle) throw new Error('a Windows program or HLE libraries cannot be kept yet');
+      return snap.packSnapshot(snap.saveMachine(mc), { ...meta, kept: Date.now(), cycles: mc.cpu.cycles });
+    },
     w32: w32in ? { input: w32in, wm: w32wm } : null,                   // a Windows program's input, for tests that drive the page
     /** A Windows program's icon once it has ended, for the desktop the page shows then (src/machines.js). */
     programIcon: () => (w32wm && w32loaded ? w32wm.icon(w32loaded.x) : null),
@@ -273,6 +289,7 @@ export async function startLinux({ canvas, img, host, user, onOutput = () => {},
     stop() {
       stopped = true; cancelAnimationFrame(raf); canvas.style.filter = ''; keyboard.detach(window); window.removeEventListener('mouseup', onUp); window.removeEventListener('mousemove', onMove);
       window.removeEventListener('keydown', wake); window.removeEventListener('pointerdown', wake); audio.close();
+      mc.rec.reset();                                                    // its compiled blocks go now: alive, they slowed the next machine's
     },
   };
 }

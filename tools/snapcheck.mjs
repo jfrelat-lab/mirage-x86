@@ -10,6 +10,11 @@
 //   node tools/snapcheck.mjs                    the golden set's DOS programs
 //   node tools/snapcheck.mjs intros/tube.com    one program; games/DOOM/DOOM.EXE a game, its directory as C:
 //   SNAP_BEFORE=30 SNAP_AFTER=30 (ticks of 400000 instructions); SNAP_OPAQUE=1 lists what is not walked
+//   SNAP_KEYS='1c@5,9c@6' keys during the run before the snapshot, SNAP_KEYS_AFTER the same after it (in
+//   every machine): a scancode in hex at a tick of its phase -- 48@10,c8@40 holds Up for 30 ticks, as a
+//   player walking. A make code with an ASCII (Enter, Esc, space, digits, letters) goes to the BIOS's
+//   buffer too, as a key pressed in the page does. SNAP_SHOT=<dir>: the restored machine's screen at
+//   the end, as a PNG (src/video.js draws it as the page does): that the keys took it where they should.
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, relative } from 'node:path';
@@ -39,7 +44,24 @@ const start = (rel) => {
   m.dos.load(new Uint8Array(readFileSync(join(ROOT, rel))), process.env.SNAP_TAIL || '', game ? 'C:\\' + game[2] : 'C:\\PROG');
   return m;
 };
-const run = (m, ticks) => { for (let t = 0; t < ticks && !m.fault && !m.dos.programDone; t++) m.mc.runSlice(BUDGET); };
+const ASCII = { 0x01: 0x1b, 0x0e: 0x08, 0x0f: 0x09, 0x1c: 0x0d, 0x39: 0x20, 0x02: 0x31, 0x03: 0x32, 0x04: 0x33, 0x05: 0x34, 0x06: 0x35,
+  0x10: 0x71, 0x11: 0x77, 0x12: 0x65, 0x13: 0x72, 0x14: 0x74, 0x15: 0x79, 0x16: 0x75, 0x17: 0x69, 0x18: 0x6f, 0x19: 0x70,
+  0x1e: 0x61, 0x1f: 0x73, 0x20: 0x64, 0x21: 0x66, 0x22: 0x67, 0x23: 0x68, 0x24: 0x6a, 0x25: 0x6b, 0x26: 0x6c,
+  0x2c: 0x7a, 0x2d: 0x78, 0x2e: 0x63, 0x2f: 0x76, 0x30: 0x62, 0x31: 0x6e, 0x32: 0x6d };
+const keys = (spec) => (spec || '').split(',').filter(Boolean).map((k) => { const [c, t] = k.split('@'); return { codes: c.split('+').map((x) => parseInt(x, 16)), at: Number(t) || 0 }; });
+const KEYS = keys(process.env.SNAP_KEYS), KEYS_AFTER = keys(process.env.SNAP_KEYS_AFTER);
+/** `ticks` of the machine, the keys of `plan` pressed at their tick, as the page's keyboard gives them. */
+const run = (m, ticks, plan = []) => {
+  for (let t = 0; t < ticks && !m.fault && !m.dos.programDone; t++) {
+    for (const k of plan) if (k.at === t && m.mc.pushScancodes) {
+      m.mc.pushScancodes(k.codes);
+      for (const c of k.codes) if (ASCII[c] !== undefined) m.mc.keyQueue.push({ scan: c, ascii: ASCII[c] });
+      m.mc.blocked = false;
+    }
+    if (m.mc.pumpKeyboard) m.mc.pumpKeyboard();
+    m.mc.runSlice(BUDGET);
+  }
+};
 /** The state compared, by part: a digest each, so a difference says where it is. */
 const parts = (m) => {
   const { mc } = m, c = mc.cpu, h = (b) => createHash('sha1').update(b).digest('hex').slice(0, 12);
@@ -76,12 +98,22 @@ const diffSnaps = (sa, sb, max = 12) => {
   return out;
 };
 
+const shot = async (m, rel) => {
+  const [{ mkdirSync }, { Video }, { writePNG }] = await Promise.all([import('node:fs'), import('../src/video.js'), import('./frame.mjs')]);
+  mkdirSync(process.env.SNAP_SHOT, { recursive: true });
+  const canvas = { width: 0, height: 0, getContext: () => ({ createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData() {} }) };
+  const v = new Video(m.mc, canvas); v.font = m.mc.font; v.frame = 16; v.render();
+  const W = v.imgW, H = v.imgH, rgb = new Uint8Array(W * H * 3);
+  for (let i = 0; i < W * H; i++) { const p = v.u32[i]; rgb[i * 3] = p & 0xff; rgb[i * 3 + 1] = (p >> 8) & 0xff; rgb[i * 3 + 2] = (p >> 16) & 0xff; }
+  const out = join(process.env.SNAP_SHOT, rel.replace(/[\/]/g, '_') + '.png');
+  writePNG(out, rgb, W, H, 1); console.log(`  the restored machine's screen: ${out}`);
+};
 const list = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT;
 let same = 0, diff = 0, failed = 0;
 for (const rel of list) {
   if (!existsSync(join(ROOT, rel))) { console.log(`${rel}: skipped (absent)`); continue; }
   const a = start(rel);
-  run(a, BEFORE);
+  run(a, BEFORE, KEYS);
   if (process.env.SNAP_OPAQUE) console.log(opaquePaths(a.mc).join('\n'));
   const at = `${(a.mc.cpu.cycles / 1e6).toFixed(0)} M instructions, mode ${a.mc.mem.r8(0x449).toString(16)}h${a.mc.cpu.cr0 & 1 ? ', protected' : ''}${a.mc.cpu.halted ? ', halted' : ''}${a.fault ? ', fault: ' + String(a.fault.message).slice(0, 60) : ''}${a.dos.programDone ? ', exited' : ''}`;
   let b, bytes = 0;
@@ -91,8 +123,9 @@ for (const rel of list) {
     loadMachine(b.mc, (await unpackSnapshot(blob)).snap);
     b.fault = a.fault;
   } catch (e) { failed++; console.log(`${rel}: FAILED ${e.message}`); continue; }
-  const c = start(rel); run(c, BEFORE); forgetTranslations(c.mc);
-  run(a, AFTER); run(b, AFTER); run(c, AFTER);
+  const c = start(rel); run(c, BEFORE, KEYS); forgetTranslations(c.mc);
+  run(a, AFTER, KEYS_AFTER); run(b, AFTER, KEYS_AFTER); run(c, AFTER, KEYS_AFTER);
+  if (process.env.SNAP_SHOT) await shot(b, rel);
   const pa = parts(a), pb = parts(b), pc = parts(c), bad = Object.keys(pc).filter((k) => pc[k] !== pb[k]);
   const timing = Object.keys(pa).some((k) => pa[k] !== pc[k]) ? ', its timeline moved by the translations made again' : '';
   if (bad.length) {
