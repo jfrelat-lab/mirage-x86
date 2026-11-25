@@ -3,6 +3,11 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-25
+
+- **WebAssembly on the Linux machine**: a program built for WASI runs there as a process of its own, started from the shell like any other, in pipes, on the same files.
+- A Linux program writing into a pipe nobody reads now stops, as `yes | head` expects.
+
 ## 2026-11-24
 
 - **Keep** in the DOS player saves the running title in your browser; its next start goes on from that moment (a demo's precalculation, a game's level). **Forget** starts it afresh.

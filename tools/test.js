@@ -8179,6 +8179,51 @@ await (async () => {
     got = [lx.status, td.decode(lx.readFile('/etc/motd')), td.decode(motd), lx.changes().files.map((f) => f.path).join(','), kept.join(','), fill.join(','), same].join(' ');
   } catch (e) { got = String(e.message || e).slice(0, 120); }
   eq('linux: an image\'s file written over changes the program\'s file, not the image\'s; one only read is kept by its path', got, '0 Zbc abc /etc/motd /bin/ow,/etc/issue /bin/ow true'); })();
+// tools/linux/sigpipe.asm: writes into a pipe nobody reads -- a child killed by SIGPIPE, PID 1 given
+// EPIPE. Docker i386/debian: 45 (13 + 32). MIRAGE-LINUX kept the bytes: `yes | head -3` never ended.
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/sigpipe.asm
+    '7f454c4601010100000000000000000002000300010000005480040834000000000000000000000034002000010000000000000001000000000000000080040800800408ce000000da0000000700000000100000b82a000000bbce800408cd80b8060000008b1dce800408cd80b802000000cd8085c0750ee83800000031dbb801000000cd80b872000000bbffffffffb9d680040831d231f6cd80e815000000f7d80fb61dd680040883e37f01c3b801000000cd80b8040000008b1dd2800408b9cd800408ba01000000cd80c358000000000000000000000000');
+  eq('linux: a write into a pipe nobody reads kills the writer by SIGPIPE (PID 1: EPIPE)', runLinux(hex, ['/w/SIGPIPE']).status, 45); })();
+// ---- WASI (src/wasi.js): WebAssembly programs as MIRAGE-LINUX processes ------------------------------
+// tools/wasi/programs.mjs, each as tools/wasi/check.mjs found it on Node's own WASI (node:wasi): what it
+// printed, its status, the files it left in /w. "rooted" works from the root's descriptor (3) with /w
+// the working directory: the *at calls took every path from the working one (mkdirat made /w/w/made).
+await (async () => {
+  const { programs } = await import('./wasi/programs.mjs');
+  const { runWasi } = await import('./wasi/mirage.mjs');
+  const want = {
+    hello: { out: 'hello from wasi\n', status: 7, files: {} },
+    args: { out: '3 /w/args.wasm\0one\0two words\0\n3 PATH=/usr/local/bin:/usr/bin:/bin\0HOME=/root\0LANG=C\0\n', status: 0, files: {} },
+    cat: { out: programs.cat.stdin, status: 0, files: {} },
+    preopens: { out: '3 /\n4 .\n', status: 0, files: {} },
+    files: { out: '0 0 0 0 written, then read\n0 4 19 0 4 0 \n0 20 0 0 0 55 0 0 7 0 44 0 44 \n', status: 0, files: { 'out.txt': 'written, then read\n' } },
+    rooted: { out: '0 0 3 0 44 0 0 made2\n0 0 44 \n', status: 0, files: {} },
+    readdir: { out: '.\n..\na.txt\nb.txt\nreaddir.wasm\nsub\n', status: 0, files: { 'a.txt': 'a', 'b.txt': 'bb', 'sub/': '', 'sub/c': 'c' } },
+    clock: { out: 'slept\n5 1 now\n', status: 0, files: {} },
+    trap: { out: 'before\n', status: 134, files: {} },
+    random: { out: '0 filled\n', status: 0, files: {} },
+  };
+  for (const [n, w] of Object.entries(want)) {
+    let got;
+    try { const r = runWasi(n, programs[n]); got = JSON.stringify({ out: r.out, status: r.status, files: r.files }); } catch (e) { got = String(e.message || e).slice(0, 120); }
+    eq(`wasi: ${n}`, got, JSON.stringify(w));
+  }
+})();
+// tools/linux/wasmexec.asm: an x86 process execve's a WebAssembly one, its stdin a pipe it wrote. The
+// child is a process like another: its descriptors inherited, its status the parent's wait4's.
+await (async () => {
+  let got;
+  try {
+    const { programs } = await import('./wasi/programs.mjs');
+    const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004080a010000160100000700000000100000b82a000000bb0a810408cd80b8040000008b1d0e810408b9e3800408ba0f000000cd80b8060000008b1d0e810408cd80b802000000cd8085c07531b83f0000008b1d0a81040831c9cd80b80b000000bbf2800408b9fe800408ba06810408cd80bb7f000000b801000000cd80b872000000bbffffffffb91281040831d231f6cd800fb61d13810408b801000000cd807468726f756768206120706970650a2f772f6361742e7761736d00f28004080000000000000000000000000000000000000000';
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.mkdir('/w'); lx.addFile('/w/cat.wasm', programs.cat.wasm);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/WASMEXEC']);
+    for (let i = 0; i < 100 && !lx.done; i++) mc.runSlice(20000);
+    got = JSON.stringify([new TextDecoder().decode(Uint8Array.from(lx.stdout)), lx.status]);
+    mc.rec.reset();
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('wasi: an x86 process execve\'s a WebAssembly one, which reads the pipe it was given', got, JSON.stringify(['through a pipe\n', 0])); })();
 // A buffer packed as its non-zero pages: a megabyte with a byte in its 101st page and its odd tail (the
 // last page short) comes back whole, and packs in less than a kilobyte head and all.
 await (async () => {

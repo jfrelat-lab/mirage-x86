@@ -99,6 +99,7 @@ and GLSL) and `d3d9.js` (Direct3D 9's device model, HLSL translated to GLSL ES),
 | File | Role |
 |---|---|
 | `linux.js` | MIRAGE-LINUX: the ELF and a.out loaders, the i386 system calls, processes and threads, signals, ttys and the console, the file system over an image's tree, /dev (fb0, dsp and audio, the mouse, ptys). |
+| `wasi.js` | WASI preview 1 for WebAssembly programs, each a MIRAGE-LINUX process: its calls answered by the kernel's i386 system calls, as wasi-libc answers them on Linux. |
 | `linuxrun.js`, `vtconsole.js` | A Linux image in the page: its file tree from the OASIS server, the canvas, the keys; the VGA text console. |
 | `hle/` | Libraries made in JavaScript for Linux programs (`elfso.js` builds the shared object, `index.js` dispatches): `sdl12.js`, `asound.js`, `gl.js` (the GL and GLU tables), `prism-gl.js` (PRISM's `gl.js` and `d3d9.js` on guest memory, and the window they draw in), `trace.js` (the headless backend that records). |
 | `win32/index.js`, `win32/dll.js` | MIRAGE-WIN32: the PE loader, the process laid out as Windows XP lays it out, threads and their TEBs; a DLL made as a real PE image whose exports trap into JavaScript. |

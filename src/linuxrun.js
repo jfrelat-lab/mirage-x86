@@ -280,6 +280,8 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
     /** This moment as bytes to keep (src/snapshot.js packSnapshot), `meta` with it. */
     async keep(meta = {}) {
       if (win32 || hle) throw new Error('a Windows program or HLE libraries cannot be kept yet');
+      // A WebAssembly process (src/wasi.js) is in the browser's engine, its stack out of reach.
+      if (lx.wasm || lx.procs.some((q) => q.wasm)) throw new Error('a WebAssembly program cannot be kept yet');
       return snap.packSnapshot(snap.saveMachine(mc), { ...meta, kept: Date.now(), cycles: mc.cpu.cycles });
     },
     w32: w32in ? { input: w32in, wm: w32wm } : null,                   // a Windows program's input, for tests that drive the page

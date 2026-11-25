@@ -16,6 +16,7 @@
 // fault taken in the kernel.
 import { installMidi } from './midi.js';
 import { snapHook, snapExternal } from './snapshot.js';
+import { wasiImports, WasiExit, isWasm } from './wasi.js';
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
@@ -33,6 +34,9 @@ const GDT_ENTRIES = 32;
 const STACK_TOP = 0xc0000000, STACK_SIZE = 0x40000;       // 256 KiB mapped up front...
 const STACK_MAX = 8 << 20;                                // ...and grown on demand to 8 MiB, RLIMIT_STACK
 const MMAP_BASE = 0x40000000;
+// A WebAssembly process (src/wasi.js): its x86 side is a loop of one call at WASM_CODE, its system
+// calls' pointers into WASM_BUF.
+const WASM_CODE = 0x08048000, WASM_BUF = 0x08100000, WASM_BUF_SIZE = 0x40000, WASM_TRAP = 0x47000000;
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
 const BLOCK = Symbol('block');                            // a system call that waits: int 80h runs again
@@ -350,7 +354,62 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // For the other personalities on this process machinery (src/win32): the address space, by hand.
   Object.assign(lx, { prepareSpace, enterUser, mapRange, setDesc, PAGE, USER_DS });
 
+  // ---- WebAssembly (WASI) -------------------------------------------------------------------------
+  // A WASI program is a process like the others: its pid, descriptors, directory and signals are the
+  // kernel's. What runs on the CPU is three instructions -- mov eax, WASM_TRAP / int 80h / jmp back --
+  // and the trap runs the module (lx.wasm, the process's own), whose WASI calls are this kernel's
+  // system calls (src/wasi.js) on a buffer of the process's address space.
+  const loadWasm = (bytes, argv, envp) => {
+    const module = new WebAssembly.Module(bytes);                        // a module that does not compile is no program
+    prepareSpace();
+    mapRange(WASM_CODE, WASM_CODE + PAGE, false);
+    mem.u8.set([0xb8, 0, 0, 0, WASM_TRAP >>> 24, 0xcd, 0x80, 0xeb, 0xf7], phys(WASM_CODE));
+    mapRange(WASM_BUF, WASM_BUF + WASM_BUF_SIZE, true);
+    mapRange(STACK_TOP - PAGE, STACK_TOP, true);
+    lx.brkStart = lx.brk = WASM_BUF + WASM_BUF_SIZE;
+    // The two directories WASI gives a program, as wasmtime's --dir / --dir . would: 3 the root, 4 the
+    // working one. Whatever the parent left there is closed.
+    for (const [fd, dir] of [[3, '/'], [4, lx.cwd]]) {
+      const r = doOpen(dir, 0x10000);
+      if (r >= 0 && r !== fd) { fds[fd] = fds[r]; delete fds[r]; }
+      lx.cloexec.delete(fd);
+    }
+    const k = {
+      sys: (n, ...a) => { try { const r = SYS[n](...a.map((x) => x >>> 0)); return r === undefined ? 0 : r; } catch (e) { if (typeof e === 'number') return -e; throw e; } },
+      BLOCK, va: WASM_BUF, size: WASM_BUF_SIZE,
+      put: (off, b) => wrBytes(WASM_BUF + off, b),
+      get: (off, n) => rdBytes(WASM_BUF + off, n),
+      // A sleep moves the guest's clock on (src/wasi.js runs to its end in one call: nobody else runs
+      // meanwhile); on the wall clock, it waits.
+      sleep: (secs) => {
+        if (!lx.realTime) { cpu.cycles += Math.ceil(secs * (machine.cyclesPerSecond || 1e8)); return; }
+        const until = lx.mono() + secs; while (lx.mono() < until) { /* the wall clock */ }
+      },
+    };
+    const w = wasiImports(k, argv, envp);
+    lx.wasm = () => {
+      let code = 0;
+      try {
+        const inst = new WebAssembly.Instance(module, w.imports);
+        w.bind(inst);
+        if (inst.exports._start) inst.exports._start();
+        else if (inst.exports._initialize) inst.exports._initialize();
+      } catch (e) {
+        if (e instanceof WasiExit) code = e.code;
+        else if (e instanceof WebAssembly.RuntimeError || e instanceof RangeError || e instanceof WebAssembly.LinkError) {
+          out(2, new TextEncoder().encode(`${argv[0]}: wasm: ${e.message}\n`));
+          exit(0, 6); return;                                           // a trap: SIGABRT, as wasmtime ends
+        } else throw e;
+      }
+      exit(code);
+    };
+    enterUser(WASM_CODE, STACK_TOP - 16);
+    lx.exe = norm(argv[0] || '/a.wasm');
+  };
+
   lx.load = (elf, argv = ['a.out'], envp = []) => {
+    lx.wasm = null;
+    if (isWasm(elf)) return loadWasm(elf, argv, envp);
     // A script started first, as execve starts one: its #! interpreter, with the script's path among the
     // arguments (a Docker image's entry is often one: node's docker-entrypoint.sh).
     if (elf[0] === 0x23 && elf[1] === 0x21) {
@@ -507,6 +566,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     mm: cpu.mm ? cpu.mm.u8.slice() : null,                               // the MMX registers too (src/mmx.js keeps them beside the x87 stack)
     tls: mem.u8.slice(TLS_A, TLS_Z), io: mem.u8.slice(TSS_BASE + IOMAP, TSS_BASE + TSS_LIMIT + 1),
     hle: lx.hle, hleTable: lx.hleTable,                                  // a Windows process's own DLLs in JavaScript (src/win32)
+    wasm: lx.wasm,                                                       // a WebAssembly process's module
   });
   const restore = (s) => {
     // Threads share their process's address space (the same lx.vm): its page map is the same object,
@@ -532,6 +592,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (s.xmm) { cpu.xmm.u8.set(s.xmm); cpu.xmm.mxcsr = s.mxcsr ?? 0x1f80; }
     if (s.mm && cpu.mm) cpu.mm.u8.set(s.mm);
     if (s.hle) { lx.hle = s.hle; lx.hleTable = s.hleTable; }
+    lx.wasm = s.wasm || null;
     cpu.halted = false; lx.done = false;
   };
   /** Put the running process aside (its pages unmapped, not freed) and run `next`. */
@@ -764,7 +825,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (!ib) return -E.ENOENT;
       bytes = ib;
     }
-    if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes)) return -E.ENOEXEC;
+    if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes) && !isWasm(bytes)) return -E.ENOEXEC;
     releasePages(lx.pages);
     lx.pages = new Map(); lx.sigHandlers = lx.sigHandlers.map((h) => (h === 1 ? 1 : 0)); lx.sigInfo = []; lx.fpuFrames = new Map();
     for (const fd of lx.cloexec) delete fds[fd];                          // close-on-exec
@@ -1464,7 +1525,14 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       f.efd.count += v + hi * 4294967296; return 8;
     }
     if (f.sk) return sockWrite(f, bytes);
-    if (f.pp) { if (f.rd) return -E.EBADF; for (const b of bytes) f.pp.buf.push(b); return bytes.length; }
+    if (f.pp) {
+      if (f.rd) return -E.EBADF;
+      // Nobody left to read it: SIGPIPE, and EPIPE if that is caught or ignored -- or if the writer is
+      // PID 1, a container's init, which the kernel spares a signal left to its default (Docker: EPIPE).
+      // `yes | head -3` ran for ever, yes writing into a pipe head had closed.
+      if (!readerOpen(f.pp)) { if (lx.pid !== 1 || lx.sigHandlers[13]) post(lx, 13); return -32; }
+      for (const b of bytes) f.pp.buf.push(b); return bytes.length;
+    }
     if (f.pipe !== undefined) { if (f.pipe === 0) return -E.EBADF; out(f.pipe, bytes); return bytes.length; }
     if (f.pty) {
       if (f.ptyMaster) { ptyIn(f.pty, bytes); machine.blocked = false; return bytes.length; }
@@ -1976,6 +2044,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   /** Is a pipe's write end open in any process? Then an empty pipe is not its end yet. */
   const writerOpen = (pp) => [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.pp === pp && !f.rd));
+  const readerOpen = (pp) => [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.pp === pp && f.rd));
   const pipe = (ptr, flags = 0) => {
     const pp = { buf: [] }, ce = (flags & 0x80000) !== 0;
     const r = newFd({ pp, rd: true }, 0, ce), w = newFd({ pp, rd: false }, 0, ce);
@@ -2003,6 +2072,48 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     f.pos = base + off; return f.pos;
   };
 
+  // ---- the tree's path operations, each from a directory: the plain call's is the working one, an *at
+  // call's the one its descriptor names (atBase).
+  // mkdir: the mode less the umask, as open's.
+  const mkdirIn = (base, path, mode) => {
+    const p = resolve(rdStr(path), base, false);
+    if (p === null) return -E.ENOENT;
+    if (getNode(p)) return -E.EEXIST;
+    if (!getNode(parent(p))) return -E.ENOENT;
+    fs.set(p, { dir: true, mtime: lx.now(), mode: (mode & ~lx.umask) & 0o7777 }); gone.delete(p); return 0;
+  };
+  const rmdirIn = (base, path) => {
+    const p = resolve(rdStr(path), base, false), n = p && getNode(p);
+    if (!n) return -E.ENOENT; if (!n.dir) return -E.ENOTDIR;
+    if ([...fs.keys()].some((k) => k.startsWith(p + '/')) || (n.host && lx.host.list(p).some((c) => !gone.has(join(p, c))))) return -E.ENOTEMPTY;
+    removeNode(p); return 0;
+  };
+  // unlink: the link itself, not what it names.
+  const unlinkIn = (base, path) => {
+    const p = resolve(rdStr(path), base, false), n = p && getNode(p);
+    if (!n) return -E.ENOENT; if (n.dir) return -E.EISDIR;
+    removeNode(p); return 0;
+  };
+  // rename: a file, or a directory of our own.
+  const renameIn = (baseA, from, baseB, to) => {
+    const a = resolve(rdStr(from), baseA, false), b = resolve(rdStr(to), baseB, false), n = a && getNode(a);
+    if (!n || b === null) return -E.ENOENT;
+    if (!getNode(parent(b))) return -E.ENOENT;
+    if (!n.dir && n.link === undefined) dataOf(n);
+    for (const [k, v] of [...fs]) if (k === a || k.startsWith(a + '/')) { removeNode(k); fs.set(b + k.slice(a.length), v); gone.delete(b + k.slice(a.length)); }
+    return 0;
+  };
+  const linkIn = (baseA, from, baseB, to) => {
+    const a = resolve(rdStr(from), baseA, false), b = resolve(rdStr(to), baseB, false), n = a && getNode(a);
+    if (!n) return -E.ENOENT; if (b === null || !getNode(parent(b))) return -E.ENOENT;
+    if (getNode(b)) return -E.EEXIST; if (n.dir) return -E.EPERM;
+    dataOf(n); n.nlink = (n.nlink || 1) + 1; fs.set(b, n); gone.delete(b); return 0;
+  };
+  const symlinkIn = (base, target, path) => {
+    const p = resolve(rdStr(path), base, false);
+    if (p === null) return -E.ENOENT; if (getNode(p)) return -E.EEXIST;
+    fs.set(p, { link: rdStr(target), mtime: lx.now() }); gone.delete(p); return 0;
+  };
   // ---- system calls --------------------------------------------------------------------------------
   // i386 numbers (arch/x86/entry/syscalls/syscall_32.tbl). Arguments in EBX ECX EDX ESI EDI EBP.
   const SYS = {
@@ -2102,48 +2213,21 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (!n) return -E.ENOENT; if (!n.dir) return -E.ENOTDIR;
       lx.cwd = p; return 0;
     },
-    39: (path, mode) => {                                                  // mkdir: the mode less the umask, as open's
-      const p = resolve(rdStr(path), lx.cwd, false);
-      if (p === null) return -E.ENOENT;
-      if (getNode(p)) return -E.EEXIST;
-      if (!getNode(parent(p))) return -E.ENOENT;
-      fs.set(p, { dir: true, mtime: lx.now(), mode: (mode & ~lx.umask) & 0o7777 }); gone.delete(p); return 0;
-    },
-    296: (dirfd, path, mode) => SYS[39](path, mode),                                   // mkdirat (relative to cwd only)
-    40: (path) => {                                                        // rmdir
-      const p = resolve(rdStr(path), lx.cwd, false), n = p && getNode(p);
-      if (!n) return -E.ENOENT; if (!n.dir) return -E.ENOTDIR;
-      if ([...fs.keys()].some((k) => k.startsWith(p + '/')) || (n.host && lx.host.list(p).some((c) => !gone.has(join(p, c))))) return -E.ENOTEMPTY;
-      removeNode(p); return 0;
-    },
-    10: (path) => {                                                        // unlink: the link itself, not what it names
-      const p = resolve(rdStr(path), lx.cwd, false), n = p && getNode(p);
-      if (!n) return -E.ENOENT; if (n.dir) return -E.EISDIR;
-      removeNode(p); return 0;
-    },
-    301: (dirfd, path, flags) => (flags & 0x200 ? SYS[40](path) : SYS[10](path)),   // unlinkat (AT_REMOVEDIR)
-    38: (from, to) => {                                                    // rename (a file, or a directory of our own)
-      const a = resolve(rdStr(from), lx.cwd, false), b = resolve(rdStr(to), lx.cwd, false), n = a && getNode(a);
-      if (!n || b === null) return -E.ENOENT;
-      if (!getNode(parent(b))) return -E.ENOENT;
-      if (!n.dir && n.link === undefined) dataOf(n);
-      for (const [k, v] of [...fs]) if (k === a || k.startsWith(a + '/')) { removeNode(k); fs.set(b + k.slice(a.length), v); gone.delete(b + k.slice(a.length)); }
-      return 0;
-    },
+    39: (path, mode) => mkdirIn(lx.cwd, path, mode),                       // mkdir
+    // The *at calls: relative to the directory their descriptor names (AT_FDCWD the working one).
+    // WASI's path calls are all of them (src/wasi.js), each relative to a directory it was given.
+    296: (dirfd, path, mode) => mkdirIn(atBase(dirfd), path, mode),                 // mkdirat
+    40: (path) => rmdirIn(lx.cwd, path),                                   // rmdir
+    10: (path) => unlinkIn(lx.cwd, path),                                  // unlink
+    301: (dirfd, path, flags) => (flags & 0x200 ? rmdirIn(atBase(dirfd), path) : unlinkIn(atBase(dirfd), path)),   // unlinkat (AT_REMOVEDIR)
+    38: (from, to) => renameIn(lx.cwd, from, lx.cwd, to),                  // rename
     // link: a hard link — the same node under a second name (nlink counts them). X's lock file is made
     // so: its pid in a temporary file, linked to /tmp/.X0-lock; without link the server could not lock.
-    9: (from, to) => {
-      const a = resolve(rdStr(from), lx.cwd, false), b = resolve(rdStr(to), lx.cwd, false), n = a && getNode(a);
-      if (!n) return -E.ENOENT; if (b === null || !getNode(parent(b))) return -E.ENOENT;
-      if (getNode(b)) return -E.EEXIST; if (n.dir) return -E.EPERM;
-      dataOf(n); n.nlink = (n.nlink || 1) + 1; fs.set(b, n); gone.delete(b); return 0;
-    },
-    303: (dfa, from, dfb, to) => SYS[9](from, to),                         // linkat
-    83: (target, path) => {                                                // symlink
-      const p = resolve(rdStr(path), lx.cwd, false);
-      if (p === null) return -E.ENOENT; if (getNode(p)) return -E.EEXIST;
-      fs.set(p, { link: rdStr(target), mtime: lx.now() }); gone.delete(p); return 0;
-    },
+    9: (from, to) => linkIn(lx.cwd, from, lx.cwd, to),                     // link
+    303: (dfa, from, dfb, to) => linkIn(atBase(dfa), from, atBase(dfb), to),   // linkat
+    302: (dfa, from, dfb, to) => renameIn(atBase(dfa), from, atBase(dfb), to),  // renameat
+    83: (target, path) => symlinkIn(lx.cwd, target, path),                 // symlink
+    304: (target, dirfd, path) => symlinkIn(atBase(dirfd), target, path),   // symlinkat
     220: (fd, buf, cnt) => getdents(fd, buf, cnt),                         // getdents64
     141: (fd, buf, cnt) => getdents32(fd, buf, cnt),                       // getdents
     89: (fd, buf) => oldReaddir(fd, buf),                                  // readdir
@@ -2596,7 +2680,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // Numbers from 48000000h are no system call: a library made in JavaScript (src/hle) traps here with
     // its function's id, its arguments on the caller's stack. lx.hle answers as a system call does —
     // a value for EAX, BLOCK to wait.
-    const fn = n >= 0x48000000 && lx.hle ? () => lx.hle(n - 0x48000000) : SYS[n];
+    const fn = n >= 0x48000000 && lx.hle ? () => lx.hle(n - 0x48000000) : n === WASM_TRAP && lx.wasm ? lx.wasm : SYS[n];
     let ret;
     if (!fn) { lx.unimplemented.set(n, (lx.unimplemented.get(n) || 0) + 1); ret = -E.ENOSYS; }
     else {
