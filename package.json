@@ -20,7 +20,7 @@
     "golden": "node tools/golden.js check"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=26"
   },
   "keywords": [
     "emulator",

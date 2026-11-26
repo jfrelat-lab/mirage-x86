@@ -1,6 +1,6 @@
 # MIRAGE
 
-[![tests](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml/badge.svg)](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Run it in your browser](https://img.shields.io/badge/%E2%96%B6%20run%20it-in%20your%20browser-00d0a0)](https://mirage-x86.pages.dev) [![site](https://img.shields.io/website?url=https%3A%2F%2Fmirage-x86.pages.dev&label=site)](https://mirage-x86.pages.dev) [![Node 22+](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](package.json) [![No WebAssembly](https://img.shields.io/badge/WebAssembly-none-555)](docs/ARCHITECTURE.md)
+[![tests](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml/badge.svg)](https://github.com/jfrelat-lab/mirage-x86/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Run it in your browser](https://img.shields.io/badge/%E2%96%B6%20run%20it-in%20your%20browser-00d0a0)](https://mirage-x86.pages.dev) [![site](https://img.shields.io/website?url=https%3A%2F%2Fmirage-x86.pages.dev&label=site)](https://mirage-x86.pages.dev) [![Node 26+](https://img.shields.io/badge/node-%E2%89%A526-339933?logo=node.js&logoColor=white)](package.json) [![No WebAssembly](https://img.shields.io/badge/WebAssembly-none-555)](docs/ARCHITECTURE.md)
 
 ### DOS games, Linux programs and the demoscene's Windows intros, run from their original binaries in your browser tab.
 
@@ -85,7 +85,7 @@ node tools/test.js                # the unit suite
 npm run test:all                  # every suite that needs nothing outside the repository
 ```
 
-Node 22 (what it is developed on). The assembly sources under `demos/` and `tools/` need `nasm` only if you change
+Node 26, the active LTS (`.nvmrc`; what it is developed and tested on). The assembly sources under `demos/` and `tools/` need `nasm` only if you change
 them; the assembled demos are checked in.
 
 ## How it is tested
