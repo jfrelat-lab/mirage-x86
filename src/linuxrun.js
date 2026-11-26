@@ -53,6 +53,7 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
     try { mc[prop] = new Uint8Array(await (await fetch('assets/' + file)).arrayBuffer()); } catch { /* optional */ }
   }
   const lx = installLinux(mc, { realTime: true, onOutput: (fd, b) => onOutput(new TextDecoder().decode(b)) });
+  lx.wasmAsync = true;                         // a large WebAssembly module compiled in the background (src/linux.js)
   // Sound: /dev/dsp (src/linux.js) plays on the program's clock, which is the wall clock here; the
   // mixer takes the same one. The output starts with the first click or key, as a browser requires.
   mc.wallOffset = 0; mc.wallClockMs = () => performance.now() + mc.wallOffset;   // a kept moment goes on from its own time (src/snapshot.js)
@@ -113,6 +114,7 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
   if (!win32) {
     const image = lx.readFile(e.run);
     if (!image) throw new Error(`${e.run}: not in the image`);
+    await lx.prepareWasm(image);
     lx.load(image, [e.run, ...(e.args || [])], env);
   }
 

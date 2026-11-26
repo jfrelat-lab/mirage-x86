@@ -3,6 +3,11 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-26
+
+- **Python 3.15 for WASI** on the OASIS shelf (linux/python-wasi): CPython's own WebAssembly build, started from a BusyBox shell in the page, in pipes with the Linux commands.
+- Programs built with wasi-sdk find their files by absolute and by relative path alike.
+
 ## 2026-11-25
 
 - **WebAssembly on the Linux machine**: a program built for WASI runs there as a process of its own, started from the shell like any other, in pipes, on the same files.

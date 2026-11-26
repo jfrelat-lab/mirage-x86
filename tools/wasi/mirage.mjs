@@ -20,7 +20,7 @@ export function runWasi(name, p) {
   const files = {};
   for (const [k, n] of [...lx.fs].sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (!k.startsWith('/w/') || k.endsWith('.wasm')) continue;
-    files[k.slice(3) + (n.dir ? '/' : '')] = n.dir ? '' : dec(n.data.subarray(0, n.size));
+    files[k.slice(3) + (n.dir ? '/' : '')] = n.dir ? '' : n.link !== undefined ? '-> ' + n.link : dec(n.data.subarray(0, n.size));
   }
   mc.rec.reset();
   return { out: dec(lx.stdout), err: dec(lx.stderr), status: lx.done ? lx.status : -1, files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : 1))) };

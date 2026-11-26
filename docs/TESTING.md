@@ -60,7 +60,7 @@ by line. Where a probe's answer settled a behaviour, `test.js` has a check with 
 | `qemu-shot.mjs` | A protected-mode program's picture captured from QEMU, from outside the guest. |
 | `chrome-perf.mjs` | A page as Chrome runs it — headless, over the DevTools protocol: guest instructions, frames and main-thread load each second, a JS profile, keys to press, a screenshot. The app's own browser pane is hidden and gets no animation frames, so it cannot measure the player. |
 | `dbx-shot.mjs` | The frames DOSBox-X's VGA displays (`DX-CAPTURE /V`, decoded by `zmbv.mjs` from PRISM): what the card shows, CRTC display end and blanking included, not what memory holds. QEMU ignores horizontal blanking (Helium: 288 pixels there, 252 on DOSBox-X). |
-| `wasi/check.mjs` | WASI programs (`wasi/programs.mjs`, assembled by `wasi/wasm.mjs`) on MIRAGE-LINUX against Node's own WASI (`node:wasi`): what they print, their status, the files they leave. |
+| `wasi/check.mjs` | WASI programs on MIRAGE-LINUX against Node's own WASI (`node:wasi`), or wasmtime with `WASMTIME=<binary>`: what they print, their status, the files they leave. `wasi/programs.mjs`'s are assembled by `wasi/wasm.mjs`; with `WASI_SDK=<dir>`, the C ones of `wasi/c` are built by wasi-sdk's clang. `MIRAGE_WASITRACE=1` on `linux/run.mjs` lists a module's calls. |
 | `v86/qemudiff.mjs` | A boot image's screen under MIRAGE against QEMU's, pixel by pixel. |
 | `v86/compare3.mjs` | Time to the arrival screen under QEMU, v86 and MIRAGE. |
 | `v86/v86shot.mjs` | v86 itself, headless, with screenshots and keystrokes. Needs v86 installed in `V86_DIR`. |

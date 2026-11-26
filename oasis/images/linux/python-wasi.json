@@ -1,0 +1,41 @@
+{
+  "oasis": 1,
+  "title": "Python 3.15 for WASI, on BusyBox",
+  "year": 2026,
+  "author": "The CPython project (WASI build: Brett Cannon); BusyBox from Docker Hub",
+  "world": "linux",
+  "machine": {
+    "cpu": "pentium4",
+    "mem": 256
+  },
+  "layers": [
+    {
+      "docker": "i386/busybox@sha256:79b6957454b0506796c042e9e2dfedd996c7efc93e701166d2dc9569bc9cc096",
+      "platform": "linux/386"
+    },
+    {
+      "zip": "https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.15.2/python-3.15.2-wasi_sdk-33.zip",
+      "into": "/usr/local"
+    },
+    {
+      "links": {
+        "/usr/local/bin/python3": "/usr/local/python.wasm",
+        "/usr/local/bin/python": "python3"
+      }
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "cwd": "/root",
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "license": "https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.15.2/python-3.15.2-wasi_sdk-33.zip",
+  "licenseName": "PSF License (CPython: LICENSE in the archive), GPL 2 (BusyBox)",
+  "notes": "CPython 3.15.2 built for WASI (wasm32-wasip1) by the CPython project's WASI build, a WebAssembly module run by the browser's own engine: each python3 is a process of MIRAGE-LINUX, its WASI calls answered by the kernel's system calls (src/wasi.js), beside the x86 BusyBox shell that starts it -- in pipes, on the same files. A read waits for nothing yet: python3's REPL needs input already typed, so run scripts or python3 -c."
+}

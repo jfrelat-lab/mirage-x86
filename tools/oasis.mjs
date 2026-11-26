@@ -170,6 +170,15 @@ async function pullLayer(l) {
       mkdirSync(dirname(join(dir, to)), { recursive: true }); writeFileSync(join(dir, to), f.bytes);
     }
   }
+  else if (l.zip && l.unzip) {           // a whole ZIP under `into`, in a Linux tree (CPython's WASI build in /usr/local)
+    const { unzip } = await import(join(ROOT, 'src', 'zip.js'));
+    const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
+    for (const f of await unzip(new Uint8Array(zb), { dirs: true })) {
+      const to = join(dir, l.into, f.path);
+      if (f.dir) { mkdirSync(to, { recursive: true }); continue; }
+      mkdirSync(dirname(to), { recursive: true }); writeFileSync(to, f.bytes, f.mode ? { mode: f.mode } : {});
+    }
+  }
   else if (l.zip && l.member) {         // a tar inside a ZIP (id's doomsrc.zip holds linuxdoom-1.10.src.tgz)
     const { unzip } = await import(join(ROOT, 'src', 'zip.js'));
     const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
@@ -208,8 +217,11 @@ async function pullLayer(l) {
   writeFileSync(join(dir, '.oasis-done'), JSON.stringify(l));
   return dir;
 }
+/** A whole ZIP under `into`, in a Linux tree: unpacked there (a cache of its own: DOS and Win32 read
+ *  the archive itself from theirs). */
+const unpacked = (l) => (l.zip && l.into && !l.member && !l.files && !l.lha ? { ...l, unzip: true } : null);
 async function pull(img) {
-  for (const l of img.layers || []) if (needsPull(l)) await pullLayer(l);
+  for (const l of img.layers || []) if (needsPull(l)) await pullLayer(img.world === 'linux' && unpacked(l) ? unpacked(l) : l);
   if (img.world === 'linux' && (img.layers || []).some((l) => l.run)) await linuxRoot(img);   // builds its `run` layers
 }
 
@@ -255,6 +267,7 @@ async function linuxRoot(img) {
     if (l.run) dirs.push(await runLayer(l, { dirs: [...dirs], files, links, mkdirs }, runDir(chain)));
     else if (l.dir) dirs.push(local(l.dir));
     else if (l.tar || l.deb || l.docker || l.lha || l.wise || l.didi || l.busybox || (l.zip && (l.member || l.files))) dirs.push(await pullLayer(l));
+    else if (unpacked(l)) dirs.push(await pullLayer(unpacked(l)));
     else if (l.gz || l.file) {
       const src = l.gz || l.file;
       let host = needsPull(l) ? join(await pullLayer(l), basename(src.split('?')[0]).replace(/\.gz$/, '')) : local(src);

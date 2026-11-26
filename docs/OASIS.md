@@ -81,7 +81,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 
 | Layer | Source | Unpacked |
 |---|---|---|
-| `{ "zip": path or URL }` | a ZIP archive | its files (DOS: at the root of C:) |
+| `{ "zip": path or URL }` | a ZIP archive | its files (DOS: at the root of C:); in a Linux tree with `into`, under that directory, with their Unix modes and empty directories |
 | `{ "file": path or URL, "to": name }` | one file | at `to` (DOS: the root of C:) |
 | `{ "gz": path or URL, "to": path }` | one gzip-compressed file | decompressed, at `to` |
 | `{ "tar": path or URL, "into": dir }` | a tar archive, `.tar.gz` or `.tgz` | under `into` |
@@ -127,6 +127,7 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 | `linux/quake-1997` | linux | `squake` 1.1, id's svgalib Quake of August 1997 — an ELF binary on libc5 and svgalib from Debian 1.3, the shareware `pak0.pak` from id's own `quake106.zip` (its LHA self-extractor read by `src/lha.js`). It plays its demos with sound — /dev/dsp in mmap mode, as Quake's snd_linux.c uses it; run with `-noudp` (no network yet) |
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
 | `linux/docker-busybox`, `linux/docker-python-3.12-alpine` | linux | made by `node tools/oasis.mjs import docker://i386/busybox` and `docker://i386/python:3.12-alpine`: Docker Hub's images pinned by digest, their entry the image's own (Entrypoint and Cmd, WorkingDir, Env); BusyBox's shell and Python 3.12's REPL on the page's console, or `run ... --terminal -c "..."` |
+| `linux/python-wasi` | linux | CPython 3.15 built for WASI by the CPython project (a release of `brettcannon/cpython-wasi-build`), in `/usr/local` over Docker Hub's BusyBox: each `python3` a WebAssembly process of MIRAGE-LINUX (src/wasi.js), started by the x86 shell, in its pipes. Scripts and `python3 -c`; not the REPL yet (a read does not wait) |
 | `linux/docker-node-10-alpine` | linux | `docker://i386/node:10-alpine`, the last Node.js built for i386 (10.24.1, 2021): its REPL on the page's console, or `run ... --terminal -e "..."`; V8 wants SSE2, so Docker images run on the `pentium4` CPU with 256 MB (a fork copies the process: `child_process` in 64 MB ran out) |
 | `linux/clod-2008`, `laminator-2009`, `makeit4k-2005`, `metatunnel-2009`, `retrospection-2010`, `ribbon-2009`, `yellowrose-2003` | linux | the scene's Linux OpenGL intros of 2003-2010, their libSDL, libGL and libGLU made in JavaScript, drawn by PRISM's `gl.js` |
 | `win32/ribbon-2009`, `flow2-2007`, `chocolux-2008`, `retrospection-2010`, `paradistance-2009`, `hartverdrahtet-2012`, `absoluteterritory-2017` | win32 | the scene's Windows OpenGL intros, packed by Crinkler: the process laid out as Windows XP lays it out, opengl32 on PRISM's `gl.js`, the music through waveOut |

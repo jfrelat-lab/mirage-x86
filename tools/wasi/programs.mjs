@@ -173,3 +173,12 @@ export const programs = {
       o.if(o.i32(1024), o.i32(7), o.call('print'), o.else, o.i32(1032), o.i32(6), o.call('print'))]),
   },
 };
+
+// C programs of tools/wasi/c, for tools/wasi/check.mjs with WASI_SDK: built with wasi-sdk's clang, so
+// what wasi-libc makes of the calls -- its stdio, its directory handling, its preopens -- is tested too.
+export const cPrograms = {
+  libc: { c: 'libc.c', args: ['one', 'two words', ''], status: 42 },
+  files: { c: 'files.c' },
+  wc: { c: 'wc.c', stdin: 'one two\nthree\n\n  four  five six\n' },
+  wcfiles: { c: 'wc.c', args: ['a.txt', 'missing', '/w/sub/b.txt'], files: { 'a.txt': 'a b c\nd\n', 'sub/b.txt': 'x'.repeat(5000) + '\n' } },
+};

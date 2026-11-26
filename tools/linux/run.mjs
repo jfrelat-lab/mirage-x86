@@ -10,7 +10,8 @@
 // in it: MIRAGE_LXROOT=rootfs node tools/linux/run.mjs /bin/ls -l /etc. MIRAGE_LXCWD sets the
 // working directory there. MIRAGE_VGA=cirrus puts a Cirrus CL-GD5446 on the VGA. MIRAGE_LXFB=1024x768 sizes /dev/fb0 (32 bits). MIRAGE_CPU (default 686), MIRAGE_LXMEM (MiB of RAM, default 64), MIRAGE_LXTRACE=1 lists the system
 // calls that were not answered, MIRAGE_LXWALLCLOCK=1 gives the program the host's clock (benchmarks),
-// MIRAGE_LXSTATS=1 prints the instructions run and the host time they took.
+// MIRAGE_LXSTATS=1 prints the instructions run and the host time they took. MIRAGE_WASITRACE=1 lists a
+// WebAssembly program's WASI calls and their answers.
 // MIRAGE_LXSHOT=<dir> writes the screen as PNG every MIRAGE_LXSTEP guest seconds (default 10), through
 // src/video.js as the browser draws it; MIRAGE_LXSECS stops the run after that many guest seconds —
 // for programs that never exit on their own (Quake, DOOM). MIRAGE_LXWAV=<file.wav> records what the
@@ -77,6 +78,7 @@ if (process.env.MIRAGE_LXHLE) {
 }
 const image = ROOT || SPEC ? lx.readFile(prog) : new Uint8Array(readFileSync(prog));
 if (!image) { console.error(`mirage-linux: ${prog}: not found under ${ROOT || 'the image'}`); process.exit(127); }
+if (process.env.MIRAGE_WASITRACE) lx.wasiTrace = (line) => process.stderr.write('wasi: ' + line + '\n');   // a WebAssembly program's calls (src/wasi.js)
 if (process.env.MIRAGE_LXCONSOLE) lx.consoleStdio();   // stdio on /dev/tty1, a virtual console (SVGAlib wants one)
 const extraEnv = Object.entries(JSON.parse(process.env.MIRAGE_LXENV || '{}')).map(([k, v]) => `${k}=${v}`);
 if (process.env.MIRAGE_LXFB) { const [w, h] = process.env.MIRAGE_LXFB.split('x').map(Number); lx.setFb(w, h); }   // /dev/fb0's size (machine.fb)

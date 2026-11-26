@@ -17,9 +17,12 @@ async function inflateRaw(bytes) {
 
 /**
  * @param {Uint8Array} zip
- * @returns {Promise<{path: string, bytes: Uint8Array}[]>} files only (directories are implied by paths)
+ * @param {{dirs?: boolean}} [opts] `dirs`: the directory entries too, as { path: 'name/', dir: true }
+ *   (an empty one is in no file's path: CPython's lib-dynload)
+ * @returns {Promise<{path: string, bytes?: Uint8Array, mode?: number, dir?: true}[]>} the files (and
+ *   directories); `mode` when the archive was made on Unix
  */
-export async function unzip(zip) {
+export async function unzip(zip, { dirs = false } = {}) {
   const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
   // The end-of-central-directory record is in the last 64 KiB + 22 bytes (a comment may follow it).
   let eocd = -1;
@@ -37,10 +40,13 @@ export async function unzip(zip) {
     const csize = dv.getUint32(p + 20, true), size = dv.getUint32(p + 24, true);
     const nameLen = dv.getUint16(p + 28, true), extraLen = dv.getUint16(p + 30, true), commentLen = dv.getUint16(p + 32, true);
     const local = dv.getUint32(p + 42, true);
+    // Made on Unix (the high byte of "version made by" 3): the file's mode in the external attributes'
+    // upper half -- an executable stays one (CPython's python.wasm).
+    const mode = dv.getUint8(p + 5) === 3 ? (dv.getUint32(p + 38, true) >>> 16) & 0o7777 : 0;
     // Names of the period are CP437/ASCII; Latin-1 decoding keeps every byte as one character.
     const name = Array.from(zip.subarray(p + 46, p + 46 + nameLen), (b) => String.fromCharCode(b)).join('');
     p += 46 + nameLen + extraLen + commentLen;
-    if (name.endsWith('/') || name.endsWith('\\')) continue;            // a directory entry
+    if (name.endsWith('/') || name.endsWith('\\')) { if (dirs) files.push({ path: name.replace(/\\/g, '/'), dir: true }); continue; }   // a directory entry
     if (flags & 1) throw new Error(`${name}: encrypted ZIP entries are not supported`);
     if (dv.getUint32(local, true) !== SIG_LOC) throw new Error(`${name}: local header not found`);
     const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
@@ -50,7 +56,7 @@ export async function unzip(zip) {
     else if (method === 8) bytes = await inflateRaw(data);
     else throw new Error(`${name}: compression method ${method} is not supported (only stored and deflate)`);
     if (bytes.length !== size) throw new Error(`${name}: ${bytes.length} bytes unpacked, the directory says ${size}`);
-    files.push({ path: name.replace(/\\/g, '/'), bytes });
+    files.push({ path: name.replace(/\\/g, '/'), bytes, ...(mode ? { mode } : {}) });
   }
   return files;
 }

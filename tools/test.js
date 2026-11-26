@@ -741,14 +741,16 @@ await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(m
 
 // ---- ZIP archives (src/zip.js): a stored entry, a deflated one, a directory entry ----------------
 await (async () => { const enc = (str) => Uint8Array.from(str, (c) => c.charCodeAt(0));
-  const entries = [['GAME/', new Uint8Array(0), 0], ['GAME/README.TXT', enc('freeware'), 0], ['GAME/GAME.EXE', enc('MZ'.padEnd(3000, 'x')), 8]];
+  // GAME.EXE made on Unix (version made by 3.0, "unx"), mode 0755 in its external attributes' upper half.
+  const entries = [['GAME/', new Uint8Array(0), 0], ['GAME/README.TXT', enc('freeware'), 0], ['GAME/GAME.EXE', enc('MZ'.padEnd(3000, 'x')), 8, 0o100755]];
   const parts = [], cen = []; let off = 0;
-  for (const [name, data, method] of entries) {
+  for (const [name, data, method, unix] of entries) {
     const body = method === 8 ? new Uint8Array(deflateRawSync(data)) : data, nm = enc(name);
     const loc = new Uint8Array(30 + nm.length), ld = new DataView(loc.buffer);
     ld.setUint32(0, 0x04034b50, true); ld.setUint16(8, method, true); ld.setUint32(18, body.length, true); ld.setUint32(22, data.length, true); ld.setUint16(26, nm.length, true); loc.set(nm, 30);
     const c = new Uint8Array(46 + nm.length), cd = new DataView(c.buffer);
     cd.setUint32(0, 0x02014b50, true); cd.setUint16(10, method, true); cd.setUint32(20, body.length, true); cd.setUint32(24, data.length, true); cd.setUint16(28, nm.length, true); cd.setUint32(42, off, true); c.set(nm, 46);
+    if (unix) { cd.setUint16(4, 0x031e, true); cd.setUint32(38, unix * 65536, true); }
     parts.push(loc, body); cen.push(c); off += loc.length + body.length;
   }
   const cenLen = cen.reduce((a, c) => a + c.length, 0), end = new Uint8Array(22), ed = new DataView(end.buffer);
@@ -757,6 +759,10 @@ await (async () => { const enc = (str) => Uint8Array.from(str, (c) => c.charCode
   const files = await unzip(zip);
   eq('ZIP: stored and deflated entries come back, the directory entry is skipped', files.map((f) => `${f.path}:${f.bytes.length}`).join(), 'GAME/README.TXT:8,GAME/GAME.EXE:3000');
   eq('...the deflated content is intact', String.fromCharCode(...files[1].bytes.subarray(0, 4)), 'MZxx');
+  // CPython's WASI build: python.wasm executable (the shell refused to run it: Permission denied), and
+  // lib-dynload an empty directory, in no file's path (Python warned it had no exec_prefix).
+  eq('...a Unix entry keeps its mode; with dirs, the directory entries come too', JSON.stringify((await unzip(zip, { dirs: true })).map((f) => [f.path, f.dir ? 'dir' : (f.mode || 0).toString(8)])),
+    JSON.stringify([['GAME/', 'dir'], ['GAME/README.TXT', '0'], ['GAME/GAME.EXE', '755']]));
   let err = ''; try { await unzip(enc('not a zip at all, just text, long enough to be scanned')); } catch (e) { err = e.message; }
   eq('...and something that is not a ZIP says so', err.startsWith('not a ZIP archive'), true);
   // id's shareware layout: DEICE.EXE beside a ZIP cut in pieces. Joined, the pieces are the archive.
@@ -8195,7 +8201,9 @@ await (async () => {
     hello: { out: 'hello from wasi\n', status: 7, files: {} },
     args: { out: '3 /w/args.wasm\0one\0two words\0\n3 PATH=/usr/local/bin:/usr/bin:/bin\0HOME=/root\0LANG=C\0\n', status: 0, files: {} },
     cat: { out: programs.cat.stdin, status: 0, files: {} },
-    preopens: { out: '3 /\n4 .\n', status: 0, files: {} },
+    // "/", "." (the last of equal prefixes: a relative path's), then the root's own directories but for
+    // the working directory's namesakes: wasi-libc takes an absolute path to the longest prefix.
+    preopens: { out: '3 /\n4 .\n5 /dev\n6 /proc\n7 /tmp\n8 /w\n', status: 0, files: {} },
     files: { out: '0 0 0 0 written, then read\n0 4 19 0 4 0 \n0 20 0 0 0 55 0 0 7 0 44 0 44 \n', status: 0, files: { 'out.txt': 'written, then read\n' } },
     rooted: { out: '0 0 3 0 44 0 0 made2\n0 0 44 \n', status: 0, files: {} },
     readdir: { out: '.\n..\na.txt\nb.txt\nreaddir.wasm\nsub\n', status: 0, files: { 'a.txt': 'a', 'b.txt': 'bb', 'sub/': '', 'sub/c': 'c' } },
@@ -8224,6 +8232,31 @@ await (async () => {
     mc.rec.reset();
   } catch (e) { got = String(e.message || e).slice(0, 120); }
   eq('wasi: an x86 process execve\'s a WebAssembly one, which reads the pipe it was given', got, JSON.stringify(['through a pipe\n', 0])); })();
+// A large module in a page: Chrome refuses to compile or instantiate one of more than 8 MB on the main
+// thread, so execve waits for WebAssembly.compile and the process's first step for instantiate
+// (lx.wasmAsync). Here the synchronous constructors refuse as Chrome's do; cat.wasm is padded to 5 MB
+// with a custom section, and tools/linux/wasmexec.asm execve's it.
+await (async () => {
+  let got;
+  const { Module, Instance } = WebAssembly;
+  try {
+    const { programs } = await import('./wasi/programs.mjs');
+    const pad = new Uint8Array(5 << 20), head = [0, 0x84, 0x80, 0xc0, 0x02, 3, 0x70, 0x61, 0x64];   // id 0, size 5 MiB + 4 (uleb), "pad"
+    const big = new Uint8Array(programs.cat.wasm.length + head.length + pad.length);
+    big.set(programs.cat.wasm); big.set(head, programs.cat.wasm.length);
+    const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004080a010000160100000700000000100000b82a000000bb0a810408cd80b8040000008b1d0e810408b9e3800408ba0f000000cd80b8060000008b1d0e810408cd80b802000000cd8085c07531b83f0000008b1d0a81040831c9cd80b80b000000bbf2800408b9fe800408ba06810408cd80bb7f000000b801000000cd80b872000000bbffffffffb91281040831d231f6cd800fb61d13810408b801000000cd807468726f756768206120706970650a2f772f6361742e7761736d00f28004080000000000000000000000000000000000000000';
+    WebAssembly.Module = function (b) { if (b.length > 8 << 20 || b.length > 4 << 20) throw new Error('WebAssembly.Compile is disallowed on the main thread'); return new Module(b); };
+    WebAssembly.Instance = function () { throw new Error('WebAssembly.Instance is disallowed on the main thread'); };
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.wasmAsync = true; lx.mkdir('/w'); lx.addFile('/w/cat.wasm', big);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/WASMEXEC']);
+    let waits = 0;
+    for (let i = 0; i < 400 && !lx.done; i++) { mc.runSlice(20000); if (mc.blocked) { waits++; await new Promise((r) => setTimeout(r, 1)); } }
+    got = JSON.stringify([new TextDecoder().decode(Uint8Array.from(lx.stdout)), lx.status, waits > 0]);
+    mc.rec.reset();
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  WebAssembly.Module = Module; WebAssembly.Instance = Instance;
+  eq('wasi: a large module in a page is compiled and instantiated in the background, execve waiting for it', got, JSON.stringify(['through a pipe\n', 0, true])); })();
 // A buffer packed as its non-zero pages: a megabyte with a byte in its 101st page and its odd tail (the
 // last page short) comes back whole, and packs in less than a kilobyte head and all.
 await (async () => {

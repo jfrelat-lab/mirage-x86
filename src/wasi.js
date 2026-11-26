@@ -7,9 +7,9 @@
 // pointers are into a buffer of the process's own address space (`k.va`, `k.size` bytes): what a call
 // reads is copied there from the program's linear memory first, what it writes copied back after.
 //
-// The descriptors are the kernel's numbers as they are: 0-2 what the process was given, 3 and 4 the
-// two directories WASI programs are given ("preopens"): 3 is "/", the root, and 4 is ".", the working
-// directory. Rights are not kept: every descriptor may do what its open file may.
+// The descriptors are the kernel's numbers as they are: 0-2 what the process was given, from 3 the
+// directories WASI programs are given ("preopens", k.preopens: descriptor and name; src/linux.js
+// chooses them). Rights are not kept: every descriptor may do what its open file may.
 //
 // The program runs to its end inside one call of its process (k.run). A call that would wait (input
 // not there yet) answers EAGAIN: a WASI program here reads what is already written.
@@ -114,7 +114,7 @@ export function wasiImports(k, argv, envp) {
   };
 
   // The preopened directories, by descriptor.
-  const preopens = new Map([[3, '/'], [4, '.']]);
+  const preopens = new Map(k.preopens || [[3, '/'], [4, '.']]);
   // fd_readdir's cookies are entry indexes: the directory read again from its start for each call.
   const entries = (fd) => {
     if (sys(140, fd, 0, 0, alloc(8), 0) < 0) return null;              // _llseek to the start
@@ -287,6 +287,15 @@ export function wasiImports(k, argv, envp) {
   }
   function timespec(va) { const t = new DataView(getBytes(va, 8).buffer); return BigInt(t.getUint32(0, true)) * 1000000000n + BigInt(t.getUint32(4, true)); }
 
+  // k.trace(line): each call, its arguments and its answer (tools/linux/run.mjs's MIRAGE_WASITRACE).
+  if (k.trace) for (const [name, f] of Object.entries(W)) {
+    W[name] = (...a) => {
+      const show = (v) => (typeof v === 'bigint' ? v.toString() + 'n' : String(v));
+      const pathOf = /^path_/.test(name) ? ' ' + JSON.stringify(path(a[name === 'path_symlink' ? 0 : name === 'path_open' || name === 'path_filestat_get' || name === 'path_filestat_set_times' || name === 'path_link' ? 2 : 1], a[name === 'path_symlink' ? 1 : name === 'path_open' || name === 'path_filestat_get' || name === 'path_filestat_set_times' || name === 'path_link' ? 3 : 2])) : '';
+      try { const r = f(...a); k.trace(`${name}(${a.map(show).join(', ')})${pathOf} = ${r}`); return r; }
+      catch (e) { k.trace(`${name}(${a.map(show).join(', ')})${pathOf} -> ${e instanceof WasiExit ? 'exit ' + e.code : e}`); throw e; }
+    };
+  }
   return {
     imports: { wasi_snapshot_preview1: W },
     bind(instance) { mem = instance.exports.memory; },

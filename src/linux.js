@@ -359,24 +359,53 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // kernel's. What runs on the CPU is three instructions -- mov eax, WASM_TRAP / int 80h / jmp back --
   // and the trap runs the module (lx.wasm, the process's own), whose WASI calls are this kernel's
   // system calls (src/wasi.js) on a buffer of the process's address space.
+  // Compiling and instantiating: at once, or -- in a page (lx.wasmAsync), for a module over SYNC_MAX
+  // bytes, which Chrome refuses to compile or instantiate on the main thread ("disallowed ... larger
+  // than 8MB") -- in the background, the call that needs it waiting (BLOCK) meanwhile: execve until the
+  // module is compiled, the process's first step until it is instantiated. A module is compiled once,
+  // kept with its bytes (a file of the image's, shared until written).
+  const SYNC_MAX = 4 << 20;
+  const wasmModules = new WeakMap();
+  const later = (promise, done) => { promise.then((v) => done(v, null), (e) => done(null, e)).finally(() => { machine.blocked = false; }); };
+  const wasmModule = (bytes) => {
+    let m = wasmModules.get(bytes);
+    if (!m && (!lx.wasmAsync || bytes.length <= SYNC_MAX)) { m = { module: new WebAssembly.Module(bytes) }; wasmModules.set(bytes, m); }
+    if (!m) { m = {}; wasmModules.set(bytes, m); later(WebAssembly.compile(bytes), (mod, e) => { m.module = mod; m.error = e; }); }
+    if (m.error) throw m.error;
+    return m.module || BLOCK;
+  };
+  /** A page compiles the program it starts with before lx.load (which cannot wait). */
+  lx.prepareWasm = async (bytes) => { if (isWasm(bytes) && !wasmModules.get(bytes)) wasmModules.set(bytes, { module: await WebAssembly.compile(bytes) }); };
   const loadWasm = (bytes, argv, envp) => {
-    const module = new WebAssembly.Module(bytes);                        // a module that does not compile is no program
+    const module = wasmModule(bytes);                                    // a module that does not compile is no program
+    if (module === BLOCK) throw new Error(`mirage-linux: ${argv[0]}: compile it first (lx.prepareWasm)`);
     prepareSpace();
     mapRange(WASM_CODE, WASM_CODE + PAGE, false);
     mem.u8.set([0xb8, 0, 0, 0, WASM_TRAP >>> 24, 0xcd, 0x80, 0xeb, 0xf7], phys(WASM_CODE));
     mapRange(WASM_BUF, WASM_BUF + WASM_BUF_SIZE, true);
     mapRange(STACK_TOP - PAGE, STACK_TOP, true);
     lx.brkStart = lx.brk = WASM_BUF + WASM_BUF_SIZE;
-    // The two directories WASI gives a program, as wasmtime's --dir / --dir . would: 3 the root, 4 the
-    // working one. Whatever the parent left there is closed.
-    for (const [fd, dir] of [[3, '/'], [4, lx.cwd]]) {
-      const r = doOpen(dir, 0x10000);
+    // The directories WASI gives a program (preopens), from 3 on; whatever the parent left there is
+    // closed. wasi-libc (preview 1) has no working directory of its own: it takes every path, absolute or
+    // not, to the preopen whose name is its longest prefix, the last given among equals. So: 3 "/", the
+    // root; 4 ".", the working directory, which a relative path finds; and each of the root's own
+    // directories by its name ("/etc", "/usr"...), so that an absolute path finds the root -- all but
+    // those the working directory has a namesake of, where a relative path must win.
+    const pre = [['/', '/'], ['.', lx.cwd]];
+    if (lx.cwd !== '/') {
+      const names = (p) => dirNames({ path: p, node: getNode(p) }).names.filter((n) => n !== '.' && n !== '..');
+      const here = new Set(names(lx.cwd));
+      for (const n of names('/')) { const r = resolve('/' + n), d = r && getNode(r); if (d && d.dir && !here.has(n)) pre.push(['/' + n, '/' + n]); }
+    }
+    pre.forEach(([, dir], i) => {
+      const fd = 3 + i, r = doOpen(dir, 0x10000);
       if (r >= 0 && r !== fd) { fds[fd] = fds[r]; delete fds[r]; }
       lx.cloexec.delete(fd);
-    }
+    });
     const k = {
       sys: (n, ...a) => { try { const r = SYS[n](...a.map((x) => x >>> 0)); return r === undefined ? 0 : r; } catch (e) { if (typeof e === 'number') return -e; throw e; } },
-      BLOCK, va: WASM_BUF, size: WASM_BUF_SIZE,
+      BLOCK, va: WASM_BUF, size: WASM_BUF_SIZE, preopens: pre.map(([name], i) => [3 + i, name]),
+      trace: lx.wasiTrace,
       put: (off, b) => wrBytes(WASM_BUF + off, b),
       get: (off, n) => rdBytes(WASM_BUF + off, n),
       // A sleep moves the guest's clock on (src/wasi.js runs to its end in one call: nobody else runs
@@ -387,10 +416,16 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       },
     };
     const w = wasiImports(k, argv, envp);
+    let pending = null;
     lx.wasm = () => {
+      if (lx.wasmAsync && bytes.length > SYNC_MAX && !(pending && pending.inst)) {
+        if (!pending) { pending = {}; later(WebAssembly.instantiate(module, w.imports), (inst, e) => { pending.inst = inst; pending.error = e; }); }
+        if (pending.error) { out(2, new TextEncoder().encode(`${argv[0]}: wasm: ${pending.error.message}\n`)); exit(0, 6); return undefined; }
+        if (!pending.inst) return BLOCK;
+      }
       let code = 0;
       try {
-        const inst = new WebAssembly.Instance(module, w.imports);
+        const inst = pending ? pending.inst : new WebAssembly.Instance(module, w.imports);
         w.bind(inst);
         if (inst.exports._start) inst.exports._start();
         else if (inst.exports._initialize) inst.exports._initialize();
@@ -826,6 +861,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       bytes = ib;
     }
     if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes) && !isWasm(bytes)) return -E.ENOEXEC;
+    if (isWasm(bytes)) {                                                 // compiled before anything of the old program goes
+      let m; try { m = wasmModule(bytes); } catch { return -E.ENOEXEC; }
+      if (m === BLOCK) return BLOCK;
+    }
     releasePages(lx.pages);
     lx.pages = new Map(); lx.sigHandlers = lx.sigHandlers.map((h) => (h === 1 ? 1 : 0)); lx.sigInfo = []; lx.fpuFrames = new Map();
     for (const fd of lx.cloexec) delete fds[fd];                          // close-on-exec

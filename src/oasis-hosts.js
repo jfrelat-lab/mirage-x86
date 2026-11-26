@@ -15,11 +15,14 @@ export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.n
   'raw.githubusercontent.com/dominikfhnw/demoscene_releases/', 'ftp.scene.org/pub/', 'ftp.untergrund.net/users/parapete/', 'conspiracy.hu/files/',
   'archive.org/download/official-jj-2/',
   // Abuse (Crack dot Com, 1996): Xenoveritas' GPL port, its Windows build a release of its GitHub repository.
-  'github.com/Xenoveritas/abuse/releases/download/'];
+  'github.com/Xenoveritas/abuse/releases/download/',
+  // CPython built for WASI (wasm32-wasip1), the builds the CPython project links to: a release of its GitHub repository.
+  'github.com/brettcannon/cpython-wasi-build/releases/download/'];
 
 /** Where a host above redirects to, for those files only: GitHub serves a release's file from its
- *  storage, under the repository's number (Xenoveritas/abuse: 21053782). */
-export const OASIS_REDIRECTS = ['release-assets.githubusercontent.com/github-production-release-asset/21053782/'];
+ *  storage, under the repository's number (Xenoveritas/abuse: 21053782, brettcannon/cpython-wasi-build: 618564477). */
+export const OASIS_REDIRECTS = ['release-assets.githubusercontent.com/github-production-release-asset/21053782/',
+  'release-assets.githubusercontent.com/github-production-release-asset/618564477/'];
 
 /**
  * An archive.org item's file where the archive serves it from, for an item OASIS_HOSTS names
