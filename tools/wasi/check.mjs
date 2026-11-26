@@ -72,12 +72,12 @@ const build = (file) => {
 };
 
 const all = { ...programs, ...(SDK ? Object.fromEntries(Object.entries(cPrograms).map(([n, p]) => [n, { ...p, get wasm() { return (this._w ||= build(p.c)); } }])) : {}) };
-const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(all);
+const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(all).filter((n) => !all[n].mirageOnly);
 let same = 0, diff = 0;
 for (const name of names) {
   const p = all[name];
   if (!p) { console.log(`${name}: no such program${SDK ? '' : ' (the C ones need WASI_SDK)'}`); diff++; continue; }
-  const [m, n] = [runWasi(name, p), await runRef(name, p)];
+  const [m, n] = [await runWasi(name, p), await runRef(name, p)];
   const view = (r) => JSON.stringify({ out: p.sorted ? r.out.split('\n').filter((l) => l && l !== '.' && l !== '..').sort() : r.out, status: r.status, err: p.stderr ? undefined : r.err, files: r.files }, null, 1);
   if (view(m) === view(n)) { same++; console.log(`${name}: same`); }
   else { diff++; console.log(`${name}: DIFFERENT\n--- mirage:\n${view(m)}\n--- ${WASMTIME ? 'wasmtime' : 'node:wasi'}:\n${view(n)}`); }

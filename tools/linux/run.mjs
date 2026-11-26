@@ -117,7 +117,8 @@ const WAV = process.env.MIRAGE_LXWAV, played = [];
 let wavRate = 0;
 const record = () => { if (!WAV || !mc.dsp) return; const { rate, samples } = mc.dsp.drain(); if (samples.length) { wavRate = rate; for (const v of samples) played.push(v); } };
 const hostT0 = performance.now(), cyc0 = mc.cpu.cycles, exec0 = mc.rec.stats.exec;
-while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (shoot) shoot(); record(); }
+lx.wasmWait = true;                             // a WebAssembly program's reads wait (JSPI), its loop below awaiting it
+while (!lx.done && mc.cpu.cycles < LIMIT) { mc.runSlice(200000); if (mc.pending) await lx.settle(); if (shoot) shoot(); record(); }
 if (process.env.MIRAGE_LXSTATS) {               // what a benchmark's score is made of: instructions and host time
   const n = mc.cpu.cycles - cyc0, s = (performance.now() - hostT0) / 1000;
   console.error(`mirage-linux: ${(n / 1e6).toFixed(1)} M instructions in ${s.toFixed(2)} s of host time, ${(n / s / 1e6).toFixed(0)} M a second, ${(n / (mc.rec.stats.exec - exec0)).toFixed(1)} a dispatch`);

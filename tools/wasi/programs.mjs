@@ -146,20 +146,34 @@ export const programs = {
         o.get(1), o.i32(24), o.add, o.get(1), o.load(16), o.add, o.set(1), o.br(0)))]),
   },
 
-  // The clocks: a sleep of 50 ms through poll_oneoff is seen by the monotonic one; the real one is now.
+  // The clocks: two sleeps of 50 ms through poll_oneoff are seen by the monotonic one, 100 ms (the
+  // second its own deadline, not the first's); the real one is now.
   clock: {
     wasm: prog(['clock_time_get', 'poll_oneoff'], [[1024, 'slept\n'], [1032, 'did not sleep\n'], [1048, 'now\n'], [1056, 'not now\n']], (o) => [
       o.i32(1), o.i64(1), o.i32(40), o.call('clock_time_get'), o.drop,
       // the subscription at 128: userdata 5, tag 0 (clock), id 1 (monotonic), timeout 50 ms, relative
       o.i32(128), o.i64(5), o.store64(), o.i32(136), o.i32(0), o.store8(), o.i32(144), o.i32(1), o.store(), o.i32(152), o.i64(50000000), o.store64(),
       o.i32(128), o.i32(192), o.i32(1), o.i32(48), o.call('poll_oneoff'), o.drop,
+      o.i32(128), o.i32(192), o.i32(1), o.i32(48), o.call('poll_oneoff'), o.drop,
       o.i32(1), o.i64(1), o.i32(56), o.call('clock_time_get'), o.drop,
-      o.i32(56), o.load64(), o.i32(40), o.load64(), [0x7d], o.i64(50000000), [0x5a],   // i64.sub, i64.ge_u
+      o.i32(56), o.load64(), o.i32(40), o.load64(), [0x7d], o.i64(100000000), [0x5a],   // i64.sub, i64.ge_u
       o.if(o.i32(1024), o.i32(6), o.call('print'), o.else, o.i32(1032), o.i32(14), o.call('print')),
       o.i32(192), o.load(), o.call('num'), o.i32(48), o.load(), o.call('num'), o.i32(1100), o.i32(0), o.call('print'),
       o.i32(0), o.i64(1), o.i32(40), o.call('clock_time_get'), o.drop,
       o.i32(40), o.load64(), o.i64(1700000000000000000n), [0x5a],
       o.if(o.i32(1048), o.i32(4), o.call('print'), o.else, o.i32(1056), o.i32(8), o.call('print'))]),
+  },
+
+  // The console as a terminal: a character device without FD_SEEK and FD_TELL, which is what
+  // wasi-libc's isatty() asks (Python gives its prompt only then). MIRAGE-LINUX's /dev/console only:
+  // tools/wasi/check.mjs's references have none (mirageOnly).
+  console: {
+    mirageOnly: true,
+    wasm: prog(['path_open', 'fd_fdstat_get'], [[1024, 'dev/console'], NL], (o) => [
+      o.i32(3), o.i32(1), o.i32(1024), o.i32(11), o.i32(0), o.i64(RW), o.i64(RW), o.i32(0), o.i32(32), o.call('path_open'), o.call('num'),
+      o.i32(32), o.load(), o.i32(320), o.call('fd_fdstat_get'), o.call('num'),
+      o.i32(320), o.load8(), o.call('num'), o.i32(328), o.load8(), o.i32(0x24), [0x71], o.call('num'),   // i32.and
+      ...nl(o)]),
   },
 
   // A trap ends it as an abort does: status 134, a line on stderr.

@@ -1,10 +1,11 @@
 // mirage.mjs — one WASI test program (tools/wasi/programs.mjs) on MIRAGE-LINUX, as tools/linux/run.mjs
 // would run it: the program at /w/<name>.wasm, /w its working directory. Returns what it printed, its
-// status and the files it left in /w.
+// status and the files it left in /w. `wait`: its reads wait (JSPI, lx.wasmWait), the loop awaiting it;
+// false, the program runs to its end in one call.
 import { Machine } from '../../src/machine.js';
 import { installLinux } from '../../src/linux.js';
 
-export function runWasi(name, p) {
+export async function runWasi(name, p, { wait = true } = {}) {
   const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
   lx.mkdir('/w'); lx.chdir('/w');
   for (const [f, c] of Object.entries(p.files || {})) {
@@ -14,8 +15,9 @@ export function runWasi(name, p) {
   lx.addFile('/w/' + name + '.wasm', p.wasm);
   lx.epoch = Math.floor(Date.now() / 1000);
   lx.stdin = new TextEncoder().encode(p.stdin || '');
+  lx.wasmWait = wait;
   lx.load(p.wasm, ['/w/' + name + '.wasm', ...(p.args || [])], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C']);
-  for (let i = 0; i < 1000 && !lx.done; i++) mc.runSlice(20000);
+  for (let i = 0; i < 1000 && !lx.done; i++) { mc.runSlice(20000); if (mc.pending) await lx.settle(); }
   const dec = (b) => Buffer.from(b).toString('latin1');
   const files = {};
   for (const [k, n] of [...lx.fs].sort(([a], [b]) => (a < b ? -1 : 1))) {

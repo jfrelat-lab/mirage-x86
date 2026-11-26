@@ -37,5 +37,5 @@
   "output": "window",
   "license": "https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.15.2/python-3.15.2-wasi_sdk-33.zip",
   "licenseName": "PSF License (CPython: LICENSE in the archive), GPL 2 (BusyBox)",
-  "notes": "CPython 3.15.2 built for WASI (wasm32-wasip1) by the CPython project's WASI build, a WebAssembly module run by the browser's own engine: each python3 is a process of MIRAGE-LINUX, its WASI calls answered by the kernel's system calls (src/wasi.js), beside the x86 BusyBox shell that starts it -- in pipes, on the same files. A read waits for nothing yet: python3's REPL needs input already typed, so run scripts or python3 -c."
+  "notes": "CPython 3.15.2 built for WASI (wasm32-wasip1) by the CPython project's WASI build, a WebAssembly module run by the browser's own engine: each python3 is a process of MIRAGE-LINUX, its WASI calls answered by the kernel's system calls (src/wasi.js), beside the x86 BusyBox shell that starts it -- in pipes, on the same files. Its reads wait (JSPI, in Chrome): python3 alone is the REPL on the page's console."
 }

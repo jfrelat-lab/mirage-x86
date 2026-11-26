@@ -16,7 +16,7 @@
 // fault taken in the kernel.
 import { installMidi } from './midi.js';
 import { snapHook, snapExternal } from './snapshot.js';
-import { wasiImports, WasiExit, isWasm } from './wasi.js';
+import { wasiImports, WasiExit, WAIT, isWasm } from './wasi.js';
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
@@ -40,6 +40,9 @@ const WASM_CODE = 0x08048000, WASM_BUF = 0x08100000, WASM_BUF_SIZE = 0x40000, WA
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
 const BLOCK = Symbol('block');                            // a system call that waits: int 80h runs again
+// A WebAssembly process goes on in a microtask (src/wasi.js under JSPI): int 80h runs again after it,
+// the slice ended, no other process run meanwhile -- machine.pending is what the machine's loop awaits.
+const PAUSE = Symbol('pause');
 const E = { EPERM: 1, ENOENT: 2, EINTR: 4, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
   EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11, ECHILD: 10 };
 
@@ -375,6 +378,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     return m.module || BLOCK;
   };
   /** A page compiles the program it starts with before lx.load (which cannot wait). */
+  /** The machine's loop, after each slice: while a WebAssembly process goes on (PAUSE), await it. */
+  lx.settle = async () => { while (machine.pending) { const p = machine.pending; machine.pending = null; await p; } };
   lx.prepareWasm = async (bytes) => { if (isWasm(bytes) && !wasmModules.get(bytes)) wasmModules.set(bytes, { module: await WebAssembly.compile(bytes) }); };
   const loadWasm = (bytes, argv, envp) => {
     const module = wasmModule(bytes);                                    // a module that does not compile is no program
@@ -403,8 +408,13 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       lx.cloexec.delete(fd);
     });
     const k = {
-      sys: (n, ...a) => { try { const r = SYS[n](...a.map((x) => x >>> 0)); return r === undefined ? 0 : r; } catch (e) { if (typeof e === 'number') return -e; throw e; } },
-      BLOCK, va: WASM_BUF, size: WASM_BUF_SIZE, preopens: pre.map(([name], i) => [3 + i, name]),
+      sys: (n, ...a) => {
+        let r;
+        try { r = SYS[n](...a.map((x) => x >>> 0)); } catch (e) { if (typeof e === 'number') r = -e; else throw e; }
+        if (r !== BLOCK) lx.wake = null;                                 // as lx.syscall: a wait's deadline is its own
+        return r === undefined ? 0 : r;
+      },
+      BLOCK, jspi: !!lx.wasmWait && typeof WebAssembly.Suspending === 'function', va: WASM_BUF, size: WASM_BUF_SIZE, preopens: pre.map(([name], i) => [3 + i, name]),
       trace: lx.wasiTrace,
       put: (off, b) => wrBytes(WASM_BUF + off, b),
       get: (off, n) => rdBytes(WASM_BUF + off, n),
@@ -416,12 +426,40 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       },
     };
     const w = wasiImports(k, argv, envp);
-    let pending = null;
+    let pending = null, run = null, outcome = null;
+    const ws = w.waiting;
+    const end = (o) => {                                                 // the module's end: an exit, or a trap
+      if (o.error && !(o.error instanceof WebAssembly.RuntimeError || o.error instanceof RangeError || o.error instanceof WebAssembly.LinkError)) throw o.error;
+      if (o.error) { out(2, new TextEncoder().encode(`${argv[0]}: wasm: ${o.error.message}\n`)); exit(0, 6); return undefined; }
+      exit(o.code); return undefined;
+    };
+    // The machine's loop awaits machine.pending: the module runs on (resumed by `go`) until it waits
+    // again or ends, the process still the one on the CPU.
+    const pause = (go) => {
+      machine.pending = new Promise((res) => { ws.onPause = () => { ws.onPause = null; res(); }; });
+      if (go) go();
+      return PAUSE;
+    };
     lx.wasm = () => {
       if (lx.wasmAsync && bytes.length > SYNC_MAX && !(pending && pending.inst)) {
         if (!pending) { pending = {}; later(WebAssembly.instantiate(module, w.imports), (inst, e) => { pending.inst = inst; pending.error = e; }); }
         if (pending.error) { out(2, new TextEncoder().encode(`${argv[0]}: wasm: ${pending.error.message}\n`)); exit(0, 6); return undefined; }
         if (!pending.inst) return BLOCK;
+      }
+      if (w.jspi) {
+        if (outcome) return end(outcome);
+        if (!run) {
+          const inst = pending ? pending.inst : new WebAssembly.Instance(module, w.imports);
+          w.bind(inst);
+          const settle = (o) => { outcome = o; ws.attempt = null; machine.blocked = false; if (ws.onPause) ws.onPause(); };
+          run = WebAssembly.promising(inst.exports._start || inst.exports._initialize)().then(() => settle({ code: 0 }), (e) => settle(e instanceof WasiExit ? { code: e.code } : { error: e }));
+          return ws.attempt ? BLOCK : pause();                              // it waits as any process does, or it has ended
+        }
+        const r = ws.attempt();                                          // what it waits for, tried again
+        if (r === WAIT) return BLOCK;
+        ws.attempt = null;
+        const resume = ws.resume;
+        return pause(() => resume(r));
       }
       let code = 0;
       try {
@@ -2732,6 +2770,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     // ...and a call that switched did not wait (an exit): what it changed may end another's wait — a
     // shell's wait4 for the child that just exited. Counted as one more wait, the next one to block
     // believed everyone waited and took the clock to X's 600-second screen saver.
+    if (ret === PAUSE) { cpu.eip = (cpu.eip - 2) >>> 0; cpu.tbudget = 0; return; }   // the slice ends here, nobody switched
     if (lx.switches !== sw || lx.done) { lx.blockRun = 0; return; }
     if (ret === BLOCK) {                                                 // int 80h again: on its next turn, or when input comes
       cpu.eip = (cpu.eip - 2) >>> 0;

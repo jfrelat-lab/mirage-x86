@@ -11,8 +11,12 @@
 // directories WASI programs are given ("preopens", k.preopens: descriptor and name; src/linux.js
 // chooses them). Rights are not kept: every descriptor may do what its open file may.
 //
-// The program runs to its end inside one call of its process (k.run). A call that would wait (input
-// not there yet) answers EAGAIN: a WASI program here reads what is already written.
+// Waiting. With k.jspi (JSPI: WebAssembly.Suspending and promising), a call that would wait -- a read
+// of input not yet written, a poll, a sleep -- suspends the module: the kernel tries it again whenever
+// it gives the process its turn, as it retries any waiting system call (`waiting.attempt`), and the
+// module goes on with the answer (`waiting.resume`) once there is one. Without JSPI the program runs to
+// its end inside one call of its process, and a call that would wait answers EAGAIN: it reads only
+// what is already written.
 
 const ERRNO = {                          // Linux errno -> WASI errno
   1: 63, 2: 44, 3: 71, 4: 27, 5: 29, 6: 60, 7: 1, 8: 45, 9: 8, 10: 12, 11: 6, 12: 48, 13: 2, 14: 21, 16: 10, 17: 20,
@@ -30,6 +34,8 @@ const ALL_RIGHTS = 0x1fffffffn;
 
 /** The exit of the program: proc_exit, as a throw through its frames. */
 export class WasiExit { constructor(code) { this.code = code; } }
+/** What a call that would wait answers, inside: the kernel's BLOCK. */
+export const WAIT = Symbol('wait');
 
 /**
  * A WASI program's imports, on a kernel `k`:
@@ -46,6 +52,21 @@ export function wasiImports(k, argv, envp) {
   const enc = new TextEncoder();
   const B = k.va, SIZE = k.size;
   const sys = (...a) => { const r = k.sys(...a); return r === k.BLOCK ? -11 : r; };   // EAGAIN: no waiting here
+  const sysWait = (...a) => { const r = k.sys(...a); return r === k.BLOCK ? WAIT : r; };
+  // A call that may wait: f answers WAIT while it would. Under JSPI the module is suspended until
+  // waiting.attempt() -- f again, from the kernel, on the process's turn -- has an answer.
+  const waiting = { attempt: null, resume: null, onPause: null };
+  const blocking = (f) => (k.jspi
+    ? new WebAssembly.Suspending(async (...a) => {
+      const attempt = () => { top = 0; return f(...a); };
+      const r = attempt();
+      if (r !== WAIT) return r;
+      waiting.attempt = attempt;
+      const answer = new Promise((res) => { waiting.resume = res; });
+      if (waiting.onPause) waiting.onPause();                           // the machine's loop goes on
+      return answer;
+    })
+    : (...a) => { top = 0; const r = f(...a); return r === WAIT ? E.AGAIN : r; });
   // The buffer as a stack of what one call needs, from its start.
   let top = 0;
   const alloc = (n) => { const at = top; top = (top + n + 7) & ~7; if (top > SIZE) throw new RangeError('wasi: buffer'); return B + at; };
@@ -82,6 +103,7 @@ export function wasiImports(k, argv, envp) {
     let want = 0; for (const [, l] of iovs(iovPtr, n)) want += l;
     want = Math.min(want, SIZE - 64);
     const va = alloc(want), r = read(va, want);
+    if (r === WAIT) return r;
     if (r > 0) scatter(iovPtr, n, getBytes(va, r));
     return r;
   };
@@ -142,7 +164,7 @@ export function wasiImports(k, argv, envp) {
     clock_time_get: call((id, precision, out) => { const ts = alloc(8), r = sys(265, id, ts); if (r < 0) return wasiErr(r); dv().setBigUint64(out, timespec(ts), true); return 0; }),
 
     fd_write: call((fd, iov, n, nw) => { const b = gather(iov, n), r = sys(4, fd, putBytes(b), b.length); if (r < 0) return wasiErr(r); dv().setUint32(nw, r, true); return 0; }),
-    fd_read: call((fd, iov, n, nr) => { const r = readInto(iov, n, (va, len) => sys(3, fd, va, len)); if (r < 0) return wasiErr(r); dv().setUint32(nr, r, true); return 0; }),
+    fd_read: blocking(call((fd, iov, n, nr) => { const r = readInto(iov, n, (va, len) => sysWait(3, fd, va, len)); if (r === WAIT) return r; if (r < 0) return wasiErr(r); dv().setUint32(nr, r, true); return 0; })),
     fd_pwrite: call((fd, iov, n, off, nw) => { const b = gather(iov, n), [lo, hi] = split64(off), r = sys(181, fd, putBytes(b), b.length, lo, hi); if (r < 0) return wasiErr(r); dv().setUint32(nw, r, true); return 0; }),
     fd_pread: call((fd, iov, n, off, nr) => { const [lo, hi] = split64(off), r = readInto(iov, n, (va, len) => sys(180, fd, va, len, lo, hi)); if (r < 0) return wasiErr(r); dv().setUint32(nr, r, true); return 0; }),
     fd_seek: call((fd, off, whence, out) => {
@@ -165,9 +187,12 @@ export function wasiImports(k, argv, envp) {
     fd_fdstat_get: call((fd, out) => {
       const st = alloc(96), r = sys(197, fd, st); if (r < 0) return wasiErr(r);
       const fl = sys(221, fd, 3, 0);                                    // F_GETFL
-      const d = dv(); d.setUint8(out, stat64(st).type);
+      // A terminal is a character device that cannot seek: wasi-libc's isatty() reads it so (no FD_SEEK,
+      // no FD_TELL), and Python without it took the console for a script and gave no prompt.
+      const type = stat64(st).type, rights = type === 2 ? ALL_RIGHTS & ~0x24n : ALL_RIGHTS;
+      const d = dv(); d.setUint8(out, type);
       d.setUint16(out + 2, (fl & 0x400 ? 1 : 0) | (fl & 0x800 ? 4 : 0) | (fl & 0x101000 ? 16 : 0), true);   // APPEND NONBLOCK SYNC
-      d.setBigUint64(out + 8, ALL_RIGHTS, true); d.setBigUint64(out + 16, ALL_RIGHTS, true); return 0;
+      d.setBigUint64(out + 8, rights, true); d.setBigUint64(out + 16, ALL_RIGHTS, true); return 0;
     }),
     fd_fdstat_set_flags: call((fd, flags) => wasiErr(sys(221, fd, 4, (flags & 1 ? 0x400 : 0) | (flags & 4 ? 0x800 : 0)))),   // F_SETFL
     fd_fdstat_set_rights: call(() => 0),
@@ -224,7 +249,7 @@ export function wasiImports(k, argv, envp) {
     }),
     path_filestat_set_times: pathCall((dirfd, fl, p, len, atim, mtim, tf) => wasiErr(sys(320, dirfd, pathArg(p, len), times(atim, mtim, tf), fl & 1 ? 0 : 0x100))),
 
-    poll_oneoff: call((inp, outp, n, nev) => {
+    poll_oneoff: k.jspi ? blocking(call((inp, outp, n, nev) => pollWait(inp, outp, n, nev))) : call((inp, outp, n, nev) => {
       // Subscriptions of 48 bytes: userdata, tag (0 clock, 1 fd_read, 2 fd_write), then the clock's
       // id, timeout, precision and flags (bit 0: an absolute time) or the descriptor.
       const d = dv(), subs = [];
@@ -281,6 +306,44 @@ export function wasiImports(k, argv, envp) {
     }),
     sock_accept: () => E.NOTSUP, sock_recv: () => E.NOTSUP, sock_send: () => E.NOTSUP, sock_shutdown: () => E.NOTSUP,
   };
+  /** poll_oneoff that waits (JSPI): the kernel's poll, its timeout the nearest clock's -- the kernel
+   *  keeps that deadline from the first try, as it does for any call it retries. */
+  function pollWait(inp, outp, n, nev) {
+    const d = dv(), subs = [];
+    for (let i = 0; i < n; i++) {
+      const s = inp + i * 48, tag = d.getUint8(s + 8);
+      subs.push(tag === 0
+        ? { ud: d.getBigUint64(s, true), tag, id: d.getUint32(s + 16, true), t: d.getBigUint64(s + 24, true), abs: d.getUint16(s + 40, true) & 1 }
+        : { ud: d.getBigUint64(s, true), tag, fd: d.getUint32(s + 16, true) });
+    }
+    const now = (id) => { const ts = alloc(8); sys(265, id, ts); return timespec(ts); };
+    let wait = null;
+    for (const s of subs) if (s.tag === 0) { const left = s.abs ? s.t - now(s.id) : s.t; const l = left < 0n ? 0n : left; if (wait === null || l < wait) wait = l; }
+    const fdSubs = subs.filter((s) => s.tag !== 0);
+    const pf = alloc(8 * Math.max(1, fdSubs.length)), b = new DataView(new ArrayBuffer(8 * Math.max(1, fdSubs.length)));
+    fdSubs.forEach((s, i) => { b.setInt32(i * 8, s.fd, true); b.setInt16(i * 8 + 4, s.tag === 1 ? 1 : 4, true); });   // POLLIN, POLLOUT
+    k.put(pf - B, new Uint8Array(b.buffer));
+    const ms = wait === null ? -1 : Number((wait + 999999n) / 1000000n);
+    const r = sysWait(168, pf, fdSubs.length, ms);
+    if (r === WAIT) return WAIT;
+    const events = [];
+    if (r < 0) for (const s of fdSubs) events.push({ ud: s.ud, err: wasiErr(r), type: s.tag });
+    else {
+      const got = new DataView(getBytes(pf, 8 * Math.max(1, fdSubs.length)).buffer);
+      fdSubs.forEach((s, i) => {
+        const rev = got.getInt16(i * 8 + 6, true);
+        if (rev & 0x20) events.push({ ud: s.ud, err: E.BADF, type: s.tag });
+        else if (rev) events.push({ ud: s.ud, err: 0, type: s.tag, hup: (rev & 0x10) !== 0 });
+      });
+      if (!events.length) for (const s of subs) if (s.tag === 0) { const left = s.abs ? s.t - now(s.id) : s.t - wait; if (left <= 0n) events.push({ ud: s.ud, err: 0, type: 0 }); }
+    }
+    events.forEach((e, i) => {
+      const o = outp + i * 32;
+      d.setBigUint64(o, e.ud, true); d.setUint16(o + 8, e.err, true); d.setUint8(o + 10, e.type);
+      d.setBigUint64(o + 16, 0n, true); d.setUint16(o + 24, e.hup ? 1 : 0, true);
+    });
+    d.setUint32(nev, events.length, true); return 0;
+  }
   function strings(list, ptrs, buf) {
     const d = dv();
     list.forEach((s, i) => { const b = enc.encode(s + '\0'); d.setUint32(ptrs + i * 4, buf, true); u8().set(b, buf); buf += b.length; });
@@ -288,7 +351,7 @@ export function wasiImports(k, argv, envp) {
   function timespec(va) { const t = new DataView(getBytes(va, 8).buffer); return BigInt(t.getUint32(0, true)) * 1000000000n + BigInt(t.getUint32(4, true)); }
 
   // k.trace(line): each call, its arguments and its answer (tools/linux/run.mjs's MIRAGE_WASITRACE).
-  if (k.trace) for (const [name, f] of Object.entries(W)) {
+  if (k.trace) for (const [name, f] of Object.entries(W)) if (typeof f === 'function') {   // (a suspending one is not)
     W[name] = (...a) => {
       const show = (v) => (typeof v === 'bigint' ? v.toString() + 'n' : String(v));
       const pathOf = /^path_/.test(name) ? ' ' + JSON.stringify(path(a[name === 'path_symlink' ? 0 : name === 'path_open' || name === 'path_filestat_get' || name === 'path_filestat_set_times' || name === 'path_link' ? 2 : 1], a[name === 'path_symlink' ? 1 : name === 'path_open' || name === 'path_filestat_get' || name === 'path_filestat_set_times' || name === 'path_link' ? 3 : 2])) : '';
@@ -297,7 +360,7 @@ export function wasiImports(k, argv, envp) {
     };
   }
   return {
-    imports: { wasi_snapshot_preview1: W },
+    imports: { wasi_snapshot_preview1: W }, waiting, jspi: !!k.jspi,
     bind(instance) { mem = instance.exports.memory; },
   };
 }

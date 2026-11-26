@@ -8221,13 +8221,16 @@ await (async () => {
     rooted: { out: '0 0 3 0 44 0 0 made2\n0 0 44 \n', status: 0, files: {} },
     readdir: { out: '.\n..\na.txt\nb.txt\nreaddir.wasm\nsub\n', status: 0, files: { 'a.txt': 'a', 'b.txt': 'bb', 'sub/': '', 'sub/c': 'c' } },
     clock: { out: 'slept\n5 1 now\n', status: 0, files: {} },
+    console: { out: '0 0 2 0 \n', status: 0, files: {} },
     trap: { out: 'before\n', status: 134, files: {} },
     random: { out: '0 filled\n', status: 0, files: {} },
   };
-  for (const [n, w] of Object.entries(want)) {
+  // Each twice: run to its end in one call, and with reads that wait (JSPI: suspended, resumed by the
+  // kernel on the process's turn, the loop awaiting it).
+  for (const wait of [false, true]) for (const [n, w] of Object.entries(want)) {
     let got;
-    try { const r = runWasi(n, programs[n]); got = JSON.stringify({ out: r.out, status: r.status, files: r.files }); } catch (e) { got = String(e.message || e).slice(0, 120); }
-    eq(`wasi: ${n}`, got, JSON.stringify(w));
+    try { const r = await runWasi(n, programs[n], { wait }); got = JSON.stringify({ out: r.out, status: r.status, files: r.files }); } catch (e) { got = String(e.message || e).slice(0, 120); }
+    eq(`wasi: ${n}${wait ? ' (waiting reads)' : ''}`, got, JSON.stringify(w));
   }
 })();
 // tools/linux/wasmexec.asm: an x86 process execve's a WebAssembly one, its stdin a pipe it wrote. The
@@ -8245,6 +8248,23 @@ await (async () => {
     mc.rec.reset();
   } catch (e) { got = String(e.message || e).slice(0, 120); }
   eq('wasi: an x86 process execve\'s a WebAssembly one, which reads the pipe it was given', got, JSON.stringify(['through a pipe\n', 0])); })();
+// tools/linux/wasmwait.asm: a WebAssembly process reads a pipe before its x86 parent has written it.
+// With waiting reads (JSPI) the module is suspended, the parent runs, and the read gets "late\n";
+// without, the read answered EAGAIN and cat.wasm printed nothing.
+await (async () => {
+  const { programs } = await import('./wasi/programs.mjs');
+  const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004081a010000260100000700000000100000b82a000000bb1a810408cd80b802000000cd8085c0753eb83f0000008b1d1a81040831c9cd80b8060000008b1d1e810408cd80b80b000000bb02810408b90e810408ba16810408cd80bb7f000000b801000000cd80b8060000008b1d1a810408cd80b8040000008b1d1e810408b9fd800408ba05000000cd80b8060000008b1d1e810408cd80b872000000bbffffffffb92281040831d231f6cd800fb61d23810408b801000000cd806c6174650a2f772f6361742e7761736d00028104080000000000000000000000000000000000000000';
+  const run = async (wait) => {
+    const mc = new Machine({ memSize: 16 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.wasmWait = wait; lx.mkdir('/w'); lx.addFile('/w/cat.wasm', programs.cat.wasm);
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/WASMWAIT']);
+    for (let i = 0; i < 200 && !lx.done; i++) { mc.runSlice(20000); if (mc.pending) await lx.settle(); }
+    mc.rec.reset();
+    return [new TextDecoder().decode(Uint8Array.from(lx.stdout)), lx.done ? lx.status : -1];
+  };
+  let got;
+  try { got = JSON.stringify([await run(true), await run(false)]); } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('wasi: a read of a pipe not yet written waits (JSPI), and without waiting reads answers EAGAIN', got, JSON.stringify([['late\n', 0], ['', 0]])); })();
 // A large module in a page: Chrome refuses to compile or instantiate one of more than 8 MB on the main
 // thread, so execve waits for WebAssembly.compile and the process's first step for instantiate
 // (lx.wasmAsync). Here the synchronous constructors refuse as Chrome's do; cat.wasm is padded to 5 MB

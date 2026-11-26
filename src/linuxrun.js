@@ -54,6 +54,7 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
   }
   const lx = installLinux(mc, { realTime: true, onOutput: (fd, b) => onOutput(new TextDecoder().decode(b)) });
   lx.wasmAsync = true;                         // a large WebAssembly module compiled in the background (src/linux.js)
+  lx.wasmWait = true;                          // ...and its reads wait (JSPI): the loop below awaits it (machine.pending)
   // Sound: /dev/dsp (src/linux.js) plays on the program's clock, which is the wall clock here; the
   // mixer takes the same one. The output starts with the first click or key, as a browser requires.
   mc.wallOffset = 0; mc.wallClockMs = () => performance.now() + mc.wallOffset;   // a kept moment goes on from its own time (src/snapshot.js)
@@ -217,9 +218,11 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
     let waiting = false;
     while (!paused && !lx.done && !fault && performance.now() - t0 < 12) {
       mc.runSlice(20000);
+      if (mc.pending) break;                                             // a WebAssembly process goes on: in a microtask
       if (mc.blocked && !lx.ttyIn.length) { waiting = true; break; }     // a read waits for a key: give the time back
     }
     busy += performance.now() - t0;
+    if (mc.pending) { lx.settle().then(() => tick.port2.postMessage(0), (e) => { fault = e; console.error(e); tick.port2.postMessage(0); }); return; }
     if (lx.done) onStatus(`exited with status ${lx.status}` + (lx.signal ? ` (signal ${lx.signal})` : ''));
     else if (fault) onStatus(String(fault.message || fault).split('\n')[0]);
     else if (paused) setTimeout(() => tick.port2.postMessage(0), 50);
