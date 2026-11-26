@@ -75,6 +75,16 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Win16 | No NE loader yet. |
 | Windows files | MIRAGE ships none of Windows' own data: Polystreptikum's synthesizer plays the instruments of XP's `drivers\gm.dls`, reads zeros and divides by zero. |
 
+## WebAssembly programs (WASI)
+
+| Limit | Consequence |
+|---|---|
+| No JSPI in Safari | A read that would wait answers EAGAIN instead: scripts run, python3's REPL does not. Chrome and Node 26 have JSPI; Firefox is not checked. |
+| No working directory in WASI preview 1 | `getcwd` says `/`; a relative path still reaches the working directory through the preopens, except a name the working directory shares with the root. |
+| Time in a module is not charged to the guest's clock | While a module runs the guest's clock stands still, so a run mixing WASI and x86 processes is not timed as the x86 alone would be. |
+| No kept moment | A machine running a module cannot be kept or restored: its memory and its suspended stack belong to the browser's engine. |
+| No `termios` in WASI | CPython prints "can't use pyrepl" and uses its basic line editor, as on every WASI runtime. |
+
 ## The tools
 
 - About twenty tools look for `nasm`, `dosbox-x` and `qemu` in `/opt/homebrew/bin`.

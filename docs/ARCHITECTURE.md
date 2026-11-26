@@ -4,9 +4,10 @@ MIRAGE is an **x86 → JavaScript dynamic recompiler** with the machines built o
 whose DOS and BIOS are written in JavaScript, a **bare PC** that boots unmodified operating
 systems from disk and CD images, and two **user-space worlds** with no operating system at all —
 **MIRAGE-LINUX** (i386 Linux programs, the kernel's system calls in JavaScript) and **MIRAGE-WIN32**
-(Windows programs, every DLL they import in JavaScript). It runs in the browser and, headless, in Node. There is **no
-WebAssembly**: the design bet is that readable emitted JavaScript, handed to the engine's own JIT,
-is a fast enough back end.
+(Windows programs, every DLL they import in JavaScript). It runs in the browser and, headless, in Node. The emulator has **no
+WebAssembly** in it: the design bet is that readable emitted JavaScript, handed to the engine's own JIT,
+is a fast enough back end. WebAssembly is only a guest's: MIRAGE-LINUX runs WASI modules as processes
+beside the x86 ones, the browser's engine executing them (`wasi.js`).
 
 Two rules shape everything else: **precision** — behaviour is checked against independent
 implementations, and the gates must stay green — and **reproducibility** — the same input gives the

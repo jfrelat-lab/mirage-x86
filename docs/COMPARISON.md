@@ -32,6 +32,7 @@ Each line is one capability, so that it can be checked on its own.
 | **DPMI host in HLE**: DOS/4GW, CWSDPMI and DJGPP programs with no extender host to load | ❌ | ❌ | 🟡 through the extender's own host | ❌ | ✅ built-in host (C-Dogs, DOOM, Heretic, Kraptor; RetroTick has one too) |
 | **BIOS in HLE**, interrupt services answered in JavaScript, checked against SeaBIOS, DOSBox-X and a vendor ROM | ❌ | ❌ (SeaBIOS ROM) | ✅ its own | ❌ (SeaBIOS ROM) | ✅ |
 | **Linux programs without a Linux kernel, in a browser** | ❌ | ❌ (`qemu-user` is native only) | ❌ | ❌ | ✅ `machines.html`, `tools/linux/run.mjs` (CheerpX does it too: WebVM, closed source, WebAssembly) |
+| **WebAssembly (WASI) programs as processes of the same Linux as x86 binaries**: one kernel, one file tree, pipes and signals between them (`yes \| head`, BusyBox's x86 shell running CPython's WASI build) | ❌ (Docker's Wasm runtimes run a module as its own container ❔) | ❌ | ❌ | ❌ | ⭐ ✅ `src/wasi.js`, checked against wasmtime and Node's WASI (`tools/wasi/check.mjs`) |
 | **Linux binaries of 1994–1996**: a.out, libc 4, SVGAlib — no current kernel loads them | ❌ (a.out removed in Linux 5.18) | ❌ | ➖ | 🟡 under an old booted kernel ❔ | ⭐ ✅ id's Linux DOOM (`linuxsdoom`), unmodified, SVGAlib driving the emulated VGA |
 | **Windows programs without Windows, in a browser**: kernel32, user32, gdi32, winmm, DirectSound, OpenGL and Direct3D 9 answered in JavaScript, no Microsoft DLL | ❌ | ❌ | ❌ | ❌ | ✅ MIRAGE-WIN32, the scene's intros (RetroTick does it too for GUI programs and OpenGL screen savers, without Direct3D) |
 | **Direct3D 9 in a browser**: HLSL and shader-model bytecode translated to WebGL 2 | ❌ | ❌ | ❌ | ❌ | ⭐ ✅ Elevated, Ergon and the 4K intros of 2008–2012 ([3D graphics](#3d-graphics)) |
@@ -40,7 +41,7 @@ Each line is one capability, so that it can be checked on its own.
 | **Period software fetched from where its authors published it**, with its terms shown before it runs | 🟡 images from a registry | ❌ | ❌ | 🟡 images hosted by the project | ⭐ ✅ OASIS: 34 recipes, each layer's origin and licence in a dialog |
 | **DOS, Linux user space and bare-metal boot in one engine**, the world chosen by the file's signature | ❌ | 🟡 two programs (system, user) | ❌ | ❌ | ⭐ ✅ `tools/run.mjs` |
 | **Translated code as readable JavaScript** (`MIRAGE_KEEP_SRC=1`) | ➖ | ❌ | ❌ | ❌ (WebAssembly) | ⭐ ✅ |
-| **No WebAssembly, no build step, no dependency** | ➖ | ➖ | ➖ | ❌ | ⭐ ✅ |
+| **No WebAssembly in the emulator, no build step, no dependency** | ➖ | ➖ | ➖ | ❌ | ⭐ ✅ |
 | **Runs reproducible to the cycle**: the guest clock follows retired instructions, randomness is seeded | ❌ | ❌ | 🟡 | ❌ | ⭐ ✅ |
 
 ## What each one is
