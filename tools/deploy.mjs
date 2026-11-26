@@ -49,6 +49,9 @@ const closed = (r) => r && r.status === 302 && /cloudflareaccess\.com/.test(r.he
 let res = null;
 for (let i = 0; i < 10; i++) {
   res = await fetch(url, { redirect: 'manual' }).catch(() => null);
+  // Each answer's body cancelled: Node 26 keeps the process alive while one is unread (the relay's
+  // .deb below kept a deployment that was done from ever ending).
+  if (res && res.body) await res.body.cancel().catch(() => {});
   if (production ? res && res.status === 200 : closed(res)) break;
   await new Promise((r) => setTimeout(r, 3000));
 }
@@ -56,6 +59,7 @@ if (production) {
   if (!res || res.status !== 200) die(`${url} answers ${res && res.status}: check it before announcing anything`);
   const probe = 'http://archive.debian.org/debian-archive/debian/dists/bo/main/binary-i386/base/ldso_1.8.12-1.deb';
   const relay = await fetch(`${url}oasis-fetch?url=${encodeURIComponent(probe)}`).catch(() => null);
+  if (relay && relay.body) await relay.body.cancel().catch(() => {});
   if (!relay || relay.status !== 200 || relay.headers.get('access-control-allow-origin') !== '*') die(`the oasis-fetch relay answers ${relay && relay.status}: OASIS Linux images will not build`);
   console.log(`\n${url} is live, and its oasis-fetch relay answers.`);
 } else {
