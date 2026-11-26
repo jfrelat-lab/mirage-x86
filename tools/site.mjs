@@ -21,6 +21,8 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { fetchSources, sums, readme, PACKAGES, UPSTREAM, RELEASE } from './freedos-sources.mjs';
+/** The HLE node's Worker: its own scripts and the guest's code (new Function), nothing else (src/node/worker.js). */
+const NODE_WORKER_CSP = "default-src 'none'; script-src 'self' 'unsafe-eval'";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
@@ -76,13 +78,19 @@ async function build() {
   write('sources/freedos/SHA256SUMS', Buffer.from(sums()));
   write('sources/freedos/README.txt', Buffer.from(readme()));
   write('sources/freedos/index.html', Buffer.from(sourcesPage(zips)));
-  // No COOP/COEP: MIRAGE uses no SharedArrayBuffer. Pages and scripts revalidate (a deploy changes
-  // them); nothing is indexed from a preview, which Cloudflare Access closes anyway.
+  // COOP and COEP: the pages are cross-origin isolated, for the SharedArrayBuffer through which an HLE
+  // node's Worker makes its system calls (src/node/host.js); they load nothing from another origin. That
+  // Worker's own CSP lets it reach nothing outside the machine (src/node/worker.js). Pages and scripts
+  // revalidate (a deploy changes them); nothing is indexed from a preview, which Cloudflare Access closes anyway.
   write('_headers', Buffer.from(`/*
     X-Content-Type-Options: nosniff
     Referrer-Policy: strict-origin-when-cross-origin
+    Cross-Origin-Opener-Policy: same-origin
+    Cross-Origin-Embedder-Policy: require-corp
   /src/*
     Cache-Control: public, max-age=0, must-revalidate
+  /src/node/worker.js
+    Content-Security-Policy: ${NODE_WORKER_CSP}
   `));
   // What a search engine is given: the pages (404.html excepted), addressed under --origin.
   const origin = (arg('origin') || 'https://mirage-x86.pages.dev').replace(/\/$/, '');

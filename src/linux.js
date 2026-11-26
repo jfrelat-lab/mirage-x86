@@ -17,6 +17,7 @@
 import { installMidi } from './midi.js';
 import { snapHook, snapExternal } from './snapshot.js';
 import { wasiImports, WasiExit, WAIT, isWasm } from './wasi.js';
+import { startNode, isHleNode, RUN as NODE_RUN, REQ as NODE_REQ, DONE as NODE_DONE, FAIL as NODE_FAIL } from './node/host.js';
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
@@ -37,6 +38,7 @@ const MMAP_BASE = 0x40000000;
 // A WebAssembly process (src/wasi.js): its x86 side is a loop of one call at WASM_CODE, its system
 // calls' pointers into WASM_BUF.
 const WASM_CODE = 0x08048000, WASM_BUF = 0x08100000, WASM_BUF_SIZE = 0x40000, WASM_TRAP = 0x47000000;
+const NODE_BUF_SIZE = 0x100000;                                         // an HLE node's system call buffer (src/node/host.js), at WASM_BUF
 
 const SIG = { SIGILL: 4, SIGFPE: 8, SIGSEGV: 11 };
 const BLOCK = Symbol('block');                            // a system call that waits: int 80h runs again
@@ -480,9 +482,64 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.exe = norm(argv[0] || '/a.wasm');
   };
 
+  // ---- node in HLE --------------------------------------------------------------------------------
+  // The node command made in JavaScript (src/node): a process like the others, its x86 side the same
+  // trampoline as a WebAssembly program's, its script run by the host's engine in a Worker that waits at
+  // each system call (src/node/worker.js). The trap serves the call the Worker asks for -- or waits for
+  // the Worker to ask (PAUSE: the machine's loop awaits it, nobody else runs meanwhile), or waits in the
+  // kernel as any call does (BLOCK). In Node, the trap waits on Atomics itself a moment before pausing.
+  const loadNode = (argv, envp) => {
+    prepareSpace();
+    mapRange(WASM_CODE, WASM_CODE + PAGE, false);
+    mem.u8.set([0xb8, 0, 0, 0, WASM_TRAP >>> 24, 0xcd, 0x80, 0xeb, 0xf7], phys(WASM_CODE));
+    mapRange(WASM_BUF, WASM_BUF + NODE_BUF_SIZE, true);
+    mapRange(STACK_TOP - PAGE, STACK_TOP, true);
+    lx.brkStart = lx.brk = WASM_BUF + NODE_BUF_SIZE;
+    const canBlock = !lx.nodeAsync && typeof window === 'undefined';
+    let w = null;
+    const copyIn = (bytes) => { for (let i = 0; i < bytes.length;) { const a = WASM_BUF + i, p = phys(a), n = Math.min(bytes.length - i, 0x1000 - (a & 0xfff)); mem.u8.set(bytes.subarray(i, i + n), p); if (mem.codePage[a >>> 12]) mem._dirty(a, n); i += n; } };
+    const pause = () => {
+      const r = Atomics.waitAsync(w.ctrl, 0, NODE_RUN);
+      machine.pending = Promise.race([r.async ? r.value : Promise.resolve(), w.failure]);
+      return PAUSE;
+    };
+    const handler = () => {
+      if (!w) {
+        w = startNode({ argv, envp, exe: lx.exe, base: WASM_BUF, size: NODE_BUF_SIZE });
+        if (w.error) { out(2, new TextEncoder().encode(`${argv[0]}: ${w.error}\n`)); w = null; exit(1); return undefined; }
+      }
+      const c = w.ctrl;
+      for (;;) {
+        const s = Atomics.load(c, 0);
+        if (s === NODE_RUN) {
+          if (canBlock && Atomics.wait(c, 0, NODE_RUN, 50) !== 'timed-out') continue;
+          return pause();
+        }
+        if (s === NODE_DONE) { const code = c[9]; exit(code & 0xff); return undefined; }
+        if (s === NODE_FAIL) { out(2, w.buf.slice(0, c[9])); exit(70); return undefined; }
+        // NODE_REQ: the call, its buffer copied in and out around it.
+        const top = c[8], sw = lx.switches;
+        if (top) copyIn(w.buf.subarray(0, top));
+        let r;
+        try { r = SYS[c[1]] ? SYS[c[1]](c[2] >>> 0, c[3] >>> 0, c[4] >>> 0, c[5] >>> 0, c[6] >>> 0, c[7] >>> 0) : -E.ENOSYS; }
+        catch (e) { if (typeof e === 'number') r = -e; else throw e; }
+        if (r === BLOCK) return BLOCK;
+        lx.wake = null;
+        if (lx.switches !== sw || lx.done) return undefined;               // it ended this process (kill, exit)
+        if (top) w.buf.set(rdBytes(WASM_BUF, top));
+        c[9] = r === undefined ? 0 : r; Atomics.store(c, 0, NODE_RUN); Atomics.notify(c, 0);
+      }
+    };
+    handler.end = () => { if (w) { w.end(); w = null; } };
+    lx.wasm = handler;
+    enterUser(WASM_CODE, STACK_TOP - 16);
+    lx.exe = norm(argv[0] || '/usr/bin/node');
+  };
+
   lx.load = (elf, argv = ['a.out'], envp = []) => {
     lx.wasm = null;
     if (isWasm(elf)) return loadWasm(elf, argv, envp);
+    if (isHleNode(elf)) return loadNode(argv, envp);
     // A script started first, as execve starts one: its #! interpreter, with the script's path among the
     // arguments (a Docker image's entry is often one: node's docker-entrypoint.sh).
     if (elf[0] === 0x23 && elf[1] === 0x21) {
@@ -556,6 +613,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
 
   // ---- ending ------------------------------------------------------------------------------------
   const exit = (status, signal = 0) => {
+    if (lx.wasm && lx.wasm.end) lx.wasm.end();                           // an HLE node's Worker ends with its process
     // A thread with others in its address space: exit ends it alone (the pages are theirs too); a
     // signal that kills it kills them all, as a thread group dies on Linux.
     if (lx.procs.some((q) => q.vm === lx.vm)) {
@@ -572,7 +630,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       switchTo(lx.procs.shift());
       return;
     }
-    for (const q of lx.procs) releasePages(q.pages);                     // the first process ends the run, as PID 1 does a container's
+    for (const q of lx.procs) { releasePages(q.pages); if (q.wasm && q.wasm.end) q.wasm.end(); }   // the first process ends the run, as PID 1 does a container's
     lx.procs.length = 0;
     lx.done = true; lx.status = signal ? 128 + signal : status & 0xff; lx.signal = signal;
     cpu.halted = true;
@@ -898,7 +956,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (!ib) return -E.ENOENT;
       bytes = ib;
     }
-    if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes) && !isWasm(bytes)) return -E.ENOEXEC;
+    if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes) && !isWasm(bytes) && !isHleNode(bytes)) return -E.ENOEXEC;
     if (isWasm(bytes)) {                                                 // compiled before anything of the old program goes
       let m; try { m = wasmModule(bytes); } catch { return -E.ENOEXEC; }
       if (m === BLOCK) return BLOCK;
@@ -2046,7 +2104,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   };
   /** Whether a read of `f` would not wait: what poll, select and epoll_wait each ask. */
   const fdReadable = (f) => (f.tfd ? tfdReady(f.tfd) : f.efd ? f.efd.count > 0 : f.ep ? epReady(f.ep).length > 0 : f.sk ? sockReady(f) : f.pty ? ptyReady(f)
-    : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? lx.stdinPos < lx.stdin.length
+    : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? true   // what is left, or its end: a read answers at once
       : f.node && f.node.dev === 'tty' ? lx.ttyIn.length > 0 : f.node && f.node.dev === 'mice' ? lx.miceIn.length > 0 : f.node && f.node.dev === 'mouse' ? lx.mouseIn.length > 0 : true);
   /*
    * epoll (libuv's event loop: node): an interest list per epoll fd, fd -> { events, lo, hi } (the 64-bit

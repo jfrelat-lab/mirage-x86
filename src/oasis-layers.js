@@ -274,6 +274,7 @@ export async function buildTree(img, io) {
       const r = await runOn(tree, [bin + '/busybox', '--list']);   // the binary's own answer, as oasis.mjs takes it
       for (const a of r.out.split('\n').map((x) => x.trim()).filter((x) => x && x !== 'busybox' && !x.includes('/'))) if (!tree.nodes.has(bin + '/' + a)) tree.symlink(bin + '/' + a, 'busybox');
     } else if (l.links) for (const [p, t] of Object.entries(l.links)) tree.symlink(p, t);
+    else if (l.hle) tree.file(norm(l.to), new TextEncoder().encode(`\0hle ${l.hle}\n`), 0o755);   // a command MIRAGE makes in JavaScript (src/node: node)
     else if (l.mkdir) for (const p of [].concat(l.mkdir)) tree.mkdir(p);
     else if (l.run) {
       const key = 'run-' + chain.slice(0, 16);

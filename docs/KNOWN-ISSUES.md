@@ -85,6 +85,18 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | No kept moment | A machine running a module cannot be kept or restored: its memory and its suspended stack belong to the browser's engine. |
 | No `termios` in WASI | CPython prints "can't use pyrepl" and uses its basic line editor, as on every WASI runtime. |
 
+## node in HLE
+
+| Limit | Consequence |
+|---|---|
+| CommonJS only | `import` and `.mjs` (ES modules) end with ERR_REQUIRE_ESM. |
+| No child processes, network, zlib, worker threads | `child_process`, `http`, `net`, `zlib` and their kin throw "not available in MIRAGE yet". |
+| No REPL | `node` alone at a terminal says so and exits; give it a script, `-e` or `-p`. |
+| What JavaScript cannot see | `util.inspect` shows a promise as `Promise { <state unknown> }`; an uncaught error's stack lists MIRAGE's frames, not Node's. |
+| Local time | `Date`'s local methods use the host's time zone, not the guest's `TZ`. |
+| Time in the script is not charged to the guest's clock | As for WebAssembly: while the script computes, the guest's clock stands still; its waits (timers, sleep) move it on. |
+| A cross-origin isolated page | node needs `SharedArrayBuffer`: the site's pages send COOP and COEP (`tools/site.mjs`). |
+
 ## The tools
 
 - About twenty tools look for `nasm`, `dosbox-x` and `qemu` in `/opt/homebrew/bin`.

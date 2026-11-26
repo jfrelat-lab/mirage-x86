@@ -8290,6 +8290,37 @@ await (async () => {
   } catch (e) { got = String(e.message || e).slice(0, 120); }
   WebAssembly.Module = Module; WebAssembly.Instance = Instance;
   eq('wasi: a large module in a page is compiled and instantiated in the background, execve waiting for it', got, JSON.stringify(['through a pipe\n', 0, true])); })();
+// ---- node in HLE (src/node): Node's API in JavaScript, a MIRAGE-LINUX process -------------------------
+// tools/node/scripts.mjs, each as Node 26 itself answered it (tools/node/expected.json, written by
+// tools/node/check.mjs --record): what it printed, its status, the files it left. Twice: the machine
+// waiting on Atomics for the Worker's calls (Node), and pausing for them as a page does (lx.nodeAsync).
+// The stdin ones end only because a stdin at its end is readable (poll said nothing was there).
+await (async () => {
+  const { scripts } = await import('./node/scripts.mjs');
+  const { runNode } = await import('./node/mirage.mjs');
+  const want = JSON.parse((await import('fs')).readFileSync(new URL('./node/expected.json', import.meta.url), 'utf8'));
+  for (const async of [false, true]) for (const [n, p] of Object.entries(scripts)) {
+    const args = p.runFile === false ? p.args : ['/w/' + Object.keys(p.files)[0], ...(p.args || [])];
+    let got;
+    try { const r = await runNode(args, { files: p.files, stdin: p.stdin, env: ['TZ=UTC'], async }); got = JSON.stringify({ out: r.out, status: r.status, ...(p.stderr ? { err: r.err } : {}), files: r.files }); } catch (e) { got = String(e.message || e).slice(0, 120); }
+    eq(`node: ${n}${async ? ' (as in a page)' : ''}`, got, JSON.stringify(want[n]));
+  }
+})();
+// tools/linux/nodeexec.asm: an x86 process execve's /usr/bin/node (an HLE node: a file beginning "\0hle node\n"), its stdin a
+// pipe it wrote; the child's status is the parent's wait4's.
+await (async () => {
+  let got;
+  try {
+    const { NODE_MAGIC } = await import('../src/node/host.js');
+    const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004088a010000960100000700000000100000b82a000000bb8a810408cd80b8040000008b1d8e810408b9e3800408ba0f000000cd80b8060000008b1d8e810408cd80b802000000cd8085c07531b83f0000008b1d8a81040831c9cd80b80b000000bbf2800408b976810408ba86810408cd80bb7f000000b801000000cd80b872000000bbffffffffb99281040831d231f6cd800fb61d93810408b801000000cd807468726f756768206120706970650a2f7573722f62696e2f6e6f6465002d650070726f636573732e737464696e2e6f6e282264617461222c20286429203d3e2070726f636573732e7374646f75742e777269746528642e746f537472696e6728292e746f557070657243617365282929292e6f6e2822656e64222c202829203d3e2070726f636573732e657869742833292900f280040800810408038104080000000000000000000000000000000000000000';
+    const mc = new Machine({ memSize: 32 << 20, cpu: '686' }), lx = installLinux(mc);
+    lx.mkdir('/w'); lx.mkdir('/usr'); lx.mkdir('/usr/bin'); lx.addFile('/usr/bin/node', new TextEncoder().encode(NODE_MAGIC));
+    lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/NODEEXEC']);
+    for (let i = 0; i < 400 && !lx.done; i++) { mc.runSlice(20000); if (mc.pending) await lx.settle(); }
+    got = JSON.stringify([new TextDecoder().decode(Uint8Array.from(lx.stdout)), lx.done ? lx.status : -1]);
+    mc.rec.reset();
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('node: an x86 process execve\'s an HLE node, which reads the pipe it was given', got, JSON.stringify(['THROUGH A PIPE\n', 3])); })();
 // A buffer packed as its non-zero pages: a megabyte with a byte in its 101st page and its odd tail (the
 // last page short) comes back whole, and packs in less than a kilobyte head and all.
 await (async () => {

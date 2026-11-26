@@ -279,6 +279,11 @@ async function linuxRoot(img) {
       files.set(l.to, host);
     } else if (l.links) for (const [p, t] of Object.entries(l.links)) links.set(p, t);
     else if (l.mkdir) for (const p of [].concat(l.mkdir)) mkdirs.add(p);
+    else if (l.hle) {                                                              // a command MIRAGE makes in JavaScript (src/node: node)
+      const out = join(cacheDir(l), l.hle);
+      if (!existsSync(out)) { mkdirSync(dirname(out), { recursive: true }); writeFileSync(out, `\0hle ${l.hle}\n`); chmodSync(out, 0o755); }
+      files.set(l.to, out);
+    }
   }
   return { dirs, files, links, mkdirs };
 }
@@ -349,7 +354,8 @@ function serve(img, host, port = 0) {
   return new Promise((ok) => {
     const srv = createServer(async (req, res) => {
       const u = new URL(req.url, 'http://x');
-      const send = (code, body, type = 'application/octet-stream') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(body); };
+      // Cross-origin isolated as the site is (tools/site.mjs _headers): an HLE node needs SharedArrayBuffer.
+      const send = (code, body, type = 'application/octet-stream') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp', ...(u.pathname === '/src/node/worker.js' ? { 'Content-Security-Policy': "default-src 'none'; script-src 'self' 'unsafe-eval'" } : {}) }); res.end(body); };
       if (STATIC_ONLY && (u.pathname.startsWith('/oasis-fs/') || u.pathname === '/oasis-image.json' || u.pathname === '/oasis-images.json')) return send(404, 'a static host');
       if (u.pathname.startsWith('/oasis-fs/')) {
         const p = u.searchParams.get('p') || '/', op = u.pathname.slice(10), want = u.searchParams.get('img');

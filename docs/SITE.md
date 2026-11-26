@@ -25,8 +25,11 @@ never committed.
   with `index.html` and a 200, which `fetch-whole.js` would take for the file.
 - `robots.txt` and `sitemap.xml` are written for `--origin` (`https://mirage-x86.pages.dev` by
   default).
-- MIRAGE needs no cross-origin isolation (it uses no `SharedArrayBuffer`); `_headers` only sets
-  `nosniff`, the referrer policy and revalidation for `src/`.
+- The pages are cross-origin isolated: `_headers` sends COOP `same-origin` and COEP `require-corp`, for
+  the `SharedArrayBuffer` through which an HLE node's Worker makes its system calls (src/node/host.js);
+  no page loads anything from another origin. The Worker's script has its own CSP (its scripts and the
+  guest's code, nothing else). `_headers` also sets `nosniff`, the referrer policy and revalidation for
+  `src/`. `tools/serve.py` and `oasis serve` send the same headers.
 
 ## Checking it
 

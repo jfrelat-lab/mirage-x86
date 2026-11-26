@@ -1,0 +1,34 @@
+{
+  "oasis": 1,
+  "title": "Node.js in HLE, on BusyBox",
+  "year": 2026,
+  "author": "MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
+  "world": "linux",
+  "machine": {
+    "cpu": "pentium4",
+    "mem": 128
+  },
+  "layers": [
+    {
+      "docker": "i386/busybox@sha256:79b6957454b0506796c042e9e2dfedd996c7efc93e701166d2dc9569bc9cc096",
+      "platform": "linux/386"
+    },
+    {
+      "hle": "node",
+      "to": "/usr/local/bin/node"
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "cwd": "/root",
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "licenseName": "MIT (MIRAGE), GPL 2 (BusyBox)",
+  "notes": "node made in JavaScript: each node is a process of MIRAGE-LINUX, its script run by the browser's own engine in a Worker, Node's API (fs, process, streams, require, timers) answered by the kernel's system calls (src/node) -- beside the x86 BusyBox shell that starts it, in pipes, on the same files. CommonJS; no network, no child processes yet."
+}

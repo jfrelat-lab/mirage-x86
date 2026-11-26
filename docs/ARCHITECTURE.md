@@ -7,7 +7,8 @@ systems from disk and CD images, and two **user-space worlds** with no operating
 (Windows programs, every DLL they import in JavaScript). It runs in the browser and, headless, in Node. The emulator has **no
 WebAssembly** in it: the design bet is that readable emitted JavaScript, handed to the engine's own JIT,
 is a fast enough back end. WebAssembly is only a guest's: MIRAGE-LINUX runs WASI modules as processes
-beside the x86 ones, the browser's engine executing them (`wasi.js`).
+beside the x86 ones, the browser's engine executing them (`wasi.js`), and its `node` is made in JavaScript
+(`node/`): a script runs on the browser's engine, Node's API answered by the kernel.
 
 Two rules shape everything else: **precision** — behaviour is checked against independent
 implementations, and the gates must stay green — and **reproducibility** — the same input gives the
@@ -100,6 +101,7 @@ and GLSL) and `d3d9.js` (Direct3D 9's device model, HLSL translated to GLSL ES),
 | File | Role |
 |---|---|
 | `linux.js` | MIRAGE-LINUX: the ELF and a.out loaders, the i386 system calls, processes and threads, signals, ttys and the console, the file system over an image's tree, /dev (fb0, dsp and audio, the mouse, ptys). |
+| `node/` | node in HLE, a MIRAGE-LINUX process (a file beginning `\0hle node\n` is its executable): `host.js` starts a Worker (a worker thread in Node) where the script runs, `worker.js`, and the kernel serves each of its system calls through a `SharedArrayBuffer`, the Worker waiting on Atomics and the machine pausing for it, nobody else running meanwhile. Node's API is made of those calls by parts evaluated in the guest's realm: `kernel.js` (the calls, UTF-8, libuv's errors), `path`, `events`, `inspect` (util.inspect's layout), `buffer`, `stream`, `fs`, `crypto` (random bytes, hashes), `process` (the event loop on poll and nanosleep, timers, the console, the guest's clock and seeded randomness behind Date and Math.random), `modules` (require, CommonJS, and the other built-in modules), `main` (node's options). |
 | `wasi.js` | WASI preview 1 for WebAssembly programs, each a MIRAGE-LINUX process: its calls answered by the kernel's i386 system calls, as wasi-libc answers them on Linux; a call that would wait suspends the module (JSPI) until the kernel, on the process's turn, has its answer. |
 | `linuxrun.js`, `vtconsole.js` | A Linux image in the page: its file tree from the OASIS server, the canvas, the keys; the VGA text console. |
 | `hle/` | Libraries made in JavaScript for Linux programs (`elfso.js` builds the shared object, `index.js` dispatches): `sdl12.js`, `asound.js`, `gl.js` (the GL and GLU tables), `prism-gl.js` (PRISM's `gl.js` and `d3d9.js` on guest memory, and the window they draw in), `trace.js` (the headless backend that records). |

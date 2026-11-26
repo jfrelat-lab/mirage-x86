@@ -66,6 +66,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        # Cross-origin isolated as the site is (tools/site.mjs _headers): an HLE node needs SharedArrayBuffer.
+        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+        self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+        if self.path.split('?')[0] == '/src/node/worker.js':
+            self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self' 'unsafe-eval'")
         super().end_headers()
 
     def log_message(self, *args):

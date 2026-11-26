@@ -207,6 +207,14 @@
     ]
   },
   {
+    "name": "linux/node-hle",
+    "title": "Node.js in HLE, on BusyBox",
+    "world": "linux",
+    "year": 2026,
+    "author": "MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
+    "output": "window"
+  },
+  {
     "name": "linux/python-wasi",
     "title": "Python 3.15 for WASI, on BusyBox",
     "world": "linux",
