@@ -207,6 +207,14 @@
     ]
   },
   {
+    "name": "linux/python-wasi",
+    "title": "Python 3.15 for WASI, on BusyBox",
+    "world": "linux",
+    "year": 2026,
+    "author": "The CPython project (WASI build: Brett Cannon); BusyBox from Docker Hub",
+    "output": "window"
+  },
+  {
     "name": "linux/quake-1997",
     "title": "Linux Quake 1.1 for SVGAlib (id Software, August 1997)",
     "world": "linux",
