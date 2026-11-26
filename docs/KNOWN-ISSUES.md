@@ -90,7 +90,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 | Limit | Consequence |
 |---|---|
 | CommonJS only | `import` and `.mjs` (ES modules) end with ERR_REQUIRE_ESM. |
-| No child processes, network, zlib, worker threads | `child_process`, `http`, `net`, `zlib` and their kin throw "not available in MIRAGE yet". |
+| No network, zlib, worker threads; no IPC for children | `http`, `net`, `zlib` and their kin throw "not available in MIRAGE yet"; so do `child_process.fork` and an `'ipc'` stdio (spawn, exec, execFile and their Sync forms work). A child is made and exec'd by the kernel at once (posix_spawn), so its start costs no guest time: an order that depends on how long a child takes to start may differ from Node's. |
 | No REPL | `node` alone at a terminal says so and exits; give it a script, `-e` or `-p`. |
 | What JavaScript cannot see | `util.inspect` shows a promise as `Promise { <state unknown> }`; an uncaught error's stack lists MIRAGE's frames, not Node's. |
 | Local time | `Date`'s local methods use the host's time zone, not the guest's `TZ`. |

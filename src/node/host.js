@@ -7,6 +7,12 @@
 //   a call's result. Then the buffer, `size` bytes, copied to and from the process's own at `base`.
 export const RUN = 0, REQ = 1, DONE = 2, FAIL = 3;
 export const NODE_MAGIC = '\0hle node\n';
+// Two calls of MIRAGE's own, beside Linux's numbers (src/linux.js's loadNode answers them):
+//   SPAWN (path, argv, envp, cwd, fds, nfds): a child made and exec'd by the kernel, as posix_spawn makes
+//     one -- its descriptors 0..nfds-1 the caller's fds[i] (-1: none), cwd its directory (0: the caller's);
+//     the child's id, or -errno with no child where the file or the directory is not there.
+//   WAIT (pollfds, n, ms): poll, which a child's end interrupts (EINTR) -- libuv's SIGCHLD.
+export const SPAWN = 0x10000, WAIT = 0x10001;
 
 /** Is it the HLE node's executable? A file beginning "\0hle node\n" (oasis's `hle` layer writes one). */
 export const isHleNode = (b) => b && b.length >= 10 && b[0] === 0 && String.fromCharCode(...b.subarray(1, 10)) === 'hle node\n';

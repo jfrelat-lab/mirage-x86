@@ -17,7 +17,7 @@
 import { installMidi } from './midi.js';
 import { snapHook, snapExternal } from './snapshot.js';
 import { wasiImports, WasiExit, WAIT, isWasm } from './wasi.js';
-import { startNode, isHleNode, RUN as NODE_RUN, REQ as NODE_REQ, DONE as NODE_DONE, FAIL as NODE_FAIL } from './node/host.js';
+import { startNode, isHleNode, SPAWN as NODE_SPAWN, WAIT as NODE_WAIT, RUN as NODE_RUN, REQ as NODE_REQ, DONE as NODE_DONE, FAIL as NODE_FAIL } from './node/host.js';
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
@@ -518,13 +518,21 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         if (s === NODE_DONE) { const code = c[9]; exit(code & 0xff); return undefined; }
         if (s === NODE_FAIL) { out(2, w.buf.slice(0, c[9])); exit(70); return undefined; }
         // NODE_REQ: the call, its buffer copied in and out around it.
-        const top = c[8], sw = lx.switches;
+        const top = c[8];
+        let sw = lx.switches;
         if (top) copyIn(w.buf.subarray(0, top));
         let r;
-        try { r = SYS[c[1]] ? SYS[c[1]](c[2] >>> 0, c[3] >>> 0, c[4] >>> 0, c[5] >>> 0, c[6] >>> 0, c[7] >>> 0) : -E.ENOSYS; }
+        const n = c[1], a = c[2] >>> 0, b = c[3] >>> 0, d = c[4] >>> 0;
+        try {
+          if (n === NODE_SPAWN) r = spawnFor(rdStr(a), strings(b), strings(d), c[5] ? rdStr(c[5] >>> 0) : null, Array.from({ length: c[7] >>> 0 }, (_, i) => rd32((c[6] >>> 0) + 4 * i) | 0));
+          else if (n === NODE_WAIT) { r = poll(a, b, c[4] | 0); if (r === BLOCK && lx.zombies.size) r = -E.EINTR; }   // a child ended: the loop goes to see
+          else r = SYS[n] ? SYS[n](a, b, d, c[5] >>> 0, c[6] >>> 0, c[7] >>> 0) : -E.ENOSYS;
+        }
         catch (e) { if (typeof e === 'number') r = -e; else throw e; }
         if (r === BLOCK) return BLOCK;
         lx.wake = null;
+        if (n === NODE_SPAWN) sw = lx.switches;                           // it ran the child's execve, and came back
+        if (lx.sigPend.size && !lx.done && lx.switches === sw) takeSignals();   // a signal's default (its own kill): no handler of node's is x86 code
         if (lx.switches !== sw || lx.done) return undefined;               // it ended this process (kill, exit)
         if (top) w.buf.set(rdBytes(WASM_BUF, top));
         c[9] = r === undefined ? 0 : r; Atomics.store(c, 0, NODE_RUN); Atomics.notify(c, 0);
@@ -972,6 +980,44 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.exe = p;
     machine.rec.reset();
     return undefined;                                                    // it does not return
+  };
+  /*
+   * A child for an HLE node (its SPAWN, src/node/host.js), made as posix_spawn makes one: what would fail
+   * is looked at first (the file, its format, the directory: -errno and no child), then fork, the child's
+   * descriptors 0..n-1 the caller's map[i] (-1 closed; nothing else inherited), its directory, execve --
+   * and the caller runs again, the child waiting its turn. Its id. A WebAssembly program still compiling:
+   * BLOCK, the call made again once it is.
+   */
+  const spawnFor = (path, argv, envp, cwd, map) => {
+    let dir = lx.cwd;
+    if (cwd !== null) { const r = resolve(cwd), dn = r && getNode(r); if (!dn) return -E.ENOENT; if (!dn.dir) return -E.ENOTDIR; dir = r; }
+    const p = resolve(path, dir), n = p && getNode(p);
+    if (!n) return -E.ENOENT;
+    if (n.dir) return -E.EACCES;
+    let bytes = dataOf(n);
+    if (bytes[0] === 0x23 && bytes[1] === 0x21) {
+      let line = ''; for (let i = 2; i < bytes.length && bytes[i] !== 10 && i < 256; i++) line += String.fromCharCode(bytes[i]);
+      bytes = lx.readFile(line.trim().split(/\s+/)[0]);
+      if (!bytes) return -E.ENOENT;
+    }
+    if (!(bytes[0] === 0x7f && bytes[1] === 0x45) && !aoutHeader(bytes) && !isWasm(bytes) && !isHleNode(bytes)) return -E.ENOEXEC;
+    if (isWasm(bytes)) { let m; try { m = wasmModule(bytes); } catch { return -E.ENOEXEC; } if (m === BLOCK) return BLOCK; }
+    for (const m of map) if (m >= 0 && !fds[m]) return -E.EBADF;
+    const me = lx.pid, own = map.map((m) => (m >= 0 ? fds[m] : undefined));
+    fork();
+    const pid = lx.pid;
+    fds.length = 0; own.forEach((f, i) => { if (f) fds[i] = f; });
+    lx.cloexec = new Set(); lx.cwd = dir;
+    lx.wasm = null;                                                      // the caller's Worker is not the child's
+    const ok = execve(path, argv, envp) === undefined;
+    if (!ok) exit(127);                                                  // looked at above: not expected (another runs now)
+    if (lx.pid !== me) {
+      const cur = snapshot();
+      releasePages(lx.pages, false);
+      if (ok) lx.procs.push(cur); else lx.procs.unshift(cur);
+      switchTo(lx.procs.splice(lx.procs.findIndex((q) => q.pid === me), 1)[0]);
+    }
+    return pid;
   };
   const strings = (ptr) => { const out = []; if (!ptr) return out; for (let a; (a = rd32(ptr)); ptr += 4) out.push(rdStr(a)); return out; };
 
@@ -1528,6 +1574,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   const endOther = (q, sig) => {
     const i = lx.procs.indexOf(q); if (i < 0) return;
     lx.procs.splice(i, 1);
+    if (q.wasm && q.wasm.end) q.wasm.end();                              // an HLE node's Worker ends with it
     // Its frames only: the page directory holds the running process's mappings, not q's (clearing
     // q's addresses there took them from the killer — busybox timeout's watcher, after its kill).
     for (const pg of q.pages.values()) if (!pg.phys) freeFrame(pg.frame);
@@ -2625,13 +2672,11 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     265: (id, ts) => clock(id, ts, false),                                 // clock_gettime
     403: (id, ts) => clock(id, ts, true),                                  // clock_gettime64
     266: (id, ts) => { if (ts) putTime(ts, 0, 1e-9, 1e9, false); return 0; },   // clock_getres
-    162: (req, rem) => {                                                   // nanosleep: the others run meanwhile
-      const secs = req ? rd32(req) + rd32(req + 4) / 1e9 : 0;
-      if (secs > 0 && !expired(secs)) return BLOCK;
-      if (rem) { wr32(rem, 0); wr32(rem + 4, 0); }
-      if (secs <= 0) lx.yieldAfter = true;                               // once its 0 is returned
-      return 0;
-    },
+    162: (req, rem) => sleepFor(req ? rd32(req) + rd32(req + 4) / 1e9 : 0, rem, 4),   // nanosleep: the others run meanwhile
+    // clock_nanosleep, clock_nanosleep_time64: nanosleep on a clock, to a time (TIMER_ABSTIME, 1) or for one.
+    // musl's sleep and nanosleep call them (BusyBox's sleep returned at once while they were missing).
+    267: (id, flags, req, rem) => sleepFor(until(id, flags, req ? rd32(req) + rd32(req + 4) / 1e9 : 0), flags & 1 ? 0 : rem, 4),
+    407: (id, flags, req, rem) => sleepFor(until(id, flags, req ? rd32(req) + rd32(req + 4) * 4294967296 + rd32(req + 8) / 1e9 : 0), flags & 1 ? 0 : rem, 8),
     43: (buf) => {                                                         // times: all of it user time, in 100 Hz ticks
       const ticks = Math.floor(lx.mono() * 100);
       if (buf) { wr32(buf, ticks); wr32(buf + 4, 0); wr32(buf + 8, 0); wr32(buf + 12, 0); }
@@ -2733,6 +2778,15 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // on it: XBoing paces its frames with selects of some 35 microseconds, which slept 10 to 20 ms
   // then; to the microsecond its game ran several times too fast. 0, a modern kernel: as asked.
   lx.wake = null; lx.hz = 0;
+  /** A sleep of `secs` (nanosleep, clock_nanosleep): BLOCK until it is over, then 0, its remainder (`rem`, timespecs of `word`-byte fields) 0. */
+  const sleepFor = (secs, rem, word) => {
+    if (secs > 0 && !expired(secs)) return BLOCK;
+    if (rem) for (let i = 0; i < 2 * word; i += 4) wr32(rem + i, 0);
+    if (secs <= 0) lx.yieldAfter = true;                                 // once its 0 is returned
+    return 0;
+  };
+  /** clock_nanosleep's length: `t` itself, or with TIMER_ABSTIME what is left to `t` on clock `id` (0 CLOCK_REALTIME). */
+  const until = (id, flags, t) => (flags & 1 ? t - (id === 0 ? lx.now() : lx.mono()) : t);
   const expired = (secs) => {
     const now = lx.mono();
     if (lx.wake === null) lx.wake = lx.hz ? (Math.floor(now * lx.hz) + Math.ceil(secs * lx.hz - 1e-9) + 1) / lx.hz : now + secs;

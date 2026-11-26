@@ -30,5 +30,5 @@
   },
   "output": "window",
   "licenseName": "MIT (MIRAGE), GPL 2 (BusyBox)",
-  "notes": "node made in JavaScript: each node is a process of MIRAGE-LINUX, its script run by the browser's own engine in a Worker, Node's API (fs, process, streams, require, timers) answered by the kernel's system calls (src/node) -- beside the x86 BusyBox shell that starts it, in pipes, on the same files. CommonJS; no network, no child processes yet."
+  "notes": "node made in JavaScript: each node is a process of MIRAGE-LINUX, its script run by the browser's own engine in a Worker, Node's API (fs, process, streams, require, timers) answered by the kernel's system calls (src/node) -- beside the x86 BusyBox shell that starts it, in pipes, on the same files. child_process starts BusyBox's commands, the shell or another node. CommonJS; no network yet."
 }

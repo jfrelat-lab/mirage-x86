@@ -3850,6 +3850,23 @@ await (async () => { const hex = (                                         // na
     '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
     '000000000000000000');
   eq('linux: signals to handlers — sigreturn, EINTR, SA_RESTART, a blocked signal', JSON.stringify(runLinux(hex, ['/w/SIGNALS'])), JSON.stringify({ out: 'sig: YYYY\n', status: 0 })); })();
+// tools/linux/clocksleep.asm: clock_nanosleep (relative, TIMER_ABSTIME on CLOCK_REALTIME) and its time64 form
+// wait as nanosleep does. Docker i386/debian: "clocksleep: YYY". MIRAGE answered ENOSYS (NNN): musl's sleep
+// calls them, and BusyBox's `sleep` returned at once.
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/clocksleep.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004082d0200002d0200000700000000100000b84e000000bb1182040831c9' +
+    'cd80b80b010000bb0100000031c9bae981040831f6cd80a329820408b84e000000bb1982040831c9cd80a1198204082b' +
+    '051182040869c040420f0003051d8204082b0515820408b24e833d298204080075093de09304007c02b25988150d8204' +
+    '08b84e000000bb1182040831c9cd80b80901000031dbb921820408cd80a1258204080500c2eb0b3d00ca9a3b7c0b2d00' +
+    'ca9a3bff0521820408a325820408b80b01000031dbb901000000ba2182040831f6cd80a329820408b84e000000bb1982' +
+    '040831c9cd80a1198204082b051182040869c040420f0003051d8204082b0515820408b24e833d298204080075093d58' +
+    '0903007c02b25988150e820408b84e000000bb1182040831c9cd80b897010000bb0100000031c9baf181040831f6cd80' +
+    'a329820408b84e000000bb1982040831c9cd80a1198204082b051182040869c040420f0003051d8204082b0515820408' +
+    'b24e833d298204080075093da08601007c02b25988150f820408b804000000bb01000000b901820408ba10000000cd80' +
+    'b80100000031dbcd800000000000a3e111000000000000000000e1f50500000000636c6f636b736c6565703a203f3f3f' +
+    '0a00000000000000000000000000000000000000000000000000000000');
+  eq('linux: clock_nanosleep waits, for a time or to one, and its time64 form', JSON.stringify(runLinux(hex, ['/w/CLOCKSLEEP'])), JSON.stringify({ out: 'clocksleep: YYY\n', status: 0 })); })();
 // tools/linux/sleeps.asm: nanosleep, select and poll wait for their timeout (by gettimeofday), and a
 // zero timeout does not wait. Docker i386/debian: "sleeps: YYYY". MIRAGE answered at once: NNNY —
 // XFree86's main loop, selecting with a timeout, spun some 90 000 times a second.
@@ -8310,9 +8327,9 @@ await (async () => {
 // pipe it wrote; the child's status is the parent's wait4's.
 await (async () => {
   let got;
+  const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004088a010000960100000700000000100000b82a000000bb8a810408cd80b8040000008b1d8e810408b9e3800408ba0f000000cd80b8060000008b1d8e810408cd80b802000000cd8085c07531b83f0000008b1d8a81040831c9cd80b80b000000bbf2800408b976810408ba86810408cd80bb7f000000b801000000cd80b872000000bbffffffffb99281040831d231f6cd800fb61d93810408b801000000cd807468726f756768206120706970650a2f7573722f62696e2f6e6f6465002d650070726f636573732e737464696e2e6f6e282264617461222c20286429203d3e2070726f636573732e7374646f75742e777269746528642e746f537472696e6728292e746f557070657243617365282929292e6f6e2822656e64222c202829203d3e2070726f636573732e657869742833292900f280040800810408038104080000000000000000000000000000000000000000';
   try {
     const { NODE_MAGIC } = await import('../src/node/host.js');
-    const hex = '7f454c46010101000000000000000000020003000100000054800408340000000000000000000000340020000100000000000000010000000000000000800408008004088a010000960100000700000000100000b82a000000bb8a810408cd80b8040000008b1d8e810408b9e3800408ba0f000000cd80b8060000008b1d8e810408cd80b802000000cd8085c07531b83f0000008b1d8a81040831c9cd80b80b000000bbf2800408b976810408ba86810408cd80bb7f000000b801000000cd80b872000000bbffffffffb99281040831d231f6cd800fb61d93810408b801000000cd807468726f756768206120706970650a2f7573722f62696e2f6e6f6465002d650070726f636573732e737464696e2e6f6e282264617461222c20286429203d3e2070726f636573732e7374646f75742e777269746528642e746f537472696e6728292e746f557070657243617365282929292e6f6e2822656e64222c202829203d3e2070726f636573732e657869742833292900f280040800810408038104080000000000000000000000000000000000000000';
     const mc = new Machine({ memSize: 32 << 20, cpu: '686' }), lx = installLinux(mc);
     lx.mkdir('/w'); lx.mkdir('/usr'); lx.mkdir('/usr/bin'); lx.addFile('/usr/bin/node', new TextEncoder().encode(NODE_MAGIC));
     lx.load(Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)), ['/w/NODEEXEC']);
@@ -8320,7 +8337,20 @@ await (async () => {
     got = JSON.stringify([new TextDecoder().decode(Uint8Array.from(lx.stdout)), lx.done ? lx.status : -1]);
     mc.rec.reset();
   } catch (e) { got = String(e.message || e).slice(0, 120); }
-  eq('node: an x86 process execve\'s an HLE node, which reads the pipe it was given', got, JSON.stringify(['THROUGH A PIPE\n', 3])); })();
+  eq('node: an x86 process execve\'s an HLE node, which reads the pipe it was given', got, JSON.stringify(['THROUGH A PIPE\n', 3]));
+  // ...and an HLE node starts it (child_process.spawnSync: the kernel's SPAWN), three processes deep: node,
+  // the x86 program, the node it execve's -- the output through the first node's pipe, the status the x86's.
+  try {
+    const { NODE_MAGIC } = await import('../src/node/host.js');
+    const mc = new Machine({ memSize: 32 << 20, cpu: '686' }), lx = installLinux(mc), magic = new TextEncoder().encode(NODE_MAGIC);
+    lx.mkdir('/w'); lx.mkdir('/usr'); lx.mkdir('/usr/bin'); lx.addFile('/usr/bin/node', magic); lx.chdir('/w');
+    lx.addFile('/w/NODEEXEC', Uint8Array.from(hex.match(/../g), (x) => parseInt(x, 16)));
+    lx.load(magic, ['/usr/bin/node', '-e', 'const r = require("child_process").spawnSync("./NODEEXEC", { encoding: "utf8" }); console.log(JSON.stringify([r.stdout, r.status, r.pid > 1]))']);
+    for (let i = 0; i < 400 && !lx.done; i++) { mc.runSlice(20000); if (mc.pending) await lx.settle(); }
+    got = JSON.stringify([new TextDecoder().decode(Uint8Array.from(lx.stdout)), lx.done ? lx.status : -1]);
+    mc.rec.reset();
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('node: an HLE node spawns an x86 program, which execve\'s another node', got, JSON.stringify(['["THROUGH A PIPE\\n",3,true]\n', 0])); })();
 // A buffer packed as its non-zero pages: a megabyte with a byte in its 101st page and its odd tail (the
 // last page short) comes back whole, and packs in less than a kilobyte head and all.
 await (async () => {

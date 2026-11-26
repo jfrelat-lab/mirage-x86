@@ -94,18 +94,19 @@ console.log(new TextDecoder().decode(new TextEncoder().encode('ok ✓')), atob(b
 ` } },
   timers: { files: { 'main.js': `
 const order = [];
-setTimeout(() => order.push('t10'), 10);
-setTimeout(() => order.push('t0'), 0);
-setImmediate(() => order.push('imm'));
+// (a timeout of 0 and an immediate set from the main script run in either order in Node, by how long it
+// took to start: from a timer's callback, the immediate is first)
+setTimeout(() => order.push('t50'), 50);
+setTimeout(() => { setTimeout(() => order.push('t0'), 0); setImmediate(() => order.push('imm')); }, 0);
 process.nextTick(() => order.push('tick'));
 Promise.resolve().then(() => order.push('promise'));
 queueMicrotask(() => order.push('micro'));
-const iv = setInterval(() => { order.push('iv'); if (order.filter((x) => x === 'iv').length === 3) clearInterval(iv); }, 5);
+const iv = setInterval(() => { order.push('iv'); if (order.filter((x) => x === 'iv').length === 3) clearInterval(iv); }, 20);
 const t = setTimeout(() => order.push('never'), 20); clearTimeout(t);
-setTimeout(() => { setImmediate(() => order.push('imm2')); process.nextTick(() => order.push('tick2')); }, 30);
-setTimeout(() => console.log(order.join(' ')), 60);
+setTimeout(() => { setImmediate(() => order.push('imm2')); process.nextTick(() => order.push('tick2')); }, 110);
+setTimeout(() => console.log(order.join(' ')), 200);
 setTimeout(() => console.log('unref'), 1000).unref();
-(async () => { await new Promise((r) => setTimeout(r, 40)); order.push('await'); })();
+(async () => { await new Promise((r) => setTimeout(r, 150)); order.push('await'); })();
 ` } },
   modules: { files: {
     'main.js': `
@@ -222,5 +223,45 @@ const counts = {}; for (const w of words) counts[w] = (counts[w] || 0) + 1;
 console.log(Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
 console.log(JSON.stringify({ deep: { list: words.slice(0, 3) } }, null, 2));
 console.log([3, 1, 2].toSorted(), Object.groupBy(words, (w) => w.length), 'abc'.at(-1), [1, [2, [3]]].flat(Infinity), new Intl.NumberFormat('en-US').format(1234567.891));
+` } },
+  child: { files: { 'main.js': `
+// child_process with node itself as the child (process.execPath: MIRAGE's HLE node, Node's own beside it)
+const cp = require('child_process');
+const r = cp.spawnSync(process.execPath, ['-e', 'console.log("hi from child", process.argv.length); process.stderr.write("err\\\\n"); process.exit(4)']);
+console.log(r.status, r.signal, JSON.stringify(r.stdout.toString()), JSON.stringify(r.stderr.toString()), r.output.length, r.output[0]);
+const s = cp.spawnSync(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], { input: 'piped in', encoding: 'utf8' });
+console.log(JSON.stringify(s.stdout), s.status);
+console.log(cp.spawnSync('nosuchcmd', ['x']).error.message, Object.keys(cp.spawnSync('nosuchcmd')));
+const k = cp.spawnSync(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM")']);
+console.log(k.status, k.signal);
+try { cp.execFileSync(process.execPath, ['-e', 'process.stderr.write("bad"); process.exit(2)'], { stdio: 'pipe' }); } catch (e) { console.log(e.message.split('\\n').slice(1), e.status); }
+console.log(cp.execFileSync(process.execPath, ['-p', '6 * 7'], { encoding: 'utf8' }));
+const c = cp.spawn(process.execPath, ['-e', 'setTimeout(() => console.log("late"), 20); console.log("early")']);
+let out = '';
+c.stdout.on('data', (d) => out += d);
+c.on('spawn', () => console.log('spawned', typeof c.pid));
+c.on('exit', (code, sig) => console.log('exit', code, sig, c.exitCode));
+c.on('close', (code) => {
+  console.log('close', code, JSON.stringify(out));
+  const bad = cp.spawn('nosuchcmd', ['a']);
+  bad.on('error', (e) => console.log('error', e.message, e.code, e.errno, e.syscall, e.path, e.spawnargs));
+  bad.on('close', (code, sig) => {
+    console.log('bad close', code, sig);
+    cp.execFile(process.execPath, ['-e', 'console.log(1+1)'], (err, stdout, stderr) => {
+      console.log('execFile', err, JSON.stringify(stdout), JSON.stringify(stderr));
+      const t = cp.spawn(process.execPath, ['-e', 'let n = 0; process.stdin.on("data", (d) => n += d.length).on("end", () => console.log("got", n))'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      t.stdin.write('abc'); t.stdin.end('defg');
+      t.on('close', (code) => {
+        console.log('inherit close', code);
+        const l = cp.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+        l.on('exit', (code, sig) => {
+          console.log('killed', code, sig, l.killed);
+          require('util').promisify(cp.execFile)(process.execPath, ['-p', '"promised"']).then((x) => console.log(x));
+        });
+        setTimeout(() => console.log('kill', l.kill()), 10);
+      });
+    });
+  });
+});
 ` } },
 };

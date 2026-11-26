@@ -83,16 +83,19 @@ export function process(N) {
   N.refs = 0;
   const alive = () => immediates.some((i) => i._ref) || [...timers].some((t) => t._ref) || [...watchers].some((w) => w.ref !== false) || N.refs > 0 || ticks.length > 0;
   const nextDeadline = () => { let at = Infinity; for (const t of timers) if (t._ref || true) at = Math.min(at, t._at); return at; };
+  // With children (src/node/child.js: N.kids, N.reap), the wait is MIRAGE's WAIT -- poll, which a child's
+  // end interrupts -- and the children that ended are seen after it.
+  N.kids = 0; N.reap = null;
   const wait = (ms) => {                                                   // poll the watched descriptors, ms at most (-1: no end)
     const list = [...watchers];
-    if (!list.length) {
+    if (!list.length && !N.kids) {
       if (ms > 0) scope(() => { const ts = alloc(8), d = view(), o = ts - N.BASE; d.setUint32(o, Math.floor(ms / 1000), true); d.setUint32(o + 4, Math.round((ms % 1000) * 1e6) % 1e9, true); sys(162, ts, 0); });
       return [];
     }
     return scope(() => {
       const pf = alloc(8 * list.length), d = view(), o = pf - N.BASE;
       list.forEach((w, i) => { d.setInt32(o + i * 8, w.fd, true); d.setInt16(o + i * 8 + 4, w.events || 1, true); d.setInt16(o + i * 8 + 6, 0, true); });
-      const r = sys(168, pf, list.length, ms < 0 ? -1 : Math.ceil(ms));
+      const r = sys(N.kids ? 0x10001 : 168, pf, list.length, ms < 0 ? -1 : Math.ceil(ms));
       if (r <= 0) return [];
       const out = [];
       list.forEach((w, i) => { const rev = d.getInt16(o + i * 8 + 6, true); if (rev) out.push([w, rev]); });
@@ -125,6 +128,7 @@ export function process(N) {
       const deadline = nextDeadline();
       const ms = immediates.length || ticks.length ? 0 : deadline === Infinity ? -1 : Math.max(0, deadline - mono());
       for (const [w, rev] of wait(ms)) { if (watchers.has(w)) { try { w.ready(rev); } catch (e) { uncaught(e); } await settle(); } }
+      if (N.kids && N.reap) { N.reap(); await settle(); }
       await runImmediates();
     }
     exit(proc.exitCode ?? 0);

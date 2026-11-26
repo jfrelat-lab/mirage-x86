@@ -18,7 +18,7 @@ export async function runNode(args, { files = {}, stdin = '', env = [], async = 
   lx.epoch = 1700000000;
   lx.stdin = enc.encode(stdin);
   lx.nodeAsync = async;
-  lx.load(magic, ['node', ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...env]);
+  lx.load(magic, ['/usr/bin/node', ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...env]);
   for (let i = 0; i < limit && !lx.done; i++) { mc.runSlice(200000); if (mc.pending) await lx.settle(); }
   const dec = (b) => Buffer.from(b).toString('latin1');
   const out = { out: dec(lx.stdout), err: dec(lx.stderr), status: lx.done ? lx.status : -1 };
