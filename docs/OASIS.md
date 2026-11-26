@@ -84,14 +84,14 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `{ "zip": path or URL }` | a ZIP archive | its files (DOS: at the root of C:); in a Linux tree with `into`, under that directory, with their Unix modes and empty directories |
 | `{ "file": path or URL, "to": name }` | one file | at `to` (DOS: the root of C:) |
 | `{ "gz": path or URL, "to": path }` | one gzip-compressed file | decompressed, at `to` |
-| `{ "tar": path or URL, "into": dir }` | a tar archive, `.tar.gz` or `.tgz` | under `into` |
+| `{ "tar": path or URL, "into": dir, "strip": n, "integrity": sri }` | a tar archive, `.tar.gz` or `.tgz`; `strip` drops its first n directories (tar --strip-components: an npm tarball's `package/`), `integrity` checks its bytes (sha512-<base64>, as npm's registry gives it) | under `into` |
 | `{ "deb": URL }` | a Debian package | its `data.tar` |
 | `{ "busybox": path or URL, "into": dir }` | a static busybox | `/bin/busybox` (or `into`) and a link per applet, as `busybox --install -s` makes them — the list is the binary's own `--list`, run on MIRAGE-LINUX at `pull` |
 | `{ "zip": path or URL, "lha": member, "into": dir, "files": { name: path } }` | an LHA archive inside a ZIP (an "LHA's SFX" self-extractor, as id's `quake106.zip` holds) — `-lh0-` and `-lh5-`, read by `src/lha.js` | the files `files` names, renamed (all of them without it), under `into` |
 | `{ "docker": image, "platform": "linux/386" }` | a Docker Hub image, `i386/<name>:<tag>` or `@sha256:<digest>` | its root file system: the manifest for the platform (an index resolved to linux/386), then each layer from the registry (tar, gzip or zstd: src/zstd.js in a page), every blob checked against its digest, laid in order with their whiteouts (`.wh.<name>`, `.wh..wh..opq`) — no Docker, in Node and in a page (`src/oasis-docker.js`) |
 | `{ "dir": path }` | a directory of the repository | used where it is |
 | `{ "links": { path: target } }` | symbolic links | — |
-| `{ "oasis": name }` | a component of MIRAGE's own (`src/oasis-components.js`), named as Docker names an image and the same in every world: `oasis/node` (node made in JavaScript, `src/node`), `oasis/python` (CPython built for WASI); it stands for the component's own layers, below | `oasis/node`: /usr/local/bin/node (`to` moves it); `oasis/python`: /usr/local, its `python3` and `python` links |
+| `{ "oasis": name }` | a component of MIRAGE's own (`src/oasis-components.js`), named as Docker names an image and the same in every world: `oasis/node` (node made in JavaScript, `src/node`), `oasis/python:3.15` (CPython 3.15 built for WASI) -- a component made of someone's release tagged with its version, MIRAGE's own (`oasis/node`) not; it stands for the component's own layers, below | `oasis/node`: /usr/local/bin/node (`to` moves it); `oasis/python:3.15`: /usr/local, its `python3` and `python` links |
 | `{ "hle": "node", "to": path }` | a command MIRAGE makes in JavaScript: `node` (src/node), its executable a file beginning `\0hle node\n` | that file, mode 755 (Linux only) |
 | `{ "mkdir": [paths] }` | empty directories | — |
 | `{ "run": command, "cwd": dir, "env": {} }` | a command run with `/bin/sh -c` on MIRAGE-LINUX over the layers before it, once — a Dockerfile's `RUN` (Linux only) | what the run made, changed or removed: files with their modes and times, links, directories, and the removed paths (`.oasis-gone`), which hide the layers below |
@@ -114,10 +114,15 @@ DOOM this way: about ten minutes once, then the game is there at every start.
 from, the entry, the manifest — from `oasis/index.json`, which `node tools/oasis.mjs index` writes.
 
 An image is named `<world>/<name>`, its name saying where its contents come from: `docker-*` an image of
-Docker Hub's, `oasis-*` one with a component of MIRAGE's own (`oasis/node`, `oasis/python`) -- the
-component the same in every world, so a `win32/oasis-node` would be `oasis/node` as `node.exe`. A
+Docker Hub's, `oasis-*` one with a component of MIRAGE's own (`oasis/node`, `oasis/python:3.15`) -- the
+component the same in every world, so a `win32/oasis-node` would be `oasis/node` as `node.exe`.
+A version is in the name where several could stand side by side, the program's major and minor
+(`oasis-python-3.15`, `oasis-typescript-6.0`, `docker-node-10-alpine`; the exact release pinned in the
+manifest): another version is another image, so a link never changes what it starts. Not in
+`oasis-node`'s: MIRAGE's node is one at a time, its version MIRAGE's. No name follows the latest. A
 renamed image keeps its old name as a redirect (`RENAMED` in `src/oasis-components.js`):
-`linux/node-hle` and `linux/python-wasi` lead to `linux/oasis-node` and `linux/oasis-python`.
+`linux/node-hle` leads to `linux/oasis-node`, `linux/python-wasi` and `linux/oasis-python` to
+`linux/oasis-python-3.15`.
 
 | Image | World | What it is |
 |---|---|---|
@@ -136,7 +141,8 @@ renamed image keeps its old name as a redirect (`RENAMED` in `src/oasis-componen
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
 | `linux/docker-busybox`, `linux/docker-python-3.12-alpine` | linux | made by `node tools/oasis.mjs import docker://i386/busybox` and `docker://i386/python:3.12-alpine`: Docker Hub's images pinned by digest, their entry the image's own (Entrypoint and Cmd, WorkingDir, Env); BusyBox's shell and Python 3.12's REPL on the page's console, or `run ... --terminal -c "..."` |
 | `linux/oasis-node` | linux | MIRAGE's own `node` (src/node: Node 26's API in JavaScript, CommonJS) in `/usr/local/bin` over Docker Hub's BusyBox: each `node` a process of MIRAGE-LINUX whose script runs on the browser's engine, started by the x86 shell, in its pipes, on its files |
-| `linux/oasis-python` | linux | CPython 3.15 built for WASI by the CPython project (a release of `brettcannon/cpython-wasi-build`), in `/usr/local` over Docker Hub's BusyBox: each `python3` a WebAssembly process of MIRAGE-LINUX (src/wasi.js), started by the x86 shell, in its pipes; `python3` alone is the REPL on the page's console (its reads wait through JSPI: Chrome) |
+| `linux/oasis-typescript-6.0` | linux | TypeScript 6.0.3 from npm's registry (its tarball checked by its integrity), the last `tsc` written in JavaScript, laid as `npm -g` lays it over `oasis/node` and BusyBox: `tsc hello.ts && node hello.js`, `tsc --watch` |
+| `linux/oasis-python-3.15` | linux | CPython 3.15 built for WASI by the CPython project (a release of `brettcannon/cpython-wasi-build`), in `/usr/local` over Docker Hub's BusyBox: each `python3` a WebAssembly process of MIRAGE-LINUX (src/wasi.js), started by the x86 shell, in its pipes; `python3` alone is the REPL on the page's console (its reads wait through JSPI: Chrome) |
 | `linux/docker-node-10-alpine` | linux | `docker://i386/node:10-alpine`, the last Node.js built for i386 (10.24.1, 2021): its REPL on the page's console, or `run ... --terminal -e "..."`; V8 wants SSE2, so Docker images run on the `pentium4` CPU with 256 MB (a fork copies the process: `child_process` in 64 MB ran out) |
 | `linux/clod-2008`, `laminator-2009`, `makeit4k-2005`, `metatunnel-2009`, `retrospection-2010`, `ribbon-2009`, `yellowrose-2003` | linux | the scene's Linux OpenGL intros of 2003-2010, their libSDL, libGL and libGLU made in JavaScript, drawn by PRISM's `gl.js` |
 | `win32/ribbon-2009`, `flow2-2007`, `chocolux-2008`, `retrospection-2010`, `paradistance-2009`, `hartverdrahtet-2012`, `absoluteterritory-2017` | win32 | the scene's Windows OpenGL intros, packed by Crinkler: the process laid out as Windows XP lays it out, opengl32 on PRISM's `gl.js`, the music through waveOut |

@@ -76,7 +76,7 @@ async function fetchBytes(src) {
 
 /** ustar / GNU tar, as `docker export` and Debian packages write it: files, directories, symbolic
  *  and hard links, long names. Device nodes and FIFOs are skipped (MIRAGE-LINUX provides /dev). */
-function untar(buf, dest, { whiteouts = false } = {}) {
+function untar(buf, dest, { whiteouts = false, strip = 0 } = {}) {
   let o = 0, longName = null;
   const str = (a, n) => { let s = ''; for (let i = 0; i < n && buf[a + i]; i++) s += String.fromCharCode(buf[a + i]); return s; };
   const oct = (a, n) => parseInt(str(a, n).trim() || '0', 8);
@@ -93,13 +93,14 @@ function untar(buf, dest, { whiteouts = false } = {}) {
     if (type === 'x' || type === 'g') continue;                                // pax headers
     name = name.replace(/^\.?\/+/, '');
     if (!name || name.split('/').includes('..')) continue;
+    if (strip) { const parts = name.replace(/\/+$/, '').split('/'); if (parts.length <= strip) continue; name = parts.slice(strip).join('/'); }   // tar --strip-components
     if (whiteouts && /(^|\/)\.wh\./.test(name)) continue;            // a Docker layer's whiteouts: applied before (dockerLayer)
     const to = join(dest, name);
     if (type === '5') { mkdirSync(to, { recursive: true }); continue; }
     mkdirSync(dirname(to), { recursive: true });
     if (existsSync(to) || isLink(to)) rmSync(to, { recursive: true, force: true });
     if (type === '2') { symlinkSync(link, to); continue; }
-    if (type === '1') { hard.push([link.replace(/^\.?\/+/, ''), to]); continue; }
+    if (type === '1') { hard.push([link.replace(/^\.?\/+/, '').split('/').slice(strip).join('/'), to]); continue; }
     if (type !== '0' && type !== '7') continue;                                // 3 4 6: devices, FIFOs
     writeFileSync(to, data, { mode: mode & 0o777 });
     void mtime;
@@ -151,7 +152,7 @@ async function pullLayer(l) {
     const { layers } = await dockerPull(registryClient(), repo, ref, l.platform || 'linux/386', (t) => process.stderr.write(`oasis: ${t}\n`));
     for (const { bytes } of layers) await dockerLayer(Buffer.from(bytes), dir);
   } else if (l.deb) undeb(await fetchBytes(l.deb), l.into ? join(dir, l.into) : dir);
-  else if (l.tar) { const b = await fetchBytes(l.tar); untar(/\.(tgz|gz)$/.test(l.tar) ? gunzipSync(b) : b, l.into ? join(dir, l.into) : dir); }
+  else if (l.tar) { const b = await fetchBytes(l.tar); if (l.integrity) await (await import(join(ROOT, 'src', 'oasis-layers.js'))).checkIntegrity(b, l, l.tar); untar(/\.(tgz|gz)$/.test(l.tar) ? gunzipSync(b) : b, l.into ? join(dir, l.into) : dir, { strip: l.strip || 0 }); }
   else if (l.busybox) {                // a static busybox, and a link per applet as `busybox --install -s` makes
     const bin = join(dir, l.into || 'bin'); mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, 'busybox'), isUrl(l.busybox) ? await fetchBytes(l.busybox) : readFileSync(local(l.busybox))); chmodSync(join(bin, 'busybox'), 0o755);

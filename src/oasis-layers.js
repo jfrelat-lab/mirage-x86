@@ -66,6 +66,24 @@ export function tarEntries(buf) {
   return out;
 }
 
+/** Entries less their first `n` directories, as tar --strip-components: an npm package's `package/`. */
+export function stripEntries(entries, n) {
+  if (!n) return entries;
+  const cut = (p) => p.split('/').slice(n).join('/');
+  return entries.filter((e) => e.path.split('/').length > n).map((e) => (e.type === 'hard' ? { ...e, path: cut(e.path), link: cut(e.link) } : { ...e, path: cut(e.path) }));
+}
+
+/** Bytes checked against a layer's `integrity` (Subresource Integrity, as npm's registry gives it:
+ *  sha512-<base64>, or sha256-/sha384-); none said, none checked. */
+export async function checkIntegrity(bytes, l, what) {
+  if (!l.integrity) return;
+  const m = /^(sha256|sha384|sha512)-(.+)$/.exec(l.integrity);
+  if (!m) throw new Error(`oasis: ${what}: integrity "${l.integrity}" is not sha256-, sha384- or sha512-<base64>`);
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-' + m[1].slice(3), bytes));
+  let bin = ''; for (const b of d) bin += String.fromCharCode(b);
+  if (btoa(bin) !== m[2]) throw new Error(`oasis: ${what} is not what the manifest says (its ${m[1]} differs)`);
+}
+
 /** A tar archive of `entries` (as tarEntries gives them): how a run layer's result is cached. */
 export function tarWrite(entries) {
   const parts = [];
@@ -240,7 +258,7 @@ export async function buildTree(img, io) {
     chain = await sha256(chain + JSON.stringify(l));
     if (l.docker) await dockerLayers(tree, l, io, say);
     else if (l.deb) tree.addEntries(tarEntries(await debData(await get(l.deb))), l.into || '');
-    else if (l.tar) { let b = await get(l.tar); if (isGzip(b)) b = await gunzip(b); tree.addEntries(tarEntries(b), l.into || ''); }
+    else if (l.tar) { let b = await get(l.tar); await checkIntegrity(b, l, l.tar); if (isGzip(b)) b = await gunzip(b); tree.addEntries(stripEntries(tarEntries(b), l.strip || 0), l.into || ''); }
     else if (l.zip && l.files && !l.lha) {        // files of a ZIP, each put where `files` says
       const entries = await unzip(await get(l.zip));
       for (const [from, to] of Object.entries(l.files)) {

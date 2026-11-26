@@ -3867,6 +3867,20 @@ await (async () => { const hex = (                                         // na
     'b80100000031dbcd800000000000a3e111000000000000000000e1f50500000000636c6f636b736c6565703a203f3f3f' +
     '0a00000000000000000000000000000000000000000000000000000000');
   eq('linux: clock_nanosleep waits, for a time or to one, and its time64 form', JSON.stringify(runLinux(hex, ['/w/CLOCKSLEEP'])), JSON.stringify({ out: 'clocksleep: YYY\n', status: 0 })); })();
+// tools/linux/rusage.asm: wait4's rusage and getrusage are written (their timevals times, not what the
+// buffer held). Docker i386/debian: "rusage: YY". MIRAGE left wait4's as it was and had no getrusage (NN):
+// BusyBox's `time` printed 298324 hours of user time.
+await (async () => { const hex = (                                         // nasm -f bin tools/linux/rusage.asm
+    '7f454c460101010000000000000000000200030001000000548004083400000000000000000000003400200001000000' +
+    '00000000010000000000000000800408008004089c0100009c0100000700000000100000b802000000cd8085c07509b8' +
+    '0100000031dbcd80bf54810408b948000000b0fff3aab872000000bbffffffffb95081040831d2be54810408cd80b24e' +
+    '85c07832813d54810408100e00007326813d5881040840420f00731a813d5c810408100e0000730e813d608104084042' +
+    '0f007302b25988154d810408bf54810408b948000000b0fff3aab84d00000031dbb954810408cd80b24e85c07832813d' +
+    '54810408100e00007326813d5881040840420f00731a813d5c810408100e0000730e813d6081040840420f007302b259' +
+    '88154e810408b804000000bb01000000b945810408ba0b000000cd80b80100000031dbcd807275736167653a203f3f0a' +
+    '000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' +
+    '00000000000000000000000000000000000000000000000000000000');
+  eq('linux: wait4\'s rusage and getrusage written', JSON.stringify(runLinux(hex, ['/w/RUSAGE'])), JSON.stringify({ out: 'rusage: YY\n', status: 0 })); })();
 // tools/linux/sleeps.asm: nanosleep, select and poll wait for their timeout (by gettimeofday), and a
 // zero timeout does not wait. Docker i386/debian: "sleeps: YYYY". MIRAGE answered at once: NNNY —
 // XFree86's main loop, selecting with a timeout, spun some 90 000 times a second.
@@ -7665,17 +7679,29 @@ await (async () => { let got;
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis-fetch: an archive.org item\'s storage servers, either datacentre', got, 'true true true false false'); })();
 // MIRAGE's own components (src/oasis-components.js): an { oasis } layer stands for the component's layers --
-// linux/oasis-node and linux/oasis-python lay what their manifests laid before they were renamed; an
+// linux/oasis-node and linux/oasis-python-3.15 lay what their manifests laid before they were renamed; an
 // unknown component is said so; the old names lead to the new.
 await (async () => { let got;
   try { const { withComponents, RENAMED } = await import('../src/oasis-components.js'); const fsm = await import('fs');
     const img = (n) => JSON.parse(fsm.readFileSync(new URL(`../oasis/images/${n}.json`, import.meta.url), 'utf8'));
     let unknown = ''; try { withComponents([{ oasis: 'perl' }]); } catch (e) { unknown = e.message; }
-    got = [JSON.stringify(withComponents(img('linux/oasis-node').layers).slice(1)), JSON.stringify(withComponents(img('linux/oasis-python').layers).slice(1)),
-      JSON.stringify(withComponents([{ oasis: 'oasis/node', to: '/bin/node' }])), unknown, RENAMED['linux/node-hle'], RENAMED['linux/python-wasi']].join(' | ');
+    got = [JSON.stringify(withComponents(img('linux/oasis-node').layers).slice(1)), JSON.stringify(withComponents(img('linux/oasis-python-3.15').layers).slice(1)),
+      JSON.stringify(withComponents([{ oasis: 'oasis/node', to: '/bin/node' }])), unknown, RENAMED['linux/node-hle'], RENAMED['linux/python-wasi'], RENAMED['linux/oasis-python']].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis: components -- oasis/node and oasis/python lay their own layers; an unknown one said so; the old names redirected', got,
-    '[{"hle":"node","to":"/usr/local/bin/node"}] | [{"zip":"https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.15.2/python-3.15.2-wasi_sdk-33.zip","into":"/usr/local"},{"links":{"/usr/local/bin/python3":"/usr/local/python.wasm","/usr/local/bin/python":"python3"}}] | [{"hle":"node","to":"/bin/node"}] | oasis: no component "perl" (oasis/node, oasis/python) | linux/oasis-node | linux/oasis-python'); })();
+    '[{"hle":"node","to":"/usr/local/bin/node"}] | [{"zip":"https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.15.2/python-3.15.2-wasi_sdk-33.zip","into":"/usr/local"},{"links":{"/usr/local/bin/python3":"/usr/local/python.wasm","/usr/local/bin/python":"python3"}}] | [{"hle":"node","to":"/bin/node"}] | oasis: no component "perl" (oasis/node, oasis/python:3.15) | linux/oasis-node | linux/oasis-python-3.15 | linux/oasis-python-3.15'); })();
+// A `tar` layer's `strip` (tar --strip-components: an npm package's package/) and `integrity` (SRI, as
+// npm's registry gives it): the entries less their first directory, a hard link's target too; the
+// bytes that match, and those that do not refused.
+await (async () => { let got;
+  try { const { tarWrite, tarEntries, stripEntries, checkIntegrity } = await import('../src/oasis-layers.js'); const { createHash } = await import('crypto');
+    const tar = tarWrite([{ path: 'package', type: 'dir', mode: 0o755, mtime: 0 }, { path: 'package/bin/tsc', type: 'file', mode: 0o755, mtime: 0, data: new TextEncoder().encode('x') }]);
+    const es = stripEntries([...tarEntries(tar), { path: 'package/h', type: 'hard', mode: 0o644, mtime: 0, link: 'package/bin/tsc' }], 1);
+    const sri = 'sha512-' + createHash('sha512').update(tar).digest('base64');
+    let bad = ''; try { await checkIntegrity(tar, { integrity: sri.slice(0, -4) + 'AAA=' }, 'x.tgz'); } catch (e) { bad = e.message; }
+    got = [es.map((e) => e.path + (e.link ? '>' + e.link : '')).join(','), await checkIntegrity(tar, { integrity: sri }, 'x.tgz'), bad].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis: a tar layer\'s strip and integrity', got, 'bin/tsc,h>bin/tsc |  | oasis: x.tgz is not what the manifest says (its sha512 differs)'); })();
 // A `zip` layer with `files`: the members it names, each put where it says (an intro's dropper out of
 // its party archive, oasis/images/linux/ribbon-2009.json); a member that is not there is said so.
 await (async () => { let got;

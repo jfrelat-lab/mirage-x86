@@ -1,6 +1,6 @@
 {
   "oasis": 1,
-  "title": "Python 3.15 for WASI (oasis/python), on BusyBox",
+  "title": "Python 3.15 for WASI (oasis/python:3.15), on BusyBox",
   "year": 2026,
   "author": "The CPython project (WASI build: Brett Cannon); BusyBox from Docker Hub",
   "world": "linux",
@@ -14,7 +14,7 @@
       "platform": "linux/386"
     },
     {
-      "oasis": "python"
+      "oasis": "python:3.15"
     }
   ],
   "entry": {

@@ -215,11 +215,19 @@
     "output": "window"
   },
   {
-    "name": "linux/oasis-python",
-    "title": "Python 3.15 for WASI (oasis/python), on BusyBox",
+    "name": "linux/oasis-python-3.15",
+    "title": "Python 3.15 for WASI (oasis/python:3.15), on BusyBox",
     "world": "linux",
     "year": 2026,
     "author": "The CPython project (WASI build: Brett Cannon); BusyBox from Docker Hub",
+    "output": "window"
+  },
+  {
+    "name": "linux/oasis-typescript-6.0",
+    "title": "TypeScript 6.0, its tsc on MIRAGE's node, on BusyBox",
+    "world": "linux",
+    "year": 2026,
+    "author": "Microsoft (TypeScript); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
     "output": "window"
   },
   {

@@ -17,7 +17,10 @@ export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.n
   // Abuse (Crack dot Com, 1996): Xenoveritas' GPL port, its Windows build a release of its GitHub repository.
   'github.com/Xenoveritas/abuse/releases/download/',
   // CPython built for WASI (wasm32-wasip1), the builds the CPython project links to: a release of its GitHub repository.
-  'github.com/brettcannon/cpython-wasi-build/releases/download/'];
+  'github.com/brettcannon/cpython-wasi-build/releases/download/',
+  // npm's registry, a package's tarballs only (a path per package: the whole registry would serve any code):
+  // TypeScript, the last tsc in JavaScript (linux/oasis-typescript-6.0).
+  'registry.npmjs.org/typescript/-/'];
 
 /** Where a host above redirects to, for those files only: GitHub serves a release's file from its
  *  storage, under the repository's number (Xenoveritas/abuse: 21053782, brettcannon/cpython-wasi-build: 618564477). */

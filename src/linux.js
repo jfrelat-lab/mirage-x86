@@ -2709,7 +2709,10 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     240: (uaddr, op, val, timeout, uaddr2, val3) => futex(uaddr, op, val, timeout, uaddr2, val3),   // futex
     422: (uaddr, op, val, timeout, uaddr2, val3) => futex(uaddr, op, val, timeout, uaddr2, val3),   // futex_time64 (the same: the seconds' low word)
     11: (path, argv, envp) => execve(rdStr(path), strings(argv), strings(envp)),   // execve
-    114: (pid, st, opt) => wait(pid | 0, st, opt),                         // wait4
+    // wait4: its rusage (struct rusage, 72 bytes) zeroed -- MIRAGE counts no process's own CPU time; left
+    // as it was, BusyBox's `time` printed the stack's leftovers as hours of user time. getrusage the same.
+    114: (pid, st, opt, ru) => { const r = wait(pid | 0, st, opt); if (ru && typeof r === 'number' && r > 0) wrBytes(ru, new Uint8Array(72)); return r; },
+    77: (who, ru) => { if (ru) wrBytes(ru, new Uint8Array(72)); return 0; },   // getrusage
     7: (pid, st, opt) => wait(pid | 0, st, opt),                           // waitpid
     57: (pid, pg) => {                                                     // setpgid: ourselves or a child, into a group
       pid = (pid | 0) || lx.pid; pg = (pg | 0) || pid;

@@ -141,7 +141,7 @@ const src = (s) => /^https?:/.test(s) ? `<a href="${esc(s)}">${esc(s)}</a>` : `<
 const layer = (l) => {
   if (l.docker) return ['docker', `the Docker Hub image <code>${esc(l.docker)}</code> (${esc(l.platform || 'linux/386')}): its layers from the registry, laid over one another`, '/'];
   if (l.deb) return ['deb', src(l.deb), l.into ? '/' + l.into : '/'];
-  if (l.tar) return ['tar', src(l.tar), l.into ? '/' + l.into : '/'];
+  if (l.tar) return ['tar', src(l.tar) + (l.strip ? ` <span class="name">(less its first ${l.strip === 1 ? 'directory' : l.strip + ' directories'})</span>` : '') + (l.integrity ? ` <span class="name">(checked: ${esc(l.integrity.split('-')[0])})</span>` : ''), l.into ? '/' + l.into : '/'];
   if (l.zip) return ['zip', src(l.zip), l.into || 'C:\\ (DOS) or /'];
   if (l.gz) return ['gz', src(l.gz), l.to];
   if (l.file) return ['file', src(l.file), l.to || 'beside the program'];

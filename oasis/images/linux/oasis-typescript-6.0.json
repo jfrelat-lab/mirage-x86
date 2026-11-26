@@ -1,0 +1,50 @@
+{
+  "oasis": 1,
+  "title": "TypeScript 6.0, its tsc on MIRAGE's node, on BusyBox",
+  "year": 2026,
+  "author": "Microsoft (TypeScript); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
+  "world": "linux",
+  "machine": {
+    "cpu": "pentium4",
+    "mem": 128
+  },
+  "layers": [
+    {
+      "docker": "i386/busybox@sha256:79b6957454b0506796c042e9e2dfedd996c7efc93e701166d2dc9569bc9cc096",
+      "platform": "linux/386"
+    },
+    {
+      "oasis": "node"
+    },
+    {
+      "tar": "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz",
+      "integrity": "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==",
+      "strip": 1,
+      "into": "usr/local/lib/node_modules/typescript"
+    },
+    {
+      "links": {
+        "/usr/local/bin/tsc": "../lib/node_modules/typescript/bin/tsc",
+        "/usr/local/bin/tsserver": "../lib/node_modules/typescript/bin/tsserver"
+      }
+    },
+    {
+      "file": "oasis/files/typescript/hello.ts",
+      "to": "/root/hello.ts"
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "cwd": "/root",
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "license": "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz",
+  "licenseName": "Apache 2.0 (TypeScript: LICENSE.txt in the package), MIT (MIRAGE), GPL 2 (BusyBox)",
+  "notes": "TypeScript 6.0.3 from npm's registry (its tarball, checked by its integrity), the last tsc written in JavaScript (TypeScript 7 is a Go program), installed as npm -g lays it: tsc on the PATH. Its JavaScript runs on MIRAGE's node, the browser's own engine, beside the x86 BusyBox shell. Try: tsc hello.ts && node hello.js; tsc --noEmit --strict hello.ts; tsc --watch hello.ts."
+}
