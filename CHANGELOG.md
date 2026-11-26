@@ -5,10 +5,11 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-26
 
-- **Node.js made by MIRAGE** on the OASIS shelf (linux/node-hle): `node` runs scripts on your browser's own engine, started from a BusyBox shell, in pipes with the Linux commands.
+- MIRAGE's own components are named as Docker names its images: linux/oasis-node and linux/oasis-python on the shelf (the old names still lead there).
+- **Node.js made by MIRAGE** on the OASIS shelf (linux/oasis-node): `node` runs scripts on your browser's own engine, started from a BusyBox shell, in pipes with the Linux commands.
 - node made by MIRAGE starts programs of its own (child_process): the shell, BusyBox's commands, another node.
 - BusyBox's `sleep` waits again on the Linux machine.
-- **Python 3.15 for WASI** on the OASIS shelf (linux/python-wasi): CPython's own WebAssembly build, started from a BusyBox shell in the page, in pipes with the Linux commands.
+- **Python 3.15 for WASI** on the OASIS shelf (linux/oasis-python): CPython's own WebAssembly build, started from a BusyBox shell in the page, in pipes with the Linux commands.
 - Programs built with wasi-sdk find their files by absolute and by relative path alike.
 - **Python's REPL** on the Linux machine: a WebAssembly program now waits for what it reads -- the keyboard, a pipe -- where the browser can suspend it (Chrome).
 - Text pasted into a machine's screen, or typed through an input method or a phone's keyboard, now reaches the program.

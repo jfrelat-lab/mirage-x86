@@ -1,6 +1,6 @@
 {
   "oasis": 1,
-  "title": "Python 3.15 for WASI, on BusyBox",
+  "title": "Python 3.15 for WASI (oasis/python), on BusyBox",
   "year": 2026,
   "author": "The CPython project (WASI build: Brett Cannon); BusyBox from Docker Hub",
   "world": "linux",
@@ -14,14 +14,7 @@
       "platform": "linux/386"
     },
     {
-      "zip": "https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.15.2/python-3.15.2-wasi_sdk-33.zip",
-      "into": "/usr/local"
-    },
-    {
-      "links": {
-        "/usr/local/bin/python3": "/usr/local/python.wasm",
-        "/usr/local/bin/python": "python3"
-      }
+      "oasis": "python"
     }
   ],
   "entry": {

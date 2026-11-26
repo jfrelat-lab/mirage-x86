@@ -7646,6 +7646,8 @@ await (async () => { let got;
   try { const { relayTarget, OASIS_HOSTS } = await import('../src/oasis-hosts.js'); const fsm = await import('fs'), pm = await import('path');
     const used = new Set(); const walk = (dir) => { for (const f of fsm.readdirSync(dir)) { const q = pm.join(dir, f); if (fsm.statSync(q).isDirectory()) walk(q); else if (f.endsWith('.json')) for (const m of fsm.readFileSync(q, 'utf8').matchAll(/"(https?:\/\/[^"]+)"/g)) used.add(m[1]); } };
     walk(new URL('../oasis/images', import.meta.url).pathname);
+    const { withComponents, COMPONENTS } = await import('../src/oasis-components.js');   // and the components' own layers
+    for (const l of withComponents(Object.keys(COMPONENTS).map((oasis) => ({ oasis })))) for (const m of JSON.stringify(l).matchAll(/"(https?:\/\/[^"]+)"/g)) used.add(m[1]);
     const urls = JSON.parse(fsm.readFileSync(new URL('../examples/manifest.json', import.meta.url), 'utf8')).filter((e) => e.url).map((e) => e.url);   // examples fetched at their source
     got = [relayTarget('http://archive.debian.org/debian/x.deb') !== null, relayTarget('https://example.com/x'), relayTarget('https://archive.debian.org:8080/x'),
       relayTarget('https://u:p@busybox.net/x'), relayTarget('file:///etc/passwd'), [...used].every((u) => relayTarget(u) !== null),
@@ -7662,6 +7664,18 @@ await (async () => { let got;
       'https://evil.example/0/items/official-jj-2/x.zip'].map((u) => relayTarget(u) !== null).join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('oasis-fetch: an archive.org item\'s storage servers, either datacentre', got, 'true true true false false'); })();
+// MIRAGE's own components (src/oasis-components.js): an { oasis } layer stands for the component's layers --
+// linux/oasis-node and linux/oasis-python lay what their manifests laid before they were renamed; an
+// unknown component is said so; the old names lead to the new.
+await (async () => { let got;
+  try { const { withComponents, RENAMED } = await import('../src/oasis-components.js'); const fsm = await import('fs');
+    const img = (n) => JSON.parse(fsm.readFileSync(new URL(`../oasis/images/${n}.json`, import.meta.url), 'utf8'));
+    let unknown = ''; try { withComponents([{ oasis: 'perl' }]); } catch (e) { unknown = e.message; }
+    got = [JSON.stringify(withComponents(img('linux/oasis-node').layers).slice(1)), JSON.stringify(withComponents(img('linux/oasis-python').layers).slice(1)),
+      JSON.stringify(withComponents([{ oasis: 'oasis/node', to: '/bin/node' }])), unknown, RENAMED['linux/node-hle'], RENAMED['linux/python-wasi']].join(' | ');
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('oasis: components -- oasis/node and oasis/python lay their own layers; an unknown one said so; the old names redirected', got,
+    '[{"hle":"node","to":"/usr/local/bin/node"}] | [{"zip":"https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.15.2/python-3.15.2-wasi_sdk-33.zip","into":"/usr/local"},{"links":{"/usr/local/bin/python3":"/usr/local/python.wasm","/usr/local/bin/python":"python3"}}] | [{"hle":"node","to":"/bin/node"}] | oasis: no component "perl" (oasis/node, oasis/python) | linux/oasis-node | linux/oasis-python'); })();
 // A `zip` layer with `files`: the members it names, each put where it says (an intro's dropper out of
 // its party archive, oasis/images/linux/ribbon-2009.json); a member that is not there is said so.
 await (async () => { let got;

@@ -1,6 +1,6 @@
 {
   "oasis": 1,
-  "title": "Node.js in HLE, on BusyBox",
+  "title": "Node.js made by MIRAGE (oasis/node), on BusyBox",
   "year": 2026,
   "author": "MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
   "world": "linux",
@@ -14,8 +14,7 @@
       "platform": "linux/386"
     },
     {
-      "hle": "node",
-      "to": "/usr/local/bin/node"
+      "oasis": "node"
     }
   ],
   "entry": {

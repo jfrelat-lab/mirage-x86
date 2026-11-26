@@ -20,6 +20,7 @@ import { unzip } from './zip.js';
 import { unlha } from './lha.js';
 import { wiseLayer } from './wise.js';
 import { didiLayer } from './didi.js';
+import { withComponents } from './oasis-components.js';
 
 const S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFLNK = 0o120000;
 const enc = new TextEncoder();
@@ -235,7 +236,7 @@ export async function buildTree(img, io) {
   const tree = new Tree(), say = io.onProgress || (() => {});
   const get = async (src, what) => { const b = await io.fetchBytes(src); say(`unpacking ${what || src.split('/').pop()}`); return b; };   // fetched, then unpacked
   let chain = '';
-  for (const l of img.layers || []) {
+  for (const l of withComponents(img.layers)) {
     chain = await sha256(chain + JSON.stringify(l));
     if (l.docker) await dockerLayers(tree, l, io, say);
     else if (l.deb) tree.addEntries(tarEntries(await debData(await get(l.deb))), l.into || '');

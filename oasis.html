@@ -134,6 +134,7 @@
   <form method="dialog"><button class="btn ghost" type="submit">Close</button></form>
 </dialog>
 <script type="module">
+import { COMPONENTS, withComponents, RENAMED } from './src/oasis-components.js';
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const REPO = 'https://github.com/jfrelat-lab/mirage-x86/blob/main/';
 const src = (s) => /^https?:/.test(s) ? `<a href="${esc(s)}">${esc(s)}</a>` : `<a href="${esc(REPO + s)}">${esc(s)}</a> <span class="name">(this repository)</span>`;
@@ -141,13 +142,15 @@ const layer = (l) => {
   if (l.docker) return ['docker', `the Docker Hub image <code>${esc(l.docker)}</code> (${esc(l.platform || 'linux/386')}): its layers from the registry, laid over one another`, '/'];
   if (l.deb) return ['deb', src(l.deb), l.into ? '/' + l.into : '/'];
   if (l.tar) return ['tar', src(l.tar), l.into ? '/' + l.into : '/'];
-  if (l.zip) return ['zip', src(l.zip), 'C:\\ (DOS) or /'];
+  if (l.zip) return ['zip', src(l.zip), l.into || 'C:\\ (DOS) or /'];
   if (l.gz) return ['gz', src(l.gz), l.to];
   if (l.file) return ['file', src(l.file), l.to || 'beside the program'];
   if (l.dir) return ['dir', src(l.dir), '/'];
   if (l.links) return ['links', Object.entries(l.links).map(([p, t]) => `${esc(p)} → ${esc(t)}`).join('<br>'), 'symbolic links'];
   if (l.mkdir) return ['mkdir', [].concat(l.mkdir).map(esc).join(' '), 'empty directories'];
   if (l.busybox) return ['busybox', src(l.busybox), '/' + (l.into || 'bin') + ', a link per applet'];
+  if (l.oasis) { const c = COMPONENTS[l.oasis]; return ['oasis', `the component <code>oasis/${esc(l.oasis)}</code>${c ? ': ' + esc(c.what) + '<br>' + withComponents([l]).map((x) => layer(x).slice(0, 2).join(' ')).join('<br>') : ''}`, c ? withComponents([l]).map((x) => layer(x)[2]).join(', ') : '']; }
+  if (l.hle) return ['hle', `<code>\\0hle ${esc(l.hle)}</code>: a command MIRAGE makes in JavaScript`, l.to];
   if (l.run) return ['run', `<code>${esc(l.run)}</code> in ${esc(l.cwd || '/')}, on MIRAGE-LINUX, once`, 'what it made, kept in the cache'];
   return ['?', esc(JSON.stringify(l)), ''];
 };
@@ -248,7 +251,7 @@ try {
       </div>
     </section>`;
   }).join('');
-  if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+  if (location.hash) { const h = decodeURIComponent(location.hash.slice(1)); document.getElementById(RENAMED[h] || h)?.scrollIntoView(); }   // an image renamed: an old link still finds it
   /*
    * SOURCE & LICENCE, one dialog for the page, as PRISM's shelf has it: a caution where the terms are
    * not a free licence (Quake's shareware), the terms themselves, and where every layer comes from —
@@ -257,7 +260,7 @@ try {
   const byName = new Map(images.map((m) => [m.name, m]));
   const dlg = document.getElementById('licdlg');
   const openLic = (m) => {
-    const from = (m.layers || []).map((l) => l.deb || l.tar || l.zip || l.gz || l.file || l.dir || l.busybox || l.docker).filter(Boolean);
+    const from = withComponents(m.layers).map((l) => l.deb || l.tar || l.zip || l.gz || l.file || l.dir || l.busybox || l.docker).filter(Boolean);
     document.getElementById('licdlg-title').textContent = m.title;
     document.getElementById('licdlg-body').innerHTML = [
       m.caution ? `<p class="caution"><span aria-hidden="true">⚠️</span> ${esc(m.caution)}</p>` : '',
@@ -270,7 +273,7 @@ try {
   };
   list.addEventListener('click', (ev) => { const b = ev.target.closest('[data-lic]'); if (b) openLic(byName.get(b.dataset.lic)); });
   dlg.addEventListener('click', (ev) => { if (ev.target === dlg) dlg.close(); });
-  const want = new URLSearchParams(location.search).get('lic');
+  const lic = new URLSearchParams(location.search).get('lic'), want = RENAMED[lic] || lic;
   if (want && byName.has(want)) { document.getElementById(want)?.scrollIntoView(); openLic(byName.get(want)); }
 } catch (e) { list.textContent = 'could not read oasis/index.json: ' + (e.message || e); }
 </script>

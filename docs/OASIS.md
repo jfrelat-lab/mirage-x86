@@ -91,6 +91,7 @@ page's address without opening it (tests: `tools/chrome-perf.mjs` drives it head
 | `{ "docker": image, "platform": "linux/386" }` | a Docker Hub image, `i386/<name>:<tag>` or `@sha256:<digest>` | its root file system: the manifest for the platform (an index resolved to linux/386), then each layer from the registry (tar, gzip or zstd: src/zstd.js in a page), every blob checked against its digest, laid in order with their whiteouts (`.wh.<name>`, `.wh..wh..opq`) — no Docker, in Node and in a page (`src/oasis-docker.js`) |
 | `{ "dir": path }` | a directory of the repository | used where it is |
 | `{ "links": { path: target } }` | symbolic links | — |
+| `{ "oasis": name }` | a component of MIRAGE's own (`src/oasis-components.js`), named as Docker names an image and the same in every world: `oasis/node` (node made in JavaScript, `src/node`), `oasis/python` (CPython built for WASI); it stands for the component's own layers, below | `oasis/node`: /usr/local/bin/node (`to` moves it); `oasis/python`: /usr/local, its `python3` and `python` links |
 | `{ "hle": "node", "to": path }` | a command MIRAGE makes in JavaScript: `node` (src/node), its executable a file beginning `\0hle node\n` | that file, mode 755 (Linux only) |
 | `{ "mkdir": [paths] }` | empty directories | — |
 | `{ "run": command, "cwd": dir, "env": {} }` | a command run with `/bin/sh -c` on MIRAGE-LINUX over the layers before it, once — a Dockerfile's `RUN` (Linux only) | what the run made, changed or removed: files with their modes and times, links, directories, and the removed paths (`.oasis-gone`), which hide the layers below |
@@ -112,6 +113,12 @@ DOOM this way: about ten minutes once, then the game is there at every start.
 [`oasis.html`](../oasis.html) shows each image's whole recipe — every layer and the archive it comes
 from, the entry, the manifest — from `oasis/index.json`, which `node tools/oasis.mjs index` writes.
 
+An image is named `<world>/<name>`, its name saying where its contents come from: `docker-*` an image of
+Docker Hub's, `oasis-*` one with a component of MIRAGE's own (`oasis/node`, `oasis/python`) -- the
+component the same in every world, so a `win32/oasis-node` would be `oasis/node` as `node.exe`. A
+renamed image keeps its old name as a redirect (`RENAMED` in `src/oasis-components.js`):
+`linux/node-hle` and `linux/python-wasi` lead to `linux/oasis-node` and `linux/oasis-python`.
+
 | Image | World | What it is |
 |---|---|---|
 | `dos/c-dogs` | dos | C-Dogs 1.06, with the Sound Blaster 16 set up |
@@ -128,8 +135,8 @@ from, the entry, the manifest — from `oasis/index.json`, which `node tools/oas
 | `linux/quake-1997` | linux | `squake` 1.1, id's svgalib Quake of August 1997 — an ELF binary on libc5 and svgalib from Debian 1.3, the shareware `pak0.pak` from id's own `quake106.zip` (its LHA self-extractor read by `src/lha.js`). It plays its demos with sound — /dev/dsp in mmap mode, as Quake's snd_linux.c uses it; run with `-noudp` (no network yet) |
 | `linux/debian-bookworm` | linux | Debian 12 i386 from Docker's image. in the terminal: `bash -c` with `$( )`, pipes and external commands |
 | `linux/docker-busybox`, `linux/docker-python-3.12-alpine` | linux | made by `node tools/oasis.mjs import docker://i386/busybox` and `docker://i386/python:3.12-alpine`: Docker Hub's images pinned by digest, their entry the image's own (Entrypoint and Cmd, WorkingDir, Env); BusyBox's shell and Python 3.12's REPL on the page's console, or `run ... --terminal -c "..."` |
-| `linux/node-hle` | linux | MIRAGE's own `node` (src/node: Node 26's API in JavaScript, CommonJS) in `/usr/local/bin` over Docker Hub's BusyBox: each `node` a process of MIRAGE-LINUX whose script runs on the browser's engine, started by the x86 shell, in its pipes, on its files |
-| `linux/python-wasi` | linux | CPython 3.15 built for WASI by the CPython project (a release of `brettcannon/cpython-wasi-build`), in `/usr/local` over Docker Hub's BusyBox: each `python3` a WebAssembly process of MIRAGE-LINUX (src/wasi.js), started by the x86 shell, in its pipes; `python3` alone is the REPL on the page's console (its reads wait through JSPI: Chrome) |
+| `linux/oasis-node` | linux | MIRAGE's own `node` (src/node: Node 26's API in JavaScript, CommonJS) in `/usr/local/bin` over Docker Hub's BusyBox: each `node` a process of MIRAGE-LINUX whose script runs on the browser's engine, started by the x86 shell, in its pipes, on its files |
+| `linux/oasis-python` | linux | CPython 3.15 built for WASI by the CPython project (a release of `brettcannon/cpython-wasi-build`), in `/usr/local` over Docker Hub's BusyBox: each `python3` a WebAssembly process of MIRAGE-LINUX (src/wasi.js), started by the x86 shell, in its pipes; `python3` alone is the REPL on the page's console (its reads wait through JSPI: Chrome) |
 | `linux/docker-node-10-alpine` | linux | `docker://i386/node:10-alpine`, the last Node.js built for i386 (10.24.1, 2021): its REPL on the page's console, or `run ... --terminal -e "..."`; V8 wants SSE2, so Docker images run on the `pentium4` CPU with 256 MB (a fork copies the process: `child_process` in 64 MB ran out) |
 | `linux/clod-2008`, `laminator-2009`, `makeit4k-2005`, `metatunnel-2009`, `retrospection-2010`, `ribbon-2009`, `yellowrose-2003` | linux | the scene's Linux OpenGL intros of 2003-2010, their libSDL, libGL and libGLU made in JavaScript, drawn by PRISM's `gl.js` |
 | `win32/ribbon-2009`, `flow2-2007`, `chocolux-2008`, `retrospection-2010`, `paradistance-2009`, `hartverdrahtet-2012`, `absoluteterritory-2017` | win32 | the scene's Windows OpenGL intros, packed by Crinkler: the process laid out as Windows XP lays it out, opengl32 on PRISM's `gl.js`, the music through waveOut |

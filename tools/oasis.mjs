@@ -29,6 +29,7 @@ import { homedir, tmpdir, platform, userInfo } from 'os';
 import { spawn, spawnSync } from 'child_process';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
+import { withComponents, RENAMED } from '../src/oasis-components.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** The user's name inside a Linux image: --user=<name>, else $OASIS_USER, else this computer's login. */
@@ -39,11 +40,12 @@ let SERVE_ONLY = false, STATIC_ONLY = false;
 
 // ---- images ---------------------------------------------------------------------------------------
 function findImage(name) {
+  if (RENAMED[name]) { console.error(`oasis: ${name} is now ${RENAMED[name]}`); name = RENAMED[name]; }
   const p = existsSync(name) && name.endsWith('.json') ? resolve(name) : join(IMAGES, name + '.json');
   if (!existsSync(p)) throw new Error(`oasis: no image "${name}" (looked for ${relative(process.cwd(), p)})`);
   const m = JSON.parse(readFileSync(p, 'utf8'));
   if (m.oasis !== 1) throw new Error(`oasis: ${p} is not an OASIS v1 manifest`);
-  return { ...m, name: m.name || name, path: p };
+  return { ...m, layers: withComponents(m.layers), name: m.name || name, path: p };   // { oasis } layers: the component's own (src/oasis-components.js)
 }
 function listImages(dir = IMAGES, pre = '') {
   const out = [];

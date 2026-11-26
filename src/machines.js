@@ -11,6 +11,7 @@
 // the OASIS server's /oasis-images.json (tools/oasis.mjs serve).
 import { Mirage } from './ui.js';
 import { fetchWhole } from './fetch-whole.js';
+import { RENAMED } from './oasis-components.js';
 import { Machine } from './machine.js';
 import { installBIOS } from './bios.js';
 import { installMouse } from './mouse.js';
@@ -27,6 +28,7 @@ const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), over = $('over'), status = $('status'), hint = $('hint');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const params = new URLSearchParams(location.search);
+if (RENAMED[params.get('run')]) params.set('run', RENAMED[params.get('run')]);   // an image renamed: an old link still starts it
 
 const MACHINES = [
   { id: 'dos', name: 'DOS', sub: 'built-in DOS · no image', spec: '586 · 16 MB · VGA · SB16 · XMS · EMS · DPMI' },
