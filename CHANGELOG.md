@@ -7,6 +7,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 - **Python 3.15 for WASI** on the OASIS shelf (linux/python-wasi): CPython's own WebAssembly build, started from a BusyBox shell in the page, in pipes with the Linux commands.
 - Programs built with wasi-sdk find their files by absolute and by relative path alike.
+- Text pasted into a machine's screen, or typed through an input method or a phone's keyboard, now reaches the program.
 
 ## 2026-11-25
 

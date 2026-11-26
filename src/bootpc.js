@@ -105,7 +105,7 @@ async function boot(name, raw) {
     else { const { bytes, drive } = attach(mc, raw); bootSector(mc, bytes, { drive }); }
   } catch (e) { status.textContent = String(e.message || e); return; }
   const keyboard = new Keyboard(mc);
-  keyboard.attach(window);
+  keyboard.attach(window, { text: canvas });
   session = { mc, video, keyboard, raf: 0, paused: false, name, fault: () => fault, host0: performance.now(), turbo, lastTick: performance.now() };
   window.mirage = session;                  // for the console
   pauseBtn.disabled = false; pauseBtn.textContent = 'Pause';

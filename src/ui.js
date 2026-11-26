@@ -104,7 +104,7 @@ export class Mirage {
       return title ? this.ensureGame(title) : null;
     };
     this.shell.boot();
-    this.keyboard.attach(window);
+    this.keyboard.attach(window, { text: this.canvas });            // and text that comes without keys (pasted, composed)
     this._attachMouse();
     this._lastTick = this._lastLoop = performance.now();
     this._loop();

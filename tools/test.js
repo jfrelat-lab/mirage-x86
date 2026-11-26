@@ -739,6 +739,19 @@ await (async () => { const mc = new Machine({ memSize: 1 << 20 }); installBIOS(m
   cpu.ax = 0x4300; cpu.si = 0x600; int13();
   eq('...43h: write protected', [cpu.flags & 1, cpu.ax >> 8].join(), '1,3'); })();
 
+// Text that comes without keys (pasted, composed by an input method, a phone's keyboard, a tool's
+// insertText) typed as a US keyboard types it: each character's make and break, Shift around the
+// shifted ones, and its pair on the BIOS path; a character no US key makes, its code alone. The page
+// took none of it (the canvas is not editable: no event came), and a paste longer than the BIOS's
+// 32-entry queue kept only its tail.
+{
+  const codes = [], queue = [], k = new Keyboard({ keyQueue: queue, pushScancodes: (a) => codes.push(...a) });
+  k.text('aZ!\r\n\u00e9');
+  eq('keyboard: text typed as keys -- scancodes with Shift, and the BIOS pairs', JSON.stringify([codes.map((c) => c.toString(16)).join(' '), queue.map((e) => e.scan.toString(16) + ':' + e.ascii.toString(16)).join(' ')]),
+    JSON.stringify(['1e 9e 2a 2c ac aa 2a 2 82 aa 1c 9c', '1e:61 2c:5a 2:21 1c:d 0:e9']));
+  const q2 = [], k2 = new Keyboard({ keyQueue: q2 }); k2.text('x'.repeat(100));
+  eq('...a paste longer than the BIOS queue is kept whole', q2.length, 100);
+}
 // ---- ZIP archives (src/zip.js): a stored entry, a deflated one, a directory entry ----------------
 await (async () => { const enc = (str) => Uint8Array.from(str, (c) => c.charCodeAt(0));
   // GAME.EXE made on Unix (version made by 3.0, "unx"), mode 0755 in its external attributes' upper half.

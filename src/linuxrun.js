@@ -155,7 +155,7 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
   const toSdl = (codes) => { for (const c of codes) { if (c === 0xe0) { e0 = true; continue; } sdlIn.events.push({ type: c & 0x80 ? 'keyup' : 'keydown', scancode: c & 0x7f, e0 }); e0 = false; } };
   const keyboard = new Keyboard({ keyQueue: w32in || sdlIn ? { length: 0, shift() {}, push() {} } : typed,
     pushScancodes: (a) => { if (w32in) toWin32(a); else if (sdlIn) toSdl(a); else if (lx.tty.kbMode !== 1) lx.keyScancodes(a); } });
-  keyboard.attach(window);
+  keyboard.attach(window, { text: canvas });                         // and text that comes without keys (pasted, composed)
   // The mouse: a click on the screen captures it (pointer lock, Esc releases it), and its moves and
   // buttons go to /dev/mouse as a Microsoft serial mouse's packets — SVGAlib's mouse, Quake's aim.
   let buttons = 0;

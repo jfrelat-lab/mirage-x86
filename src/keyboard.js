@@ -54,6 +54,21 @@ const SCAN = {
   F6: [0x40, 0], F7: [0x41, 0], F8: [0x42, 0], F9: [0x43, 0], F10: [0x44, 0],
 };
 
+// Text that comes without keys -- pasted, composed by an input method (a dead key's ê), from a phone's
+// keyboard, or inserted by a tool driving the page -- is typed as a US keyboard would type it: each
+// character's key, with Shift where it needs it. A character no US key makes still reaches the BIOS
+// path (and so a Linux console) as its code.
+const CHAR2KEY = (() => {
+  const m = {};
+  const rows = [['`1234567890-=', '~!@#$%^&*()_+', ['Backquote', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Digit0', 'Minus', 'Equal']],
+    ['qwertyuiop[]\\', 'QWERTYUIOP{}|', ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO', 'KeyP', 'BracketLeft', 'BracketRight', 'Backslash']],
+    ["asdfghjkl;'", 'ASDFGHJKL:"', ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'Quote']],
+    ['zxcvbnm,./', 'ZXCVBNM<>?', ['KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Comma', 'Period', 'Slash']]];
+  for (const [plain, shifted, codes] of rows) codes.forEach((c, i) => { m[plain[i]] = [CODE2SCAN[c], false]; m[shifted[i]] = [CODE2SCAN[c], true]; });
+  m[' '] = [CODE2SCAN.Space, false]; m['\n'] = [CODE2SCAN.Enter, false]; m['\t'] = [CODE2SCAN.Tab, false]; m['\b'] = [CODE2SCAN.Backspace, false];
+  return m;
+})();
+
 export class Keyboard {
   constructor(machine) {
     this.machine = machine;
@@ -62,19 +77,55 @@ export class Keyboard {
     this._up = (e) => this._onUp(e);
   }
 
-  attach(el = window) {
+  /** `text`: the screen (a canvas). Clicked or focused, it hands the focus to a hidden text field,
+   *  which takes what arrives as text rather than keys (typed with text() below). A key the page
+   *  handles is not inserted there too (_onDown prevents it), so nothing is typed twice. */
+  attach(el = window, { text } = {}) {
     el.addEventListener('keydown', this._down);
     el.addEventListener('keyup', this._up);
+    if (text && typeof document !== 'undefined') this._textField(text);
   }
   detach(el = window) {
     el.removeEventListener('keydown', this._down);
     el.removeEventListener('keyup', this._up);
+    if (this._field) { this._field.remove(); this._field = null; this._unscreen(); }
   }
 
-  _push(scan, ascii) {
+  _textField(screen) {
+    const f = document.createElement('textarea');
+    f.setAttribute('aria-label', 'keyboard input'); f.setAttribute('autocapitalize', 'off'); f.setAttribute('autocomplete', 'off');
+    f.setAttribute('autocorrect', 'off'); f.spellcheck = false; f.tabIndex = -1;
+    Object.assign(f.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', opacity: '0', border: '0', padding: '0', resize: 'none', pointerEvents: 'none' });
+    document.body.appendChild(f);
+    const focus = () => { if (document.activeElement !== f) f.focus({ preventScroll: true }); };
+    screen.addEventListener('pointerdown', focus); screen.addEventListener('focus', focus);
+    this._unscreen = () => { screen.removeEventListener('pointerdown', focus); screen.removeEventListener('focus', focus); };
+    f.addEventListener('beforeinput', (e) => {
+      if (e.inputType === 'insertCompositionText') return;              // still being composed: compositionend has it
+      const t = e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop' ? e.dataTransfer && e.dataTransfer.getData('text/plain')
+        : e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph' ? '\n'
+          : e.inputType === 'deleteContentBackward' ? '\b' : e.data;
+      if (t) this.text(t);
+      e.preventDefault();
+    });
+    f.addEventListener('compositionend', (e) => { if (e.data) this.text(e.data); f.value = ''; });
+    this._field = f;
+  }
+
+  /** Text typed as keys: for each character its key's make and break (Shift around it if it needs
+   *  it), and its (scan, ascii) pair on the BIOS path. */
+  text(str) {
+    for (const ch of str.replace(/\r\n?/g, '\n')) {
+      const k = CHAR2KEY[ch], code = ch === '\n' ? 0x0d : ch === '\b' ? 0x08 : ch.codePointAt(0);
+      if (k && this.machine.pushScancodes) this.machine.pushScancodes([...(k[1] ? [0x2a] : []), k[0], k[0] | 0x80, ...(k[1] ? [0xaa] : [])]);
+      if (code <= 0xff) this._push(k ? k[0] : 0, code, 32 + str.length);
+    }
+  }
+
+  _push(scan, ascii, room = 32) {
     const q = this.machine.keyQueue;
     q.push({ scan, ascii });
-    if (q.length > 32) q.shift();   // BIOS buffer holds ~16; keep it bounded
+    if (q.length > room) q.shift();   // BIOS buffer holds ~16; keep it bounded (a paste: its length)
   }
 
   _onDown(e) {
