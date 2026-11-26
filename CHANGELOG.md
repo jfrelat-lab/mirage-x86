@@ -7,6 +7,8 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 - MIRAGE's own components are named as Docker names its images: linux/oasis-node and linux/oasis-python on the shelf (the old names still lead there).
 - **Node.js made by MIRAGE** on the OASIS shelf (linux/oasis-node): `node` runs scripts on your browser's own engine, started from a BusyBox shell, in pipes with the Linux commands.
+- node made by MIRAGE watches files (fs.watch, fs.watchFile): TypeScript's `tsc --watch` recompiles as you save.
+- A file made again after being deleted on the Linux machine is kept with the rest of what its programs wrote.
 - node made by MIRAGE starts programs of its own (child_process): the shell, BusyBox's commands, another node.
 - BusyBox's `sleep` waits again on the Linux machine.
 - **Python 3.15 for WASI** on the OASIS shelf (linux/oasis-python): CPython's own WebAssembly build, started from a BusyBox shell in the page, in pipes with the Linux commands.

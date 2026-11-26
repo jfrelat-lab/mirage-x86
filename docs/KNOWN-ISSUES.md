@@ -91,6 +91,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 |---|---|
 | CommonJS only | `import` and `.mjs` (ES modules) end with ERR_REQUIRE_ESM. |
 | No network, zlib, worker threads; no IPC for children | `http`, `net`, `zlib` and their kin throw "not available in MIRAGE yet"; so do `child_process.fork` and an `'ipc'` stdio (spawn, exec, execFile and their Sync forms work). A child is made and exec'd by the kernel at once (posix_spawn), so its start costs no guest time: an order that depends on how long a child takes to start may differ from Node's. |
+| fs.watch polls | MIRAGE-LINUX has no inotify: `fs.watch` compares a directory's entries and their stats every 100 ms of guest time (`fs.watchFile` polls as Node itself does, at its interval). A write is one `'change'`, where Linux's inotify may say two; a change and its undoing within 100 ms are not seen. |
 | No REPL | `node` alone at a terminal says so and exits; give it a script, `-e` or `-p`. |
 | What JavaScript cannot see | `util.inspect` shows a promise as `Promise { <state unknown> }`; an uncaught error's stack lists MIRAGE's frames, not Node's. |
 | Local time | `Date`'s local methods use the host's time zone, not the guest's `TZ`. |

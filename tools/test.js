@@ -8337,6 +8337,25 @@ await (async () => {
     eq(`node: ${n}${async ? ' (as in a page)' : ''}`, got, JSON.stringify(want[n]));
   }
 })();
+// fs.watch, polled (MIRAGE-LINUX has no inotify): a directory's entry made, changed, removed -> rename,
+// change, rename by its name; a file's own change; fs.promises.watch's iterator, ended by an AbortSignal;
+// a path not there -> ENOENT ... watch; close -> 'close'. Not against Node: the host's events are its
+// platform's (FSEvents on macOS), Linux's inotify says a write as one 'change' or more.
+await (async () => {
+  let got;
+  const src = `const fs = require('fs'); fs.mkdirSync('d'); fs.writeFileSync('f', '1');
+const log = []; const w = fs.watch('d', (e, n) => log.push(e + ':' + n)); const wf = fs.watch('f', (e, n) => log.push('f ' + e + ':' + n));
+w.on('close', () => log.push('closed'));
+try { fs.watch('nothere'); } catch (e) { log.push(e.code + ' ' + e.syscall + ' ' + e.message); }
+const ac = new AbortController();
+(async () => { try { for await (const ev of fs.promises.watch('d', { signal: ac.signal })) log.push('it ' + ev.eventType + ':' + ev.filename); } catch (e) { log.push(e.name); } })();
+const steps = [() => fs.writeFileSync('d/a', 'x'), () => fs.writeFileSync('d/a', 'yy'), () => fs.unlinkSync('d/a'), () => fs.writeFileSync('f', '2'),
+  () => { w.close(); wf.close(); ac.abort(); }, () => console.log(log.join('|'))];
+let i = 0; const next = () => { steps[i++](); if (i < steps.length) setTimeout(next, 250); }; setTimeout(next, 250);`;
+  try { const { runNode } = await import('./node/mirage.mjs'); const r = await runNode(['-e', src], { env: ['TZ=UTC'] }); got = r.out.trim(); }
+  catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('node: fs.watch polled -- a directory\'s entries and a file, fs.promises.watch, ENOENT, close', got,
+    "ENOENT watch ENOENT: no such file or directory, watch 'nothere'|rename:a|it rename:a|change:a|it change:a|rename:a|it rename:a|f change:f|closed|AbortError"); })();
 // tools/linux/nodeexec.asm: an x86 process execve's /usr/bin/node (an HLE node: a file beginning "\0hle node\n"), its stdin a
 // pipe it wrote; the child's status is the parent's wait4's.
 await (async () => {

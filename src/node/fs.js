@@ -363,6 +363,23 @@ export function fs(N) {
   }
   promises.open = (p, flags, mode) => new Promise((resolve, reject) => { try { resolve(new FileHandle(openSync(p, flags, mode))); } catch (e) { reject(e); } });
   promises.opendir = async (p) => opendirSync(p);
+  promises.watch = (filename, options = {}) => {          // an async iterator of { eventType, filename }
+    const queue = [], waiting = [];
+    const w = fsmod.watch(filename, { ...optsOf(options), signal: undefined }, (eventType, name) => {
+      const ev = { eventType, filename: name };
+      if (waiting.length) waiting.shift()({ value: ev, done: false }); else queue.push(ev);
+    });
+    let ended = false;
+    const end = () => { if (ended) return; ended = true; w.close(); while (waiting.length) waiting.shift()({ value: undefined, done: true }); };
+    const sig = optsOf(options).signal;
+    let abortErr = null;
+    if (sig) { const ab = () => { abortErr = Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR', cause: sig.reason }); const ws = waiting.splice(0); end(); for (const r of ws) r(Promise.reject(abortErr)); }; if (sig.aborted) ab(); else sig.addEventListener('abort', ab, { once: true }); }
+    return {
+      next() { if (abortErr) return Promise.reject(abortErr); if (queue.length) return Promise.resolve({ value: queue.shift(), done: false }); if (ended) return Promise.resolve({ value: undefined, done: true }); return new Promise((r) => waiting.push(r)); },
+      return() { end(); return Promise.resolve({ value: undefined, done: true }); },
+      [Symbol.asyncIterator]() { return this; },
+    };
+  };
   fsmod.promises = promises;
   fsmod.FileHandle = FileHandle;
 
@@ -411,8 +428,105 @@ export function fs(N) {
     w.on('finish', () => w.destroy());
     return w;
   };
-  fsmod.watch = () => { throw N.nodeError(Error, 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM', 'fs.watch is not available in MIRAGE'); };
-  fsmod.watchFile = fsmod.watch; fsmod.unwatchFile = () => {};
+
+  // ---- watching: by polling stat on the guest's clock, as libuv's fs_poll does for watchFile -------
+  // (MIRAGE-LINUX has no inotify: fs.watch polls too, every 100 ms, a directory's entries and their stats)
+  const sameStat = (a, b) => a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.size === b.size && a.mode === b.mode && a.ino === b.ino && a.dev === b.dev && a.uid === b.uid && a.gid === b.gid && a.nlink === b.nlink;
+  const zeroStat = (bigint) => {               // a file that is not there: every field 0, every date the epoch (Node's)
+    const z = bigint ? new BigIntStats() : new Stats(), v = bigint ? 0n : 0;
+    for (const k of ['dev', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'blksize', 'ino', 'size', 'blocks', 'atimeMs', 'mtimeMs', 'ctimeMs', 'birthtimeMs']) z[k] = v;
+    if (bigint) for (const k of ['atimeNs', 'mtimeNs', 'ctimeNs', 'birthtimeNs']) z[k] = 0n;
+    for (const k of ['atime', 'mtime', 'ctime', 'birthtime']) z[k] = new Date(0);
+    return z;
+  };
+  const statOrNone = (p, bigint) => { try { return statAt(p, 0, 'stat', { bigint }); } catch { return null; } };
+  class StatWatcher extends N.EventEmitter {
+    constructor(bigint) { super(); this._bigint = bigint; this._timer = null; }
+    // As libuv's fs_poll: the first stat only kept (or, the file not there, said with both stats zeroed);
+    // then a change said with the last stats seen, which a file gone and back keeps as its `prev`.
+    start(p, persistent, interval) {
+      let last = null, state = 0;                                          // state: 0 not polled, 1 there, -1 not there
+      const poll = () => {
+        const cur = statOrNone(p, this._bigint);
+        if (!cur) { if (state !== -1) { state = -1; this.emit('change', zeroStat(this._bigint), last || zeroStat(this._bigint)); } return; }
+        if (state === -1 || (state === 1 && !sameStat(cur, last))) this.emit('change', cur, last || zeroStat(this._bigint));
+        state = 1; last = cur;
+      };
+      this._first = N.timers.setImmediate(poll);                         // the first stat on the loop's next turn, as libuv's answers
+      this._timer = N.timers.setInterval(poll, interval);
+      if (!persistent) { this._first.unref(); this._timer.unref(); }
+    }
+    stop() { if (this._timer) { N.timers.clearImmediate(this._first); N.timers.clearInterval(this._timer); this._timer = null; N.nextTick(() => this.emit('stop')); } }
+    ref() { if (this._timer) this._timer.ref(); return this; }
+    unref() { if (this._timer) this._timer.unref(); return this; }
+  }
+  const statWatchers = new Map();
+  fsmod.watchFile = (filename, options, listener) => {
+    const p = N.path.resolve(pathOf(filename));
+    if (typeof options === 'function') { listener = options; options = {}; }
+    options = { interval: 5007, persistent: true, ...options };
+    if (typeof listener !== 'function') throw N.invalidArg('listener', 'of type function', listener);
+    let w = statWatchers.get(p);
+    if (!w) { w = new StatWatcher(!!options.bigint); w.start(p, options.persistent, options.interval); statWatchers.set(p, w); }
+    w.on('change', listener);
+    return w;
+  };
+  fsmod.unwatchFile = (filename, listener) => {
+    const p = N.path.resolve(pathOf(filename)), w = statWatchers.get(p);
+    if (!w) return;
+    if (typeof listener === 'function') w.removeListener('change', listener); else w.removeAllListeners('change');
+    if (w.listenerCount('change') === 0) { w.stop(); statWatchers.delete(p); }
+  };
+  // fs.watch: a file -> 'change' (its stat moved) or 'rename' (gone, or back); a directory -> the same for
+  // each entry (recursive: the whole tree), by its name relative to the directory.
+  const snapshot = (p, recursive) => {
+    const st = statOrNone(p), out = new Map();
+    if (!st) return { st, out };
+    if (!st.isDirectory()) return { st, out };
+    const walk = (dir, rel) => {
+      let names; try { names = listDir(dir); } catch { return; }
+      for (const [name] of names) {
+        const full = dir + '/' + name, r = rel ? rel + '/' + name : name, s = statOrNone(full);
+        if (!s) continue;
+        out.set(r, s);
+        if (recursive && s.isDirectory()) walk(full, r);
+      }
+    };
+    walk(p, '');
+    return { st, out };
+  };
+  class FSWatcher extends N.EventEmitter {
+    constructor() { super(); this._timer = null; }
+    close() { if (this._timer) { N.timers.clearInterval(this._timer); this._timer = null; N.nextTick(() => this.emit('close')); } }
+    ref() { if (this._timer) this._timer.ref(); return this; }
+    unref() { if (this._timer) this._timer.unref(); return this; }
+    [Symbol.dispose]() { this.close(); }
+  }
+  fsmod.watch = (filename, options, listener) => {
+    const given = pathOf(filename), p = N.path.resolve(given);
+    if (typeof options === 'function') { listener = options; options = {}; }
+    options = optsOf(options, { persistent: true });
+    const first = statAt(given, 0, 'watch');                                   // ENOENT ... watch 'x', as Node throws it
+    const w = new FSWatcher(), base = N.path.basename(p), enc = (n) => (options.encoding === 'buffer' ? Buffer.from(n) : n);
+    if (listener) w.on('change', listener);
+    const dir = first.isDirectory();
+    let was = snapshot(p, options.recursive);
+    w._timer = N.timers.setInterval(() => {
+      const now = snapshot(p, options.recursive);
+      if (!dir) {
+        if (!now.st !== !was.st) w.emit('change', 'rename', enc(base));
+        else if (now.st && !sameStat(now.st, was.st)) w.emit('change', 'change', enc(base));
+      } else {
+        for (const [n, s] of now.out) { const o = was.out.get(n); if (!o || o.ino !== s.ino) w.emit('change', 'rename', enc(n)); else if (!s.isDirectory() && !sameStat(o, s)) w.emit('change', 'change', enc(n)); }
+        for (const n of was.out.keys()) if (!now.out.has(n)) w.emit('change', 'rename', enc(n));
+      }
+      was = now;
+    }, 100);
+    if (!options.persistent) w._timer.unref();
+    if (options.signal) { if (options.signal.aborted) w.close(); else options.signal.addEventListener('abort', () => w.close(), { once: true }); }
+    return w;
+  };
+  fsmod.StatWatcher = StatWatcher; fsmod.FSWatcher = FSWatcher;
   N.fs = fsmod;
   N.fsio = { readSync, writeSync, fstatSync, statAt, readAll };
 }

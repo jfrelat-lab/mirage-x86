@@ -264,4 +264,25 @@ c.on('close', (code) => {
   });
 });
 ` } },
+  // fs.watchFile polls stat as libuv's fs_poll does, the same on every platform: a change of the same
+  // size seen (a file's times to the nanosecond), a file gone (its stats zeroed) and back, unwatchFile's stop.
+  watchfile: { files: { 'main.js': `
+const fs = require('fs');
+fs.writeFileSync('x.txt', 'one');
+const steps = [() => fs.writeFileSync('x.txt', 'two'), () => fs.writeFileSync('x.txt', 'three!'), () => fs.unlinkSync('x.txt'), () => fs.writeFileSync('x.txt', 'back')];
+let step = 0;
+const next = () => {
+  if (step < steps.length) setTimeout(steps[step++], 80);
+  else { fs.unwatchFile('x.txt', listener); console.log(w.listenerCount('change')); fs.unwatchFile('x.txt'); w.on('stop', () => console.log('stop')); }
+};
+const listener = (cur, prev) => {
+  console.log('change', prev.size, '->', cur.size, cur.mtimeMs === 0, prev.mtimeMs === 0, cur.mtimeMs >= prev.mtimeMs, cur.isFile(), cur.mtime instanceof Date);
+  next();
+};
+const w = fs.watchFile('x.txt', { interval: 20 }, listener);
+fs.watchFile('nothere', { interval: 20, persistent: false }, () => console.log('never'));
+console.log(w instanceof require('events'), typeof w.ref, typeof w.unref, fs.watchFile('x.txt', () => {}) === w);
+fs.unwatchFile('x.txt', () => {});
+next();
+` } },
 };

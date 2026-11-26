@@ -1480,7 +1480,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     lx.mmapNext += size; mapRange(at, at + size, true); cpu.setCR3(cpu.cr3);
     return at;
   };
-  lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); };
+  lx.addFile = (path, bytes) => { const p = norm(path, '/'); mkdirs(parent(p)); fs.set(p, { data: Uint8Array.from(bytes), size: bytes.length, mtime: lx.now() }); gone.delete(p); };
   lx.readFile = (path) => { const r = resolve(path, '/'), n = r && getNode(r); return n && !n.dir && n.link === undefined ? dataOf(n).subarray(0, n.size) : null; };
   lx.mkdir = (path) => mkdirs(norm(path, '/'));
   /** The user's name, on uid 0 (everything runs as root here): first in /etc/passwd, so getpwuid(0)
@@ -1824,7 +1824,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       if (!dir) return -E.ENOENT;
       if (!dir.dir) return -E.ENOTDIR;
       // The mode asked for, less the umask: ld creates its output 0777 and the program is executable.
-      node = { data: new Uint8Array(0), size: 0, mtime: lx.now(), mode: (mode & ~lx.umask) & 0o7777 }; fs.set(p, node);
+      node = { data: new Uint8Array(0), size: 0, mtime: lx.now(), mode: (mode & ~lx.umask) & 0o7777 }; fs.set(p, node); gone.delete(p);   // made again: no longer a removal
     }
     if (node.dir && (flags & 3)) return -E.EISDIR;
     if (node.gen) { node.data = new TextEncoder().encode(node.gen()); node.size = node.data.length; }
@@ -1866,8 +1866,8 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     d.setUint32(44, size, true);
     d.setUint32(52, 4096, true);
     d.setUint32(56, Math.ceil(size / 512), true);
-    const t = Math.floor(node.mtime || lx.epoch);
-    d.setUint32(64, t, true); d.setUint32(72, t, true); d.setUint32(80, t, true);
+    const m = node.mtime || lx.epoch, t = Math.floor(m), ns = Math.min(999999999, Math.round((m - t) * 1e9));   // and its nanoseconds, as Linux keeps them
+    for (const k of [64, 72, 80]) { d.setUint32(k, t, true); d.setUint32(k + 4, ns, true); }
     d.setUint32(88, inoOf(p), true);
   };
   // struct stat (i386, 64 bytes): the 32-bit form libc 4 and 5 ask for with stat/lstat/fstat 106-108.
