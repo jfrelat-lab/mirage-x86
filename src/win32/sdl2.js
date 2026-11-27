@@ -21,10 +21,19 @@
 //   SDL_UpperBlit       an 8-bit surface onto a 32-bit one a row at a time (PRISM's, a byte at a time, otherwise)
 //   SDL_WarpMouseInWindow, SDL_ShowCursor, SDL_Delay, SDL_GetWindowDisplayMode, SDL_ShowSimpleMessageBox
 //
-// Not made: SDL's own threads and callbacks into the program (the audio device's, timers, a program's
-// RWops) -- PRISM calls them through M.icall, which stops here, named; SDL_mixer's sound reaches no card yet
-// (the mixer mixes, nobody listens); window events beyond the first three (a move, a resize); SDL_SaveBMP's file.
+//   The audio device, timers, threads: SDL's own threads as threads of the program's (CreateThread's), each
+//                       running a few instructions made here that wait in a trap and call the program's
+//                       function (src/hle/sdl12.js's loops): the device's callback, or its queue
+//                       (SDL_QueueAudio), played on the machine's card (lx.dspPlay); SDL_mixer's buffers,
+//                       mixed by PRISM on the guest's clock, played the same way; mutexes, semaphores,
+//                       condition variables and atomics for those threads
+//   Window events: SHOWN, EXPOSED, FOCUS_GAINED when made; SIZE_CHANGED and RESIZED when its client area changes
+//
+// Not made: a program's own RWops (PRISM calls their functions through M.icall, which stops here, named),
+// Mix_SetPostMix's hook, music, SDL_SaveBMP's file.
 import { prismM } from '../hle/prism-gl.js';
+import { audioLoop, threadCall, timerLoop } from '../hle/sdl12.js';
+import { HLE_BASE } from '../hle/elfso.js';
 
 const WS_POPUP = 0x80000000, WS_VISIBLE = 0x10000000, STYLE_NORMAL = 0x00ca0000;   // WS_OVERLAPPED|CAPTION|SYSMENU|MINIMIZEBOX
 const SDL_WINDOW_FULLSCREEN = 0x1, SDL_WINDOWPOS_MASK = 0xffff0000, SDL_WINDOWPOS_UNDEFINED = 0x1fff0000, SDL_WINDOWPOS_CENTERED = 0x2fff0000;
@@ -121,9 +130,13 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
     }
   };
   const BUTTON = { 0x201: [1, 1], 0x202: [1, 0], 0x204: [4, 1], 0x205: [4, 0], 0x207: [2, 1], 0x208: [2, 0] };
+  // SIZE_CHANGED then RESIZED (SDL_OnWindowResized's order) when the client area is not what it was.
+  const windowEvent = (ev, d1 = 0, d2 = 0) => { const { e, d } = raw(SDL_WINDOWEVENT); d.setUint32(8, 1, true); e[12] = ev; d.setInt32(16, d1, true); d.setInt32(20, d2, true); sdl.state.events.push(e); };
+  const checkSize = () => { const c = client(); if (c.w === win.cw && c.h === win.ch) return; win.cw = c.w; win.ch = c.h; windowEvent(6, c.w, c.h); windowEvent(5, c.w, c.h); };
   const pumpMessages = () => {
     if (!win.hwnd) return;
     scratch();
+    checkSize();
     for (let n = 0; n < 256 && user32.PeekMessageA[1](x, win.msg, 0, 0, 0, 1) === 1; n++) {
       const hwnd = x.r32(win.msg), m = x.r32(win.msg + 4), wp = x.r32(win.msg + 8), lp = x.r32(win.msg + 12);
       if (m === 0x0f) { user32.ValidateRect[1](x, hwnd, 0); continue; }                 // WM_PAINT: the next frame draws it
@@ -175,8 +188,15 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
   };
 
   const sdl = sdl2.installSDL2(M, { clock, onPresent: (frame) => present(frame) });
+  // The mixer reads a stream as SDL_RWops: its size, then its bytes from the start (PRISM's own SDL 2
+  // environment gives it no reader, and Mix_LoadWAV_RW loaded nothing).
+  const readRW = (rw) => {
+    const n = Number(M.rt.SDL_RWsize(rw)); if (!(n > 0)) return null;
+    const p = x.win.heapAlloc(n);
+    try { M.rt.SDL_RWseek(rw, 0, 0); const got = Number(M.rt.SDL_RWread(rw, p, 1, n)) >>> 0; return x.bytes(p, got); } finally { x.win.heapFree(p); }
+  };
   const mix = { ...mixer.MIXER_STATE, clock };
-  Object.assign(M.rt, mixer.mixerApi(M, mix));
+  Object.assign(M.rt, mixer.mixerApi(M, mix, { readRW }));
 
   /*
    * SDL_UpperBlit's commonest case made a row at a time: a whole 8-bit paletted surface onto a 32-bit one of
@@ -213,6 +233,167 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
     return 0;
   };
 
+  // ---- SDL's threads, as the program's ---------------------------------------------------------------------
+  // A thread made here: `bytes` of guest code (sdl12.js's loops) in the program's heap, run by CreateThread's
+  // machinery (its TEB, its stack). The traps they call are this DLL's functions without a name.
+  const trap = (name) => x.idOf(`SDL2.dll!${name}`);
+  const thread = (bytes) => { const code = x.win.heapAlloc(bytes.length); x.write(code, Uint8Array.from(bytes)); return x.win.createThread(code, 0); };
+  const BLOCK = () => lx.BLOCK;
+  const wait = (s) => x.waitUntil(lx.mono() + s);
+
+  // The audio devices: id 1 SDL_OpenAudio's, 2 and up SDL_OpenAudioDevice's. A device with a callback runs
+  // audioLoop (play the buffer, then call callback(userdata, buf, len) for the next); one without, a loop
+  // that plays what SDL_QueueAudio queued. The card takes 8- and 16-bit samples: F32 and S32 are made 16-bit.
+  const AUDIO_U8 = 0x0008, AUDIO_S16LSB = 0x8010, AUDIO_S32LSB = 0x8020, AUDIO_F32LSB = 0x8120;
+  const devices = new Map(); let nextDevice = 2;
+  const openAudio = (id, desired, obtained, allowed) => {
+    const freq = x.r32(desired) | 0 || 22050, want = x.r16(desired + 4), chans = x.r8(desired + 6) || 2;
+    let format = want;
+    if (![AUDIO_U8, AUDIO_S16LSB, AUDIO_S32LSB, AUDIO_F32LSB].includes(format)) { if (!obtained || !(allowed & 2)) return -1; format = AUDIO_S16LSB; }
+    const channels = chans <= 2 ? chans : obtained && (allowed & 4) ? 2 : 0;
+    if (!channels) return -1;
+    let samples = x.r16(desired + 8); if (!samples) { samples = 1; while (samples < freq / 23) samples <<= 1; }   // SDL's default: some 46 ms
+    const bytes = (format & 0xff) >> 3, size = samples * channels * bytes, silence = format === AUDIO_U8 ? 0x80 : 0;
+    const d = { id, freq, format, channels, samples, size, silence, callback: x.r32(desired + 16), userdata: x.r32(desired + 20), paused: true, queue: [], queued: 0 };
+    d.buf = x.win.heapAlloc(size); x.write(d.buf, new Uint8Array(size).fill(silence));
+    const out = obtained || desired;                                 // SDL writes the spec it opened back
+    x.w32(out, freq); x.w16(out + 4, format); x.w8(out + 6, channels); x.w8(out + 7, silence); x.w16(out + 8, samples); x.w32(out + 12, size);
+    lx.dspFormat(freq, format === AUDIO_U8 ? 8 : 0x10, channels);
+    devices.set(id, d);
+    d.tid = thread(d.callback ? audioLoop(trap('MIRAGE_audio'), size, d.buf, d.userdata, d.callback)
+      : [0x68, ...le(id), 0x68, ...le(id), 0xb8, ...le(HLE_BASE + trap('MIRAGE_audioQueue')), 0xcd, 0x80, 0x83, 0xc4, 0x08, 0xeb, 0x100 - 22]);
+    return 0;
+  };
+  // What the card is given: 8 or 16 bits as they are, 32-bit samples made 16-bit.
+  const toCard = (d, b) => {
+    if (d.format !== AUDIO_F32LSB && d.format !== AUDIO_S32LSB) return b;
+    const v = new DataView(b.buffer, b.byteOffset, b.byteLength), n = b.length >> 2, o = new Int16Array(n);
+    for (let i = 0; i < n; i++) o[i] = d.format === AUDIO_F32LSB ? Math.max(-32768, Math.min(32767, Math.round(v.getFloat32(4 * i, true) * 32767))) : v.getInt32(4 * i, true) >> 16;
+    return new Uint8Array(o.buffer);
+  };
+  const closeAudio = (id) => { const d = devices.get(id); if (!d) return; lx.killThread(d.tid); x.win.heapFree(d.buf); devices.delete(id); };
+  const status = (id) => { const d = devices.get(id); return !d ? 0 : d.paused ? 2 : 1; };   // SDL_AUDIO_STOPPED, PLAYING, PAUSED
+  const le = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+
+  // Timers: timerLoop's thread each, `rec` (the interval, then what the callback returned) its id.
+  const timers = new Map();
+  // Mutexes { owner, count }, semaphores { count }, conditions { seq }, by their block; a thread waiting keeps
+  // where it is in `waits` (a wait is its call made again until it may go on).
+  const sync = new Map(), waits = new Map();
+  const lock = (m) => { const o = sync.get(m); if (!o) return -1; if (o.owner && o.owner !== lx.pid) return null; o.owner = lx.pid; o.count++; return 0; };
+  const unlock = (m) => { const o = sync.get(m); if (!o || o.owner !== lx.pid) return -1; if (!--o.count) o.owner = 0; return 0; };
+  // SDL_CondWait(TimeOut): the mutex let go, a signal waited for (or the time), the mutex taken again.
+  const condWait = (c, m, ms) => {
+    const k = lx.pid, cv = sync.get(c); if (!cv) return -1;
+    let w = waits.get(k);
+    if (!w || w.c !== c) { w = { c, seq: cv.seq, until: ms >= 0 ? lx.mono() + ms / 1000 : Infinity, phase: 0, count: 0 }; waits.set(k, w); const o = sync.get(m); w.count = o ? o.count : 0; if (o) { o.owner = 0; o.count = 0; } }
+    if (w.phase === 0) {
+      if (cv.seq === w.seq && lx.mono() < w.until) return w.until === Infinity ? wait(0.001) : x.waitUntil(Math.min(w.until, lx.mono() + 0.001));
+      w.phase = 1; w.timedOut = cv.seq === w.seq;
+    }
+    const o = sync.get(m);
+    if (o && o.owner && o.owner !== k) return wait(0.001);
+    if (o) { o.owner = k; o.count = w.count || 1; }
+    waits.delete(k);
+    return w.timedOut ? 1 : 0;                                       // SDL_MUTEX_TIMEDOUT
+  };
+  const semWait = (sem, ms) => {
+    const o = sync.get(sem); if (!o) return -1;
+    if (o.count > 0) { o.count--; waits.delete(lx.pid); return 0; }
+    if (ms === 0) return 1;
+    let w = waits.get(lx.pid); if (!w || w.sem !== sem) waits.set(lx.pid, w = { sem, until: ms > 0 ? lx.mono() + ms / 1000 : Infinity });
+    if (lx.mono() >= w.until) { waits.delete(lx.pid); return 1; }
+    return x.waitUntil(Math.min(w.until, lx.mono() + 0.001));
+  };
+  // SDL_mixer's buffers: mixed by PRISM as the guest's clock makes them due (its pump), each queued for the
+  // card by a thread of its own that plays them as the card takes them.
+  let mixer_ = null;
+  mix.onMixed = (buf, len) => { if (mixer_) { mixer_.queue.push(x.bytes(buf, len)); if (mixer_.queue.length > 16) mixer_.queue.shift(); } };
+
+  const THREADS = {
+    SDL_OpenAudio: ['pp', (desired, obtained) => { if (devices.has(1)) return -1; return openAudio(1, desired, obtained, 0); }],
+    SDL_OpenAudioDevice: ['pipi' + 'i', (name, capture, desired, obtained, allowed) => { if (capture) return 0; const id = nextDevice++; return openAudio(id, desired, obtained, allowed) ? 0 : id; }],
+    SDL_PauseAudio: ['i', (on) => { const d = devices.get(1); if (d) d.paused = !!on; }],
+    SDL_PauseAudioDevice: ['ui', (id, on) => { const d = devices.get(id); if (d) d.paused = !!on; }],
+    SDL_CloseAudio: ['', () => closeAudio(1)], SDL_CloseAudioDevice: ['u', (id) => closeAudio(id)],
+    SDL_GetAudioStatus: ['', () => status(1)], SDL_GetAudioDeviceStatus: ['u', (id) => status(id)],
+    // The callback runs only between the traps of its thread, and threads change only at system calls: a
+    // lock has nothing to wait for.
+    SDL_LockAudio: ['', () => {}], SDL_UnlockAudio: ['', () => {}], SDL_LockAudioDevice: ['u', () => {}], SDL_UnlockAudioDevice: ['u', () => {}],
+    SDL_QueueAudio: ['upu', (id, data, len) => { const d = devices.get(id); if (!d || d.callback) return -1; if (len) { d.queue.push(x.bytes(data, len)); d.queued += len; } return 0; }],
+    SDL_GetQueuedAudioSize: ['u', (id) => { const d = devices.get(id); return d && !d.callback ? d.queued : 0; }],
+    SDL_ClearQueuedAudio: ['u', (id) => { const d = devices.get(id); if (d) { d.queue = []; d.queued = 0; } }],
+    // audioLoop's trap: the buffer the callback filled to the card (waiting while it is full), then silence
+    // in it for the next call, as SDL clears the stream before each.
+    MIRAGE_audio: ['', () => {
+      const d = [...devices.values()].find((v) => v.tid === lx.pid);
+      if (!d || d.paused) return wait(0.01);
+      const r = lx.dspPlay(toCard(d, x.bytes(d.buf, d.size)));
+      if (r === BLOCK()) return r;
+      x.write(d.buf, new Uint8Array(d.size).fill(d.silence));
+      return 0;
+    }],
+    MIRAGE_audioQueue: ['u', (id) => {
+      const d = devices.get(id);
+      if (!d || d.paused || !d.queue.length) return wait(0.005);
+      const r = lx.dspPlay(toCard(d, d.queue[0]));
+      if (r === BLOCK()) return r;
+      d.queued -= d.queue.shift().length;
+      return 0;
+    }],
+    MIRAGE_mixer: ['u', () => {
+      mix.pump();
+      if (!mixer_ || !mixer_.queue.length) return wait(0.005);
+      const r = lx.dspPlay(mixer_.queue[0]);
+      if (r === BLOCK()) return r;
+      mixer_.queue.shift();
+      return 0;
+    }],
+    // SDL_AddTimer(interval, callback, param): timerLoop until the callback returns 0 or SDL_RemoveTimer.
+    SDL_AddTimer: ['upp', (interval, callback, param) => {
+      const rec = x.win.heapAlloc(8); x.w32(rec, interval);
+      timers.set(rec, { due: lx.mono() + interval / 1000, removed: false });
+      thread(timerLoop(trap('MIRAGE_timer'), trap('MIRAGE_threadExit'), rec, callback, param));
+      return rec;
+    }],
+    SDL_RemoveTimer: ['p', (rec) => { const t = timers.get(rec); if (!t || t.removed) return 0; t.removed = true; return 1; }],
+    MIRAGE_timer: ['p', (rec) => {
+      const t = timers.get(rec), ms = x.r32(rec);
+      if (!t || t.removed || !ms) { timers.delete(rec); return 1; }
+      if (lx.mono() < t.due) return x.waitUntil(t.due);
+      t.due = lx.mono() + ms / 1000;
+      return 0;
+    }],
+    MIRAGE_threadExit: ['i', (code) => { lx.exitThread(code); return 0; }],
+    // SDL_CreateThread(fn, name, data, beginthread, endthread) -- Windows' SDL passes the C runtime's two --
+    // and SDL_CreateThreadWithStackSize: fn(data) on a thread of the program's; SDL_Thread* holds its id.
+    SDL_CreateThread: ['pppp' + 'p', (fn, name, data) => { const t = x.win.heapAlloc(8); x.w32(t, thread(threadCall(fn, data, trap('MIRAGE_threadExit')))); return t; }],
+    SDL_CreateThreadWithStackSize: ['ppupp' + 'p', (fn, name, size, data) => { const t = x.win.heapAlloc(8); x.w32(t, thread(threadCall(fn, data, trap('MIRAGE_threadExit')))); return t; }],
+    SDL_WaitThread: ['pp', (t, st) => { if (!t) return; const tid = x.r32(t); if (!lx.threadExits.has(tid)) return wait(0.001); if (st) x.w32(st, lx.threadExits.get(tid)); }],
+    SDL_DetachThread: ['p', () => {}], SDL_GetThreadID: ['p', (t) => (t ? x.r32(t) : lx.pid)], SDL_ThreadID: ['', () => lx.pid],
+    SDL_SetThreadPriority: ['i', () => 0],
+    SDL_CreateMutex: ['', () => { const m = x.win.heapAlloc(8); sync.set(m, { owner: 0, count: 0 }); return m; }],
+    SDL_LockMutex: ['p', (m) => lock(m) ?? wait(0.001)], SDL_TryLockMutex: ['p', (m) => lock(m) ?? 1], SDL_UnlockMutex: ['p', (m) => unlock(m)],
+    SDL_DestroyMutex: ['p', (m) => { if (sync.delete(m)) x.win.heapFree(m); }],
+    SDL_CreateSemaphore: ['u', (n) => { const p = x.win.heapAlloc(8); sync.set(p, { count: n }); return p; }],
+    SDL_DestroySemaphore: ['p', (p) => { if (sync.delete(p)) x.win.heapFree(p); }],
+    SDL_SemWait: ['p', (p) => semWait(p, -1)], SDL_SemTryWait: ['p', (p) => semWait(p, 0)], SDL_SemWaitTimeout: ['pu', (p, ms) => semWait(p, ms)],
+    SDL_SemPost: ['p', (p) => { const o = sync.get(p); if (!o) return -1; o.count++; return 0; }], SDL_SemValue: ['p', (p) => (sync.get(p) || { count: 0 }).count],
+    SDL_CreateCond: ['', () => { const c = x.win.heapAlloc(8); sync.set(c, { seq: 0 }); return c; }],
+    SDL_DestroyCond: ['p', (c) => { if (sync.delete(c)) x.win.heapFree(c); }],
+    SDL_CondSignal: ['p', (c) => { const o = sync.get(c); if (!o) return -1; o.seq++; return 0; }], SDL_CondBroadcast: ['p', (c) => { const o = sync.get(c); if (!o) return -1; o.seq++; return 0; }],
+    SDL_CondWait: ['pp', (c, m) => condWait(c, m, -1)], SDL_CondWaitTimeout: ['ppu', (c, m, ms) => condWait(c, m, ms)],
+    // Atomics: threads change only at system calls, so a read and a write are one step.
+    SDL_AtomicGet: ['p', (a) => x.r32(a) | 0], SDL_AtomicSet: ['pi', (a, v) => { const o = x.r32(a) | 0; x.w32(a, v); return o; }],
+    SDL_AtomicAdd: ['pi', (a, v) => { const o = x.r32(a) | 0; x.w32(a, o + v); return o; }],
+    SDL_AtomicCAS: ['pii', (a, o, n) => { if ((x.r32(a) | 0) !== o) return 0; x.w32(a, n); return 1; }],
+    SDL_AtomicGetPtr: ['p', (a) => x.r32(a)], SDL_AtomicSetPtr: ['pp', (a, v) => { const o = x.r32(a); x.w32(a, v); return o; }],
+    SDL_AtomicCASPtr: ['ppp', (a, o, n) => { if (x.r32(a) !== o) return 0; x.w32(a, n); return 1; }],
+    SDL_AtomicTryLock: ['p', (a) => { if (x.r32(a)) return 0; x.w32(a, 1); return 1; }], SDL_AtomicLock: ['p', (a) => (x.r32(a) ? wait(0.0001) : (x.w32(a, 1), undefined))],
+    SDL_AtomicUnlock: ['p', (a) => { x.w32(a, 0); }],
+  };
+  const INTERNAL = new Set(['MIRAGE_audio', 'MIRAGE_audioQueue', 'MIRAGE_mixer', 'MIRAGE_timer', 'MIRAGE_threadExit']);
+
   const WINDOW = {
     SDL_UpperBlit: ['pppp', (src, srcrect, dst, dstrect) => fastBlit(src, srcrect, dst, dstrect) ?? M.rt.SDL_UpperBlit(src, srcrect, dst, dstrect)],
     SDL_CreateWindow: ['ppiiiiu', (title, X, Y, w, h, flags) => {
@@ -223,7 +404,8 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
       const rec = st.wins && st.wins.get(win.hwnd); if (rec) rec.ex = 0;  // CreateWindowEx read its extended style off this call's stack
       // A window shown, exposed and given the keyboard, as SDL's Windows driver reports it (SDL_WINDOWEVENT
       // SHOWN 1, EXPOSED 3, FOCUS_GAINED 12): a program's first events. Abuse reads the mouse at each.
-      for (const ev of [1, 3, 12]) { const { e, d } = raw(SDL_WINDOWEVENT); d.setUint32(8, 1, true); e[12] = ev; sdl.state.events.push(e); }
+      for (const ev of [1, 3, 12]) windowEvent(ev);
+      const c = client(); win.cw = c.w; win.ch = c.h;
       return sdl.state.window;
     }],
     SDL_SetWindowFullscreen: ['pu', (window, flags) => {
@@ -263,12 +445,27 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
     }],
     SDL_Delay: ['u', (ms) => { sdl.state.pump(); if (!ms) { lx.yieldAfter = true; return 0; } return x.sleep(ms / 1000); }],
     SDL_ShowSimpleMessageBox: ['uppp', (flags, title, msg) => { M.write(`${x.str(title, 256)}: ${x.str(msg, 4096)}\n`); return 0; }],
-    // SDL_RWops are PRISM's handles: freeing one is closing it.
-    SDL_FreeRW: ['p', (rw) => { if (rw) M.rt.SDL_RWclose(rw); }],
+    // SDL_AllocRW / SDL_FreeRW: the struct alone (SDL_RWops, 48 bytes on Win32), freed without closing what it
+    // reads. A stream of PRISM's (SDL_RWFrom*) is a handle, not a struct: freeing it lets PRISM's record go.
+    SDL_AllocRW: ['', () => { const p = x.win.heapAlloc(48); x.write(p, new Uint8Array(48)); return p; }],
+    SDL_FreeRW: ['p', (rw) => { if (!rw) return; if (rw >= 0x51000000 && rw < 0x52000000) M.rt.SDL_RWclose(rw); else x.win.heapFree(rw); }],
     SDL_SaveBMP_RW: ['ppi', (s, rw, free) => { if (free && rw) M.rt.SDL_RWclose(rw); sdl.state.error = M.mod.intern([...enc.encode('SDL_SaveBMP: no files are written here'), 0]); return -1; }],
   };
   // SDL_mixer's functions a Windows build exports that PRISM's programs reach by macro or not at all.
   const MIXER = {
+    // The device as PRISM opens it, played by a thread of its own (MIRAGE_mixer) on the machine's card.
+    Mix_OpenAudio: ['iuii', (freq, format, channels, chunk) => {
+      const r = M.rt.Mix_OpenAudio(freq, format, channels, chunk);
+      if (r === 0 && !mixer_) {
+        lx.dspFormat(mix.freq, (mix.format & 0xff) === 8 ? 8 : 0x10, mix.outChannels);
+        mixer_ = { queue: [] };
+        mixer_.tid = thread([0x68, 0, 0, 0, 0, 0x68, 0, 0, 0, 0, 0xb8, ...le(HLE_BASE + trap('MIRAGE_mixer')), 0xcd, 0x80, 0x83, 0xc4, 0x08, 0xeb, 0x100 - 22]);
+      }
+      return r;
+    }],
+    Mix_CloseAudio: ['', () => { M.rt.Mix_CloseAudio(); if (mixer_) { lx.killThread(mixer_.tid); mixer_ = null; } }],
+    // freesrc: the stream closed once read, as SDL_mixer does.
+    Mix_LoadWAV_RW: ['pi', (rw, free) => { const c = M.rt.Mix_LoadWAV_RW(rw, free); if (free && rw) M.rt.SDL_RWclose(rw); return c; }],
     Mix_PlayChannel: ['ipi', (ch, chunk, loops) => M.rt.Mix_PlayChannelTimed(ch, chunk, loops, -1)],
     // A group's fade: its channels stopped at once (the fade itself is not made); how many were playing.
     Mix_FadeOutGroup: ['ii', (tag, ms) => { const n = M.rt.Mix_Playing(-1); M.rt.Mix_HaltChannel(-1); return n; }],
@@ -299,9 +496,9 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
     }
     return out;
   };
-  const own = (table) => Object.fromEntries(Object.entries(table).map(([name, [sig, fn]]) => [name, [sig, (cx, ...a) => { x = cx; return fn(...a); }, { cdecl: true }]]));
+  const own = (table) => Object.fromEntries(Object.entries(table).map(([name, [sig, fn]]) => [name, [sig, (cx, ...a) => { x = cx; return fn(...a); }, { cdecl: true, ...(INTERNAL.has(name) ? { noName: true } : {}) }]]));
   return [
-    { dll: 'SDL2.dll', fns: { ...fromPrism(decls), ...own(WINDOW) } },
+    { dll: 'SDL2.dll', fns: { ...fromPrism(decls), ...own(THREADS), ...own(WINDOW) } },
     { dll: 'SDL2_mixer.dll', fns: { ...fromPrism(mixer.mixerBuiltins(T)), ...own(MIXER) } },
   ];
 }

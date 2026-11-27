@@ -4961,6 +4961,52 @@ await (async () => { let got;
   eq('win32: SDL2.dll in JavaScript -- the 8-to-32-bit blit a row at a time gives PRISM\'s bytes; SDL_PollEvent(NULL) peeks; logical size, scale and viewport as SDL 2.0.22; SDL\'s stretch',
     got, 'true true 1 1 1 512 1 3.2000 0,0,319,239 0001112');
 })();
+// SDL2.dll's threads (src/win32/sdl2.js): SDL_OpenAudio's callback called by a thread of the program's between
+// the card's buffers (85 of 1024 bytes in half a guest second: the card's buffer filled, then its pace), each
+// one's samples played; SDL_AddTimer's callback every 10 ms (49 times); SDL_mixer's device played by a thread
+// of its own, a WAV loaded from memory (SDL_RWFromMem: PRISM's mixer had no reader in its SDL 2) on channel 0.
+await (async () => { let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const { win32HleDlls } = await import('../src/win32/sdl2.js');
+    const exe = Uint8Array.from(('4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
+    '000000000000000000004000040000000400000004000000000000000400000000000000000001004000000000000000' +
+    '0300000000001000001000000000100000100000000000000000000064a1300000008b400c8b400c8b008b008b58188b' +
+    '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
+    '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const apis = win32Apis({ hle: await win32HleDlls(['sdl2'], lx, mc.mem) }), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: traceBackend() });
+    const fns = (d) => apis.find((t) => t.dll === d).fns, sdl = fns('SDL2.dll'), mixf = fns('SDL2_mixer.dll');
+    const call = (n, ...a) => (sdl[n] || mixf[n])[1](x, ...a);
+    const le = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+    const put = (bytes) => { const p = x.win.heapAlloc(bytes.length + 16); x.write(p, Uint8Array.from(bytes)); return p; };
+    const sleep = x.win.load('kernel32.dll').exports.get('Sleep');
+    const idle = put([0x6a, 0x01, 0xb8, ...le(sleep), 0xff, 0xd0, 0xeb, 0xf5]);
+    const acb = put([0x8b, 0x44, 0x24, 0x04, 0xff, 0x00, 0x8b, 0x54, 0x24, 0x08, 0xc7, 0x02, 0x00, 0x40, 0x00, 0x40, 0xc3]);
+    const tcb = put([0x8b, 0x44, 0x24, 0x08, 0xff, 0x00, 0x8b, 0x44, 0x24, 0x04, 0xc3]);
+    const counts = x.win.heapAlloc(8); x.write(counts, new Uint8Array(8));
+    let played = 0, loud = 0; const orig = lx.dspPlay; lx.dspPlay = (b) => { const r = orig(b); if (r !== lx.BLOCK) { played += b.length; if (b.some((v) => v)) loud++; } return r; };
+    const spec = x.win.heapAlloc(24); x.write(spec, new Uint8Array(24)); x.w32(spec, 22050); x.w16(spec + 4, 0x8010); x.w8(spec + 6, 1); x.w16(spec + 8, 512); x.w32(spec + 16, acb); x.w32(spec + 20, counts);
+    const open = call('SDL_OpenAudio', spec, 0); call('SDL_PauseAudio', 0);
+    const timer = call('SDL_AddTimer', 10, tcb, counts + 4);
+    mc.cpu.eip = idle;
+    const run = (s) => { const t = lx.mono() + s; for (let i = 0; i < 20000 && lx.mono() < t && !lx.done; i++) mc.runSlice(50000); };
+    run(0.5);
+    const a = [open, x.r32(counts), x.r32(counts + 4), played, loud, x.r16(spec + 8), x.r32(spec + 12)];
+    call('SDL_RemoveTimer', timer); call('SDL_CloseAudio');
+    // The mixer: a WAV from memory, played.
+    const n = 2205, wav = new Uint8Array(44 + 2 * n), dv = new DataView(wav.buffer);
+    wav.set([...'RIFF'].map((c) => c.charCodeAt(0)), 0); dv.setUint32(4, 36 + 2 * n, true); wav.set([...'WAVEfmt '].map((c) => c.charCodeAt(0)), 8);
+    dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, 22050, true); dv.setUint32(28, 44100, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+    wav.set([...'data'].map((c) => c.charCodeAt(0)), 36); dv.setUint32(40, 2 * n, true); for (let i = 0; i < n; i++) dv.setInt16(44 + 2 * i, i & 64 ? 8000 : -8000, true);
+    const wp = put([...wav]);
+    played = 0; loud = 0;
+    const mo = call('Mix_OpenAudio', 22050, 0x8010, 2, 512), rw = call('SDL_RWFromMem', wp, wav.length), chunk = call('Mix_LoadWAV_RW', rw, 1), ch = call('Mix_PlayChannel', -1, chunk, 0);
+    run(0.5);
+    lx.dspPlay = orig;
+        got = [...a, mo, !!chunk, ch, played > 0, loud > 0].join(' ');
+  } catch (e) { got = e.message.slice(0, 120); }
+  eq('win32: SDL2.dll\'s audio callback, timer and SDL_mixer on threads of the program\'s, played on the card', got, '0 85 49 87040 84 512 1024 0 true 0 true true');
+})();
 // tools/win32/tinyhdr.asm: a PE as Crinkler's /TINYHEADER lays one out -- no section, alignment 4, the
 // code in the headers, SizeOfImage past the file -- is mapped flat, as Windows maps an image whose
 // section alignment is below the page's: it reads a byte past SizeOfHeaders (42) and one past the

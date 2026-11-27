@@ -39,13 +39,13 @@ const b32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255
  *           push len ; push buf ; push userdata ; mov eax, callback ; call eax ; add esp, 12 ; jmp loop
  * It starts at the play, so a paused device (SDL starts paused) waits there before the first callback.
  */
-const audioLoop = (play, len, buf, userdata, callback) => [
+export const audioLoop = (play, len, buf, userdata, callback) => [
   0xb8, ...b32(HLE_BASE + play), 0xcd, 0x80,
   0x68, ...b32(len), 0x68, ...b32(buf), 0x68, ...b32(userdata), 0xb8, ...b32(callback), 0xff, 0xd0, 0x83, 0xc4, 0x0c,
   0xeb, 0x100 - 34];
 /** SDL_CreateThread's thread: fn(data), then the thread ends with what it returned (pushed twice: the
  *  trap reads its argument above a return address, as a stub's caller leaves one). */
-const threadCall = (fn, data, exit) => [0x68, ...b32(data), 0xb8, ...b32(fn), 0xff, 0xd0, 0x50, 0x50, 0xb8, ...b32(HLE_BASE + exit), 0xcd, 0x80];
+export const threadCall = (fn, data, exit) => [0x68, ...b32(data), 0xb8, ...b32(fn), 0xff, 0xd0, 0x50, 0x50, 0xb8, ...b32(HLE_BASE + exit), 0xcd, 0x80];
 
 /*
  * SDL_AddTimer's thread, as guest code: wait for the timer (the trap answers when it is due, or nonzero when
@@ -55,7 +55,7 @@ const threadCall = (fn, data, exit) => [0x68, ...b32(data), 0xb8, ...b32(fn), 0x
  *        push param ; push [rec] ; mov eax, callback ; call eax ; add esp, 8 ; mov [rec], eax ; jmp L
  *     X: push 0 ; push 0 ; mov eax, HLE(SDL_mirage_thread_exit) ; int 80h
  */
-const timerLoop = (wait, exit, rec, callback, param) => [
+export const timerLoop = (wait, exit, rec, callback, param) => [
   0x68, ...b32(rec), 0x68, ...b32(rec), 0xb8, ...b32(HLE_BASE + wait), 0xcd, 0x80, 0x83, 0xc4, 0x08, 0x85, 0xc0, 0x75, 0x1c,
   0x68, ...b32(param), 0xff, 0x35, ...b32(rec), 0xb8, ...b32(callback), 0xff, 0xd0, 0x83, 0xc4, 0x08, 0xa3, ...b32(rec), 0xeb, 0x100 - 52,
   0x6a, 0x00, 0x6a, 0x00, 0xb8, ...b32(HLE_BASE + exit), 0xcd, 0x80];
