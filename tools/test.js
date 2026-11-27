@@ -8448,6 +8448,44 @@ await (async () => {
     eq(`node: ${n}${async ? ' (as in a page)' : ''}`, got, JSON.stringify(want[n]));
   }
 })();
+// zlib's deflate (src/node/zlib.js) makes its own bytes, not zlib's: the host's zlib inflates what it made --
+// every format, level and strategy, a stream flushed in the middle (Z_SYNC_FLUSH, Z_FULL_FLUSH), a dictionary.
+await (async () => {
+  let got;
+  try {
+    const { runNode } = await import('./node/mirage.mjs');
+    const hz = await import('zlib');
+    const src = `const z = require('zlib'), fs = require('fs');
+const text = Buffer.from(Array.from({ length: 4000 }, (_, i) => 'row ' + (i % 211) + ' ' + 'ab'.repeat(i % 17) + '\\n').join(''));
+const rnd = Buffer.alloc(150000); let s = 7; for (let i = 0; i < rnd.length; i++) { s = (s * 1103515245 + 12345) >>> 0; rnd[i] = i % 3 ? s >>> 24 : 65; }
+for (const [name, input] of [['text', text], ['rnd', rnd]]) for (const level of [0, 1, 4, 6, 9]) for (const strategy of [0, 2, 3, 4]) {
+  fs.writeFileSync(name + '-' + level + '-' + strategy + '.zz', z.deflateSync(input, { level, strategy }));
+  fs.writeFileSync(name + '-' + level + '-' + strategy + '.gz', z.gzipSync(input, { level, strategy }));
+  fs.writeFileSync(name + '-' + level + '-' + strategy + '.raw', z.deflateRawSync(input, { level, strategy }));
+}
+const d = z.createDeflate(), out = [];
+d.on('data', (b) => out.push(b)); d.on('end', () => fs.writeFileSync('flushed.zz', Buffer.concat(out)));
+d.write(text.subarray(0, 5000)); d.flush(z.constants.Z_SYNC_FLUSH, () => { d.write(text.subarray(5000, 9000)); d.flush(z.constants.Z_FULL_FLUSH, () => d.end(text.subarray(9000))); });
+fs.writeFileSync('dict.zz', z.deflateSync('row 5 abab and row 6', { dictionary: Buffer.from('row 5 abab row 6') }));
+`;
+    const r = await runNode(['/w/main.js'], { files: { 'main.js': src } });
+    const text = Buffer.from(Array.from({ length: 4000 }, (_, i) => 'row ' + (i % 211) + ' ' + 'ab'.repeat(i % 17) + '\n').join(''));
+    const rnd = Buffer.alloc(150000); let s = 7; for (let i = 0; i < rnd.length; i++) { s = (s * 1103515245 + 12345) >>> 0; rnd[i] = i % 3 ? s >>> 24 : 65; }
+    const bad = [];
+    let n = 0;
+    for (const [f, c] of Object.entries(r.files)) {
+      const m = /^(text|rnd)-\d-\d\.(zz|gz|raw)$/.exec(f); if (!m) continue;
+      const b = Buffer.from(c, 'latin1'), want = m[1] === 'text' ? text : rnd;
+      try { const back = m[2] === 'zz' ? hz.inflateSync(b) : m[2] === 'gz' ? hz.gunzipSync(b) : hz.inflateRawSync(b); if (!back.equals(want)) bad.push(f); } catch (e) { bad.push(f + ' ' + e.message); }
+      n++;
+    }
+    let flushed, dict;
+    try { flushed = hz.inflateSync(Buffer.from(r.files['flushed.zz'] || '', 'latin1')).equals(text); } catch (e) { flushed = e.message; }
+    try { dict = hz.inflateSync(Buffer.from(r.files['dict.zz'] || '', 'latin1'), { dictionary: Buffer.from('row 5 abab row 6') }).toString(); } catch (e) { dict = e.message; }
+    got = JSON.stringify([r.status, n, bad, flushed, dict]);
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('node: zlib\'s deflate, every format, level and strategy, flushed and with a dictionary, inflated by the host\'s zlib', got, JSON.stringify([0, 120, [], true, 'row 5 abab and row 6']));
+})();
 // fs.watch, polled (MIRAGE-LINUX has no inotify): a directory's entry made, changed, removed -> rename,
 // change, rename by its name; a file's own change; fs.promises.watch's iterator, ended by an AbortSignal;
 // a path not there -> ENOENT ... watch; close -> 'close'. Not against Node: the host's events are its

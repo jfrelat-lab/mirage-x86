@@ -385,5 +385,58 @@ const o = { import(x) { return 'method ' + x; } }; console.log(o.import(1));
   // never settles (status 13).
   esmthrow: { files: { 'main.mjs': "import './dep.mjs';\nconsole.log('never');\n", 'dep.mjs': "console.log('dep runs');\nthrow new TypeError('from a module');\n" } },
   esmunsettled: { files: { 'main.mjs': "console.log('before');\nawait new Promise(() => {});\nconsole.log('never');\n" } },
-  esmeval: { files: { 'main.js': '' }, args: ['-e', 'import { sep } from "path"; console.log("eval as a module", sep, typeof require);'], runFile: false },
+  // zlib: every format's round trip, sync, callback, promisified and streamed; inflate of Node's own bytes
+  // (made by zlib, kept in the script); its errors; crc32. Its deflate's bytes are not zlib's: only their
+  // round trips are compared here; tools/test.js has the host's zlib inflate them.
+  zlib: { files: { 'main.js': `
+const z = require('zlib'), fs = require('fs');
+const text = Buffer.from(Array.from({ length: 3000 }, (_, i) => 'line ' + (i % 97) + ' of the zlib test, ' + 'x'.repeat(i % 13) + '\\n').join(''));
+const rnd = Buffer.alloc(70000); let s = 1; for (let i = 0; i < rnd.length; i++) { s = (s * 1103515245 + 12345) >>> 0; rnd[i] = s >>> 24; }
+for (const [c, d] of [['deflateSync', 'inflateSync'], ['gzipSync', 'gunzipSync'], ['deflateRawSync', 'inflateRawSync'], ['gzipSync', 'unzipSync'], ['deflateSync', 'unzipSync']]) {
+  for (const input of [text, rnd, Buffer.alloc(0), Buffer.from('a')]) for (const level of [0, 1, 6, 9]) {
+    const packed = z[c](input, { level });
+    if (!z[d](packed).equals(input)) console.log('MISMATCH', c, d, input.length, level);
+  }
+}
+console.log('round trips', z.deflateSync(text).length < text.length / 4, z.deflateSync(rnd).length < rnd.length + 100, z.deflateSync(text, { level: 0 }).length > text.length);
+console.log(z.deflateSync('').toString('hex'), z.deflateRawSync('').toString('hex'), z.deflateSync('', { level: 0 }).toString('hex'), z.gzipSync('x').subarray(0, 4).toString('hex'), z.gzipSync('x', { level: 9 })[8], z.gzipSync('x', { level: 1 })[8]);
+// zlib 1.3's own output, inflated here
+console.log(z.inflateSync(Buffer.from('789ccb48cdc9c957c8402701680308b1', 'hex')).toString(), z.gunzipSync(Buffer.from('1f8b0800000000000013cbc80400ac2a93d802000000', 'hex')).toString());
+console.log(z.gunzipSync(Buffer.concat([z.gzipSync('a'), z.gzipSync('b')])).toString(), z.inflateSync(Buffer.concat([z.deflateSync('ok'), Buffer.from('junk')])).toString());
+const bad = Buffer.from(z.deflateSync('hello')); bad[bad.length - 1] ^= 1;
+const g = z.gzipSync('hello'); const badLen = Buffer.from(g); badLen[badLen.length - 1] ^= 1;
+for (const f of [() => z.inflateSync(Buffer.from('hello')), () => z.inflateSync(z.deflateSync('hello hello').subarray(0, 6)), () => z.inflateSync(bad), () => z.gunzipSync(z.deflateSync('a')),
+  () => z.inflateRawSync(Buffer.from([0xff, 0xff])), () => z.gunzipSync(badLen), () => z.gunzipSync(Buffer.concat([g, Buffer.from('junk')])), () => z.inflateSync(z.deflateSync('a'.repeat(1000)), { maxOutputLength: 10 }),
+  () => z.deflateSync('x', { level: 12 }), () => z.inflateRawSync(Buffer.from([0x05, 0x00]))]) {
+  try { const r = f(); console.log('ok', r.toString()); } catch (e) { console.log(e.name, e.code, e.errno, e.message); }
+}
+console.log(z.crc32('hello'), z.crc32('world', z.crc32('hello ')), z.crc32(Buffer.from('hello world')), z.crc32(''), typeof z.constants.Z_SYNC_FLUSH, z.constants.Z_BEST_COMPRESSION, z.codes.Z_DATA_ERROR, z.codes['-3']);
+const dict = Buffer.from('the dictionary of words');
+console.log(z.inflateSync(z.deflateSync('words of the dictionary', { dictionary: dict }), { dictionary: dict }).toString());
+try { z.inflateSync(z.deflateSync('words', { dictionary: dict })); } catch (e) { console.log(e.code, e.message); }
+console.log(Object.keys(z.deflateSync('x', { info: true })), z.deflateSync('x', { info: true }).engine instanceof z.Deflate);
+// one after another (the host's zlib answers from its thread pool, in no set order)
+const step = (f) => new Promise((done) => f(done));
+(async () => {
+  await step((done) => z.deflate(text, (e, b) => z.inflate(b, (e2, t) => { console.log('callbacks', e, e2, t.equals(text)); done(); })));
+  await step((done) => require('util').promisify(z.gzip)(text).then((b) => { console.log('promisified', z.gunzipSync(b).equals(text)); done(); }));
+  // streams: written in small pieces (each a write the inflater must take up where it stopped), and piped
+  await step((done) => {
+    const gz = z.gzipSync(text), un = z.createGunzip(), parts = [];
+    un.on('data', (d) => parts.push(d)); un.on('end', () => { console.log('stream in pieces', Buffer.concat(parts).equals(text), parts.length > 1); done(); });
+    for (let i = 0; i < gz.length; i += 7) un.write(gz.subarray(i, i + 7));
+    un.end();
+  });
+  await step((done) => {
+    const src = require('stream').Readable.from([text.subarray(0, 1000), text.subarray(1000)]);
+    require('stream').pipeline(src, z.createDeflate(), z.createInflate(), fs.createWriteStream('out.txt'), (e) => { console.log('pipeline', e, fs.readFileSync('out.txt').equals(text)); done(); });
+  });
+  await step((done) => { const bs = z.createInflate(); bs.on('error', (e) => { console.log('stream error', e.code, e.message); done(); }); bs.end(Buffer.from('nope')); });
+  await step((done) => {
+    const fl = z.createDeflate(), got = []; fl.on('data', (d) => got.push(d));
+    fl.write('flushed '); fl.flush(z.constants.Z_SYNC_FLUSH, () => { console.log('flush', z.inflateSync(Buffer.concat(got), { finishFlush: z.constants.Z_SYNC_FLUSH }).toString()); fl.end(); done(); });
+  });
+})();
+` } },
+  esmeval: { files: { 'main.js': '' }, args: ['-e','import { sep } from "path"; console.log("eval as a module", sep, typeof require);'], runFile: false },
 };
