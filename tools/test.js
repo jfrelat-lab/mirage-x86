@@ -8448,6 +8448,36 @@ await (async () => {
     eq(`node: ${n}${async ? ' (as in a page)' : ''}`, got, JSON.stringify(want[n]));
   }
 })();
+// A program's own fetch (FETCH, src/node/host.js; https.get in src/node/http.js): carried by the host's
+// fetch to registry.npmjs.org only; the response read as it comes, in pieces, its gzip already undone (so
+// no Content-Encoding is passed on); the guest's clock still while the host takes its time (a 1-second
+// timer of the guest's does not fire first); another host refused (EACCES); with no fetch, ENOTFOUND.
+await (async () => {
+  let got;
+  try {
+    const { runNode } = await import('./node/mirage.mjs');
+    const asked = [];
+    const fetch = async (req) => {
+      asked.push(req.url + ' ' + (req.headers.accept || '-'));
+      await new Promise((r) => setTimeout(r, 120));
+      const parts = ['{"name":"x",', '"versions":', '{}}'], enc = new TextEncoder();
+      const body = new ReadableStream({ async pull(c) { if (!parts.length) { c.close(); return; } await new Promise((r) => setTimeout(r, 5)); c.enqueue(enc.encode(parts.shift())); } });
+      return { status: 200, statusText: 'OK', url: req.url, headers: [['Content-Type', 'application/json'], ['Content-Encoding', 'gzip'], ['Content-Length', '9']], body };
+    };
+    const src = `const https = require('https');
+setTimeout(() => console.log('timer'), 1000);
+https.get('https://registry.npmjs.org/x', { headers: { accept: 'application/json' } }, (res) => {
+  let s = ''; res.setEncoding('utf8'); res.on('data', (d) => { s += d; }); res.on('end', () => console.log(res.statusCode, res.headers['content-type'], res.headers['content-encoding'], JSON.parse(s).name));
+});
+https.get('https://example.com/', () => {}).on('error', (e) => console.log(e.code));
+`;
+    const r = await runNode(['/w/main.js'], { files: { 'main.js': src }, fetch });
+    const none = await runNode(['/w/main.js'], { files: { 'main.js': "require('https').get('https://registry.npmjs.org/x', () => {}).on('error', (e) => console.log(e.code, e.message));\n" } });
+    got = JSON.stringify([r.out, r.status, asked, none.out]);
+  } catch (e) { got = String(e.message || e).slice(0, 120); }
+  eq('node: https.get through the host\'s fetch, registry.npmjs.org only, the guest\'s clock still while it waits', got,
+    JSON.stringify(['EACCES\n200 application/json undefined x\ntimer\n', 0, ['https://registry.npmjs.org/x application/json'], 'ENOTFOUND getaddrinfo ENOTFOUND registry.npmjs.org\n']));
+})();
 // zlib's deflate (src/node/zlib.js) makes its own bytes, not zlib's: the host's zlib inflates what it made --
 // every format, level and strategy, a stream flushed in the middle (Z_SYNC_FLUSH, Z_FULL_FLUSH), a dictionary.
 await (async () => {

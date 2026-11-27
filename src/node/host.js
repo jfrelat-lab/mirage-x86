@@ -12,7 +12,11 @@ export const NODE_MAGIC = '\0hle node\n';
 //     one -- its descriptors 0..nfds-1 the caller's fds[i] (-1: none), cwd its directory (0: the caller's);
 //     the child's id, or -errno with no child where the file or the directory is not there.
 //   WAIT (pollfds, n, ms): poll, which a child's end interrupts (EINTR) -- libuv's SIGCHLD.
-export const SPAWN = 0x10000, WAIT = 0x10001;
+//   FETCH (request): an HTTP GET carried by the host (lx.fetch) to the hosts src/oasis-hosts.js lets a guest
+//     reach; `request` a JSON string { url, method, headers }. A descriptor to read, the response as it comes:
+//     a line of JSON { status, statusText, headers: [[name, value]] } (or { error, code }), then the body;
+//     its end, the response's. -errno where no fetch is offered (ENETUNREACH) or the URL is not allowed (EACCES).
+export const SPAWN = 0x10000, WAIT = 0x10001, FETCH = 0x10002;
 
 /** Is it the HLE node's executable? A file beginning "\0hle node\n" (oasis's `hle` layer writes one). */
 export const isHleNode = (b) => b && b.length >= 10 && b[0] === 0 && String.fromCharCode(...b.subarray(1, 10)) === 'hle node\n';

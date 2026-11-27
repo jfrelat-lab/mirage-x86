@@ -353,6 +353,47 @@ export function modules(N) {
   };
   readline.promises = { Interface, createInterface: (...a) => { const rl = new Interface(...a); const q = rl.question.bind(rl); rl.question = (query, opts) => new Promise((resolve) => q(query, opts, resolve)); return rl; } };
 
+  // ---- diagnostics_channel: named channels, their subscribers called on publish; tracing channels
+  // (start, end, asyncStart, asyncEnd, error) around a call (lru-cache 11, under npm, makes some) --------
+  function diagnostics() {
+    const named = new Map();
+    class Channel {
+      constructor(name) { this.name = name; this._subs = []; }
+      get hasSubscribers() { return this._subs.length > 0; }
+      subscribe(f) { if (typeof f !== 'function') throw N.invalidArg('subscription', 'of type function', f); this._subs.push(f); }
+      unsubscribe(f) { const i = this._subs.indexOf(f); if (i < 0) return false; this._subs.splice(i, 1); return true; }
+      publish(msg) { for (const f of this._subs.slice()) { try { f(msg, this.name); } catch (e) { N.nextTick(() => { throw e; }); } } }
+      bindStore() {} unbindStore() { return false; }
+      runStores(data, fn, thisArg, ...args) { this.publish(data); return fn.apply(thisArg, args); }
+    }
+    const channel = (name) => { if (!named.has(name)) named.set(name, new Channel(name)); return named.get(name); };
+    const KINDS = ['start', 'end', 'asyncStart', 'asyncEnd', 'error'];
+    class TracingChannel {
+      constructor(n) { for (const k of KINDS) this[k] = typeof n === 'string' ? channel(`tracing:${n}:${k}`) : n[k]; }
+      get hasSubscribers() { return KINDS.some((k) => this[k].hasSubscribers); }
+      subscribe(h) { for (const k of KINDS) if (h[k]) this[k].subscribe(h[k]); }
+      unsubscribe(h) { let all = true; for (const k of KINDS) if (h[k] && !this[k].unsubscribe(h[k])) all = false; return all; }
+      traceSync(fn, ctx = {}, thisArg, ...args) {
+        this.start.publish(ctx);
+        try { const r = fn.apply(thisArg, args); ctx.result = r; return r; } catch (e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); }
+      }
+      tracePromise(fn, ctx = {}, thisArg, ...args) {
+        this.start.publish(ctx);
+        try {
+          const p = fn.apply(thisArg, args);
+          return Promise.resolve(p).then((r) => { ctx.result = r; this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); return r; }, (e) => { ctx.error = e; this.error.publish(ctx); this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); throw e; });
+        } catch (e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); }
+      }
+      traceCallback(fn, position = -1, ctx = {}, thisArg, ...args) {
+        const i = position < 0 ? args.length + position : position, cb = args[i];
+        args[i] = (err, res) => { if (err) { ctx.error = err; this.error.publish(ctx); } else ctx.result = res; this.asyncStart.publish(ctx); try { return cb(err, res); } finally { this.asyncEnd.publish(ctx); } };
+        return this.traceSync(fn, ctx, thisArg, ...args);
+      }
+    }
+    return { channel, hasSubscribers: (n) => named.has(n) && named.get(n).hasSubscribers, subscribe: (n, f) => channel(n).subscribe(f), unsubscribe: (n, f) => channel(n).unsubscribe(f),
+      tracingChannel: (n) => new TracingChannel(n), Channel };
+  }
+
   // ---- the remaining modules -----------------------------------------------------------------------
   const notYet = (mod) => new Proxy({}, { get: (t, k) => (k === '__esModule' || typeof k === 'symbol' ? undefined : () => { throw N.nodeError(Error, 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM', `${mod}.${String(k)} is not available in MIRAGE yet`); }) });
   const timersPromises = {
@@ -371,7 +412,7 @@ export function modules(N) {
     worker_threads: { isMainThread: true, parentPort: null, workerData: null, threadId: 0, Worker: class Worker { constructor() { throw N.nodeError(Error, 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM', 'worker_threads is not available in MIRAGE yet'); } } },
     zlib: notYet('zlib'), http: notYet('http'), https: notYet('https'), net: notYet('net'), dgram: notYet('dgram'), dns: notYet('dns'), tls: notYet('tls'), http2: notYet('http2'),
     cluster: { isPrimary: true, isMaster: true, isWorker: false }, perf_hooks: { performance: N.performance, PerformanceObserver: class {} }, async_hooks: { AsyncLocalStorage: class AsyncLocalStorage { run(s, f, ...a) { this._s = s; try { return f(...a); } finally { this._s = undefined; } } getStore() { return this._s; } enterWith(s) { this._s = s; } }, createHook: () => ({ enable() { return this; }, disable() { return this; } }), executionAsyncId: () => 1, triggerAsyncId: () => 0, AsyncResource: class AsyncResource { runInAsyncScope(f, t, ...a) { return f.apply(t, a); } } },
-    diagnostics_channel: { channel: () => ({ hasSubscribers: false, publish() {}, subscribe() {}, unsubscribe() {} }), hasSubscribers: () => false, subscribe() {}, unsubscribe() {} },
+    diagnostics_channel: diagnostics(),
     punycode: { toASCII: (s) => s, toUnicode: (s) => s }, inspector: notYet('inspector'), repl: notYet('repl'), sea: { isSea: () => false }, test: notYet('test'), wasi: notYet('wasi'), trace_events: notYet('trace_events'), domain: notYet('domain'),
   };
   const schemeOnly = new Set(['sea', 'test', 'test/reporters', 'sqlite']);
@@ -461,6 +502,11 @@ export function modules(N) {
   Module._extensions = Object.create(null);
   Module._resolveFilename = (req, parent) => resolveFilename(req, parent);
   Module.createRequire = (f) => { const file = typeof f === 'string' ? (f.startsWith('file:') ? N.fileURLToPath(f) : f) : N.fileURLToPath(f); const m = new Module(file); m.filename = file; m.paths = []; return makeRequire(m); };
+  // The node_modules directories a module in `from` looks in, nearest first (init-package-json asks).
+  Module._nodeModulePaths = (from) => { const out = []; for (let d = path.resolve(from); ; d = path.dirname(d)) { if (path.basename(d) !== 'node_modules') out.push((d === '/' ? '' : d) + '/node_modules'); if (d === '/') break; } return out; };
+  Module.globalPaths = [...(N.process.env.HOME ? [N.process.env.HOME + '/.node_modules', N.process.env.HOME + '/.node_libraries'] : []), path.resolve(N.process.execPath, '../../lib/node')];
+  Module._load = (request, parent, isMain) => load(request, parent, !!isMain);
+  Module._findPath = (request, paths = []) => { for (const p of paths) { try { return resolveFilename(path.resolve(p, request), null); } catch { /* the next */ } } try { return resolveFilename(request, null); } catch { return false; } };
   Module.syncBuiltinESMExports = () => {}; Module.register = () => {}; Module.enableCompileCache = () => ({ status: 0 }); Module.findPackageJSON = () => undefined;
   Module.Module = Module;
   builtins.module = Module;
@@ -517,6 +563,7 @@ export function modules(N) {
     const cached = Module._cache[filename];
     if (cached) return cached.exports;
     const m = new Module(filename, parent);
+    m.paths = Module._nodeModulePaths(path.dirname(filename));
     if (isMain) { m.id = '.'; N.mainModule = m; N.process.mainModule = m; }
     Module._cache[filename] = m;
     let ok = false;

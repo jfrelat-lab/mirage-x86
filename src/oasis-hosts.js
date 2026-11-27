@@ -19,8 +19,8 @@ export const OASIS_HOSTS = ['archive.debian.org', 'ftp.fu-berlin.de', 'busybox.n
   // CPython built for WASI (wasm32-wasip1), the builds the CPython project links to: a release of its GitHub repository.
   'github.com/brettcannon/cpython-wasi-build/releases/download/',
   // npm's registry, a package's tarballs only (a path per package: the whole registry would serve any code):
-  // TypeScript, the last tsc in JavaScript (linux/oasis-typescript-6.0).
-  'registry.npmjs.org/typescript/-/'];
+  // TypeScript, the last tsc in JavaScript (linux/oasis-typescript-6.0); npm itself (linux/oasis-npm-11.20).
+  'registry.npmjs.org/typescript/-/', 'registry.npmjs.org/npm/-/'];
 
 /** Where a host above redirects to, for those files only: GitHub serves a release's file from its
  *  storage, under the repository's number (Xenoveritas/abuse: 21053782, brettcannon/cpython-wasi-build: 618564477). */
@@ -52,4 +52,20 @@ export function relayTarget(raw) {
   if (OASIS_REDIRECTS.some((h) => at.startsWith(h)) && !u.pathname.includes('/../')) return u.href;
   if (!OASIS_HOSTS.some((h) => (h.includes('/') ? at.startsWith(h) && !u.pathname.includes('/../') : u.hostname === h))) return null;
   return u.href;
+}
+
+/*
+ * What a program in a machine may fetch itself (an HLE node's FETCH, src/node/host.js, carried by the
+ * page's or the tool's own fetch -- not by the relay: these hosts send CORS headers): npm's registry, for
+ * `npm install` -- a package's metadata and its tarballs, by GET, over https. Nothing else is reachable
+ * from inside a machine.
+ */
+export const GUEST_HOSTS = ['registry.npmjs.org/'];
+
+/** The URL a guest may fetch, or null. */
+export function guestFetchTarget(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port || u.pathname.includes('/../')) return null;
+  return GUEST_HOSTS.some((h) => (u.hostname + u.pathname).startsWith(h)) ? u.href : null;
 }

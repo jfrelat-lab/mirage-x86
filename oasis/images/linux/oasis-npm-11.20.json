@@ -1,0 +1,54 @@
+{
+  "oasis": 1,
+  "title": "npm 11.20, on MIRAGE's node, on BusyBox",
+  "year": 2026,
+  "author": "npm, Inc. and GitHub (npm); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
+  "world": "linux",
+  "machine": {
+    "cpu": "pentium4",
+    "mem": 256
+  },
+  "layers": [
+    {
+      "docker": "i386/busybox@sha256:79b6957454b0506796c042e9e2dfedd996c7efc93e701166d2dc9569bc9cc096",
+      "platform": "linux/386"
+    },
+    {
+      "oasis": "node"
+    },
+    {
+      "tar": "https://registry.npmjs.org/npm/-/npm-11.20.0.tgz",
+      "integrity": "sha512-dF3EDFwbYN+N5RUip+ZYDe0NeURK5BgqKOcvT1iNtUYhTMTl0FwWhBuXrS7KtXyduqyTMS5aaQaregnHDAxNgw==",
+      "strip": 1,
+      "into": "usr/local/lib/node_modules/npm"
+    },
+    {
+      "links": {
+        "/usr/local/bin/npm": "../lib/node_modules/npm/bin/npm-cli.js",
+        "/usr/local/bin/npx": "../lib/node_modules/npm/bin/npx-cli.js"
+      }
+    },
+    {
+      "file": "oasis/files/npm/package.json",
+      "to": "/root/hello/package.json"
+    },
+    {
+      "file": "oasis/files/npm/index.js",
+      "to": "/root/hello/index.js"
+    }
+  ],
+  "entry": {
+    "run": "/bin/sh",
+    "cwd": "/root/hello",
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME": "/root",
+      "TERM": "linux"
+    },
+    "console": "page"
+  },
+  "output": "window",
+  "license": "https://registry.npmjs.org/npm/-/npm-11.20.0.tgz",
+  "licenseName": "Artistic 2.0 (npm: LICENSE in the package), MIT (MIRAGE), GPL 2 (BusyBox)",
+  "notes": "npm 11.20.0 from npm's registry (its tarball, checked by its integrity), the npm Node.js 26.13.1 ships, installed as Node's installers lay it: npm and npx on the PATH. Its JavaScript runs on MIRAGE's node, the browser's own engine, beside the x86 BusyBox shell. npm reaches the registry through the browser's own fetch (registry.npmjs.org only: packages' metadata and tarballs; no audit). Try: npm install && npm start; npm init -y; npm ls; npx semver 1.2.3."
+}

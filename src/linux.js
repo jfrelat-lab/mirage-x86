@@ -17,7 +17,8 @@
 import { installMidi } from './midi.js';
 import { snapHook, snapExternal } from './snapshot.js';
 import { wasiImports, WasiExit, WAIT, isWasm } from './wasi.js';
-import { startNode, isHleNode, SPAWN as NODE_SPAWN, WAIT as NODE_WAIT, RUN as NODE_RUN, REQ as NODE_REQ, DONE as NODE_DONE, FAIL as NODE_FAIL } from './node/host.js';
+import { guestFetchTarget } from './oasis-hosts.js';
+import { startNode, isHleNode, FETCH as NODE_FETCH, SPAWN as NODE_SPAWN, WAIT as NODE_WAIT, RUN as NODE_RUN, REQ as NODE_REQ, DONE as NODE_DONE, FAIL as NODE_FAIL } from './node/host.js';
 
 const PAGE = 0x1000;
 const PD_BASE = 0x10000, GDT_BASE = 0x11000, FRAMES_BASE = 0x100000;
@@ -46,7 +47,7 @@ const BLOCK = Symbol('block');                            // a system call that 
 // the slice ended, no other process run meanwhile -- machine.pending is what the machine's loop awaits.
 const PAUSE = Symbol('pause');
 const E = { EPERM: 1, ENOENT: 2, EINTR: 4, EBADF: 9, ENOMEM: 12, EACCES: 13, EFAULT: 14, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
-  EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11, ECHILD: 10 };
+  EINVAL: 22, ENOTTY: 25, ESPIPE: 29, ERANGE: 34, ENOSYS: 38, ENOTEMPTY: 39, ENOSPC: 28, ENODATA: 61, ENOEXEC: 8, EMFILE: 24, EAGAIN: 11, ECHILD: 10, ENETUNREACH: 101 };
 
 /** The card memory (MiB, for installBIOS's `vram`) a framebuffer of `fb` ("WxH", 32 bits) needs, or 0
  *  when the 4 MiB every machine has will do. */
@@ -526,6 +527,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
         try {
           if (n === NODE_SPAWN) r = spawnFor(rdStr(a), strings(b), strings(d), c[5] ? rdStr(c[5] >>> 0) : null, Array.from({ length: c[7] >>> 0 }, (_, i) => rd32((c[6] >>> 0) + 4 * i) | 0));
           else if (n === NODE_WAIT) { r = poll(a, b, c[4] | 0); if (r === BLOCK && lx.zombies.size) r = -E.EINTR; }   // a child ended: the loop goes to see
+          else if (n === NODE_FETCH) r = fetchFor(rdStr(a));
           else r = SYS[n] ? SYS[n](a, b, d, c[5] >>> 0, c[6] >>> 0, c[7] >>> 0) : -E.ENOSYS;
         }
         catch (e) { if (typeof e === 'number') r = -e; else throw e; }
@@ -1759,6 +1761,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       const v = e.sem ? 1 : e.count; e.count -= v;
       wr32(buf, v % 4294967296); wr32(buf + 4, Math.floor(v / 4294967296)); return 8;
     }
+    if (f.hp) return hostRead(f, buf, n);
     if (f.sk) { const r = sockRead(f, n); if (typeof r !== 'object') return r; wrBytes(buf, r); return r.length; }
     // A pipe: what its writer left. Its writer has run to its end already (one process at a time), so an
     // empty pipe is the end of it.
@@ -2150,7 +2153,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     18: (a) => NET.accept(a[0], a[1], a[2], a[3]),                                                            // accept4
   };
   /** Whether a read of `f` would not wait: what poll, select and epoll_wait each ask. */
-  const fdReadable = (f) => (f.tfd ? tfdReady(f.tfd) : f.efd ? f.efd.count > 0 : f.ep ? epReady(f.ep).length > 0 : f.sk ? sockReady(f) : f.pty ? ptyReady(f)
+  const fdReadable = (f) => (f.hp ? f.hp.chunks.length > 0 || f.hp.done : f.tfd ? tfdReady(f.tfd) : f.efd ? f.efd.count > 0 : f.ep ? epReady(f.ep).length > 0 : f.sk ? sockReady(f) : f.pty ? ptyReady(f)
     : f.pp ? (!f.rd || f.pp.buf.length > 0 || !writerOpen(f.pp)) : f.pipe === 0 ? true   // what is left, or its end: a read answers at once
       : f.node && f.node.dev === 'tty' ? lx.ttyIn.length > 0 : f.node && f.node.dev === 'mice' ? lx.miceIn.length > 0 : f.node && f.node.dev === 'mouse' ? lx.mouseIn.length > 0 : true);
   /*
@@ -2182,7 +2185,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   // poll: like select, on struct pollfd { fd, events, revents } — POLLIN 1, POLLOUT 4, POLLHUP 10h, POLLNVAL 20h.
   const poll = (pfds, n, timeout) => {
     let ready = 0, waitsOnInput = false;
-    const res = [];
+    const res = [], hostWaits = [];
     for (let i = 0; i < n; i++) {
       const a = pfds + i * 8, fd = rd32(a) | 0, ev = rd8(a + 4) | (rd8(a + 5) << 8), f = fd >= 0 ? fds[fd] : null;
       let rev = 0;
@@ -2196,8 +2199,9 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
       }
       res.push([a + 6, rev]);
       if (rev) ready++;
+      if (f && f.hp && !f.hp.done) hostWaits.push(f.hp.next);
     }
-    if (!ready && timeout !== 0 && (timeout < 0 || !expired(timeout / 1000))) return BLOCK;   // wait: for ever, or the timeout
+    if (!ready && timeout !== 0 && (timeout < 0 || !expired(timeout / 1000))) { if (hostWaits.length) lx.hostWait = Promise.race(hostWaits); return BLOCK; }   // wait: for ever, or the timeout
     for (const [a, rev] of res) { wr8(a, rev & 0xff); wr8(a + 1, rev >> 8); }
     return ready;
   };
@@ -2227,6 +2231,44 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
   /** Is a pipe's write end open in any process? Then an empty pipe is not its end yet. */
   const writerOpen = (pp) => [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.pp === pp && !f.rd));
   const readerOpen = (pp) => [fds, ...lx.procs.map((q) => q.fds)].some((t) => t.some((f) => f && f.pp === pp && f.rd));
+  /*
+   * A fetch for an HLE node (its FETCH, src/node/host.js): the request carried by the host (lx.fetch: the
+   * page's or the tool's own fetch) to what src/oasis-hosts.js lets a guest reach, its response laid in a
+   * descriptor as it comes -- a line of JSON (status, headers), then the body; the end when it ends. While
+   * a process waits on it nobody's clock moves: the machine awaits the host (machine.pending), as for a
+   * module's compilation, so a timeout of the guest's cannot fire because the network is slow.
+   */
+  lx.fetch = typeof fetch === 'function' ? (req) => fetch(req.url, { method: 'GET', headers: req.headers.accept ? { accept: req.headers.accept } : {}, redirect: 'follow' }) : null;
+  const fetchFor = (json) => {
+    let req; try { req = JSON.parse(json); } catch { return -E.EINVAL; }
+    const url = guestFetchTarget(req.url || '');
+    if (!url || (req.method && req.method !== 'GET')) return -E.EACCES;
+    if (!lx.fetch) return -E.ENETUNREACH;
+    const hp = { chunks: [], done: false, next: null };
+    let wake;
+    const arm = () => { hp.next = new Promise((r) => { wake = r; }); };
+    const push = (b) => { hp.chunks.push(b); const w = wake; arm(); w(); };
+    const end = () => { hp.done = true; wake(); };
+    const line = (o) => new TextEncoder().encode(JSON.stringify(o) + '\n');
+    arm();
+    Promise.resolve().then(() => lx.fetch({ url, headers: Object.fromEntries(Object.entries(req.headers || {}).map(([k, v]) => [k.toLowerCase(), String(v)])) })).then(async (res) => {
+      // the body comes decoded (fetch undoes Content-Encoding): its encoding and length are not said again
+      const headers = [...res.headers].filter(([k]) => !['content-encoding', 'content-length', 'transfer-encoding'].includes(k.toLowerCase()));
+      push(line({ status: res.status, statusText: res.statusText, headers, url: res.url }));
+      if (res.body && res.body.getReader) { const rd = res.body.getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; if (value && value.length) push(value); } }
+      else { const b = new Uint8Array(await res.arrayBuffer()); if (b.length) push(b); }
+      end();
+    }).catch((e) => { push(line({ error: String((e && e.message) || e), code: 'ECONNRESET' })); end(); });
+    return newFd({ hp, rd: true }, 0, true);
+  };
+  const hostRead = (f, buf, n) => {
+    const hp = f.hp;
+    if (!hp.chunks.length) { if (hp.done) return 0; if (f.flags & 0x800) return -E.EAGAIN; lx.hostWait = hp.next; return BLOCK; }
+    let got = 0; const parts = [];
+    while (got < n && hp.chunks.length) { const c = hp.chunks[0], k = Math.min(n - got, c.length); parts.push(c.subarray(0, k)); got += k; if (k === c.length) hp.chunks.shift(); else hp.chunks[0] = c.subarray(k); }
+    const out = new Uint8Array(got); let at = 0; for (const p of parts) { out.set(p, at); at += p.length; }
+    wrBytes(buf, out); return got;
+  };
   const pipe = (ptr, flags = 0) => {
     const pp = { buf: [] }, ce = (flags & 0x80000) !== 0;
     const r = newFd({ pp, rd: true }, 0, ce), w = newFd({ pp, rd: false }, 0, ce);
@@ -2890,6 +2932,7 @@ export function installLinux(machine, { onOutput, realTime } = {}) {
     if (ret === BLOCK) {                                                 // int 80h again: on its next turn, or when input comes
       cpu.eip = (cpu.eip - 2) >>> 0;
       if (takeSignals(n)) { lx.blockRun = 0; return; }                    // a signal: the wait is over (or runs again after it)
+      if (lx.hostWait) { machine.pending = lx.hostWait; lx.hostWait = null; lx.blockRun = 0; cpu.tbudget = 0; return; }   // the host's fetch: awaited, the clock still
       if (lx.procs.length && ++lx.blockRun <= lx.procs.length) { yieldTo(); return; }
       lx.blockRun = 0;                                                   // every process waits
       const w = firstWake();

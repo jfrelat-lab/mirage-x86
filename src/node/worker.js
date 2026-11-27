@@ -19,10 +19,11 @@ import { process as proc } from './process.js';
 import { child } from './child.js';
 import { modules } from './modules.js';
 import { zlib } from './zlib.js';
+import { http } from './http.js';
 import { esm } from './esm.js';
 import { main } from './main.js';
 
-const PARTS = [kernel, path, events, inspect, buffer, stream, fs, crypto, proc, child, modules, zlib, esm, main];
+const PARTS = [kernel, path, events, inspect, buffer, stream, fs, crypto, proc, child, modules, zlib, http, esm, main];
 const ST = 0, RUN = 0, REQ = 1, DONE = 2, FAIL = 3;
 const inNode = typeof globalThis.process === 'object' && !!globalThis.process.versions?.node && typeof globalThis.WorkerGlobalScope === 'undefined';
 

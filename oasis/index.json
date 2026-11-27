@@ -215,6 +215,14 @@
     "output": "window"
   },
   {
+    "name": "linux/oasis-npm-11.20",
+    "title": "npm 11.20, on MIRAGE's node, on BusyBox",
+    "world": "linux",
+    "year": 2026,
+    "author": "npm, Inc. and GitHub (npm); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
+    "output": "window"
+  },
+  {
     "name": "linux/oasis-python-3.15",
     "title": "Python 3.15 for WASI (oasis/python:3.15), on BusyBox",
     "world": "linux",

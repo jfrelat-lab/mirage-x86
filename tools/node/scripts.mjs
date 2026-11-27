@@ -438,5 +438,20 @@ const step = (f) => new Promise((done) => f(done));
   });
 })();
 ` } },
+  // What npm and its agents load at every start: http's and https's classes and tables, net's address tests,
+  // diagnostics_channel's channels and tracing channels (lru-cache), Module._nodeModulePaths (init-package-json).
+  netsurface: { files: { 'main.js': `
+const http = require('http'), https = require('https'), net = require('net'), dc = require('diagnostics_channel'), Module = require('module');
+console.log(Object.keys(http.STATUS_CODES).length, http.STATUS_CODES[418], http.STATUS_CODES[511], http.METHODS.length, http.METHODS.slice(0, 5));
+class A extends http.Agent { constructor() { super({ keepAlive: true }); } } const a = new A();
+console.log(a instanceof require('events'), a.keepAlive, new https.Agent().defaultPort, http.globalAgent.defaultPort, typeof http.request, typeof https.get, typeof http.ClientRequest, typeof http.IncomingMessage);
+console.log(['1.2.3.4', '256.1.1.1', '::1', 'fe80::1', 'x', '2001:db8::ff00:42:8329', '01.2.3.4'].map((s) => net.isIP(s)), net.isIPv4('8.8.8.8'), net.isIPv6('8.8.8.8'));
+const ch = dc.channel('my'), seen = []; const f = (m, n) => seen.push(n + ':' + m.v); ch.subscribe(f); ch.publish({ v: 1 }); console.log(ch.hasSubscribers, dc.hasSubscribers('my'), ch.unsubscribe(f), ch.hasSubscribers, seen);
+const tc = dc.tracingChannel('op'), ev = []; tc.subscribe({ start: () => ev.push('start'), end: () => ev.push('end'), asyncStart: () => ev.push('asyncStart'), asyncEnd: () => ev.push('asyncEnd'), error: (c) => ev.push('error ' + c.error.message) });
+console.log(tc.traceSync((x) => x * 2, {}, null, 21), tc.hasSubscribers);
+try { tc.traceSync(() => { throw new Error('boom'); }); } catch (e) { ev.push('caught'); }
+tc.tracePromise(async () => 'p', {}).then((v) => console.log(v, ev));
+console.log(Module._nodeModulePaths('/a/node_modules/b/c'), typeof Module._load, typeof Module._findPath, Array.isArray(Module.globalPaths), module.paths[0] === require('path').join(__dirname, 'node_modules'), module.paths.at(-1));
+` } },
   esmeval: { files: { 'main.js': '' }, args: ['-e','import { sep } from "path"; console.log("eval as a module", sep, typeof require);'], runFile: false },
 };

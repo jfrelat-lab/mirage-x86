@@ -5,7 +5,7 @@ import { Machine } from '../../src/machine.js';
 import { installLinux } from '../../src/linux.js';
 import { NODE_MAGIC } from '../../src/node/host.js';
 
-export async function runNode(args, { files = {}, stdin = '', env = [], async = false, limit = 4000 } = {}) {
+export async function runNode(args, { files = {}, stdin = '', env = [], async = false, limit = 4000, fetch = null } = {}) {
   const mc = new Machine({ memSize: 32 << 20, cpu: '686' }), lx = installLinux(mc);
   for (const d of ['/usr', '/usr/bin', '/w', '/tmp']) lx.mkdir(d);
   lx.chdir('/w');
@@ -18,6 +18,7 @@ export async function runNode(args, { files = {}, stdin = '', env = [], async = 
   lx.epoch = 1700000000;
   lx.stdin = enc.encode(stdin);
   lx.nodeAsync = async;
+  lx.fetch = fetch;                                                      // no network unless the caller gives one (FETCH, src/node/host.js)
   lx.load(magic, ['/usr/bin/node', ...args], ['PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/root', 'LANG=C', ...env]);
   for (let i = 0; i < limit && !lx.done; i++) { mc.runSlice(200000); if (mc.pending) await lx.settle(); }
   const dec = (b) => Buffer.from(b).toString('latin1');
