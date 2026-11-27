@@ -131,6 +131,8 @@ export function process(N) {
       if (N.kids && N.reap) { N.reap(); await settle(); }
       await runImmediates();
     }
+    const unsettled = N.unsettled && N.unsettled();                      // a main module's top-level await that never settled
+    if (unsettled) { stderrWrite(unsettled); exit(13); }
     exit(proc.exitCode ?? 0);
   };
 

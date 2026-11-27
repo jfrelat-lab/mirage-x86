@@ -285,4 +285,105 @@ console.log(w instanceof require('events'), typeof w.ref, typeof w.unref, fs.wat
 fs.unwatchFile('x.txt', () => {});
 next();
 ` } },
+  // ES modules: import and export in every form, live bindings, a cycle, CommonJS and built-ins imported,
+  // JSON, packages' "exports" and "imports", import.meta, top-level await, import()'s errors.
+  esm: { files: { 'main.mjs': `
+import fs, { readFileSync as rfs } from 'node:fs';
+import { join } from 'path';
+import * as lib from './lib.mjs';
+import def, { count, bump, Klass, fromCycle } from './lib.mjs';
+import anon from './anon.mjs';
+import anonClass from './anonclass.mjs';
+import arrow from './arrow.mjs';
+import * as cjs from './c.cjs';
+import cjsDefault, { a as ca } from './c.cjs';
+import * as again from './again.mjs';
+import data from './data.json' with { type: 'json' };
+import pkg from 'pkg';
+import { which } from 'pkg/sub';
+import inner from '#inner';
+import typed from './typed/x.js';
+import detected from './detected.js';
+import { createRequire } from 'node:module';
+const strip = (s) => String(s).split(fs.realpathSync(process.cwd())).join('.').split(process.cwd()).join('.');
+console.log(typeof fs.readFileSync, rfs === fs.readFileSync, join('a', 'b'));
+console.log(lib, def.name, count);
+bump(); bump();
+console.log(count, lib.count, Klass.name, new Klass().hi(), fromCycle());
+console.log(anon.name, anonClass.name, arrow.name, arrow());
+console.log(cjs, cjsDefault === cjs.default, ca);
+console.log(Object.keys(again), again.y, again.m === lib);
+console.log(data, pkg, which, inner, typed, detected);
+try { count = 5; } catch (e) { console.log(e.name); }
+console.log(Object.keys(import.meta), strip(import.meta.url), strip(import.meta.filename), strip(import.meta.dirname), import.meta.main, strip(import.meta.resolve('./zz.js')));
+const require = createRequire(import.meta.url);
+const r = require('./lib.mjs'); console.log(r === lib, r.__esModule, r.count, require('./nodef.mjs'), require('./me.mjs'));
+console.log(await Promise.resolve('top-level await'), (await import('./tla.mjs')).v);
+for (const spec of ['./nope.mjs', './c', './sub', './data.json', './bad.mjs', './badc.mjs', 'nopkg', 'pkg/hidden', 'node:nope', '#nothing', './x.txt', 'http://x/y.js']) {
+  try { await import(spec); console.log('loaded', spec); } catch (e) { console.log(e.name, e.code, strip(e.message)); }
+}
+const ns = await import('node:events'); console.log(typeof ns.default, typeof ns.once, ns.default === (await import('events')).default);
+console.log(await import('./lib.mjs') === lib, typeof (await import('./c.cjs')).default.b);
+`,
+  'lib.mjs': `import { cycled } from './cycle.mjs';
+export default function named() {}
+export let count = 0;
+export function bump() { count++; }
+export class Klass { hi() { return 'hi'; } }
+export const { a: destructured, b: [first, ...rest] } = { a: 1, b: [2, 3, 4] }, after = 5;
+export var v1 = 1, v2;
+export function fromCycle() { return cycled(); }
+const local = 'L'; export { local as renamed, local as 'string name' };
+export function inCycle() { return 'lib function, hoisted'; }
+`,
+  'cycle.mjs': `import { inCycle } from './lib.mjs';
+export function cycled() { return inCycle(); }
+console.log('cycle sees', typeof inCycle);
+`,
+  'anon.mjs': 'export default function () { return 1; }\n',
+  'anonclass.mjs': 'export default class { }\n',
+  'arrow.mjs': 'export default () => "arrow";\n',
+  'c.cjs': "exports.a = 1; exports.b = function () {}; module.exports.c = 3; Object.defineProperty(exports, '__esModule', { value: true });\n",
+  'again.mjs': "export * from './c.cjs';\nexport * as m from './lib.mjs';\nexport { renamed as y, default } from './lib.mjs';\n",
+  'data.json': '{ "json": [1, 2] }\n',
+  'nodef.mjs': 'export const q = 1;\n',
+  'me.mjs': 'const v = { z: 1 };\nexport { v as "module.exports" };\nexport const w = 2;\n',
+  'tla.mjs': 'export const v = await new Promise((r) => setTimeout(() => r("waited"), 5));\n',
+  'bad.mjs': "import { nope } from './lib.mjs';\n",
+  'badc.mjs': "import { nope } from './c.cjs';\n",
+  'x.txt': 'text\n',
+  'sub/.keep': '',
+  'typed/package.json': '{ "type": "module" }\n',
+  'typed/x.js': 'export default "typed as a module";\n',
+  'detected.js': 'export default "detected as a module";\n',
+  'package.json': '{ "imports": { "#inner": "./inner.mjs" } }\n',
+  'inner.mjs': 'export default "imported by #inner";\n',
+  'node_modules/pkg/package.json': '{ "name": "pkg", "exports": { ".": { "import": "./esm.mjs", "require": "./cjs.cjs" }, "./sub": "./sub.mjs" } }\n',
+  'node_modules/pkg/esm.mjs': 'export default "pkg, its import condition";\n',
+  'node_modules/pkg/cjs.cjs': 'module.exports = "pkg, its require condition";\n',
+  'node_modules/pkg/sub.mjs': 'export const which = "pkg/sub";\n',
+  'node_modules/pkg/hidden.mjs': 'export default 1;\n',
+} },
+  // ES modules from CommonJS: import(), require() of an ES module (a namespace, its default's facade,
+  // "module.exports"), and of one that awaits.
+  esmcjs: { files: { 'main.js': `
+const strip = (s) => String(s).split(require('fs').realpathSync(process.cwd())).join('.').split(process.cwd()).join('.');
+const m = require('./m.mjs'); console.log(m, require('util').types.isModuleNamespaceObject(m));
+console.log(require('./t/esm.js'), require('./nodef.mjs'));
+try { require('./tla.mjs'); } catch (e) { console.log(e.code, strip(e.message)); }
+import('./m.mjs').then((ns) => console.log('import()', ns === m, ns.default === m.default, ns));
+import('fs').then((ns) => console.log('import(fs)', typeof ns.readFileSync));
+const o = { import(x) { return 'method ' + x; } }; console.log(o.import(1));
+`,
+  'm.mjs': 'export default function () {}\nexport const x = 1;\n',
+  'nodef.mjs': 'export const q = 1;\n',
+  'tla.mjs': 'await 0;\nexport const v = 1;\n',
+  't/package.json': '{ "type": "module" }\n',
+  't/esm.js': 'export const typed = true;\n',
+} },
+  // Errors of ES modules, as Node reports them: a throw at the top level, and a top-level await that
+  // never settles (status 13).
+  esmthrow: { files: { 'main.mjs': "import './dep.mjs';\nconsole.log('never');\n", 'dep.mjs': "console.log('dep runs');\nthrow new TypeError('from a module');\n" } },
+  esmunsettled: { files: { 'main.mjs': "console.log('before');\nawait new Promise(() => {});\nconsole.log('never');\n" } },
+  esmeval: { files: { 'main.js': '' }, args: ['-e', 'import { sep } from "path"; console.log("eval as a module", sep, typeof require);'], runFile: false },
 };

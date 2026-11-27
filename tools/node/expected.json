@@ -189,5 +189,76 @@
    "main.js": "\nconst fs = require('fs');\nfs.writeFileSync('x.txt', 'one');\nconst steps = [() => fs.writeFileSync('x.txt', 'two'), () => fs.writeFileSync('x.txt', 'three!'), () => fs.unlinkSync('x.txt'), () => fs.writeFileSync('x.txt', 'back')];\nlet step = 0;\nconst next = () => {\n  if (step < steps.length) setTimeout(steps[step++], 80);\n  else { fs.unwatchFile('x.txt', listener); console.log(w.listenerCount('change')); fs.unwatchFile('x.txt'); w.on('stop', () => console.log('stop')); }\n};\nconst listener = (cur, prev) => {\n  console.log('change', prev.size, '->', cur.size, cur.mtimeMs === 0, prev.mtimeMs === 0, cur.mtimeMs >= prev.mtimeMs, cur.isFile(), cur.mtime instanceof Date);\n  next();\n};\nconst w = fs.watchFile('x.txt', { interval: 20 }, listener);\nfs.watchFile('nothere', { interval: 20, persistent: false }, () => console.log('never'));\nconsole.log(w instanceof require('events'), typeof w.ref, typeof w.unref, fs.watchFile('x.txt', () => {}) === w);\nfs.unwatchFile('x.txt', () => {});\nnext();\n",
    "x.txt": "back"
   }
+ },
+ "esm": {
+  "out": "cycle sees function\nfunction true a/b\n[Module: null prototype] {\n  Klass: [class Klass],\n  after: 5,\n  bump: [Function: bump],\n  count: 0,\n  default: [Function: named],\n  destructured: 1,\n  first: 2,\n  fromCycle: [Function: fromCycle],\n  inCycle: [Function: inCycle],\n  renamed: 'L',\n  rest: [ 3, 4 ],\n  'string name': 'L',\n  v1: 1,\n  v2: undefined\n} named 0\n2 2 Klass hi lib function, hoisted\ndefault default default arrow\n[Module: null prototype] {\n  __esModule: true,\n  a: 1,\n  b: [Function (anonymous)],\n  c: 3,\n  default: { a: 1, b: [Function (anonymous)], c: 3 },\n  'module.exports': { a: 1, b: [Function (anonymous)], c: 3 }\n} true 1\n[ '__esModule', 'a', 'b', 'c', 'default', 'm', 'module.exports', 'y' ] L true\n{ json: [ 1, 2 ] } pkg, its import condition pkg/sub imported by #inner typed as a module detected as a module\nTypeError\n[ 'dirname', 'filename', 'main', 'resolve', 'url' ] file://./main.mjs ./main.mjs . true file://./zz.js\nfalse true 2 [Module: null prototype] { q: 1 } { z: 1 }\ntop-level await waited\nError ERR_MODULE_NOT_FOUND Cannot find module './nope.mjs' imported from ./main.mjs\nError ERR_MODULE_NOT_FOUND Cannot find module './c' imported from ./main.mjs\nError ERR_UNSUPPORTED_DIR_IMPORT Directory import './sub' is not supported resolving ES modules imported from ./main.mjs\nTypeError ERR_IMPORT_ATTRIBUTE_MISSING Module \"file://./data.json\" needs an import attribute of \"type: json\"\nSyntaxError undefined The requested module './lib.mjs' does not provide an export named 'nope'\nSyntaxError undefined Named export 'nope' not found. The requested module './c.cjs' is a CommonJS module, which may not support all module.exports as named exports.\nCommonJS modules can always be imported via the default export, for example using:\n\nimport pkg from './c.cjs';\nconst { nope } = pkg;\n\nError ERR_MODULE_NOT_FOUND Cannot find package 'nopkg' imported from ./main.mjs\nError ERR_PACKAGE_PATH_NOT_EXPORTED Package subpath './hidden' is not defined by \"exports\" in ./node_modules/pkg/package.json imported from ./main.mjs\nError ERR_UNKNOWN_BUILTIN_MODULE No such built-in module: node:nope\nTypeError ERR_PACKAGE_IMPORT_NOT_DEFINED Package import specifier \"#nothing\" is not defined in package ./package.json imported from ./main.mjs\nTypeError ERR_UNKNOWN_FILE_EXTENSION Unknown file extension \".txt\" for ./x.txt\nError ERR_UNSUPPORTED_ESM_URL_SCHEME Only URLs with a scheme in: file and data are supported by the default ESM loader. Received protocol 'http:'\nfunction function true\ntrue function\n",
+  "status": 0,
+  "files": {
+   "again.mjs": "export * from './c.cjs';\nexport * as m from './lib.mjs';\nexport { renamed as y, default } from './lib.mjs';\n",
+   "anon.mjs": "export default function () { return 1; }\n",
+   "anonclass.mjs": "export default class { }\n",
+   "arrow.mjs": "export default () => \"arrow\";\n",
+   "bad.mjs": "import { nope } from './lib.mjs';\n",
+   "badc.mjs": "import { nope } from './c.cjs';\n",
+   "c.cjs": "exports.a = 1; exports.b = function () {}; module.exports.c = 3; Object.defineProperty(exports, '__esModule', { value: true });\n",
+   "cycle.mjs": "import { inCycle } from './lib.mjs';\nexport function cycled() { return inCycle(); }\nconsole.log('cycle sees', typeof inCycle);\n",
+   "data.json": "{ \"json\": [1, 2] }\n",
+   "detected.js": "export default \"detected as a module\";\n",
+   "inner.mjs": "export default \"imported by #inner\";\n",
+   "lib.mjs": "import { cycled } from './cycle.mjs';\nexport default function named() {}\nexport let count = 0;\nexport function bump() { count++; }\nexport class Klass { hi() { return 'hi'; } }\nexport const { a: destructured, b: [first, ...rest] } = { a: 1, b: [2, 3, 4] }, after = 5;\nexport var v1 = 1, v2;\nexport function fromCycle() { return cycled(); }\nconst local = 'L'; export { local as renamed, local as 'string name' };\nexport function inCycle() { return 'lib function, hoisted'; }\n",
+   "main.mjs": "\nimport fs, { readFileSync as rfs } from 'node:fs';\nimport { join } from 'path';\nimport * as lib from './lib.mjs';\nimport def, { count, bump, Klass, fromCycle } from './lib.mjs';\nimport anon from './anon.mjs';\nimport anonClass from './anonclass.mjs';\nimport arrow from './arrow.mjs';\nimport * as cjs from './c.cjs';\nimport cjsDefault, { a as ca } from './c.cjs';\nimport * as again from './again.mjs';\nimport data from './data.json' with { type: 'json' };\nimport pkg from 'pkg';\nimport { which } from 'pkg/sub';\nimport inner from '#inner';\nimport typed from './typed/x.js';\nimport detected from './detected.js';\nimport { createRequire } from 'node:module';\nconst strip = (s) => String(s).split(fs.realpathSync(process.cwd())).join('.').split(process.cwd()).join('.');\nconsole.log(typeof fs.readFileSync, rfs === fs.readFileSync, join('a', 'b'));\nconsole.log(lib, def.name, count);\nbump(); bump();\nconsole.log(count, lib.count, Klass.name, new Klass().hi(), fromCycle());\nconsole.log(anon.name, anonClass.name, arrow.name, arrow());\nconsole.log(cjs, cjsDefault === cjs.default, ca);\nconsole.log(Object.keys(again), again.y, again.m === lib);\nconsole.log(data, pkg, which, inner, typed, detected);\ntry { count = 5; } catch (e) { console.log(e.name); }\nconsole.log(Object.keys(import.meta), strip(import.meta.url), strip(import.meta.filename), strip(import.meta.dirname), import.meta.main, strip(import.meta.resolve('./zz.js')));\nconst require = createRequire(import.meta.url);\nconst r = require('./lib.mjs'); console.log(r === lib, r.__esModule, r.count, require('./nodef.mjs'), require('./me.mjs'));\nconsole.log(await Promise.resolve('top-level await'), (await import('./tla.mjs')).v);\nfor (const spec of ['./nope.mjs', './c', './sub', './data.json', './bad.mjs', './badc.mjs', 'nopkg', 'pkg/hidden', 'node:nope', '#nothing', './x.txt', 'http://x/y.js']) {\n  try { await import(spec); console.log('loaded', spec); } catch (e) { console.log(e.name, e.code, strip(e.message)); }\n}\nconst ns = await import('node:events'); console.log(typeof ns.default, typeof ns.once, ns.default === (await import('events')).default);\nconsole.log(await import('./lib.mjs') === lib, typeof (await import('./c.cjs')).default.b);\n",
+   "me.mjs": "const v = { z: 1 };\nexport { v as \"module.exports\" };\nexport const w = 2;\n",
+   "node_modules/": "",
+   "node_modules/pkg/": "",
+   "node_modules/pkg/cjs.cjs": "module.exports = \"pkg, its require condition\";\n",
+   "node_modules/pkg/esm.mjs": "export default \"pkg, its import condition\";\n",
+   "node_modules/pkg/hidden.mjs": "export default 1;\n",
+   "node_modules/pkg/package.json": "{ \"name\": \"pkg\", \"exports\": { \".\": { \"import\": \"./esm.mjs\", \"require\": \"./cjs.cjs\" }, \"./sub\": \"./sub.mjs\" } }\n",
+   "node_modules/pkg/sub.mjs": "export const which = \"pkg/sub\";\n",
+   "nodef.mjs": "export const q = 1;\n",
+   "package.json": "{ \"imports\": { \"#inner\": \"./inner.mjs\" } }\n",
+   "sub/": "",
+   "sub/.keep": "",
+   "tla.mjs": "export const v = await new Promise((r) => setTimeout(() => r(\"waited\"), 5));\n",
+   "typed/": "",
+   "typed/package.json": "{ \"type\": \"module\" }\n",
+   "typed/x.js": "export default \"typed as a module\";\n",
+   "x.txt": "text\n"
+  }
+ },
+ "esmcjs": {
+  "out": "[Module: null prototype] {\n  __esModule: true,\n  default: [Function: default],\n  x: 1\n} true\n[Module: null prototype] { typed: true } [Module: null prototype] { q: 1 }\nERR_REQUIRE_ASYNC_MODULE require() cannot be used on an ESM graph with top-level await. Use import() instead. To see where the top-level await comes from, use --experimental-print-required-tla.\nRequired module: ./tla.mjs\nRequire stack:\n- ./main.js\nmethod 1\nimport() false true [Module: null prototype] { default: [Function: default], x: 1 }\nimport(fs) function\n",
+  "status": 0,
+  "files": {
+   "m.mjs": "export default function () {}\nexport const x = 1;\n",
+   "main.js": "\nconst strip = (s) => String(s).split(require('fs').realpathSync(process.cwd())).join('.').split(process.cwd()).join('.');\nconst m = require('./m.mjs'); console.log(m, require('util').types.isModuleNamespaceObject(m));\nconsole.log(require('./t/esm.js'), require('./nodef.mjs'));\ntry { require('./tla.mjs'); } catch (e) { console.log(e.code, strip(e.message)); }\nimport('./m.mjs').then((ns) => console.log('import()', ns === m, ns.default === m.default, ns));\nimport('fs').then((ns) => console.log('import(fs)', typeof ns.readFileSync));\nconst o = { import(x) { return 'method ' + x; } }; console.log(o.import(1));\n",
+   "nodef.mjs": "export const q = 1;\n",
+   "t/": "",
+   "t/esm.js": "export const typed = true;\n",
+   "t/package.json": "{ \"type\": \"module\" }\n",
+   "tla.mjs": "await 0;\nexport const v = 1;\n"
+  }
+ },
+ "esmthrow": {
+  "out": "dep runs\n",
+  "status": 1,
+  "files": {
+   "dep.mjs": "console.log('dep runs');\nthrow new TypeError('from a module');\n",
+   "main.mjs": "import './dep.mjs';\nconsole.log('never');\n"
+  }
+ },
+ "esmunsettled": {
+  "out": "before\n",
+  "status": 13,
+  "files": {
+   "main.mjs": "console.log('before');\nawait new Promise(() => {});\nconsole.log('never');\n"
+  }
+ },
+ "esmeval": {
+  "out": "eval as a module / undefined\n",
+  "status": 0,
+  "files": {
+   "main.js": ""
+  }
  }
 }

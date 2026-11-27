@@ -9,7 +9,7 @@ export function main(N) {
     if (a === '--') { i++; break; }
     if (!a.startsWith('-') || a === '-') break;
     if (a === '-v' || a === '--version') { N.write(1, proc.version + '\n'); N.exit(0); }
-    else if (a === '-h' || a === '--help') { N.write(1, 'Usage: node [options] [ script.js ] [arguments]\n       node -e "script" [arguments]\n\nMIRAGE\'s node: Node\'s API in JavaScript on MIRAGE-LINUX (CommonJS).\n'); N.exit(0); }
+    else if (a === '-h' || a === '--help') { N.write(1, 'Usage: node [options] [ script.js ] [arguments]\n       node -e "script" [arguments]\n\nMIRAGE\'s node: Node\'s API in JavaScript on MIRAGE-LINUX (CommonJS and ES modules).\n'); N.exit(0); }
     else if (a === '-e' || a === '--eval') { opts.eval = argv[++i] ?? ''; }
     else if (a === '-p' || a === '--print') { opts.eval = argv[++i] ?? ''; opts.print = true; }
     else if (a === '-pe' || a === '-ep') { opts.eval = argv[++i] ?? ''; opts.print = true; }

@@ -389,19 +389,19 @@ export function modules(N) {
   };
   const asIndex = (p) => { for (const e of ['.js', '.json', '.node']) if (isFile(p + '/index' + e)) return p + '/index' + e; return null; };
   const conditions = ['require', 'node', 'default', 'module-sync'];
-  const pickExport = (target) => {
+  const pickExport = (target, conds = conditions) => {
     if (typeof target === 'string') return target;
-    if (Array.isArray(target)) { for (const t of target) { const r = pickExport(t); if (r) return r; } return null; }
-    if (target && typeof target === 'object') for (const [k, v] of Object.entries(target)) if (conditions.includes(k)) { const r = pickExport(v); if (r) return r; }
+    if (Array.isArray(target)) { for (const t of target) { const r = pickExport(t, conds); if (r) return r; } return null; }
+    if (target && typeof target === 'object') for (const [k, v] of Object.entries(target)) if (conds.includes(k)) { const r = pickExport(v, conds); if (r) return r; }
     return null;
   };
-  const viaExports = (dir, pkg, sub) => {
+  const viaExports = (dir, pkg, sub, conds = conditions) => {
     let ex = pkg.exports;
     if (typeof ex === 'string' || Array.isArray(ex) || (ex && Object.keys(ex).every((k) => !k.startsWith('.')))) ex = { '.': ex };
-    if (ex[sub] !== undefined) { const t = pickExport(ex[sub]); return t ? path.resolve(dir, t) : null; }
+    if (ex[sub] !== undefined) { const t = pickExport(ex[sub], conds); return t ? path.resolve(dir, t) : null; }
     for (const [k, v] of Object.entries(ex)) {
       const star = k.indexOf('*');
-      if (star >= 0 && sub.startsWith(k.slice(0, star)) && sub.endsWith(k.slice(star + 1))) { const t = pickExport(v); if (t) return path.resolve(dir, t.replace('*', sub.slice(star, sub.length - (k.length - star - 1)))); }
+      if (star >= 0 && sub.startsWith(k.slice(0, star)) && sub.endsWith(k.slice(star + 1))) { const t = pickExport(v, conds); if (t) return path.resolve(dir, t.replaceAll('*', sub.slice(star, sub.length - (k.length - star - 1)))); }
     }
     return undefined;
   };
@@ -467,22 +467,31 @@ export function modules(N) {
 
   const stripShebang = (src) => (src.startsWith('#!') ? '//' + src.slice(2) : src);
   const stripBOM = (src) => (src.charCodeAt(0) === 0xfeff ? src.slice(1) : src);
+  // A .js file is an ES module in a package of "type": "module", or, in one of no type, when it does not
+  // compile as CommonJS and has a module's syntax (Node's detection); require() then evaluates its graph
+  // (src/node/esm.js).
   Module._extensions['.js'] = (m, filename) => {
     const src = stripBOM(fs.readFileSync(filename, 'utf8'));
-    if (filename.endsWith('.mjs') || isESM(filename, src)) throw esmError(filename);
-    m._compile(src, filename);
+    const type = filename.endsWith('.cjs') ? 'commonjs' : filename.endsWith('.mjs') ? 'module' : typeOfPackage(filename);
+    if (type === 'module') { m.exports = N.esm.requireESM(filename, m.parent); return; }
+    try { m._compile(src, filename); } catch (e) {
+      if (type === undefined && m._compiling && e instanceof SyntaxError && N.esm.isModuleSyntax(src)) { m._compiling = false; m.exports = N.esm.requireESM(filename, m.parent); return; }
+      throw e;
+    }
   };
   Module._extensions['.cjs'] = Module._extensions['.js'];
-  Module._extensions['.mjs'] = (m, filename) => { throw esmError(filename); };
+  Module._extensions['.mjs'] = (m, filename) => { m.exports = N.esm.requireESM(filename, m.parent); };
   Module._extensions['.json'] = (m, filename) => { const src = stripBOM(fs.readFileSync(filename, 'utf8')); try { m.exports = JSON.parse(src); } catch (e) { e.message = filename + ': ' + e.message; throw e; } };
   Module._extensions['.node'] = (m, filename) => { const e = new Error(`${filename}: native addons cannot run in MIRAGE's node`); e.code = 'ERR_DLOPEN_FAILED'; throw e; };
   const typeOfPackage = (file) => { for (let d = path.dirname(file); ; d = path.dirname(d)) { const p = readPkg(d); if (p) return p.type; if (d === '/') return undefined; } };
-  const isESM = (file, src) => typeOfPackage(file) === 'module' && !file.endsWith('.cjs') || (!file.endsWith('.cjs') && /^\s*(import\s+[\w{*'"]|export\s+(default|const|let|var|function|class|async|\{|\*))/m.test(src) && !/\brequire\s*\(|module\.exports|exports\./.test(src));
-  const esmError = (file) => { const e = new Error(`${file}: ES modules are not supported by MIRAGE's node yet (CommonJS only)`); e.code = 'ERR_REQUIRE_ESM'; return e; };
+  // import() in CommonJS: the ES loader's (src/node/esm.js), relative to this file.
   Module.prototype._compile = function (content, filename) {
-    const fn = N.bridge.compile(stripShebang(content), filename, ['exports', 'require', 'module', '__filename', '__dirname']);
+    const src = stripShebang(content), dyn = N.esm.cjsDynamic(src);
+    this._compiling = true;
+    const fn = N.bridge.compile(dyn ?? src, filename, ['exports', 'require', 'module', '__filename', '__dirname', '__mI']);
+    this._compiling = false;
     const req = makeRequire(this);
-    return fn.call(this.exports, this.exports, req, this, filename, path.dirname(filename));
+    return fn.call(this.exports, this.exports, req, this, filename, path.dirname(filename), (s, o) => N.esm.dynamicImport(s, filename, o));
   };
   Module.prototype.require = function (id) { return load(id, this, false); };
   Module.prototype.load = function (filename) {
@@ -514,20 +523,31 @@ export function modules(N) {
     try { m.load(filename); ok = true; } finally { if (!ok) delete Module._cache[filename]; }
     return m.exports;
   };
-  N.runMain = (file) => { load(path.resolve(file), null, true); };
+  // The main module: an ES module (.mjs, a package of "type": "module", a module's syntax in a .js of no
+  // type) is the ES loader's to run, the rest CommonJS. -e's code likewise.
+  N.runMain = (file) => {
+    const filename = resolveFilename(path.resolve(file), null), ext = path.extname(filename);
+    const type = ext === '.mjs' ? 'module' : ext === '.js' || ext === '' ? typeOfPackage(filename) : 'commonjs';
+    if (type === 'module' || (type === undefined && N.esm.isModuleSyntax(stripBOM(fs.readFileSync(filename, 'utf8'))))) { N.esm.runMain(filename); return; }
+    load(path.resolve(file), null, true);
+  };
   N.evalScript = (src, name = '[eval]') => {
+    if (N.esm.isModuleSyntax(src)) { N.esm.runMain(path.join(N.process.cwd(), name + '1'), src); return undefined; }
     const m = new Module(name); m.filename = path.join(N.process.cwd(), name); m.paths = [];
     const req = makeRequire(m);
     G.require = req; G.module = m; G.exports = m.exports; G.__filename = name; G.__dirname = '.';
-    return N.bridge.compile(`return eval(${JSON.stringify(src)})`, name, [])();
+    const dyn = N.esm.cjsDynamic(src);
+    return N.bridge.compile(`return eval(${JSON.stringify(dyn ?? src)})`, name, ['__mI'])((s, o) => N.esm.dynamicImport(s, m.filename, o));
   };
   N.builtins = builtins;
   N.Module = Module;
+  N.pathToFileURL = pathToFileURL;
+  N.cjs = { isFile, isDir, readPkg, pickExport, viaExports, typeOfPackage, resolveFilename, schemeOnly, cache: Module._cache, load: (file, parent, isMain) => load(file, parent, isMain) };
   /** Where an error was thrown, as Node prints it above an uncaught one: the file and line, the line, a caret. */
   N.throwSite = (e) => {
-    const m = /\n\s+at (?:.*?\()?(\/[^():]+):(\d+):(\d+)\)?/.exec(String(e.stack || ''));
+    const m = /\n\s+at (?:.*?\()?((?:file:\/\/)?\/[^():]+):(\d+):(\d+)\)?/.exec(String(e.stack || ''));   // an ES module's frame is its URL
     if (!m) return null;
-    try { const line = fs.readFileSync(m[1], 'utf8').split('\n')[m[2] - 1]; if (line === undefined) return null; return `${m[1]}:${m[2]}\n${line}\n${' '.repeat(Math.max(0, m[3] - 1))}^\n`; } catch { return null; }
+    try { const line = fs.readFileSync(m[1].startsWith('file:') ? N.fileURLToPath(m[1]) : m[1], 'utf8').split('\n')[m[2] - 1]; if (line === undefined) return null; return `${m[1]}:${m[2]}\n${line}\n${' '.repeat(Math.max(0, m[3] - 1))}^\n`; } catch { return null; }
   };
 
   // ---- the globals the built-in modules bring ---------------------------------------------------

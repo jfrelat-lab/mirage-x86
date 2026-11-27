@@ -146,7 +146,10 @@ export function inspect(N) {
     if (noIterator) {
       keys = getKeys(value, ctx.showHidden);
       braces = ['{', '}'];
-      if (constructor === 'Object' || (constructor === null && typeof value !== 'function' && !isError(value))) {
+      if (N.esm && N.esm.isNamespace(value)) {                          // an ES module's namespace (src/node/esm.js)
+        braces[0] = `${getPrefix(constructor, tag, 'Module')}{`;
+        if (keys.length === 0) return `${braces[0]}}`;
+      } else if (constructor === 'Object' || (constructor === null && typeof value !== 'function' && !isError(value))) {
         if (toStr(value) === '[object Arguments]') braces[0] = '[Arguments] [';
         else if (tag !== '' || constructor === null) braces[0] = `${getPrefix(constructor, tag, 'Object')}{`;
         if (toStr(value) === '[object Arguments]') { braces[1] = ']'; extrasType = kArrayExtrasType; formatter = formatArray; if (value.length === 0 && keys.length === 0) return '[Arguments] []'; }
@@ -357,8 +360,12 @@ export function inspect(N) {
   function formatProperty(ctx, value, recurseTimes, key, type) {
     let name, str;
     let extra = ' ';
-    const desc = Object.getOwnPropertyDescriptor(value, key) || { value: value[key], enumerable: false };
-    if (desc.value !== undefined) {
+    let desc;
+    try { desc = Object.getOwnPropertyDescriptor(value, key) || { value: value[key], enumerable: false }; } catch (e) {
+      if (!(N.esm && N.esm.isNamespace(value))) throw e;
+      desc = { enumerable: true }; str = '<uninitialized>';                // a binding not yet initialized (its let in its dead zone)
+    }
+    if (str !== undefined) { /* known */ } else if (desc.value !== undefined) {
       const diff = (ctx.compact !== true || type !== kObjectType) ? 2 : 3;
       ctx.indentationLvl += diff;
       str = formatValue(ctx, desc.value, recurseTimes);

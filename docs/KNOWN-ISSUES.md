@@ -89,7 +89,7 @@ Per-title status is in [COMPATIBILITY.md](COMPATIBILITY.md). The failures with a
 
 | Limit | Consequence |
 |---|---|
-| CommonJS only | `import` and `.mjs` (ES modules) end with ERR_REQUIRE_ESM. |
+| ES modules made from their source | A module is its source with its imports and exports taken out, compiled as a function (src/node/esm.js), not the engine's own module: the same bindings, cycles, errors and output as Node on tools/node's scripts, but a namespace is extensible, a module's first line reports columns shifted, and an `import(` or `export` that only a full parser would tell from a regex may be misread. Not here: loaders and hooks (`module.register`), import maps, `data:` URLs, WebAssembly modules, `import defer` and source imports. |
 | No network, zlib, worker threads; no IPC for children | `http`, `net`, `zlib` and their kin throw "not available in MIRAGE yet"; so do `child_process.fork` and an `'ipc'` stdio (spawn, exec, execFile and their Sync forms work). A child is made and exec'd by the kernel at once (posix_spawn), so its start costs no guest time: an order that depends on how long a child takes to start may differ from Node's. |
 | fs.watch polls | MIRAGE-LINUX has no inotify: `fs.watch` compares a directory's entries and their stats every 100 ms of guest time (`fs.watchFile` polls as Node itself does, at its interval). A write is one `'change'`, where Linux's inotify may say two; a change and its undoing within 100 ms are not seen. |
 | No REPL | `node` alone at a terminal says so and exits; give it a script, `-e` or `-p`. |

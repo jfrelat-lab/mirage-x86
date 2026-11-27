@@ -5,6 +5,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-27
 
+- node made by MIRAGE runs ES modules: `import` and `export`, `.mjs` files, packages of `"type": "module"`, `import()` and top-level `await`.
 - **Abuse** on the Windows machine now runs on an SDL 2 made in JavaScript: the same picture as its own SDL, for less of your browser's time.
 
 ## 2026-11-26
