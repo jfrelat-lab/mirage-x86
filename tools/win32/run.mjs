@@ -14,6 +14,7 @@
 //                                   a point (mouseAt), the left button down or up there
 //                                   (rdown, rup: the right button)
 //   MIRAGE_W32ENV=NAME=value,...    the program's environment (GetEnvironmentVariable)
+//   MIRAGE_W32HLE=sdl2              DLLs made in JavaScript in place of the program's own (machine.hle)
 //   MIRAGE_W32DIR=<dir>             the files beside it and below, by their path there, on the program's own disk (src/win32/api.js);
 //                                   a program in a folder of it has its path there (C:\jre\bin\java.exe)
 //   MIRAGE_W32SECS=<guest seconds>  stop after that long (default: until it ends, or 2e10 instructions)
@@ -92,7 +93,10 @@ const fonts = process.env.MIRAGE_W32FONTS ? Object.fromEntries(process.env.MIRAG
 const env = Object.fromEntries((process.env.MIRAGE_W32ENV || '').split(',').filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
 // MIRAGE_W32CODEPAGE=932: a Japanese Windows' code page (an image's machine.codepage).
 // MIRAGE_W32DESK=800x600: the desktop's size (an image's machine.desktop), 1024x768 otherwise.
-const apis = win32Apis({ files, fonts, env, codepage: Number(process.env.MIRAGE_W32CODEPAGE) || undefined, desk: process.env.MIRAGE_W32DESK });
+// MIRAGE_W32HLE=sdl2: DLLs made in JavaScript in place of the program's own (an image's machine.hle).
+const { win32HleDlls } = await import('../../src/win32/sdl2.js');
+const hle = await win32HleDlls((process.env.MIRAGE_W32HLE || '').split(',').filter(Boolean), lx, mc.mem);
+const apis = win32Apis({ files, fonts, env, codepage: Number(process.env.MIRAGE_W32CODEPAGE) || undefined, desk: process.env.MIRAGE_W32DESK, hle });
 /*
  * MIRAGE_W32PROBE=goldsrc: what Half-Life's engine (sw.dll) and its game (hl.dll) say to each other through
  * their tables of function pointers, which no import trace sees. The engine's table, handed over by

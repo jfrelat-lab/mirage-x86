@@ -180,7 +180,7 @@ export function langIdOf(tag, codepage = 1252) {
 // (only the text's black shadow showed).
 export const WIN32_GL_EXTENSIONS = ['GL_ARB_multitexture'];
 
-export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null, lang = 0x409, disk = null } = {}) {
+export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 1252, desk = null, lang = 0x409, disk = null, hle = [] } = {}) {
   const st = windowState(fonts);
   // The system's code page (GetACP): 1252, a Western Windows XP's, or 932, a Japanese one's -- what the
   // ANSI calls' bytes mean, Shift-JIS there (Cave Story's text, 2004). An image's `machine.codepage`.
@@ -4232,6 +4232,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // Direct3D 11 and DXGI (src/win32/d3d11.js); wininet, dwmapi, gdiplus, dbghelp (src/win32/modern.js).
     ...d3d11Apis(st), ...modern.dlls,
     ...ucrt,
+    // DLLs made in JavaScript in place of the program's own (machine.hle: SDL2.dll, src/win32/sdl2.js): the
+    // loader takes a table's DLL before the file beside the program.
+    ...hle.flatMap((make) => make({ st, user32, gdi32, target })),
   ];
   for (const [dll, fns] of Object.entries(modern.into)) { const t = tables.find((e) => e.dll === dll); for (const k in fns) if (!(k in t.fns)) t.fns[k] = fns[k]; }
   /*
@@ -4411,7 +4414,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // The program's icon (its first RT_GROUP_ICON's first image): { w, h, px 0x00RRGGBB, mask 1 transparent }, or null.
     icon: (x) => { try { const b = st.gdi.get(loadIcon(x, x.win.base, null)); return b && b.px ? { w: b.w, h: b.h, px: b.px, mask: b.mask } : null; } catch { return null; } } };   // GDI frames shown
   // The Windows a child process gets (CreateProcess): its own state, on the same disk.
-  tables.childApis = () => win32Apis({ gl, glu, fonts, env, codepage, desk, lang, disk: st.disk });
+  tables.childApis = () => win32Apis({ gl, glu, fonts, env, codepage, desk, lang, disk: st.disk, hle });
   return tables;
 }
 

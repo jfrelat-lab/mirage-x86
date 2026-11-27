@@ -88,7 +88,9 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
     // The visitor's language (machine.lang, else the browser's, when the code page can write it): the
     // language a program's resources are taken in -- Flash Player 8's menus in French for a French browser.
     const { langIdOf } = await import('./win32/api.js'), lang = m.lang ? Number(m.lang) : langIdOf(globalThis.navigator && navigator.language, m.codepage);
-    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files, env: img.entry.env || {}, codepage: m.codepage, desk: m.desktop, lang });
+    // machine.hle: Windows DLLs made in JavaScript in place of the program's own ("sdl2", src/win32/sdl2.js).
+    const w32hle = m.hle ? await (await import('./win32/sdl2.js')).win32HleDlls(m.hle, lx, mc.mem) : [];
+    const apis = win32Apis({ gl: glLib.fns, glu: gluLib.fns, fonts, files, env: img.entry.env || {}, codepage: m.codepage, desk: m.desktop, lang, hle: w32hle });
     w32in = apis.input; w32wm = apis.wm;
     w32loaded = win32Mod.loadPE(lx, mc.mem, mc.cpu, new Uint8Array(exe), { path: 'C:\\' + (root ? img.entry.run.slice(root === '/' ? 1 : root.length + 1).split('/').join('\\') : img.entry.run.split('/').pop()), args: (img.entry.args || []).join(' '), apis, backend: hle.backend });
   } else if (m.hle) {

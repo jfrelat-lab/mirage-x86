@@ -3,6 +3,10 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-27
+
+- **Abuse** on the Windows machine now runs on an SDL 2 made in JavaScript: the same picture as its own SDL, for less of your browser's time.
+
 ## 2026-11-26
 
 - **TypeScript 6.0** on the OASIS shelf (linux/oasis-typescript-6.0): `tsc` compiles, checks and watches on MIRAGE's node, from npm's own tarball.

@@ -4922,6 +4922,45 @@ await (async () => { let got;
     got = [lx.done && lx.status, ord('GlmfBeginGlsBlock'), ord('glAccum'), ord('glViewport'), ord('wglCreateContext'), ord('wglUseFontOutlinesW'), cos.st0].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: a PE walks the PEB to kernel32\'s exports as Crinkler does; opengl32\'s ordinals as XP\'s; a double returned in ST0', got, '42 1 7 343 346 368 -1'); })();
+// SDL2.dll made in JavaScript (machine.hle "sdl2", src/win32/sdl2.js): PRISM's SDL 2 on a Windows program's
+// memory. A whole 8-bit surface blitted onto a 32-bit one a row at a time gives PRISM's bytes (its path: the
+// same blit given a rectangle), with and without an alpha channel; SDL_PollEvent(NULL) leaves the event it
+// sees (Abuse asks so before each one it takes), the window's first being SHOWN; a FULLSCREEN_DESKTOP window
+// on the 1024x768 desktop with a 320x240 logical size has SDL 2.0.22's float scale and its viewport in
+// logical units (1024 / 3.2f truncated); and a stretch takes SDL's pixels, from half a step in.
+await (async () => { let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const { win32HleDlls, stretchSteps } = await import('../src/win32/sdl2.js');
+    const exe = Uint8Array.from((                       // nasm -f bin tools/win32/tinyhdr.asm
+    '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
+    '000000000000000000004000040000000400000004000000000000000400000000000000000001004000000000000000' +
+    '0300000000001000001000000000100000100000000000000000000064a1300000008b400c8b400c8b008b008b58188b' +
+    '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
+    '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const apis = win32Apis({ hle: await win32HleDlls(['sdl2'], lx, mc.mem) }), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { apis, backend: traceBackend() });
+    const sdl = apis.find((d) => d.dll === 'SDL2.dll').fns, call = (n, ...a) => sdl[n][1](x, ...a);
+    const W = 37, H = 5, s8 = call('SDL_CreateRGBSurface', 0, W, H, 8, 0, 0, 0, 0), pix = x.r32(s8 + 20), pitch8 = x.r32(s8 + 16) | 0;
+    let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) >>> 24;
+    for (let y = 0; y < H; y++) x.write(pix + y * pitch8, Uint8Array.from({ length: W }, rnd));
+    const colors = x.win.heapAlloc(1024); x.write(colors, Uint8Array.from({ length: 1024 }, rnd));
+    call('SDL_SetPaletteColors', x.r32(x.r32(s8 + 4) + 4), colors, 0, 256);
+    const rect = x.win.heapAlloc(16); x.write(rect, Uint8Array.of(0, 0, 0, 0, 0, 0, 0, 0, W, 0, 0, 0, H, 0, 0, 0));
+    const same = [[0, 0, 0, 0], [0xff0000, 0xff00, 0xff, 0xff000000]].map((m) => {
+      const a = call('SDL_CreateRGBSurface', 0, W, H, 32, ...m), b = call('SDL_CreateRGBSurface', 0, W, H, 32, ...m);
+      call('SDL_UpperBlit', s8, 0, a, 0); call('SDL_UpperBlit', s8, rect, b, 0);
+      const n = (x.r32(a + 16) | 0) * H, A = x.bytes(x.r32(a + 20), n), B = x.bytes(x.r32(b + 20), n);
+      return A.every((v, i) => v === B[i]) && A.some((v) => v);
+    });
+    call('SDL_CreateWindow', 0, 0x1fff0000, 0x1fff0000, 640, 480, 0x1001);
+    const ev = x.win.heapAlloc(56), peek = [call('SDL_PollEvent', 0), call('SDL_PollEvent', 0), call('SDL_PollEvent', ev), x.r32(ev), x.r8(ev + 12)];
+    const r = call('SDL_CreateRenderer', 0, -1, 0); call('SDL_RenderSetLogicalSize', r, 320, 240);
+    const f = x.win.heapAlloc(8), vp = x.win.heapAlloc(16); call('SDL_RenderGetScale', r, f, f + 4); call('SDL_RenderGetViewport', r, vp);
+    got = [...same, ...peek, x.f32(f).toFixed(4), [0, 4, 8, 12].map((k) => x.r32(vp + k) | 0).join(','), [...stretchSteps(320, 1024).subarray(0, 7)].join('')].join(' ');
+  } catch (e) { got = e.message.slice(0, 120); }
+  eq('win32: SDL2.dll in JavaScript -- the 8-to-32-bit blit a row at a time gives PRISM\'s bytes; SDL_PollEvent(NULL) peeks; logical size, scale and viewport as SDL 2.0.22; SDL\'s stretch',
+    got, 'true true 1 1 1 512 1 3.2000 0,0,319,239 0001112');
+})();
 // tools/win32/tinyhdr.asm: a PE as Crinkler's /TINYHEADER lays one out -- no section, alignment 4, the
 // code in the headers, SizeOfImage past the file -- is mapped flat, as Windows maps an image whose
 // section alignment is below the page's: it reads a byte past SizeOfHeaders (42) and one past the
