@@ -41,7 +41,7 @@ export const SHIPPED = (p) => /^[^/]+\.(html|css)$/.test(p) || p === 'LICENSE' |
  * submodule's files are not the repository's own (git ls-files lists the submodule, not them), so they
  * are named here; a module PRISM adds to that closure is shipped without a change here.
  */
-const PRISM = 'vendor/prism', PRISM_ENTRIES = ['src/env/gl.js', 'src/env/glu.js', 'src/env/d3d9.js'];
+const PRISM = 'vendor/prism', PRISM_ENTRIES = ['src/env/gl.js', 'src/env/glu.js', 'src/env/d3d9.js', 'src/env/sdl2.js', 'src/env/sdl2-surface.js', 'src/env/sdl2-image.js', 'src/env/sdlmixer.js'];
 export function prismShipped(root = ROOT) {
   const out = new Set(['LICENSE', 'THIRD-PARTY.md']), todo = [...PRISM_ENTRIES];
   while (todo.length) {
