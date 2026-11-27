@@ -36,6 +36,7 @@ import { audioLoop, threadCall, timerLoop } from '../hle/sdl12.js';
 import { HLE_BASE } from '../hle/elfso.js';
 
 const WS_POPUP = 0x80000000, WS_VISIBLE = 0x10000000, STYLE_NORMAL = 0x00ca0000;   // WS_OVERLAPPED|CAPTION|SYSMENU|MINIMIZEBOX
+const STYLE_RESIZABLE = 0x00050000, SDL_WINDOW_RESIZABLE = 0x20;                    // WS_THICKFRAME|MAXIMIZEBOX, SDL's
 const SDL_WINDOW_FULLSCREEN = 0x1, SDL_WINDOWPOS_MASK = 0xffff0000, SDL_WINDOWPOS_UNDEFINED = 0x1fff0000, SDL_WINDOWPOS_CENTERED = 0x2fff0000;
 const SDL_QUIT = 0x100, SDL_WINDOWEVENT = 0x200, SDL_MOUSEMOTION = 0x400, SDL_MOUSEBUTTONUP = 0x402, SDL_MOUSEWHEEL = 0x403;
 
@@ -75,7 +76,7 @@ export async function sdl2Dlls(lx, mem) {
   return (w32) => makeDlls(lx, mem, w32, { sdl2, surface, image, mixer });
 }
 
-function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer }) {
+function makeDlls(lx, mem, { st, user32, target, formatC }, { sdl2, surface, image, mixer }) {
   const enc = new TextEncoder();
   let x = null;                                                    // the context of the call being answered
   const M = prismM(lx, mem);
@@ -91,7 +92,7 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
   const clock = { now: () => Math.floor(lx.mono() * 1000), delay: () => {}, peek: () => Math.floor(lx.mono() * 1000) };
 
   // ---- the window ------------------------------------------------------------------------------------
-  const win = { hwnd: 0, flags: 0, w: 0, h: 0, cursor: 1, buttons: 0, mx: 0, my: 0, msg: 0, rect: 0 };
+  const win = { hwnd: 0, flags: 0, w: 0, h: 0, cursor: 1, buttons: 0, mx: 0, my: 0, msg: 0, rect: 0, mod: 0 };
   const scratch = () => { if (!win.rect) { win.rect = x.win.heapAlloc(16); win.msg = x.win.heapAlloc(28); } };
   const client = () => { scratch(); user32.GetClientRect[1](x, win.hwnd, win.rect); return { w: x.r32(win.rect + 8) | 0, h: x.r32(win.rect + 12) | 0 }; };
   // SDL 2.0.22's UpdateLogicalSize (no integer scale): the scale a float, the viewport in pixels.
@@ -109,7 +110,7 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
   // Where the window goes and how it looks, as WIN_CreateWindow and WIN_SetWindowFullscreen put it.
   const place = (flags, X, Y, w, h) => {
     if (fullscreen(flags)) { const s = screen(); return { style: WS_POPUP | WS_VISIBLE, X: 0, Y: 0, W: s.w, H: s.h }; }
-    const s = screen(), style = STYLE_NORMAL | WS_VISIBLE;
+    const s = screen(), style = STYLE_NORMAL | (flags & SDL_WINDOW_RESIZABLE ? STYLE_RESIZABLE : 0) | WS_VISIBLE;
     const pos = (v, room, n) => ((v & SDL_WINDOWPOS_MASK) === SDL_WINDOWPOS_UNDEFINED || (v & SDL_WINDOWPOS_MASK) === SDL_WINDOWPOS_CENTERED ? ((room - n) / 2) | 0 : v | 0);
     scratch(); x.write(win.rect, new Uint8Array(16)); x.w32(win.rect + 8, w); x.w32(win.rect + 12, h);
     user32.AdjustWindowRectEx[1](x, win.rect, style, 0, 0);
@@ -144,6 +145,8 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
       if (m === 0x100 || m === 0x101 || m === 0x104 || m === 0x105) {                   // WM_(SYS)KEYDOWN/UP
         const from = sdl.state.events.length, down = !(m & 1);
         sdl.pushScan((lp >>> 16) & 0xff, (lp >>> 24) & 1, down);
+        const last = sdl.state.events[sdl.state.events.length - 1];
+        if (sdl.state.events.length > from && last) win.mod = new DataView(last.buffer).getUint16(24, true);   // the modifiers it reported
         if (down && (lp & 0x40000000)) for (const e of sdl.state.events.slice(from)) e[13] = 1;   // keysym's repeat
         if (down) user32.TranslateMessage[1](x, win.msg);
         continue;
@@ -392,6 +395,33 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
     SDL_AtomicTryLock: ['p', (a) => { if (x.r32(a)) return 0; x.w32(a, 1); return 1; }], SDL_AtomicLock: ['p', (a) => (x.r32(a) ? wait(0.0001) : (x.w32(a, 1), undefined))],
     SDL_AtomicUnlock: ['p', (a) => { x.w32(a, 0); }],
   };
+  // ---- the C library SDL carries (SDL_stdinc.h), and what PRISM's programs never asked ------------------------------
+  const enc8 = new TextEncoder(), wstr = (p) => { let n = 0; while (x.r16(p + 2 * n)) n++; return n; };
+  const ICONV = { 'UTF-8': 'utf8', UTF8: 'utf8', ASCII: 'latin1', 'US-ASCII': 'latin1', LATIN1: 'latin1', 'ISO-8859-1': 'latin1', 'UTF-16LE': 'utf16', 'UCS-2LE': 'utf16', 'UCS-2-INTERNAL': 'utf16', 'UTF-16': 'utf16', 'UCS-2': 'utf16', WCHAR_T: 'utf16', 'UTF-32LE': 'utf32', 'UCS-4LE': 'utf32', 'UCS-4-INTERNAL': 'utf32', 'UTF-32': 'utf32', 'UCS-4': 'utf32' };
+  const decode = (kind, b) => kind === 'utf8' ? new TextDecoder().decode(b) : kind === 'latin1' ? String.fromCharCode(...b)
+    : kind === 'utf16' ? String.fromCharCode(...new Uint16Array(b.buffer.slice(b.byteOffset, b.byteOffset + (b.length & ~1))))
+    : String.fromCodePoint(...new Uint32Array(b.buffer.slice(b.byteOffset, b.byteOffset + (b.length & ~3))));
+  const encode = (kind, t) => kind === 'utf8' ? enc8.encode(t) : kind === 'latin1' ? Uint8Array.from(t, (c) => (c.charCodeAt(0) < 256 ? c.charCodeAt(0) : 63))
+    : kind === 'utf16' ? new Uint8Array(Uint16Array.from(t, (c) => c.charCodeAt(0)).buffer) : new Uint8Array(Uint32Array.from([...t], (c) => c.codePointAt(0)).buffer);
+  const LIBC = {
+    SDL_malloc: ['u', (n) => x.win.heapAlloc(n || 1)],
+    SDL_calloc: ['uu', (n, size) => { const p = x.win.heapAlloc(n * size || 1); x.write(p, new Uint8Array(n * size)); return p; }],
+    SDL_realloc: ['pu', (p, n) => { const q = x.win.heapAlloc(n || 1); if (p) { x.write(q, x.bytes(p, Math.min(x.win.heapSize(p), n))); x.win.heapFree(p); } return q; }],
+    SDL_memcpy: ['ppu', (d, src, n) => { if (n) x.write(d, x.bytes(src, n)); return d; }],
+    SDL_memmove: ['ppu', (d, src, n) => { if (n) x.write(d, x.bytes(src, n)); return d; }],
+    SDL_wcslen: ['p', (p) => wstr(p)],
+    // SDL_SetError(fmt, ...): the message as printf makes it, kept for SDL_GetError; -1.
+    SDL_SetError: ['p', (fmt) => { const t = formatC(x, x.str(fmt, 1024), (x.cpu.reg[4] >>> 0) + 8).slice(0, 1023); sdl.state.error = M.mod.intern([...enc8.encode(t), 0]); return -1; }],
+    SDL_vsnprintf: ['pupp', (buf, n, fmt, ap) => { const t = enc8.encode(formatC(x, x.str(fmt, 4096), ap)); if (n) { const k = Math.min(t.length, n - 1); x.write(buf, t.subarray(0, k)); x.w8(buf + k, 0); } return t.length; }],
+    // SDL_iconv_string(to, from, in, bytes): the text in a new block (SDL_free), four zero bytes after it.
+    SDL_iconv_string: ['pppu', (to, from, inp, n) => {
+      const t = ICONV[x.str(to, 64).toUpperCase()], f = ICONV[x.str(from, 64).toUpperCase()];
+      if (!t || !f) return 0;
+      const out = encode(t, decode(f, x.bytes(inp, n))), p = x.win.heapAlloc(out.length + 4);
+      x.write(p, out); x.write(p + out.length, new Uint8Array(4)); return p;
+    }],
+    SDL_GetModState: ['', () => win.mod], SDL_SetMainReady: ['', () => {}], SDL_JoystickNameForIndex: ['i', () => 0],
+  };
   const INTERNAL = new Set(['MIRAGE_audio', 'MIRAGE_audioQueue', 'MIRAGE_mixer', 'MIRAGE_timer', 'MIRAGE_threadExit']);
 
   const WINDOW = {
@@ -408,9 +438,30 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
       const c = client(); win.cw = c.w; win.ch = c.h;
       return sdl.state.window;
     }],
+    // The window's size and place, as SDL's Windows driver sets them (WIN_SetWindowSize/Position: the frame
+    // made round the client area asked); the size it has, its client area's.
+    SDL_SetWindowSize: ['pii', (window, w, h) => {
+      M.rt.SDL_SetWindowSize(window, w, h); win.w = w; win.h = h;
+      if (!win.hwnd || fullscreen(win.flags)) return;
+      const p = place(win.flags, 0, 0, w, h);
+      user32.SetWindowPos[1](x, win.hwnd, 0, 0, 0, p.W, p.H, 0x16);  // SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE
+    }],
+    SDL_SetWindowPosition: ['pii', (window, X, Y) => {
+      if (!win.hwnd || fullscreen(win.flags)) return;
+      const p = place(win.flags, X, Y, win.w, win.h);
+      user32.SetWindowPos[1](x, win.hwnd, 0, p.X, p.Y, 0, 0, 0x15);  // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+    }],
+    SDL_GetWindowSize: ['ppp', (window, wp, hp) => { const c = win.hwnd ? client() : { w: win.w, h: win.h }; if (wp) x.w32(wp, c.w); if (hp) x.w32(hp, c.h); }],
+    SDL_ShowWindow: ['p', () => { if (win.hwnd) user32.ShowWindow[1](x, win.hwnd, 5); }],
+    SDL_HideWindow: ['p', () => { if (win.hwnd) user32.ShowWindow[1](x, win.hwnd, 0); }],
+    // One display, MIRAGE-WIN32's desktop.
+    SDL_GetNumVideoDisplays: ['', () => 1], SDL_GetWindowDisplayIndex: ['p', () => 0],
+    SDL_GetDisplayBounds: ['ip', (i, rect) => { if (i || !rect) return -1; const sc = screen(); x.w32(rect, 0); x.w32(rect + 4, 0); x.w32(rect + 8, sc.w); x.w32(rect + 12, sc.h); return 0; }],
+    SDL_GetDesktopDisplayMode: ['ip', (i, mode) => { if (i || !mode) return -1; const sc = screen(); x.write(mode, new Uint8Array(20)); x.w32(mode, 0x16161804); x.w32(mode + 4, sc.w); x.w32(mode + 8, sc.h); x.w32(mode + 12, 60); return 0; }],
     SDL_SetWindowFullscreen: ['pu', (window, flags) => {
       if (!win.hwnd) return -1;
-      const p = place(flags, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win.w, win.h);
+      // The window's own flags (RESIZABLE...) with the fullscreen ones asked.
+      const all = (win.flags & ~0x1001) | (flags & 0x1001), p = place(all, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win.w, win.h);
       user32.SetWindowLongA[1](x, win.hwnd, -16, p.style >>> 0);
       user32.SetWindowPos[1](x, win.hwnd, 0, p.X, p.Y, p.W, p.H, 0x24);   // SWP_NOZORDER | SWP_FRAMECHANGED
       win.flags = (win.flags & ~0x1001) | (flags & 0x1001);
@@ -498,7 +549,7 @@ function makeDlls(lx, mem, { st, user32, target }, { sdl2, surface, image, mixer
   };
   const own = (table) => Object.fromEntries(Object.entries(table).map(([name, [sig, fn]]) => [name, [sig, (cx, ...a) => { x = cx; return fn(...a); }, { cdecl: true, ...(INTERNAL.has(name) ? { noName: true } : {}) }]]));
   return [
-    { dll: 'SDL2.dll', fns: { ...fromPrism(decls), ...own(THREADS), ...own(WINDOW) } },
+    { dll: 'SDL2.dll', fns: { ...fromPrism(decls), ...own(LIBC), ...own(THREADS), ...own(WINDOW) } },
     { dll: 'SDL2_mixer.dll', fns: { ...fromPrism(mixer.mixerBuiltins(T)), ...own(MIXER) } },
   ];
 }

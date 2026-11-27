@@ -1,0 +1,31 @@
+{
+  "oasis": 1,
+  "title": "OpenTyrian — Tyrian 2.1 (Eclipse Productions, 1995), OpenTyrian's SDL 2 port for Windows",
+  "year": 1995,
+  "author": "Eclipse Productions / the OpenTyrian project",
+  "world": "win32",
+  "machine": {
+    "cpu": "pentium4",
+    "hle": ["sdl2"]
+  },
+  "layers": [
+    {
+      "zip": "https://github.com/opentyrian/opentyrian/releases/download/v2.1.20221123/opentyrian-v2.1.20221123-win-x86.zip",
+      "into": "opentyrian",
+      "strip": 1
+    },
+    {
+      "zip": "https://www.camanis.net/tyrian/tyrian21.zip",
+      "into": "opentyrian",
+      "strip": 1
+    }
+  ],
+  "entry": {
+    "run": "/opentyrian/opentyrian.exe"
+  },
+  "output": "window",
+  "thumb": "oasis/thumbs/win32-opentyrian-2022.png",
+  "notes": "Tyrian, the vertical shooter Eclipse Productions made in 1995 and released as freeware in 2004 (its 2.1 data, from camanis.net, where OpenTyrian's README sends for it), on OpenTyrian, its open-source port (GPL; the Windows build of release v2.1.20221123, from the project's GitHub). A Windows program on MIRAGE-WIN32's Universal C Runtime, its SDL2.dll made in JavaScript (machine.hle: PRISM's SDL 2, src/win32/sdl2.js): its frames those of the SDL2.dll beside it, run in x86 without machine.hle, and its music and sound through SDL's audio callback on a thread of the program's; SDL2_net.dll, beside it, runs in x86 on a machine with no network. Arrow keys to move, Space to fire, Enter for the menus.",
+  "tags": ["Game", "Win32", "SDL 2"],
+  "sound": true
+}

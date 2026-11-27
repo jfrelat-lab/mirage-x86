@@ -5,6 +5,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-27
 
+- **OpenTyrian** on the Windows machine: Tyrian 2.1, its music and sound, on the SDL 2 made in JavaScript.
 - **npm 11.20** on the OASIS shelf (linux/oasis-npm-11.20): `npm install` fetches packages from npm's registry, `npm run` and `npx` run them, on MIRAGE's node.
 - node made by MIRAGE compresses and decompresses (zlib): deflate, inflate, gzip and gunzip, at once or as streams.
 - node made by MIRAGE runs ES modules: `import` and `export`, `.mjs` files, packages of `"type": "module"`, `import()` and top-level `await`.

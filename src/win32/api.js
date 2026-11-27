@@ -3590,6 +3590,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     // Functions to run at the exit (a DLL's static destructors): kept, never run -- the process's end needs
     // none of them here. Winamp registers its own with _onexit.
     _onexit: ['p', (x, f) => f, cd], __dllonexit: ['ppp', (x, f) => f, cd], atexit: ['p', () => 0, cd],
+    // The C runtime's own locks (MinGW's __dllonexit takes _LOCK_EXIT around its table: SDL2_net's): threads
+    // change only at system calls, so there is nothing to wait for.
+    _lock: ['i', () => 0, cd], _unlock: ['i', () => 0, cd],
     malloc: ['u', (x, n) => x.win.heapAlloc(n), cd], calloc: ['uu', (x, n, k) => { const p = x.win.heapAlloc(n * k); x.write(p, new Uint8Array(n * k)); return p; }, cd],
     // free (and operator delete above) give the block back, as the UCRT's does: they kept everything, and
     // Warcraft III's installer, 32 KiB at a time, filled the heap.
@@ -4130,6 +4133,9 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     TransparentBlt: ['piiiipiiiiu', (x, d, dx, dy, dw, dh, s, sx, sy, sw, sh) => gdi32.StretchBlt[1](x, d, dx, dy, dw, dh, s, sx, sy, sw, sh, 0xcc0020)],
   };
   const mpr = { WNetGetConnectionA: ['ppp', () => 2250] };
+  // iphlpapi.dll: a machine with no network adapter (ERROR_NO_DATA) -- SDL2_net imports GetAdaptersInfo
+  // for SDLNet_GetLocalAddresses, and OpenTyrian loads SDL2_net.
+  const iphlpapi = { GetAdaptersInfo: ['pp', (x, info, len) => 232] };
   /*
    * Another program run as a process of its own: `app` its path (or null: the command line's first word, quoted
    * or not, .exe added when it has no extension), the rest of the line its arguments. PROCESS_INFORMATION at `pi`
@@ -4149,7 +4155,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     return ret;
   };
   const tables = [
-    { dll: 'msimg32.dll', fns: msimg32 }, { dll: 'mpr.dll', fns: mpr },
+    { dll: 'msimg32.dll', fns: msimg32 }, { dll: 'mpr.dll', fns: mpr }, { dll: 'iphlpapi.dll', fns: iphlpapi },
     // msvcrt.dll: its own functions, and the Universal CRT's (src/win32/ucrt.js) for the rest, as crtdll.dll's
     // below -- Winamp 2 and its plugins import some 150 of them (strcmp, fopen, sscanf, _beginthreadex...).
     { dll: 'msvcrt.dll', fns: { ...Object.assign({}, ...ucrt.map((t) => t.fns)), ...msvcrt } },
@@ -4234,7 +4240,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     ...ucrt,
     // DLLs made in JavaScript in place of the program's own (machine.hle: SDL2.dll, src/win32/sdl2.js): the
     // loader takes a table's DLL before the file beside the program.
-    ...hle.flatMap((make) => make({ st, user32, gdi32, target })),
+    ...hle.flatMap((make) => make({ st, user32, gdi32, target, formatC })),
   ];
   for (const [dll, fns] of Object.entries(modern.into)) { const t = tables.find((e) => e.dll === dll); for (const k in fns) if (!(k in t.fns)) t.fns[k] = fns[k]; }
   /*

@@ -177,7 +177,8 @@ async function pullLayer(l) {
     const { unzip } = await import(join(ROOT, 'src', 'zip.js'));
     const zb = isUrl(l.zip) ? await fetchBytes(l.zip) : readFileSync(local(l.zip));
     for (const f of await unzip(new Uint8Array(zb), { dirs: true })) {
-      const to = join(dir, l.into, f.path);
+      const rel = f.path.split('/').slice(l.strip || 0).join('/'); if (!rel) continue;   // `strip`, as src/oasis-layers.js
+      const to = join(dir, l.into, rel);
       if (f.dir) { mkdirSync(to, { recursive: true }); continue; }
       mkdirSync(dirname(to), { recursive: true }); writeFileSync(to, f.bytes, f.mode ? { mode: f.mode } : {});
     }

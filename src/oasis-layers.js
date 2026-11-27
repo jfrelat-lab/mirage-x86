@@ -280,8 +280,11 @@ export async function buildTree(img, io) {
     } else if (l.didi) {
       for (const f of didiLayer(await get(l.didi), l)) tree.file(norm(f.to), f.bytes);
     } else if (l.zip) {                                // a whole ZIP, under `into` (Abuse's release: its files at the top)
+      // `strip`: that many leading folders taken off each path, as tar --strip-components (OpenTyrian's
+      // release and Tyrian's data each in a folder of their own, the game wanting them in one).
       for (const f of await unzip(await get(l.zip), { dirs: true })) {
-        const p = norm((l.into ? l.into.replace(/\/$/, '') + '/' : '') + f.path);
+        const rel = f.path.split('/').slice(l.strip || 0).join('/'); if (!rel) continue;
+        const p = norm((l.into ? l.into.replace(/\/$/, '') + '/' : '') + rel);
         if (f.dir) tree.mkdir(p); else tree.file(p, f.bytes, f.mode);
       }
     } else if (l.gz) tree.file(l.to, await gunzip(await get(l.gz)));

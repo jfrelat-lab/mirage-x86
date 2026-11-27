@@ -211,7 +211,7 @@ export function ucrtApis({ st, send }) {
   // _libm_sse2_*_precise: Visual C++'s /arch:SSE2 math, the argument and the result in XMM0 (and XMM1 for a
   // second argument), not on the stack.
   const SSE = (f) => (x) => { const d = x.cpu.xmm.d; d[0] = f(d[0], d[2]); return 0; };
-  const errnoP = (x) => (st.errnoP ||= malloc(x, 16));
+  const errnoP = (x) => (st.errnoP ||= (() => { const p = malloc(x, 16); x.write(p, new Uint8Array(16)); return p; })());   // errno 0 until a call sets it
 
   // ---- files: FILE blocks over kernel32's handles --------------------------------------------------
   st.crtFiles = st.crtFiles || [];                                   // FILE index -> { h, eof, err, back, cons }
@@ -326,6 +326,22 @@ export function ucrtApis({ st, send }) {
     _initialize_narrow_environment: ['', () => 0, cd], _initialize_wide_environment: ['', () => 0, cd],
     __p___argc: ['', (x) => args(x).pargc, cd], __p___argv: ['', (x) => args(x).pargv, cd],
     _get_initial_narrow_environment: ['', (x) => args(x).env, cd],
+    // A WinMain program's lpCmdLine: the command line past the program's name -- its arguments (SDL's
+    // SDL_main programs, OpenTyrian).
+    _get_narrow_winmain_command_line: ['', (x) => (st.winmainCmd ||= putStr(x, x.win.args || '')), cd],
+    // strerror: the Universal CRT's messages (its _sys_errlist), each a string of its own.
+    strerror: ['i', (x, n) => {
+      const t = { 0: 'No error', 1: 'Operation not permitted', 2: 'No such file or directory', 3: 'No such process', 4: 'Interrupted function call',
+        5: 'Input/output error', 6: 'No such device or address', 7: 'Arg list too long', 8: 'Exec format error', 9: 'Bad file descriptor', 10: 'No child processes',
+        11: 'Resource temporarily unavailable', 12: 'Not enough space', 13: 'Permission denied', 14: 'Bad address', 16: 'Resource device', 17: 'File exists',
+        18: 'Improper link', 19: 'No such device', 20: 'Not a directory', 21: 'Is a directory', 22: 'Invalid argument', 23: 'Too many open files in system',
+        24: 'Too many open files', 25: 'Inappropriate I/O control operation', 27: 'File too large', 28: 'No space left on device', 29: 'Invalid seek',
+        30: 'Read-only file system', 31: 'Too many links', 32: 'Broken pipe', 33: 'Domain error', 34: 'Result too large', 36: 'Resource deadlock avoided',
+        38: 'Filename too long', 39: 'No locks available', 40: 'Function not implemented', 41: 'Directory not empty', 42: 'Illegal byte sequence' };
+      const m = (st.strerror ||= new Map());
+      if (!m.has(n)) m.set(n, putStr(x, t[n] || 'Unknown error'));
+      return m.get(n);
+    }, cd],
     _set_app_type: ['i', () => 0, cd], __setusermatherr: ['p', () => 0, cd], _set_new_mode: ['i', () => 0, cd],
     _seh_filter_exe: ['up', () => 0, cd], _seh_filter_dll: ['up', () => 0, cd],              // EXCEPTION_CONTINUE_SEARCH
     _controlfp_s: ['puu', (x, p, v, mask) => { if (p) x.w32(p, 0x0009001f); return 0; }, cd],
@@ -387,7 +403,7 @@ export function ucrtApis({ st, send }) {
     __stdio_common_vsnprintf_s: ['uupuuppp', (x, lo, hi, buf, n, max, fmt, loc, ap) => { const s = cprintf(x, x.str(fmt), ap), k = Math.min(s.length, n - 1, max >>> 0); setStr(x, buf, s.slice(0, k)); return k < s.length ? -1 : k; }, cd],
     __stdio_common_vfprintf: ['uupppp', (x, lo, hi, F, fmt, loc, ap) => { const r = fileOf(x, F), s = cprintf(x, x.str(fmt), ap); if (r) out(x, r, enc(s)); return s.length; }, cd],
     __stdio_common_vsscanf: ['uupuppp', (x, lo, hi, buf, n, fmt, loc, ap) => cscanf(x, x.str(buf, n === 0xffffffff ? 1 << 20 : n), x.str(fmt), ap), cd],
-    fopen: ['pp', (x, name, mode) => { const m = x.str(mode), h = open(x, x.str(name), m); return h ? fileBlock(x, { h, text: !m.includes('b') }) : 0; }, cd],
+    fopen: ['pp', (x, name, mode) => { const m = x.str(mode), h = open(x, x.str(name), m); if (!h) { x.w32(errnoP(x), 2); return 0; } return fileBlock(x, { h, text: !m.includes('b') }); }, cd],   // ENOENT
     fclose: ['p', (x, F) => { const r = fileOf(x, F); if (!r) return -1; if (r.cons === undefined) free(x, F); return 0; }, cd],
     fread: ['puup', (x, buf, size, n, F) => {
       const r = fileOf(x, F); if (!r || r.cons !== undefined || !size || !n) return 0;

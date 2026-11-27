@@ -634,6 +634,21 @@
     "sound": true
   },
   {
+    "name": "win32/opentyrian-2022",
+    "title": "OpenTyrian — Tyrian 2.1 (Eclipse Productions, 1995), OpenTyrian's SDL 2 port for Windows",
+    "world": "win32",
+    "year": 1995,
+    "author": "Eclipse Productions / the OpenTyrian project",
+    "thumb": "oasis/thumbs/win32-opentyrian-2022.png",
+    "output": "window",
+    "tags": [
+      "Game",
+      "Win32",
+      "SDL 2"
+    ],
+    "sound": true
+  },
+  {
     "name": "win32/paradistance-2009",
     "title": "Paradistance — Titan, 4K for Windows",
     "world": "win32",

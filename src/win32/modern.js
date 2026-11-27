@@ -395,7 +395,42 @@ export function modernApis({ st, kernel32, user32, gdi32, send, advapi32: reg, w
   // shell32: the folders a program keeps its settings in (CSIDL_APPDATA and the like), all on C:; no
   // icons in its executable to extract; files dropped on the window never.
   const APPDATA = 'C:' + String.fromCharCode(92) + 'APPDATA';
+/**
+ * The words of a command line as CommandLineToArgvW splits it: blanks between words, a quote opening and
+ * closing a quoted part, 2n backslashes before a quote n backslashes (the quote counting), 2n+1 n and a quote,
+ * other backslashes as they are; "" inside a quoted part a quote.
+ */
+  function commandLineWords(s) {
+  const out = []; let i = 0;
+  while (i < s.length) {
+    while (s[i] === ' ' || s[i] === '\t') i++;
+    if (i >= s.length) break;
+    let w = '', q = false;
+    for (; i < s.length && (q || (s[i] !== ' ' && s[i] !== '\t')); i++) {
+      if (s[i] === '\\') {
+        let n = 0; while (s[i] === '\\') { n++; i++; }
+        if (s[i] === '"') { w += '\\'.repeat(n >> 1); if (n & 1) w += '"'; else { i--; continue; } } else { w += '\\'.repeat(n); i--; }
+      } else if (s[i] === '"') { if (q && s[i + 1] === '"') { w += '"'; i++; } else q = !q; }
+      else w += s[i];
+    }
+    out.push(w);
+  }
+  return out;
+}
+
   const shell32 = {
+    // CommandLineToArgvW: the words (commandLineWords) as an array of pointers and the strings after it, in
+    // one block LocalFree lets go; an empty line is the program's path alone.
+    CommandLineToArgvW: ['pp', (x, line, pn) => {
+      let s = ''; if (line) for (let a = line, c; (c = x.r16(a)); a += 2) s += String.fromCharCode(c);
+      const words = s.trim() ? commandLineWords(s) : [x.win.path];
+      const size = 4 * (words.length + 1) + words.reduce((n, w) => n + 2 * (w.length + 1), 0), p = x.win.heapAlloc(size);
+      let at = p + 4 * (words.length + 1);
+      words.forEach((w, i) => { x.w32(p + 4 * i, at); for (const ch of w) { x.w16(at, ch.charCodeAt(0)); at += 2; } x.w16(at, 0); at += 2; });
+      x.w32(p + 4 * words.length, 0);
+      if (pn) x.w32(pn, words.length);
+      return p;
+    }],
     // SHAppBarMessage: the taskbar, at the bottom (ABM_GETTASKBARPOS 5 fills its APPBARDATA: edge 3, its
     // rectangle); ABM_GETSTATE 4: always on top (2). Other messages: none answered.
     SHAppBarMessage: ['up', (x, m, abd) => {

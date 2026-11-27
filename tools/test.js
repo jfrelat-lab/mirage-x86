@@ -5007,6 +5007,44 @@ await (async () => { let got;
   } catch (e) { got = e.message.slice(0, 120); }
   eq('win32: SDL2.dll\'s audio callback, timer and SDL_mixer on threads of the program\'s, played on the card', got, '0 85 49 87040 84 512 1024 0 true 0 true true');
 })();
+// What OpenTyrian's Windows build asks beyond Abuse's (src/win32): CommandLineToArgvW's splitting (quotes,
+// backslashes before a quote), WinMain's command line, errno set by a failed fopen and strerror's text for it;
+// SDL2.dll's SDL_SetError formatted, SDL_iconv_string from UTF-8 to UTF-16, SDL_realloc keeping the bytes; a
+// RESIZABLE window keeping WS_THICKFRAME | WS_MAXIMIZEBOX through SDL_SetWindowFullscreen(0), and its client
+// area the size SDL_SetWindowSize asks.
+await (async () => { let got;
+  try { const { loadPE } = await import('../src/win32/index.js'), { win32Apis } = await import('../src/win32/api.js'), { traceBackend } = await import('../src/hle/trace.js');
+    const { win32HleDlls } = await import('../src/win32/sdl2.js');
+    const exe = Uint8Array.from((                       // nasm -f bin tools/win32/tinyhdr.asm
+    '4d5a0000504500004c010000000000000000000000000000600002010b0100000000000000000000000000007c000000' +
+    '000000000000000000004000040000000400000004000000000000000400000000000000000001004000000000000000' +
+    '0300000000001000001000000000100000100000000000000000000064a1300000008b400c8b400c8b008b008b58188b' +
+    '433c8b54037801da8b4a188b6a2001dd49783c8b748d0001debfe000400051b90c000000f3a65975e78b422401d80fb7' +
+    '04488b721c01de8b048601d80fb60dec0040000fb615ed01400001d151ffd0cc4578697450726f63657373002a').match(/../g), (v) => parseInt(v, 16));
+    const mc = new Machine({ memSize: 64 << 20, cpu: '686' }), lx = installLinux(mc);
+    const apis = win32Apis({ hle: await win32HleDlls(['sdl2'], lx, mc.mem) }), { x } = loadPE(lx, mc.mem, mc.cpu, exe, { path: 'C:\\ot.exe', args: '-x "a b"', apis, backend: traceBackend() });
+    const fn = (dll, n) => apis.find((d) => d.dll === dll).fns[n][1], wide = (t) => { const p = x.win.heapAlloc(2 * t.length + 2); [...t].forEach((c, i) => x.w16(p + 2 * i, c.charCodeAt(0))); x.w16(p + 2 * t.length, 0); return p; };
+    const wread = (p) => { let t = ''; for (let c; (c = x.r16(p)); p += 2) t += String.fromCharCode(c); return t; };
+    const n = x.win.heapAlloc(4), av = fn('shell32.dll', 'CommandLineToArgvW')(x, wide('a "b c" d\\\\"e f\\\\\\"g h\\i'), n);
+    const words = Array.from({ length: x.r32(n) }, (_, i) => wread(x.r32(av + 4 * i))).join('|');
+    const crt = (name) => apis.find((d) => d.fns[name] && /api-ms-win-crt-(runtime|stdio)/.test(d.dll)).fns[name][1];
+    const mk = (t) => { const p = x.win.heapAlloc(t.length + 1); x.write(p, new TextEncoder().encode(t + '\0')); return p; };
+    const f = crt('fopen')(x, mk('nothere.cfg'), mk('rb')), errno = x.r32(crt('_errno')(x)), msg = x.str(crt('strerror')(x, errno));
+    const cmd = x.str(crt('_get_narrow_winmain_command_line')(x));
+    const sdl = (name, ...a) => fn('SDL2.dll', name)(x, ...a);
+    const esp = x.cpu.reg[4]; x.cpu.reg[4] = x.win.heapAlloc(32); x.w32(x.cpu.reg[4] + 4, mk('bad %d')); x.w32(x.cpu.reg[4] + 8, 42);
+    sdl('SDL_SetError', mk('bad %d')); x.cpu.reg[4] = esp;
+    const err = x.str(sdl('SDL_GetError'));
+    const u16 = sdl('SDL_iconv_string', mk('UTF-16LE'), mk('UTF-8'), mk('é!'), 3), conv = [x.r16(u16), x.r16(u16 + 2), x.r16(u16 + 4)].join(',');
+    const r0 = sdl('SDL_malloc', 4); x.write(r0, Uint8Array.of(1, 2, 3, 4)); const r1 = sdl('SDL_realloc', r0, 64), kept = [...x.bytes(r1, 4)].join('');
+    sdl('SDL_CreateWindow', 0, 0x2fff0000, 0x2fff0000, 320, 200, 0x28); sdl('SDL_SetWindowFullscreen', 0, 0); sdl('SDL_SetWindowSize', 0, 640, 400);
+    const hwnd = fn('user32.dll', 'GetForegroundWindow')(x), style = fn('user32.dll', 'GetWindowLongA')(x, hwnd, -16) >>> 0;
+    const ws = x.win.heapAlloc(8); sdl('SDL_GetWindowSize', 0, ws, ws + 4);
+    got = [words, f, errno, msg, cmd, err, conv, kept, (style & 0x50000).toString(16), x.r32(ws) + 'x' + x.r32(ws + 4)].join(' ');
+  } catch (e) { got = e.message.slice(0, 120); }
+  eq('win32: CommandLineToArgvW, WinMain\'s command line, fopen\'s errno and strerror; SDL_SetError, SDL_iconv_string, SDL_realloc; a resizable SDL window kept so',
+    got, 'a|b c|d\\e f\\"g h\\i 0 2 No such file or directory -x "a b" bad 42 233,33,0 1234 50000 640x400');
+})();
 // tools/win32/tinyhdr.asm: a PE as Crinkler's /TINYHEADER lays one out -- no section, alignment 4, the
 // code in the headers, SizeOfImage past the file -- is mapped flat, as Windows maps an image whose
 // section alignment is below the page's: it reads a byte past SizeOfHeaders (42) and one past the
@@ -7808,9 +7846,10 @@ await (async () => { let got;
     const io = { fetchBytes: async () => zip };
     const h = (await buildTree({ layers: [{ zip: 'https://ftp.scene.org/pub/x.zip', files: { 'party/linux/intro_640x480.i386': '/intro/intro.i386' } }] }, io)).host();
     let missing = 'none'; try { await buildTree({ layers: [{ zip: 'https://ftp.scene.org/pub/x.zip', files: { 'party/nope': '/x' } }] }, io); } catch (e) { missing = e.message; }
-    got = [new TextDecoder().decode(h.read('/intro/intro.i386')), h.list('/').join(), missing].join(' | ');
+    const s1 = (await buildTree({ layers: [{ zip: 'https://ftp.scene.org/pub/x.zip', into: 'g', strip: 1 }] }, io)).host();
+    got = [new TextDecoder().decode(h.read('/intro/intro.i386')), h.list('/').join(), missing, s1.list('/g').sort().join(), new TextDecoder().decode(s1.read('/g/windows/intro.exe'))].join(' | ');
   } catch (e) { got = e.message.slice(0, 80); }
-  eq('oasis in a page: a zip layer with files takes the members it names, to where it says', got, 'a=/tmp/I | intro | oasis: party/nope is not in https://ftp.scene.org/pub/x.zip'); })();
+  eq('oasis in a page: a zip layer with files takes the members it names, to where it says; a whole zip with strip loses its first folder', got, 'a=/tmp/I | intro | oasis: party/nope is not in https://ftp.scene.org/pub/x.zip | linux,windows | MZ'); })();
 // src/hle/prism-gl.js: the M PRISM's gl.js reads guest memory through -- u8 by index across a page
 // boundary, slice and set, the DataView-like dv in every width (glCallLists reads GL_BYTE names with getInt8), cstr and intern.
 await (async () => { let got;
