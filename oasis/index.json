@@ -212,7 +212,13 @@
     "world": "linux",
     "year": 2026,
     "author": "MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
-    "output": "window"
+    "thumb": "oasis/thumbs/linux-oasis-node.png",
+    "output": "window",
+    "tags": [
+      "Node.js",
+      "JavaScript",
+      "HLE"
+    ]
   },
   {
     "name": "linux/oasis-npm-11.20",
@@ -220,7 +226,13 @@
     "world": "linux",
     "year": 2026,
     "author": "npm, Inc. and GitHub (npm); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
-    "output": "window"
+    "thumb": "oasis/thumbs/linux-oasis-npm-11.20.png",
+    "output": "window",
+    "tags": [
+      "npm",
+      "Node.js",
+      "registry"
+    ]
   },
   {
     "name": "linux/oasis-python-3.15",
@@ -228,7 +240,13 @@
     "world": "linux",
     "year": 2026,
     "author": "The CPython project (WASI build: Brett Cannon); BusyBox from Docker Hub",
-    "output": "window"
+    "thumb": "oasis/thumbs/linux-oasis-python-3.15.png",
+    "output": "window",
+    "tags": [
+      "Python",
+      "WebAssembly",
+      "WASI"
+    ]
   },
   {
     "name": "linux/oasis-typescript-6.0",
@@ -236,7 +254,12 @@
     "world": "linux",
     "year": 2026,
     "author": "Microsoft (TypeScript); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
-    "output": "window"
+    "thumb": "oasis/thumbs/linux-oasis-typescript-6.0.png",
+    "output": "window",
+    "tags": [
+      "TypeScript",
+      "Node.js"
+    ]
   },
   {
     "name": "linux/quake-1997",
