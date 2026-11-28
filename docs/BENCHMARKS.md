@@ -103,7 +103,7 @@ is Quake II's own: frames over the seconds it timed. Higher is better. 2026-11-2
 | Rank | Emulator | Where it ran | Frames a second | Relative to the first |
 |---|---|---|---|---|
 | 🥇 1 | Boxedwine 26R1 | native (macOS, ARM64 JIT), Wine 11.0 | 65.2–74.6 | `████████████████████` 100 % |
-| 🥈 2 | **MIRAGE** | Chrome, the Windows machine | 13.5 | `████░░░░░░░░░░░░░░░░` 18 % |
+| 🥈 2 | **MIRAGE** | Chrome, the Windows machine | 14.3 | `████░░░░░░░░░░░░░░░░` 19 % |
 | 🥉 3 | Boxedwine 26R1 | Chrome, its multi-threaded web build, Wine 11.0 | 5.4 | `█░░░░░░░░░░░░░░░░░░░` 7 % |
 | 4 | Boxedwine 26R1 | Chrome, its single-threaded web build, Wine 11.0 | 3.5 | `█░░░░░░░░░░░░░░░░░░░` 5 % |
 
@@ -153,9 +153,9 @@ few seconds after it boots, and the screen it settles on is that blank one.
   Web: `boxedwine.html?app=q2&p=q2bench.bat`, the game in a zip as its sample's, the Wine 11.0 file system
   of its web package, served with COOP/COEP; the result read on Quake II's console.
 - **MIRAGE** on Windows: `machines.html?m=win32`, an OASIS image of the demo with the arguments; Quake II's
-  timing checked against the page's own (it ended 47 s into the run, its instructions a second rising
-  from 165 M to 410 M when the console came back). 12.3 before the screen was converted only when it
-  changed.
+  timing checked against the page's own (it ended 44 s into the run, its instructions a second rising
+  from 170 M to 510 M when the console came back). 12.3 before the screen was converted only when it
+  changed, 13.5 before the blocks kept the registers in their own variables.
 - **MIRAGE**: in Chrome, the DOS player, scores as printed; headless,
   `MIRAGE_DOSSTATS=1 node tools/dos/run.mjs` and
   `MIRAGE_LXWALLCLOCK=1 MIRAGE_LXSTATS=1 node tools/linux/run.mjs`, which print the instructions run and

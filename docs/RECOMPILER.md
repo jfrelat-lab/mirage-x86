@@ -15,6 +15,20 @@ var r=cpu.reg, m=cpu.mem, sb=cpu.base, u8=m.u8, cp=m.codePage;   // + st, dv whe
 ```
 
 Each instruction then appends statements that read and write `r[i]`, `u8[a]` and the rest directly.
+
+**The registers in the block's own variables.** Before it is compiled, the finished body goes
+through `localRegs`: each `r[i]` becomes a variable `$ri`, read once at the start and written back
+once, in a `finally`, however the block ends — an exit, a side exit, a fault thrown by a memory
+access (the registers are then those before the faulting instruction, as before). V8 keeps such a
+variable in a machine register; it could not keep `r[i]`, a typed array element, across the
+block's memory stores. A call to a helper that may see the registers (anything but the flags, shift
+and x87 arithmetic helpers of `REG_PURE`) has them written back before it and read again after; one
+the block returns after, or one that throws, leaves `cpu.reg` as it made it (`_sy`). A read is
+`($ri>>>0)`, the value the `Uint32Array` gave. A block whose code uses `cpu.reg` otherwise, calls on
+an unknown receiver or has a `catch` of its own (PUSHA's restart) is left as it was. The cache is
+bounded by the length before this. `MIRAGE_NOREGLOCALS=1` turns it off. Quake II's timedemo: 13.5 to
+14.3 frames a second in Chrome; plasma13 56 % faster, kaneda 11 %; the other DOS benchmarks unchanged.
+
 The block object it returns:
 
 ```js

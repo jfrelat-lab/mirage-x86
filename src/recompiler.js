@@ -56,6 +56,80 @@ const NOREALSPEC = typeof process !== 'undefined' && !!(process.env && process.e
 const NOFLATSPEC = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFLATSPEC);
 // MIRAGE_NOSELFLOOP=1: a block that branches back to itself returns to the dispatcher at each turn.
 const NOSELFLOOP = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOSELFLOOP);
+// MIRAGE_NOREGLOCALS=1: the guest's registers read and written in cpu.reg at every instruction, as before
+// localRegs (below) kept them in a block's own variables.
+const NOREGLOCALS = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOREGLOCALS);
+// The helpers a block calls that neither read nor write the general registers (checked one by one in
+// src/cpu.js, src/fpu.js, src/mmx.js): the flags of an operation, a shift's result, the x87's arithmetic.
+// A call to any other (a push, a far call, an interrupt, a port, IMUL's EDX:EAX form) has the registers
+// written back before it and read again after.
+const REG_PURE = new Set(['setAdd', 'setAdd8', 'setAdd16', 'setAdd32', 'setSub', 'setSub8', 'setSub16', 'setSub32', 'setLogic', 'setLogic8',
+  'setLogic16', 'setLogic32', 'setInc32', 'setDec32', 'setAdc', 'setSbb', 'setShiftResult', 'setMul', 'imul16x', 'shl', 'shr', 'sar', 'rol',
+  'ror', 'rcl', 'rcr', 'shrd', 'shld', 'cond', 'fcmp', 'fi32', 'fi16', 'fdiv', 'sig24', 'f2i', 'ftrigCC', 'fprec', 'fxam', 'ftst', 'fprem',
+  'frem1', 'fxtract', 'flog2p1', 'ffree', 'emms', 'fldcw']);
+const CALL_RECEIVERS = new Set(['cpu', 'M', 'm', '_dv', 'dv', 'Math']);
+const KEYWORDS = new Set(['if', 'else', 'do', 'for', 'while', 'switch', 'case', 'return', 'typeof', 'void', 'catch', 'function']);
+export const regLocalStats = { blocks: 0, local: 0, bail: {} };
+
+/**
+ * A block's code with the general registers in its own variables ($r0-$r7) instead of cpu.reg's array.
+ *
+ * Every instruction read and wrote cpu.reg -- a typed array, which V8 cannot keep in a machine register
+ * across the block's memory stores (any typed array may share their buffer): Quake II's span loop
+ * loaded and stored EDX, EAX and ESI from memory at each of its nineteen instructions. Here the
+ * registers the block uses are read once at its start and written back once, in a `finally`, however
+ * it ends: by its exits, a side exit, a fault thrown from a memory access (whose registers are then those
+ * before the faulting instruction, as they were). A call to a helper that may read or write them (see
+ * REG_PURE) has them written back before and read again after; if it throws, what it left in cpu.reg
+ * stands (_sy). Reads are (x>>>0), as the Uint32Array gave them; a write stores the value as computed and
+ * the array's conversion happens at the write-back.
+ *
+ * Returns null, the block left as it was, when its code does something this cannot follow: cpu.reg or
+ * `r` used otherwise than r[n], a call on an unknown receiver, a catch of its own.
+ */
+export function localRegs(code) {
+  regLocalStats.blocks++;
+  const bail = (why) => { regLocalStats.bail[why] = (regLocalStats.bail[why] || 0) + 1; return null; };
+  if (NOREGLOCALS) return null;
+  if (/\$r|\b_sy\b|\b_rt\b/.test(code)) return bail('names');
+  if (code.includes('catch(')) return bail('catch');
+  code = code.replace(/(?<![\w$.])cpu\.reg\[(\d)\]/g, 'r[$1]');
+  if (/(?<![\w$.])cpu\.reg(?![\w$])/.test(code)) return bail('cpu.reg');
+  if (/(?<![\w$.])r(?![\w$])(?!\[\d\])/.test(code)) return bail('r');
+  if (/(?<![\w$.])new\s/.test(code)) return bail('new');
+  for (const mm of code.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g)) if (!KEYWORDS.has(mm[1])) return bail('call ' + mm[1]);
+  for (const mm of code.matchAll(/(?:(?<![\w$.])([\w$]+)|(\)|\]))\s*\.\s*([\w$]+)\s*\(/g)) {
+    // (cpu.eip=X,m).r32(a), (cpu.eip=X,cpu).fRd32(a): a memory access that says where it is first (src/fpu.js's
+    // float loads and stores are memory alone); any other call on an expression is not followed
+    if (mm[2] ? !(mm[2] === ')' && /^(?:[rw](8|16|32)|f(Rd|Wr)(32|64))$/.test(mm[3])) : !CALL_RECEIVERS.has(mm[1])) return bail('receiver ' + (mm[1] || mm[2]) + '.' + mm[3]);
+  }
+  const used = new Set(), written = new Set();
+  for (const mm of code.matchAll(/(?<![\w$.])r\[(\d)\]/g)) used.add(+mm[1]);
+  if (!used.size) return bail('no registers');
+  for (const mm of code.matchAll(/(?<![\w$.])r\[(\d)\]\s*(?:[-+*/%&|^]|<<|>>>?)?=(?!=)|(?<![\w$.])r\[(\d)\]\s*(?:\+\+|--)|(?:\+\+|--)\s*r\[(\d)\]/g)) written.add(+(mm[1] ?? mm[2] ?? mm[3]));
+  // Writes name the variable; every other mention reads it as the array did.
+  code = code.replace(/(?<![\w$.])r\[(\d)\](?=\s*(?:(?:[-+*/%&|^]|<<|>>>?)?=(?!=)|\+\+|--))/g, '$$r$1')
+    .replace(/((?:\+\+|--)\s*)r\[(\d)\]/g, '$1$$r$2')
+    .replace(/\(r\[(\d)\]>>>0\)/g, '($$r$1>>>0)')                       // already read as the array gave it
+    .replace(/(?<![\w$.])r\[(\d)\]/g, '($$r$1>>>0)');
+  const regs = [...used].sort(), flush = [...written].sort().map((n) => `r[${n}]=$r${n}`), reload = regs.map((n) => `$r${n}=r[${n}]`);
+  // The calls that may see the registers, from the last back, so that one in another's arguments is done first.
+  const calls = [...code.matchAll(/(?<![\w$.])(cpu|M)\.([\w$]+)\s*\(/g)].filter((mm) => !(mm[1] === 'cpu' && REG_PURE.has(mm[2])));
+  for (let k = calls.length - 1; k >= 0; k--) {
+    const at = calls[k].index;
+    let i = code.indexOf('(', at + calls[k][1].length + 1 + calls[k][2].length), depth = 0;
+    for (; i < code.length; i++) { const c = code[i]; if (c === '(') depth++; else if (c === ')' && --depth === 0) break; }
+    if (i >= code.length) return bail('parens');
+    let p = at - 1; while (p >= 0 && /\s/.test(code[p])) p--;
+    const asi = p >= 0 && /[\w$)\]]/.test(code[p]) && code.slice(p + 1, at).includes('\n') ? ';' : '';
+    // A call the block returns after (a fault raised, an interrupt): written back, and cpu.reg stands (_sy).
+    const exits = /^\s*;\s*return\s*;/.test(code.slice(i + 1));
+    code = code.slice(0, at) + (exits ? `${asi}(_sy=1,${flush.map((f) => f + ',').join('')}${code.slice(at, i + 1)})`
+      : `${asi}(_sy=1,${flush.map((f) => f + ',').join('')}_rt=${code.slice(at, i + 1)},${reload.join(',')},_sy=0,_rt)`) + code.slice(i + 1);
+  }
+  regLocalStats.local++;
+  return `var ${reload.join(',')},_sy=0,_rt;try{\n${code}\n}finally{if(_sy===0){${flush.join(';')}}}`;
+}
 // MIRAGE_NOSIDEEXIT=1: every conditional branch ends its block, as before side exits.
 const LAZYEIP = !(typeof process !== 'undefined' && process.env && process.env.MIRAGE_NOLAZYEIP);
 const NOFXCACHE = typeof process !== 'undefined' && !!(process.env && process.env.MIRAGE_NOFXCACHE);
@@ -2119,7 +2193,12 @@ export class Recompiler {
     const code = out.join('\n').replace(/\/\*REM(\d+)\*\/0/g, (_, k) => String(count - +k)).replace(/\/\*FSYNC\*\//g, fx ? 'F=cpu.ftop;' : '')   // side exits: what they did not run
       .replace(/\/\*FIN\*\/0/g, String(fin)).replace(/\/\*SEGEND(\d+):(\d+)\*\/0/g, (_, i, m0) => String(segEnd(+i) - +m0 - (chained ? fin : count)))
       .replace(/\/\*SEG(LO|HI)(\d+)\*\/0/g, (_, w, i) => String(mask(linStart - ip0 + (w === 'LO' ? segIps[+i] : (+i + 1 < segIps.length ? segIps[+i + 1] : ip)))));
-    const body = pre + '\n' + (selfLoop ? `for(;;){\n${code}\n}` : code);
+    const inner = selfLoop ? `for(;;){\n${code}\n}` : code;
+    const body = pre + '\n' + (localRegs(inner) ?? inner);
+    // The cache is bounded by the source as the block's instructions make it, before localRegs: with
+    // registers in variables the same blocks take a fifth more text, and the cap counted them so filled
+    // sooner (Quake II's was dropped and rebuilt three guest seconds earlier) for no more of them.
+    const plainLen = pre.length + 1 + inner.length;
     const fn = new Function('cpu', body);
     // The emitted source is kept ONLY if something will read it: the region compiler splices
     // bodyOut, and tools/trace.js prints body. Tier 2 is opt-in, so by default neither is, and
@@ -2129,7 +2208,7 @@ export class Recompiler {
     const keep = rec.keepSource;
     hi = Math.max(hi, ip);
     return { fn, linStart: mask(linStart - ip0 + lo), linEnd: mask(linStart - ip0 + hi), ip0, ipEnd: ip, count: chained ? fin : count, ran: 0, pieces: chained ? segIps.map((a, i) => [mask(linStart - ip0 + a), mask(linStart - ip0 + (i + 1 < segIps.length ? segIps[i + 1] : ip))]) : undefined,
-             body: keep ? body : '', bodyLen: body.length, term, bodyOut: keep ? bodyOut : EMPTY_LINES,
+             body: keep ? body : '', bodyLen: plainLen, term, bodyOut: keep ? bodyOut : EMPTY_LINES,
              // epoch/ph0/ph1 (ROADMAP D8) are set by _compile under paging; declared HERE so every block
              // has one shape — adding them afterwards made the dispatch loop's blk.fn/blk.count polymorphic
              // and Windows 3.0's steady state ran at half speed with not one CR3 load or compile.

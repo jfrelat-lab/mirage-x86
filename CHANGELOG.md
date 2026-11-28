@@ -6,6 +6,7 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 ## 2026-11-28
 
 - Windows programs that draw in software, such as Quake II, run faster.
+- Programs run faster on every machine: the translated code keeps the processor's registers where the browser's own compiler can hold them.
 
 ## 2026-11-27
 

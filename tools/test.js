@@ -1290,6 +1290,34 @@ eq('a word read whose LAST byte is past the limit is #GP(0)',
 eq('...while one that ends ON the limit is fine',
   segRun([0xb8, 0x18, 0x00, 0x8e, 0xd8, 0xa1, 0xfe, 0x00, 0xf4]), null);     // mov ax,[00FE]
 
+// ---- the registers in a block's own variables (src/recompiler.js localRegs) --------------------
+// Written back however the block ends: a fault thrown by a memory access sees what the instructions
+// before it wrote; a helper that reads or writes them sees them and is seen; one the block returns
+// after, or one that throws, leaves cpu.reg as it made it.
+await (async () => {
+  const { localRegs } = await import('../src/recompiler.js');
+  const go = (src, cpu, m) => { const code = localRegs(src); if (!code) return 'not transformed'; try { new Function('cpu', 'm', 'var r=cpu.reg;' + code)(cpu, m); } catch (e) { return 'threw ' + e.message + ' ' + [...cpu.reg].join(','); } return [...cpu.reg].join(','); };
+  const mk = (extra = {}) => ({ reg: new Uint32Array(8), ...extra });
+  const fault = { r32: () => { throw new Error('#PF'); } };
+  eq('register locals: a fault thrown after a write sees it', go('r[0]=5;r[1]=(r[0]+1)>>>0;var a=m.r32(r[1]);r[2]=a;', mk(), fault), 'threw #PF 5,6,0,0,0,0,0,0');
+  const c1 = mk(); c1.helper = () => { c1.seen = c1.reg[1]; c1.reg[1] = 9; };
+  eq('register locals: a helper sees the registers and is seen', go('r[1]=7;cpu.helper();r[2]=(r[1]+1)>>>0;', c1) + ' saw ' + c1.seen, '0,9,10,0,0,0,0,0 saw 7');
+  const c2 = mk(); c2.raise = () => { c2.reg[3] = 8; };
+  eq('register locals: a call the block returns after leaves cpu.reg as it made it', go('r[3]=4;r[4]=1;if(r[4]){cpu.raise(1);return;}r[3]=0;', c2), '0,0,0,8,1,0,0,0');
+  const c3 = mk(); c3.boom = () => { c3.reg[0] = 2; throw new Error('boom'); };
+  eq('register locals: a helper that throws leaves cpu.reg as it made it', go('r[0]=1;r[5]=3;cpu.boom();r[0]=7;', c3), 'threw boom 2,0,0,0,0,3,0,0');
+  eq('register locals: a value read back as the Uint32Array gave it', go('r[0]=-1;r[1]=r[0]===4294967295?1:0;', mk()), '4294967295,1,0,0,0,0,0,0');
+  eq('register locals: code that uses cpu.reg another way is left as it was', String(localRegs('var x=cpu.reg;x[0]=1;')), 'null');
+})();
+await (async () => {
+  const { regLocalStats } = await import('../src/recompiler.js'), n0 = regLocalStats.local;
+  // mov cx,5; xor ax,ax; l: add ax,cx; dec cx; jnz l; hlt -- a block that loops on itself
+  const a = run([0xb9, 0x05, 0x00, 0x31, 0xc0, 0x01, 0xc8, 0x49, 0x75, 0xfb, 0xf4]).cpu;
+  // mov eax,80000000h; mov ebx,4; mul ebx; add eax,edx; hlt -- MUL's helper writes EDX:EAX mid-block
+  const b = run([0x66, 0xb8, 0, 0, 0, 0x80, 0x66, 0xbb, 4, 0, 0, 0, 0x66, 0xf7, 0xe3, 0x66, 0x01, 0xd0, 0xf4]).cpu;
+  eq('register locals: a loop and a MUL through the recompiler', [a.ax, a.cx, b.reg[0], b.reg[2], regLocalStats.local > n0].join(), '15,0,2,2,true');
+})();
+
 // ---- a block translated in real mode carries no limit guards, and must not run in protected mode --
 // The guards are dead in real and V86 mode, so the recompiler leaves them out of a block translated
 // there and marks it `real`. Two ways that block could then run with PE set: reached again after the
