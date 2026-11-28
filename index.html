@@ -148,10 +148,11 @@
   </section>
 
   <section id="windows">
-    <h2>Windows intros, with no Windows</h2>
-    <p class="lead">4K and 1K intros of the demoscene, their Win32 API, OpenGL and Direct3D 9 written in JavaScript —
-      no Windows, no Microsoft DLL. Their shaders go to WebGL2 through <a href="https://github.com/jfrelat-lab/prism">PRISM</a>.
-      Each one is fetched from scene.org when first run. Every screenshot here was taken by MIRAGE itself, and
+    <h2>Windows, with no Windows</h2>
+    <p class="lead">Games as they shipped — id's, Epic's, SDL's — and the demoscene's 4K and 1K intros, their Win32 API,
+      DirectDraw, DirectSound, OpenGL and Direct3D 9 written in JavaScript — no Windows, no Microsoft DLL. Their 3D
+      goes to WebGL2 through <a href="https://github.com/jfrelat-lab/prism">PRISM</a>. Each one is fetched from where
+      its authors published it when first run. Every screenshot here was taken by MIRAGE itself, and
       <span class="chip sound" title="Sound: heard playing in MIRAGE">🔊 sound</span> marks what was heard playing.</p>
     <div class="grid" id="wingrid"></div>
   </section>
@@ -239,7 +240,8 @@
   };
   // Systems booted to their desktop, from examples/gallery.json: a screenshot and the bare PC set up for them.
   fetch('examples/gallery.json').then((r) => r.json()).then((list) => {
-    document.getElementById('gallery').innerHTML = list.map((g) => {
+    // Newest first, as every other shelf of this page.
+    document.getElementById('gallery').innerHTML = list.slice().sort((a, b) => (b.year || 0) - (a.year || 0)).map((g) => {
       const q = new URLSearchParams({ cpu: g.cpu, mem: g.mem, pci: g.pci ? '1' : '0', for: g.title });
       return `<article class="card">
         <span class="shot"><img src="${esc(g.thumb)}" alt="${esc(g.title)} on MIRAGE" loading="lazy"></span>
@@ -286,11 +288,16 @@
     ex = ex.filter(on); imgs = imgs.filter((m) => on(m) && m.thumb);
     const intro = (m) => /intro/.test((m.tags || []).join(' '));
     const newest = (a, b) => (b.year || 0) - (a.year || 0);
-    document.getElementById('dosgrid').innerHTML = ex.filter((e) => e.kind === 'zip' || e.kind === 'dos').sort(newest).map(exampleCard).join('');
+    // DOS: games and programs, then the demoscene's demos and intros (Unreal, Helium, the 256-byte ones).
+    const dos = ex.filter((e) => e.kind === 'zip' || e.kind === 'dos'), scene = (e) => !(e.tags || []).some((t) => /^(game|program)$/i.test(t));
+    document.getElementById('dosgrid').innerHTML = sub('Games and programs') + dos.filter((e) => !scene(e)).sort(newest).map(exampleCard).join('')
+      + sub('Demoscene demos and intros') + dos.filter(scene).sort(newest).map(exampleCard).join('');
     const lx = imgs.filter((m) => m.world === 'linux');
     document.getElementById('linuxgrid').innerHTML = sub('Programs') + lx.filter((m) => !intro(m)).sort(newest).map(imageCard).join('')
       + sub('Demoscene intros') + [...lx.filter(intro), ...ex.filter((e) => e.kind === 'linux')].sort(newest).map((x) => (x.world ? imageCard(x) : exampleCard(x))).join('');
-    document.getElementById('wingrid').innerHTML = imgs.filter((m) => m.world === 'win32').sort(newest).map(imageCard).join('');
+    const win = imgs.filter((m) => m.world === 'win32');
+    document.getElementById('wingrid').innerHTML = sub('Games') + win.filter((m) => !intro(m)).sort(newest).map(imageCard).join('')
+      + sub('Demoscene intros') + win.filter(intro).sort(newest).map(imageCard).join('');
     document.getElementById('bootgrid').innerHTML = ex.filter((e) => e.kind === 'boot').sort(newest).map(exampleCard).join('');
   }).catch(() => { document.getElementById('dosgrid').innerHTML = '<p class="lead">The examples could not be loaded.</p>'; });
 </script>

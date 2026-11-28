@@ -1,6 +1,8 @@
 {
   "oasis": 1,
   "title": "TypeScript 6.0, its tsc on MIRAGE's node, on BusyBox",
+  "thumb": "oasis/thumbs/linux-oasis-typescript-6.0.png",
+  "tags": ["TypeScript", "Node.js"],
   "year": 2026,
   "author": "Microsoft (TypeScript); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
   "world": "linux",

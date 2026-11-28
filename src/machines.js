@@ -75,9 +75,10 @@ const logOutput = (t) => {
   if (lines.length) log(lines.join('\n'), { stamp: false });
 };
 
+// `items` may hold headings ({ head: 'Games' }) between the cards: the shelf's sections.
 function shelf(title, items, current) {
   $('shelfTitle').textContent = title;
-  $('shelf').innerHTML = items.map((x, i) => `<button class="card" data-i="${i}" data-id="${esc(x.id || '')}"${x.id === current ? ' aria-selected="true"' : ''}>
+  $('shelf').innerHTML = items.map((x, i) => x.head ? `<div class="shelfhead">${esc(x.head)}</div>` : `<button class="card" data-i="${i}" data-id="${esc(x.id || '')}"${x.id === current ? ' aria-selected="true"' : ''}>
     ${x.thumb ? `<img src="${esc(x.thumb)}" alt="" loading="lazy">` : '<span class="noimg">no picture</span>'}
     <span><span class="t">${esc(x.title)}</span><span class="s">${esc([x.year, x.author].filter(Boolean).join(' · '))}</span>
     <span class="s">${esc(x.note || '')}</span></span></button>`).join('') || '<span style="color:var(--dim)">nothing here yet</span>';
@@ -127,6 +128,19 @@ async function examples() {
   try { return await (await fetch('examples/manifest.json')).json(); } catch { return []; }
 }
 
+/**
+ * A shelf in two sections, as the home page has them: programs and games first, the demoscene's
+ * demos and intros after (by their tags: "4K intro", "256 bytes", "demo"), each without a heading
+ * when the other is empty.
+ */
+const isScene = (x) => { const t = (x.tags || []).join(' '); return /intro|demo|bytes/i.test(t) && !/\b(game|program)\b/i.test(t); };
+const isTest = (x) => (x.tags || []).includes('test');                 // MIRAGE's own (plasma13, the VESA and EGA probes)
+function sections(items, first) {
+  const groups = [[first, items.filter((x) => !isScene(x) && !isTest(x))], ['Demoscene intros', items.filter(isScene)], ["MIRAGE's own tests", items.filter(isTest)]]
+    .filter(([, l]) => l.length);
+  return groups.length < 2 ? items : groups.flatMap(([head, l]) => [{ head }, ...l]);
+}
+
 // ---- DOS ------------------------------------------------------------------------------------------
 async function dos() {
   const list = (await examples()).filter((e) => e.kind === 'zip' || e.kind === 'dos');
@@ -172,7 +186,7 @@ async function dos() {
         const meta = await app.resume(kept);
         log(`${e.run || e.id}: going on from the moment kept ${new Date(meta.kept).toLocaleString()} (${kib(kept.length)}, ${(meta.cycles / 1e6).toFixed(0)} M instructions in) -- Forget starts it afresh`);
         canvas.focus();
-        for (const c of $('shelf').querySelectorAll('.card')) c.setAttribute('aria-selected', String(list[+c.dataset.i] === e));
+        for (const c of $('shelf').querySelectorAll('.card')) c.setAttribute('aria-selected', String(c.dataset.id === e.id));
         return;
       } catch (err) { await moments.drop('dos', e.id); log(`${e.run || e.id}: the kept moment cannot be taken back (${err.message || err}); it is forgotten, starting afresh`); go({ m: 'dos', run: e.id }); return; }
     }
@@ -182,10 +196,10 @@ async function dos() {
       app.runCommand(name.replace(/\.[^.]+$/, ''));
     } else app.runCommand(e.run);
     canvas.focus();
-    for (const c of $('shelf').querySelectorAll('.card')) c.setAttribute('aria-selected', String(list[+c.dataset.i] === e));
+    for (const c of $('shelf').querySelectorAll('.card')) c.setAttribute('aria-selected', String(c.dataset.id === e.id));
   };
-  shelf('C:\\GAMES — or type a name at the prompt', list.map((e) => ({ ...e, thumb: `examples/thumbs/${e.id}.png`,
-    note: e.kind === 'zip' ? e.run : e.file.split('/').pop().toUpperCase(), open: () => start(e) })), params.get('run'));
+  shelf('C:\\GAMES — or type a name at the prompt', sections(list.map((e) => ({ ...e, thumb: `examples/thumbs/${e.id}.png`,
+    note: e.kind === 'zip' ? e.run : e.file.split('/').pop().toUpperCase(), open: () => start(e) })), 'Games and programs'), params.get('run'));
   hint.textContent = 'Type a title (CDOGS, DOOM, KEEN1…) at C:\\> — DIR, CD, CLS work as in DOS';
   const wanted = list.find((e) => e.id === params.get('run'));
   if (wanted) start(wanted); else app.runCommand('DIR GAMES');
@@ -195,7 +209,7 @@ async function dos() {
 // ---- PC -----------------------------------------------------------------------------------------
 const TICK_MS = 1000 / 18.2065;
 async function pc() {
-  const list = (await examples()).filter((e) => e.kind === 'boot');
+  const list = (await examples()).filter((e) => e.kind === 'boot').sort((a, b) => (b.year || 0) - (a.year || 0));   // newest first, as the home page
   const boot = async (e) => {
     if (session) { go({ m: 'pc', run: e.id }); return; }
     over.hidden = true;
@@ -352,7 +366,7 @@ async function linux(world = 'linux') {
     replace({ m: 'linux', prog: e.id });
     await runBytes(e.title, (e.member || e.file).split('/').pop(), bytes, e.fb || fbSel.value, `(${e.license}, ${e.author})`, e.id);
   };
-  const introItems = intros.map((e) => ({ id: e.id, title: e.title, year: e.year, author: e.author, thumb: `examples/thumbs/${e.id}.png`,
+  const introItems = intros.map((e) => ({ id: e.id, title: e.title, year: e.year, author: e.author, thumb: `examples/thumbs/${e.id}.png`, tags: [e.tag || 'Linux intro'],
     note: `${e.tag || 'Linux intro'} · ${e.fb || ''}`, open: () => runIntro(e) }));
   const wantedIntro = intros.find((e) => e.id === params.get('prog'));
   openBtn.onclick = () => openFile.click();
@@ -538,10 +552,12 @@ async function linux(world = 'linux') {
     const needs = (m, why) => {
       over.className = 'over needs'; over.hidden = false;
       over.innerHTML = `<div class="panel">${m && m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : ''}
-        <h2>${esc(m ? m.title : 'Linux programs, from OASIS images')}</h2>
-        ${m ? `<p>${esc(why)}</p>` : `<p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
+        <h2>${esc(m ? m.title : isLinux ? 'Linux programs, from OASIS images' : 'Windows programs, from OASIS images')}</h2>
+        ${m ? `<p>${esc(why)}</p>` : isLinux ? `<p>The Linux machine answers Linux's system calls in JavaScript — there is no kernel — and takes its programs from
         OASIS images, which bring their files from where their authors published them: Debian's archive, idgames. Choose an image:
-        this page fetches its layers once, keeps them in your browser, and starts it.</p>`}
+        this page fetches its layers once, keeps them in your browser, and starts it.</p>` : `<p>The Windows machine answers the Win32 API in JavaScript — there is no Windows and no Microsoft DLL — and
+        takes its programs from OASIS images, which bring their files from where their authors published them: id's FTP, scene.org,
+        GitHub releases. Choose an image: this page fetches it once, keeps it in your browser, and starts it.</p>`}
         <p class="dim">An i386 image from Docker Hub, here with no Docker: <a href="oasis.html#docker">the OASIS page</a> looks one up and starts it. On a computer, every image: <code>node tools/oasis.mjs serve --open</code></p>
         <p><a href="oasis.html${m ? '#' + esc(m.name) : ''}">See ${m ? 'this image\'s' : 'each image\'s'} recipe →</a></p></div>`;
       for (const el of $('shelf').querySelectorAll('.card')) el.setAttribute('aria-selected', String(!!m && items[+el.dataset.i].id === m.name));
@@ -553,7 +569,7 @@ async function linux(world = 'linux') {
       try { img = { ...(await (await fetch(`oasis/images/${m.name}.json`)).json()), name: m.name }; } catch { return needs(m, 'Its manifest could not be read.'); }
       await runImage(m, img, () => runHere(m), (why) => needs(m, why));
     };
-    const items = [...introItems, ...listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => runHere(m) }))];
+    const items = sections([...listed.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, tags: m.tags, note: m.name, open: () => runHere(m) })), ...introItems], isLinux ? 'Programs' : 'Games');
     shelf(shelfTitle, items, params.get('prog') || params.get('run'));
     const wanted = listed.find((m) => m.name === params.get('run'));
     if (wantedIntro) runIntro(wantedIntro);
@@ -569,7 +585,7 @@ async function linux(world = 'linux') {
     const img = await (await fetch(`/oasis-image.json?img=${encodeURIComponent(m.name)}`)).json();
     await start(m, img, oasisHost(m.name), () => run(m));
   };
-  const items = [...introItems, ...images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, note: m.name, open: () => run(m) }))];
+  const items = sections([...images.map((m) => ({ id: m.name, title: m.title, year: m.year, author: m.author, thumb: m.thumb, tags: m.tags, note: m.name, open: () => run(m) })), ...introItems], isLinux ? 'Programs' : 'Games');
   shelf(shelfTitle, items, params.get('prog') || params.get('run') || 'linux/mirage');
   // The machine boots into a real shell: bash on tty1 of the image that has one (linux/mirage),
   // typed at as a console is; the shelf starts any image instead.

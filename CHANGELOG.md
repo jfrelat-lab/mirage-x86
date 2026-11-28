@@ -5,6 +5,8 @@ the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
 ## 2026-11-28
 
+- The home page and the machines' shelves show games and programs apart from the demoscene's intros, on Windows and DOS as on Linux; the systems gallery, newest first, adds Windows NT 3.51 and Windows 2000.
+- Node.js, npm, Python and TypeScript have their pictures on the shelf.
 - Windows programs that draw in software, such as Quake II, run faster.
 - Programs run faster on every machine: the translated code keeps the processor's registers where the browser's own compiler can hold them.
 

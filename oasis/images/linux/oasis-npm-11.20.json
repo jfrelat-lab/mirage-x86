@@ -1,6 +1,8 @@
 {
   "oasis": 1,
   "title": "npm 11.20, on MIRAGE's node, on BusyBox",
+  "thumb": "oasis/thumbs/linux-oasis-npm-11.20.png",
+  "tags": ["npm", "Node.js", "registry"],
   "year": 2026,
   "author": "npm, Inc. and GitHub (npm); MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
   "world": "linux",

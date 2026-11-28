@@ -1,6 +1,7 @@
 [
   {
     "id": "dunedemo",
+    "tags": ["game", "VGA", "AdLib"],
     "tag": "game demo",
     "kind": "zip",
     "file": "examples/games/dunedemo.zip",
@@ -187,6 +188,7 @@
   },
   {
     "id": "plasma13",
+    "tags": ["test", "VGA"],
     "kind": "dos",
     "file": "demos/PLASMA13.COM",
     "title": "Plasma",
@@ -199,6 +201,7 @@
   },
   {
     "id": "xormunch",
+    "tags": ["test", "VGA"],
     "kind": "dos",
     "file": "demos/XORMUNCH.COM",
     "title": "Munching squares",
@@ -211,6 +214,7 @@
   },
   {
     "id": "vesa",
+    "tags": ["test", "VESA"],
     "kind": "dos",
     "file": "demos/VESA.COM",
     "title": "VESA banks",
@@ -223,6 +227,7 @@
   },
   {
     "id": "planar",
+    "tags": ["test", "EGA"],
     "kind": "dos",
     "file": "demos/PLANAR.COM",
     "title": "EGA planes",
@@ -235,6 +240,7 @@
   },
   {
     "id": "cga",
+    "tags": ["test", "CGA"],
     "kind": "dos",
     "file": "demos/CGA.COM",
     "title": "CGA palette",
@@ -305,6 +311,7 @@
   },
   {
     "id": "dirojed",
+    "tags": ["32 bytes", "VGA"],
     "kind": "dos",
     "file": "examples/intros/dirojed.com",
     "title": "Dírojed",
@@ -319,6 +326,7 @@
   },
   {
     "id": "paralaxa",
+    "tags": ["32 bytes", "VGA"],
     "kind": "dos",
     "file": "examples/intros/paralaxa.com",
     "title": "Paralaxa",

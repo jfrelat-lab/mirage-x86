@@ -1,6 +1,8 @@
 {
   "oasis": 1,
   "title": "Node.js made by MIRAGE (oasis/node), on BusyBox",
+  "thumb": "oasis/thumbs/linux-oasis-node.png",
+  "tags": ["Node.js", "JavaScript", "HLE"],
   "year": 2026,
   "author": "MIRAGE (node's API in JavaScript); BusyBox from Docker Hub",
   "world": "linux",

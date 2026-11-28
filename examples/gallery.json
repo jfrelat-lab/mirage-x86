@@ -40,6 +40,17 @@
     "blurb": "The Program Manager in standard mode at 1024×768 in 256 colours (SVGA256.DRV), pixel for pixel the screen QEMU draws."
   },
   {
+    "id": "nt351",
+    "title": "Windows NT 3.51",
+    "vendor": "Microsoft",
+    "year": 1995,
+    "thumb": "examples/thumbs/os-nt351.png",
+    "cpu": "586",
+    "mem": 64,
+    "pci": true,
+    "blurb": "The Program Manager of Microsoft's 32-bit Windows, after Ctrl+Alt+Del and its log-on: its welcome screen the same as QEMU's."
+  },
+  {
     "id": "win95",
     "title": "Windows 95",
     "vendor": "Microsoft",
@@ -58,6 +69,17 @@
     "cpu": "586",
     "mem": 128,
     "blurb": "The desktop, from the same hard-disk image v86 boots, in about 100 guest seconds: paging, V86 mode, the VMM and its drivers."
+  },
+  {
+    "id": "win2k",
+    "title": "Windows 2000",
+    "vendor": "Microsoft",
+    "year": 2000,
+    "thumb": "examples/thumbs/os-win2k.png",
+    "cpu": "pentiumpro",
+    "mem": 256,
+    "pci": true,
+    "blurb": "The desktop, logged on and asking to restart for the devices it found — with the machine's clock run five times faster, as the boot is slow."
   },
   {
     "id": "winme",
