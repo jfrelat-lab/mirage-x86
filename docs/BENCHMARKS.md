@@ -6,7 +6,9 @@ What each one *can do* is in [COMPARISON.md](COMPARISON.md).
 **At a glance.** On 32-bit code the WebAssembly JITs lead: v86 runs DJGPP's Dhrystone and CoreMark
 2.5 to 4 times as fast as MIRAGE headless, and v86 and CheerpX run Linux code 6 to 9 times as fast. On
 16-bit real-mode code (the Sieve) MIRAGE is first: headless ahead of native DOSBox-X, and in the page
-ahead of v86 and js-dos. MIRAGE is ahead of js-dos and RetroTick on every benchmark they finished. Its
+ahead of v86 and js-dos. MIRAGE is ahead of js-dos and RetroTick on every benchmark they finished. On
+Windows, in a browser, MIRAGE runs Quake II's timedemo at twice Boxedwine's web build's speed, at a sixth
+of Boxedwine native's. Its
 JavaScript runs at 450–460 M x86 instructions a second on Linux code, 150 M on the Sieve.
 
 ## The rules
@@ -89,6 +91,25 @@ count that runs over ten seconds).
 | 🥈 2 | Docker (`qemu-user`) | native | 8,175–8,240 | `█████████████████░░░` 84 % |
 | 🥉 3 | **MIRAGE** | headless (Node) | 1,055–1,058 | `██░░░░░░░░░░░░░░░░░░` 11 % |
 
+## Windows
+
+### Quake II's timedemo
+
+id's Quake II demo 3.14 (1998), its own `q2demo1.dm2` (633 frames) with `+timedemo 1`, the software
+renderer at 640x480 in a window, sound off (`+set s_initsound 0`): the same files on all three. Each figure
+is Quake II's own: frames over the seconds it timed. Higher is better. 2026-11-28, an Apple M1 Pro, Chrome
+158 headless for the two pages.
+
+| Rank | Emulator | Where it ran | Frames a second | Relative to the first |
+|---|---|---|---|---|
+| 🥇 1 | Boxedwine 26R1 | native (macOS, ARM64 JIT), Wine 11.0 | 65.2–74.6 | `████████████████████` 100 % |
+| 🥈 2 | **MIRAGE** | Chrome, the Windows machine | 12.3 | `███░░░░░░░░░░░░░░░░░` 16 % |
+| 🥉 3 | Boxedwine 26R1 | Chrome, its multi-threaded web build, Wine 11.0 | 5.4 | `█░░░░░░░░░░░░░░░░░░░` 7 % |
+| 4 | Boxedwine 26R1 | Chrome, its single-threaded web build, Wine 11.0 | 3.5 | `█░░░░░░░░░░░░░░░░░░░` 5 % |
+
+Boxedwine's own figures (its `docs/Performance.md`) use the full game's `demo1.dm2` at 800x600, a
+different demo: 63.3 frames a second on an M1 under Asahi Linux, 84.3 on an M4.
+
 ## Booting whole systems
 
 Wall-clock seconds to the arrival screen, `tools/v86/compare3.mjs`, the three measured one after
@@ -126,6 +147,14 @@ few seconds after it boots, and the screen it settles on is that blank one.
   translator; on an x86 host it would be native.
 - **PCjs**: a COMPAQ DeskPro 386 at its highest speed setting (about 53 MHz of 386 cycles); DJGPP's
   Dhrystone stopped with a general protection fault inside CWSDPMI.
+- **Boxedwine** 26R1, the release's own builds. Native: its macOS app (sandboxed: its files in its
+  container), `-root`, `-zip TinyCore15Wine11.0.zip` (its Wine 11.0 file system), `-mount` the game's
+  folder, `/bin/wine quake2.exe` and the arguments; three runs, the first with Wine's prefix just made.
+  Web: `boxedwine.html?app=q2&p=q2bench.bat`, the game in a zip as its sample's, the Wine 11.0 file system
+  of its web package, served with COOP/COEP; the result read on Quake II's console.
+- **MIRAGE** on Windows: `machines.html?m=win32`, an OASIS image of the demo with the arguments; Quake II's
+  timing checked against the page's own (it ended 52 s into the run, its instructions a second rising
+  from 145 M to 310 M when the console came back).
 - **MIRAGE**: in Chrome, the DOS player, scores as printed; headless,
   `MIRAGE_DOSSTATS=1 node tools/dos/run.mjs` and
   `MIRAGE_LXWALLCLOCK=1 MIRAGE_LXSTATS=1 node tools/linux/run.mjs`, which print the instructions run and

@@ -120,11 +120,39 @@ software renderer (MIRAGE runs Mesa under XFree86 3.3); these rows are about the
 | **Direct3D 9 shader bytecode** (vs_1_1–vs_3_0, ps_2_0–ps_3_0, from fxc or `D3DXAssembleShader`) | ➖ | 🟡 as above ❔ | 🟡 as above ❔ | 🟡 as above ❔ | ✅ translated to GLSL ES 3.00 |
 | **Direct3D 9 fixed function** | ➖ | 🟡 as above ❔ | 🟡 as above ❔ | 🟡 as above ❔ | 🟡 pretransformed vertices, transform and lighting, texture stages; no fog or point size yet |
 | **D3DX helpers** (meshes, text, math) | ➖ | ➖ | ➖ | ➖ | 🟡 what the intros call: the math library, meshes (`D3DXCreateMeshFVF`, polygons, N-patch tessellation, normals), TrueType text meshes, texture fills |
-| Direct3D 5–8, DirectDraw | ➖ | 🟡 under a booted Windows ❔ | 🟡 under Windows 9x ❔ | 🟡 under a booted Windows ❔ | ❌ in MIRAGE-WIN32; under a booted Windows 98 not tried |
-| 3dfx Voodoo / Glide | ➖ | ❌ | ✅ Voodoo 1 ❔ | ❌ | ❌ |
+| Direct3D 5–8, DirectDraw | ➖ | 🟡 under a booted Windows ❔ | 🟡 under Windows 9x ❔ | 🟡 under a booted Windows ❔ | 🟡 DirectDraw (Quake II's software renderer, 8-bit modes and palettes) and Direct3D 7 on the Direct3D 9 device model (Unreal Tournament's D3DDrv); Direct3D 5, 6 and 8 not made |
+| 3dfx Voodoo / Glide | ➖ | ❌ | ✅ Voodoo 1 ❔ | ❌ | 🟡 Glide 2 in JavaScript on WebGL 2: Linux's libglide2x with fxMesa (GLQuake, Quake II's ref_gl) and Windows' glide2x.dll (Unreal Tournament); no Voodoo registers |
 
 The OpenGL and Direct3D code is shared with PRISM, the sibling project that compiles the same
 period's C sources to JavaScript: one implementation, checked by both.
+
+## Windows programs in a browser: MIRAGE and Boxedwine
+
+[Boxedwine](https://github.com/danoon2/Boxedwine) (GPL-2.0, release 26R1 of April 2026) runs Windows
+programs by running the real Wine, 32-bit, on an emulated Linux kernel and x86 CPU. It has native builds
+(Windows, macOS, Linux; x86-64 and ARM64) and a WebAssembly build. MIRAGE-WIN32 takes the other road:
+no Wine and no Windows file, the Windows API written in JavaScript. The two are compared here as they
+ship; what a cell says of Boxedwine is from its README, its documentation and its web build's readme,
+except the speed, measured ([BENCHMARKS.md](BENCHMARKS.md#windows)).
+
+| | Boxedwine, native | Boxedwine, web | MIRAGE |
+|---|---|---|---|
+| **Where Windows comes from** | Wine 3.1 to 11.0, its own DLLs, on TinyCore Linux 15 | the same, a stripped Wine 6.0 or 11.0 file system | the API answered in JavaScript (kernel32, user32, gdi32, DirectX, the C runtimes...); no Wine, no Microsoft DLL |
+| **CPU** | a JIT to x86-64 or ARM64 ("50% faster" in 26R1) | its "normal" core, an interpreter of decoded blocks: no JIT in WebAssembly ("still slow, need to implement a JIT") | x86 recompiled to JavaScript, compiled by the browser's engine |
+| **3D** | OpenGL, Direct3D and Vulkan | none: "OpenGL and Direct3D are not supported in the Web/Emscripten build"; DirectDraw | Direct3D 9 (HLSL and shader bytecode), Direct3D 7 and 11 (feature level 9_3) on its device model, OpenGL with GLSL, Glide 2, DirectDraw: all on WebGL 2 |
+| **SDL games** | through Wine, as any program | through Wine, without 3D | the program's SDL2.dll in x86, or SDL2.dll made in JavaScript (`machine.hle: ["sdl2"]`: Abuse, OpenTyrian), its frames pixel for pixel the x86 one's |
+| **Sound** | Wine's OSS driver on an emulated /dev/dsp | the same, "improved for Web builds, still not perfect"; the multi-threaded build "stutters with sound" | waveOut, DirectSound, DirectMusic, MIDI and SDL's audio answered in JavaScript, mixed with the machine's card |
+| **Windows 3.x programs** | ✅ Wine's | ✅ Wine's | ❌ planned (the NE loader, ROADMAP) |
+| **Breadth** | Wine's: installers, older .NET ("newer versions of .NET don't work"), "games after the year 2010 have limited success" | Wine's, minus 3D | what MIRAGE-WIN32 makes: the scene's intros, 15 games and 5 applications listed in [COMPATIBILITY.md](COMPATIBILITY.md); an API not made stops the program, named |
+| **What a visitor downloads first** | a 151 MB Wine file system (Wine 11.0) | 2.3 MB of WebAssembly and a 37 MB (Wine 6.0) or 49 MB (Wine 11.0) file system | MIRAGE's JavaScript (2.7 MB of source for the machine and its Win32 API, PRISM's modules besides), then the program's own files |
+| **Cross-origin isolation** | ➖ | the faster, multi-threaded build needs COOP/COEP; the other does not | the site is served isolated (SharedArrayBuffer: MIRAGE's node runs in a worker) |
+| **Other worlds** | ➖ | ➖ | DOS, Linux user space, the bare PC, OASIS images |
+| **Licence** | GPL-2.0 | GPL-2.0 | MIT |
+
+Where each stands: Boxedwine's native builds run more of Windows, and run it fast -- a JIT under the real
+Wine. In a browser its web build has neither its JIT nor 3D; MIRAGE has no Wine's breadth, but its
+Windows is JavaScript the browser compiles, with 3D on WebGL 2, and on the one program both run (Quake II's
+demo, in software) it is twice as fast as Boxedwine's fastest web build.
 
 ## Conformance
 
