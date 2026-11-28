@@ -254,7 +254,7 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
     for (const fn of f.querySelectorAll('feFuncR, feFuncG, feFuncB')) fn.setAttribute('exponent', String(1 / g));
     canvas.style.filter = g === 1 ? '' : 'url(#mirage-gamma)';
   };
-  let deskVersion = -1;
+  let deskVersion = -1, shownVersion = -1;
   const draw = () => {
     if (stopped) return;
     const d0 = performance.now();
@@ -269,6 +269,12 @@ export async function startLinux({ canvas, img, host, user, moment = null, onOut
       if (hle.gamma) showGamma(hle.gamma());
       if (canvas.width !== glFrame.width || canvas.height !== glFrame.height) { canvas.width = glFrame.width; canvas.height = glFrame.height; }
       canvas.getContext('2d').drawImage(glFrame, 0, 0);
+    } else if (w32wm && w32wm.version && mc.vbe) {
+      // A Windows program's screen: only the window manager writes it (a present, the cursor), so it is
+      // converted again only when its version moved. Quake II presents a dozen frames a second; converting
+      // the 32-bit screen at each of the page's sixty was a twelfth of the main thread.
+      const v = w32wm.version();
+      if (v !== shownVersion) { video.render(); shownVersion = v; }
     } else video.render();
     audio.pump();
     const now = performance.now();

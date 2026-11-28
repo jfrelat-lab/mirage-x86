@@ -7,8 +7,8 @@ What each one *can do* is in [COMPARISON.md](COMPARISON.md).
 2.5 to 4 times as fast as MIRAGE headless, and v86 and CheerpX run Linux code 6 to 9 times as fast. On
 16-bit real-mode code (the Sieve) MIRAGE is first: headless ahead of native DOSBox-X, and in the page
 ahead of v86 and js-dos. MIRAGE is ahead of js-dos and RetroTick on every benchmark they finished. On
-Windows, in a browser, MIRAGE runs Quake II's timedemo at twice Boxedwine's web build's speed, at a sixth
-of Boxedwine native's. Its
+Windows, in a browser, MIRAGE runs Quake II's timedemo at two and a half times Boxedwine's web build's speed,
+at a fifth of Boxedwine native's. Its
 JavaScript runs at 450–460 M x86 instructions a second on Linux code, 150 M on the Sieve.
 
 ## The rules
@@ -103,7 +103,7 @@ is Quake II's own: frames over the seconds it timed. Higher is better. 2026-11-2
 | Rank | Emulator | Where it ran | Frames a second | Relative to the first |
 |---|---|---|---|---|
 | 🥇 1 | Boxedwine 26R1 | native (macOS, ARM64 JIT), Wine 11.0 | 65.2–74.6 | `████████████████████` 100 % |
-| 🥈 2 | **MIRAGE** | Chrome, the Windows machine | 12.3 | `███░░░░░░░░░░░░░░░░░` 16 % |
+| 🥈 2 | **MIRAGE** | Chrome, the Windows machine | 13.5 | `████░░░░░░░░░░░░░░░░` 18 % |
 | 🥉 3 | Boxedwine 26R1 | Chrome, its multi-threaded web build, Wine 11.0 | 5.4 | `█░░░░░░░░░░░░░░░░░░░` 7 % |
 | 4 | Boxedwine 26R1 | Chrome, its single-threaded web build, Wine 11.0 | 3.5 | `█░░░░░░░░░░░░░░░░░░░` 5 % |
 
@@ -153,8 +153,9 @@ few seconds after it boots, and the screen it settles on is that blank one.
   Web: `boxedwine.html?app=q2&p=q2bench.bat`, the game in a zip as its sample's, the Wine 11.0 file system
   of its web package, served with COOP/COEP; the result read on Quake II's console.
 - **MIRAGE** on Windows: `machines.html?m=win32`, an OASIS image of the demo with the arguments; Quake II's
-  timing checked against the page's own (it ended 52 s into the run, its instructions a second rising
-  from 145 M to 310 M when the console came back).
+  timing checked against the page's own (it ended 47 s into the run, its instructions a second rising
+  from 165 M to 410 M when the console came back). 12.3 before the screen was converted only when it
+  changed.
 - **MIRAGE**: in Chrome, the DOS player, scores as printed; headless,
   `MIRAGE_DOSSTATS=1 node tools/dos/run.mjs` and
   `MIRAGE_LXWALLCLOCK=1 MIRAGE_LXSTATS=1 node tools/linux/run.mjs`, which print the instructions run and

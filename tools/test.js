@@ -5743,6 +5743,19 @@ await (async () => { const w32 = async (args = '', opts = {}) => {
     got = [hbm ? 'dib' : 'none', mc.vbe && `${mc.vbe.width}x${mc.vbe.height}`, fb(40, 20).toString(16), fb(41, 21).toString(16), fb(42, 20)].join(' ');
   } catch (e) { got = e.message.slice(0, 80); }
   eq('win32: an 8-bit DIB section, its colour table set, stretched to the window reaches the framebuffer', got, 'dib 320x200 123456 123456 0');
+  // ... and BitBlt at its own size (Quake II's frame): a bottom-up section, from an offset, past the screen's
+  // left edge -- what is copied and what is left, its rows the right way up.
+  try { const { mc, fn, x } = await w32(), g = (n) => fn('gdi32.dll', n);
+    fn('user32.dll', 'CreateWindowExA')(0, 0, 0, 0, 0, 0, 320, 200);
+    const bmi = x.win.heapAlloc(40 + 1024); x.write(bmi, new Uint8Array(1064)); x.w32(bmi, 40); x.w32(bmi + 4, 8); x.w32(bmi + 8, 4); x.w16(bmi + 12, 1); x.w16(bmi + 14, 8);
+    const pp = x.win.heapAlloc(4), dc = g('CreateCompatibleDC')(0); g('SelectObject')(dc, g('CreateDIBSection')(dc, bmi, 0, pp, 0, 0));
+    const q = x.win.heapAlloc(4 * 33); for (let i = 0; i < 33; i++) x.w32(q + 4 * i, i * 0x010101); g('SetDIBColorTable')(dc, 0, 33, q);
+    x.write(x.r32(pp), Uint8Array.from({ length: 32 }, (_, i) => i + 1));   // stored row r (bottom first), column X: r*8+X+1
+    g('BitBlt')(0x1001, -2, 1, 8, 4, dc, 1, 0, 0xcc0020);
+    const fb = (X, Y) => new Uint32Array(mc.mem.u8.buffer, mc.mem.u8.byteOffset + mc.vbeFbBase + (Y * 320 + X) * 4, 1)[0];
+    got = [fb(0, 1), fb(4, 1), fb(5, 2), fb(0, 4), fb(0, 0), fb(319, 0)].map((v) => v.toString(16)).join(' ');   // (319, 0): not the row above's end
+  } catch (e) { got = e.message.slice(0, 80); }
+  eq('win32: BitBlt of an 8-bit DIB section at its size, clipped, bottom-up', got, '1c1c1c 202020 0 40404 0 0');
   // Winsock on a network with nobody on it: it starts (Quake II stops otherwise, even to play alone),
   // a socket is made, nothing arrives (WSAEWOULDBLOCK), the machine's name is 127.0.0.1.
   try { const { fn, str, x } = await w32(), w = (n) => fn('wsock32.dll', n), wd = x.win.heapAlloc(400), buf = x.win.heapAlloc(64);

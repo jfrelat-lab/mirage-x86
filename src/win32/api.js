@@ -2895,7 +2895,7 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     if (!bm || bm.kind !== 'bitmap') return null;
     if (bm.dib8) {
       const { bits, stride } = bm.dib8, raw = x.bytes(bits, stride * bm.h), c = bm.colors;
-      return { w: bm.w, h: bm.h, at: (X, Y) => c[raw[(bm.up ? bm.h - 1 - Y : Y) * stride + X]] };
+      return { w: bm.w, h: bm.h, at: (X, Y) => c[raw[(bm.up ? bm.h - 1 - Y : Y) * stride + X]], raw8: { raw, stride, up: bm.up, c } };
     }
     if (bm.dib) dibCopy(x, bm, 0, bm.h, bm.dib.bits, bm.dib.bmi, true);
     if (bm.load) bm.load(x);
@@ -2916,6 +2916,17 @@ export function win32Apis({ gl, glu, fonts, files = {}, env = {}, codepage = 125
     const op = ROPS[rop] || ROPS[0xcc0020];
     const s = source(x, src), t = target(x, dst);
     if (!s || !t || !dw || !dh) return 1;
+    // An 8-bit section copied as it is (a software renderer's frame each time: WinQuake, Quake II): its rows
+    // through its colour table, without a closure and two divisions a pixel -- the same pixels as below.
+    if (s.raw8 && rop === 0xcc0020 && dw === sw && dh === sh && dw > 0 && dh > 0) {
+      const { raw, stride, up, c } = s.raw8, px = t.px, i0 = Math.max(0, -dx, -sx), i1 = Math.min(dw, t.w - dx, s.w - sx);
+      for (let j = 0; j < dh && i1 > i0; j++) {
+        const ty = dy + j, syy = sy + j; if (ty < 0 || ty >= t.h || syy < 0 || syy >= s.h) continue;
+        const so = (up ? s.h - 1 - syy : syy) * stride + sx, to = ty * t.w + dx;
+        for (let i = i0; i < i1; i++) px[to + i] = c[raw[so + i]];
+      }
+      t.done(); return 1;
+    }
     const d = s.mono && dcState(dst), one = d ? rgbOf(d.bkColor) : 0, zero = d ? rgbOf(d.textColor) : 0;
     const pick = s.mono ? (X, Y) => { const v = s.at(X, Y); return ((v >> 16 & 255) + (v >> 8 & 255) + (v & 255)) >= 384 ? one : zero; } : s.at;
     for (let j = 0; j < Math.abs(dh); j++) {

@@ -152,7 +152,7 @@ except the speed, measured ([BENCHMARKS.md](BENCHMARKS.md#windows)).
 Where each stands: Boxedwine's native builds run more of Windows, and run it fast -- a JIT under the real
 Wine. In a browser its web build has neither its JIT nor 3D; MIRAGE has no Wine's breadth, but its
 Windows is JavaScript the browser compiles, with 3D on WebGL 2, and on the one program both run (Quake II's
-demo, in software) it is twice as fast as Boxedwine's fastest web build.
+demo, in software) it is two and a half times as fast as Boxedwine's fastest web build.
 
 ## Conformance
 

@@ -3,6 +3,10 @@
 What changed on [mirage-x86.pages.dev](https://mirage-x86.pages.dev), newest first. The details are in
 the [commit history](https://github.com/jfrelat-lab/mirage-x86/commits/main).
 
+## 2026-11-28
+
+- Windows programs that draw in software, such as Quake II, run faster.
+
 ## 2026-11-27
 
 - **OpenTyrian** on the Windows machine: Tyrian 2.1, its music and sound, on the SDL 2 made in JavaScript.
